@@ -550,6 +550,7 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindDomainById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindNftById(q) => Ok(SingularQueryOutputBox::from(q.execute(state)?)),
         }
     }
 }

@@ -11,15 +11,43 @@ seiyaku PerpFunding {
     // Update position balance by transferring funding between the trader and
     // insurance fund. A mark premium makes the trader pay; a discount reverses
     // the transfer direction.
-    kotoage fn settle_funding(trader: AccountId, insurance_fund: AccountId, stable_asset: AssetDefinitionId, position_size_magnitude: Amount, mark_price: Amount, index_price: Amount, funding_bps: Amount) authorize("Admin") {
+    kotoage fn settle_funding(
+        trader: AccountId,
+        insurance_fund: AccountId,
+        stable_asset: AssetDefinitionId,
+        position_size_magnitude: Amount,
+        mark_price: Amount,
+        index_price: Amount,
+        funding_bps: Amount,
+    ) authorize("Admin") {
         if mark_price >= index_price {
             let premium_delta = mark_price - index_price;
-            let premium_payment = funding_payment(position_size_magnitude, premium_delta, funding_bps);
-            ledger::asset::transfer(trader, insurance_fund, stable_asset, premium_payment, DataSpaceId::parse("0"));
+            let premium_payment = funding_payment(
+                position_size_magnitude: position_size_magnitude,
+                price_delta: premium_delta,
+                funding_bps: funding_bps,
+            );
+            ledger::asset::transfer(
+                source: trader,
+                destination: insurance_fund,
+                asset_definition: stable_asset,
+                amount: premium_payment,
+                dataspace: DataSpaceId::parse("0"),
+            );
         } else {
             let discount_delta = index_price - mark_price;
-            let discount_payment = funding_payment(position_size_magnitude, discount_delta, funding_bps);
-            ledger::asset::transfer(insurance_fund, trader, stable_asset, discount_payment, DataSpaceId::parse("0"));
+            let discount_payment = funding_payment(
+                position_size_magnitude: position_size_magnitude,
+                price_delta: discount_delta,
+                funding_bps: funding_bps,
+            );
+            ledger::asset::transfer(
+                source: insurance_fund,
+                destination: trader,
+                asset_definition: stable_asset,
+                amount: discount_payment,
+                dataspace: DataSpaceId::parse("0"),
+            );
         }
     }
 

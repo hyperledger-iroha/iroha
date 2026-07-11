@@ -131,8 +131,8 @@ type-checks each module before linking, and assigns deterministic internal
 identities in typed HIR. It never rewrites source ASTs, and it rejects calls to
 functions that the dependency did not export. Musubi V1 modules may declare
 structs, error enums, constants, and private functions. Durable state, triggers,
-public entrypoints, lifecycle hooks, and contract-only declarations are rejected
-inside reusable modules.
+`kotoage`/`言挙げ`, `hajimari`/`始まり`, `kaizen`/`改善`, and other
+`seiyaku`/`誓約`-only declarations are rejected inside reusable modules.
 
 `pack` computes the deterministic BLAKE3-256 source archive hash plus the source
 byte and file counts. With `--car-out`, `--sorafs-manifest-out`, or
@@ -144,8 +144,16 @@ rejects digest-only archive submissions, optionally uploads the manifest and
 payload through Torii's SoraFS storage-pin endpoint with `--upload`, registers
 the generated SoraFS pin, then submits the signed `PublishMusubiRelease`
 transaction using the Iroha client config. Publish also parses package `.ko`
-sources and rejects exports that are not defined by a Kotodama function in the
-source tree. `yank` works the same way for `YankMusubiRelease`.
+sources through the canonical production compiler session before writing any
+archive output. Every local source must be a production `module`; a deployable
+`seiyaku`/`誓約`, test-only function, invalid body or type, duplicate module or
+symbol, missing export, or ambiguous export rejects publication. When the
+manifest has dependencies, publish requires the resolved lockfile and
+authenticated source cache (selectable with `--cache-dir`), validates the full
+locked typed package graph, and rejects dependency cycles and calls to hidden
+or unexported functions. Package source identities and fingerprints use
+normalized package-relative paths, so cache locations do not affect release
+validation. `yank` works the same way for `YankMusubiRelease`.
 
 `search`, `versions`, and `alias resolve` query the same registry. `alias set
 --dry-run` prints a curated short-alias binding, and without `--dry-run` submits

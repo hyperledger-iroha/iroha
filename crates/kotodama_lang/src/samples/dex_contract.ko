@@ -9,10 +9,34 @@ seiyaku DexContract {
         return num / den;
     }
 
-    kotoage fn swap(trader: AccountId, pool: AccountId, input_asset: AssetDefinitionId, output_asset: AssetDefinitionId, amount_in: Amount, reserve_in: Amount, reserve_out: Amount) -> Amount authorize("Admin") {
-        let out = quote_sell(reserve_in, reserve_out, amount_in);
-        ledger::asset::transfer(trader, pool, input_asset, amount_in, DataSpaceId::parse("0"));
-        ledger::asset::transfer(pool, trader, output_asset, out, DataSpaceId::parse("0"));
+    kotoage fn swap(
+        trader: AccountId,
+        pool: AccountId,
+        input_asset: AssetDefinitionId,
+        output_asset: AssetDefinitionId,
+        amount_in: Amount,
+        reserve_in: Amount,
+        reserve_out: Amount,
+    ) -> Amount authorize("Admin") {
+        let out = quote_sell(
+            reserve_in: reserve_in,
+            reserve_out: reserve_out,
+            amount_in: amount_in,
+        );
+        ledger::asset::transfer(
+            source: trader,
+            destination: pool,
+            asset_definition: input_asset,
+            amount: amount_in,
+            dataspace: DataSpaceId::parse("0"),
+        );
+        ledger::asset::transfer(
+            source: pool,
+            destination: trader,
+            asset_definition: output_asset,
+            amount: out,
+            dataspace: DataSpaceId::parse("0"),
+        );
         return out;
     }
 }

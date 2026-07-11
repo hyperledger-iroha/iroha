@@ -17,18 +17,43 @@ use super::{
     BridgeNativeProofBackendV1, SccpEvmSourceEmitterV1, SccpLaneIdV1, SccpNativeTrustAnchorV1,
     SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
 };
-use crate::{account::AccountId, asset::AssetDefinitionId};
+use crate::{
+    account::AccountId, asset::AssetDefinitionId, consensus::VALIDATOR_SET_HASH_VERSION_V1,
+};
 
 /// Maximum decimal scale accepted by first-release SCCP amount payloads.
 pub const SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE: u32 = 28;
 /// Exact decimal scale of the first-release XOR SCCP payload.
 pub const SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE: u32 = 9;
-/// Maximum number of complete routes in the V1 registry.
-pub const SCCP_V1_MAX_GOVERNED_ROUTES: usize = 64;
+/// Maximum number of nonterminal routes in the V1 registry.
+///
+/// Terminal revisions are immutable history needed to authenticate messages
+/// emitted before a deployment rotation. They deliberately do not consume
+/// this live-governance budget; a separate generous retained-history bound
+/// keeps the full state and registry response finite.
+pub const SCCP_V1_MAX_LIVE_GOVERNED_ROUTES: usize = 64;
 /// Maximum number of exact lanes in the V1 registry.
 pub const SCCP_V1_MAX_GOVERNED_LANES: usize = 16;
-/// Maximum number of immutable routes sharing one lane anchor.
-pub const SCCP_V1_MAX_ROUTES_PER_LANE: usize = 8;
+/// Maximum number of nonterminal routes sharing one governed lane.
+///
+/// A governance action can append only one staged revision. Retired revisions
+/// remain queryable but are excluded from this mutable-state bound.
+pub const SCCP_V1_MAX_LIVE_ROUTES_PER_LANE: usize = 8;
+/// Maximum retained route revisions sharing one governed lane.
+///
+/// For a single-lineage lane, sixty-four revisions provide more than five
+/// years of monthly deployment rotation. History is never evicted implicitly;
+/// governance must stop before this shared lane bound and operators must plan
+/// an explicit first-release migration. A fixed-shape admitted V1 route fits a
+/// conservative 4 KiB canonical encoding envelope.
+pub const SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE: usize = 64;
+/// Maximum retained native trust anchors sharing one governed lane.
+///
+/// At one governed rotation per day, 4,096 checkpoints cover more than eleven
+/// years. A checkpoint fits a conservative 64-byte canonical encoding
+/// envelope; together with the route and 16-lane caps, retained entry payloads
+/// are bounded by 8 MiB before small vector/lane framing overhead.
+pub const SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE: usize = 4_096;
 /// Maximum byte length of a canonical SCCP route or asset key.
 pub const SCCP_V1_MAX_KEY_BYTES: usize = 64;
 /// Exact Taira(9-decimal) to wrapped-token(18-decimal) multiplier.
@@ -48,9 +73,25 @@ const NETWORK_HASH_DOMAIN_V1: &[u8] = b"sccp:network-identity:v1";
 const LANE_HASH_DOMAIN_V1: &[u8] = b"sccp:lane-id:v1";
 const SOURCE_EMITTER_HASH_DOMAIN_V1: &[u8] = b"sccp:source-emitter-identity:v1";
 const SOURCE_IDENTITY_HASH_DOMAIN_V1: &[u8] = b"sccp:source-identity:v1";
-const STARK_FRI_PROOF_FAMILY_V1: &[u8] = b"stark-fri-v1";
+const SEMANTIC_PROOF_PROFILE_HASH_DOMAIN_V1: &[u8] = b"sccp:semantic-proof-profile:v1";
+const SORA_FINALITY_ANCHOR_HASH_DOMAIN_V1: &[u8] = b"sccp:sora-finality-anchor:v1";
+const GROTH16_PUBLIC_SIGNAL_SCHEMA_HASH_DOMAIN_V1: &[u8] =
+    b"sccp:groth16-bn254:public-signal-schema:v1";
 const EVM_GROTH16_BACKEND_V1: &[u8] = b"evm-groth16-bn254-v1";
 const TRON_GROTH16_BACKEND_V1: &[u8] = b"tron-groth16-bn254-v1";
+const GROTH16_PUBLIC_SIGNAL_LABELS_V1: [&[u8]; 11] = [
+    b"sccp:groth16-bn254:signal:message-id:v1",
+    b"sccp:groth16-bn254:signal:payload-hash:v1",
+    b"sccp:groth16-bn254:signal:target-domain:v1",
+    b"sccp:groth16-bn254:signal:commitment-root:v1",
+    b"sccp:groth16-bn254:signal:finality-height:v1",
+    b"sccp:groth16-bn254:signal:finality-block-hash:v1",
+    b"sccp:groth16-bn254:signal:source-domain:v1",
+    b"sccp:groth16-bn254:signal:statement-hash:v1",
+    b"sccp:groth16-bn254:signal:destination-binding-hash:v1",
+    b"sccp:groth16-bn254:signal:route-configuration-hash:v1",
+    b"sccp:groth16-bn254:signal:sora-finality-anchor-hash:v1",
+];
 
 /// BN254 base-field modulus in canonical big-endian form.
 const BN254_BASE_FIELD_MODULUS_BE: [u8; 32] = [
@@ -58,9 +99,6 @@ const BN254_BASE_FIELD_MODULUS_BE: [u8; 32] = [
     0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d, 0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c, 0xfd, 0x47,
 ];
 
-const SORA_NEXUS_CHAIN_ID_BYTES: [u8; 16] = [
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x53,
-];
 const SORA_TAIRA_CHAIN_ID_BYTES: [u8; 16] = [
     0x80, 0x95, 0x74, 0xf5, 0xfe, 0xe7, 0x5e, 0x69, 0xbf, 0xcf, 0x52, 0x45, 0x1e, 0x42, 0xd5, 0x0f,
 ];
@@ -71,15 +109,29 @@ pub enum SccpRouteValidationError {
     /// The registry version is not V1.
     #[error("SCCP registry version must be exactly 1")]
     UnsupportedRegistryVersion,
-    /// The registry exceeds its deterministic consensus bound.
-    #[error("SCCP registry contains more than {SCCP_V1_MAX_GOVERNED_ROUTES} routes")]
-    RegistryTooLarge,
+    /// The registry exceeds its deterministic live-route consensus bound.
+    #[error(
+        "SCCP registry contains more than {SCCP_V1_MAX_LIVE_GOVERNED_ROUTES} nonterminal routes"
+    )]
+    TooManyLiveRoutes,
     /// The registry exceeds its deterministic lane bound.
     #[error("SCCP registry contains more than {SCCP_V1_MAX_GOVERNED_LANES} lanes")]
     TooManyLanes,
-    /// One lane exceeds its deterministic route bound.
-    #[error("SCCP lane contains no routes or more than {SCCP_V1_MAX_ROUTES_PER_LANE} routes")]
-    InvalidLaneRouteCount,
+    /// One lane is empty or exceeds its deterministic live-route bound.
+    #[error(
+        "SCCP lane contains no routes or more than {SCCP_V1_MAX_LIVE_ROUTES_PER_LANE} nonterminal routes"
+    )]
+    InvalidLaneLiveRouteCount,
+    /// One lane exceeds its deterministic retained-route bound.
+    #[error(
+        "SCCP lane contains more than {SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE} retained route revisions"
+    )]
+    TooManyRetainedRoutes,
+    /// One lane exceeds its deterministic retained-anchor bound.
+    #[error(
+        "SCCP lane contains more than {SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE} retained native trust anchors"
+    )]
+    TooManyRetainedTrustAnchors,
     /// A route or asset identifier is not canonical.
     #[error("SCCP {0} must be lowercase ASCII [a-z0-9_-], with alphanumeric ends")]
     NonCanonicalKey(&'static str),
@@ -101,6 +153,15 @@ pub enum SccpRouteValidationError {
     /// The full governed key does not match the Solidity verifier commitment.
     #[error("SCCP Groth16 verification-key hash does not match the embedded key")]
     Groth16VerifyingKeyHashMismatch,
+    /// The governed semantic circuit profile is absent, malformed, or uses another schema.
+    #[error("SCCP semantic proof profile is not the exact audited V1 shape")]
+    InvalidSemanticProofProfile,
+    /// The governed SORA checkpoint is absent, malformed, or belongs to another chain.
+    #[error("SCCP SORA finality anchor is not the exact Taira V1 shape")]
+    InvalidSoraFinalityAnchor,
+    /// The destination proof policy is not V1 or its typed commitments are invalid.
+    #[error("SCCP outbound proof policy must be exactly version 1")]
+    InvalidOutboundProofPolicy,
     /// Two distinct protocol roles use the same identity or commitment.
     #[error("SCCP deployment identities and hash roles must be pairwise distinct")]
     RoleAlias,
@@ -119,6 +180,14 @@ pub enum SccpRouteValidationError {
     /// The trust-anchor commitment is zero.
     #[error("SCCP native trust anchor must be nonzero")]
     InvalidTrustAnchor,
+    /// Historical lane anchors are not a unique, append-only checkpoint chain.
+    #[error(
+        "SCCP native trust-anchor history must use one backend and unique, strictly increasing checkpoints"
+    )]
+    InvalidTrustAnchorHistory,
+    /// The current anchor pointer does not select the last historical anchor.
+    #[error("SCCP current native trust-anchor hash must select the highest retained checkpoint")]
+    InvalidCurrentTrustAnchor,
     /// Anchor compare-and-swap does not preserve the backend or change the commitment.
     #[error("SCCP lane trust-anchor update must keep its backend and change its hash")]
     InvalidTrustAnchorAdvance,
@@ -157,6 +226,11 @@ pub enum SccpRouteValidationError {
     /// More than one immutable revision of one semantic route is enabled.
     #[error("SCCP registry enables multiple revisions of one semantic route and asset")]
     MultipleEnabledRevisions,
+    /// Terminal inbound admission lacks an exact governed anchor-interval cutoff.
+    #[error(
+        "SCCP retired route must carry one valid anchor-interval cutoff tied to retained anchor history"
+    )]
+    InvalidInboundFinalityCutoff,
 }
 
 /// Canonical non-infinity BN254 G1 point in Solidity ABI coordinate order.
@@ -167,6 +241,7 @@ pub enum SccpRouteValidationError {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpBn254G1PointV1 {
     /// Canonical big-endian base-field x coordinate.
     pub x: [u8; 32],
@@ -193,6 +268,7 @@ impl SccpBn254G1PointV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpBn254G2PointV1 {
     /// First x-coordinate Fq2 limb (`x[0]` in the Solidity verifier).
     pub x_c0: [u8; 32],
@@ -215,7 +291,7 @@ impl SccpBn254G2PointV1 {
     }
 }
 
-/// Fixed Groth16 IC vector: one constant point and exactly ten signal points.
+/// Fixed Groth16 IC vector: one constant point and exactly eleven signal points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -223,6 +299,7 @@ impl SccpBn254G2PointV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpGroth16Bn254IcV1 {
     /// Constant IC point.
     pub constant: SccpBn254G1PointV1,
@@ -246,12 +323,14 @@ pub struct SccpGroth16Bn254IcV1 {
     pub signal_8: SccpBn254G1PointV1,
     /// IC point for signal 9 (governed route-configuration hash).
     pub signal_9: SccpBn254G1PointV1,
+    /// IC point for signal 10 (governed SORA finality-anchor hash).
+    pub signal_10: SccpBn254G1PointV1,
 }
 
 impl SccpGroth16Bn254IcV1 {
-    /// Return the constant point followed by the ten public-signal points.
+    /// Return the constant point followed by the eleven public-signal points.
     #[must_use]
-    pub const fn points(self) -> [SccpBn254G1PointV1; 11] {
+    pub const fn points(self) -> [SccpBn254G1PointV1; 12] {
         [
             self.constant,
             self.signal_0,
@@ -264,11 +343,12 @@ impl SccpGroth16Bn254IcV1 {
             self.signal_7,
             self.signal_8,
             self.signal_9,
+            self.signal_10,
         ]
     }
 }
 
-/// Closed SCCP BN254 Groth16 verification key for exactly ten public signals.
+/// Closed SCCP BN254 Groth16 verification key for exactly eleven public signals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -276,6 +356,7 @@ impl SccpGroth16Bn254IcV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpGroth16Bn254VerifyingKeyV1 {
     /// Verifying-key schema version. SCCP V1 requires `1`.
     pub version: u8,
@@ -287,7 +368,7 @@ pub struct SccpGroth16Bn254VerifyingKeyV1 {
     pub gamma2: SccpBn254G2PointV1,
     /// Groth16 delta point in G2.
     pub delta2: SccpBn254G2PointV1,
-    /// Constant IC point followed by exactly ten public-signal IC points.
+    /// Constant IC point followed by exactly eleven public-signal IC points.
     pub ic: SccpGroth16Bn254IcV1,
 }
 
@@ -321,12 +402,12 @@ impl SccpGroth16Bn254VerifyingKeyV1 {
 }
 
 /// Encode a structurally canonical key byte-identically to the fixed Solidity
-/// `verifyingKeyHash()` preimage: 36 consecutive ABI words.
+/// `verifyingKeyHash()` preimage: 38 consecutive ABI words.
 pub fn canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
     verifying_key: SccpGroth16Bn254VerifyingKeyV1,
 ) -> Result<Vec<u8>, SccpRouteValidationError> {
     verifying_key.validate_structure()?;
-    let mut out = Vec::with_capacity(36 * 32);
+    let mut out = Vec::with_capacity(38 * 32);
     out.extend_from_slice(&verifying_key.alpha1.x);
     out.extend_from_slice(&verifying_key.alpha1.y);
     for point in [
@@ -356,6 +437,173 @@ pub fn sccp_groth16_bn254_verifying_key_hash_v1(
     ))
 }
 
+/// Immutable commitments identifying one audited semantic Groth16 circuit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+pub struct SccpGroth16Bn254SemanticCircuitV1 {
+    /// Circuit-profile schema version. SCCP V1 requires `1`.
+    pub version: u8,
+    /// Commitment to the exact compiled constraint system and proving key.
+    pub circuit_commitment: [u8; 32],
+    /// Commitment to the reproducible witness generator and its dependencies.
+    pub witness_generator_commitment: [u8; 32],
+    /// Commitment to the ordered eleven-signal public-input schema.
+    pub public_signal_schema_hash: [u8; 32],
+}
+
+/// Closed semantic proof profile accepted by first-release outbound routes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+#[norito(tag = "profile", content = "commitments")]
+pub enum SccpSemanticProofProfileV1 {
+    /// Groth16 proof of canonical payload semantics, message inclusion, and
+    /// Taira finality rooted in the governed SORA checkpoint.
+    #[codec(index = 0)]
+    #[norito(rename = "sora_taira_finality_inclusion_groth16_bn254")]
+    SoraTairaFinalityInclusionGroth16Bn254(SccpGroth16Bn254SemanticCircuitV1),
+}
+
+impl SccpSemanticProofProfileV1 {
+    /// Validate the closed profile and exact ordered public-signal schema.
+    pub fn validate(self) -> Result<(), SccpRouteValidationError> {
+        let Self::SoraTairaFinalityInclusionGroth16Bn254(circuit) = self;
+        if circuit.version != 1
+            || circuit.public_signal_schema_hash
+                != sccp_groth16_bn254_public_signal_schema_hash_v1()
+            || validate_hash_roles(&[
+                circuit.circuit_commitment,
+                circuit.witness_generator_commitment,
+                circuit.public_signal_schema_hash,
+            ])
+            .is_err()
+        {
+            return Err(SccpRouteValidationError::InvalidSemanticProofProfile);
+        }
+        Ok(())
+    }
+
+    /// Return the fixed circuit commitments in protocol-role order.
+    #[must_use]
+    pub const fn commitments(self) -> [[u8; 32]; 3] {
+        let Self::SoraTairaFinalityInclusionGroth16Bn254(circuit) = self;
+        [
+            circuit.circuit_commitment,
+            circuit.witness_generator_commitment,
+            circuit.public_signal_schema_hash,
+        ]
+    }
+}
+
+/// Immutable Taira checkpoint anchoring one governed outbound proof policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+pub struct SccpSoraFinalityAnchorV1 {
+    /// Anchor schema version. SCCP V1 requires `1`.
+    pub version: u8,
+    /// Exact source chain. SCCP V1 outbound proofs require SORA Taira.
+    pub source_network: SccpNetworkV1,
+    /// Keccak-256 of the canonical 16-byte Taira chain identifier.
+    pub chain_id_hash: [u8; 32],
+    /// Nonzero finalized checkpoint height.
+    pub checkpoint_height: u64,
+    /// Hash of the canonical finalized checkpoint block header.
+    pub checkpoint_block_hash: [u8; 32],
+    /// Consensus epoch of the checkpoint validator roster.
+    pub validator_set_epoch: u64,
+    /// Canonical validator-roster hash at the checkpoint.
+    pub validator_set_hash: [u8; 32],
+    /// Version of the validator-roster hash construction.
+    pub validator_set_hash_version: u16,
+}
+
+impl SccpSoraFinalityAnchorV1 {
+    /// Validate the exact Taira chain identity and consensus checkpoint roles.
+    pub fn validate(self) -> Result<(), SccpRouteValidationError> {
+        if self.version != 1
+            || self.source_network != SccpNetworkV1::SoraTaira
+            || self.chain_id_hash != sccp_sora_taira_chain_id_hash_v1()
+            || self.checkpoint_height == 0
+            || self.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
+            || validate_hash_roles(&[
+                self.chain_id_hash,
+                self.checkpoint_block_hash,
+                self.validator_set_hash,
+            ])
+            .is_err()
+        {
+            return Err(SccpRouteValidationError::InvalidSoraFinalityAnchor);
+        }
+        Ok(())
+    }
+}
+
+/// Mandatory immutable proof policy of one value-moving destination deployment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+pub struct SccpOutboundProofPolicyV1 {
+    /// Policy schema version. SCCP V1 requires `1`.
+    pub version: u8,
+    /// Exact audited semantic circuit profile.
+    pub semantic_profile: SccpSemanticProofProfileV1,
+    /// Exact governed SORA checkpoint exposed as public signal 10.
+    pub sora_finality_anchor: SccpSoraFinalityAnchorV1,
+}
+
+impl SccpOutboundProofPolicyV1 {
+    /// Validate every typed policy role and their domain-separated hashes.
+    pub fn validate(self) -> Result<(), SccpRouteValidationError> {
+        if self.version != 1 {
+            return Err(SccpRouteValidationError::InvalidOutboundProofPolicy);
+        }
+        self.semantic_profile.validate()?;
+        self.sora_finality_anchor.validate()?;
+        let mut roles = Vec::from(self.semantic_profile.commitments());
+        roles.extend([
+            self.sora_finality_anchor.chain_id_hash,
+            self.sora_finality_anchor.checkpoint_block_hash,
+            self.sora_finality_anchor.validator_set_hash,
+            self.semantic_profile_hash()?,
+            self.sora_finality_anchor_hash()?,
+        ]);
+        validate_hash_roles(&roles)
+            .map_err(|_| SccpRouteValidationError::InvalidOutboundProofPolicy)
+    }
+
+    /// Return the domain-separated semantic-profile commitment pinned on-chain.
+    pub fn semantic_profile_hash(self) -> Result<[u8; 32], SccpRouteValidationError> {
+        sccp_semantic_proof_profile_hash_v1(self.semantic_profile)
+    }
+
+    /// Return the domain-separated Taira finality-anchor commitment pinned on-chain.
+    pub fn sora_finality_anchor_hash(self) -> Result<[u8; 32], SccpRouteValidationError> {
+        sccp_sora_finality_anchor_hash_v1(self.sora_finality_anchor)
+    }
+}
+
 /// Directional activation state for one complete governed SCCP route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -364,6 +612,7 @@ pub fn sccp_groth16_bn254_verifying_key_hash_v1(
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "activation", content = "direction")]
 pub enum SccpRouteActivationV1 {
     /// The complete route is governed but admits no transfers.
@@ -413,6 +662,15 @@ impl SccpRouteActivationV1 {
         matches!(self, Self::Retired)
     }
 
+    /// Return whether this revision still consumes live governance capacity.
+    ///
+    /// Staged, active, draining, and paused revisions may all change state or
+    /// admit traffic again. Only terminal immutable history is excluded.
+    #[must_use]
+    pub const fn consumes_live_capacity(self) -> bool {
+        !self.is_terminal()
+    }
+
     /// Return whether a compare-and-swap transition is legal.
     #[must_use]
     pub fn can_transition_to(self, next: Self) -> bool {
@@ -421,14 +679,50 @@ impl SccpRouteActivationV1 {
         }
         matches!(
             (self, next),
-            (Self::Staged, Self::Bidirectional | Self::Retired)
-                | (Self::Bidirectional, Self::InboundOnly | Self::Paused)
+            (
+                Self::Staged,
+                Self::Bidirectional | Self::InboundOnly | Self::Retired
+            ) | (Self::Bidirectional, Self::InboundOnly | Self::Paused)
                 | (Self::InboundOnly, Self::Paused | Self::Retired)
                 | (
                     Self::Paused,
                     Self::Bidirectional | Self::InboundOnly | Self::Retired
                 )
         )
+    }
+}
+
+/// Authenticated upper bound for delayed claims on one retired route revision.
+///
+/// An external event whose fully verified consensus-progress coordinate is at
+/// or below `max_anchor_interval_height` remains redeemable after retirement.
+/// Events above it are rejected, so a retired emitter cannot create new claims
+/// indefinitely. `trust_anchor_hash` binds the cutoff to a complete retained
+/// checkpoint interval; the maximum must equal that anchor's successor
+/// checkpoint and an open-ended current anchor cannot be retired against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+pub struct SccpInboundFinalityCutoffV1 {
+    /// Retained lane checkpoint whose validity interval contains the cutoff.
+    pub trust_anchor_hash: [u8; 32],
+    /// Greatest authenticated backend-specific consensus-progress coordinate admitted.
+    ///
+    /// Ethereum lanes use a finalized beacon slot. BSC and TRON lanes use a
+    /// finalized block height.
+    pub max_anchor_interval_height: u64,
+}
+
+impl SccpInboundFinalityCutoffV1 {
+    /// Return whether both cutoff roles are nonzero.
+    #[must_use]
+    pub fn is_well_formed(self) -> bool {
+        self.trust_anchor_hash != [0; 32] && self.max_anchor_interval_height != 0
     }
 }
 
@@ -440,6 +734,7 @@ impl SccpRouteActivationV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpRouteKeyV1 {
     /// Exact external-to-SORA lane.
     pub lane_id: SccpLaneIdV1,
@@ -495,6 +790,7 @@ impl SccpRouteKeyV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpEvmDestinationDeploymentV1 {
     /// Exact ERC-20 token contract address.
     pub token_address: [u8; 20],
@@ -508,6 +804,8 @@ pub struct SccpEvmDestinationDeploymentV1 {
     pub verifying_key: SccpGroth16Bn254VerifyingKeyV1,
     /// Commitment to the exact Groth16 verification key.
     pub verifier_key_hash: [u8; 32],
+    /// Immutable audited semantic circuit and governed SORA finality anchor.
+    pub outbound_proof_policy: SccpOutboundProofPolicyV1,
     /// Exact SCCP transfer-route contract address.
     pub route_address: [u8; 20],
     /// Keccak-256 hash of the transfer-route runtime bytecode.
@@ -524,6 +822,7 @@ pub struct SccpEvmDestinationDeploymentV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpTronDestinationDeploymentV1 {
     /// Raw TRC-20 contract address without the `0x41` network byte.
     pub token_address: [u8; 20],
@@ -537,6 +836,8 @@ pub struct SccpTronDestinationDeploymentV1 {
     pub verifying_key: SccpGroth16Bn254VerifyingKeyV1,
     /// Commitment to the exact Groth16 verification key.
     pub verifier_key_hash: [u8; 32],
+    /// Immutable audited semantic circuit and governed SORA finality anchor.
+    pub outbound_proof_policy: SccpOutboundProofPolicyV1,
     /// Raw SCCP transfer-route address without the `0x41` network byte.
     pub route_address: [u8; 20],
     /// Keccak-256 hash of the governed transfer-route runtime bytecode.
@@ -553,6 +854,7 @@ pub struct SccpTronDestinationDeploymentV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "family", content = "deployment")]
 pub enum SccpDestinationDeploymentV1 {
     /// EVM deployment for Ethereum or BSC.
@@ -572,6 +874,15 @@ impl SccpDestinationDeploymentV1 {
         match self {
             Self::Evm(deployment) => deployment.verifier_key_hash,
             Self::Tron(deployment) => deployment.verifier_key_hash,
+        }
+    }
+
+    /// Return the mandatory immutable outbound proof policy.
+    #[must_use]
+    pub const fn outbound_proof_policy(&self) -> SccpOutboundProofPolicyV1 {
+        match self {
+            Self::Evm(deployment) => deployment.outbound_proof_policy,
+            Self::Tron(deployment) => deployment.outbound_proof_policy,
         }
     }
 
@@ -666,6 +977,7 @@ impl SccpDestinationDeploymentV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpSoraSettlementV1 {
     /// Canonical SORA-home asset definition locked and released by Core.
     pub asset_definition_id: AssetDefinitionId,
@@ -712,6 +1024,7 @@ pub fn sccp_v1_taira_xor_asset_definition_id() -> AssetDefinitionId {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpGovernedRouteV1 {
     /// Exact external-to-SORA lane governed by this record.
     pub lane_id: SccpLaneIdV1,
@@ -723,6 +1036,8 @@ pub struct SccpGovernedRouteV1 {
     pub revision: u32,
     /// Directional activation state.
     pub activation: SccpRouteActivationV1,
+    /// Delayed-claim cutoff, present exactly in terminal historical state.
+    pub inbound_finality_cutoff: Option<SccpInboundFinalityCutoffV1>,
     /// Exact source-emitter identity used for native inbound admission.
     pub source_identity: SccpSourceIdentityV1,
     /// Exact reverse-direction destination deployment.
@@ -768,6 +1083,14 @@ impl SccpGovernedRouteV1 {
         }
         if self.activation.allows_inbound() && !self.supports_inbound_activation() {
             return Err(SccpRouteValidationError::UnsupportedInboundActivation);
+        }
+        let cutoff_is_valid = match (self.activation.is_terminal(), self.inbound_finality_cutoff) {
+            (true, Some(cutoff)) => cutoff.is_well_formed(),
+            (false, None) => true,
+            _ => false,
+        };
+        if !cutoff_is_valid {
+            return Err(SccpRouteValidationError::InvalidInboundFinalityCutoff);
         }
         Ok(())
     }
@@ -820,7 +1143,7 @@ impl SccpGovernedRouteV1 {
     pub fn supports_inbound_activation(&self) -> bool {
         self.lane_id.source.supports_native_inbound_source()
             && self.source_identity.is_well_formed()
-            && (self.lane_id.target != SccpNetworkV1::SoraNexus
+            && (self.lane_id.target != SccpNetworkV1::SoraTaira
                 || self.source_identity.has_production_source())
     }
 
@@ -830,11 +1153,22 @@ impl SccpGovernedRouteV1 {
         self.validate().is_ok()
     }
 
+    /// Return whether an authenticated backend-specific consensus-progress
+    /// coordinate may settle through this revision.
+    #[must_use]
+    pub fn allows_inbound_at(&self, anchor_interval_height: u64) -> bool {
+        self.activation.allows_inbound()
+            || (self.activation.is_terminal()
+                && self.inbound_finality_cutoff.is_some_and(|cutoff| {
+                    anchor_interval_height <= cutoff.max_anchor_interval_height
+                }))
+    }
+
     /// Derive the exact immutable route-configuration hash exposed by the
     /// destination contract.
     ///
     /// This is the single V1 route-configuration commitment recorded in
-    /// outbound messages and exposed as the tenth Groth16 public signal. It
+    /// outbound messages and exposed as Groth16 public signal 9. It
     /// must remain byte-identical to the EVM/TVM `routeConfigHash`.
     pub fn route_configuration_hash(&self) -> Result<[u8; 32], SccpRouteValidationError> {
         self.validate()?;
@@ -853,10 +1187,12 @@ impl SccpGovernedRouteV1 {
     }
 }
 
-/// One lane-level native checkpoint and its exact immutable routes.
+/// One append-only lane checkpoint history and its exact immutable routes.
 ///
-/// Keeping the advancing anchor once per lane prevents routes sharing native
-/// consensus from drifting to different finalized checkpoints.
+/// Every native checkpoint remains available after rotation so a message
+/// finalized under an earlier checkpoint cannot be stranded while in flight.
+/// The current pointer names the last, highest checkpoint and prevents routes
+/// sharing native consensus from drifting to different active checkpoints.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -864,35 +1200,144 @@ impl SccpGovernedRouteV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpGovernedLaneV1 {
     /// Exact external-to-SORA lane.
     pub lane_id: SccpLaneIdV1,
-    /// Single family-tagged native checkpoint used by every inbound-active route.
+    /// Immutable family-tagged native checkpoints in strictly increasing order.
     ///
-    /// Staged and outbound-only lanes do not require a placeholder checkpoint.
-    pub native_trust_anchor: Option<SccpNativeTrustAnchorV1>,
-    /// Complete immutable routes sharing this lane checkpoint.
+    /// Governance appends at most one checkpoint per action. No checkpoint is
+    /// deleted because externally finalized messages have no safe implicit
+    /// expiry in V1; an append at the retained-history bound rejects instead.
+    pub native_trust_anchors: Vec<SccpNativeTrustAnchorV1>,
+    /// Hash of the last (highest) retained checkpoint, or `None` for an
+    /// anchorless staged/outbound-only lane.
+    pub current_native_trust_anchor_hash: Option<[u8; 32]>,
+    /// Retained routes sharing this lane's checkpoint history.
+    ///
+    /// Nonterminal routes are bounded; terminal revisions remain as immutable
+    /// history for exact message and configuration resolution.
     pub routes: Vec<SccpGovernedRouteV1>,
 }
 
 impl SccpGovernedLaneV1 {
-    /// Validate the lane checkpoint, bounded routes, and exact route membership.
+    /// Return the current highest native checkpoint.
+    #[must_use]
+    pub fn current_native_trust_anchor(&self) -> Option<SccpNativeTrustAnchorV1> {
+        let current_hash = self.current_native_trust_anchor_hash?;
+        self.native_trust_anchors
+            .last()
+            .copied()
+            .filter(|anchor| anchor.anchor_hash == current_hash)
+    }
+
+    /// Resolve one retained native checkpoint by its authenticated hash.
+    ///
+    /// Consensus admission uses a precomputed registry index for this lookup;
+    /// this lane-local helper is intended for validation and small wire values.
+    #[must_use]
+    pub fn native_trust_anchor_by_hash(
+        &self,
+        anchor_hash: [u8; 32],
+    ) -> Option<SccpNativeTrustAnchorV1> {
+        self.native_trust_anchors
+            .iter()
+            .copied()
+            .find(|anchor| anchor.anchor_hash == anchor_hash)
+    }
+
+    /// Resolve a retained checkpoint and its inclusive successor boundary.
+    #[must_use]
+    pub fn native_trust_anchor_interval(
+        &self,
+        anchor_hash: [u8; 32],
+    ) -> Option<(SccpNativeTrustAnchorV1, Option<u64>)> {
+        let index = self
+            .native_trust_anchors
+            .iter()
+            .position(|anchor| anchor.anchor_hash == anchor_hash)?;
+        Some((
+            self.native_trust_anchors[index],
+            self.native_trust_anchors
+                .get(index + 1)
+                .map(|next| next.checkpoint_height),
+        ))
+    }
+
+    /// Return whether a retirement cutoff closes one complete historical
+    /// anchor interval through its successor checkpoint, inclusively.
+    #[must_use]
+    pub fn is_complete_inbound_finality_interval(
+        &self,
+        cutoff: SccpInboundFinalityCutoffV1,
+    ) -> bool {
+        let Some(anchor_index) = self
+            .native_trust_anchors
+            .iter()
+            .position(|anchor| anchor.anchor_hash == cutoff.trust_anchor_hash)
+        else {
+            return false;
+        };
+        self.native_trust_anchors
+            .get(anchor_index + 1)
+            .map(|next| next.checkpoint_height)
+            == Some(cutoff.max_anchor_interval_height)
+    }
+
+    /// Validate bounded append-only history, bounded live routes, and membership.
     pub fn validate(&self) -> Result<(), SccpRouteValidationError> {
         validate_inbound_lane(self.lane_id)?;
-        if let Some(native_trust_anchor) = self.native_trust_anchor {
+        if self.native_trust_anchors.len() > SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE {
+            return Err(SccpRouteValidationError::TooManyRetainedTrustAnchors);
+        }
+        if self.routes.len() > SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE {
+            return Err(SccpRouteValidationError::TooManyRetainedRoutes);
+        }
+        let mut previous_anchor = None;
+        let mut anchor_hashes = BTreeSet::new();
+        for native_trust_anchor in &self.native_trust_anchors {
             if !native_trust_anchor.is_well_formed() {
                 return Err(SccpRouteValidationError::InvalidTrustAnchor);
             }
             if !native_backend_matches_family(native_trust_anchor.backend, self.lane_id.source) {
                 return Err(SccpRouteValidationError::TrustAnchorFamilyMismatch);
             }
+            if !anchor_hashes.insert(native_trust_anchor.anchor_hash)
+                || previous_anchor.is_some_and(|previous: SccpNativeTrustAnchorV1| {
+                    native_trust_anchor.backend != previous.backend
+                        || native_trust_anchor.checkpoint_height <= previous.checkpoint_height
+                })
+            {
+                return Err(SccpRouteValidationError::InvalidTrustAnchorHistory);
+            }
+            previous_anchor = Some(*native_trust_anchor);
         }
-        if self.routes.is_empty() || self.routes.len() > SCCP_V1_MAX_ROUTES_PER_LANE {
-            return Err(SccpRouteValidationError::InvalidLaneRouteCount);
+        if self.current_native_trust_anchor_hash
+            != self
+                .native_trust_anchors
+                .last()
+                .map(|anchor| anchor.anchor_hash)
+        {
+            return Err(SccpRouteValidationError::InvalidCurrentTrustAnchor);
+        }
+        let current_native_trust_anchor = self.current_native_trust_anchor();
+        let live_route_count = self
+            .routes
+            .iter()
+            .filter(|route| route.activation.consumes_live_capacity())
+            .count();
+        if self.routes.is_empty() || live_route_count > SCCP_V1_MAX_LIVE_ROUTES_PER_LANE {
+            return Err(SccpRouteValidationError::InvalidLaneLiveRouteCount);
         }
         let mut lineages = BTreeMap::<(&str, &str), Vec<(u32, bool)>>::new();
         for route in &self.routes {
-            route.validate_with_anchor(self.native_trust_anchor)?;
+            route.validate_with_anchor(current_native_trust_anchor)?;
+            if route
+                .inbound_finality_cutoff
+                .is_some_and(|cutoff| !self.is_complete_inbound_finality_interval(cutoff))
+            {
+                return Err(SccpRouteValidationError::InvalidInboundFinalityCutoff);
+            }
             if route.lane_id != self.lane_id {
                 return Err(SccpRouteValidationError::InvalidInboundLane);
             }
@@ -903,12 +1348,15 @@ impl SccpGovernedLaneV1 {
         }
         for revisions in lineages.values_mut() {
             revisions.sort_unstable_by_key(|(revision, _)| *revision);
-            for (index, (revision, _)) in revisions.iter().enumerate() {
-                let expected =
-                    u32::try_from(index + 1).expect("bounded SCCP route revision count fits u32");
-                if *revision != expected {
-                    return Err(SccpRouteValidationError::InvalidRouteRevision);
-                }
+            if revisions.first().map(|(revision, _)| *revision) != Some(1)
+                || revisions.windows(2).any(|pair| {
+                    pair[0]
+                        .0
+                        .checked_add(1)
+                        .is_none_or(|expected| pair[1].0 != expected)
+                })
+            {
+                return Err(SccpRouteValidationError::InvalidRouteRevision);
             }
             if revisions.iter().filter(|(_, enabled)| *enabled).count() > 1 {
                 return Err(SccpRouteValidationError::MultipleEnabledRevisions);
@@ -926,10 +1374,11 @@ impl SccpGovernedLaneV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpRegistryV1 {
     /// Registry format version. First release accepts exactly `1`.
     pub version: u8,
-    /// Complete governed lanes, each with one checkpoint and bounded routes.
+    /// Governed lanes with bounded append-only history and bounded live routes.
     pub lanes: Vec<SccpGovernedLaneV1>,
 }
 
@@ -943,7 +1392,7 @@ impl Default for SccpRegistryV1 {
 }
 
 impl SccpRegistryV1 {
-    /// Validate the complete bounded registry and all uniqueness invariants.
+    /// Validate the bounded registry, live surface, and uniqueness invariants.
     pub fn validate(&self) -> Result<(), SccpRouteValidationError> {
         if self.version != 1 {
             return Err(SccpRouteValidationError::UnsupportedRegistryVersion);
@@ -951,13 +1400,26 @@ impl SccpRegistryV1 {
         if self.lanes.len() > SCCP_V1_MAX_GOVERNED_LANES {
             return Err(SccpRouteValidationError::TooManyLanes);
         }
-        let route_count = self
+        if self.lanes.iter().any(|lane| {
+            lane.native_trust_anchors.len() > SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE
+        }) {
+            return Err(SccpRouteValidationError::TooManyRetainedTrustAnchors);
+        }
+        if self
             .lanes
             .iter()
-            .map(|lane| lane.routes.len())
-            .sum::<usize>();
-        if route_count > SCCP_V1_MAX_GOVERNED_ROUTES {
-            return Err(SccpRouteValidationError::RegistryTooLarge);
+            .any(|lane| lane.routes.len() > SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE)
+        {
+            return Err(SccpRouteValidationError::TooManyRetainedRoutes);
+        }
+        let live_route_count = self
+            .lanes
+            .iter()
+            .flat_map(|lane| &lane.routes)
+            .filter(|route| route.activation.consumes_live_capacity())
+            .count();
+        if live_route_count > SCCP_V1_MAX_LIVE_GOVERNED_ROUTES {
+            return Err(SccpRouteValidationError::TooManyLiveRoutes);
         }
         let mut lanes = BTreeSet::new();
         let mut keys = BTreeSet::new();
@@ -994,7 +1456,6 @@ impl SccpRegistryV1 {
 #[must_use]
 pub const fn sccp_network_tag_v1(network: SccpNetworkV1) -> u8 {
     match network {
-        SccpNetworkV1::SoraNexus => 0,
         SccpNetworkV1::SoraTaira => 1,
         SccpNetworkV1::EthereumMainnet => 2,
         SccpNetworkV1::EthereumSepolia => 3,
@@ -1006,6 +1467,90 @@ pub const fn sccp_network_tag_v1(network: SccpNetworkV1) -> u8 {
     }
 }
 
+/// Return canonical bytes of the ordered eleven-signal Groth16 schema.
+#[must_use]
+pub fn canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1() -> Vec<u8> {
+    let mut out = Vec::with_capacity(768);
+    out.push(1);
+    push_u32(
+        &mut out,
+        u32::try_from(GROTH16_PUBLIC_SIGNAL_LABELS_V1.len())
+            .expect("fixed SCCP public-signal count fits u32"),
+    );
+    for label in GROTH16_PUBLIC_SIGNAL_LABELS_V1 {
+        push_vec(&mut out, label);
+    }
+    out
+}
+
+/// Hash the exact ordered eleven-signal Groth16 public-input schema.
+#[must_use]
+pub fn sccp_groth16_bn254_public_signal_schema_hash_v1() -> [u8; 32] {
+    let mut preimage = Vec::with_capacity(1024);
+    preimage.extend_from_slice(GROTH16_PUBLIC_SIGNAL_SCHEMA_HASH_DOMAIN_V1);
+    preimage.extend_from_slice(&canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1());
+    keccak256(preimage)
+}
+
+/// Return the canonical Taira chain-id commitment used by finality anchors.
+#[must_use]
+pub fn sccp_sora_taira_chain_id_hash_v1() -> [u8; 32] {
+    keccak256(SORA_TAIRA_CHAIN_ID_BYTES)
+}
+
+/// Encode one valid semantic proof profile independently of Norito framing.
+pub fn canonical_sccp_semantic_proof_profile_bytes_v1(
+    profile: SccpSemanticProofProfileV1,
+) -> Result<Vec<u8>, SccpRouteValidationError> {
+    profile.validate()?;
+    let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(circuit) = profile;
+    let mut out = Vec::with_capacity(99);
+    out.push(1);
+    out.push(0);
+    out.push(circuit.version);
+    out.extend_from_slice(&circuit.circuit_commitment);
+    out.extend_from_slice(&circuit.witness_generator_commitment);
+    out.extend_from_slice(&circuit.public_signal_schema_hash);
+    Ok(out)
+}
+
+/// Hash one valid semantic proof profile for destination-contract pinning.
+pub fn sccp_semantic_proof_profile_hash_v1(
+    profile: SccpSemanticProofProfileV1,
+) -> Result<[u8; 32], SccpRouteValidationError> {
+    let mut preimage = Vec::with_capacity(160);
+    preimage.extend_from_slice(SEMANTIC_PROOF_PROFILE_HASH_DOMAIN_V1);
+    preimage.extend_from_slice(&canonical_sccp_semantic_proof_profile_bytes_v1(profile)?);
+    Ok(keccak256(preimage))
+}
+
+/// Encode one valid Taira finality anchor independently of Norito framing.
+pub fn canonical_sccp_sora_finality_anchor_bytes_v1(
+    anchor: SccpSoraFinalityAnchorV1,
+) -> Result<Vec<u8>, SccpRouteValidationError> {
+    anchor.validate()?;
+    let mut out = Vec::with_capacity(124);
+    out.push(anchor.version);
+    out.push(sccp_network_tag_v1(anchor.source_network));
+    out.extend_from_slice(&anchor.chain_id_hash);
+    push_u64(&mut out, anchor.checkpoint_height);
+    out.extend_from_slice(&anchor.checkpoint_block_hash);
+    push_u64(&mut out, anchor.validator_set_epoch);
+    out.extend_from_slice(&anchor.validator_set_hash);
+    push_u16(&mut out, anchor.validator_set_hash_version);
+    Ok(out)
+}
+
+/// Hash one valid Taira finality anchor for destination-contract pinning.
+pub fn sccp_sora_finality_anchor_hash_v1(
+    anchor: SccpSoraFinalityAnchorV1,
+) -> Result<[u8; 32], SccpRouteValidationError> {
+    let mut preimage = Vec::with_capacity(192);
+    preimage.extend_from_slice(SORA_FINALITY_ANCHOR_HASH_DOMAIN_V1);
+    preimage.extend_from_slice(&canonical_sccp_sora_finality_anchor_bytes_v1(anchor)?);
+    Ok(keccak256(preimage))
+}
+
 /// Return canonical V1 bytes for an exact SCCP network profile.
 #[must_use]
 pub fn canonical_sccp_network_bytes_v1(network: SccpNetworkV1) -> Vec<u8> {
@@ -1014,7 +1559,6 @@ pub fn canonical_sccp_network_bytes_v1(network: SccpNetworkV1) -> Vec<u8> {
     out.push(sccp_network_tag_v1(network));
     push_u32(&mut out, network.domain_id());
     match network {
-        SccpNetworkV1::SoraNexus => out.extend_from_slice(&SORA_NEXUS_CHAIN_ID_BYTES),
         SccpNetworkV1::SoraTaira => out.extend_from_slice(&SORA_TAIRA_CHAIN_ID_BYTES),
         SccpNetworkV1::EthereumMainnet => push_u64(&mut out, 1),
         SccpNetworkV1::EthereumSepolia => push_u64(&mut out, 11_155_111),
@@ -1139,10 +1683,13 @@ pub fn sccp_evm_destination_binding_hash_v1(
         SccpNetworkV1::BscTestnet => (SCCP_DOMAIN_BSC, 97),
         _ => return Err(SccpRouteValidationError::DestinationFamilyMismatch),
     };
-    let mut payload = Vec::with_capacity(32 * 10);
+    let semantic_profile_hash = deployment.outbound_proof_policy.semantic_profile_hash()?;
+    let finality_anchor_hash = deployment
+        .outbound_proof_policy
+        .sora_finality_anchor_hash()?;
+    let mut payload = Vec::with_capacity(32 * 11);
     payload.extend_from_slice(&keccak256(EVM_BINDING_DOMAIN_V1));
     payload.extend_from_slice(&keccak256(EVM_GROTH16_BACKEND_V1));
-    payload.extend_from_slice(&keccak256(STARK_FRI_PROOF_FAMILY_V1));
     payload.extend_from_slice(&abi_word_u64(chain_id));
     payload.extend_from_slice(&abi_word_u32(SCCP_DOMAIN_SORA));
     payload.extend_from_slice(&abi_word_u32(target_domain));
@@ -1150,6 +1697,8 @@ pub fn sccp_evm_destination_binding_hash_v1(
     payload.extend_from_slice(&abi_word_bytes20(deployment.route_address));
     payload.extend_from_slice(&deployment.verifier_code_hash);
     payload.extend_from_slice(&deployment.verifier_key_hash);
+    payload.extend_from_slice(&semantic_profile_hash);
+    payload.extend_from_slice(&finality_anchor_hash);
     Ok(keccak256(payload))
 }
 
@@ -1165,10 +1714,13 @@ pub fn sccp_tron_destination_binding_hash_v1(
         SccpNetworkV1::TronShasta => 0x94a9_059e,
         _ => return Err(SccpRouteValidationError::DestinationFamilyMismatch),
     };
-    let mut payload = Vec::with_capacity(32 * 10);
+    let semantic_profile_hash = deployment.outbound_proof_policy.semantic_profile_hash()?;
+    let finality_anchor_hash = deployment
+        .outbound_proof_policy
+        .sora_finality_anchor_hash()?;
+    let mut payload = Vec::with_capacity(32 * 11);
     payload.extend_from_slice(&keccak256(TRON_BINDING_DOMAIN_V1));
     payload.extend_from_slice(&keccak256(TRON_GROTH16_BACKEND_V1));
-    payload.extend_from_slice(&keccak256(STARK_FRI_PROOF_FAMILY_V1));
     payload.extend_from_slice(&abi_word_u32(network_id));
     payload.extend_from_slice(&abi_word_u32(SCCP_DOMAIN_SORA));
     payload.extend_from_slice(&abi_word_u32(SCCP_DOMAIN_TRON));
@@ -1176,6 +1728,8 @@ pub fn sccp_tron_destination_binding_hash_v1(
     payload.extend_from_slice(&abi_word_tron_address(deployment.route_address));
     payload.extend_from_slice(&deployment.verifier_code_hash);
     payload.extend_from_slice(&deployment.verifier_key_hash);
+    payload.extend_from_slice(&semantic_profile_hash);
+    payload.extend_from_slice(&finality_anchor_hash);
     Ok(keccak256(payload))
 }
 
@@ -1201,20 +1755,28 @@ pub fn sccp_exact_evm_xor_route_config_hash_v1(
         _ => return Err(SccpRouteValidationError::DestinationFamilyMismatch),
     };
     validate_lane_hash_pair(network, source_lane_hash, destination_lane_hash)?;
+    let semantic_profile_hash = deployment.outbound_proof_policy.semantic_profile_hash()?;
+    let finality_anchor_hash = deployment
+        .outbound_proof_policy
+        .sora_finality_anchor_hash()?;
     validate_hash_roles(&[
         source_lane_hash,
         destination_lane_hash,
         deployment.token_code_hash,
         deployment.verifier_code_hash,
         deployment.verifier_key_hash,
+        semantic_profile_hash,
+        finality_anchor_hash,
     ])?;
 
-    let mut deployment_config = Vec::with_capacity(32 * 5);
+    let mut deployment_config = Vec::with_capacity(32 * 7);
     deployment_config.extend_from_slice(&abi_word_bytes20(deployment.token_address));
     deployment_config.extend_from_slice(&deployment.token_code_hash);
     deployment_config.extend_from_slice(&abi_word_bytes20(deployment.verifier_address));
     deployment_config.extend_from_slice(&deployment.verifier_code_hash);
     deployment_config.extend_from_slice(&deployment.verifier_key_hash);
+    deployment_config.extend_from_slice(&semantic_profile_hash);
+    deployment_config.extend_from_slice(&finality_anchor_hash);
     let deployment_config_hash = keccak256(deployment_config);
 
     let mut asset_route = Vec::with_capacity(32 * 4);
@@ -1256,21 +1818,29 @@ pub fn sccp_exact_tron_xor_route_config_hash_v1(
     };
     validate_lane_hash_pair(network, source_lane_hash, destination_lane_hash)?;
     let destination_binding_hash = sccp_tron_destination_binding_hash_v1(network, deployment)?;
+    let semantic_profile_hash = deployment.outbound_proof_policy.semantic_profile_hash()?;
+    let finality_anchor_hash = deployment
+        .outbound_proof_policy
+        .sora_finality_anchor_hash()?;
     validate_hash_roles(&[
         source_lane_hash,
         destination_lane_hash,
         deployment.token_code_hash,
         deployment.verifier_code_hash,
         deployment.verifier_key_hash,
+        semantic_profile_hash,
+        finality_anchor_hash,
         destination_binding_hash,
     ])?;
 
-    let mut deployment_config = Vec::with_capacity(32 * 6);
+    let mut deployment_config = Vec::with_capacity(32 * 8);
     deployment_config.extend_from_slice(&abi_word_bytes20(deployment.token_address));
     deployment_config.extend_from_slice(&deployment.token_code_hash);
     deployment_config.extend_from_slice(&abi_word_bytes20(deployment.verifier_address));
     deployment_config.extend_from_slice(&deployment.verifier_code_hash);
     deployment_config.extend_from_slice(&deployment.verifier_key_hash);
+    deployment_config.extend_from_slice(&semantic_profile_hash);
+    deployment_config.extend_from_slice(&finality_anchor_hash);
     deployment_config.extend_from_slice(&destination_binding_hash);
     let deployment_config_hash = keccak256(deployment_config);
 
@@ -1358,11 +1928,18 @@ fn validate_evm_deployment(
     if derived_key_hash != deployment.verifier_key_hash {
         return Err(SccpRouteValidationError::Groth16VerifyingKeyHashMismatch);
     }
+    deployment.outbound_proof_policy.validate()?;
+    let semantic_profile_hash = deployment.outbound_proof_policy.semantic_profile_hash()?;
+    let finality_anchor_hash = deployment
+        .outbound_proof_policy
+        .sora_finality_anchor_hash()?;
     validate_hash_roles(&[
         deployment.token_code_hash,
         deployment.verifier_code_hash,
         deployment.verifier_key_hash,
         deployment.route_code_hash,
+        semantic_profile_hash,
+        finality_anchor_hash,
     ])
 }
 
@@ -1384,11 +1961,18 @@ fn validate_tron_deployment(
     if derived_key_hash != deployment.verifier_key_hash {
         return Err(SccpRouteValidationError::Groth16VerifyingKeyHashMismatch);
     }
+    deployment.outbound_proof_policy.validate()?;
+    let semantic_profile_hash = deployment.outbound_proof_policy.semantic_profile_hash()?;
+    let finality_anchor_hash = deployment
+        .outbound_proof_policy
+        .sora_finality_anchor_hash()?;
     validate_hash_roles(&[
         deployment.token_code_hash,
         deployment.verifier_code_hash,
         deployment.verifier_key_hash,
         deployment.route_code_hash,
+        semantic_profile_hash,
+        finality_anchor_hash,
     ])
 }
 
@@ -1523,6 +2107,10 @@ fn push_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
+fn push_u16(out: &mut Vec<u8>, value: u16) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
 fn push_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
@@ -1596,13 +2184,38 @@ mod tests {
                 signal_7: g1,
                 signal_8: g1,
                 signal_9: g1,
+                signal_10: g1,
+            },
+        }
+    }
+
+    fn outbound_proof_policy() -> SccpOutboundProofPolicyV1 {
+        SccpOutboundProofPolicyV1 {
+            version: 1,
+            semantic_profile: SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(
+                SccpGroth16Bn254SemanticCircuitV1 {
+                    version: 1,
+                    circuit_commitment: [0x71; 32],
+                    witness_generator_commitment: [0x72; 32],
+                    public_signal_schema_hash: sccp_groth16_bn254_public_signal_schema_hash_v1(),
+                },
+            ),
+            sora_finality_anchor: SccpSoraFinalityAnchorV1 {
+                version: 1,
+                source_network: SccpNetworkV1::SoraTaira,
+                chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
+                checkpoint_height: 5,
+                checkpoint_block_hash: [0x73; 32],
+                validator_set_epoch: 1,
+                validator_set_hash: [0x74; 32],
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             },
         }
     }
 
     fn lane() -> SccpLaneIdV1 {
         SccpLaneIdV1 {
-            source: SccpNetworkV1::EthereumSepolia,
+            source: SccpNetworkV1::EthereumMainnet,
             target: SccpNetworkV1::SoraTaira,
         }
     }
@@ -1619,6 +2232,7 @@ mod tests {
             verifier_code_hash: [0x40_u8.wrapping_add(revision_byte); 32],
             verifying_key: key,
             verifier_key_hash: key_hash,
+            outbound_proof_policy: outbound_proof_policy(),
             route_address: [0x50_u8.wrapping_add(revision_byte); 20],
             route_code_hash: [0x60_u8.wrapping_add(revision_byte); 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
@@ -1635,6 +2249,7 @@ mod tests {
             verifying_key: key,
             verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(key)
                 .expect("valid structural verification key"),
+            outbound_proof_policy: outbound_proof_policy(),
             route_address: [0x51; 20],
             route_code_hash: [0x61; 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
@@ -1660,6 +2275,12 @@ mod tests {
             asset_key: "xor".to_owned(),
             revision,
             activation,
+            inbound_finality_cutoff: activation.is_terminal().then_some(
+                SccpInboundFinalityCutoffV1 {
+                    trust_anchor_hash: [0x91; 32],
+                    max_anchor_interval_height: 100,
+                },
+            ),
             source_identity: SccpSourceIdentityV1 {
                 lane,
                 emitter: SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
@@ -1679,6 +2300,33 @@ mod tests {
         }
     }
 
+    fn retarget_evm_route_source(
+        mut route: SccpGovernedRouteV1,
+        source: SccpNetworkV1,
+    ) -> SccpGovernedRouteV1 {
+        let lane = SccpLaneIdV1 {
+            source,
+            target: SccpNetworkV1::SoraTaira,
+        };
+        route.lane_id = lane;
+        route.source_identity.lane = lane;
+        let route_config_hash = route
+            .destination
+            .route_configuration_hash(
+                lane,
+                &route.route_id,
+                &route.asset_key,
+                route.revision,
+                route.settlement.payload_amount_scale,
+            )
+            .expect("valid retargeted EVM route configuration");
+        let SccpSourceEmitterV1::Evm(emitter) = &mut route.source_identity.emitter else {
+            panic!("fixture route must use an EVM source emitter")
+        };
+        emitter.route_config_hash = route_config_hash;
+        route
+    }
+
     fn anchor(height: u64) -> SccpNativeTrustAnchorV1 {
         SccpNativeTrustAnchorV1 {
             backend: BridgeNativeProofBackendV1::EthereumBeacon,
@@ -1691,14 +2339,45 @@ mod tests {
         routes: Vec<SccpGovernedRouteV1>,
         native_trust_anchor: Option<SccpNativeTrustAnchorV1>,
     ) -> SccpRegistryV1 {
+        registry_for_lane(lane(), routes, native_trust_anchor)
+    }
+
+    fn registry_for_lane(
+        lane_id: SccpLaneIdV1,
+        routes: Vec<SccpGovernedRouteV1>,
+        native_trust_anchor: Option<SccpNativeTrustAnchorV1>,
+    ) -> SccpRegistryV1 {
+        let native_trust_anchors = native_trust_anchor.into_iter().collect();
         SccpRegistryV1 {
             version: 1,
             lanes: vec![SccpGovernedLaneV1 {
-                lane_id: lane(),
-                native_trust_anchor,
+                lane_id,
+                native_trust_anchors,
+                current_native_trust_anchor_hash: native_trust_anchor
+                    .map(|anchor| anchor.anchor_hash),
                 routes,
             }],
         }
+    }
+
+    #[cfg(feature = "json")]
+    fn insert_unknown_json_field(value: &mut norito::json::Value, path: &[&str]) {
+        let mut current = value;
+        for field in path {
+            let norito::json::Value::Object(object) = current else {
+                panic!("JSON path component `{field}` is not an object")
+            };
+            current = object
+                .get_mut(*field)
+                .unwrap_or_else(|| panic!("JSON path component `{field}` is absent"));
+        }
+        let norito::json::Value::Object(object) = current else {
+            panic!("JSON target at {path:?} is not an object")
+        };
+        object.insert(
+            "adversarial_extension".to_owned(),
+            norito::json::Value::Null,
+        );
     }
 
     #[test]
@@ -1708,17 +2387,16 @@ mod tests {
             canonical_sccp_groth16_bn254_verifying_key_bytes_v1(key)
                 .expect("canonical key")
                 .len(),
-            36 * 32
+            38 * 32
         );
         assert_eq!(
             sccp_groth16_bn254_verifying_key_hash_v1(key).expect("canonical key hash"),
-            hex32("51f287450cb7bcc401e07ffe5d726f13aee45f6cce5cb0c8415794d4ba47c774")
+            hex32("6923e63427820ab42cc16c3c2bc0eb4097577919bb3911ea50cbb4f20cebfddb")
         );
     }
 
     #[test]
     fn network_tags_and_tron_route_hash_match_exact_contract_vectors() {
-        assert_eq!(sccp_network_tag_v1(SccpNetworkV1::SoraNexus), 0);
         assert_eq!(sccp_network_tag_v1(SccpNetworkV1::SoraTaira), 1);
         assert_eq!(sccp_network_tag_v1(SccpNetworkV1::EthereumMainnet), 2);
         assert_eq!(sccp_network_tag_v1(SccpNetworkV1::EthereumSepolia), 3);
@@ -1728,8 +2406,8 @@ mod tests {
         assert_eq!(sccp_network_tag_v1(SccpNetworkV1::TronNile), 11);
         assert_eq!(sccp_network_tag_v1(SccpNetworkV1::TronShasta), 12);
 
-        // The gap at 6..=9 is deliberate. This exact byte vector is consumed
-        // by SccpExactTransferCodec.tronNetwork in the deployed contracts.
+        // Tags 0 and 6..=9 are permanently reserved. This exact byte vector is
+        // consumed by SccpExactTransferCodec.tronNetwork in deployed contracts.
         assert_eq!(
             canonical_sccp_network_bytes_v1(SccpNetworkV1::TronNile),
             vec![0x01, 0x0b, 0x05, 0x00, 0x00, 0x00, 0xdc, 0x90, 0x86, 0xcd]
@@ -1763,7 +2441,7 @@ mod tests {
                 7,
             )
             .expect("valid exact TRON route"),
-            hex32("6571ac200c92c7db53afa625984f3cbcc5d2d2490033812b4cbac84f3fa7cfc9")
+            hex32("3546ddb81c89ee998e9eaf7a517b6a59346f8dd28a4727de87dac33da4f04c5f")
         );
     }
 
@@ -1889,6 +2567,321 @@ mod tests {
     }
 
     #[test]
+    fn taira_inbound_activation_rejects_staging_source_even_with_matching_anchor() {
+        let staging_lane = SccpLaneIdV1 {
+            source: SccpNetworkV1::EthereumSepolia,
+            target: SccpNetworkV1::SoraTaira,
+        };
+        let native_anchor = anchor(100);
+        let staged =
+            retarget_evm_route_source(route(1, SccpRouteActivationV1::Staged), staging_lane.source);
+        staged
+            .validate_with_anchor(Some(native_anchor))
+            .expect("staging route remains governable while disabled");
+
+        for activation in [
+            SccpRouteActivationV1::InboundOnly,
+            SccpRouteActivationV1::Bidirectional,
+        ] {
+            let route = retarget_evm_route_source(route(1, activation), staging_lane.source);
+            assert_eq!(
+                route.validate_with_anchor(Some(native_anchor)),
+                Err(SccpRouteValidationError::UnsupportedInboundActivation),
+                "a family-compatible anchor must not activate staging source {activation:?}"
+            );
+            assert_eq!(
+                registry_for_lane(staging_lane, vec![route], Some(native_anchor)).validate(),
+                Err(SccpRouteValidationError::UnsupportedInboundActivation),
+                "registry validation must preserve the staging-source rejection"
+            );
+        }
+    }
+
+    #[test]
+    fn trust_anchor_history_is_append_only_and_current_selects_highest_checkpoint() {
+        let first = anchor(100);
+        let second = SccpNativeTrustAnchorV1 {
+            anchor_hash: [0x92; 32],
+            checkpoint_height: 200,
+            ..first
+        };
+        let mut governed = registry(vec![route(1, SccpRouteActivationV1::Staged)], Some(first));
+        governed.lanes[0].native_trust_anchors.push(second);
+        governed.lanes[0].current_native_trust_anchor_hash = Some(second.anchor_hash);
+        governed.validate().expect("append-only anchor history");
+        let lane = &governed.lanes[0];
+        assert_eq!(lane.current_native_trust_anchor(), Some(second));
+        assert_eq!(
+            lane.native_trust_anchor_by_hash(first.anchor_hash),
+            Some(first)
+        );
+        assert_eq!(
+            lane.native_trust_anchor_interval(first.anchor_hash),
+            Some((first, Some(second.checkpoint_height)))
+        );
+        assert_eq!(
+            lane.native_trust_anchor_interval(second.anchor_hash),
+            Some((second, None))
+        );
+
+        let mut stale_pointer = governed.clone();
+        stale_pointer.lanes[0].current_native_trust_anchor_hash = Some(first.anchor_hash);
+        assert_eq!(
+            stale_pointer.validate(),
+            Err(SccpRouteValidationError::InvalidCurrentTrustAnchor)
+        );
+
+        let mut duplicate_hash = governed.clone();
+        duplicate_hash.lanes[0]
+            .native_trust_anchors
+            .push(SccpNativeTrustAnchorV1 {
+                anchor_hash: first.anchor_hash,
+                checkpoint_height: 300,
+                ..first
+            });
+        duplicate_hash.lanes[0].current_native_trust_anchor_hash = Some(first.anchor_hash);
+        assert_eq!(
+            duplicate_hash.validate(),
+            Err(SccpRouteValidationError::InvalidTrustAnchorHistory)
+        );
+
+        let mut rollback = governed;
+        rollback.lanes[0]
+            .native_trust_anchors
+            .push(SccpNativeTrustAnchorV1 {
+                anchor_hash: [0x93; 32],
+                checkpoint_height: 150,
+                ..first
+            });
+        rollback.lanes[0].current_native_trust_anchor_hash = Some([0x93; 32]);
+        assert_eq!(
+            rollback.validate(),
+            Err(SccpRouteValidationError::InvalidTrustAnchorHistory)
+        );
+    }
+
+    #[test]
+    fn terminal_history_does_not_exhaust_live_route_capacity() {
+        let routes = (1..=12)
+            .map(|revision| {
+                route(
+                    revision,
+                    if revision == 12 {
+                        SccpRouteActivationV1::Staged
+                    } else {
+                        SccpRouteActivationV1::Retired
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let first = anchor(100);
+        let second = SccpNativeTrustAnchorV1 {
+            anchor_hash: [0x92; 32],
+            checkpoint_height: 101,
+            ..first
+        };
+        let mut governed = registry(routes, Some(first));
+        governed.lanes[0].native_trust_anchors.push(second);
+        governed.lanes[0].current_native_trust_anchor_hash = Some(second.anchor_hash);
+        for route in governed.lanes[0]
+            .routes
+            .iter_mut()
+            .filter(|route| route.activation.is_terminal())
+        {
+            route.inbound_finality_cutoff = Some(SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: first.anchor_hash,
+                max_anchor_interval_height: second.checkpoint_height,
+            });
+        }
+        governed
+            .validate()
+            .expect("retained terminal history below the generous cap remains valid");
+        assert_eq!(governed.lanes[0].routes.len(), 12);
+
+        let live_routes = (1..=SCCP_V1_MAX_LIVE_ROUTES_PER_LANE + 1)
+            .map(|revision| {
+                route(
+                    u32::try_from(revision).expect("test revision fits u32"),
+                    SccpRouteActivationV1::Staged,
+                )
+            })
+            .collect();
+        assert_eq!(
+            registry(live_routes, Some(anchor(100))).validate(),
+            Err(SccpRouteValidationError::InvalidLaneLiveRouteCount)
+        );
+    }
+
+    #[test]
+    fn retained_history_caps_accept_exact_bounds_and_reject_one_more() {
+        let first = anchor(99);
+        let second = SccpNativeTrustAnchorV1 {
+            anchor_hash: [0x92; 32],
+            checkpoint_height: 100,
+            ..first
+        };
+        let routes = (1..=SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE)
+            .map(|revision| {
+                route(
+                    u32::try_from(revision).expect("retained route bound fits u32"),
+                    if revision == SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE {
+                        SccpRouteActivationV1::Staged
+                    } else {
+                        SccpRouteActivationV1::Retired
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut exact_routes = registry(routes, Some(first));
+        exact_routes.lanes[0].native_trust_anchors.push(second);
+        exact_routes.lanes[0].current_native_trust_anchor_hash = Some(second.anchor_hash);
+        exact_routes
+            .validate()
+            .expect("exact retained-route bound remains admissible");
+
+        let mut excess_routes = exact_routes;
+        excess_routes.lanes[0].routes.push(route(
+            u32::try_from(SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE + 1)
+                .expect("retained route overflow fixture fits u32"),
+            SccpRouteActivationV1::Staged,
+        ));
+        assert_eq!(
+            excess_routes.validate(),
+            Err(SccpRouteValidationError::TooManyRetainedRoutes)
+        );
+
+        let retained_anchor = |height: usize| {
+            let height = u64::try_from(height).expect("retained anchor bound fits u64");
+            let mut anchor_hash = [0_u8; 32];
+            anchor_hash[24..].copy_from_slice(&height.to_be_bytes());
+            SccpNativeTrustAnchorV1 {
+                backend: BridgeNativeProofBackendV1::EthereumBeacon,
+                anchor_hash,
+                checkpoint_height: height,
+            }
+        };
+        let anchors = (1..=SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE)
+            .map(retained_anchor)
+            .collect::<Vec<_>>();
+        let last_anchor_hash = anchors
+            .last()
+            .expect("retained-anchor bound is nonzero")
+            .anchor_hash;
+        let exact_anchors = SccpRegistryV1 {
+            version: 1,
+            lanes: vec![SccpGovernedLaneV1 {
+                lane_id: lane(),
+                native_trust_anchors: anchors,
+                current_native_trust_anchor_hash: Some(last_anchor_hash),
+                routes: vec![route(1, SccpRouteActivationV1::Staged)],
+            }],
+        };
+        exact_anchors
+            .validate()
+            .expect("exact retained-anchor bound remains admissible");
+
+        let mut excess_anchors = exact_anchors;
+        let excess_anchor = retained_anchor(SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE + 1);
+        excess_anchors.lanes[0]
+            .native_trust_anchors
+            .push(excess_anchor);
+        excess_anchors.lanes[0].current_native_trust_anchor_hash = Some(excess_anchor.anchor_hash);
+        assert_eq!(
+            excess_anchors.validate(),
+            Err(SccpRouteValidationError::TooManyRetainedTrustAnchors)
+        );
+
+        let maximum_route = route(1, SccpRouteActivationV1::Retired);
+        maximum_route
+            .validate()
+            .expect("fixed-shape V1 route remains valid");
+        assert!(
+            maximum_route.encode().len() <= 4_096,
+            "retained-route envelope exceeded the cap-sizing assumption"
+        );
+        assert!(
+            retained_anchor(1).encode().len() <= 64,
+            "retained-anchor envelope exceeded the cap-sizing assumption"
+        );
+        assert_eq!(
+            SCCP_V1_MAX_GOVERNED_LANES
+                * (SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE * 4_096
+                    + SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE * 64),
+            8 * 1024 * 1024,
+            "conservative retained-entry envelope must remain eight MiB"
+        );
+    }
+
+    #[test]
+    fn retired_route_cutoff_must_belong_to_one_retained_anchor_interval() {
+        let first = anchor(100);
+        let second = SccpNativeTrustAnchorV1 {
+            anchor_hash: [0x92; 32],
+            checkpoint_height: 200,
+            ..first
+        };
+        for cutoff in [
+            SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: [0; 32],
+                max_anchor_interval_height: 0,
+            },
+            SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: first.anchor_hash,
+                max_anchor_interval_height: second.checkpoint_height,
+            },
+        ] {
+            let mut live = route(1, SccpRouteActivationV1::Staged);
+            live.inbound_finality_cutoff = Some(cutoff);
+            assert_eq!(
+                live.validate(),
+                Err(SccpRouteValidationError::InvalidInboundFinalityCutoff),
+                "nonterminal route carried cutoff {cutoff:?}"
+            );
+        }
+        let mut governed = registry(vec![route(1, SccpRouteActivationV1::Retired)], Some(first));
+        governed.lanes[0].native_trust_anchors.push(second);
+        governed.lanes[0].current_native_trust_anchor_hash = Some(second.anchor_hash);
+        governed.lanes[0].routes[0].inbound_finality_cutoff = Some(SccpInboundFinalityCutoffV1 {
+            trust_anchor_hash: first.anchor_hash,
+            max_anchor_interval_height: second.checkpoint_height,
+        });
+        governed
+            .validate()
+            .expect("cutoff at the inclusive successor checkpoint is valid");
+
+        for cutoff in [
+            None,
+            Some(SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: [0xFF; 32],
+                max_anchor_interval_height: 150,
+            }),
+            Some(SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: first.anchor_hash,
+                max_anchor_interval_height: 99,
+            }),
+            Some(SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: first.anchor_hash,
+                max_anchor_interval_height: second.checkpoint_height - 1,
+            }),
+            Some(SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: first.anchor_hash,
+                max_anchor_interval_height: second.checkpoint_height + 1,
+            }),
+            Some(SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: second.anchor_hash,
+                max_anchor_interval_height: second.checkpoint_height + 1,
+            }),
+        ] {
+            let mut hostile = governed.clone();
+            hostile.lanes[0].routes[0].inbound_finality_cutoff = cutoff;
+            assert_eq!(
+                hostile.validate(),
+                Err(SccpRouteValidationError::InvalidInboundFinalityCutoff)
+            );
+        }
+    }
+
+    #[test]
     fn multiple_outbound_revisions_and_revision_gaps_are_rejected() {
         assert_eq!(
             registry(
@@ -1915,6 +2908,7 @@ mod tests {
     fn activation_transitions_enforce_drain_before_retirement() {
         use SccpRouteActivationV1 as A;
         assert!(A::Staged.can_transition_to(A::Bidirectional));
+        assert!(A::Staged.can_transition_to(A::InboundOnly));
         assert!(A::Bidirectional.can_transition_to(A::InboundOnly));
         assert!(A::InboundOnly.can_transition_to(A::Retired));
         assert!(!A::Bidirectional.can_transition_to(A::Retired));
@@ -1969,18 +2963,360 @@ mod tests {
         assert_eq!(alias.validate(), Err(SccpRouteValidationError::RoleAlias));
     }
 
+    #[test]
+    fn outbound_proof_policy_rejects_every_malformed_or_aliased_role() {
+        let policy = outbound_proof_policy();
+        policy.validate().expect("exact fixture policy");
+        let profile_hash = policy.semantic_profile_hash().expect("profile hash");
+        let anchor_hash = policy.sora_finality_anchor_hash().expect("anchor hash");
+        assert_eq!(
+            sccp_groth16_bn254_public_signal_schema_hash_v1(),
+            hex32("7567439f41173d6745a3d51923cb70371acc7d66f23cefb4100d6d5d7a432cbb")
+        );
+        assert_eq!(
+            sccp_sora_taira_chain_id_hash_v1(),
+            hex32("3f139c4b2a31457994d17be5ce922d87fc702939116359f0e47314ab36a7f588")
+        );
+        assert_eq!(
+            profile_hash,
+            hex32("ce5a1e17aca3cafe47a403fd66479f0a36339eb56092dafa67c8d97bdeeb60ef")
+        );
+        assert_eq!(
+            anchor_hash,
+            hex32("60c7628fe7a8e8c6a73a21ef30c270b6944bb33a4feb03e0b302aabe210cf0c6")
+        );
+        assert_ne!(profile_hash, [0; 32]);
+        assert_ne!(anchor_hash, [0; 32]);
+        assert_ne!(profile_hash, anchor_hash);
+
+        let mut invalid = policy;
+        invalid.version = 0;
+        assert_eq!(
+            invalid.validate(),
+            Err(SccpRouteValidationError::InvalidOutboundProofPolicy)
+        );
+
+        let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(mut circuit) =
+            policy.semantic_profile;
+        circuit.circuit_commitment = [0; 32];
+        invalid = policy;
+        invalid.semantic_profile =
+            SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(circuit);
+        assert_eq!(
+            invalid.validate(),
+            Err(SccpRouteValidationError::InvalidSemanticProofProfile)
+        );
+
+        let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(mut circuit) =
+            policy.semantic_profile;
+        circuit.witness_generator_commitment = circuit.circuit_commitment;
+        invalid = policy;
+        invalid.semantic_profile =
+            SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(circuit);
+        assert_eq!(
+            invalid.validate(),
+            Err(SccpRouteValidationError::InvalidSemanticProofProfile)
+        );
+
+        let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(mut circuit) =
+            policy.semantic_profile;
+        circuit.public_signal_schema_hash[0] ^= 1;
+        invalid = policy;
+        invalid.semantic_profile =
+            SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(circuit);
+        assert_eq!(
+            invalid.validate(),
+            Err(SccpRouteValidationError::InvalidSemanticProofProfile)
+        );
+
+        let anchor_mutations: [fn(&mut SccpSoraFinalityAnchorV1); 7] = [
+            |anchor: &mut SccpSoraFinalityAnchorV1| anchor.version = 0,
+            |anchor: &mut SccpSoraFinalityAnchorV1| {
+                anchor.source_network = SccpNetworkV1::EthereumMainnet;
+            },
+            |anchor: &mut SccpSoraFinalityAnchorV1| anchor.chain_id_hash[0] ^= 1,
+            |anchor: &mut SccpSoraFinalityAnchorV1| anchor.checkpoint_height = 0,
+            |anchor: &mut SccpSoraFinalityAnchorV1| anchor.checkpoint_block_hash = [0; 32],
+            |anchor: &mut SccpSoraFinalityAnchorV1| anchor.validator_set_hash = [0; 32],
+            |anchor: &mut SccpSoraFinalityAnchorV1| {
+                anchor.validator_set_hash_version = VALIDATOR_SET_HASH_VERSION_V1 + 1;
+            },
+        ];
+        for mutate in anchor_mutations {
+            invalid = policy;
+            mutate(&mut invalid.sora_finality_anchor);
+            assert_eq!(
+                invalid.validate(),
+                Err(SccpRouteValidationError::InvalidSoraFinalityAnchor)
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_destination_deployments_roundtrip_with_typed_outbound_policy() {
+        let evm = deployment(1);
+        let evm_bytes = norito::to_bytes(&evm).expect("canonical EVM deployment encodes");
+        let decoded_evm = norito::decode_from_bytes::<SccpEvmDestinationDeploymentV1>(&evm_bytes)
+            .expect("canonical EVM deployment decodes");
+        assert_eq!(decoded_evm, evm);
+        assert_eq!(
+            norito::to_bytes(&decoded_evm).expect("decoded EVM deployment re-encodes"),
+            evm_bytes
+        );
+        decoded_evm
+            .outbound_proof_policy
+            .validate()
+            .expect("roundtripped EVM policy remains valid");
+
+        let tron = tron_deployment();
+        let tron_bytes = norito::to_bytes(&tron).expect("canonical TRON deployment encodes");
+        let decoded_tron =
+            norito::decode_from_bytes::<SccpTronDestinationDeploymentV1>(&tron_bytes)
+                .expect("canonical TRON deployment decodes");
+        assert_eq!(decoded_tron, tron);
+        assert_eq!(
+            norito::to_bytes(&decoded_tron).expect("decoded TRON deployment re-encodes"),
+            tron_bytes
+        );
+        decoded_tron
+            .outbound_proof_policy
+            .validate()
+            .expect("roundtripped TRON policy remains valid");
+    }
+
+    #[test]
+    fn policyless_norito_destination_deployments_are_rejected() {
+        #[derive(norito::derive::NoritoSerialize)]
+        struct PolicylessEvmDestinationDeploymentV1 {
+            token_address: [u8; 20],
+            token_code_hash: [u8; 32],
+            verifier_address: [u8; 20],
+            verifier_code_hash: [u8; 32],
+            verifying_key: SccpGroth16Bn254VerifyingKeyV1,
+            verifier_key_hash: [u8; 32],
+            route_address: [u8; 20],
+            route_code_hash: [u8; 32],
+            taira_to_token_multiplier: u64,
+        }
+
+        #[derive(norito::derive::NoritoSerialize)]
+        struct PolicylessTronDestinationDeploymentV1 {
+            token_address: [u8; 20],
+            token_code_hash: [u8; 32],
+            verifier_address: [u8; 20],
+            verifier_code_hash: [u8; 32],
+            verifying_key: SccpGroth16Bn254VerifyingKeyV1,
+            verifier_key_hash: [u8; 32],
+            route_address: [u8; 20],
+            route_code_hash: [u8; 32],
+            taira_to_token_multiplier: u64,
+        }
+
+        let evm = deployment(1);
+        let mut evm_bytes = norito::to_bytes(&PolicylessEvmDestinationDeploymentV1 {
+            token_address: evm.token_address,
+            token_code_hash: evm.token_code_hash,
+            verifier_address: evm.verifier_address,
+            verifier_code_hash: evm.verifier_code_hash,
+            verifying_key: evm.verifying_key,
+            verifier_key_hash: evm.verifier_key_hash,
+            route_address: evm.route_address,
+            route_code_hash: evm.route_code_hash,
+            taira_to_token_multiplier: evm.taira_to_token_multiplier,
+        })
+        .expect("policy-less EVM deployment encodes");
+        evm_bytes[6..22].copy_from_slice(
+            &<SccpEvmDestinationDeploymentV1 as norito::NoritoSerialize>::schema_hash(),
+        );
+        assert!(
+            norito::decode_from_bytes::<SccpEvmDestinationDeploymentV1>(&evm_bytes).is_err(),
+            "policy-less EVM deployment must not decode as the canonical V1 shape"
+        );
+
+        let tron = tron_deployment();
+        let mut tron_bytes = norito::to_bytes(&PolicylessTronDestinationDeploymentV1 {
+            token_address: tron.token_address,
+            token_code_hash: tron.token_code_hash,
+            verifier_address: tron.verifier_address,
+            verifier_code_hash: tron.verifier_code_hash,
+            verifying_key: tron.verifying_key,
+            verifier_key_hash: tron.verifier_key_hash,
+            route_address: tron.route_address,
+            route_code_hash: tron.route_code_hash,
+            taira_to_token_multiplier: tron.taira_to_token_multiplier,
+        })
+        .expect("policy-less TRON deployment encodes");
+        tron_bytes[6..22].copy_from_slice(
+            &<SccpTronDestinationDeploymentV1 as norito::NoritoSerialize>::schema_hash(),
+        );
+        assert!(
+            norito::decode_from_bytes::<SccpTronDestinationDeploymentV1>(&tron_bytes).is_err(),
+            "policy-less TRON deployment must not decode as the canonical V1 shape"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn policyless_json_destination_deployments_are_rejected() {
+        let mut evm = norito::json::to_value(&deployment(1)).expect("serialize EVM deployment");
+        let norito::json::Value::Object(evm_object) = &mut evm else {
+            panic!("EVM deployment JSON is an object")
+        };
+        assert!(evm_object.remove("outbound_proof_policy").is_some());
+        let evm_json = norito::json::to_json(&evm).expect("serialize policy-less EVM deployment");
+        assert!(norito::json::from_json::<SccpEvmDestinationDeploymentV1>(&evm_json).is_err());
+
+        let mut tron =
+            norito::json::to_value(&tron_deployment()).expect("serialize TRON deployment");
+        let norito::json::Value::Object(tron_object) = &mut tron else {
+            panic!("TRON deployment JSON is an object")
+        };
+        assert!(tron_object.remove("outbound_proof_policy").is_some());
+        let tron_json =
+            norito::json::to_json(&tron).expect("serialize policy-less TRON deployment");
+        assert!(norito::json::from_json::<SccpTronDestinationDeploymentV1>(&tron_json).is_err());
+    }
+
+    #[test]
+    fn semantic_profile_and_anchor_are_committed_by_binding_and_route_hash() {
+        let baseline = deployment(1);
+        let baseline_binding =
+            sccp_evm_destination_binding_hash_v1(lane().source, &baseline).expect("binding");
+        let baseline_route = SccpDestinationDeploymentV1::Evm(baseline)
+            .route_configuration_hash(
+                lane(),
+                "taira_eth_xor",
+                "xor",
+                1,
+                SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+            )
+            .expect("route hash");
+
+        let mut changed_profile = baseline;
+        let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(ref mut circuit) =
+            changed_profile.outbound_proof_policy.semantic_profile;
+        circuit.circuit_commitment = [0x75; 32];
+        changed_profile
+            .outbound_proof_policy
+            .validate()
+            .expect("changed profile remains valid");
+        assert_ne!(
+            baseline_binding,
+            sccp_evm_destination_binding_hash_v1(lane().source, &changed_profile)
+                .expect("changed binding")
+        );
+        assert_ne!(
+            baseline_route,
+            SccpDestinationDeploymentV1::Evm(changed_profile)
+                .route_configuration_hash(
+                    lane(),
+                    "taira_eth_xor",
+                    "xor",
+                    1,
+                    SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+                )
+                .expect("changed route hash")
+        );
+
+        let mut changed_anchor = baseline;
+        changed_anchor
+            .outbound_proof_policy
+            .sora_finality_anchor
+            .checkpoint_height += 1;
+        assert_ne!(
+            baseline_binding,
+            sccp_evm_destination_binding_hash_v1(lane().source, &changed_anchor)
+                .expect("changed anchor binding")
+        );
+    }
+
     #[cfg(feature = "json")]
     #[test]
     fn registry_json_rejects_unknown_fields_at_every_consensus_boundary() {
-        let registry = registry(vec![route(1, SccpRouteActivationV1::Staged)], None);
-        let mut value = norito::json::to_value(&registry).expect("serialize registry");
-        let norito::json::Value::Object(root) = &mut value else {
-            panic!("registry JSON is an object")
-        };
-        root.insert("operator_note".to_owned(), norito::json::Value::Null);
-        let json = norito::json::to_json(&value).expect("serialize mutated JSON");
-        let error = norito::json::from_json::<SccpRegistryV1>(&json)
-            .expect_err("unknown consensus field must fail");
-        assert!(error.to_string().contains("unknown field"));
+        let route = route(1, SccpRouteActivationV1::Staged);
+        let valid_json = norito::json::to_json(&route).expect("route serializes");
+        assert_eq!(
+            norito::json::from_json::<SccpGovernedRouteV1>(&valid_json)
+                .expect("valid route decodes"),
+            route
+        );
+
+        for path in [
+            &[][..],
+            &["destination"][..],
+            &["destination", "deployment"][..],
+            &["destination", "deployment", "verifying_key"][..],
+            &[
+                "destination",
+                "deployment",
+                "verifying_key",
+                "ic",
+                "signal_10",
+            ][..],
+            &["source_identity"][..],
+            &["source_identity", "lane"][..],
+            &["source_identity", "emitter"][..],
+            &["source_identity", "emitter", "identity"][..],
+            &["destination", "deployment", "outbound_proof_policy"][..],
+            &[
+                "destination",
+                "deployment",
+                "outbound_proof_policy",
+                "semantic_profile",
+            ][..],
+            &[
+                "destination",
+                "deployment",
+                "outbound_proof_policy",
+                "semantic_profile",
+                "commitments",
+            ][..],
+            &[
+                "destination",
+                "deployment",
+                "outbound_proof_policy",
+                "sora_finality_anchor",
+            ][..],
+        ] {
+            let mut hostile = norito::json::to_value(&route).expect("serialize route");
+            insert_unknown_json_field(&mut hostile, path);
+            let hostile_json = norito::json::to_json(&hostile).expect("serialize hostile route");
+            let error = norito::json::from_json::<SccpGovernedRouteV1>(&hostile_json)
+                .expect_err("unknown route field must fail");
+            assert!(
+                error.to_string().contains("adversarial_extension"),
+                "unexpected error for path {path:?}: {error}"
+            );
+        }
+
+        let registry = registry(vec![route], None);
+        let registry_json = norito::json::to_json(&registry).expect("registry serializes");
+        assert_eq!(
+            norito::json::from_json::<SccpRegistryV1>(&registry_json)
+                .expect("valid registry decodes"),
+            registry
+        );
+        for path in [&[][..], &["lanes"][..]] {
+            let mut hostile = norito::json::to_value(&registry).expect("serialize registry");
+            if path == ["lanes"] {
+                let norito::json::Value::Object(root) = &mut hostile else {
+                    panic!("registry JSON is an object")
+                };
+                let norito::json::Value::Array(lanes) = root
+                    .get_mut("lanes")
+                    .expect("registry JSON carries governed lanes")
+                else {
+                    panic!("registry lanes JSON is an array")
+                };
+                insert_unknown_json_field(&mut lanes[0], &[]);
+            } else {
+                insert_unknown_json_field(&mut hostile, path);
+            }
+            let hostile_json = norito::json::to_json(&hostile).expect("serialize hostile registry");
+            assert!(
+                norito::json::from_json::<SccpRegistryV1>(&hostile_json).is_err(),
+                "unknown registry field at {path:?} must fail"
+            );
+        }
     }
 }

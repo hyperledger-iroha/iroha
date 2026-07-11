@@ -800,11 +800,11 @@ pub struct SyncCommittee {
 impl SyncCommittee {
     /// Construct a fixed-size sync committee.
     pub fn new(
-        pubkeys: [BlsPublicKey; SYNC_COMMITTEE_SIZE],
+        pubkeys: Box<[BlsPublicKey; SYNC_COMMITTEE_SIZE]>,
         aggregate_pubkey: BlsPublicKey,
     ) -> Self {
         Self {
-            pubkeys: Box::new(pubkeys),
+            pubkeys,
             aggregate_pubkey,
         }
     }
@@ -1247,7 +1247,7 @@ impl EthereumLightClientState {
         };
 
         Ok(Self {
-            schedule: self.schedule.clone(),
+            schedule: self.schedule,
             finalized_header: update.finalized_header,
             current_sync_committee,
             next_sync_committee,
@@ -1274,15 +1274,12 @@ impl EthereumLightClientState {
         hasher.update(self.schedule.commitment());
         hasher.update(self.finalized_header.hash_tree_root());
         hasher.update(self.current_sync_committee.hash_tree_root());
-        match &self.next_sync_committee {
-            Some(committee) => {
-                hasher.update([1]);
-                hasher.update(committee.hash_tree_root());
-            }
-            None => {
-                hasher.update([0]);
-                hasher.update(ZERO_ROOT);
-            }
+        if let Some(committee) = &self.next_sync_committee {
+            hasher.update([1]);
+            hasher.update(committee.hash_tree_root());
+        } else {
+            hasher.update([0]);
+            hasher.update(ZERO_ROOT);
         }
         hasher.finalize().into()
     }
@@ -1491,7 +1488,7 @@ mod tests {
 
     fn committee(public_key: [u8; 48]) -> SyncCommittee {
         SyncCommittee::new(
-            [BlsPublicKey::new(public_key); SYNC_COMMITTEE_SIZE],
+            Box::new([BlsPublicKey::new(public_key); SYNC_COMMITTEE_SIZE]),
             BlsPublicKey::new(public_key),
         )
     }
@@ -1849,7 +1846,7 @@ mod tests {
             .try_into()
             .expect("Electra current branch length");
         let state = EthereumLightClientState::from_trusted_anchor(
-            schedule.clone(),
+            schedule,
             trusted,
             LightClientBootstrap {
                 header: header.clone(),
@@ -1895,7 +1892,7 @@ mod tests {
         let header = altair_header(1, root(9));
         assert_eq!(
             EthereumLightClientState::from_trusted_anchor(
-                schedule.clone(),
+                schedule,
                 root(8),
                 LightClientBootstrap {
                     header: header.clone(),
@@ -1909,7 +1906,7 @@ mod tests {
         );
         assert_eq!(
             EthereumLightClientState::from_trusted_anchor(
-                schedule.clone(),
+                schedule,
                 header.beacon().hash_tree_root(),
                 LightClientBootstrap {
                     header: header.clone(),
@@ -2083,7 +2080,7 @@ mod tests {
         );
 
         let conflicting_committee = SyncCommittee::new(
-            [BlsPublicKey::new(GENERATOR_PUBLIC_KEY); SYNC_COMMITTEE_SIZE],
+            Box::new([BlsPublicKey::new(GENERATOR_PUBLIC_KEY); SYNC_COMMITTEE_SIZE]),
             BlsPublicKey::new(NEGATED_GENERATOR_PUBLIC_KEY),
         );
         let conflicting = unsigned_update(3, 4, 5, conflicting_committee, [0; 96]);

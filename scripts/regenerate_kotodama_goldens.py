@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import struct
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -31,12 +33,15 @@ from typing import Iterable, Sequence
 MAX_CYCLES = 1_000_000
 HEADER_SIZE = 17
 ZK_MODE_BIT = 0x01
+VECTOR_MODE_BIT = 0x02
+KNOWN_CONTRACT_MODE_BITS = ZK_MODE_BIT | VECTOR_MODE_BIT
 MAP_PATH = Path("scripts/kotodama_goldens.tsv")
 SIZE_BASELINE_PATH = Path("scripts/kotodama_v1_size_baseline.json")
 TEST_SOURCE = Path("crates/ivm/docs/examples/19_contract_flow_test.test.ko")
 FILTERED_TEST_FRAGMENT = "actor_helpers"
 EXACT_TEST_NAME = "actor_helpers_roundtrip"
 SIZE_BASELINE_SCHEMA = "kotodama-v1-size-baseline-v1"
+SIZE_BASELINE_CORPUS = "kotodama-v1-audited-padding-heavy-control-flow"
 # `ADDI r0, r0, 0` is reserved by the Kotodama assembler as its one-word
 # relocation placeholder. A deployable image may contain it only when it was
 # deliberately emitted as a semantic no-op; V1 keeps such words below 1%.
@@ -235,7 +240,12 @@ def validate_artifact(path: Path, mode: str) -> None:
         raise GoldenError(f"{path} does not use ABI v1")
     if struct.unpack_from("<Q", artifact, 8)[0] != MAX_CYCLES:
         raise GoldenError(f"{path} does not embed the {MAX_CYCLES}-cycle ceiling")
-    is_zk = bool(artifact[6] & ZK_MODE_BIT)
+    header_mode = artifact[6]
+    if header_mode & ~KNOWN_CONTRACT_MODE_BITS:
+        raise GoldenError(f"{path} contains unknown execution-mode bits")
+    if artifact[7] != 0:
+        raise GoldenError(f"{path} contains a noncanonical vector-length override")
+    is_zk = bool(header_mode & ZK_MODE_BIT)
     if is_zk != (mode == "zk"):
         raise GoldenError(f"{path} has the wrong ZK execution bit for mode {mode}")
     if artifact[HEADER_SIZE : HEADER_SIZE + 4] != b"CNTR":
@@ -297,7 +307,7 @@ def artifact_code_metrics(path: Path) -> ArtifactCodeMetrics:
 
 
 def read_size_baseline(path: Path) -> dict[Path, int]:
-    """Read the immutable pre-reset code-size evidence for representative samples."""
+    """Read immutable pre-reset evidence for the normative V1 size corpus."""
 
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -312,6 +322,11 @@ def read_size_baseline(path: Path) -> dict[Path, int]:
         )
     if payload.get("unit") != "code_bytes":
         raise GoldenError(f"Kotodama size baseline {path} must use code_bytes")
+    if payload.get("corpus") != SIZE_BASELINE_CORPUS:
+        raise GoldenError(
+            f"Kotodama size baseline {path} must bind the normative corpus "
+            f"{SIZE_BASELINE_CORPUS!r}"
+        )
     source_revision = payload.get("source_revision")
     if (
         not isinstance(source_revision, str)
@@ -529,6 +544,104 @@ def run_contract_tests(koto: Path, root: Path, stage: Path) -> None:
     json_output = run(commands[3], root)
     (stage / "contract-flow-tests.json").write_text(json_output, encoding="utf-8")
     run(commands[4], root)
+    validate_contract_test_reports(
+        json_output,
+        stage / "contract-flow-tests.xml",
+    )
+
+
+def validate_contract_test_reports(json_output: str, junit_path: Path) -> None:
+    """Require equivalent, successful canonical JSON and JUnit reports."""
+
+    try:
+        report = json.loads(json_output)
+    except json.JSONDecodeError as error:
+        raise GoldenError(f"koto test emitted invalid JSON: {error}") from error
+    expected_report_keys = {"target", "seed", "passed", "failed", "tests"}
+    if not isinstance(report, dict) or set(report) != expected_report_keys:
+        raise GoldenError("koto test JSON has a noncanonical report shape")
+    tests = report["tests"]
+    if (
+        not isinstance(report["target"], str)
+        or not report["target"]
+        or isinstance(report["seed"], bool)
+        or report["seed"] != 0
+        or isinstance(report["passed"], bool)
+        or not isinstance(report["passed"], int)
+        or isinstance(report["failed"], bool)
+        or not isinstance(report["failed"], int)
+        or not isinstance(tests, list)
+        or not tests
+        or report["passed"] != len(tests)
+        or report["failed"] != 0
+    ):
+        raise GoldenError("koto test JSON does not describe a complete successful run")
+
+    expected_test_keys = {"name", "line", "passed", "duration_ns", "failure"}
+    names: list[str] = []
+    for test in tests:
+        if not isinstance(test, dict) or set(test) != expected_test_keys:
+            raise GoldenError("koto test JSON contains a noncanonical test result")
+        if (
+            not isinstance(test["name"], str)
+            or not test["name"]
+            or isinstance(test["line"], bool)
+            or not isinstance(test["line"], int)
+            or test["line"] <= 0
+            or test["passed"] is not True
+            or isinstance(test["duration_ns"], bool)
+            or not isinstance(test["duration_ns"], int)
+            or test["duration_ns"] < 0
+            or test["failure"] is not None
+        ):
+            raise GoldenError("koto test JSON contains an invalid successful test result")
+        names.append(test["name"])
+    if len(names) != len(set(names)):
+        raise GoldenError("koto test JSON contains duplicate test names")
+
+    try:
+        suite = ElementTree.parse(junit_path).getroot()
+    except (OSError, ElementTree.ParseError) as error:
+        raise GoldenError(f"koto test emitted invalid JUnit XML: {error}") from error
+    try:
+        junit_tests = int(suite.attrib["tests"])
+        junit_failures = int(suite.attrib["failures"])
+        junit_seed = int(suite.attrib["seed"])
+        junit_duration = float(suite.attrib["time"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise GoldenError("koto test JUnit has invalid summary attributes") from error
+    cases = list(suite)
+    if (
+        suite.tag != "testsuite"
+        or set(suite.attrib) != {"name", "tests", "failures", "time", "seed"}
+        or suite.attrib["name"] != report["target"]
+        or junit_tests != len(tests)
+        or junit_failures != 0
+        or junit_seed != 0
+        or not math.isfinite(junit_duration)
+        or junit_duration < 0.0
+        or len(cases) != len(tests)
+    ):
+        raise GoldenError("koto test JUnit does not match the successful JSON run")
+    junit_names: list[str] = []
+    for case in cases:
+        if (
+            case.tag != "testcase"
+            or set(case.attrib) != {"name", "classname", "line", "time"}
+            or case.attrib["classname"] != report["target"]
+            or list(case)
+        ):
+            raise GoldenError("koto test JUnit contains a noncanonical test case")
+        try:
+            line = int(case.attrib["line"])
+            duration = float(case.attrib["time"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise GoldenError("koto test JUnit contains invalid case attributes") from error
+        if line <= 0 or not math.isfinite(duration) or duration < 0.0:
+            raise GoldenError("koto test JUnit contains invalid case values")
+        junit_names.append(case.attrib["name"])
+    if junit_names != names:
+        raise GoldenError("koto test JSON and JUnit test inventories differ")
 
 
 def verify_runtime_manifests(
@@ -546,6 +659,7 @@ def verify_runtime_manifests(
         run(
             [
                 iroha,
+                "--machine",
                 "contract",
                 "manifest",
                 "build",

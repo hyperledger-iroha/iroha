@@ -63,9 +63,9 @@ seiyaku Hello {
 
     kotoage fn write_detail() authorize("Admin") {
         ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
         );
     }
 
@@ -152,63 +152,3 @@ iroha --config defaults/client.toml \
 - Өөрийнхөө гэрээг давтахдаа `npm run sync-norito-snippets`-г ашиглана уу
   ажлын талбар нь татаж авах боломжтой хэсгүүдийг сэргээхийн тулд портал баримт бичиг болон олдворууд үлдэх болно
   `crates/ivm/docs/examples/` доорх эх сурвалжуудтай синхрончлогдсон.
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```

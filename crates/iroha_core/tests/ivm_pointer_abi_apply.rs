@@ -33,6 +33,22 @@ fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
     blob
 }
 
+fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
+    let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
+    let entrypoint = metadata
+        .contract_interface
+        .as_ref()
+        .expect("Kotodama V1 artifact must embed CNTR")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == name)
+        .unwrap_or_else(|| panic!("missing Kotodama V1 entrypoint `{name}`"));
+    let entrypoint_pc = u64::try_from(metadata.prefix_len()).expect("program prefix fits u64")
+        + entrypoint.entry_pc;
+    vm.set_program_counter(entrypoint_pc)
+        .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
+}
+
 fn opaque_asset_definition_literal(aid_bytes: [u8; 16]) -> String {
     AssetDefinitionId::from_uuid_bytes(aid_bytes)
         .expect("opaque asset definition id")
@@ -54,7 +70,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
     let amount = Numeric::from(500_u64);
-    let amount_bytes = tlv_envelope(PointerType::NoritoBytes, &amount);
+    let amount_bytes = tlv_envelope(PointerType::Amount, &amount);
     let dataspace = iroha_data_model::nexus::DataSpaceId::UNIVERSAL;
     let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
     let align8 = |n: u64| (n + 7) & !7;
@@ -241,7 +257,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
-    let amount_bytes = tlv_envelope(PointerType::NoritoBytes, &amount);
+    let amount_bytes = tlv_envelope(PointerType::Amount, &amount);
     let dataspace = iroha_data_model::nexus::DataSpaceId::UNIVERSAL;
     let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
     let align8 = |n: u64| (n + 7) & !7;
@@ -392,10 +408,10 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         seiyaku DebugTransfer {{
           kotoage fn main() authorize("TransferAsset") {{
             let ev = Json::parse("{{\"kind\":\"asset_change\",\"op\":\"added\",\"asset_definition_id\":\"{aed}\",\"account_domain\":\"{domain}\",\"account_id\":\"{dst}\",\"amount_i64\":1}}");
-            let recipient = json::get_account_id(ev, Name::parse("account_id"));
-            let amount = Amount::from_i64(json::get_i64(ev, Name::parse("amount_i64")));
-            ledger::asset::transfer(recipient, AccountId::parse("{reserve}"), AssetDefinitionId::parse("{aed}"), amount, DataSpaceId::parse("0"));
-            ledger::asset::transfer(AccountId::parse("{reserve}"), recipient, AssetDefinitionId::parse("{cbdc}"), amount * Amount::from_i64({ratio}), DataSpaceId::parse("0"));
+            let recipient = ev.get_account_id(Name::parse("account_id")).unwrap_or(AccountId::parse("{dst}"));
+            let amount = Amount::from_i64(ev.get_i64(Name::parse("amount_i64")).unwrap_or(0));
+            ledger::asset::transfer(source: recipient, destination: AccountId::parse("{reserve}"), asset_definition: AssetDefinitionId::parse("{aed}"), amount: amount, dataspace: DataSpaceId::parse("0"));
+            ledger::asset::transfer(source: AccountId::parse("{reserve}"), destination: recipient, asset_definition: AssetDefinitionId::parse("{cbdc}"), amount: amount * Amount::from_i64({ratio}), dataspace: DataSpaceId::parse("0"));
           }}
         }}
         "#,
@@ -411,6 +427,7 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let mut vm = IVM::new(500_000);
     vm.set_host(CoreHost::new(authority.clone()));
     vm.load_program(&program).expect("load");
+    select_kotodama_entrypoint(&mut vm, &program, "main");
     vm.run().expect("run");
 
     let kura = Kura::blank_kura_for_testing();

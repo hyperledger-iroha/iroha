@@ -1,1 +1,1 @@
-{"counterparty_profile":"bsc-mainnet","fixture":"exact-native-and-outbound-evidence-v1","result":"passed"}
+{"schema":"sccp-release-lane-evidence-v1","version":1,"profile":{"network":"bsc_mainnet","profile":null},"inbound":{"status":"unavailable","evidence":{"reason":"authenticated-native-inbound-proof-is-unavailable"}},"outbound":{"status":"unavailable","evidence":{"reason":"authenticated-destination-state-is-unavailable"}}}

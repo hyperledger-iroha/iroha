@@ -36,6 +36,18 @@ final class NoritoTests: XCTestCase {
         XCTAssertEqual(frame.header.schema, noritoSchemaHash(forTypeName: typeName))
     }
 
+    func testNoritoDecodeFrameEnforcesGenericPaddingBoundary() {
+        let payload = Data([0x01, 0x02])
+        let framed = noritoEncode(typeName: "test.PaddingBoundary", payload: payload)
+        var exact = framed
+        exact.insert(contentsOf: [UInt8](repeating: 0, count: 64), at: NoritoHeader.encodedLength)
+        XCTAssertEqual(noritoDecodeFrame(exact)?.paddingLength, 64)
+
+        var over = framed
+        over.insert(contentsOf: [UInt8](repeating: 0, count: 65), at: NoritoHeader.encodedLength)
+        XCTAssertNil(noritoDecodeFrame(over))
+    }
+
     func testNoritoDecodeFrameRejectsReservedFlags() {
         let payload = Data([0x01])
         for flags in [

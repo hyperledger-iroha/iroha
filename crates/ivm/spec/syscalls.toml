@@ -96,19 +96,19 @@ gas = "G_unreg_asset"
 
 [[syscall]]
 number = "0x22"
-args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)"
+args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount"
 ret = "u64=0"
 gas = "G_mint"
 
 [[syscall]]
 number = "0x23"
-args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)"
+args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount"
 ret = "u64=0"
 gas = "G_burn"
 
 [[syscall]]
 number = "0x24"
-args = "r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric); batch-internal only"
+args = "r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount; batch-internal only"
 ret = "u64=0"
 gas = "G_transfer"
 
@@ -156,7 +156,7 @@ gas = "G_transfer per entry"
 
 [[syscall]]
 number = "0x2C"
-args = "r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric), r14=&DataSpaceId"
+args = "r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount, r14=&DataSpaceId"
 ret = "u64=0"
 gas = "G_transfer"
 
@@ -535,10 +535,148 @@ ret = "r10=payload_len:u64"
 gas = "G_tlv_len + bytes"
 
 [[syscall]]
+number = "0x78"
+args = "r10=&Json(object), r11=&Name(key)"
+ret = "r10=Option<i64> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x79"
+args = "r10=&Json(object), r11=&Name(key)"
+ret = "r10=Option<Json> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x7A"
+args = "r10=&Json(object), r11=&Name(key)"
+ret = "r10=Option<Name> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x7B"
+args = "r10=&Json(object), r11=&Name(key)"
+ret = "r10=Option<AccountId> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x7C"
+args = "r10=&Json(object), r11=&Name(key)"
+ret = "r10=Option<NftId> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x7D"
+args = "r10=&Json(object), r11=&Name(key)"
+ret = "r10=Option<bytes> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
 number = "0x7E"
 args = "r10=&NoritoBytes(VrfEpochSeedRequest)"
 ret = "r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64"
 gas = "G_vote_get + bytes"
+
+[[syscall]]
+number = "0x7F"
+args = "r10=&Json(object), r11=&Name(key)"
+ret = "r10=Option<Amount> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x80"
+args = "r10=&Json(object), r11=&Name(key)"
+ret = "r10=Option<AssetDefinitionId> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x81"
+args = "-"
+ret = "r10=&Json(empty object)"
+gas = "G_json + encoded bytes"
+
+[[syscall]]
+number = "0x82"
+args = "r10=&Json(object), r11=&Name(key), r12=value:i64"
+ret = "r10=&Json"
+gas = "G_json + encoded bytes"
+
+[[syscall]]
+number = "0x83"
+args = "r10=&Json(object), r11=&Name(key), r12=&AccountId"
+ret = "r10=&Json"
+gas = "G_json + encoded bytes"
+
+[[syscall]]
+number = "0x84"
+args = "r10=&Json(any validated region), r11=&Name(key)"
+ret = "r10=Option<i64> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x85"
+args = "r10=&Json(any validated region), r11=&Name(key)"
+ret = "r10=Option<Json> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x86"
+args = "r10=&Json(any validated region), r11=&Name(key)"
+ret = "r10=Option<Name> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x87"
+args = "r10=&Json(any validated region), r11=&Name(key)"
+ret = "r10=Option<AccountId> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x88"
+args = "r10=&Json(any validated region), r11=&Name(key)"
+ret = "r10=Option<NftId> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x89"
+args = "r10=&Json(any validated region), r11=&Name(key)"
+ret = "r10=Option<bytes> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x8A"
+args = "r10=&Json(any validated region), r11=&Name(key)"
+ret = "r10=Option<Amount> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x8B"
+args = "r10=&Json(any validated region), r11=&Name(key)"
+ret = "r10=Option<AssetDefinitionId> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x8C"
+args = "r10=&Json(any validated region), r11=&Name(key), r12=value:i64"
+ret = "r10=&Json"
+gas = "G_json + encoded bytes"
+
+[[syscall]]
+number = "0x8D"
+args = "r10=&Json(any validated region), r11=&Name(key), r12=&AccountId"
+ret = "r10=&Json"
+gas = "G_json + encoded bytes"
+
+[[syscall]]
+number = "0x8E"
+args = "r10=&Name(base), r11=&NoritoBytes(key)"
+ret = "r10=ptr (&Name)"
+gas = "G_path + bytes"
+
+[[syscall]]
+number = "0x8F"
+args = "r10=&Name(schema)"
+ret = "ptr (&Json{\"id\":...,\"version\":...})"
+gas = "G_schema + bytes"
 
 [[syscall]]
 number = "0x90"
@@ -662,8 +800,8 @@ gas = "G_sysvar"
 
 [[syscall]]
 number = "0xA9"
-args = "r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload)"
-ret = "r10=ptr (&NoritoBytes(return)) or 0"
+args = "r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&NoritoBytes(EntrypointArgumentRecordV1) or 0"
+ret = "r10=ptr (&NoritoBytes(EntrypointReturnRecordV1)) or 0"
 gas = "G_call_contract + request bytes + return bytes + child gas"
 
 [[syscall]]
@@ -734,7 +872,7 @@ gas = "G_axt + bytes"
 
 [[syscall]]
 number = "0xB8"
-args = "r10=&Name(escrow), r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric), r13=&NoritoBytes(Vec<Hash>) or 0"
+args = "r10=&Name(escrow), r11=&AssetDefinitionId, r12=&Amount, r13=&NoritoBytes(Vec<Hash>) or 0"
 ret = "u64=0"
 gas = "G_escrow + bytes"
 
@@ -770,7 +908,7 @@ gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xBE"
-args = "r10=&Name(escrow), r11=&NoritoBytes(Numeric buyer_amount), r12=&NoritoBytes(Numeric seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0"
+args = "r10=&Name(escrow), r11=&Amount(buyer_amount), r12=&Amount(seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0"
 ret = "u64=0"
 gas = "G_escrow + bytes"
 
@@ -841,6 +979,96 @@ ret = "r10=&SoracloudResponse(ReadSecretEnvelope) under SoracloudIvmHost; CoreHo
 gas = "G_soracloud + request bytes (+ response bytes under SoracloudIvmHost)"
 
 [[syscall]]
+number = "0xD0"
+args = "r10=&Name(schema), r11=&Json"
+ret = "ptr (&NoritoBytes)"
+gas = "G_schema + bytes"
+
+[[syscall]]
+number = "0xD1"
+args = "r10=&Name(schema), r11=&NoritoBytes"
+ret = "ptr (&Json)"
+gas = "G_schema + bytes"
+
+[[syscall]]
+number = "0xD2"
+args = "r10=&NoritoBytes(Numeric)"
+ret = "r10=value:i64"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xD3"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xD4"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xD5"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xD6"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xD7"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xD8"
+args = "r10=&NoritoBytes(Numeric)"
+ret = "r10=ptr (&NoritoBytes(Numeric))"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xD9"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xDA"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xDB"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xDC"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xDD"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0xDE"
+args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
+ret = "r10=u64(0/1)"
+gas = "G_numeric"
+
+[[syscall]]
 number = "0xF0"
 args = "r10=bytes:u64"
 ret = "ptr (r10)"
@@ -879,7 +1107,7 @@ gas = "G_mpath + len"
 [[syscall]]
 number = "0xF9"
 args = "r10=&AccountId, r11=&AssetDefinitionId"
-ret = "ptr (&NoritoBytes(Numeric))"
+ret = "ptr (&Amount)"
 gas = "G_get_bal"
 
 [[syscall]]
@@ -926,33 +1154,15 @@ gas = "G_scq"
 
 [[syscall]]
 number = "0x010001"
-args = "r10=&NoritoBytes(AccountId)"
-ret = "r10=ptr (&NoritoBytes(Account))"
-gas = "G_scq"
+args = "r10=CoreQueryEntityTagV1:u64, r11=&typed entity id"
+ret = "r10=Option<View> sum handle (typed leaf TLVs)"
+gas = "G_scq + query items + encoded bytes"
 
 [[syscall]]
 number = "0x010002"
-args = "r10=&NoritoBytes(AssetId)"
-ret = "r10=ptr (&NoritoBytes(Asset))"
-gas = "G_scq"
-
-[[syscall]]
-number = "0x010003"
-args = "r10=&NoritoBytes(AssetDefinitionId)"
-ret = "r10=ptr (&NoritoBytes(AssetDefinition))"
-gas = "G_scq"
-
-[[syscall]]
-number = "0x010004"
-args = "r10=&NoritoBytes(DomainId)"
-ret = "r10=ptr (&NoritoBytes(Domain))"
-gas = "G_scq"
-
-[[syscall]]
-number = "0x010005"
-args = "r10=&NoritoBytes(NftId)"
-ret = "r10=ptr (&NoritoBytes(Nft))"
-gas = "G_scq"
+args = "r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64"
+ret = "r10=List<View,64> handle, r11=Option<i64> sum handle"
+gas = "G_scq + offset + query items + encoded bytes"
 
 [[syscall]]
 number = "0x010006"
@@ -1015,7 +1225,97 @@ ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))"
 gas = "G_argument_decode + record + schema + output"
 
 [[syscall]]
+number = "0x010040"
+args = "r10=value:i64 (nonnegative)"
+ret = "r10=ptr (&Amount)"
+gas = "G_amount by fixed 64-bit limb work + encoded bytes"
+
+[[syscall]]
+number = "0x010041"
+args = "r10=&NoritoBytes(scale-zero u128 Numeric)"
+ret = "r10=ptr (&Amount)"
+gas = "G_amount by fixed 64-bit limb work + encoded bytes"
+
+[[syscall]]
+number = "0x010042"
+args = "r10=&Amount (scale zero, i64 range)"
+ret = "r10=value:i64"
+gas = "G_amount by fixed 64-bit limb work"
+
+[[syscall]]
+number = "0x010043"
+args = "r10=&Amount, r11=&Amount"
+ret = "r10=ptr (&Amount)"
+gas = "G_amount_add by aligned fixed 64-bit limb work + encoded bytes"
+
+[[syscall]]
+number = "0x010044"
+args = "r10=&Amount, r11=&Amount"
+ret = "r10=ptr (&Amount); underflow traps"
+gas = "G_amount_sub by aligned fixed 64-bit limb work + encoded bytes"
+
+[[syscall]]
+number = "0x010045"
+args = "r10=&Amount, r11=&Amount"
+ret = "r10=ptr (&Amount)"
+gas = "G_amount_mul by limb product + encoded bytes"
+
+[[syscall]]
+number = "0x010046"
+args = "r10=&Amount dividend, r11=&Amount divisor"
+ret = "r10=ptr (&Amount); non-finite or scale>28 result traps"
+gas = "G_amount_div by deterministic bounded limb work + encoded bytes"
+
+[[syscall]]
+number = "0x010047"
+args = "r10=&Amount dividend, r11=&Amount divisor, r12=scale:0..28, r13=rounding:0..2"
+ret = "r10=ptr (&Amount)"
+gas = "G_amount_div by deterministic bounded limb work + encoded bytes"
+
+[[syscall]]
+number = "0x010048"
+args = "r10=&Amount, r11=&Amount"
+ret = "r10=0/1"
+gas = "G_amount_cmp by aligned fixed 64-bit limb work"
+
+[[syscall]]
+number = "0x010049"
+args = "r10=&Amount, r11=&Amount"
+ret = "r10=0/1"
+gas = "G_amount_cmp by aligned fixed 64-bit limb work"
+
+[[syscall]]
+number = "0x01004A"
+args = "r10=&Amount, r11=&Amount"
+ret = "r10=0/1"
+gas = "G_amount_cmp by aligned fixed 64-bit limb work"
+
+[[syscall]]
+number = "0x01004B"
+args = "r10=&Amount, r11=&Amount"
+ret = "r10=0/1"
+gas = "G_amount_cmp by aligned fixed 64-bit limb work"
+
+[[syscall]]
+number = "0x01004C"
+args = "r10=&Amount, r11=&Amount"
+ret = "r10=0/1"
+gas = "G_amount_cmp by aligned fixed 64-bit limb work"
+
+[[syscall]]
+number = "0x01004D"
+args = "r10=&Amount, r11=&Amount"
+ret = "r10=0/1"
+gas = "G_amount_cmp by aligned fixed 64-bit limb work"
+
+[[syscall]]
+number = "0x01004E"
+args = "r10=&NoritoBytes(JsonConstructionSchemaV1), r11=word_table, r12=word_count"
+ret = "r10=&Json"
+gas = "G_json_build + schema bytes + source bytes + words + collection elements + encoded bytes"
+
+[[syscall]]
 number = "0x00"
-args = "-"
+args = "r10=value:u64"
 ret = "-"
 gas = "G_debug"

@@ -4,7 +4,7 @@ pragma circom 2.1.6;
 // sccp-bsc-labeled-signal-binding-v1
 //
 // SECURITY CLASSIFICATION: public-signal-binding-material-only.
-// This circuit constrains labeled Keccak derivation from nine caller-provided
+// This circuit constrains labeled Keccak derivation from eleven caller-provided
 // words. It does not prove payload semantics, source finality, message
 // inclusion, FastPQ verification, or destination semantics. Material produced
 // from it is never production-semantic verifier material.
@@ -31,6 +31,8 @@ pragma circom 2.1.6;
 //   source_domain               = keccak256(0xd07ef0087259b42adc11497be275f42091c6ef51becccd113be860e1b48a5109 || value) mod Fr
 //   statement_hash              = keccak256(0xa4895607d62c8e116357ba7d102e08b5636840e0816a608f3a1fc9d0a1077569 || value) mod Fr
 //   destination_binding_hash    = keccak256(0x094cf24d193ac65c8a450188d16282fba8ee8c5a7539b751857d231f4380c2dd || value) mod Fr
+//   route_configuration_hash    = keccak256(0xe91a2fa5432d526db661d88529cf1dcbbccf07ec0557fb85e4cd0a3ba7718a5a || value) mod Fr
+//   sora_finality_anchor_hash   = keccak256(0x4d2ff6f2e46a0f703169d520846a53d350906c34710e2cbdfae7020e655fe646 || value) mod Fr
 
 include "circomlib/circuits/gates.circom";
 include "circomlib/circuits/sha256/xor3.circom";
@@ -98,7 +100,7 @@ template SccpBscLabeledKeccakSignal(label0, label1, label2, label3, label4, labe
 }
 
 template SccpBscLabeledSignalBindingV1() {
-  signal input publicSignals[9];
+  signal input publicSignals[11];
 
   signal input messageIdBits[256];
   signal input payloadHashBits[256];
@@ -109,6 +111,8 @@ template SccpBscLabeledSignalBindingV1() {
   signal input sourceDomainBits[256];
   signal input statementHashBits[256];
   signal input destinationBindingHashBits[256];
+  signal input routeConfigurationHashBits[256];
+  signal input soraFinalityAnchorHashBits[256];
 
   component messageId = SccpBscLabeledKeccakSignal(0x09, 0x1b, 0x17, 0x15, 0xf3, 0x1a, 0xdb, 0xc0, 0x23, 0x93, 0x78, 0xca, 0xf7, 0x7a, 0x43, 0x70, 0xe8, 0x34, 0x85, 0x99, 0x04, 0x8e, 0xc4, 0x5e, 0xfb, 0x20, 0x33, 0x68, 0xdb, 0xcc, 0x50, 0x73);
   for (var messageIdIndex = 0; messageIdIndex < 256; messageIdIndex++) {
@@ -163,6 +167,18 @@ template SccpBscLabeledSignalBindingV1() {
     destinationBindingHash.valueBits[destinationBindingHashIndex] <== destinationBindingHashBits[destinationBindingHashIndex];
   }
   destinationBindingHash.publicSignal <== publicSignals[8];
+
+  component routeConfigurationHash = SccpBscLabeledKeccakSignal(0xe9, 0x1a, 0x2f, 0xa5, 0x43, 0x2d, 0x52, 0x6d, 0xb6, 0x61, 0xd8, 0x85, 0x29, 0xcf, 0x1d, 0xcb, 0xbc, 0xcf, 0x07, 0xec, 0x05, 0x57, 0xfb, 0x85, 0xe4, 0xcd, 0x0a, 0x3b, 0xa7, 0x71, 0x8a, 0x5a);
+  for (var routeConfigurationHashIndex = 0; routeConfigurationHashIndex < 256; routeConfigurationHashIndex++) {
+    routeConfigurationHash.valueBits[routeConfigurationHashIndex] <== routeConfigurationHashBits[routeConfigurationHashIndex];
+  }
+  routeConfigurationHash.publicSignal <== publicSignals[9];
+
+  component soraFinalityAnchorHash = SccpBscLabeledKeccakSignal(0x4d, 0x2f, 0xf6, 0xf2, 0xe4, 0x6a, 0x0f, 0x70, 0x31, 0x69, 0xd5, 0x20, 0x84, 0x6a, 0x53, 0xd3, 0x50, 0x90, 0x6c, 0x34, 0x71, 0x0e, 0x2c, 0xbd, 0xfa, 0xe7, 0x02, 0x0e, 0x65, 0x5f, 0xe6, 0x46);
+  for (var soraFinalityAnchorHashIndex = 0; soraFinalityAnchorHashIndex < 256; soraFinalityAnchorHashIndex++) {
+    soraFinalityAnchorHash.valueBits[soraFinalityAnchorHashIndex] <== soraFinalityAnchorHashBits[soraFinalityAnchorHashIndex];
+  }
+  soraFinalityAnchorHash.publicSignal <== publicSignals[10];
 }
 
 component main { public [publicSignals] } = SccpBscLabeledSignalBindingV1();

@@ -1,6 +1,7 @@
 //! Kotodama pointer roundtrip tests.
 
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+mod common;
 
 fn run_prog(body: &str) {
     let src = format!(
@@ -11,6 +12,7 @@ fn run_prog(body: &str) {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("program should run with CoreHost TLV validation");
 }
@@ -29,11 +31,7 @@ fn roundtrip_nft_mint_asset() {
 #[test]
 fn roundtrip_nft_set_metadata() {
     let src = r#"
-          ledger::nft::set_metadata(
-            NftId::parse("rose:uuid:ffff$wonderland.universal"),
-            Name::parse("dpn_metadata"),
-            Json::parse("{\"meta\":1}")
-          );
+          ledger::nft::set_metadata(nft: NftId::parse("rose:uuid:ffff$wonderland.universal"), key: Name::parse("dpn_metadata"), value: Json::parse("{\"meta\":1}"));
     "#;
     run_prog(src);
 }
@@ -41,13 +39,7 @@ fn roundtrip_nft_set_metadata() {
 #[test]
 fn roundtrip_transfer_asset() {
     let src = r#"
-          ledger::asset::transfer(
-            AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-            AccountId::parse("sorauﾛ1PｦﾔJdﾐww6ﾆfgｾ73xJkｺﾓｺﾀEｿGzQuﾄg3ﾐeﾕｳｶﾒﾚｻY1FC8K"),
-            AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-            Amount::from_i64(1),
-            DataSpaceId::parse("0")
-          );
+          ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1PｦﾔJdﾐww6ﾆfgｾ73xJkｺﾓｺﾀEｿGzQuﾄg3ﾐeﾕｳｶﾒﾚｻY1FC8K"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
     "#;
     run_prog(src);
 }
@@ -78,7 +70,7 @@ fn roundtrip_nft_transfer_asset_accepts_runtime_from() {
           let from = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
           let to = AccountId::parse("sorauﾛ1PｦﾔJdﾐww6ﾆfgｾ73xJkｺﾓｺﾀEｿGzQuﾄg3ﾐeﾕｳｶﾒﾚｻY1FC8K");
           let nft = NftId::parse("rose:uuid:bead$wonderland.universal");
-          ledger::nft::transfer(from, nft, to);
+          ledger::nft::transfer(source: from, nft: nft, destination: to);
     "#;
     run_prog(src);
 }

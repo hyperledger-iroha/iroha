@@ -1,8 +1,9 @@
-using System.Buffers;
 using System.Buffers.Binary;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Hyperledger.Iroha.Address;
+using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
 
 namespace Hyperledger.Iroha.Sccp;
@@ -10,24 +11,14 @@ namespace Hyperledger.Iroha.Sccp;
 /// <summary>Closed bridge payload kinds admitted in SCCP V1.</summary>
 public enum SccpPayloadKindV1
 {
-    AssetRegister,
-    RouteActivate,
     Transfer,
-    TokenAdd,
-    TokenPause,
-    TokenResume,
 }
 
 public static class SccpPayloadKindV1Extensions
 {
     public static string WireKey(this SccpPayloadKindV1 kind) => kind switch
     {
-        SccpPayloadKindV1.AssetRegister => "asset_register",
-        SccpPayloadKindV1.RouteActivate => "route_activate",
         SccpPayloadKindV1.Transfer => "transfer",
-        SccpPayloadKindV1.TokenAdd => "token_add",
-        SccpPayloadKindV1.TokenPause => "token_pause",
-        SccpPayloadKindV1.TokenResume => "token_resume",
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
 
@@ -51,102 +42,47 @@ public sealed class SccpBridgeProofSubmitRequest
 {
     public SccpBridgeProofSubmitRequest(
         string authority,
-        string messageBundleBase64,
-        string? publicKeyHex = null,
+        string destinationProofBase64,
         string? signatureBase64 = null,
-        string? networkIdHex = null,
-        string? verifierAddressHex = null,
-        string? bridgeAddressHex = null,
-        string? verifierCodeHashHex = null,
-        string? verifierKeyHashHex = null,
-        string? tronVerifierAddress = null,
-        string? proofBytesHex = null,
+        string? transactionPayloadBase64 = null,
         ulong? creationTimeMs = null)
     {
         Authority = SccpSubmitValidation.Authority(authority);
-        (PublicKeyHex, SignatureBase64) = SccpSubmitValidation.DetachedSigner(
-            publicKeyHex,
-            signatureBase64,
-            Authority);
-        SccpSubmitValidation.CanonicalNoritoBase64(messageBundleBase64, "message_bundle_b64");
-        MessageBundleBase64 = messageBundleBase64;
-        NetworkIdHex = SccpSubmitValidation.OptionalHex(networkIdHex, 32, "network_id_hex");
-        VerifierAddressHex = SccpSubmitValidation.OptionalHex(verifierAddressHex, 20, "verifier_address_hex");
-        BridgeAddressHex = SccpSubmitValidation.OptionalHex(bridgeAddressHex, 20, "bridge_address_hex");
-        VerifierCodeHashHex = SccpSubmitValidation.OptionalHex(verifierCodeHashHex, 32, "verifier_code_hash_hex");
-        VerifierKeyHashHex = SccpSubmitValidation.OptionalHex(verifierKeyHashHex, 32, "verifier_key_hash_hex");
-        TronVerifierAddress = SccpSubmitValidation.OptionalText(tronVerifierAddress, 128, "tron_verifier_address");
-        ProofBytesHex = SccpSubmitValidation.OptionalProofHex(proofBytesHex);
+        var destinationProof = SccpSubmitValidation.CanonicalNoritoBase64(
+            destinationProofBase64,
+            "destination_proof_b64",
+            SccpSubmitValidation.MaximumDestinationArtifactBytes,
+            SccpSubmitValidation.DestinationArtifactSchemaName);
+        DestinationProofBase64 = destinationProofBase64;
         if (creationTimeMs == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(creationTimeMs), "creation_time_ms must be positive.");
         }
 
         CreationTimeMs = creationTimeMs;
-        var evm = VerifierAddressHex is not null || BridgeAddressHex is not null;
-        var tron = TronVerifierAddress is not null;
-        var destination = NetworkIdHex is not null || evm || tron
-            || VerifierCodeHashHex is not null || VerifierKeyHashHex is not null;
-        if ((ProofBytesHex is not null) != destination)
-        {
-            throw new ArgumentException(
-                "proof_bytes_hex and complete destination material must be supplied together.");
-        }
-
-        if (destination
-            && (evm == tron || NetworkIdHex is null || VerifierCodeHashHex is null || VerifierKeyHashHex is null))
-        {
-            throw new ArgumentException(
-                "Destination material must select exactly one complete EVM or TRON family.");
-        }
-
-        if (evm && (VerifierAddressHex is null || BridgeAddressHex is null))
-        {
-            throw new ArgumentException("Complete EVM SCCP destination material is required.");
-        }
+        (SignatureBase64, TransactionPayloadBase64) =
+            SccpSubmitValidation.DetachedSubmissionState(
+                Authority,
+                signatureBase64,
+                transactionPayloadBase64,
+                creationTimeMs,
+                destinationProof,
+                expectedDestinationProof: true);
     }
 
     [JsonPropertyName("authority")]
     public string Authority { get; }
 
-    [JsonPropertyName("public_key_hex")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? PublicKeyHex { get; }
-
     [JsonPropertyName("signature_b64")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SignatureBase64 { get; }
 
-    [JsonPropertyName("message_bundle_b64")]
-    public string MessageBundleBase64 { get; }
-
-    [JsonPropertyName("network_id_hex")]
+    [JsonPropertyName("transaction_payload_b64")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? NetworkIdHex { get; }
+    public string? TransactionPayloadBase64 { get; }
 
-    [JsonPropertyName("verifier_address_hex")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? VerifierAddressHex { get; }
-
-    [JsonPropertyName("bridge_address_hex")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? BridgeAddressHex { get; }
-
-    [JsonPropertyName("verifier_code_hash_hex")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? VerifierCodeHashHex { get; }
-
-    [JsonPropertyName("verifier_key_hash_hex")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? VerifierKeyHashHex { get; }
-
-    [JsonPropertyName("tron_verifier_address")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? TronVerifierAddress { get; }
-
-    [JsonPropertyName("proof_bytes_hex")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? ProofBytesHex { get; }
+    [JsonPropertyName("destination_proof_b64")]
+    public string DestinationProofBase64 { get; }
 
     [JsonPropertyName("creation_time_ms")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -159,16 +95,16 @@ public sealed class SccpBridgeMessageSubmitRequest
     public SccpBridgeMessageSubmitRequest(
         string authority,
         string nativeProofBase64,
-        string? publicKeyHex = null,
         string? signatureBase64 = null,
+        string? transactionPayloadBase64 = null,
         ulong? creationTimeMs = null)
     {
         Authority = SccpSubmitValidation.Authority(authority);
-        (PublicKeyHex, SignatureBase64) = SccpSubmitValidation.DetachedSigner(
-            publicKeyHex,
-            signatureBase64,
-            Authority);
-        SccpSubmitValidation.CanonicalNoritoBase64(nativeProofBase64, "native_proof_b64");
+        var nativeProof = SccpSubmitValidation.CanonicalNoritoBase64(
+            nativeProofBase64,
+            "native_proof_b64",
+            SccpSubmitValidation.MaximumNativeArtifactBytes,
+            SccpSubmitValidation.NativeInboundProofSchemaName);
         NativeProofBase64 = nativeProofBase64;
         if (creationTimeMs == 0)
         {
@@ -176,18 +112,26 @@ public sealed class SccpBridgeMessageSubmitRequest
         }
 
         CreationTimeMs = creationTimeMs;
+        (SignatureBase64, TransactionPayloadBase64) =
+            SccpSubmitValidation.DetachedSubmissionState(
+                Authority,
+                signatureBase64,
+                transactionPayloadBase64,
+                creationTimeMs,
+                nativeProof,
+                expectedDestinationProof: false);
     }
 
     [JsonPropertyName("authority")]
     public string Authority { get; }
 
-    [JsonPropertyName("public_key_hex")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? PublicKeyHex { get; }
-
     [JsonPropertyName("signature_b64")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SignatureBase64 { get; }
+
+    [JsonPropertyName("transaction_payload_b64")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TransactionPayloadBase64 { get; }
 
     [JsonPropertyName("native_proof_b64")]
     public string NativeProofBase64 { get; }
@@ -203,16 +147,25 @@ public sealed record SccpBridgeResponseExpectation(
     string? MessageIdHex = null,
     uint? CounterpartyDomain = null,
     SccpNetworkV1? CounterpartyChain = null,
-    ulong? CreationTimeMs = null)
+    ulong? CreationTimeMs = null,
+    string? Backend = null,
+    string? RouteConfigurationHashHex = null,
+    ulong? RangeStartHeight = null,
+    ulong? RangeEndHeight = null)
 {
     public void Validate()
     {
+        if (PayloadKind is { } payloadKind)
+        {
+            _ = payloadKind.WireKey();
+        }
+
         if (MessageIdHex is not null)
         {
             SccpSubmitValidation.ResponseHash(MessageIdHex, nameof(MessageIdHex));
         }
 
-        if (CounterpartyDomain is not null and (0 or > 5))
+        if (CounterpartyDomain is not null and not (1 or 2 or 5))
         {
             throw new ArgumentOutOfRangeException(nameof(CounterpartyDomain));
         }
@@ -232,6 +185,25 @@ public sealed record SccpBridgeResponseExpectation(
         {
             throw new ArgumentOutOfRangeException(nameof(CreationTimeMs));
         }
+
+        if (Backend is not null)
+        {
+            SccpSubmitValidation.RequireClosedBackend(Backend, CounterpartyChain);
+        }
+
+        if (RouteConfigurationHashHex is not null)
+        {
+            SccpSubmitValidation.ResponseHash(
+                RouteConfigurationHashHex,
+                nameof(RouteConfigurationHashHex));
+        }
+
+        if (RangeStartHeight == 0
+            || RangeEndHeight == 0
+            || RangeStartHeight is { } start && RangeEndHeight is { } end && end < start)
+        {
+            throw new ArgumentOutOfRangeException(nameof(RangeEndHeight));
+        }
     }
 }
 
@@ -243,7 +215,7 @@ public sealed record SccpBridgeSubmitResponse(
     string Backend,
     uint CounterpartyDomain,
     SccpNetworkV1 CounterpartyChain,
-    string ManifestHashHex,
+    string RouteConfigurationHashHex,
     ulong RangeStartHeight,
     ulong RangeEndHeight,
     ulong CreationTimeMs,
@@ -254,13 +226,37 @@ public sealed record SccpBridgeSubmitResponse(
     private static readonly HashSet<string> Fields =
     [
         "submitted", "payload_kind", "message_id_hex", "backend", "counterparty_domain",
-        "counterparty_chain", "manifest_hash_hex", "range_start_height", "range_end_height",
+        "counterparty_chain", "route_configuration_hash_hex", "range_start_height", "range_end_height",
         "creation_time_ms", "tx_hash_hex", "transaction_payload_b64", "signing_message_b64",
     ];
 
     public static SccpBridgeSubmitResponse Parse(
         ReadOnlyMemory<byte> json,
-        SccpBridgeResponseExpectation? expectation = null)
+        SccpBridgeResponseExpectation? expectation = null) =>
+        ParseCore(json, expectation, expectedAuthority: null, expectedProof: null);
+
+    internal static SccpBridgeSubmitResponse ParseForRequest(
+        ReadOnlyMemory<byte> json,
+        SccpBridgeResponseExpectation? expectation,
+        string expectedAuthority,
+        byte[] expectedProof,
+        string? expectedTransactionPayloadBase64 = null,
+        string? expectedSignatureBase64 = null) =>
+        ParseCore(
+            json,
+            expectation,
+            expectedAuthority,
+            expectedProof,
+            expectedTransactionPayloadBase64,
+            expectedSignatureBase64);
+
+    private static SccpBridgeSubmitResponse ParseCore(
+        ReadOnlyMemory<byte> json,
+        SccpBridgeResponseExpectation? expectation,
+        string? expectedAuthority,
+        byte[]? expectedProof,
+        string? expectedTransactionPayloadBase64 = null,
+        string? expectedSignatureBase64 = null)
     {
         using var document = SccpJson.Parse(json, "bridge submit response");
         var root = document.RootElement;
@@ -269,15 +265,12 @@ public sealed record SccpBridgeSubmitResponse(
         var payloadKind = SccpPayloadKindV1Extensions.ParseWireKey(SccpJson.Text(root, "payload_kind"));
         var messageId = SccpSubmitValidation.ResponseHash(SccpJson.Text(root, "message_id_hex"), "message_id_hex");
         var backend = SccpJson.Text(root, "backend");
-        if (backend.Length > 128 || !System.Text.RegularExpressions.Regex.IsMatch(
-                backend,
-                "^bridge/[a-z0-9/_-]+$",
-                System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+        var domain = SccpJson.UInt32(root, "counterparty_domain", 1, 5);
+        if (domain is not (1 or 2 or 5))
         {
-            throw new ArgumentException("backend must be a canonical bridge backend label.");
+            throw new ArgumentException("counterparty_domain is unsupported or retired.");
         }
 
-        var domain = SccpJson.UInt32(root, "counterparty_domain", 1, 5);
         var chain = SccpNetworkV1Extensions.ParseProfileKey(SccpJson.Text(root, "counterparty_chain"));
         if (!chain.IsExternal() || chain.DomainId() != domain)
         {
@@ -285,7 +278,17 @@ public sealed record SccpBridgeSubmitResponse(
                 "counterparty_chain and counterparty_domain must identify one exact external network.");
         }
 
-        var manifest = SccpSubmitValidation.ResponseHash(SccpJson.Text(root, "manifest_hash_hex"), "manifest_hash_hex");
+        SccpSubmitValidation.RequireClosedBackend(backend, chain);
+
+        var routeConfigurationHash = SccpSubmitValidation.ResponseHash(
+            SccpJson.Text(root, "route_configuration_hash_hex"),
+            "route_configuration_hash_hex");
+        if (routeConfigurationHash == messageId)
+        {
+            throw new ArgumentException(
+                "SCCP message and route-configuration hash roles must be distinct.");
+        }
+
         var start = SccpJson.UInt64(root, "range_start_height", 1);
         var end = SccpJson.UInt64(root, "range_end_height", start);
         var creation = SccpJson.UInt64(root, "creation_time_ms", 1);
@@ -293,16 +296,51 @@ public sealed record SccpBridgeSubmitResponse(
         if (txHash is not null)
         {
             txHash = SccpSubmitValidation.ResponseHash(txHash, "tx_hash_hex");
+            if (txHash == messageId || txHash == routeConfigurationHash)
+            {
+                throw new ArgumentException(
+                    "SCCP transaction, message, and route-configuration hash roles must be distinct.");
+            }
         }
 
         var payloadBase64 = SccpJson.OptionalText(root, "transaction_payload_b64");
         var signingBase64 = SccpJson.OptionalText(root, "signing_message_b64");
+        var requestStateKnown = expectedAuthority is not null;
+        var requestWasDirect = expectedTransactionPayloadBase64 is not null
+            && expectedSignatureBase64 is not null;
+        if ((expectedTransactionPayloadBase64 is null) != (expectedSignatureBase64 is null)
+            || requestStateKnown && submitted != requestWasDirect)
+        {
+            throw new ArgumentException(
+                "SCCP response submission state contradicts the exact request signing state.");
+        }
+
         if (submitted)
         {
             if (txHash is null || payloadBase64 is not null || signingBase64 is not null)
             {
                 throw new ArgumentException(
                     "Submitted SCCP response must contain tx_hash_hex and no signing payload.");
+            }
+
+            if (requestWasDirect)
+            {
+                var expectedTransactionHash =
+                    SccpSubmitValidation.RequireCanonicalDirectSubmission(
+                        expectedTransactionPayloadBase64!,
+                        expectedSignatureBase64!,
+                        creation,
+                        backend,
+                        Convert.FromHexString(routeConfigurationHash),
+                        start,
+                        end,
+                        expectedAuthority!,
+                        expectedProof);
+                if (!string.Equals(txHash, expectedTransactionHash, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        "tx_hash_hex does not match the exact detached signed transaction.");
+                }
             }
         }
         else
@@ -316,11 +354,20 @@ public sealed record SccpBridgeSubmitResponse(
             var payload = SccpSubmitValidation.CanonicalBase64(
                 payloadBase64,
                 "transaction_payload_b64",
-                maximumBytes: SccpSubmitValidation.MaximumArtifactBytes);
+                maximumBytes: SccpSubmitValidation.MaximumTransactionPayloadBytes);
             var signing = SccpSubmitValidation.CanonicalBase64(
                 signingBase64,
                 "signing_message_b64",
                 exactBytes: IrohaHash.Length);
+            SccpSubmitValidation.RequireCanonicalTransactionPayload(
+                payload,
+                creation,
+                backend,
+                Convert.FromHexString(routeConfigurationHash),
+                start,
+                end,
+                expectedAuthority,
+                expectedProof);
             if (!signing.AsSpan().SequenceEqual(IrohaHash.Hash(payload)))
             {
                 throw new ArgumentException(
@@ -335,7 +382,7 @@ public sealed record SccpBridgeSubmitResponse(
             backend,
             domain,
             chain,
-            manifest,
+            routeConfigurationHash,
             start,
             end,
             creation,
@@ -358,7 +405,12 @@ public sealed record SccpBridgeSubmitResponse(
             || expectation.MessageIdHex is { } messageId && messageId != MessageIdHex
             || expectation.CounterpartyDomain is { } domain && domain != CounterpartyDomain
             || expectation.CounterpartyChain is { } chain && chain != CounterpartyChain
-            || expectation.CreationTimeMs is { } creation && creation != CreationTimeMs)
+            || expectation.CreationTimeMs is { } creation && creation != CreationTimeMs
+            || expectation.Backend is { } backend && backend != Backend
+            || expectation.RouteConfigurationHashHex is { } routeHash
+                && routeHash != RouteConfigurationHashHex
+            || expectation.RangeStartHeight is { } start && start != RangeStartHeight
+            || expectation.RangeEndHeight is { } end && end != RangeEndHeight)
         {
             throw new ArgumentException("Bridge submit response does not match its request expectation.");
         }
@@ -367,7 +419,46 @@ public sealed record SccpBridgeSubmitResponse(
 
 internal static class SccpSubmitValidation
 {
-    internal const int MaximumArtifactBytes = 16 * 1024 * 1024;
+    internal const string DestinationArtifactSchemaName =
+        "iroha_sccp::SccpGroth16Bn254ProofArtifactV1";
+    internal const string NativeInboundProofSchemaName =
+        "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
+    private const string SubmitBridgeProofWireName =
+        "iroha_data_model::isi::bridge::SubmitBridgeProof";
+    private const string TairaChainId = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+    internal const int MaximumNativeArtifactBytes = 16 * 1024 * 1024;
+    internal const int MaximumDestinationArtifactBytes = MaximumNativeArtifactBytes + 64 * 1024;
+    internal const int MaximumArtifactBytes = MaximumDestinationArtifactBytes;
+    internal const int MaximumTransactionPayloadBytes = MaximumArtifactBytes + 1024 * 1024;
+    internal const int MaximumJsonBytes = MaximumArtifactBytes * 2 + 1024 * 1024;
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+    internal static void RequireClosedBackend(string backend, SccpNetworkV1? chain = null)
+    {
+        ArgumentNullException.ThrowIfNull(backend);
+        var valid = chain is null
+            ? backend is
+                "evm-groth16-bn254-v1"
+                    or "tron-groth16-bn254-v1"
+                    or "bridge/sccp/native/ethereum-beacon-v1"
+                    or "bridge/sccp/native/bsc-parlia-v1"
+                    or "bridge/sccp/native/tron-dpos-v1"
+            : BackendSupports(backend, chain.Value);
+        if (!valid)
+        {
+            throw new ArgumentException("backend must match one closed SCCP V1 counterparty family.", nameof(backend));
+        }
+    }
+
+    private static bool BackendSupports(string backend, SccpNetworkV1 chain) => backend switch
+    {
+        "evm-groth16-bn254-v1" => chain.DomainId() is 1 or 2,
+        "tron-groth16-bn254-v1" => chain.DomainId() == 5,
+        "bridge/sccp/native/ethereum-beacon-v1" => SccpNativeBackendV1.EthereumBeacon.Supports(chain),
+        "bridge/sccp/native/bsc-parlia-v1" => SccpNativeBackendV1.BscParlia.Supports(chain),
+        "bridge/sccp/native/tron-dpos-v1" => SccpNativeBackendV1.TronDpos.Supports(chain),
+        _ => false,
+    };
 
     internal static string Authority(string value)
     {
@@ -375,53 +466,94 @@ internal static class SccpSubmitValidation
         AccountAddress address;
         try
         {
-            address = AccountAddress.Parse(value, AccountAddress.DefaultChainDiscriminant);
+            address = AccountAddress.Parse(value, AccountAddress.TestChainDiscriminant);
         }
         catch (Exception error) when (error is ArgumentException or FormatException)
         {
-            throw new ArgumentException("authority must be a canonical AccountId.", nameof(value), error);
+            throw new ArgumentException(
+                "authority must be an exact canonical Taira/test AccountId.",
+                nameof(value),
+                error);
         }
 
-        if (!string.Equals(address.ToI105(), value, StringComparison.Ordinal))
+        if (!string.Equals(
+                address.ToI105(AccountAddress.TestChainDiscriminant),
+                value,
+                StringComparison.Ordinal))
         {
-            throw new ArgumentException("authority must be a canonical AccountId.", nameof(value));
+            throw new ArgumentException(
+                "authority must be an exact canonical Taira/test AccountId.",
+                nameof(value));
         }
 
         return value;
     }
 
-    internal static (string? PublicKey, string? Signature) DetachedSigner(
-        string? publicKeyHex,
-        string? signatureBase64,
-        string authority)
+    internal static (string? SignatureBase64, string? TransactionPayloadBase64)
+        DetachedSubmissionState(
+            string authority,
+            string? signatureBase64,
+            string? transactionPayloadBase64,
+            ulong? creationTimeMs,
+            byte[] expectedProof,
+            bool expectedDestinationProof)
     {
-        if ((publicKeyHex is null) != (signatureBase64 is null))
+        if ((signatureBase64 is null) != (transactionPayloadBase64 is null))
         {
-            throw new ArgumentException("public_key_hex and signature_b64 must be supplied together.");
+            throw new ArgumentException(
+                "Preparation requires neither signature_b64 nor transaction_payload_b64; direct submission requires both.");
         }
 
-        if (publicKeyHex is null || signatureBase64 is null)
+        if (signatureBase64 is null)
         {
             return (null, null);
         }
 
-        if (publicKeyHex.Length != 64 || publicKeyHex.Any(static item =>
-                !char.IsAsciiDigit(item) && item is not (>= 'a' and <= 'f')))
+        if (creationTimeMs is null or 0)
         {
-            throw new ArgumentException("public_key_hex must be canonical lowercase Ed25519 hex.");
+            throw new ArgumentException(
+                "Direct SCCP submission requires an explicit positive creation_time_ms.",
+                nameof(creationTimeMs));
         }
 
-        var publicKey = Convert.FromHexString(publicKeyHex);
-        if (!CanonicalEd25519Point(publicKey))
+        var address = AccountAddress.Parse(authority, AccountAddress.TestChainDiscriminant);
+        if (address.AddressClass != AddressClass.SingleKey
+            || !string.Equals(address.Algorithm, "ed25519", StringComparison.Ordinal)
+            || address.PublicKey.Length != Ed25519Signer.PublicKeyLength)
         {
-            throw new ArgumentException("public_key_hex must be one canonical Ed25519 public key.");
+            throw new ArgumentException(
+                "Direct SCCP submission requires a single-key Ed25519 authority.",
+                nameof(authority));
         }
 
-        var address = AccountAddress.Parse(authority, AccountAddress.DefaultChainDiscriminant);
-        if (!string.Equals(address.Algorithm, "ed25519", StringComparison.Ordinal)
-            || !address.PublicKey.AsSpan().SequenceEqual(publicKey))
+        var signature = OptionalSignature(signatureBase64)!;
+        var payload = CanonicalBase64(
+            transactionPayloadBase64!,
+            "transaction_payload_b64",
+            maximumBytes: MaximumTransactionPayloadBytes);
+        InspectCanonicalDetachedPayload(
+            payload,
+            creationTimeMs.Value,
+            authority,
+            expectedProof,
+            expectedDestinationProof);
+        if (!Ed25519Signer.Verify(
+                IrohaHash.Hash(payload),
+                Convert.FromBase64String(signature),
+                address.PublicKey))
         {
-            throw new ArgumentException("public_key_hex does not match authority.");
+            throw new ArgumentException(
+                "signature_b64 does not verify the exact transaction payload for authority.");
+        }
+
+        return (signature, transactionPayloadBase64);
+    }
+
+    private static string? OptionalSignature(string? signatureBase64)
+    {
+        if (signatureBase64 is null)
+        {
+            return null;
         }
 
         var signature = CanonicalBase64(signatureBase64, "signature_b64", exactBytes: 64);
@@ -431,42 +563,347 @@ internal static class SccpSubmitValidation
             throw new ArgumentException("signature_b64 must contain one canonical Ed25519 signature.");
         }
 
-        return (publicKeyHex, signatureBase64);
+        return signatureBase64;
     }
 
-    internal static byte[] CanonicalNoritoBase64(string value, string field)
+    internal static string RequireCanonicalDirectSubmission(
+        string transactionPayloadBase64,
+        string signatureBase64,
+        ulong creationTimeMs,
+        string backend,
+        byte[] routeConfigurationHash,
+        ulong rangeStartHeight,
+        ulong rangeEndHeight,
+        string expectedAuthority,
+        byte[]? expectedProof)
     {
-        var archive = CanonicalBase64(value, field, maximumBytes: MaximumArtifactBytes);
+        var payload = CanonicalBase64(
+            transactionPayloadBase64,
+            "transaction_payload_b64",
+            maximumBytes: MaximumTransactionPayloadBytes);
+        var exactSignature = OptionalSignature(signatureBase64)
+            ?? throw new ArgumentException("signature_b64 is required for direct submission.");
+        var signature = Convert.FromBase64String(exactSignature);
+        RequireCanonicalTransactionPayload(
+            payload,
+            creationTimeMs,
+            backend,
+            routeConfigurationHash,
+            rangeStartHeight,
+            rangeEndHeight,
+            expectedAuthority,
+            expectedProof);
+
+        var address = AccountAddress.Parse(
+            expectedAuthority,
+            AccountAddress.TestChainDiscriminant);
+        if (address.AddressClass != AddressClass.SingleKey
+            || !string.Equals(address.Algorithm, "ed25519", StringComparison.Ordinal)
+            || !Ed25519Signer.Verify(IrohaHash.Hash(payload), signature, address.PublicKey))
+        {
+            throw new ArgumentException(
+                "signature_b64 does not verify the exact transaction payload for authority.");
+        }
+
+        return Convert.ToHexString(DetachedTransactionHash(payload, signature))
+            .ToLowerInvariant();
+    }
+
+    private readonly record struct DetachedBridgeBinding(
+        string Backend,
+        byte[] RouteConfigurationHash,
+        ulong RangeStartHeight,
+        ulong RangeEndHeight,
+        bool IsDestination);
+
+    private static void InspectCanonicalDetachedPayload(
+        ReadOnlySpan<byte> payload,
+        ulong creationTimeMs,
+        string expectedAuthority,
+        byte[] expectedProof,
+        bool expectedDestinationProof)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var chain = cursor.TakeField("chain_id");
+        var authority = cursor.TakeField("authority");
+        var creation = cursor.TakeField("creation_time_ms");
+        var executable = cursor.TakeField("executable");
+        var timeToLive = cursor.TakeField("time_to_live_ms");
+        var nonce = cursor.TakeField("nonce");
+        var metadata = cursor.TakeField("metadata");
+        if (!cursor.IsFinished
+            || creation.Length != sizeof(ulong)
+            || BinaryPrimitives.ReadUInt64LittleEndian(creation) != creationTimeMs)
+        {
+            throw new ArgumentException(
+                "transaction_payload_b64 must contain one canonical transaction payload matching creation_time_ms.");
+        }
+
+        RequireCanonicalChainId(chain);
+        var controller = RequireCanonicalAuthority(authority);
+        var expectedController = AccountAddress
+            .Parse(expectedAuthority, AccountAddress.TestChainDiscriminant)
+            .ControllerBytes();
+        if (!controller.AsSpan().SequenceEqual(expectedController))
+        {
+            throw new ArgumentException(
+                "Transaction authority does not match the SCCP submit request.");
+        }
+
+        var binding = InspectCanonicalDetachedExecutable(executable, expectedProof);
+        RequireClosedBackend(binding.Backend);
+        if (binding.IsDestination != expectedDestinationProof)
+        {
+            throw new ArgumentException(
+                "Detached SCCP transaction proof family does not match the submit endpoint.");
+        }
+
+        RequireAbsentOption(timeToLive, "time_to_live_ms");
+        RequireAbsentOption(nonce, "nonce");
+        RequireCanonicalMetadata(metadata);
+    }
+
+    private static DetachedBridgeBinding InspectCanonicalDetachedExecutable(
+        ReadOnlySpan<byte> payload,
+        byte[] expectedProof)
+    {
+        var executable = new CompactTransactionCursor(payload);
+        if (executable.TakeUInt32("executable.kind") != 0)
+        {
+            throw new ArgumentException(
+                "SCCP transaction executable must contain instructions.");
+        }
+
+        var instructions = new CompactTransactionCursor(
+            executable.TakeField("executable.instructions"));
+        if (!executable.IsFinished
+            || instructions.TakeUInt64("executable.instructions.count") != 1)
+        {
+            throw new ArgumentException(
+                "SCCP transaction must contain exactly one instruction.");
+        }
+
+        var instruction = new CompactTransactionCursor(
+            instructions.TakeField("executable.instruction"));
+        var wireName = DecodeCompactString(
+            instruction.TakeField("executable.instruction.wire_name"),
+            "executable.instruction.wire_name");
+        var archive = DecodeRawByteVector(
+            instruction.TakeField("executable.instruction.payload"),
+            "executable.instruction.payload");
+        if (!instructions.IsFinished
+            || !instruction.IsFinished
+            || wireName != SubmitBridgeProofWireName)
+        {
+            throw new ArgumentException(
+                "SCCP transaction instruction must be exactly SubmitBridgeProof.");
+        }
+
+        RequireCanonicalNoritoArchive(
+            archive,
+            "executable.instruction.payload",
+            MaximumTransactionPayloadBytes,
+            SubmitBridgeProofWireName);
+        return InspectCanonicalDetachedSubmitBridgeProof(archive, expectedProof);
+    }
+
+    private static DetachedBridgeBinding InspectCanonicalDetachedSubmitBridgeProof(
+        ReadOnlySpan<byte> archive,
+        byte[] expectedProof)
+    {
+        if (archive[39] != 0x02)
+        {
+            throw new ArgumentException(
+                "SubmitBridgeProof must use the canonical SCCP compact Norito layout.");
+        }
+
+        var payloadLength = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(
+            archive.Slice(23, 8)));
+        var submit = new CompactTransactionCursor(
+            archive.Slice(NoritoHeader.EncodedLength, payloadLength));
+        var proof = new CompactTransactionCursor(
+            submit.TakeField("SubmitBridgeProof.proof"));
+        if (!submit.IsFinished)
+        {
+            throw new ArgumentException("SubmitBridgeProof contains trailing fields.");
+        }
+
+        var range = new CompactTransactionCursor(
+            proof.TakeField("SubmitBridgeProof.proof.range"));
+        var start = DecodeFramedUInt64(ref range, "SubmitBridgeProof.proof.range.start");
+        var end = DecodeFramedUInt64(ref range, "SubmitBridgeProof.proof.range.end");
+        if (!range.IsFinished || start == 0 || end < start)
+        {
+            throw new ArgumentException("SubmitBridgeProof range is invalid.");
+        }
+
+        var proofPayload = new CompactTransactionCursor(
+            proof.TakeField("SubmitBridgeProof.proof.payload"));
+        var kind = proofPayload.TakeUInt32("SubmitBridgeProof.proof.payload.kind");
+        var variant = proofPayload.TakeField("SubmitBridgeProof.proof.payload.value");
+        if (!proofPayload.IsFinished)
+        {
+            throw new ArgumentException("SubmitBridgeProof payload contains trailing bytes.");
+        }
+
+        var binding = kind switch
+        {
+            2 => InspectCanonicalDetachedNativeProof(variant, start, end, expectedProof),
+            3 => InspectCanonicalDetachedDestinationProof(variant, start, end, expectedProof),
+            0 or 1 => throw new ArgumentException(
+                "SCCP SubmitBridgeProof cannot use generic bridge payloads."),
+            _ => throw new ArgumentException(
+                "SubmitBridgeProof uses an unknown bridge payload."),
+        };
+
+        if (!proof.IsFinished)
+        {
+            throw new ArgumentException(
+                "SCCP SubmitBridgeProof must contain no trailing fields.");
+        }
+
+        if (binding.RouteConfigurationHash.All(static value => value == 0))
+        {
+            throw new ArgumentException(
+                "SubmitBridgeProof route-configuration binding must be nonzero.");
+        }
+
+        return binding;
+    }
+
+    private static DetachedBridgeBinding InspectCanonicalDetachedNativeProof(
+        ReadOnlySpan<byte> payload,
+        ulong start,
+        ulong end,
+        byte[] expectedProof)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var backendField = cursor.TakeField("SubmitBridgeProof.native.backend");
+        if (backendField.Length != sizeof(uint))
+        {
+            throw new ArgumentException("SubmitBridgeProof native backend is malformed.");
+        }
+
+        var backend = BinaryPrimitives.ReadUInt32LittleEndian(backendField) switch
+        {
+            0 => "bridge/sccp/native/ethereum-beacon-v1",
+            1 => "bridge/sccp/native/bsc-parlia-v1",
+            2 => "bridge/sccp/native/tron-dpos-v1",
+            _ => throw new ArgumentException("SubmitBridgeProof native backend is unknown."),
+        };
+        var routeHash = DecodeFixedByteArray(
+            cursor.TakeField("SubmitBridgeProof.native.route_configuration_hash"),
+            IrohaHash.Length,
+            "SubmitBridgeProof.native.route_configuration_hash");
+        var envelope = DecodeRawByteVector(
+            cursor.TakeField("SubmitBridgeProof.native.encoded_envelope"),
+            "SubmitBridgeProof.native.encoded_envelope");
+        if (!cursor.IsFinished || !envelope.SequenceEqual(expectedProof))
+        {
+            throw new ArgumentException(
+                "SubmitBridgeProof native proof does not match the submitted proof.");
+        }
+
+        RequireCanonicalNoritoArchive(
+            envelope,
+            "SubmitBridgeProof.native.encoded_envelope",
+            MaximumNativeArtifactBytes,
+            NativeInboundProofSchemaName);
+        return new DetachedBridgeBinding(backend, routeHash, start, end, false);
+    }
+
+    private static DetachedBridgeBinding InspectCanonicalDetachedDestinationProof(
+        ReadOnlySpan<byte> payload,
+        ulong start,
+        ulong end,
+        byte[] expectedProof)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var backendField = cursor.TakeField("SubmitBridgeProof.destination.backend");
+        if (backendField.Length != sizeof(uint))
+        {
+            throw new ArgumentException("SubmitBridgeProof destination backend is malformed.");
+        }
+
+        var backend = BinaryPrimitives.ReadUInt32LittleEndian(backendField) switch
+        {
+            0 => "evm-groth16-bn254-v1",
+            1 => "tron-groth16-bn254-v1",
+            _ => throw new ArgumentException("SubmitBridgeProof destination backend is unknown."),
+        };
+        var routeHash = DecodeFixedByteArray(
+            cursor.TakeField("SubmitBridgeProof.destination.route_configuration_hash"),
+            IrohaHash.Length,
+            "SubmitBridgeProof.destination.route_configuration_hash");
+        var artifact = DecodeRawByteVector(
+            cursor.TakeField("SubmitBridgeProof.destination.encoded_artifact"),
+            "SubmitBridgeProof.destination.encoded_artifact");
+        if (!cursor.IsFinished || !artifact.SequenceEqual(expectedProof))
+        {
+            throw new ArgumentException(
+                "SubmitBridgeProof destination artifact does not match the submitted proof.");
+        }
+
+        RequireCanonicalNoritoArchive(
+            artifact,
+            "SubmitBridgeProof.destination.encoded_artifact",
+            MaximumDestinationArtifactBytes,
+            DestinationArtifactSchemaName);
+        return new DetachedBridgeBinding(backend, routeHash, start, end, true);
+    }
+
+    internal static byte[] CanonicalNoritoBase64(
+        string value,
+        string field,
+        int maximumBytes,
+        string? expectedSchemaName = null)
+    {
+        var archive = CanonicalBase64(value, field, maximumBytes: maximumBytes);
+        RequireCanonicalNoritoArchive(archive, field, maximumBytes, expectedSchemaName);
+        return archive;
+    }
+
+    private static void RequireCanonicalNoritoArchive(
+        ReadOnlySpan<byte> archive,
+        string field,
+        int maximumBytes,
+        string? expectedSchemaName = null)
+    {
         if (archive.Length < NoritoHeader.EncodedLength
-            || !archive.AsSpan(0, 4).SequenceEqual("NRT0"u8)
+            || archive.Length > maximumBytes
+            || !archive.Slice(0, 4).SequenceEqual("NRT0"u8)
             || archive[4] != 0 || archive[5] != 0
-            || archive.AsSpan(6, 16).IndexOfAnyExcept((byte)0) < 0
-            || archive[22] != (byte)NoritoCompression.None)
+            || archive.Slice(6, 16).IndexOfAnyExcept((byte)0) < 0
+            || archive[22] != (byte)NoritoCompression.None
+            || !SupportedNoritoFlags(archive[39]))
         {
             throw new ArgumentException($"{field} must contain one canonical uncompressed Norito envelope.");
         }
 
-        var payloadLength = BinaryPrimitives.ReadUInt64LittleEndian(archive.AsSpan(23, 8));
+        if (expectedSchemaName is not null
+            && !archive.Slice(6, 16).SequenceEqual(NoritoCodec.SchemaHash(expectedSchemaName)))
+        {
+            throw new ArgumentException($"{field} does not contain the closed SCCP artifact schema.");
+        }
+
+        var payloadLength = BinaryPrimitives.ReadUInt64LittleEndian(archive.Slice(23, 8));
         if (payloadLength > int.MaxValue || payloadLength > (ulong)(archive.Length - NoritoHeader.EncodedLength))
         {
             throw new ArgumentException($"{field} contains an invalid Norito payload length.");
         }
 
         var padding = archive.Length - NoritoHeader.EncodedLength - (int)payloadLength;
-        if (padding is not (0 or 8)
-            || archive.AsSpan(NoritoHeader.EncodedLength, padding).IndexOfAnyExcept((byte)0) >= 0)
+        if (padding != 0)
         {
-            throw new ArgumentException($"{field} must use canonical Norito header alignment.");
+            throw new ArgumentException($"{field} contains non-canonical Norito header padding.");
         }
 
-        var payload = archive.AsSpan(NoritoHeader.EncodedLength + padding, (int)payloadLength);
-        var checksum = BinaryPrimitives.ReadUInt64LittleEndian(archive.AsSpan(31, 8));
+        var payload = archive.Slice(NoritoHeader.EncodedLength + padding, (int)payloadLength);
+        var checksum = BinaryPrimitives.ReadUInt64LittleEndian(archive.Slice(31, 8));
         if (Crc64Ecma.Compute(payload) != checksum)
         {
             throw new ArgumentException($"{field} has an invalid Norito checksum.");
         }
-
-        return archive;
     }
 
     internal static byte[] CanonicalBase64(
@@ -476,6 +913,23 @@ internal static class SccpSubmitValidation
         int maximumBytes = MaximumArtifactBytes)
     {
         ArgumentNullException.ThrowIfNull(value);
+        var encodedLimit = checked(((maximumBytes + 2) / 3) * 4);
+        if (value.Length == 0 || value.Length > encodedLimit || value.Length % 4 != 0
+            || value.Any(static character =>
+                character is not (>= 'A' and <= 'Z')
+                    and not (>= 'a' and <= 'z')
+                    and not (>= '0' and <= '9')
+                    and not ('+' or '/' or '=')))
+        {
+            throw new ArgumentException($"{field} must be bounded canonical padded base64.", field);
+        }
+
+        if (exactBytes is { } exact
+            && value.Length != checked(((exact + 2) / 3) * 4))
+        {
+            throw new ArgumentException($"{field} must contain exactly {exact} bytes.", field);
+        }
+
         byte[] decoded;
         try
         {
@@ -486,7 +940,7 @@ internal static class SccpSubmitValidation
             throw new ArgumentException($"{field} must be canonical padded base64.", field, error);
         }
 
-        if (value.Length == 0 || value != value.Trim() || decoded.Length == 0
+        if (decoded.Length == 0
             || decoded.Length > maximumBytes
             || !string.Equals(Convert.ToBase64String(decoded), value, StringComparison.Ordinal))
         {
@@ -501,23 +955,762 @@ internal static class SccpSubmitValidation
         return decoded;
     }
 
-    internal static string? OptionalHex(string? value, int bytes, string field)
+    private static bool SupportedNoritoFlags(byte flags) =>
+        (flags & ~0x27) == 0 && ((flags & 0x20) == 0 || (flags & 0x06) == 0x06);
+
+    private static byte[] DetachedTransactionHash(
+        ReadOnlySpan<byte> payload,
+        ReadOnlySpan<byte> signature)
     {
-        if (value is null)
+        using var signatureVector = new MemoryStream();
+        WriteLittleEndianUInt64(signatureVector, checked((ulong)signature.Length));
+        foreach (var item in signature)
         {
-            return null;
+            WriteLittleEndianUInt64(signatureVector, 1);
+            signatureVector.WriteByte(item);
         }
 
-        if (value.Length != 2 + bytes * 2 || !value.StartsWith("0x", StringComparison.Ordinal)
-            || value.AsSpan(2).ContainsAnyExcept("0123456789abcdef")
-            || value.AsSpan(2).IndexOfAnyExcept('0') < 0)
+        using var signedTransaction = new MemoryStream();
+        WriteFixedField(signedTransaction, signatureVector.ToArray());
+        WriteFixedField(signedTransaction, payload);
+        WriteFixedField(signedTransaction, [0]);
+        WriteFixedField(signedTransaction, [0]);
+
+        using var entrypoint = new MemoryStream();
+        Span<byte> variant = stackalloc byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32LittleEndian(variant, 0);
+        entrypoint.Write(variant);
+        WriteFixedField(entrypoint, signedTransaction.ToArray());
+        return IrohaHash.Hash(entrypoint.ToArray());
+    }
+
+    private static void WriteFixedField(Stream output, ReadOnlySpan<byte> value)
+    {
+        WriteLittleEndianUInt64(output, checked((ulong)value.Length));
+        output.Write(value);
+    }
+
+    private static void WriteLittleEndianUInt64(Stream output, ulong value)
+    {
+        Span<byte> encoded = stackalloc byte[sizeof(ulong)];
+        BinaryPrimitives.WriteUInt64LittleEndian(encoded, value);
+        output.Write(encoded);
+    }
+
+    internal static void RequireCanonicalTransactionPayload(
+        ReadOnlySpan<byte> payload,
+        ulong creationTimeMs,
+        string backend,
+        byte[] routeConfigurationHash,
+        ulong rangeStartHeight,
+        ulong rangeEndHeight,
+        string? expectedAuthority,
+        byte[]? expectedProof)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var chain = cursor.TakeField("chain_id");
+        var authority = cursor.TakeField("authority");
+        var creation = cursor.TakeField("creation_time_ms");
+        var executable = cursor.TakeField("executable");
+        var timeToLive = cursor.TakeField("time_to_live_ms");
+        var nonce = cursor.TakeField("nonce");
+        var metadata = cursor.TakeField("metadata");
+        if (!cursor.IsFinished
+            || creation.Length != sizeof(ulong)
+            || BinaryPrimitives.ReadUInt64LittleEndian(creation) != creationTimeMs)
         {
             throw new ArgumentException(
-                $"{field} must be canonical lowercase nonzero 0x-prefixed {bytes}-byte hex.",
-                field);
+                "transaction_payload_b64 must contain one canonical transaction payload matching creation_time_ms.");
         }
 
-        return value;
+        RequireCanonicalChainId(chain);
+        var controller = RequireCanonicalAuthority(authority);
+        if (expectedAuthority is not null)
+        {
+            var expectedController = AccountAddress
+                .Parse(expectedAuthority, AccountAddress.TestChainDiscriminant)
+                .ControllerBytes();
+            if (!controller.AsSpan().SequenceEqual(expectedController))
+            {
+                throw new ArgumentException(
+                    "Transaction authority does not match the SCCP submit request.");
+            }
+        }
+
+        RequireCanonicalExecutable(
+            executable,
+            backend,
+            routeConfigurationHash,
+            rangeStartHeight,
+            rangeEndHeight,
+            expectedProof);
+        RequireAbsentOption(timeToLive, "time_to_live_ms");
+        RequireAbsentOption(nonce, "nonce");
+        RequireCanonicalMetadata(metadata);
+    }
+
+    private static void RequireCanonicalChainId(ReadOnlySpan<byte> payload)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var encodedString = cursor.TakeField("chain_id.value");
+        var chainId = DecodeCompactString(encodedString, "chain_id.value");
+        if (!cursor.IsFinished
+            || chainId != TairaChainId)
+        {
+            throw new ArgumentException("SCCP transaction must target the canonical Taira chain.");
+        }
+    }
+
+    private static byte[] RequireCanonicalAuthority(ReadOnlySpan<byte> payload)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var controllerTag = cursor.TakeUInt32("authority.controller");
+        byte[] canonicalController;
+        switch (controllerTag)
+        {
+            case 0:
+            {
+                var publicKey = DecodeByteVector(
+                    cursor.TakeField("authority.public_key"),
+                    "authority.public_key",
+                    byte.MaxValue + 1);
+                RequireCanonicalCompactPublicKey(publicKey, byte.MaxValue, "authority.public_key");
+                canonicalController = CanonicalSingleController(publicKey);
+                break;
+            }
+            case 1:
+                canonicalController = RequireCanonicalMultisigPolicy(
+                    cursor.TakeField("authority.multisig"));
+                break;
+            default:
+                throw new ArgumentException("Transaction authority uses an unknown controller tag.");
+        }
+
+        if (!cursor.IsFinished)
+        {
+            throw new ArgumentException("Transaction authority contains trailing bytes.");
+        }
+
+        return canonicalController;
+    }
+
+    private static byte[] RequireCanonicalMultisigPolicy(ReadOnlySpan<byte> payload)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var version = cursor.TakeByte("authority.multisig.version");
+        var threshold = cursor.TakeUInt16("authority.multisig.threshold");
+        var memberCount = cursor.TakeUInt64("authority.multisig.members");
+        if (version != 1 || threshold == 0 || memberCount is 0 or > ushort.MaxValue)
+        {
+            throw new ArgumentException("Transaction multisig authority has invalid version, threshold, or member count.");
+        }
+
+        ulong totalWeight = 0;
+        byte[]? previousMemberSortKey = null;
+        var canonicalMembers = new List<(byte[] PublicKey, ushort Weight)>();
+        for (var index = 0UL; index < memberCount; index++)
+        {
+            var member = new CompactTransactionCursor(cursor.TakeField("authority.multisig.member"));
+            var publicKey = DecodeByteVector(
+                ref member,
+                "authority.multisig.member.public_key",
+                ushort.MaxValue + 1);
+            RequireCanonicalCompactPublicKey(
+                publicKey,
+                ushort.MaxValue,
+                "authority.multisig.member.public_key");
+            var memberSortKey = CompactPublicKeySortKey(publicKey);
+            var weight = member.TakeUInt16("authority.multisig.member.weight");
+            if (weight == 0
+                || !member.IsFinished
+                || previousMemberSortKey is not null
+                    && previousMemberSortKey.AsSpan().SequenceCompareTo(memberSortKey) >= 0)
+            {
+                throw new ArgumentException(
+                    "Transaction multisig members must be nonzero, unique, and canonically sorted.");
+            }
+
+            totalWeight = checked(totalWeight + weight);
+            previousMemberSortKey = memberSortKey;
+            canonicalMembers.Add((publicKey, weight));
+        }
+
+        if (!cursor.IsFinished || totalWeight < threshold)
+        {
+            throw new ArgumentException("Transaction multisig authority is not canonical.");
+        }
+
+        using var canonical = new MemoryStream();
+        canonical.WriteByte(1);
+        canonical.WriteByte(version);
+        WriteBigEndian(canonical, threshold);
+        WriteBigEndian(canonical, checked((ushort)canonicalMembers.Count));
+        foreach (var member in canonicalMembers)
+        {
+            canonical.WriteByte(CanonicalCurveId(member.PublicKey[0]));
+            WriteBigEndian(canonical, member.Weight);
+            WriteBigEndian(canonical, checked((ushort)(member.PublicKey.Length - 1)));
+            canonical.Write(member.PublicKey.AsSpan(1));
+        }
+
+        return canonical.ToArray();
+    }
+
+    private static byte[] CanonicalSingleController(byte[] publicKey)
+    {
+        var keyLength = checked((byte)(publicKey.Length - 1));
+        var result = new byte[3 + keyLength];
+        result[0] = 0;
+        result[1] = CanonicalCurveId(publicKey[0]);
+        result[2] = keyLength;
+        publicKey.AsSpan(1).CopyTo(result.AsSpan(3));
+        return result;
+    }
+
+    private static byte CanonicalCurveId(byte algorithm) => algorithm switch
+    {
+        0 => 1,
+        1 => 4,
+        2 => 3,
+        3 => 5,
+        4 => 2,
+        5 => 10,
+        6 => 11,
+        7 => 12,
+        8 => 13,
+        9 => 14,
+        10 => 15,
+        _ => throw new ArgumentException("Transaction public key algorithm is unknown."),
+    };
+
+    private static void WriteBigEndian(Stream output, ushort value)
+    {
+        Span<byte> encoded = stackalloc byte[sizeof(ushort)];
+        BinaryPrimitives.WriteUInt16BigEndian(encoded, value);
+        output.Write(encoded);
+    }
+
+    private static byte[] DecodeByteVector(
+        ReadOnlySpan<byte> payload,
+        string field,
+        int maximumBytes)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var result = DecodeByteVector(ref cursor, field, maximumBytes);
+        if (!cursor.IsFinished)
+        {
+            throw new ArgumentException($"{field} contains trailing bytes.");
+        }
+
+        return result;
+    }
+
+    private static byte[] DecodeByteVector(
+        ref CompactTransactionCursor cursor,
+        string field,
+        int maximumBytes)
+    {
+        var count = cursor.TakeUInt64(field);
+        if (count == 0 || count > (ulong)maximumBytes)
+        {
+            throw new ArgumentException($"{field} length is invalid.");
+        }
+
+        var result = new byte[checked((int)count)];
+        for (var index = 0; index < result.Length; index++)
+        {
+            if (cursor.TakeCompactLength(field) != 1)
+            {
+                throw new ArgumentException($"{field} byte element is not canonically framed.");
+            }
+
+            result[index] = cursor.TakeByte(field);
+        }
+
+        return result;
+    }
+
+    private static void RequireCanonicalCompactPublicKey(
+        byte[] payload,
+        int maximumKeyBytes,
+        string field)
+    {
+        if (payload.Length is < 2 || payload.Length - 1 > maximumKeyBytes || payload[0] > 10)
+        {
+            throw new ArgumentException($"{field} is not a closed compact public key.");
+        }
+    }
+
+    private static byte[] CompactPublicKeySortKey(byte[] payload)
+    {
+        var algorithm = payload[0] switch
+        {
+            0 => "ed25519",
+            1 => "secp256k1",
+            2 => "bls_normal",
+            3 => "bls_small",
+            4 => "ml-dsa",
+            5 => "gost3410-2012-256-paramset-a",
+            6 => "gost3410-2012-256-paramset-b",
+            7 => "gost3410-2012-256-paramset-c",
+            8 => "gost3410-2012-512-paramset-a",
+            9 => "gost3410-2012-512-paramset-b",
+            10 => "sm2",
+            _ => throw new ArgumentException("Transaction public key algorithm is unknown."),
+        };
+        var prefix = StrictUtf8.GetBytes(algorithm);
+        var result = new byte[prefix.Length + payload.Length];
+        prefix.CopyTo(result, 0);
+        payload.AsSpan(1).CopyTo(result.AsSpan(prefix.Length + 1));
+        return result;
+    }
+
+    private static void RequireCanonicalExecutable(
+        ReadOnlySpan<byte> payload,
+        string backend,
+        byte[] routeConfigurationHash,
+        ulong rangeStartHeight,
+        ulong rangeEndHeight,
+        byte[]? expectedProof)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        switch (cursor.TakeUInt32("executable.kind"))
+        {
+            case 0:
+                RequireCanonicalInstructions(
+                    cursor.TakeField("executable.instructions"),
+                    backend,
+                    routeConfigurationHash,
+                    rangeStartHeight,
+                    rangeEndHeight,
+                    expectedProof);
+                break;
+            case 1 or 2 or 3:
+                throw new ArgumentException("SCCP transaction executable must contain instructions.");
+            default:
+                throw new ArgumentException("Transaction executable variant is unknown.");
+        }
+
+        if (!cursor.IsFinished)
+        {
+            throw new ArgumentException("Transaction executable contains trailing bytes.");
+        }
+    }
+
+    private static void RequireCanonicalInstructions(
+        ReadOnlySpan<byte> payload,
+        string backend,
+        byte[] routeConfigurationHash,
+        ulong rangeStartHeight,
+        ulong rangeEndHeight,
+        byte[]? expectedProof)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var count = cursor.TakeUInt64("executable.instructions.count");
+        if (count != 1)
+        {
+            throw new ArgumentException("SCCP transaction must contain exactly one instruction.");
+        }
+
+        for (var index = 0UL; index < count; index++)
+        {
+            var instruction = new CompactTransactionCursor(cursor.TakeField("executable.instruction"));
+            var wireName = DecodeCompactString(
+                instruction.TakeField("executable.instruction.wire_name"),
+                "executable.instruction.wire_name");
+            var archive = DecodeRawByteVector(
+                instruction.TakeField("executable.instruction.payload"),
+                "executable.instruction.payload");
+            if (wireName != SubmitBridgeProofWireName
+                || !instruction.IsFinished)
+            {
+                throw new ArgumentException("SCCP transaction instruction must be SubmitBridgeProof.");
+            }
+
+            RequireCanonicalNoritoArchive(
+                archive,
+                "executable.instruction.payload",
+                MaximumTransactionPayloadBytes,
+                SubmitBridgeProofWireName);
+            RequireCanonicalSubmitBridgeProof(
+                archive,
+                backend,
+                routeConfigurationHash,
+                rangeStartHeight,
+                rangeEndHeight,
+                expectedProof);
+        }
+
+        if (!cursor.IsFinished)
+        {
+            throw new ArgumentException("Transaction instruction sequence contains trailing bytes.");
+        }
+    }
+
+    private static ReadOnlySpan<byte> DecodeRawByteVector(ReadOnlySpan<byte> payload, string field)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var length = cursor.TakeUInt64(field);
+        if (length == 0 || length > int.MaxValue)
+        {
+            throw new ArgumentException($"{field} length is invalid.");
+        }
+
+        var result = cursor.TakeExact(checked((int)length), field);
+        if (!cursor.IsFinished)
+        {
+            throw new ArgumentException($"{field} contains trailing bytes.");
+        }
+
+        return result;
+    }
+
+    private static void RequireCanonicalSubmitBridgeProof(
+        ReadOnlySpan<byte> archive,
+        string backend,
+        byte[] routeConfigurationHash,
+        ulong rangeStartHeight,
+        ulong rangeEndHeight,
+        byte[]? expectedProof)
+    {
+        if (archive[39] != 0x02)
+        {
+            throw new ArgumentException(
+                "SubmitBridgeProof must use the canonical SCCP compact Norito layout.");
+        }
+
+        var payloadLength = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(archive.Slice(23, 8)));
+        var submit = new CompactTransactionCursor(
+            archive.Slice(NoritoHeader.EncodedLength, payloadLength));
+        var proof = new CompactTransactionCursor(submit.TakeField("SubmitBridgeProof.proof"));
+        if (!submit.IsFinished)
+        {
+            throw new ArgumentException("SubmitBridgeProof contains trailing fields.");
+        }
+
+        var range = new CompactTransactionCursor(proof.TakeField("SubmitBridgeProof.proof.range"));
+        var start = DecodeFramedUInt64(ref range, "SubmitBridgeProof.proof.range.start");
+        var end = DecodeFramedUInt64(ref range, "SubmitBridgeProof.proof.range.end");
+        if (!range.IsFinished || start != rangeStartHeight || end != rangeEndHeight)
+        {
+            throw new ArgumentException("SubmitBridgeProof range contradicts the SCCP response.");
+        }
+
+        var proofPayload = new CompactTransactionCursor(
+            proof.TakeField("SubmitBridgeProof.proof.payload"));
+        var kind = proofPayload.TakeUInt32("SubmitBridgeProof.proof.payload.kind");
+        var variant = proofPayload.TakeField("SubmitBridgeProof.proof.payload.value");
+        if (!proofPayload.IsFinished)
+        {
+            throw new ArgumentException("SubmitBridgeProof payload contains trailing bytes.");
+        }
+
+        switch (kind)
+        {
+            case 2:
+                RequireCanonicalNativeBridgeProof(
+                    variant,
+                    backend,
+                    routeConfigurationHash,
+                    expectedProof);
+                break;
+            case 3:
+                RequireCanonicalDestinationBridgeProof(
+                    variant,
+                    backend,
+                    routeConfigurationHash,
+                    expectedProof);
+                break;
+            case 0 or 1:
+                throw new ArgumentException("SCCP SubmitBridgeProof cannot use generic bridge payloads.");
+            default:
+                throw new ArgumentException("SubmitBridgeProof uses an unknown bridge payload.");
+        }
+
+        if (!proof.IsFinished)
+        {
+            throw new ArgumentException("SCCP SubmitBridgeProof must contain no trailing fields.");
+        }
+    }
+
+    private static void RequireCanonicalNativeBridgeProof(
+        ReadOnlySpan<byte> payload,
+        string backend,
+        byte[] routeConfigurationHash,
+        byte[]? expectedProof)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var backendField = cursor.TakeField("SubmitBridgeProof.native.backend");
+        if (backendField.Length != sizeof(uint))
+        {
+            throw new ArgumentException("SubmitBridgeProof native backend is malformed.");
+        }
+
+        var backendTag = BinaryPrimitives.ReadUInt32LittleEndian(backendField);
+        var expectedBackend = backendTag switch
+        {
+            0 => "bridge/sccp/native/ethereum-beacon-v1",
+            1 => "bridge/sccp/native/bsc-parlia-v1",
+            2 => "bridge/sccp/native/tron-dpos-v1",
+            _ => throw new ArgumentException("SubmitBridgeProof native backend is unknown."),
+        };
+        var routeHash = DecodeFixedByteArray(
+            cursor.TakeField("SubmitBridgeProof.native.route_configuration_hash"),
+            IrohaHash.Length,
+            "SubmitBridgeProof.native.route_configuration_hash");
+        var envelope = DecodeRawByteVector(
+            cursor.TakeField("SubmitBridgeProof.native.encoded_envelope"),
+            "SubmitBridgeProof.native.encoded_envelope");
+        if (!cursor.IsFinished
+            || backend != expectedBackend
+            || !routeHash.AsSpan().SequenceEqual(routeConfigurationHash))
+        {
+            throw new ArgumentException(
+                "SubmitBridgeProof native backend or route binding contradicts the SCCP response.");
+        }
+
+        RequireCanonicalNoritoArchive(
+            envelope,
+            "SubmitBridgeProof.native.encoded_envelope",
+            MaximumNativeArtifactBytes,
+            NativeInboundProofSchemaName);
+        if (expectedProof is not null && !envelope.SequenceEqual(expectedProof))
+        {
+            throw new ArgumentException("SubmitBridgeProof native proof does not match the submitted proof.");
+        }
+    }
+
+    private static void RequireCanonicalDestinationBridgeProof(
+        ReadOnlySpan<byte> payload,
+        string backend,
+        byte[] routeConfigurationHash,
+        byte[]? expectedProof)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var backendField = cursor.TakeField("SubmitBridgeProof.destination.backend");
+        if (backendField.Length != sizeof(uint))
+        {
+            throw new ArgumentException("SubmitBridgeProof destination backend is malformed.");
+        }
+
+        var backendTag = BinaryPrimitives.ReadUInt32LittleEndian(backendField);
+        var expectedBackend = backendTag switch
+        {
+            0 => "evm-groth16-bn254-v1",
+            1 => "tron-groth16-bn254-v1",
+            _ => throw new ArgumentException("SubmitBridgeProof destination backend is unknown."),
+        };
+        var routeHash = DecodeFixedByteArray(
+            cursor.TakeField("SubmitBridgeProof.destination.route_configuration_hash"),
+            IrohaHash.Length,
+            "SubmitBridgeProof.destination.route_configuration_hash");
+        var artifact = DecodeRawByteVector(
+            cursor.TakeField("SubmitBridgeProof.destination.encoded_artifact"),
+            "SubmitBridgeProof.destination.encoded_artifact");
+        if (!cursor.IsFinished
+            || backend != expectedBackend
+            || !routeHash.AsSpan().SequenceEqual(routeConfigurationHash))
+        {
+            throw new ArgumentException(
+                "SubmitBridgeProof destination binding contradicts the SCCP response.");
+        }
+
+        RequireCanonicalNoritoArchive(
+            artifact,
+            "SubmitBridgeProof.destination.encoded_artifact",
+            MaximumDestinationArtifactBytes,
+            DestinationArtifactSchemaName);
+        if (expectedProof is not null && !artifact.SequenceEqual(expectedProof))
+        {
+            throw new ArgumentException(
+                "SubmitBridgeProof destination artifact does not match the submitted proof.");
+        }
+    }
+
+    private static ulong DecodeFramedUInt64(ref CompactTransactionCursor cursor, string field)
+    {
+        var value = cursor.TakeField(field);
+        if (value.Length != sizeof(ulong))
+        {
+            throw new ArgumentException($"{field} is not a canonical UInt64.");
+        }
+
+        return BinaryPrimitives.ReadUInt64LittleEndian(value);
+    }
+
+    private static byte[] DecodeFixedByteArray(
+        ReadOnlySpan<byte> payload,
+        int length,
+        string field)
+    {
+        if (payload.Length != length)
+        {
+            throw new ArgumentException($"{field} is not a canonical fixed byte array.");
+        }
+
+        return payload.ToArray();
+    }
+
+    private static void RequireAbsentOption(ReadOnlySpan<byte> payload, string field)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var tag = cursor.TakeByte(field);
+        if (tag != 0 || !cursor.IsFinished)
+        {
+            throw new ArgumentException($"SCCP transaction {field} must use the exact None encoding.");
+        }
+    }
+
+    private static void RequireCanonicalMetadata(ReadOnlySpan<byte> payload)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var count = cursor.TakeUInt64("metadata.count");
+        if (count > 1)
+        {
+            throw new ArgumentException("SCCP transaction metadata may contain only gas_asset_id.");
+        }
+
+        string? previousKey = null;
+        for (var index = 0UL; index < count; index++)
+        {
+            var entry = new CompactTransactionCursor(cursor.TakeField("metadata.entry"));
+            var key = DecodeCompactString(entry.TakeField("metadata.key"), "metadata.key");
+            var jsonValue = new CompactTransactionCursor(entry.TakeField("metadata.value"));
+            var rawJson = DecodeCompactString(jsonValue.TakeField("metadata.value.json"), "metadata.value.json");
+            if (!entry.IsFinished
+                || !jsonValue.IsFinished
+                || key.Length == 0
+                || previousKey is not null && string.CompareOrdinal(previousKey, key) >= 0)
+            {
+                throw new ArgumentException("Transaction metadata is not uniquely sorted and canonical.");
+            }
+
+            using var document = SccpJson.Parse(
+                StrictUtf8.GetBytes(rawJson),
+                "transaction metadata value");
+            var gasAssetId = document.RootElement.ValueKind == JsonValueKind.String
+                ? document.RootElement.GetString()
+                : null;
+            if (key != "gas_asset_id"
+                || string.IsNullOrEmpty(gasAssetId)
+                || gasAssetId.Any(static character => char.IsWhiteSpace(character) || char.IsControl(character)))
+            {
+                throw new ArgumentException(
+                    "SCCP transaction metadata must be the optional canonical gas_asset_id string.");
+            }
+
+            previousKey = key;
+        }
+
+        if (!cursor.IsFinished)
+        {
+            throw new ArgumentException("Transaction metadata contains trailing bytes.");
+        }
+    }
+
+    private static string DecodeCompactString(ReadOnlySpan<byte> payload, string field)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        var length = cursor.TakeCompactLength(field);
+        if (length > int.MaxValue)
+        {
+            throw new ArgumentException($"{field} length exceeds the runtime bound.");
+        }
+
+        var bytes = cursor.TakeExact(checked((int)length), field);
+        if (!cursor.IsFinished)
+        {
+            throw new ArgumentException($"{field} contains trailing bytes.");
+        }
+
+        try
+        {
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException error)
+        {
+            throw new ArgumentException($"{field} is not strict UTF-8.", field, error);
+        }
+    }
+
+    private ref struct CompactTransactionCursor
+    {
+        private readonly ReadOnlySpan<byte> input;
+        private int offset;
+
+        internal CompactTransactionCursor(ReadOnlySpan<byte> input)
+        {
+            this.input = input;
+            offset = 0;
+        }
+
+        internal bool IsFinished => offset == input.Length;
+
+        internal byte TakeByte(string field) => TakeExact(1, field)[0];
+
+        internal ushort TakeUInt16(string field) =>
+            BinaryPrimitives.ReadUInt16LittleEndian(TakeExact(sizeof(ushort), field));
+
+        internal uint TakeUInt32(string field) =>
+            BinaryPrimitives.ReadUInt32LittleEndian(TakeExact(sizeof(uint), field));
+
+        internal ulong TakeUInt64(string field) =>
+            BinaryPrimitives.ReadUInt64LittleEndian(TakeExact(sizeof(ulong), field));
+
+        internal ulong TakeCompactLength(string field)
+        {
+            ulong result = 0;
+            var shift = 0;
+            while (true)
+            {
+                var value = TakeByte(field);
+                var chunk = value & 0x7f;
+                if (shift == 63 && chunk > 1)
+                {
+                    throw new ArgumentException($"{field} compact length exceeds UInt64.");
+                }
+
+                result |= (ulong)chunk << shift;
+                if ((value & 0x80) == 0)
+                {
+                    if (shift > 0 && chunk == 0)
+                    {
+                        throw new ArgumentException($"{field} compact length is overlong.");
+                    }
+
+                    return result;
+                }
+
+                shift += 7;
+                if (shift >= 64)
+                {
+                    throw new ArgumentException($"{field} compact length exceeds UInt64.");
+                }
+            }
+        }
+
+        internal ReadOnlySpan<byte> TakeField(string field)
+        {
+            var length = TakeCompactLength(field);
+            if (length > int.MaxValue)
+            {
+                throw new ArgumentException($"{field} length exceeds the runtime bound.");
+            }
+
+            return TakeExact(checked((int)length), field);
+        }
+
+        internal ReadOnlySpan<byte> TakeExact(int length, string field)
+        {
+            if (length < 0 || offset > input.Length - length)
+            {
+                throw new ArgumentException($"{field} is truncated.");
+            }
+
+            var result = input.Slice(offset, length);
+            offset += length;
+            return result;
+        }
     }
 
     internal static string ResponseHash(string value, string field)
@@ -529,49 +1722,6 @@ internal static class SccpSubmitValidation
             throw new ArgumentException(
                 $"{field} must be canonical lowercase nonzero 32-byte hex.",
                 field);
-        }
-
-        return value;
-    }
-
-    internal static string? OptionalText(string? value, int maximumBytes, string field)
-    {
-        if (value is null)
-        {
-            return null;
-        }
-
-        if (value.Length == 0 || value != value.Trim()
-            || System.Text.Encoding.UTF8.GetByteCount(value) > maximumBytes)
-        {
-            throw new ArgumentException($"{field} must be canonical nonempty text.", field);
-        }
-
-        return value;
-    }
-
-    internal static string? OptionalProofHex(string? value)
-    {
-        if (value is null)
-        {
-            return null;
-        }
-
-        if (value.Length != 768 || value.AsSpan().ContainsAnyExcept("0123456789abcdef")
-            || value.AsSpan().IndexOfAnyExcept('0') < 0)
-        {
-            throw new ArgumentException(
-                "proof_bytes_hex must be canonical lowercase nonzero 384-byte hex.",
-                nameof(value));
-        }
-
-        var proof = Convert.FromHexString(value);
-        if (proof.AsSpan(0, 31).IndexOfAnyExcept((byte)0) >= 0 || proof[31] != 1
-            || proof.AsSpan(32, 32).IndexOfAnyExcept((byte)0) < 0
-            || proof.AsSpan(64, 32).IndexOfAnyExcept((byte)0) >= 0
-            || proof.AsSpan(96, 32).IndexOfAnyExcept((byte)0) < 0)
-        {
-            throw new ArgumentException("proof_bytes_hex has invalid SCCP public inputs.", nameof(value));
         }
 
         return value;
@@ -641,9 +1791,15 @@ internal static class SccpSubmitValidation
         string[] smallOrder =
         [
             "0000000000000000000000000000000000000000000000000000000000000000",
-            "0100000000000000000000000000000000000000000000000000000000000000",
-            "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
             "0000000000000000000000000000000000000000000000000000000000000080",
+            "0100000000000000000000000000000000000000000000000000000000000000",
+            "0100000000000000000000000000000000000000000000000000000000000080",
+            "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+            "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+            "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+            "13888ecb61c5c95739d95c69ce5177c450e99128e7a90b3ecbc595e035c15500",
+            "b4dfc53e58080246839b2c4e6f3db63e185f6c730b31e990b6f3f2519295550f",
         ];
         var hex = Convert.ToHexString(value).ToLowerInvariant();
         return !smallOrder.Contains(hex, StringComparer.Ordinal);
@@ -656,6 +1812,11 @@ internal static class SccpJson
     {
         try
         {
+            if (json.Length == 0 || json.Length > SccpSubmitValidation.MaximumJsonBytes)
+            {
+                throw new JsonException("JSON body exceeds the SCCP size bound.");
+            }
+
             var reader = new Utf8JsonReader(json.Span, new JsonReaderOptions
             {
                 AllowTrailingCommas = false,
@@ -685,7 +1846,12 @@ internal static class SccpJson
                 }
             }
 
-            return JsonDocument.Parse(json);
+            return JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = 128,
+            });
         }
         catch (JsonException error)
         {
@@ -694,6 +1860,13 @@ internal static class SccpJson
     }
 
     internal static void ExactFields(JsonElement value, HashSet<string> fields, string label)
+        => ExactFields(value, fields, fields, label);
+
+    internal static void ExactFields(
+        JsonElement value,
+        HashSet<string> allowed,
+        HashSet<string> required,
+        string label)
     {
         if (value.ValueKind != JsonValueKind.Object)
         {
@@ -703,7 +1876,7 @@ internal static class SccpJson
         var observed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var property in value.EnumerateObject())
         {
-            if (!fields.Contains(property.Name))
+            if (!allowed.Contains(property.Name))
             {
                 throw new ArgumentException($"{label} contains unknown or retired field `{property.Name}`.");
             }
@@ -711,7 +1884,7 @@ internal static class SccpJson
             observed.Add(property.Name);
         }
 
-        foreach (var field in fields)
+        foreach (var field in required)
         {
             if (!observed.Contains(field))
             {
@@ -747,11 +1920,16 @@ internal static class SccpJson
         _ => throw new ArgumentException($"{field} must be boolean."),
     };
 
-    internal static ulong UInt64(JsonElement value, string field, ulong minimum)
+    internal static ulong UInt64(
+        JsonElement value,
+        string field,
+        ulong minimum,
+        ulong maximum = ulong.MaxValue)
     {
         var property = value.GetProperty(field);
         if (property.ValueKind != JsonValueKind.Number || !property.TryGetUInt64(out var result)
-            || result < minimum || property.GetRawText() != result.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            || result < minimum || result > maximum
+            || property.GetRawText() != result.ToString(System.Globalization.CultureInfo.InvariantCulture))
         {
             throw new ArgumentException($"{field} must be a canonical unsigned integer >= {minimum}.");
         }

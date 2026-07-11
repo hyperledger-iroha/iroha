@@ -1,15 +1,17 @@
 fn main() {
     let src = r#"
-        struct A { x: int; }
-        struct B { a: A; }
-        struct C { b: B; }
-        struct D { c: C; }
-        fn f() -> int {
-            let a = A(5);
-            let b = B(a);
-            let c = C(b);
-            let d = D(c);
-            return d.c.b.a.x;
+        seiyaku DumpProgram {
+            struct A { x: i64 }
+            struct B { a: A }
+            struct C { b: B }
+            struct D { c: C }
+            view fn main() -> i64 {
+                let a = A { x: 5 };
+                let b = B { a };
+                let c = C { b };
+                let d = D { c };
+                return d.c.b.a.x;
+            }
         }
     "#;
     let code = ivm::KotodamaCompiler::new()

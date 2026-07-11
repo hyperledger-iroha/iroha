@@ -65,9 +65,9 @@ seiyaku Hello {
 
     kotoage fn write_detail() authorize("Admin") {
         ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
         );
     }
 
@@ -154,63 +154,3 @@ Norito қолдайтын JSON пайдалы жүктемесін көруің�
 - Өз келісім-шарттарыңызды қайталау кезінде `npm run sync-norito-snippets` пайдаланыңыз
   Портал құжаттары мен артефактілер қалуы үшін жүктеп алынатын үзінділерді қалпына келтіруге арналған жұмыс кеңістігі
   `crates/ivm/docs/examples/` астындағы көздермен синхрондалған.
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```

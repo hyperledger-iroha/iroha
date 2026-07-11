@@ -92,6 +92,18 @@ def test_artifact_validation_binds_v1_budget_mode_and_debug_policy(
     with pytest.raises(goldens.GoldenError, match="forbidden debug metadata"):
         goldens.validate_artifact(path, "standard")
 
+    mutated = bytearray(artifact())
+    mutated[6] = 0x80
+    path.write_bytes(mutated)
+    with pytest.raises(goldens.GoldenError, match="unknown execution-mode bits"):
+        goldens.validate_artifact(path, "standard")
+
+    mutated = bytearray(artifact())
+    mutated[7] = 8
+    path.write_bytes(mutated)
+    with pytest.raises(goldens.GoldenError, match="vector-length override"):
+        goldens.validate_artifact(path, "standard")
+
 
 def test_atomic_publish_does_not_rewrite_equal_output(tmp_path: Path) -> None:
     source = tmp_path / "source.to"
@@ -133,9 +145,10 @@ def test_runtime_manifest_verification_uses_canonical_contract_command(
     goldens.verify_runtime_manifests(iroha, root, release.parent, [row])
 
     assert commands == [
-        [
-            str(iroha),
-            "contract",
+            [
+                str(iroha),
+                "--machine",
+                "contract",
             "manifest",
             "build",
             "--code-file",
@@ -220,15 +233,94 @@ def test_run_contract_tests_executes_only_the_pinned_inventory(
             str(part) for part in expected[index]
         ]
         commands.append(command)
-        return '{"ok":true}\n' if index == 3 else ""
+        if index == 3:
+            return json.dumps(
+                {
+                    "target": str(goldens.TEST_SOURCE),
+                    "seed": 0,
+                    "passed": 1,
+                    "failed": 0,
+                    "tests": [
+                        {
+                            "name": goldens.EXACT_TEST_NAME,
+                            "line": 7,
+                            "passed": True,
+                            "duration_ns": 10,
+                            "failure": None,
+                        }
+                    ],
+                }
+            )
+        if index == 4:
+            (stage / "contract-flow-tests.xml").write_text(
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                f'<testsuite name="{goldens.TEST_SOURCE}" tests="1" '
+                'failures="0" time="0.000000010" seed="0">\n'
+                f'  <testcase name="{goldens.EXACT_TEST_NAME}" '
+                f'classname="{goldens.TEST_SOURCE}" line="7" '
+                'time="0.000000010">\n'
+                "  </testcase>\n"
+                "</testsuite>\n",
+                encoding="utf-8",
+            )
+        return ""
 
     monkeypatch.setattr(goldens, "run", fake_run)
     goldens.run_contract_tests(koto, root, stage)
 
     assert len(commands) == len(expected) == 5
-    assert (stage / "contract-flow-tests.json").read_text(encoding="utf-8") == (
-        '{"ok":true}\n'
+    report = json.loads(
+        (stage / "contract-flow-tests.json").read_text(encoding="utf-8")
     )
+    assert report["tests"][0]["name"] == goldens.EXACT_TEST_NAME
+
+
+def test_contract_report_validation_rejects_malformed_or_divergent_output(
+    tmp_path: Path,
+) -> None:
+    valid = {
+        "target": "demo.test.ko",
+        "seed": 0,
+        "passed": 1,
+        "failed": 0,
+        "tests": [
+            {
+                "name": "roundtrip",
+                "line": 3,
+                "passed": True,
+                "duration_ns": 1,
+                "failure": None,
+            }
+        ],
+    }
+    junit = tmp_path / "report.xml"
+    junit.write_text(
+        '<testsuite name="demo.test.ko" tests="1" failures="0" '
+        'time="0.000000001" seed="0">\n'
+        '  <testcase name="roundtrip" classname="demo.test.ko" '
+        'line="3" time="0.000000001"></testcase>\n'
+        "</testsuite>\n",
+        encoding="utf-8",
+    )
+    goldens.validate_contract_test_reports(json.dumps(valid), junit)
+
+    with pytest.raises(goldens.GoldenError, match="invalid JSON"):
+        goldens.validate_contract_test_reports("{", junit)
+
+    failed = json.loads(json.dumps(valid))
+    failed["failed"] = 1
+    failed["passed"] = 0
+    failed["tests"][0]["passed"] = False
+    failed["tests"][0]["failure"] = "rejected"
+    with pytest.raises(goldens.GoldenError, match="complete successful run"):
+        goldens.validate_contract_test_reports(json.dumps(failed), junit)
+
+    divergent = junit.read_text(encoding="utf-8").replace(
+        'name="roundtrip"', 'name="different"'
+    )
+    junit.write_text(divergent, encoding="utf-8")
+    with pytest.raises(goldens.GoldenError, match="inventories differ"):
+        goldens.validate_contract_test_reports(json.dumps(valid), junit)
 
 
 def test_artifact_code_metrics_locates_literals_and_counts_relocation_nops(
@@ -260,6 +352,7 @@ def test_size_baseline_is_strict_and_word_aligned(tmp_path: Path) -> None:
             {
                 "schema": goldens.SIZE_BASELINE_SCHEMA,
                 "unit": "code_bytes",
+                "corpus": goldens.SIZE_BASELINE_CORPUS,
                 "source_revision": "0" * 40,
                 "samples": {"samples/demo.to": 128},
             }
@@ -269,6 +362,12 @@ def test_size_baseline_is_strict_and_word_aligned(tmp_path: Path) -> None:
     assert goldens.read_size_baseline(baseline) == {Path("samples/demo.to"): 128}
 
     payload = json.loads(baseline.read_text(encoding="utf-8"))
+    del payload["corpus"]
+    baseline.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(goldens.GoldenError, match="normative corpus"):
+        goldens.read_size_baseline(baseline)
+
+    payload["corpus"] = goldens.SIZE_BASELINE_CORPUS
     del payload["source_revision"]
     baseline.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(goldens.GoldenError, match="source_revision"):
@@ -296,6 +395,7 @@ def test_performance_gate_rejects_one_percent_padding_and_size_regression(
             {
                 "schema": goldens.SIZE_BASELINE_SCHEMA,
                 "unit": "code_bytes",
+                "corpus": goldens.SIZE_BASELINE_CORPUS,
                 "source_revision": "0" * 40,
                 "samples": {destination.as_posix(): 800},
             }

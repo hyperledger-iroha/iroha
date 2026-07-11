@@ -240,7 +240,7 @@ fn verify_decoded_contract_artifact(
         .map(|entrypoint| entrypoint.to_manifest_descriptor())
         .collect::<Vec<_>>();
     let manifest = ContractManifest {
-        contract_name: Some(envelope.contract_interface.contract_name.clone()),
+        seiyaku_name: Some(envelope.contract_interface.seiyaku_name.clone()),
         code_hash: Some(code_hash),
         abi_hash: Some(abi_hash),
         compiler_fingerprint: Some(envelope.contract_interface.compiler_fingerprint.clone()),
@@ -331,6 +331,9 @@ fn manifest_state_type_name(ty: &crate::metadata::EmbeddedStateType) -> String {
                 manifest_state_type_name(err)
             )
         }
+        EmbeddedStateType::List { element, capacity } => {
+            format!("List<{}, {capacity}>", manifest_state_type_name(element))
+        }
     }
 }
 
@@ -339,9 +342,9 @@ fn validate_contract_interface(
     contract_interface: &EmbeddedContractInterfaceV1,
     decoded: &[DecodedOp],
 ) -> Result<(), ContractArtifactError> {
-    if !is_canonical_contract_name(&contract_interface.contract_name) {
+    if !is_canonical_seiyaku_name(&contract_interface.seiyaku_name) {
         return Err(ContractArtifactError::invalid(
-            "CNTR contract_name must be a non-empty identifier",
+            "CNTR seiyaku_name must be a canonical Kotodama V1 identifier",
         ));
     }
     let fingerprint = contract_interface.compiler_fingerprint.trim();
@@ -387,9 +390,11 @@ fn validate_contract_interface(
     validate_bytecode_security(decoded, zk_enabled)?;
     let valid_pcs = decoded.iter().map(|op| op.pc).collect::<BTreeSet<_>>();
     let mut entrypoint_names = BTreeSet::new();
+    let mut entrypoint_kinds = BTreeMap::new();
     let mut entrypoint_pcs = BTreeSet::new();
-    let mut init_seen = false;
-    let mut upgrade_seen = false;
+    let mut entrypoint_reachability = BTreeMap::new();
+    let mut hajimari_seen = false;
+    let mut kaizen_seen = false;
 
     for entrypoint in &contract_interface.entrypoints {
         validate_entrypoint_name(&entrypoint.name)?;
@@ -399,6 +404,7 @@ fn validate_contract_interface(
                 entrypoint.name
             )));
         }
+        entrypoint_kinds.insert(entrypoint.name.clone(), entrypoint.kind);
         if !valid_pcs.contains(&entrypoint.entry_pc) {
             return Err(ContractArtifactError::invalid(format!(
                 "entrypoint `{}` has invalid entry_pc {}",
@@ -445,24 +451,82 @@ fn validate_contract_interface(
                 )));
             }
         }
+        match (
+            entrypoint.return_type.as_deref(),
+            entrypoint.return_schema.as_ref(),
+        ) {
+            (None, None) => {}
+            (Some(type_name), Some(schema))
+                if schema.validate()
+                    && schema.canonical_type_name().as_deref() == Some(type_name)
+                    && schema.word_count().is_some_and(|words| {
+                        words <= ivm_abi::entrypoint::MAX_ENTRYPOINT_RETURN_WORDS
+                    }) => {}
+            (Some(_), Some(_)) => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "entrypoint `{}` has a return schema that does not match its declared type or exceeds the ABI v1 public register window",
+                    entrypoint.name
+                )));
+            }
+            (Some(_), None) => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "entrypoint `{}` is missing its exact return schema",
+                    entrypoint.name
+                )));
+            }
+            (None, Some(_)) => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "unit entrypoint `{}` must not declare a return schema",
+                    entrypoint.name
+                )));
+            }
+        }
         if entrypoint.kind == EntryPointKind::View {
             validate_view_effects(&entrypoint.name, &reachability.syscalls)?;
         }
-        if entrypoint.kind == EntryPointKind::Public && entrypoint.permission.is_none() {
+        if entrypoint.kind == EntryPointKind::Kotoage && entrypoint.permission.is_none() {
             return Err(ContractArtifactError::invalid(format!(
-                "public entrypoint `{}` is missing caller authorization",
+                "`kotoage`/`言挙げ` entrypoint `{}` is missing caller authorization",
                 entrypoint.name
             )));
         }
         if matches!(
             entrypoint.kind,
-            EntryPointKind::Init | EntryPointKind::Upgrade
+            EntryPointKind::Hajimari | EntryPointKind::Kaizen
         ) && entrypoint.permission.is_some()
         {
             return Err(ContractArtifactError::invalid(format!(
-                "lifecycle entrypoint `{}` must use runtime-defined authorization",
+                "`hajimari`/`始まり` and `kaizen`/`改善` entrypoint `{}` must use runtime-defined authorization",
                 entrypoint.name
             )));
+        }
+        let canonical_lifecycle_kind = match entrypoint.name.as_str() {
+            "hajimari" | "始まり" => Some(EntryPointKind::Hajimari),
+            "kaizen" | "改善" => Some(EntryPointKind::Kaizen),
+            _ => None,
+        };
+        match (entrypoint.kind, canonical_lifecycle_kind) {
+            (EntryPointKind::Hajimari, Some(EntryPointKind::Hajimari))
+            | (EntryPointKind::Kaizen, Some(EntryPointKind::Kaizen))
+            | (EntryPointKind::Kotoage | EntryPointKind::View, None) => {}
+            (EntryPointKind::Hajimari, _) => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "hajimari/始まり entrypoint `{}` must use the reserved `hajimari` or `始まり` selector",
+                    entrypoint.name
+                )));
+            }
+            (EntryPointKind::Kaizen, _) => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "kaizen/改善 entrypoint `{}` must use the reserved `kaizen` or `改善` selector",
+                    entrypoint.name
+                )));
+            }
+            (EntryPointKind::Kotoage | EntryPointKind::View, Some(_)) => {
+                return Err(ContractArtifactError::invalid(format!(
+                    "reserved hajimari/始まり or kaizen/改善 selector `{}` has the wrong entrypoint kind",
+                    entrypoint.name
+                )));
+            }
         }
         if let Some(permission) = entrypoint.permission.as_deref()
             && permission.trim().is_empty()
@@ -499,24 +563,51 @@ fn validate_contract_interface(
         }
         validate_entrypoint_access_claims(entrypoint, &reachability.syscalls)?;
         match entrypoint.kind {
-            EntryPointKind::Init if init_seen => {
+            EntryPointKind::Hajimari if hajimari_seen => {
                 return Err(ContractArtifactError::invalid(
                     "CNTR declares more than one hajimari entrypoint",
                 ));
             }
-            EntryPointKind::Init => init_seen = true,
-            EntryPointKind::Upgrade if upgrade_seen => {
+            EntryPointKind::Hajimari => hajimari_seen = true,
+            EntryPointKind::Kaizen if kaizen_seen => {
                 return Err(ContractArtifactError::invalid(
                     "CNTR declares more than one kaizen entrypoint",
                 ));
             }
-            EntryPointKind::Upgrade => upgrade_seen = true,
-            EntryPointKind::Public | EntryPointKind::View => {}
+            EntryPointKind::Kaizen => kaizen_seen = true,
+            EntryPointKind::Kotoage | EntryPointKind::View => {}
+        }
+        entrypoint_reachability.insert(entrypoint.name.clone(), reachability);
+    }
+
+    // Entrypoint authorization is enforced by dispatch metadata, not by code at
+    // the target PC. Raw control flow into a distinct entrypoint would bypass
+    // that target's `authorize` permission or its runtime-defined lifecycle
+    // authorization. Shared implementation must therefore live in private
+    // helpers; cross-contract calls use the reauthorizing host boundary.
+    for caller in &contract_interface.entrypoints {
+        let reachability = entrypoint_reachability
+            .get(&caller.name)
+            .expect("validated entrypoint reachability is retained");
+        for target in &contract_interface.entrypoints {
+            if caller.name != target.name && reachability.pcs.contains(&target.entry_pc) {
+                return Err(ContractArtifactError::invalid(format!(
+                    "entrypoint `{}` reaches distinct entrypoint `{}` at pc {}; raw cross-entrypoint control flow bypasses dispatch authorization",
+                    caller.name, target.name, target.entry_pc
+                )));
+            }
         }
     }
 
+    let mut trigger_ids = BTreeSet::new();
     for entrypoint in &contract_interface.entrypoints {
         for trigger in &entrypoint.triggers {
+            if !trigger_ids.insert(trigger.id.clone()) {
+                return Err(ContractArtifactError::invalid(format!(
+                    "duplicate trigger `{}`",
+                    trigger.id
+                )));
+            }
             if let Some(namespace) = trigger.callback.namespace.as_deref()
                 && namespace.trim().is_empty()
             {
@@ -526,13 +617,19 @@ fn validate_contract_interface(
                 )));
             }
             validate_entrypoint_name(&trigger.callback.entrypoint)?;
-            if trigger.callback.namespace.is_none()
-                && !entrypoint_names.contains(&trigger.callback.entrypoint)
-            {
-                return Err(ContractArtifactError::invalid(format!(
-                    "trigger `{}` callback target `{}` is not a declared entrypoint",
-                    trigger.id, trigger.callback.entrypoint
-                )));
+            if trigger.callback.namespace.is_none() {
+                let Some(kind) = entrypoint_kinds.get(&trigger.callback.entrypoint) else {
+                    return Err(ContractArtifactError::invalid(format!(
+                        "trigger `{}` callback target `{}` is not a declared entrypoint",
+                        trigger.id, trigger.callback.entrypoint
+                    )));
+                };
+                if *kind != EntryPointKind::Kotoage {
+                    return Err(ContractArtifactError::invalid(format!(
+                        "trigger `{}` callback target `{}` must be a `kotoage`/`言挙げ` entrypoint",
+                        trigger.id, trigger.callback.entrypoint
+                    )));
+                }
             }
         }
     }
@@ -544,6 +641,24 @@ fn is_canonical_contract_name(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn is_canonical_source_identifier(name: &str) -> bool {
+    is_canonical_contract_name(name) && !kotodama_lang::lexer::V1_KEYWORDS.contains(&name)
+}
+
+fn is_canonical_source_declaration_name(name: &str, is_function: bool) -> bool {
+    is_canonical_source_identifier(name)
+        && !kotodama_lang::semantic::is_reserved_source_declaration(name, is_function)
+}
+
+fn is_canonical_entrypoint_name(name: &str) -> bool {
+    matches!(name, "hajimari" | "始まり" | "kaizen" | "改善")
+        || is_canonical_source_declaration_name(name, true)
+}
+
+fn is_canonical_seiyaku_name(name: &str) -> bool {
+    is_canonical_source_declaration_name(name, false)
 }
 
 fn validate_bytecode_security(
@@ -685,6 +800,7 @@ fn direct_control_flow_target(op: &crate::ivm_cache::DecodedOp) -> Option<u64> {
 
 struct Reachability {
     syscalls: BTreeSet<u32>,
+    pcs: BTreeSet<u64>,
 }
 
 fn reachable_syscalls(
@@ -795,7 +911,10 @@ fn reachable_syscalls(
             }
         }
     }
-    Ok(Reachability { syscalls })
+    Ok(Reachability {
+        syscalls,
+        pcs: visited,
+    })
 }
 
 fn validate_view_effects(
@@ -986,9 +1105,9 @@ fn validate_entrypoint_name(name: &str) -> Result<(), ContractArtifactError> {
             "entrypoint names must not be empty",
         ));
     }
-    if !name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
+    if !is_canonical_entrypoint_name(name) {
         return Err(ContractArtifactError::invalid(format!(
-            "entrypoint `{name}` contains unsupported characters"
+            "entrypoint `{name}` is not a canonical Kotodama V1 identifier or branded lifecycle selector"
         )));
     }
     Ok(())
@@ -1003,6 +1122,12 @@ fn validate_state_descriptors(
             return Err(ContractArtifactError::invalid(
                 "CNTR state descriptors must not use an empty name",
             ));
+        }
+        if !is_canonical_source_declaration_name(&state.name, false) {
+            return Err(ContractArtifactError::invalid(format!(
+                "state descriptor `{}` is not a canonical Kotodama V1 identifier",
+                state.name
+            )));
         }
         if !names.insert(state.name.clone()) {
             return Err(ContractArtifactError::invalid(format!(
@@ -1021,10 +1146,11 @@ fn validate_error_codes(
     let mut paths = BTreeSet::new();
     let mut codes = BTreeSet::new();
     for error in &contract_interface.error_codes {
-        if !is_canonical_contract_name(&error.namespace) || !is_canonical_contract_name(&error.name)
+        if !is_canonical_source_declaration_name(&error.namespace, false)
+            || !is_canonical_source_identifier(&error.name)
         {
             return Err(ContractArtifactError::invalid(
-                "CNTR error code namespace and name must be non-empty identifiers",
+                "CNTR error code namespace and name must be canonical Kotodama V1 identifiers",
             ));
         }
         let path = format!("{}::{}", error.namespace, error.name);
@@ -1056,16 +1182,17 @@ fn validate_state_type(ty: &EmbeddedStateType) -> Result<(), ContractArtifactErr
             }
         }
         EmbeddedStateType::Struct { name, fields } => {
-            if name.trim().is_empty() {
-                return Err(ContractArtifactError::invalid(
-                    "CNTR struct state type must not use an empty name",
-                ));
+            if !is_canonical_source_declaration_name(name, false) {
+                return Err(ContractArtifactError::invalid(format!(
+                    "CNTR struct `{name}` is not a canonical Kotodama V1 identifier"
+                )));
             }
             let mut field_names = BTreeSet::new();
             for field in fields {
-                if field.name.trim().is_empty() {
+                if !is_canonical_source_identifier(&field.name) {
                     return Err(ContractArtifactError::invalid(format!(
-                        "CNTR struct `{name}` contains an empty field name"
+                        "CNTR struct `{name}` contains noncanonical field `{}`",
+                        field.name
                     )));
                 }
                 if !field_names.insert(field.name.clone()) {
@@ -1111,7 +1238,7 @@ mod tests {
             ..ProgramMetadata::default()
         };
         let interface = EmbeddedContractInterfaceV1 {
-            contract_name: "PreparedFixture".to_owned(),
+            seiyaku_name: "PreparedFixture".to_owned(),
             compiler_fingerprint: "ivm-unit-tests".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
@@ -1122,6 +1249,7 @@ mod tests {
                 params: Vec::new(),
                 argument_schema: None,
                 return_type: None,
+                return_schema: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),

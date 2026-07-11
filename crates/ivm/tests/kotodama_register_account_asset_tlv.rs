@@ -6,6 +6,7 @@ use ivm::{
     IVM, MockWorldStateView, PermissionToken, kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::WsvHost,
 };
+mod common;
 
 #[test]
 fn kotodama_register_account_and_unregister_asset() {
@@ -15,7 +16,7 @@ fn kotodama_register_account_and_unregister_asset() {
         kotoage fn main() authorize("ManageEntities") {
           ledger::domain::register(DomainId::parse("default.universal"));
           ledger::account::register(AccountId::parse("sorauﾛ1PzEcｸZkfGﾊ1ﾚ9ﾐﾂRﾕDAuXﾋyﾔヰヰ3VgAｸ4ﾇｹWL6iXCEYDCW"));
-          ledger::asset::register(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "ROSE", 0, 1);
+          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", scale: 0, mintable: 1);
           ledger::asset::unregister(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
           ledger::account::unregister(AccountId::parse("sorauﾛ1PzEcｸZkfGﾊ1ﾚ9ﾐﾂRﾕDAuXﾋyﾔヰヰ3VgAｸ4ﾇｹWL6iXCEYDCW"));
         }
@@ -45,6 +46,7 @@ fn kotodama_register_account_and_unregister_asset() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("program should run with WsvHost TLV validation");
 }

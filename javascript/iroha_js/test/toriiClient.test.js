@@ -12901,7 +12901,7 @@ test("governanceProposeDeployContract normalizes payloads", async () => {
     abiHash: Buffer.alloc(32, 0xbb),
     abiVersion: "1",
     window: { lower: 10, upper: 42 },
-    mode: "plain",
+    mode: "Plain",
     limits: { maxTx: 5 },
   });
   assert.equal(
@@ -12937,6 +12937,48 @@ test("governanceProposeDeployContract accepts byte-array hashes", async () => {
 
   assert.equal(capturedBody.code_hash, "1a".repeat(32));
   assert.equal(capturedBody.abi_hash, "bb".repeat(32));
+});
+
+test("governanceProposeDeployContract accepts only canonical Zk and Plain modes", async () => {
+  const capturedModes = [];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      capturedModes.push(JSON.parse(init.body).mode);
+      return createResponse({
+        status: 200,
+        jsonData: cloneFixture(toriiFixtures.governance.deployContractDraft),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const base = {
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    codeHash: `0x${"1a".repeat(32)}`,
+    abiHash: Buffer.alloc(32, 0xbb),
+  };
+  for (const mode of ["Zk", "Plain"]) {
+    await client.governanceProposeDeployContract({ ...base, mode });
+  }
+  assert.deepEqual(capturedModes, ["Zk", "Plain"]);
+  for (const mode of [
+    "zk",
+    "plain",
+    " Zk",
+    "Plain ",
+    "zero-knowledge",
+    "zkp",
+    "plaintext",
+    "plain_text",
+    "quadratic",
+    "ranked-choice",
+    1,
+  ]) {
+    await assert.rejects(
+      () => client.governanceProposeDeployContract({ ...base, mode }),
+      /must be either 'Zk' or 'Plain'/u,
+    );
+  }
+  assert.equal(capturedModes.length, 2, "invalid modes must fail before fetch");
 });
 
 test("governanceProposeDeployContract rejects non-byte hash arrays", async () => {
@@ -19429,7 +19471,8 @@ test("registerContractCode posts manifest JSON", async () => {
     authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
     manifest: {
-      codeHash: "a".repeat(64),
+      seiyakuName: "Ledger",
+      codeHash: "ab".repeat(32),
       compilerFingerprint: "rustc",
       accessSetHints: {
         readKeys: ["account:alice"],
@@ -19452,7 +19495,7 @@ test("registerContractCode posts manifest JSON", async () => {
         ],
       },
       entrypoints: [
-        { name: "upgrade_ledger", kind: "Upgrade", permission: "can_upgrade" },
+        { name: "kaizen", kind: "Kaizen" },
       ],
       kotoba: [
         {
@@ -19475,7 +19518,8 @@ test("registerContractCode posts manifest JSON", async () => {
     authority: FIXTURE_ALICE_ID,
     private_key: "ed25519:deadbeef",
     manifest: {
-      code_hash: "a".repeat(64),
+      seiyaku_name: "Ledger",
+      code_hash: "ab".repeat(32),
       compiler_fingerprint: "rustc",
       abi_hash: null,
       features_bitmap: null,
@@ -19500,8 +19544,23 @@ test("registerContractCode posts manifest JSON", async () => {
         ],
       },
       entrypoints: [
-        { name: "upgrade_ledger", kind: "Upgrade", permission: "can_upgrade" },
+        {
+          name: "kaizen",
+          kind: { kind: "Kaizen", value: null },
+          params: [],
+          argument_schema: null,
+          return_type: null,
+          return_schema: null,
+          permission: null,
+          read_keys: [],
+          write_keys: [],
+          access_hints_complete: null,
+          access_hints_skipped: [],
+          triggers: [],
+        },
       ],
+      states: null,
+      error_codes: null,
       kotoba: [
         {
           msg_id: "contract.title",
@@ -19515,6 +19574,500 @@ test("registerContractCode posts manifest JSON", async () => {
     },
     code_bytes: Buffer.from("hello").toString("base64"),
   });
+});
+
+test("registerContractCode rejects retired English entrypoint kinds", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 202 });
+    },
+  });
+
+  for (const retired of ["Public", "public", "Init", "init", "Upgrade", "upgrade"]) {
+    await assert.rejects(
+      client.registerContractCode({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        manifest: {
+          entrypoints: [{ name: "legacy", kind: retired }],
+        },
+      }),
+      /must be Kotoage, View, Hajimari, or Kaizen/,
+    );
+  }
+  assert.equal(called, false);
+});
+
+test("registerContractCode preserves branded romanized and Japanese lifecycle selectors", async () => {
+  let body;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      body = JSON.parse(init.body);
+      return createResponse({ status: 202 });
+    },
+  });
+
+  await client.registerContractCode({
+    authority: FIXTURE_ALICE_ID,
+    privateKey: "ed25519:deadbeef",
+    manifest: {
+      seiyakuName: "BrandedLedger",
+      entrypoints: [
+        { name: "hajimari", kind: "Hajimari" },
+        { name: "改善", kind: "Kaizen" },
+        {
+          name: "transfer",
+          kind: "Kotoage",
+          permission: "TransferAsset",
+          params: [{ name: "amount", typeName: "Option<i64>" }],
+          argumentSchema: {
+            fields: [
+              {
+                name: "amount",
+                ty: {
+                  nodes: [
+                    { kind: "Option", value: null },
+                    { kind: "Leaf", value: { kind: "Int", value: null } },
+                  ],
+                },
+              },
+            ],
+          },
+          returnType: "Result<bool, string>",
+          returnSchema: {
+            nodes: [
+              { kind: "Result", value: null },
+              { kind: "Leaf", value: { kind: "Bool", value: null } },
+              { kind: "Leaf", value: { kind: "String", value: null } },
+            ],
+          },
+        },
+        { name: "balance", kind: "View" },
+      ],
+    },
+  });
+
+  assert.deepEqual(
+    body.manifest.entrypoints.map(({ name, kind }) => [name, kind.kind]),
+    [
+      ["hajimari", "Hajimari"],
+      ["改善", "Kaizen"],
+      ["transfer", "Kotoage"],
+      ["balance", "View"],
+    ],
+  );
+});
+
+const QUERY_VIEW_LAYOUTS = new Map([
+  ["AccountView", { fields: ["id", "metadata"], children: ["AccountId", "Json"] }],
+  ["AssetView", { fields: ["id", "amount"], children: ["AssetId", "Amount"] }],
+  [
+    "AssetDefinitionView",
+    {
+      fields: ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+      children: [
+        "AssetDefinitionId",
+        "String",
+        ["Option", "String"],
+        "AccountId",
+        "Amount",
+        "Json",
+      ],
+    },
+  ],
+  [
+    "DomainView",
+    { fields: ["id", "owned_by", "metadata"], children: ["DomainId", "AccountId", "Json"] },
+  ],
+  [
+    "NftView",
+    { fields: ["id", "owned_by", "content"], children: ["NftId", "AccountId", "Json"] },
+  ],
+]);
+
+function entrypointLeaf(kind) {
+  return { kind: "Leaf", value: { kind, value: null } };
+}
+
+function queryViewNodes(name) {
+  const layout = QUERY_VIEW_LAYOUTS.get(name);
+  assert.notEqual(layout, undefined);
+  const children = layout.children.flatMap((child) =>
+    Array.isArray(child)
+      ? [{ kind: child[0], value: null }, entrypointLeaf(child[1])]
+      : [entrypointLeaf(child)],
+  );
+  return [
+    { kind: "Struct", value: { name, fields: layout.fields } },
+    ...children,
+  ];
+}
+
+function queryPageNodes(name) {
+  return [
+    {
+      kind: "Struct",
+      value: { name: "QueryPage", fields: ["items", "next_offset"] },
+    },
+    { kind: "List", value: { capacity: 64 } },
+    ...queryViewNodes(name),
+    { kind: "Option", value: null },
+    entrypointLeaf("Int"),
+  ];
+}
+
+test("registerContractCode accepts all exact query views, pages, and ordinary structs", async () => {
+  let body;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      body = JSON.parse(init.body);
+      return createResponse({ status: 202 });
+    },
+  });
+  const entrypoints = [];
+  for (const name of QUERY_VIEW_LAYOUTS.keys()) {
+    entrypoints.push(
+      {
+        name: `get_${name.toLowerCase()}`,
+        kind: "View",
+        returnType: `Option<${name}>`,
+        returnSchema: {
+          nodes: [{ kind: "Option", value: null }, ...queryViewNodes(name)],
+        },
+      },
+      {
+        name: `page_${name.toLowerCase()}`,
+        kind: "View",
+        returnType: `QueryPage<${name}>`,
+        returnSchema: { nodes: queryPageNodes(name) },
+      },
+    );
+  }
+  entrypoints.push({
+    name: "pair",
+    kind: "View",
+    returnType: "struct Pair",
+    returnSchema: {
+      nodes: [
+        {
+          kind: "Struct",
+          value: { name: "Pair", fields: ["left", "right"] },
+        },
+        entrypointLeaf("Int"),
+        entrypointLeaf("Bool"),
+      ],
+    },
+  });
+
+  await client.registerContractCode({
+    authority: FIXTURE_ALICE_ID,
+    privateKey: "ed25519:deadbeef",
+    manifest: { seiyakuName: "QuerySchemas", entrypoints },
+  });
+
+  assert.equal(body.manifest.entrypoints.length, QUERY_VIEW_LAYOUTS.size * 2 + 1);
+  assert.deepEqual(
+    body.manifest.entrypoints.at(-1).return_schema.nodes[0].value,
+    { name: "Pair", fields: ["left", "right"] },
+  );
+});
+
+test("registerContractCode rejects every forged reserved query view and page", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 202 });
+    },
+  });
+  const submit = (returnType, nodes) =>
+    client.registerContractCode({
+      authority: FIXTURE_ALICE_ID,
+      privateKey: "ed25519:deadbeef",
+      manifest: {
+        entrypoints: [
+          { name: "read", kind: "View", returnType, returnSchema: { nodes } },
+        ],
+      },
+    });
+
+  for (const name of QUERY_VIEW_LAYOUTS.keys()) {
+    const wrongFields = structuredClone(queryViewNodes(name));
+    wrongFields[0].value.fields[0] = "forged";
+    await assert.rejects(submit(name, wrongFields), /forged reserved query-view/u);
+
+    const wrongLeaf = structuredClone(queryViewNodes(name));
+    wrongLeaf[1].value.kind = "Bool";
+    await assert.rejects(submit(name, wrongLeaf), /forged reserved query-view/u);
+
+    const wrongPageCapacity = structuredClone(queryPageNodes(name));
+    wrongPageCapacity[1].value.capacity = 32;
+    await assert.rejects(
+      submit(`QueryPage<${name}>`, wrongPageCapacity),
+      /forged QueryPage/u,
+    );
+
+    const wrongPageOffset = structuredClone(queryPageNodes(name));
+    wrongPageOffset.at(-1).value.kind = "String";
+    await assert.rejects(
+      submit(`QueryPage<${name}>`, wrongPageOffset),
+      /forged QueryPage/u,
+    );
+  }
+  assert.equal(called, false);
+});
+
+test("registerContractCode accepts the flat List tape at depth 256", async () => {
+  let body;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      body = JSON.parse(init.body);
+      return createResponse({ status: 202 });
+    },
+  });
+  const listNodes = Array.from({ length: 255 }, () => ({
+    kind: "List",
+    value: { capacity: 1 },
+  }));
+  listNodes.push({ kind: "Leaf", value: { kind: "Int", value: null } });
+  let returnType = "i64";
+  for (let depth = 0; depth < 255; depth += 1) {
+    returnType = `List<${returnType}, 1>`;
+  }
+
+  await client.registerContractCode({
+    authority: FIXTURE_ALICE_ID,
+    privateKey: "ed25519:deadbeef",
+    manifest: {
+      seiyakuName: "DeepList",
+      entrypoints: [
+        {
+          name: "read",
+          kind: "View",
+          returnType,
+          returnSchema: { nodes: listNodes },
+        },
+      ],
+    },
+  });
+
+  assert.equal(body.manifest.entrypoints[0].return_schema.nodes.length, 256);
+  assert.deepEqual(body.manifest.entrypoints[0].return_schema.nodes[0].value, {
+    capacity: 1,
+  });
+});
+
+test("registerContractCode rejects malformed and over-depth flat List tapes before fetch", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 202 });
+    },
+  });
+  const submit = (nodes, returnType = "List<i64, 1>") =>
+    client.registerContractCode({
+      authority: FIXTURE_ALICE_ID,
+      privateKey: "ed25519:deadbeef",
+      manifest: {
+        entrypoints: [
+          { name: "read", kind: "View", returnType, returnSchema: { nodes } },
+        ],
+      },
+    });
+
+  await assert.rejects(
+    submit([{ kind: "List", value: { capacity: 1 } }]),
+    /not one complete canonical prefix type tree/u,
+  );
+  await assert.rejects(
+    submit([
+      { kind: "List", value: { capacity: 1, element: { nodes: [] } } },
+      { kind: "Leaf", value: { kind: "Int", value: null } },
+    ]),
+    /must contain exactly capacity/u,
+  );
+  await assert.rejects(
+    submit([
+      ...Array.from({ length: 256 }, () => ({
+        kind: "List",
+        value: { capacity: 1 },
+      })),
+      { kind: "Leaf", value: { kind: "Int", value: null } },
+    ]),
+    /nodes must contain 1\.\.256 canonical type nodes/u,
+  );
+  assert.equal(called, false);
+});
+
+test("registerContractCode rejects forged branded manifest declarations before fetch", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 202 });
+    },
+  });
+  const submit = (manifest) =>
+    client.registerContractCode({
+      authority: FIXTURE_ALICE_ID,
+      privateKey: "ed25519:deadbeef",
+      manifest,
+    });
+
+  for (const seiyakuName of [
+    "",
+    "seiyaku",
+    "match",
+    "i64",
+    "state_map_get",
+    "__kotodama_link_forged",
+    "９ledger",
+  ]) {
+    await assert.rejects(
+      submit({ seiyakuName }),
+      /seiyaku_name must (?:not be empty|be a canonical Kotodama V1 identifier)/u,
+    );
+  }
+  await assert.rejects(
+    submit({ entrypoints: [{ name: "hajimari", kind: "Kotoage", permission: "Init" }] }),
+    /kind does not match its branded lifecycle selector/u,
+  );
+  await assert.rejects(
+    submit({ entrypoints: [{ name: "setup", kind: "Hajimari" }] }),
+    /kind does not match its branded lifecycle selector/u,
+  );
+  await assert.rejects(
+    submit({ entrypoints: [{ name: "kaizen", kind: "Kaizen", permission: "Upgrade" }] }),
+    /permission must be null for hajimari\/始まり and kaizen\/改善/u,
+  );
+  await assert.rejects(
+    submit({ entrypoints: [{ name: "mutate", kind: "Kotoage" }] }),
+    /permission is required for kotoage\/言挙げ/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        { name: "same", kind: "View" },
+        { name: "same", kind: "Kotoage", permission: "Same" },
+      ],
+    }),
+    /entrypoints contains duplicate name same/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        {
+          name: "read",
+          kind: "View",
+          accessHintsComplete: false,
+          accessHintsSkipped: [],
+        },
+      ],
+    }),
+    /marks access hints incomplete without a reason/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        { name: "read", kind: "View" },
+        {
+          name: "schedule",
+          kind: "Kotoage",
+          permission: "Schedule",
+          triggers: [
+            {
+              id: "bad-callback",
+              repeats: { Indefinitely: null },
+              filter: "AQ==",
+              callback: { entrypoint: "read" },
+            },
+          ],
+        },
+      ],
+    }),
+    /local callback must target kotoage\/言挙げ/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        {
+          name: "mutate",
+          kind: "Kotoage",
+          permission: "Mutate",
+          params: [{ name: "value", typeName: "i64" }],
+        },
+      ],
+    }),
+    /has parameters but no exact argument schema/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        {
+          name: "mutate",
+          kind: "Kotoage",
+          permission: "Mutate",
+          params: [{ name: "match", typeName: "i64" }],
+        },
+      ],
+    }),
+    /params\[0\]\.name must be a canonical Kotodama V1 identifier/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        {
+          name: "read",
+          kind: "View",
+          returnType: "List<i64, 0>",
+          returnSchema: {
+            nodes: [
+              {
+                kind: "List",
+                value: { capacity: 0 },
+              },
+              { kind: "Leaf", value: { kind: "Int", value: null } },
+            ],
+          },
+        },
+      ],
+    }),
+    /capacity must be in the V1 range 1\.\.64/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        {
+          name: "read",
+          kind: "View",
+          returnType: "i64",
+          returnSchema: {
+            nodes: [
+              { kind: "Leaf", value: { kind: "Int", value: null } },
+              { kind: "Leaf", value: { kind: "Bool", value: null } },
+            ],
+          },
+        },
+      ],
+    }),
+    /not one complete canonical prefix type tree/u,
+  );
+  await assert.rejects(
+    submit({ contractName: "Legacy" }),
+    /contains unsupported fields: contractName/u,
+  );
+  await assert.rejects(
+    submit({ seiyakuName: "Ledger", seiyaku_name: "Other" }),
+    /contains conflicting aliases: seiyaku_name, seiyakuName/u,
+  );
+  await assert.rejects(
+    submit({ codeHash: "aa".repeat(32) }),
+    /must set the Iroha Hash marker bit/u,
+  );
+  assert.equal(called, false);
 });
 
 test("deployContract submits base64 payload and returns response", async () => {
@@ -19534,7 +20087,7 @@ test("deployContract submits base64 payload and returns response", async () => {
         contract_alias: "router::universal",
         contract_address: contractAddress,
         previous_contract_address: null,
-        upgraded: false,
+        kaizen: false,
         dataspace: "universal",
         deploy_nonce: 7,
         tx_hash_hex: "a".repeat(64),
@@ -19651,7 +20204,7 @@ test("deployContract exposes optional pipeline_status diagnostics", async () => 
             contract_alias: "router::universal",
             contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
             previous_contract_address: null,
-            upgraded: false,
+            kaizen: false,
             dataspace: "universal",
             deploy_nonce: 7,
             tx_hash_hex: txHash,
@@ -20739,8 +21292,16 @@ test("getContractManifest returns normalized payload", async () => {
       status: 200,
       jsonData: {
         manifest: {
-          code_hash: "0".repeat(64),
+          seiyaku_name: "Ledger",
+          code_hash:
+            "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
           abi_hash: null,
+          compiler_fingerprint: null,
+          features_bitmap: null,
+          access_set_hints: null,
+          entrypoints: null,
+          states: null,
+          error_codes: null,
           kotoba: [
             {
               msg_id: "contract.title",
@@ -20752,14 +21313,15 @@ test("getContractManifest returns normalized payload", async () => {
             signature: signatureCanonical,
           },
         },
-        code_bytes: null,
+        code_hash: "11".repeat(32),
       },
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const manifest = await client.getContractManifest("0".repeat(64));
+  const manifest = await client.getContractManifest("11".repeat(32));
   assert.ok(manifest);
-  assert.equal(manifest?.manifest.code_hash, "0".repeat(64));
+  assert.equal(manifest?.manifest.seiyaku_name, "Ledger");
+  assert.equal(manifest?.manifest.code_hash, "11".repeat(32));
   assert.equal(manifest?.manifest.abi_hash ?? null, null);
   assert.deepEqual(manifest?.manifest.kotoba, [
     {
@@ -20771,15 +21333,88 @@ test("getContractManifest returns normalized payload", async () => {
     signer: signerCanonical,
     signature: signatureCanonical,
   });
-  assert.equal(manifest?.code_bytes, null);
+  assert.equal(manifest?.code_hash, "11".repeat(32));
+  assert.equal(manifest?.abi_hash, null);
+});
+
+test("getContractManifest rejects noncanonical or inconsistent hash projections", async () => {
+  const canonical =
+    "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2";
+  const makeClient = (payload) =>
+    new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: payload,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+  await assert.rejects(
+    () =>
+      makeClient({
+        manifest: { code_hash: canonical.toLowerCase(), abi_hash: null },
+        code_hash: "bb".repeat(32),
+      }).getContractManifest("bb".repeat(32)),
+    /canonical uppercase Norito Hash literal/u,
+  );
+  await assert.rejects(
+    () =>
+      makeClient({
+        manifest: { code_hash: canonical, abi_hash: null },
+        code_hash: "dd".repeat(32),
+      }).getContractManifest("bb".repeat(32)),
+    /does not match manifest.code_hash/u,
+  );
+  await assert.rejects(
+    () =>
+      makeClient({
+        manifest: { code_hash: canonical, abi_hash: null },
+        code_hash: "bb".repeat(32),
+        code_bytes: null,
+      }).getContractManifest("bb".repeat(32)),
+    /must not include code_bytes/u,
+  );
+  await assert.rejects(
+    () =>
+      makeClient({
+        manifest: {
+          code_hash:
+            "hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#0E5B",
+          abi_hash: null,
+        },
+        code_hash: "aa".repeat(32),
+      }).getContractManifest("bb".repeat(32)),
+    /must set the Iroha Hash marker bit/u,
+  );
 });
 
 test("getContractManifest returns null on 404", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
   });
-  const result = await client.getContractManifest("0".repeat(64));
+  const result = await client.getContractManifest("11".repeat(32));
   assert.equal(result, null);
+});
+
+test("contract code lookups reject hashes without the Iroha marker before fetch", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 404 });
+    },
+  });
+
+  await assert.rejects(
+    () => client.getContractManifest("aa".repeat(32)),
+    /must set the Iroha Hash marker bit/u,
+  );
+  await assert.rejects(
+    () => client.getContractCodeBytes("22".repeat(32)),
+    /must set the Iroha Hash marker bit/u,
+  );
+  assert.equal(called, false);
 });
 
 test("getContractCodeBytes returns record", async () => {

@@ -180,17 +180,18 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
-        contract_name: "TestContract".to_owned(),
+        seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "torii-test-utils".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
             name: "main".to_owned(),
-            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
             params: Vec::new(),
             argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -1305,6 +1306,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 metal_debug_fused: fastpq::METAL_DEBUG_FUSED,
             },
             stark: A::Stark::default(),
+            sccp: A::Sccp::default(),
             root_history_cap: defaults::zk::ledger::ROOT_HISTORY_CAP,
             ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
             empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,

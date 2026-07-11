@@ -181,6 +181,7 @@ jobs:
     needs: pre_build
     env:
       LLVM_PROFILE_FILE_NAME: "iroha-%p-%m.profraw"
+      IROHA_TEST_REQUIRE_NETWORK: "1"
       TEST_NETWORK_BIN_IROHAD: bins/irohad
       TEST_NETWORK_BIN_IROHA: bins/iroha
     steps:

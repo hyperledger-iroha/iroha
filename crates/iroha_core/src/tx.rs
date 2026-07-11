@@ -9231,7 +9231,7 @@ pub mod tests {
         tx1.world.contract_manifests.insert(
             code_hash,
             ContractManifest {
-                contract_name: None,
+                seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
                 compiler_fingerprint: None,
@@ -9256,7 +9256,7 @@ pub mod tests {
         let mut wrong_abi = abi_hash;
         wrong_abi[0] ^= 0x55;
         let manifest = ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
             compiler_fingerprint: None,
@@ -9322,7 +9322,7 @@ pub mod tests {
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         // Attach manifest in metadata
         let manifest = ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
             compiler_fingerprint: None,
@@ -9377,7 +9377,7 @@ pub mod tests {
         let mut wrong_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         wrong_abi[0] ^= 0xAA;
         let manifest = ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
             compiler_fingerprint: None,
@@ -9439,7 +9439,7 @@ pub mod tests {
         let wrong_code_hash = iroha_crypto::Hash::prehashed(wrong_bytes);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest = ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: Some(wrong_code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
             compiler_fingerprint: None,
@@ -9502,7 +9502,7 @@ pub mod tests {
         tx1.world.contract_manifests.insert(
             code_hash,
             ContractManifest {
-                contract_name: None,
+                seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
                 compiler_fingerprint: None,
@@ -9525,7 +9525,7 @@ pub mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block2 = state.block(header2);
         let manifest = ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
             compiler_fingerprint: None,
@@ -9779,7 +9779,7 @@ pub mod tests {
         let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest = ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
             compiler_fingerprint: None,

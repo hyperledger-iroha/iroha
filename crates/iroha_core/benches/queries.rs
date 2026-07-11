@@ -9,7 +9,7 @@
 )]
 use std::sync::LazyLock;
 
-use criterion::{BenchmarkId, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion};
 use iroha_core::{
     prelude::*,
     query::snapshot::{CursorMode as LaneCursorMode, run_on_snapshot, run_on_snapshot_with_mode},
@@ -17,6 +17,7 @@ use iroha_core::{
     smartcontracts::{
         Execute, ValidQuery,
         isi::query::{QueryCountMode, QueryLimits},
+        ivm::host::CoreHostImpl,
     },
     state::{State, World},
 };
@@ -30,6 +31,11 @@ use iroha_data_model::{
         dsl::CompoundPredicate,
         trigger::prelude::{FindActiveTriggerIds, FindTriggers},
     },
+};
+use ivm::{
+    IVM,
+    core_query::{CoreQueryEntityTagV1, QUERY_PAGE_CAPACITY_V1},
+    host::IVMHost,
 };
 
 // Shared Tokio runtime for benches that need background tasks (e.g., LiveQueryStore)
@@ -164,6 +170,95 @@ fn bench_find_accounts_paginate(c: &mut Criterion) {
             }
             std::hint::black_box(pages);
         })
+    });
+}
+
+fn build_state_for_typed_account_page(n: usize) -> (State, AccountId) {
+    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
+    let _guard = RUNTIME.enter();
+    let query_handle = LiveQueryStore::start_test();
+
+    let domain_id = bench_domain_id();
+    let authority = bench_account("typed-query-authority");
+    let domain = Domain::new(domain_id).build(&authority);
+    let mut accounts = Vec::with_capacity(n.saturating_add(1));
+    accounts.push(Account::new(authority.clone()).build(&authority));
+    for i in 0..n {
+        let id = bench_account(&format!("typed-query-user{i}"));
+        accounts.push(Account::new(id.clone()).build(&id));
+    }
+
+    let state = State::new(
+        World::with([domain], accounts, []),
+        kura,
+        query_handle,
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
+    );
+    (state, authority)
+}
+
+fn bench_typed_core_query_account_page(c: &mut Criterion) {
+    const ACCOUNT_VIEW_WORDS_V1: u64 = 2;
+
+    let (state, authority) = build_state_for_typed_account_page(1_000);
+    let view = state.view();
+    let raw_accounts = ValidQuery::execute(FindAccounts, CompoundPredicate::PASS, &view)
+        .expect("execute raw account payload baseline")
+        .take(QUERY_PAGE_CAPACITY_V1)
+        .collect::<Vec<_>>();
+    assert_eq!(raw_accounts.len(), QUERY_PAGE_CAPACITY_V1);
+    let raw_payload_bytes = u64::try_from(
+        norito::to_bytes(&raw_accounts)
+            .expect("encode raw account payload baseline")
+            .len(),
+    )
+    .expect("raw account payload length fits u64");
+    let mut host = CoreHostImpl::new(authority);
+    host.set_query_state(&view);
+    host.enable_core_query_page_metrics();
+    let page_layout =
+        ivm::list::ListLayoutV1::try_new(QUERY_PAGE_CAPACITY_V1 as u64, ACCOUNT_VIEW_WORDS_V1)
+            .expect("typed account-page List layout");
+
+    c.bench_function("typed_core_query_accounts_page_64", |b| {
+        b.iter_batched(
+            || {
+                let mut vm = IVM::new(u64::MAX);
+                vm.set_register(10, CoreQueryEntityTagV1::Account.as_u64());
+                vm.set_register(11, 0);
+                vm.set_register(12, QUERY_PAGE_CAPACITY_V1 as u64);
+                vm
+            },
+            |mut vm| {
+                host.reset_core_query_page_metrics();
+                let gas = host
+                    .syscall(ivm::syscalls::SYSCALL_CORE_QUERY_PAGE, &mut vm)
+                    .expect("execute typed account-page query");
+                let items = ivm::list::read_words(&vm, vm.register(10), page_layout)
+                    .expect("materialized typed account page");
+                assert_eq!(items.len(), QUERY_PAGE_CAPACITY_V1);
+                let metrics = host
+                    .core_query_page_metrics()
+                    .expect("typed page-query counters enabled");
+                assert_eq!(metrics.host_queries, 1, "one host query per typed page");
+                assert_eq!(
+                    metrics.projection_decodes, 1,
+                    "one projection decode per typed page"
+                );
+                assert!(
+                    metrics.leaf_tlv_bytes > 0,
+                    "typed leaves must be encoded exactly once before materialization"
+                );
+                assert!(
+                    metrics.projection_payload_bytes < raw_payload_bytes,
+                    "typed projection payload ({} bytes) must be smaller than raw account payload ({raw_payload_bytes} bytes)",
+                    metrics.projection_payload_bytes,
+                );
+                std::hint::black_box((gas, items, vm.register(11), metrics));
+            },
+            BatchSize::SmallInput,
+        )
     });
 }
 
@@ -971,6 +1066,7 @@ fn main() {
     bench_find_active_trigger_ids_iter(&mut c);
     bench_find_accounts_sort_id(&mut c);
     bench_find_accounts_paginate(&mut c);
+    bench_typed_core_query_account_page(&mut c);
     bench_snapshot_vs_live_find_domains_first_batch(&mut c);
     bench_snapshot_vs_live_find_assets_first_batch(&mut c);
     bench_snapshot_sorted_asset_defs_first_batch(&mut c);

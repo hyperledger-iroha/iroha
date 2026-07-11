@@ -29,7 +29,7 @@ fn ephemeral_map_constructor_is_rejected() {
         .compile_source(src)
         .expect_err("ephemeral Map::new must be rejected");
     assert!(
-        err.contains("in-memory `Map` is not part of Kotodama V1"),
+        err.contains("error[K2002]") && err.contains("unknown function or builtin `Map::new`"),
         "unexpected error: {err}"
     );
 }
@@ -42,8 +42,8 @@ fn get_or_state_map() {
 
           kotoage fn main() -> i64 authorize("WriteState") {
               m[7] = 111;
-              let a = m.get_or(7, 5);
-              let b = m.get_or(8, 9);
+              let a = m.get_or(key: 7, default: 5);
+              let b = m.get_or(key: 8, default: 9);
               return a * 2 + b;
           }
         }
@@ -52,6 +52,7 @@ fn get_or_state_map() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(ivm::CoreHost::new());
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute");
     assert_eq!(vm.register(10), 111 * 2 + 9);
 }
@@ -152,24 +153,68 @@ fn ir_lower_ensure_pointer_variants_use_pointer_syscalls() {
             .iter()
             .find(|f| f.name == "main")
             .expect("main lowered");
-        let mut saw_pointer_to = false;
-        let mut saw_pointer_from = false;
+        let entry = func
+            .blocks
+            .iter()
+            .find_map(|block| match block.terminator {
+                Terminator::Branch {
+                    then_bb, else_bb, ..
+                } => Some((then_bb, else_bb)),
+                _ => None,
+            })
+            .expect("durable ensure must branch on state presence");
+        let present = func
+            .blocks
+            .iter()
+            .find(|block| block.label == entry.0)
+            .expect("present-value branch");
+        let absent = func
+            .blocks
+            .iter()
+            .find(|block| block.label == entry.1)
+            .expect("absent-value branch");
+        let decodes_state = |instruction: &Instr| {
+            matches!(
+                instruction,
+                Instr::DirectHelperSyscall { syscall, .. }
+                    if *syscall == ivm::syscalls::SYSCALL_STATE_VALUE_DECODE
+            )
+        };
+        let encodes_state =
+            |instruction: &Instr| matches!(instruction, Instr::StateValueEncode { .. });
+        assert!(
+            present.instrs.iter().any(decodes_state),
+            "present branch must decode the active stored {ty} value"
+        );
+        assert!(
+            present
+                .instrs
+                .iter()
+                .all(|instruction| !encodes_state(instruction)),
+            "present branch must not materialize the inactive default {ty} value"
+        );
+        assert!(
+            absent.instrs.iter().any(encodes_state),
+            "absent branch must encode the active default {ty} value"
+        );
+        assert!(
+            absent
+                .instrs
+                .iter()
+                .all(|instruction| !decodes_state(instruction)),
+            "absent branch must not decode an inactive stored {ty} value"
+        );
+        let mut saw_state_set = false;
         for bb in &func.blocks {
             for ins in &bb.instrs {
-                match ins {
-                    Instr::PointerToNorito { .. } => saw_pointer_to = true,
-                    Instr::PointerFromNorito { .. } => saw_pointer_from = true,
-                    _ => {}
+                if matches!(ins, Instr::StateSet { .. }) {
+                    saw_state_set = true;
                 }
             }
         }
         assert!(
-            saw_pointer_to,
-            "durable else branch should encode pointer defaults for {ty}"
-        );
-        assert!(
-            saw_pointer_from,
-            "durable then branch should decode stored pointer for {ty}"
+            saw_state_set,
+            "absent branch must persist the schema-bound {ty} default"
         );
     }
 }
@@ -179,11 +224,10 @@ fn runtime_durable_ensure_state_map() {
     let src = r#"
         seiyaku C {
             state S: StateMap<i64, i64>;
-            kotoage fn main() authorize("WriteState") {
+            kotoage fn main() -> i64 authorize("WriteState") {
                 let x = S.ensure(7);
-                test::assert(x == 0);
                 let y = S.ensure(7);
-                test::assert(y == 0);
+                return x + y;
             }
         }
     "#;
@@ -200,7 +244,9 @@ fn runtime_durable_ensure_state_map() {
     );
     let host = WsvHost::new_with_subject(wsv, alice, HashMap::new());
     vm.set_host(host);
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("exec");
+    assert_eq!(vm.register(10), 0);
 
     let host_ref = vm.host_mut_any().unwrap();
     let host = host_ref.downcast_ref::<WsvHost>().unwrap();

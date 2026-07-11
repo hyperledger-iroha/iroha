@@ -2,11 +2,21 @@
 seiyaku DetailAndTransfer {
     kotoage fn set_cursor_and_transfer() authorize("Admin") {
         // Write a small JSON cursor to the caller's account metadata
-        ledger::account::set_detail(context::authority(), Name::parse("cursor"), Json::parse("{\"c\":1,\"q\":\"sc_dummy\"}"));
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("cursor"),
+            value: Json::parse("{\"c\":1,\"q\":\"sc_dummy\"}"),
+        );
         // Transfer 10 ROSE from Alice to Bob
-        let from = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-        let to = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
+        let from = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", );
+        let to = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", );
         let asset = AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi");
-        ledger::asset::transfer(from, to, asset, Amount::from_i64(10), DataSpaceId::parse("0"));
+        ledger::asset::transfer(
+            source: from,
+            destination: to,
+            asset_definition: asset,
+            amount: Amount::from_i64(10),
+            dataspace: DataSpaceId::parse("0"),
+        );
     }
 }

@@ -65,9 +65,9 @@ seiyaku Hello {
 
     kotoage fn write_detail() authorize("Admin") {
         ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
         );
     }
 
@@ -154,63 +154,3 @@ iroha --config defaults/client.toml \
 - Երբ կրկնում եք ձեր սեփական պայմանագրերը, օգտագործեք `npm run sync-norito-snippets`-ը
   աշխատանքային տարածք՝ ներբեռնվող հատվածները վերականգնելու համար, որպեսզի պորտալի փաստաթղթերն ու արտեֆակտները մնան
   համաժամեցված է `crates/ivm/docs/examples/`-ի աղբյուրների հետ:
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```

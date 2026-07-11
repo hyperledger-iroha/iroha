@@ -30,6 +30,7 @@ ALL_PHASES=(
   java-android
   dotnet-sdk
   contract-smoke
+  tvm-contract-smoke
   core-admission
 )
 
@@ -77,6 +78,10 @@ Environment:
                                Defaults to node.
   SCCP_CORRIDOR_PYTHON_BIN     Python runtime for evidence and Python SDK phases.
                                Defaults to python3.
+  SCCP_TVM_DOCKER_BIN          Docker CLI for the real TVM phase. Defaults to
+                               docker and fails closed when unavailable.
+  SCCP_TVM_PORT                Loopback host port for official TRE. Defaults to
+                               19090.
 EOF
 }
 
@@ -90,7 +95,7 @@ list_phases() {
 
 is_known_phase() {
   case "$1" in
-    rust-sccp|evidence-scripts|js-sdk|python-sdk|swift-sdk|kotlin-sdk|java-android|dotnet-sdk|contract-smoke|core-admission)
+    rust-sccp|evidence-scripts|js-sdk|python-sdk|swift-sdk|kotlin-sdk|java-android|dotnet-sdk|contract-smoke|tvm-contract-smoke|core-admission)
       return 0
       ;;
     *)
@@ -1466,10 +1471,10 @@ resolve_dotnet() {
 phase_rust_sccp() {
   run_cmd \
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
-    cargo test -p iroha_sccp -- --nocapture
+    cargo test --locked -p iroha_sccp -- --nocapture
   run_cmd \
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
-    cargo test -p iroha_sccp --bin sccp_release_evidence -- --nocapture
+    cargo test --locked -p iroha_sccp --bin sccp_release_evidence -- --nocapture
 }
 
 phase_evidence_scripts() {
@@ -1483,7 +1488,7 @@ phase_evidence_scripts() {
   fi
   run_cmd \
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
-    cargo build -p iroha_sccp --bin sccp_release_evidence
+    cargo build --locked -p iroha_sccp --bin sccp_release_evidence
   run_cmd env "SCCP_RELEASE_RUST_VALIDATOR=$validator" \
     "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q \
     pytests/scripts/check_sccp_production_corridor_test.py \
@@ -1712,7 +1717,7 @@ phase_dotnet_sdk() {
     env "CARGO_TARGET_DIR=$bridge_target_dir" \
     "CARGO_INCREMENTAL=0" \
     "CARGO_PROFILE_DEV_DEBUG=0" \
-    cargo build -p connect_norito_bridge
+    cargo build --locked -p connect_norito_bridge
   if [[ "$DRY_RUN" -eq 0 ]]; then
     reject_dotnet_bridge_symlink_path "$bridge_target_dir" "$bridge_library_dir" "$bridge_library_path"
     if [[ ! -f "$bridge_library_path" ]]; then
@@ -1802,14 +1807,55 @@ phase_dotnet_sdk() {
 }
 
 phase_contract_smoke() {
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q \
+    scripts/tests/contract_artifact_corridor_test.py
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -m py_compile \
+    scripts/contract_artifact_corridor.py
+  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check scripts/contract_soljson_runner.js
+  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check scripts/contract_tvm_receipts.mjs
+  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check scripts/contract_tvm_smoke.mjs
+  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test scripts/tests/contract_tvm_receipts_test.mjs
+  run_cmd bash -n scripts/sccp_evm_contract_smoke.sh
+  run_cmd bash -n scripts/contract_tvm_runner.sh
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
   run_cmd bash scripts/sccp_evm_contract_smoke.sh
+}
+
+phase_tvm_contract_smoke() {
+  local work_dir
+  local artifact_dir
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    work_dir="${TMPDIR:-/tmp}/iroha-sccp-tvm-corridor.dry-run"
+  else
+    work_dir="$(mktemp -d "${TMPDIR:-/tmp}/iroha-sccp-tvm-corridor.XXXXXX")"
+  fi
+  artifact_dir="$work_dir/artifacts"
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/contract_artifact_corridor.py build \
+    --repo-root . \
+    --output-dir "$artifact_dir" \
+    --node "$SCCP_CORRIDOR_NODE_BIN"
+  run_cmd bash scripts/contract_tvm_runner.sh \
+    --manifest "$artifact_dir/sccp-contract-artifacts-v1.json"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    rm -rf "$work_dir"
+  fi
 }
 
 phase_core_admission() {
   run_cmd \
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
-    cargo test -p iroha_core --test iroha_core_group_01 bridge_proofs:: -- --nocapture
+    cargo test --locked -p iroha_core --lib sccp_ -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --test iroha_core_group_01 bridge_proofs:: -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --test sccp_route_governance_isi -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p integration_tests --test network_functional \
+      sccp_route_governance::exact_sccp_route_governance_converges_and_rejects_adversarial_updates \
+      -- --nocapture
 }
 
 run_with_log_dir() {
@@ -1921,6 +1967,9 @@ main() {
         ;;
       contract-smoke)
         phase_contract_smoke
+        ;;
+      tvm-contract-smoke)
+        phase_tvm_contract_smoke
         ;;
       core-admission)
         phase_core_admission

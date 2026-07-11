@@ -191,8 +191,8 @@ seiyaku ArgumentRecordRuntime {
 fn single_json_parameter_is_a_named_record_field_not_the_transport_object() {
     let source = r#"
 seiyaku JsonArgumentRecordRuntime {
-  view fn run(event: Json) -> i64 {
-    return event.get_int(Name::parse("value"));
+  view fn run(event: Json) -> Option<i64> {
+    event.get_int(Name::parse("value"))
   }
 }
 "#;
@@ -221,7 +221,11 @@ seiyaku JsonArgumentRecordRuntime {
         .expect("select run wrapper");
     vm.set_host(host);
     vm.run().expect("execute Json argument wrapper");
-    assert_eq!(vm.register(10), 29);
+    let layout = ivm::sum::SumLayoutV1::option(1).expect("Option<i64> layout");
+    assert_eq!(
+        ivm::sum::read_words(&vm, vm.register(10), layout),
+        Ok((true, vec![29]))
+    );
 }
 
 #[test]

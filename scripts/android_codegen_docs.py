@@ -266,7 +266,7 @@ MANIFEST_TYPE_TABLES: dict[str, dict] = {
             {
                 "name": "features_bitmap",
                 "type": "Option<u64>",
-                "description": "Bitmask of build features (SIMD, CUDA, etc.).",
+                "description": "Compiler-derived, hash-covered V1 execution capabilities (ZK and VECTOR); never host SIMD, Metal, or CUDA availability.",
             },
             {
                 "name": "access_set_hints",
@@ -309,7 +309,7 @@ MANIFEST_TYPE_TABLES: dict[str, dict] = {
             {
                 "name": "kind",
                 "type": "EntryPointKind",
-                "description": "Role of the entrypoint (`Public`, `View`, `Init`, or `Upgrade`).",
+                "description": "Role of the entrypoint (`Kotoage`, `View`, `Hajimari`, or `Kaizen`).",
             },
             {
                 "name": "permission",

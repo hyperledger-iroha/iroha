@@ -60,9 +60,11 @@ Validation and execution rules:
 - Torii derives the manifest from the verified artifact; callers do not supply
   a manifest override on this route.
 - The dataspace is derived from `contract_alias`.
+- The signing authority must already hold `CanRegisterSmartContractCode`;
+  account self-registration in the submitted transaction does not grant it.
 - `contract_address` is derived from `(chain_discriminant, authority,
   deploy_nonce, dataspace_id)`.
-- Reusing an existing `contract_alias` is the public upgrade path: Torii
+- Reusing an existing `contract_alias` is the public `kaizen`/`改善` path: Torii
   clears the prior alias binding, deactivates the retired address, binds the
   alias to the new address, and reports `previous_contract_address`.
 
@@ -83,7 +85,8 @@ Validation and execution rules:
 
 For `POST /v1/contracts/deploy`, the sole `contracts[0]` entry carries the
 fresh immutable `contract_address`, the stable `contract_alias`, any
-`previous_contract_address` retired by an upgrade, the resolved `dataspace`,
+`previous_contract_address` retired by `kaizen`/`改善`, the `kaizen` status,
+the resolved `dataspace`,
 the consumed `deploy_nonce`, `tx_hash_hex`, `code_hash_hex`, `abi_hash_hex`,
 and the current receipt `status`. Single deploy receipts normally return
 `status = "submitted"` because the route returns after queue admission; bundle
@@ -161,8 +164,9 @@ Executes multiple read-only view entrypoints in one HTTP round-trip.
 - Request type: `ContractViewBatchDto`.
 - The top-level `authority` supplies the read authority and host context for
   every item in the batch.
-- The top-level `gas_limit` is optional; when present it becomes the default
-  item gas limit and must still be positive.
+- The top-level `gas_limit` is optional and defaults to `1500000`. Every item
+  that omits its own `gas_limit` inherits that effective batch default; any
+  supplied batch or per-item limit must be positive.
 - Each `ContractViewBatchItemDto` follows the same selector rules as
   `ContractViewDto`: exactly one of `contract_address` or `contract_alias`,
   `entrypoint` defaults to `main`, and the selected manifest entrypoint must be
@@ -217,7 +221,7 @@ Executes multiple read-only view entrypoints in one HTTP round-trip.
   `multisig_account_id` or `multisig_account_alias`.
 - The contract target is selected by exactly one of `contract_address` or
   `contract_alias`.
-- `gas_limit` defaults to `5000` when omitted and must be positive when
+- `gas_limit` defaults to `1500000` when omitted and must be positive when
   supplied.
 - The route validates the signer against the live multisig spec, normalizes the
   contract payload, wraps the call in `MultisigPropose`, and returns

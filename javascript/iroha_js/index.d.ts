@@ -751,22 +751,204 @@ export type SccpCodecTag = 1 | 2 | 5;
 export const SCCP_CODEC_KEYS: Readonly<Record<SccpCodecTag, string>>;
 export type SccpPayloadKind = "transfer";
 export const SCCP_PAYLOAD_KINDS: readonly SccpPayloadKind[];
-export type SccpNetworkProfile = "sora-nexus" | "sora-taira" | "ethereum-mainnet" | "ethereum-sepolia" | "bsc-mainnet" | "bsc-testnet" | "tron-mainnet" | "tron-nile" | "tron-shasta";
+export type SccpNetworkProfile = "sora-taira" | "ethereum-mainnet" | "ethereum-sepolia" | "bsc-mainnet" | "bsc-testnet" | "tron-mainnet" | "tron-nile" | "tron-shasta";
 export interface SccpNetworkDescriptor { readonly profile: SccpNetworkProfile; readonly tag: number; readonly domain: number; readonly sora: boolean; }
 export const SCCP_NETWORK_PROFILES: Readonly<Record<SccpNetworkProfile, SccpNetworkDescriptor>>;
 export function normalizeSccpCodecValue(codec: SccpCodecTag, value: string | BinaryLike): Uint8Array;
 export function sccpSourceEventDigest(laneHash: string | BinaryLike, messageId: string | BinaryLike, payloadHash: string | BinaryLike): string;
-export interface SccpCapabilities { readonly version: 1; readonly registry_revision: string; readonly registry_path: "/v1/sccp/registry"; readonly message_bundle_path: "/v1/sccp/proofs/message/{message_id}"; readonly proof_request_path: "/v1/sccp/proof-requests/{message_id}"; readonly recent_messages_path: "/v1/sccp/messages/recent"; readonly proof_submit_path: "/v1/bridge/proofs/submit" | null; readonly native_message_submit_path: "/v1/bridge/messages" | null; }
-export interface SccpRegistry { readonly version: 1; readonly lanes: readonly Readonly<Record<string, unknown>>[]; }
-export interface SccpRecentMessage { readonly height: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-nexus" | "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: Readonly<Record<string, unknown>> | null; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
+export interface SccpRegistryLimits {
+  readonly max_governed_lanes: 16;
+  readonly max_live_governed_routes: 64;
+  readonly max_live_routes_per_lane: 8;
+  readonly max_retained_routes_per_lane: 64;
+  readonly max_retained_native_trust_anchors_per_lane: 4096;
+}
+export interface SccpResourceLimits {
+  readonly max_proofs_per_transaction: number;
+  readonly max_proofs_per_block: number;
+  readonly max_proof_bytes_per_proof: number;
+  readonly max_proof_bytes_per_transaction: number;
+  readonly max_proof_bytes_per_block: number;
+  readonly max_native_headers_per_transaction: number;
+  readonly max_native_headers_per_block: number;
+  readonly max_ethereum_light_client_updates_per_transaction: number;
+  readonly max_ethereum_light_client_updates_per_block: number;
+  readonly max_native_header_bytes_per_transaction: number;
+  readonly max_native_header_bytes_per_block: number;
+  readonly max_secp256k1_recoveries_per_transaction: number;
+  readonly max_secp256k1_recoveries_per_block: number;
+  readonly max_bls_aggregate_checks_per_transaction: number;
+  readonly max_bls_aggregate_checks_per_block: number;
+  readonly max_bls_signer_contributions_per_transaction: number;
+  readonly max_bls_signer_contributions_per_block: number;
+  readonly max_bn254_pairing_checks_per_transaction: number;
+  readonly max_bn254_pairing_checks_per_block: number;
+}
+export interface SccpCapabilities { readonly version: 1; readonly registry_revision: string; readonly registry_path: "/v1/sccp/registry"; readonly message_bundle_path: "/v1/sccp/proofs/message/{message_id}"; readonly proof_request_path: "/v1/sccp/proof-requests/{message_id}"; readonly recent_messages_path: "/v1/sccp/messages/recent"; readonly registry_limits: SccpRegistryLimits; readonly resource_limits: SccpResourceLimits; readonly proof_submit_path: "/v1/bridge/proofs/submit" | null; readonly native_message_submit_path: "/v1/bridge/messages" | null; }
+export type SccpNetworkWireName = "sora_taira" | "ethereum_mainnet" | "ethereum_sepolia" | "bsc_mainnet" | "bsc_testnet" | "tron_mainnet" | "tron_nile" | "tron_shasta";
+export interface SccpNetworkV1 { readonly network: SccpNetworkWireName; readonly profile: null; }
+export interface SccpLaneIdV1 { readonly source: SccpNetworkV1; readonly target: SccpNetworkV1; }
+export interface SccpBn254G1PointV1 { readonly x: string; readonly y: string; }
+export interface SccpBn254G2PointV1 { readonly x_c0: string; readonly x_c1: string; readonly y_c0: string; readonly y_c1: string; }
+export interface SccpGroth16Bn254IcV1 {
+  readonly constant: SccpBn254G1PointV1;
+  readonly signal_0: SccpBn254G1PointV1;
+  readonly signal_1: SccpBn254G1PointV1;
+  readonly signal_2: SccpBn254G1PointV1;
+  readonly signal_3: SccpBn254G1PointV1;
+  readonly signal_4: SccpBn254G1PointV1;
+  readonly signal_5: SccpBn254G1PointV1;
+  readonly signal_6: SccpBn254G1PointV1;
+  readonly signal_7: SccpBn254G1PointV1;
+  readonly signal_8: SccpBn254G1PointV1;
+  readonly signal_9: SccpBn254G1PointV1;
+  readonly signal_10: SccpBn254G1PointV1;
+}
+export interface SccpGroth16Bn254VerifyingKeyV1 {
+  readonly version: 1;
+  readonly alpha1: SccpBn254G1PointV1;
+  readonly beta2: SccpBn254G2PointV1;
+  readonly gamma2: SccpBn254G2PointV1;
+  readonly delta2: SccpBn254G2PointV1;
+  readonly ic: SccpGroth16Bn254IcV1;
+}
+export interface SccpGroth16Bn254SemanticCircuitV1 {
+  readonly version: 1;
+  readonly circuit_commitment: string;
+  readonly witness_generator_commitment: string;
+  readonly public_signal_schema_hash: string;
+}
+export interface SccpSemanticProofProfileV1 {
+  readonly profile: "sora_taira_finality_inclusion_groth16_bn254";
+  readonly commitments: SccpGroth16Bn254SemanticCircuitV1;
+}
+export interface SccpSoraFinalityAnchorV1 {
+  readonly version: 1;
+  readonly source_network: SccpNetworkV1;
+  readonly chain_id_hash: string;
+  readonly checkpoint_height: number;
+  readonly checkpoint_block_hash: string;
+  readonly validator_set_epoch: number;
+  readonly validator_set_hash: string;
+  readonly validator_set_hash_version: 1;
+}
+export interface SccpOutboundProofPolicyV1 {
+  readonly version: 1;
+  readonly semantic_profile: SccpSemanticProofProfileV1;
+  readonly sora_finality_anchor: SccpSoraFinalityAnchorV1;
+}
+export interface SccpDestinationDeploymentFieldsV1 {
+  readonly token_address: string;
+  readonly token_code_hash: string;
+  readonly verifier_address: string;
+  readonly verifier_code_hash: string;
+  readonly verifying_key: SccpGroth16Bn254VerifyingKeyV1;
+  readonly verifier_key_hash: string;
+  readonly outbound_proof_policy: SccpOutboundProofPolicyV1;
+  readonly route_address: string;
+  readonly route_code_hash: string;
+  readonly taira_to_token_multiplier: 1000000000;
+}
+export interface SccpEvmDestinationDeploymentV1 extends SccpDestinationDeploymentFieldsV1 {}
+export interface SccpTronDestinationDeploymentV1 extends SccpDestinationDeploymentFieldsV1 {}
+export type SccpDestinationDeploymentV1 =
+  | Readonly<{ family: "evm"; deployment: SccpEvmDestinationDeploymentV1 }>
+  | Readonly<{ family: "tron"; deployment: SccpTronDestinationDeploymentV1 }>;
+export interface SccpSourceEmitterIdentityV1 {
+  readonly address: string;
+  readonly runtime_code_hash: string;
+  readonly route_config_hash: string;
+}
+export type SccpSourceEmitterV1 =
+  | Readonly<{ emitter: "evm"; identity: SccpSourceEmitterIdentityV1 }>
+  | Readonly<{ emitter: "tron"; identity: SccpSourceEmitterIdentityV1 }>;
+export interface SccpSourceIdentityV1 { readonly lane: SccpLaneIdV1; readonly emitter: SccpSourceEmitterV1; }
+export type SccpRouteActivationKindV1 = "staged" | "bidirectional" | "inbound_only" | "paused" | "retired";
+export interface SccpRouteActivationV1 { readonly activation: SccpRouteActivationKindV1; readonly direction: null; }
+export interface SccpInboundFinalityCutoffV1 {
+  readonly trust_anchor_hash: string;
+  readonly max_anchor_interval_height: number;
+}
+export interface SccpSoraSettlementV1 { readonly asset_definition_id: string; readonly custody_account_id: string; readonly payload_amount_scale: 9; }
+export interface SccpGovernedRouteV1 {
+  readonly lane_id: SccpLaneIdV1;
+  readonly route_id: string;
+  readonly asset_key: string;
+  readonly revision: number;
+  readonly activation: SccpRouteActivationV1;
+  readonly inbound_finality_cutoff: SccpInboundFinalityCutoffV1 | null;
+  readonly source_identity: SccpSourceIdentityV1;
+  readonly destination: SccpDestinationDeploymentV1;
+  readonly settlement: SccpSoraSettlementV1;
+}
+export type SccpNativeProofBackendV1 = "ethereum_beacon_v1" | "bsc_parlia_v1" | "tron_dpos_v1";
+export interface SccpNativeTrustAnchorV1 {
+  readonly backend: Readonly<{ backend: SccpNativeProofBackendV1; protocol: null }>;
+  readonly anchor_hash: string;
+  readonly checkpoint_height: number;
+}
+export interface SccpGovernedLaneV1 {
+  readonly lane_id: SccpLaneIdV1;
+  readonly native_trust_anchors: readonly SccpNativeTrustAnchorV1[];
+  readonly current_native_trust_anchor_hash: string | null;
+  readonly routes: readonly SccpGovernedRouteV1[];
+}
+export interface SccpRegistry { readonly version: 1; readonly lanes: readonly SccpGovernedLaneV1[]; }
+export interface SccpCanonicalTextValueV1 { readonly CanonicalText: Readonly<{ value: string }>; }
+export interface SccpEvmAddressValueV1 { readonly EvmAddress20: Readonly<{ bytes: string }>; }
+export interface SccpTronAddressValueV1 { readonly TronAddress21: Readonly<{ bytes: string }>; }
+export interface SccpTransferProjectionV1 {
+  readonly version: 1;
+  readonly source_domain: 0;
+  readonly dest_domain: 1 | 2 | 5;
+  readonly nonce: number;
+  readonly route_revision: number;
+  readonly asset_home_domain: 0;
+  readonly asset_id: SccpCanonicalTextValueV1;
+  readonly amount: number;
+  readonly sender: SccpCanonicalTextValueV1;
+  readonly recipient: SccpEvmAddressValueV1 | SccpTronAddressValueV1;
+  readonly route_id: SccpCanonicalTextValueV1;
+}
+export interface SccpPayloadProjectionV1 { readonly Transfer: SccpTransferProjectionV1; }
+export interface SccpRecentMessage { readonly height: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
 export interface SccpRecentMessages { readonly items: readonly SccpRecentMessage[]; }
 export interface SccpMessageBundle { readonly version: 1; readonly commitment_root: string; readonly commitment: Readonly<Record<string, unknown>>; readonly merkle_proof: Readonly<Record<string, unknown>>; readonly payload: Readonly<{ Transfer: Readonly<Record<string, unknown>> }>; readonly finality_proof: string; }
-export interface SccpProofRequest { readonly version: 1; readonly backend: Readonly<Record<string, unknown>>; readonly source_network: Readonly<Record<string, unknown>>; readonly target_network: Readonly<Record<string, unknown>>; readonly public_inputs: Readonly<Record<string, unknown>>; readonly verifying_key: Readonly<Record<string, unknown>>; readonly verifier_key_hash: string; readonly bundle_bytes: string; readonly statement_hash: string; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly request_hash: string; }
-export interface SccpDetachedSigner { readonly signature_b64?: string; }
-export interface SccpBridgeProofSubmitPayload extends SccpDetachedSigner { readonly authority: string; readonly destination_proof_b64: string; readonly creation_time_ms?: number; }
-export interface SccpBridgeMessageSubmitPayload extends SccpDetachedSigner { readonly authority: string; readonly native_proof_b64: string; readonly creation_time_ms?: number; }
-export interface SccpBridgeSubmitResponse { readonly submitted: boolean; readonly payload_kind: SccpPayloadKind; readonly message_id_hex: string; readonly backend: string; readonly counterparty_domain: number; readonly counterparty_chain: SccpNetworkProfile; readonly manifest_hash_hex: string; readonly range_start_height: number; readonly range_end_height: number; readonly creation_time_ms: number; readonly tx_hash_hex: string | null; readonly transaction_payload_b64: string | null; readonly signing_message_b64: string | null; }
-export interface SccpBridgeResponseExpectations { readonly creation_time_ms?: number; }
+export interface SccpMessagePublicInputsV1 { readonly version: 1; readonly message_id: string; readonly payload_hash: string; readonly target_domain: 1 | 2 | 5; readonly commitment_root: string; readonly finality_height: string; readonly finality_block_hash: string; }
+export type SccpDestinationProofBackendV1 =
+  | Readonly<{ backend: "evm_groth16_bn254_v1"; family: null }>
+  | Readonly<{ backend: "tron_groth16_bn254_v1"; family: null }>;
+export interface SccpProofRequest {
+  readonly version: 1;
+  readonly backend: SccpDestinationProofBackendV1;
+  readonly source_network: SccpNetworkV1;
+  readonly target_network: SccpNetworkV1;
+  readonly public_inputs: SccpMessagePublicInputsV1;
+  readonly verifying_key: SccpGroth16Bn254VerifyingKeyV1;
+  readonly verifier_key_hash: string;
+  readonly semantic_proof_profile: SccpSemanticProofProfileV1;
+  readonly semantic_proof_profile_hash: string;
+  readonly sora_finality_anchor: SccpSoraFinalityAnchorV1;
+  readonly sora_finality_anchor_hash: string;
+  readonly bundle_bytes: string;
+  readonly statement_hash: string;
+  readonly destination_binding_hash: string;
+  readonly route_configuration_hash: string;
+  readonly request_hash: string;
+}
+export type SccpDetachedSigningState =
+  | Readonly<{ signature_b64?: never; transaction_payload_b64?: never; creation_time_ms?: number }>
+  | Readonly<{ signature_b64: string; transaction_payload_b64: string; creation_time_ms: number }>;
+export type SccpBridgeProofSubmitPayload = Readonly<{
+  authority: string;
+  destination_proof_b64: string;
+}> & SccpDetachedSigningState;
+export type SccpBridgeMessageSubmitPayload = Readonly<{
+  authority: string;
+  native_proof_b64: string;
+}> & SccpDetachedSigningState;
+export interface SccpBridgeSubmitResponse { readonly submitted: boolean; readonly payload_kind: SccpPayloadKind; readonly message_id_hex: string; readonly backend: string; readonly counterparty_domain: number; readonly counterparty_chain: SccpNetworkProfile; readonly route_configuration_hash_hex: string; readonly range_start_height: number; readonly range_end_height: number; readonly creation_time_ms: number; readonly tx_hash_hex: string | null; readonly transaction_payload_b64: string | null; readonly signing_message_b64: string | null; }
+export interface SccpBridgeResponseExpectations { readonly submitted?: boolean; readonly creation_time_ms?: number; }
 export function normalizeSccpCapabilities(value: unknown): SccpCapabilities;
 export function normalizeSccpRegistry(value: unknown): SccpRegistry;
 export function normalizeSccpRouteGovernanceAction(value: SccpRouteGovernanceActionInput): Readonly<SccpRouteGovernanceActionInput>;
@@ -5784,7 +5966,7 @@ export interface ToriiGovernanceDeployContractProposalRequest {
   abiHash: string | BinaryLike;
   abiVersion?: string;
   window?: ToriiGovernanceWindow | null;
-  mode?: "Zk" | "Plain" | "zk" | "plain";
+  mode?: "Zk" | "Plain";
   limits?: JsonValue;
 }
 
@@ -6941,10 +7123,56 @@ export type SccpRouteGovernanceActionKind =
   | "AdvanceTrustAnchor"
   | "Remove";
 
-export interface SccpRouteGovernanceActionInput {
-  action: SccpRouteGovernanceActionKind;
-  route: Record<string, unknown>;
+export interface SccpRouteKeyV1 {
+  readonly lane_id: SccpLaneIdV1;
+  readonly route_id: string;
+  readonly asset_key: string;
+  readonly revision: number;
 }
+
+export interface SccpRegisterRouteV1 {
+  readonly route: SccpGovernedRouteV1;
+  readonly native_trust_anchor: SccpNativeTrustAnchorV1 | null;
+}
+
+export interface SccpSetRouteActivationV1 {
+  readonly key: SccpRouteKeyV1;
+  readonly expected_current: SccpRouteActivationV1;
+  readonly next: SccpRouteActivationV1;
+  readonly inbound_finality_cutoff: SccpInboundFinalityCutoffV1 | null;
+}
+
+export interface SccpSwitchRouteRevisionV1 {
+  readonly previous_key: SccpRouteKeyV1;
+  readonly expected_previous: SccpRouteActivationV1;
+  readonly previous_next: SccpRouteActivationV1;
+  readonly previous_inbound_finality_cutoff: SccpInboundFinalityCutoffV1 | null;
+  readonly successor_key: SccpRouteKeyV1;
+  readonly successor_next: SccpRouteActivationV1;
+}
+
+export interface SccpInitializeLaneTrustAnchorV1 {
+  readonly lane_id: SccpLaneIdV1;
+  readonly expected_current: null;
+  readonly initial: SccpNativeTrustAnchorV1;
+}
+
+export interface SccpAdvanceLaneTrustAnchorV1 {
+  readonly lane_id: SccpLaneIdV1;
+  readonly expected_current: SccpNativeTrustAnchorV1;
+  readonly next: SccpNativeTrustAnchorV1;
+}
+
+export type SccpRouteGovernanceActionInput =
+  | Readonly<{ action: "Register"; route: SccpRegisterRouteV1 }>
+  | Readonly<{ action: "SetActivation"; route: SccpSetRouteActivationV1 }>
+  | Readonly<{ action: "SwitchRevision"; route: SccpSwitchRouteRevisionV1 }>
+  | Readonly<{
+      action: "InitializeTrustAnchor";
+      route: SccpInitializeLaneTrustAnchorV1;
+    }>
+  | Readonly<{ action: "AdvanceTrustAnchor"; route: SccpAdvanceLaneTrustAnchorV1 }>
+  | Readonly<{ action: "Remove"; route: SccpRouteKeyV1 }>;
 
 export interface ApplySccpRouteGovernanceTransactionInput
   extends Omit<TransactionAssemblyInput, "instructions"> {
@@ -7715,13 +7943,13 @@ export interface ProposeDeployContractInstructionInput {
   abiHash: HashLike;
   abiVersion?: string;
   window?: GovernanceWindowInput | null;
-  votingMode?: GovernanceVotingMode | string | null;
+  votingMode?: GovernanceVotingMode | null;
 }
 
 export interface ProposeSccpRouteGovernanceInstructionInput {
   action: SccpRouteGovernanceActionInput;
   window?: GovernanceWindowInput | null;
-  mode?: GovernanceVotingMode | string | null;
+  mode?: GovernanceVotingMode | null;
 }
 
 export interface CastZkBallotInstructionInput {
@@ -8030,10 +8258,118 @@ export interface ContractAccessSetHintsInput {
   dynamic_writes?: ReadonlyArray<ContractDynamicAccessHintInput>;
 }
 
+export type ContractEntrypointKind =
+  | "Kotoage"
+  | "View"
+  | "Hajimari"
+  | "Kaizen";
+
+export interface ContractEntrypointKindRecord {
+  kind: ContractEntrypointKind;
+  value: null;
+}
+
+export type ContractEntrypointValueKindName =
+  | "Int"
+  | "U128"
+  | "Bool"
+  | "String"
+  | "Amount"
+  | "Json"
+  | "Name"
+  | "AccountId"
+  | "AssetDefinitionId"
+  | "AssetId"
+  | "DomainId"
+  | "NftId"
+  | "DataSpaceId"
+  | "Blob";
+
+export interface ContractEntrypointValueKindRecord {
+  kind: ContractEntrypointValueKindName;
+  value: null;
+}
+
+export interface ContractEntrypointStructTypeNode {
+  name: string;
+  fields: ReadonlyArray<string>;
+}
+
+export interface ContractEntrypointListTypeNode {
+  capacity: NumericLike;
+}
+
+export type ContractEntrypointValueTypeNode =
+  | { kind: "Struct"; value: ContractEntrypointStructTypeNode }
+  | { kind: "Tuple"; value: NumericLike }
+  | { kind: "Option"; value: null }
+  | { kind: "Result"; value: null }
+  | { kind: "List"; value: ContractEntrypointListTypeNode }
+  | { kind: "Leaf"; value: ContractEntrypointValueKindRecord };
+
+export interface ContractEntrypointValueType {
+  nodes: ReadonlyArray<ContractEntrypointValueTypeNode>;
+}
+
+export interface ContractEntrypointArgumentField {
+  name: string;
+  ty: ContractEntrypointValueType;
+}
+
+export interface ContractEntrypointArgumentSchema {
+  fields: ReadonlyArray<ContractEntrypointArgumentField>;
+}
+
+export interface ContractEntrypointParamInput {
+  name: string;
+  typeName?: string;
+  type_name?: string;
+}
+
+export type ContractTriggerRepeats =
+  | { Indefinitely: null }
+  | { Exactly: NumericLike };
+
+export interface ContractTriggerCallbackInput {
+  namespace?: string | null;
+  entrypoint: string;
+}
+
+export interface ContractTriggerDescriptorInput {
+  id: string;
+  repeats: ContractTriggerRepeats;
+  /** Canonical standard-base64 NRT0 frame for `EventFilterBox`. */
+  filter: string;
+  authority?: string | null;
+  metadata?: Readonly<Record<string, JsonValue>>;
+  callback: ContractTriggerCallbackInput;
+}
+
 export interface ContractEntrypointInput {
   name: string;
-  kind?: string;
+  kind: ContractEntrypointKind | ContractEntrypointKindRecord;
+  params?: ReadonlyArray<ContractEntrypointParamInput>;
+  argumentSchema?: ContractEntrypointArgumentSchema | null;
+  returnType?: string | null;
+  returnSchema?: ContractEntrypointValueType | null;
   permission?: string | null;
+  readKeys?: ReadonlyArray<string>;
+  writeKeys?: ReadonlyArray<string>;
+  accessHintsComplete?: boolean | null;
+  accessHintsSkipped?: ReadonlyArray<string>;
+  triggers?: ReadonlyArray<ContractTriggerDescriptorInput>;
+}
+
+export interface ContractStateDescriptorInput {
+  name: string;
+  typeName?: string;
+  type_name?: string;
+}
+
+export interface ContractErrorCodeDescriptorInput {
+  namespace: string;
+  name: string;
+  code: NumericLike;
 }
 
 export interface ContractKotobaTranslationInput {
@@ -8057,12 +8393,15 @@ export interface ContractManifestProvenanceInput {
 }
 
 export interface ContractManifestInput {
+  seiyakuName?: string | null;
   codeHash?: HashLike | null;
   abiHash?: HashLike | null;
   compilerFingerprint?: string | null;
   featuresBitmap?: NumericLike | null;
   accessSetHints?: ContractAccessSetHintsInput | null;
   entrypoints?: ReadonlyArray<ContractEntrypointInput> | null;
+  states?: ReadonlyArray<ContractStateDescriptorInput> | null;
+  errorCodes?: ReadonlyArray<ContractErrorCodeDescriptorInput> | null;
   kotoba?: ReadonlyArray<ContractKotobaEntryInput> | null;
   provenance?: ContractManifestProvenanceInput | null;
 }
@@ -8073,12 +8412,15 @@ export interface ContractManifestInput {
  * binary buffers are rejected at runtime.
  */
 export interface ToriiContractManifestInput {
+  seiyakuName?: string | null;
   codeHash?: string | null;
   abiHash?: string | null;
   compilerFingerprint?: string | null;
   featuresBitmap?: NumericLike | null;
   accessSetHints?: ContractAccessSetHintsInput | null;
   entrypoints?: ReadonlyArray<ContractEntrypointInput> | null;
+  states?: ReadonlyArray<ContractStateDescriptorInput> | null;
+  errorCodes?: ReadonlyArray<ContractErrorCodeDescriptorInput> | null;
   kotoba?: ReadonlyArray<ContractKotobaEntryInput> | null;
   provenance?: ContractManifestProvenanceInput | null;
 }
@@ -8103,7 +8445,7 @@ export interface DeployContractReceiptContract {
   contract_alias: string;
   contract_address: string;
   previous_contract_address: string | null;
-  upgraded: boolean;
+  kaizen: boolean;
   dataspace: string;
   deploy_nonce: number;
   code_hash_hex: string;
@@ -8225,29 +8567,84 @@ export interface ContractCallResponse {
 
 export interface ContractManifestRecord {
   manifest: {
-    code_hash: string | null | undefined;
-    abi_hash: string | null | undefined;
-    compiler_fingerprint?: string | null | undefined;
-    features_bitmap?: number | null | undefined;
-    access_set_hints?:
+    seiyaku_name: string | null;
+    /** Lowercase 32-byte hex normalized from Rust's canonical Hash literal. */
+    code_hash: string | null;
+    /** Lowercase 32-byte hex normalized from Rust's canonical Hash literal. */
+    abi_hash: string | null;
+    compiler_fingerprint: string | null;
+    features_bitmap: number | null;
+    access_set_hints:
       | {
           read_keys: ReadonlyArray<string>;
           write_keys: ReadonlyArray<string>;
+          dynamic_reads: ReadonlyArray<{
+            base_key: string;
+            key_type: string;
+            bound_kind: string;
+            max_keys: number;
+          }>;
+          dynamic_writes: ReadonlyArray<{
+            base_key: string;
+            key_type: string;
+            bound_kind: string;
+            max_keys: number;
+          }>;
         }
-      | null
-      | undefined;
-    entrypoints?:
-      | ReadonlyArray<{
-          name: string;
-          kind: { kind: string; value?: unknown };
-          permission: string | null;
-        }>
-      | null
-      | undefined;
-    kotoba?: JsonValue | null | undefined;
-    provenance?: JsonValue | null | undefined;
+      | null;
+    entrypoints: ReadonlyArray<ContractEntrypointRecord> | null;
+    states: ReadonlyArray<ContractStateDescriptorRecord> | null;
+    error_codes: ReadonlyArray<ContractErrorCodeDescriptorRecord> | null;
+    kotoba: ReadonlyArray<ContractKotobaEntryRecord> | null;
+    provenance: ContractManifestProvenanceInput | null;
   };
-  code_bytes: string | null;
+  code_hash: string | null;
+  abi_hash: string | null;
+}
+
+export interface ContractEntrypointParamRecord {
+  name: string;
+  type_name: string;
+}
+
+export interface ContractTriggerDescriptorRecord {
+  id: string;
+  repeats: { Indefinitely: null } | { Exactly: number };
+  filter: string;
+  authority: string | null;
+  metadata: Readonly<Record<string, JsonValue>>;
+  callback: { namespace: string | null; entrypoint: string };
+}
+
+export interface ContractEntrypointRecord {
+  name: string;
+  kind: ContractEntrypointKindRecord;
+  params: ReadonlyArray<ContractEntrypointParamRecord>;
+  argument_schema: ContractEntrypointArgumentSchema | null;
+  return_type: string | null;
+  return_schema: ContractEntrypointValueType | null;
+  permission: string | null;
+  read_keys: ReadonlyArray<string>;
+  write_keys: ReadonlyArray<string>;
+  access_hints_complete: boolean | null;
+  access_hints_skipped: ReadonlyArray<string>;
+  triggers: ReadonlyArray<ContractTriggerDescriptorRecord>;
+}
+
+export interface ContractStateDescriptorRecord {
+  name: string;
+  type_name: string;
+}
+
+export interface ContractErrorCodeDescriptorRecord {
+  namespace: string;
+  name: string;
+  code: number;
+}
+
+export interface ContractKotobaEntryRecord {
+  msg_id: string;
+  translations: ReadonlyArray<ContractKotobaTranslationInput>;
 }
 
 export interface ContractCodeBytesRecord {
@@ -10673,6 +11070,11 @@ export declare class ToriiClient {
     messageId: string,
     options?: { format?: "json"; signal?: AbortSignal },
   ): Promise<SccpMessageBundle>;
+  /**
+   * Returns an opaque frame preflighted against canonical uncompressed Norito
+   * and the `TairaSccpMessageProofV1` schema. It does not decode the embedded
+   * message id for independent path-to-payload binding.
+   */
   getSccpMessageBundle(
     messageId: string,
     options: { format: "norito"; signal?: AbortSignal },
@@ -10681,6 +11083,11 @@ export declare class ToriiClient {
     messageId: string,
     options?: { format?: "json"; signal?: AbortSignal },
   ): Promise<SccpProofRequest>;
+  /**
+   * Returns an opaque frame preflighted against canonical uncompressed Norito
+   * and the `SccpGroth16Bn254ProofRequestV1` schema. It does not decode the
+   * embedded message id for independent path-to-payload binding.
+   */
   getSccpProofRequest(
     messageId: string,
     options: { format: "norito"; signal?: AbortSignal },
@@ -12039,6 +12446,22 @@ export function noritoEncodePrivacyProofEnvelope(envelope: object): Buffer;
 export function noritoDecodePrivacyProofEnvelope(
   bytes: ArrayBufferView | ArrayBuffer | Buffer | string,
 ): object;
+export interface NoritoFrameValidationOptions {
+  context?: string;
+  expectedSchemaHash?: ArrayBufferView | ArrayBuffer | Buffer;
+  expectedTypeName?: string;
+  requireNonEmptyPayload?: boolean;
+}
+export interface ValidatedNoritoFrame {
+  payload: Buffer;
+  schemaHash: Buffer;
+  flags: number;
+}
+/** Validate one canonical, uncompressed Norito v1 frame without decoding its payload. */
+export function validateNoritoFrame(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: NoritoFrameValidationOptions,
+): ValidatedNoritoFrame;
 export interface MultisigProposeNoritoRequest {
   multisig_account_id?: string | null;
   multisigAccountId?: string | null;

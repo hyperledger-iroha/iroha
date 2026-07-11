@@ -62,9 +62,9 @@ seiyaku Hello {
 
     kotoage fn write_detail() authorize("Admin") {
         ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
         );
     }
 
@@ -137,63 +137,3 @@ Se o valor estiver ausente, confirme que o servico Docker compose ainda esta rod
   mais profunda do tooling de compilador/runner, do deploy de manifests e dos metadados IVM.
 - Ao iterar nos seus contratos, use `npm run sync-norito-snippets` no workspace para
   regenerar snippets baixaveis e manter os docs do portal e artifacts sincronizados com as fontes em `crates/ivm/docs/examples/`.
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```

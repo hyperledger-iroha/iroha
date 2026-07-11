@@ -1226,7 +1226,7 @@ test("buildRegisterKaigiRelayInstruction encodes hpke key", () => {
   assert.deepEqual(encodeAndDecode(instruction), expected);
 });
 
-test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () => {
+baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () => {
   const codeHashBytes = Buffer.alloc(32, 0xaa);
   const abiHashBytes = Buffer.alloc(32, 0xbb);
   const signer = `ed25519:ed0120${"11".repeat(32)}`;
@@ -1235,6 +1235,7 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
   const signatureCanonical = signature.split(":")[1].toUpperCase();
   const instruction = buildRegisterSmartContractCodeInstruction({
     manifest: {
+      seiyakuName: "Ledger",
       codeHash: codeHashBytes,
       abiHash: abiHashBytes,
       compilerFingerprint: "rustc-1.79",
@@ -1262,7 +1263,7 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
       entrypoints: [
         {
           name: "upgrade_ledger",
-          kind: "Upgrade",
+          kind: "Kaizen",
           permission: "can_upgrade",
         },
       ],
@@ -1281,6 +1282,7 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
   const expected = {
     RegisterSmartContractCode: {
       manifest: {
+        seiyaku_name: "Ledger",
         code_hash: normalizedHashHex(codeHashBytes),
         abi_hash: normalizedHashHex(abiHashBytes),
         compiler_fingerprint: "rustc-1.79",
@@ -1308,10 +1310,21 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
         entrypoints: [
           {
             name: "upgrade_ledger",
-            kind: { kind: "Upgrade" },
+            kind: { kind: "Kaizen", value: null },
+            params: [],
+            argument_schema: null,
+            return_type: null,
+            return_schema: null,
             permission: "can_upgrade",
+            read_keys: [],
+            write_keys: [],
+            access_hints_complete: null,
+            access_hints_skipped: [],
+            triggers: [],
           },
         ],
+        states: null,
+        error_codes: null,
         kotoba: [
           {
             msg_id: "contract.title",
@@ -1329,21 +1342,6 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
     RegisterSmartContractCode: {
       manifest: {
         ...expected.RegisterSmartContractCode.manifest,
-        entrypoints: [
-          {
-            access_hints_complete: null,
-            access_hints_skipped: [],
-            kind: { kind: "Upgrade", value: null },
-            name: "upgrade_ledger",
-            params: [],
-            permission: "can_upgrade",
-            read_keys: [],
-            return_type: null,
-            triggers: [],
-            write_keys: [],
-          },
-        ],
-        states: null,
       },
     },
   };
@@ -1352,18 +1350,20 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
   assert.deepEqual(decoded, expectedDecoded);
 });
 
-test("smart-contract entrypoint kinds use only the V1 interface names", () => {
-  const view = buildRegisterSmartContractCodeInstruction({
-    manifest: {
-      entrypoints: [{ name: "read", kind: "View" }],
-    },
-  });
-  assert.equal(
-    view.RegisterSmartContractCode.manifest.entrypoints[0].kind.kind,
-    "View",
-  );
+baseTest("smart-contract entrypoint kinds use only the V1 interface names", () => {
+  for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
+    const instruction = buildRegisterSmartContractCodeInstruction({
+      manifest: {
+        entrypoints: [{ name: "run", kind: canonical }],
+      },
+    });
+    assert.equal(
+      instruction.RegisterSmartContractCode.manifest.entrypoints[0].kind.kind,
+      canonical,
+    );
+  }
 
-  for (const retired of ["kotoage", "hajimari", "kaizen"]) {
+  for (const retired of ["Public", "public", "Init", "init", "Upgrade", "upgrade"]) {
     assert.throws(
       () =>
         buildRegisterSmartContractCodeInstruction({
@@ -1371,8 +1371,111 @@ test("smart-contract entrypoint kinds use only the V1 interface names", () => {
             entrypoints: [{ name: "legacy", kind: retired }],
           },
         }),
-      /must be one of 'Public', 'View', 'Init', or 'Upgrade'/,
+      /must be one of 'Kotoage', 'View', 'Hajimari', or 'Kaizen'/,
     );
+  }
+});
+
+baseTest("smart-contract branded entrypoint kinds preserve their Norito tag order", () => {
+  for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
+    const instruction = buildRegisterSmartContractCodeInstruction({
+      manifest: {
+        entrypoints: [{ name: "run", kind: canonical }],
+      },
+    });
+    assert.equal(
+      encodeAndDecode(instruction).RegisterSmartContractCode.manifest.entrypoints[0].kind.kind,
+      canonical,
+    );
+  }
+});
+
+baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tapes", () => {
+  const leaf = (kind) => ({ kind: "Leaf", value: { kind, value: null } });
+  const build = (nodes) =>
+    buildRegisterSmartContractCodeInstruction({
+      manifest: {
+        entrypoints: [
+          {
+            name: "read",
+            kind: "View",
+            returnType: "schema-under-test",
+            returnSchema: { nodes },
+          },
+        ],
+      },
+    });
+
+  const pair = [
+    { kind: "Struct", value: { name: "Pair", fields: ["left", "right"] } },
+    leaf("Int"),
+    leaf("Bool"),
+  ];
+  assert.deepEqual(
+    build(pair).RegisterSmartContractCode.manifest.entrypoints[0].return_schema.nodes,
+    pair,
+  );
+  assert.deepEqual(
+    build([
+      { kind: "List", value: { capacity: 64 } },
+      leaf("Name"),
+    ]).RegisterSmartContractCode.manifest.entrypoints[0].return_schema.nodes[0].value,
+    { capacity: 64 },
+  );
+
+  for (const malformed of [
+    [],
+    [{ kind: "List", value: { capacity: 1 } }],
+    [leaf("Int"), leaf("Bool")],
+    [
+      { kind: "List", value: { capacity: 1, element: { nodes: [leaf("Int")] } } },
+      leaf("Int"),
+    ],
+    [{ kind: "List", value: { capacity: 0 } }, leaf("Int")],
+    [{ kind: "List", value: { capacity: 65 } }, leaf("Int")],
+    [
+      ...Array.from({ length: 256 }, () => ({
+        kind: "List",
+        value: { capacity: 1 },
+      })),
+      leaf("Int"),
+    ],
+  ]) {
+    assert.throws(() => build(malformed), /canonical|capacity|complete|only capacity/u);
+  }
+
+  for (const [name, fields, children] of [
+    ["AccountView", ["id", "metadata"], [leaf("AccountId"), leaf("Json")]],
+    ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Amount")]],
+    [
+      "AssetDefinitionView",
+      ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+      [
+        leaf("AssetDefinitionId"),
+        leaf("String"),
+        { kind: "Option", value: null },
+        leaf("String"),
+        leaf("AccountId"),
+        leaf("Amount"),
+        leaf("Json"),
+      ],
+    ],
+    [
+      "DomainView",
+      ["id", "owned_by", "metadata"],
+      [leaf("DomainId"), leaf("AccountId"), leaf("Json")],
+    ],
+    [
+      "NftView",
+      ["id", "owned_by", "content"],
+      [leaf("NftId"), leaf("AccountId"), leaf("Json")],
+    ],
+  ]) {
+    const canonical = [{ kind: "Struct", value: { name, fields } }, ...children];
+    assert.doesNotThrow(() => build(canonical));
+    const forged = structuredClone(canonical);
+    forged[1].value.kind = "Bool";
+    assert.throws(() => build(forged), /forged reserved query-view/u);
   }
 });
 
@@ -1436,7 +1539,7 @@ test("buildProposeDeployContractInstruction normalizes hashes and window", () =>
     abiHash: Buffer.alloc(32, 0xbb),
     abiVersion: "1",
     window: { lower: 10, upper: 20 },
-    votingMode: "plain",
+    votingMode: "Plain",
   });
   const expected = {
     ProposeDeployContract: {
@@ -1451,6 +1554,47 @@ test("buildProposeDeployContractInstruction normalizes hashes and window", () =>
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expected);
+});
+
+test("buildProposeDeployContractInstruction rejects non-canonical voting modes", () => {
+  const base = {
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+  };
+  for (const votingMode of [
+    "zk",
+    "plain",
+    " Zk",
+    "Plain ",
+    "zero-knowledge",
+    "zkp",
+    "plaintext",
+    "plain_text",
+    "quadratic",
+    1,
+  ]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction({ ...base, votingMode }),
+      /must be either 'Zk' or 'Plain'/u,
+    );
+  }
+
+  for (const mode of ["zk", "plain", " Zk", "Plain "]) {
+    assert.throws(
+      () =>
+        encodeInstruction({
+          ProposeDeployContract: {
+            contract_address: base.contractAddress,
+            code_hash_hex: base.codeHash,
+            abi_hash_hex: base.abiHash,
+            abi_version: "1",
+            mode,
+          },
+        }),
+      /must be Zk or Plain/u,
+    );
+  }
 });
 
 test("buildCastZkBallotInstruction encodes proof and JSON inputs", () => {

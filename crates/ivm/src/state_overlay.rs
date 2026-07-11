@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs,
+    ops::Bound,
+    path::PathBuf,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64_STANDARD};
 use norito::json::{self, Map, Value};
@@ -68,6 +73,21 @@ impl DurableStateOverlay {
     /// Iterate over the stored state paths.
     pub fn keys(&self) -> impl Iterator<Item = &String> {
         self.data.keys()
+    }
+
+    /// Visit only keys in the ordered range sharing `prefix` as text.
+    ///
+    /// Callers apply any stricter path-segment rule. Starting at the ordered
+    /// lower bound prevents an attacker-selected state prefix from charging or
+    /// examining unrelated keys that sort before it.
+    pub fn keys_with_text_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = &'a String> + 'a {
+        self.data
+            .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
+            .map(|(key, _)| key)
+            .take_while(move |key| key.starts_with(prefix))
     }
 
     /// Delete the TLV envelope for the provided path.

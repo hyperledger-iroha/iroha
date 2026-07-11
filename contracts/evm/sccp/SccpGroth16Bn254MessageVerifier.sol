@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity ^0.7.4;
+pragma solidity 0.8.24;
 
 import "./ISccpMessageVerifier.sol";
 
 /**
  * @title SccpGroth16Bn254MessageVerifier
- * @dev Production-style SCCP verifier for EVM-compatible lanes backed by the
- * BN254 pairing precompiles.
+ * @dev Immutable policy-bound SCCP verifier for EVM-compatible lanes backed by
+ * the BN254 pairing precompiles. Pairing success proves only the semantics of
+ * the configured circuit; production deployment additionally requires the
+ * governed semantic-profile commitments and independent circuit audit.
  *
  * The immutable verifying key is supplied at deployment and cannot be updated.
  * `proofBytes` must ABI-decode as:
@@ -197,10 +199,8 @@ contract SccpGroth16Bn254MessageVerifier is ISccpMessageVerifier {
         require(statementHash != bytes32(0), "Statement hash is required");
         require(destinationBindingHash != bytes32(0), "Destination binding hash is required");
         require(routeConfigurationHash != bytes32(0), "Route configuration hash is required");
-        require(
-            routeConfigurationHash != destinationBindingHash &&
-                routeConfigurationHash != statementHash,
-            "Route configuration hash aliases another role"
+        _requireDistinctProtocolHashRoles(
+            statementHash, destinationBindingHash, routeConfigurationHash
         );
         uint256 targetDomain = uint256(publicInputs[2]);
         require(targetDomain != 0, "Target domain is required");
@@ -220,6 +220,26 @@ contract SccpGroth16Bn254MessageVerifier is ISccpMessageVerifier {
         require(_verifyProof(signals, proof), "Groth16 proof verification failed");
 
         sourceDomain = uint32(rawSourceDomain);
+    }
+
+    function _requireDistinctProtocolHashRoles(
+        bytes32 statementHash,
+        bytes32 destinationBindingHash,
+        bytes32 routeConfigurationHash
+    ) private view {
+        bytes32[6] memory roles;
+        roles[0] = statementHash;
+        roles[1] = destinationBindingHash;
+        roles[2] = routeConfigurationHash;
+        roles[3] = verifyingKeyHash();
+        roles[4] = semanticProofProfileHash;
+        roles[5] = soraFinalityAnchorHash;
+        for (uint256 i = 0; i < roles.length; i++) {
+            require(roles[i] != bytes32(0), "Protocol hash role is required");
+            for (uint256 j = i + 1; j < roles.length; j++) {
+                require(roles[i] != roles[j], "Protocol hash roles must differ");
+            }
+        }
     }
 
     function _decodeProof(bytes calldata proofBytes)
@@ -359,10 +379,12 @@ contract SccpGroth16Bn254MessageVerifier is ISccpMessageVerifier {
     {
         uint256[4] memory input = [left.x, left.y, right.x, right.y];
         bool success;
+        uint256 returnSize;
         assembly {
             success := staticcall(gas(), 6, input, 0x80, result, 0x40)
+            returnSize := returndatasize()
         }
-        require(success, "G1 addition failed");
+        require(success && returnSize == 0x40, "G1 addition failed");
     }
 
     function _scalarMul(G1Point memory point, uint256 scalar)
@@ -372,10 +394,12 @@ contract SccpGroth16Bn254MessageVerifier is ISccpMessageVerifier {
     {
         uint256[3] memory input = [point.x, point.y, scalar];
         bool success;
+        uint256 returnSize;
         assembly {
             success := staticcall(gas(), 7, input, 0x60, result, 0x40)
+            returnSize := returndatasize()
         }
-        require(success, "G1 scalar multiplication failed");
+        require(success && returnSize == 0x40, "G1 scalar multiplication failed");
     }
 
     function _pairing(
@@ -416,11 +440,13 @@ contract SccpGroth16Bn254MessageVerifier is ISccpMessageVerifier {
         ];
         uint256[1] memory out;
         bool success;
+        uint256 returnSize;
         assembly {
             success := staticcall(gas(), 8, input, 0x300, out, 0x20)
+            returnSize := returndatasize()
         }
-        require(success, "Pairing precompile failed");
-        return out[0] != 0;
+        require(success && returnSize == 0x20, "Pairing precompile failed");
+        return out[0] == 1;
     }
 
     function _pairing2(
@@ -445,10 +471,12 @@ contract SccpGroth16Bn254MessageVerifier is ISccpMessageVerifier {
         ];
         uint256[1] memory out;
         bool success;
+        uint256 returnSize;
         assembly {
             success := staticcall(gas(), 8, input, 0x180, out, 0x20)
+            returnSize := returndatasize()
         }
-        require(success, "Pairing precompile failed");
-        return out[0] != 0;
+        require(success && returnSize == 0x20, "Pairing precompile failed");
+        return out[0] == 1;
     }
 }

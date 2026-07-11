@@ -5,10 +5,18 @@
 //! unsupported profiles must fail decoding instead of being interpreted by
 //! node-local policy.
 
+use core::cmp::Ordering;
+
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use super::SccpNativeTrustAnchorV1;
+
+/// Largest integer encoded as a JSON number by the closed SCCP V1 capability surface.
+///
+/// Capping advertised byte budgets at `2^53 - 1` keeps their exact value portable across every
+/// supported SDK, including runtimes whose JSON number type is IEEE-754 binary64.
+pub const SCCP_V1_JSON_SAFE_INTEGER_MAX: u64 = (1_u64 << 53) - 1;
 
 /// A supported SCCP network profile for the V1 wire format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
@@ -18,13 +26,12 @@ use super::SccpNativeTrustAnchorV1;
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "network", content = "profile")]
 pub enum SccpNetworkV1 {
-    /// The production SORA Nexus network.
-    #[codec(index = 0)]
-    #[norito(rename = "sora_nexus")]
-    SoraNexus,
-    /// The SORA Taira staging network.
+    /// The sole production SORA endpoint admitted by SCCP V1.
+    // Tag 0 is permanently reserved for the removed pre-release SORA profile.
+    // Exact V1 contract and governance hashes commit Taira as tag 1.
     #[codec(index = 1)]
     #[norito(rename = "sora_taira")]
     SoraTaira,
@@ -66,7 +73,7 @@ impl SccpNetworkV1 {
     #[must_use]
     pub const fn domain_id(self) -> u32 {
         match self {
-            Self::SoraNexus | Self::SoraTaira => 0,
+            Self::SoraTaira => 0,
             Self::EthereumMainnet | Self::EthereumSepolia => 1,
             Self::BscMainnet | Self::BscTestnet => 2,
             Self::TronMainnet | Self::TronNile | Self::TronShasta => 5,
@@ -77,7 +84,6 @@ impl SccpNetworkV1 {
     #[must_use]
     pub const fn profile_key(self) -> &'static str {
         match self {
-            Self::SoraNexus => "sora-nexus",
             Self::SoraTaira => "sora-taira",
             Self::EthereumMainnet => "ethereum-mainnet",
             Self::EthereumSepolia => "ethereum-sepolia",
@@ -97,7 +103,6 @@ impl SccpNetworkV1 {
     #[must_use]
     pub fn from_profile_key(profile: &str) -> Option<Self> {
         match profile {
-            "sora-nexus" => Some(Self::SoraNexus),
             "sora-taira" => Some(Self::SoraTaira),
             "ethereum-mainnet" => Some(Self::EthereumMainnet),
             "ethereum-sepolia" => Some(Self::EthereumSepolia),
@@ -115,7 +120,7 @@ impl SccpNetworkV1 {
     pub const fn is_production_profile(self) -> bool {
         matches!(
             self,
-            Self::SoraNexus | Self::EthereumMainnet | Self::BscMainnet | Self::TronMainnet
+            Self::SoraTaira | Self::EthereumMainnet | Self::BscMainnet | Self::TronMainnet
         )
     }
 
@@ -128,7 +133,7 @@ impl SccpNetworkV1 {
     /// Return whether this profile belongs to the SORA domain.
     #[must_use]
     pub const fn is_sora(self) -> bool {
-        matches!(self, Self::SoraNexus | Self::SoraTaira)
+        matches!(self, Self::SoraTaira)
     }
 
     /// Return whether this profile is a supported external SCCP endpoint.
@@ -164,6 +169,7 @@ impl SccpNetworkV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpLaneIdV1 {
     /// Network on which the SCCP message originates.
     pub source: SccpNetworkV1,
@@ -231,6 +237,7 @@ impl SccpLaneIdV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpOutboundMessageContextV1 {
     /// Exact SORA-to-external lane on which the message is emitted.
     pub lane: SccpLaneIdV1,
@@ -285,6 +292,7 @@ impl SccpOutboundMessageContextV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpOutboundMessageKeyV1 {
     /// Exact SORA-to-external lane on which the message was emitted.
     pub lane: SccpLaneIdV1,
@@ -312,16 +320,17 @@ impl SccpOutboundMessageKeyV1 {
 
 /// Ordered locator for one durable outbound SCCP message.
 ///
-/// Ordering by height first supports bounded newest/oldest pagination without
-/// scanning sparse block history. Lane and message id make every index entry
-/// self-checking against the authoritative replay map.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+/// Reverse-height ordering supports bounded newest-first pagination and direct
+/// seeking to an inclusive historical height. Lane and message id make every
+/// index entry self-checking against the authoritative replay map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpOutboundMessageIndexKeyV1 {
     /// Local SORA block height containing the recorded message.
     pub recorded_at_height: u64,
@@ -345,6 +354,25 @@ impl SccpOutboundMessageIndexKeyV1 {
         })
     }
 
+    /// Return the inclusive lower bound for a newest-first range at `height`.
+    ///
+    /// This sentinel is only a search bound and must never be persisted: its
+    /// zero message identifier intentionally sorts before every well-formed
+    /// entry at the same height. Since index ordering reverses height, a
+    /// forward range beginning here contains exactly entries recorded at or
+    /// before `height`, newest first.
+    #[must_use]
+    pub const fn range_start_at_or_before(height: u64) -> Self {
+        Self {
+            recorded_at_height: height,
+            lane: SccpLaneIdV1 {
+                source: SccpNetworkV1::SoraTaira,
+                target: SccpNetworkV1::EthereumMainnet,
+            },
+            message_id: [0; 32],
+        }
+    }
+
     /// Return the authoritative composite replay key named by this locator.
     #[must_use]
     pub const fn message_key(self) -> SccpOutboundMessageKeyV1 {
@@ -361,6 +389,22 @@ impl SccpOutboundMessageIndexKeyV1 {
     }
 }
 
+impl Ord for SccpOutboundMessageIndexKeyV1 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .recorded_at_height
+            .cmp(&self.recorded_at_height)
+            .then_with(|| self.lane.cmp(&other.lane))
+            .then_with(|| self.message_id.cmp(&other.message_id))
+    }
+}
+
+impl PartialOrd for SccpOutboundMessageIndexKeyV1 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Durable admission evidence for a SORA-origin outbound SCCP message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -369,6 +413,7 @@ impl SccpOutboundMessageIndexKeyV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpOutboundMessageRecordV1 {
     /// Governed destination binding authenticated at record admission.
     pub destination_binding_hash: [u8; 32],
@@ -404,6 +449,62 @@ impl SccpOutboundMessageRecordV1 {
     }
 }
 
+/// Durable accepted destination-proof evidence for a SORA-origin SCCP message.
+///
+/// The authoritative [`SccpOutboundMessageKeyV1`] is reused as the replay key,
+/// so a deterministic `BTreeMap` lookup identifies one exact outbound lane and
+/// message in `O(log n)` time. Only fixed-size commitments are retained here;
+/// proof history may be pruned without weakening proof-submission replay protection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+pub struct SccpOutboundProofRecordV1 {
+    /// Hash of the exact canonical SCCP payload authenticated for the key.
+    pub payload_hash: [u8; 32],
+    /// Governed destination binding authenticated by the accepted artifact.
+    pub destination_binding_hash: [u8; 32],
+    /// Immutable governed route configuration authenticated by the artifact.
+    pub route_configuration_hash: [u8; 32],
+    /// Finalized Taira block hash authenticated by the destination proof.
+    pub finality_block_hash: [u8; 32],
+    /// Domain-separated proof-registry commitment to the accepted proof.
+    pub destination_proof_commitment: [u8; 32],
+    /// Finalized Taira height containing the authoritative outbound message.
+    pub finality_height: u64,
+    /// Local Taira height at which proof admission was committed.
+    pub accepted_at_height: u64,
+}
+
+impl SccpOutboundProofRecordV1 {
+    /// Return whether every commitment and both heights are nonzero and every
+    /// hash role is distinct from the lane-bound message identifier.
+    #[must_use]
+    pub fn is_well_formed_for_key(&self, key: &SccpOutboundMessageKeyV1) -> bool {
+        let hashes = [
+            key.message_id,
+            self.payload_hash,
+            self.destination_binding_hash,
+            self.route_configuration_hash,
+            self.finality_block_hash,
+            self.destination_proof_commitment,
+        ];
+        key.is_well_formed()
+            && self.finality_height != 0
+            && self.accepted_at_height != 0
+            && self.accepted_at_height >= self.finality_height
+            && hashes.iter().all(nonzero)
+            && hashes
+                .iter()
+                .enumerate()
+                .all(|(index, hash)| !hashes[index + 1..].contains(hash))
+    }
+}
+
 /// Durable replay key for a native external-to-SORA SCCP message.
 ///
 /// The exact source and target profiles are part of the key. Consequently, a
@@ -418,6 +519,7 @@ impl SccpOutboundMessageRecordV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpInboundMessageKeyV1 {
     /// Exact external-to-SORA lane on which the message was authenticated.
     pub lane: SccpLaneIdV1,
@@ -443,6 +545,45 @@ impl SccpInboundMessageKeyV1 {
     }
 }
 
+/// Durable high-water key for admissions under one governed native trust anchor.
+///
+/// The value stored under this key is the greatest authenticated
+/// backend-specific consensus-progress coordinate admitted for the exact lane
+/// and anchor. Governance uses it to prevent a successor checkpoint from
+/// retroactively excluding already accepted evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+pub struct SccpInboundAnchorHighWaterKeyV1 {
+    /// Exact external-to-SORA lane on which evidence was admitted.
+    pub lane: SccpLaneIdV1,
+    /// Nonzero hash of the retained native trust anchor used at admission.
+    pub anchor_hash: [u8; 32],
+}
+
+impl SccpInboundAnchorHighWaterKeyV1 {
+    /// Construct a high-water key after validating its topology and anchor hash.
+    #[must_use]
+    pub fn new(lane: SccpLaneIdV1, anchor_hash: [u8; 32]) -> Option<Self> {
+        let key = Self { lane, anchor_hash };
+        key.is_well_formed().then_some(key)
+    }
+
+    /// Return whether this is an external-to-SORA lane with a nonzero anchor hash.
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        self.lane.is_well_formed()
+            && self.lane.source.is_external()
+            && self.lane.target.is_sora()
+            && nonzero(&self.anchor_hash)
+    }
+}
+
 /// Durable admission evidence bound to an inbound SCCP replay key.
 ///
 /// This record stores only fixed-size commitments. The accepted native proof
@@ -455,6 +596,7 @@ impl SccpInboundMessageKeyV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpInboundMessageRecordV1 {
     /// Hash of the exact canonical SCCP payload admitted for the key.
     pub payload_hash: [u8; 32],
@@ -464,6 +606,12 @@ pub struct SccpInboundMessageRecordV1 {
     pub source_identity_hash: [u8; 32],
     /// Governed native verifier and checkpoint commitment used at admission.
     pub trust_anchor: SccpNativeTrustAnchorV1,
+    /// Authenticated backend-specific consensus-progress coordinate used for
+    /// trust-anchor interval and retired-route cutoff admission.
+    ///
+    /// Ethereum lanes persist the finalized beacon slot. BSC and TRON lanes
+    /// persist the finalized block height.
+    pub anchor_interval_height: u64,
     /// Native source-chain finality height authenticated by the verifier.
     pub source_finality_height: u64,
     /// Native source-chain finalized block or checkpoint hash.
@@ -475,7 +623,7 @@ pub struct SccpInboundMessageRecordV1 {
 }
 
 impl SccpInboundMessageRecordV1 {
-    /// Return whether every commitment and both chain heights are nonzero.
+    /// Return whether every commitment and authenticated coordinate is valid.
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         nonzero(&self.payload_hash)
@@ -484,6 +632,7 @@ impl SccpInboundMessageRecordV1 {
             && self.route_configuration_hash != self.payload_hash
             && self.route_configuration_hash != self.source_identity_hash
             && self.trust_anchor.is_well_formed()
+            && self.anchor_interval_height >= self.trust_anchor.checkpoint_height
             && self.source_finality_height != 0
             && nonzero(&self.source_finality_hash)
             && nonzero(&self.source_proof_commitment)
@@ -517,6 +666,7 @@ impl SccpInboundMessageRecordV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpEvmSourceEmitterV1 {
     /// Canonical 20-byte contract address.
     pub address: [u8; 20],
@@ -539,6 +689,7 @@ pub struct SccpEvmSourceEmitterV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpTronSourceEmitterV1 {
     /// Canonical 20-byte TRON account payload, without the network prefix.
     pub address: [u8; 20],
@@ -556,6 +707,7 @@ pub struct SccpTronSourceEmitterV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "emitter", content = "identity")]
 pub enum SccpSourceEmitterV1 {
     /// EVM contract identity used by Ethereum and BSC profiles.
@@ -636,6 +788,7 @@ impl SccpSourceEmitterV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct SccpSourceIdentityV1 {
     /// Inbound lane whose source identity is being authenticated.
     pub lane: SccpLaneIdV1,
@@ -656,9 +809,8 @@ impl SccpSourceIdentityV1 {
 
     /// Return whether the external endpoint and emitter are admissible production source material.
     ///
-    /// This deliberately says nothing about the SORA target. In particular, a
-    /// mainnet source targeting Taira has production source material but is not
-    /// a production lane.
+    /// This deliberately says nothing about the SORA target; use
+    /// [`Self::is_production_lane`] when the complete lane must be production.
     #[must_use]
     pub fn has_production_source(&self) -> bool {
         self.is_well_formed() && self.emitter.is_production_source_for(self.lane.source)
@@ -687,8 +839,7 @@ mod tests {
     use crate::bridge::BridgeNativeProofBackendV1;
     use norito::codec::DecodeAll as _;
 
-    const NETWORKS: [SccpNetworkV1; 9] = [
-        SccpNetworkV1::SoraNexus,
+    const NETWORKS: [SccpNetworkV1; 8] = [
         SccpNetworkV1::SoraTaira,
         SccpNetworkV1::EthereumMainnet,
         SccpNetworkV1::EthereumSepolia,
@@ -718,13 +869,13 @@ mod tests {
     fn inbound_lane(source: SccpNetworkV1) -> SccpLaneIdV1 {
         SccpLaneIdV1 {
             source,
-            target: SccpNetworkV1::SoraNexus,
+            target: SccpNetworkV1::SoraTaira,
         }
     }
 
     fn outbound_lane(target: SccpNetworkV1) -> SccpLaneIdV1 {
         SccpLaneIdV1 {
-            source: SccpNetworkV1::SoraNexus,
+            source: SccpNetworkV1::SoraTaira,
             target,
         }
     }
@@ -743,6 +894,7 @@ mod tests {
             route_configuration_hash: [11; 32],
             source_identity_hash: [12; 32],
             trust_anchor: trust_anchor(backend),
+            anchor_interval_height: 7,
             source_finality_height: 8,
             source_finality_hash: [13; 32],
             source_proof_commitment: [14; 32],
@@ -759,9 +911,41 @@ mod tests {
         }
     }
 
+    fn outbound_proof_record() -> SccpOutboundProofRecordV1 {
+        SccpOutboundProofRecordV1 {
+            payload_hash: [17; 32],
+            destination_binding_hash: [15; 32],
+            route_configuration_hash: [16; 32],
+            finality_block_hash: [19; 32],
+            destination_proof_commitment: [20; 32],
+            finality_height: 10,
+            accepted_at_height: 11,
+        }
+    }
+
+    #[cfg(feature = "json")]
+    fn insert_unknown_json_field(value: &mut norito::json::Value, path: &[&str]) {
+        let mut current = value;
+        for field in path {
+            let norito::json::Value::Object(object) = current else {
+                panic!("JSON path component `{field}` is not an object")
+            };
+            current = object
+                .get_mut(*field)
+                .unwrap_or_else(|| panic!("JSON path component `{field}` is absent"));
+        }
+        let norito::json::Value::Object(object) = current else {
+            panic!("JSON target at {path:?} is not an object")
+        };
+        object.insert(
+            "adversarial_extension".to_owned(),
+            norito::json::Value::Null,
+        );
+    }
+
     #[test]
     fn network_inventory_and_profile_keys_are_exact() {
-        assert_eq!(NETWORKS.len(), 9);
+        assert_eq!(NETWORKS.len(), 8);
         for network in NETWORKS {
             assert_eq!(
                 SccpNetworkV1::from_profile_key(network.profile_key()),
@@ -771,6 +955,8 @@ mod tests {
 
         for unsupported in [
             "",
+            "sora-nexus",
+            "sora_nexus",
             "ethereum",
             "ETHEREUM-MAINNET",
             "solana-mainnet-beta",
@@ -781,7 +967,6 @@ mod tests {
             assert_eq!(SccpNetworkV1::from_profile_key(unsupported), None);
         }
 
-        assert_eq!(SccpNetworkV1::SoraNexus.domain_id(), 0);
         assert_eq!(SccpNetworkV1::SoraTaira.domain_id(), 0);
         assert_eq!(SccpNetworkV1::EthereumMainnet.domain_id(), 1);
         assert_eq!(SccpNetworkV1::EthereumSepolia.domain_id(), 1);
@@ -813,7 +998,7 @@ mod tests {
 
     #[test]
     fn unknown_binary_enum_tags_are_rejected() {
-        for unsupported_tag in [6_u32, 7, 8, 9, 13, u32::MAX] {
+        for unsupported_tag in [0_u32, 6, 7, 8, 9, 13, u32::MAX] {
             let encoded = unsupported_tag.encode();
             assert!(
                 SccpNetworkV1::decode_all(&mut encoded.as_slice()).is_err(),
@@ -831,10 +1016,9 @@ mod tests {
     }
 
     #[test]
-    fn binary_tags_reserve_six_through_nine_and_match_contract_profiles() {
+    fn binary_tags_reserve_zero_and_six_through_nine_and_match_contract_profiles() {
         let expected = [
-            (SccpNetworkV1::SoraNexus, 0_u32),
-            (SccpNetworkV1::SoraTaira, 1),
+            (SccpNetworkV1::SoraTaira, 1_u32),
             (SccpNetworkV1::EthereumMainnet, 2),
             (SccpNetworkV1::EthereumSepolia, 3),
             (SccpNetworkV1::BscMainnet, 4),
@@ -856,6 +1040,7 @@ mod tests {
     #[test]
     fn removed_networks_and_emitters_are_not_json_decodable() {
         for profile in [
+            "sora_nexus",
             "solana_mainnet_beta",
             "solana_testnet",
             "ton_mainnet",
@@ -898,6 +1083,40 @@ mod tests {
             assert_eq!(
                 norito::json::from_json::<SccpSourceEmitterV1>(&json).expect("emitter decodes"),
                 emitter
+            );
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn source_identity_json_rejects_unknown_fields_recursively() {
+        let identity = SccpSourceIdentityV1 {
+            lane: inbound_lane(SccpNetworkV1::EthereumMainnet),
+            emitter: evm_emitter(),
+        };
+        let json = norito::json::to_json(&identity).expect("source identity serializes");
+        assert_eq!(
+            norito::json::from_json::<SccpSourceIdentityV1>(&json)
+                .expect("valid source identity decodes"),
+            identity
+        );
+
+        for path in [
+            &[][..],
+            &["lane"][..],
+            &["lane", "source"][..],
+            &["emitter"][..],
+            &["emitter", "identity"][..],
+        ] {
+            let mut hostile = norito::json::to_value(&identity).expect("serialize source identity");
+            insert_unknown_json_field(&mut hostile, path);
+            let hostile_json =
+                norito::json::to_json(&hostile).expect("serialize hostile source identity");
+            let error = norito::json::from_json::<SccpSourceIdentityV1>(&hostile_json)
+                .expect_err("unknown source-identity field must fail");
+            assert!(
+                error.to_string().contains("adversarial_extension"),
+                "unexpected error for path {path:?}: {error}"
             );
         }
     }
@@ -1062,6 +1281,9 @@ mod tests {
         assert!(SccpInboundMessageKeyV1::new(inbound, [1; 32]).is_some());
         assert!(SccpInboundMessageKeyV1::new(inbound, [0; 32]).is_none());
         assert!(SccpInboundMessageKeyV1::new(outbound, [1; 32]).is_none());
+        assert!(SccpInboundAnchorHighWaterKeyV1::new(inbound, [2; 32]).is_some());
+        assert!(SccpInboundAnchorHighWaterKeyV1::new(inbound, [0; 32]).is_none());
+        assert!(SccpInboundAnchorHighWaterKeyV1::new(outbound, [2; 32]).is_none());
 
         assert!(SccpOutboundMessageKeyV1::new(outbound, [1; 32]).is_some());
         assert!(SccpOutboundMessageKeyV1::new(outbound, [0; 32]).is_none());
@@ -1140,6 +1362,124 @@ mod tests {
     }
 
     #[test]
+    fn outbound_proof_record_is_fixed_size_and_rejects_aliases_and_invalid_heights() {
+        let key =
+            SccpOutboundMessageKeyV1::new(outbound_lane(SccpNetworkV1::EthereumMainnet), [18; 32])
+                .expect("valid outbound proof key");
+        let record = outbound_proof_record();
+        assert!(record.is_well_formed_for_key(&key));
+
+        let encoded = record.encode();
+        assert_eq!(
+            SccpOutboundProofRecordV1::decode_all(&mut encoded.as_slice())
+                .expect("outbound proof record must roundtrip"),
+            record
+        );
+
+        for hostile in [
+            SccpOutboundProofRecordV1 {
+                payload_hash: [0; 32],
+                ..record
+            },
+            SccpOutboundProofRecordV1 {
+                destination_binding_hash: record.payload_hash,
+                ..record
+            },
+            SccpOutboundProofRecordV1 {
+                route_configuration_hash: record.destination_binding_hash,
+                ..record
+            },
+            SccpOutboundProofRecordV1 {
+                finality_block_hash: record.route_configuration_hash,
+                ..record
+            },
+            SccpOutboundProofRecordV1 {
+                destination_proof_commitment: record.finality_block_hash,
+                ..record
+            },
+            SccpOutboundProofRecordV1 {
+                finality_height: 0,
+                ..record
+            },
+            SccpOutboundProofRecordV1 {
+                accepted_at_height: record.finality_height - 1,
+                ..record
+            },
+        ] {
+            assert!(!hostile.is_well_formed_for_key(&key), "{hostile:?}");
+        }
+
+        for collision in [
+            record.payload_hash,
+            record.destination_binding_hash,
+            record.route_configuration_hash,
+            record.finality_block_hash,
+            record.destination_proof_commitment,
+        ] {
+            assert!(!record.is_well_formed_for_key(&SccpOutboundMessageKeyV1 {
+                message_id: collision,
+                ..key
+            }));
+        }
+        let inbound_key = SccpOutboundMessageKeyV1 {
+            lane: inbound_lane(SccpNetworkV1::EthereumMainnet),
+            ..key
+        };
+        assert!(!record.is_well_formed_for_key(&inbound_key));
+    }
+
+    #[test]
+    fn ordered_outbound_index_seeks_newest_at_or_before_height() {
+        use std::collections::BTreeSet;
+
+        let index_at = |height: u64, target: SccpNetworkV1, id: u8| {
+            let key = SccpOutboundMessageKeyV1::new(outbound_lane(target), [id; 32])
+                .expect("valid outbound key");
+            SccpOutboundMessageIndexKeyV1::new(
+                key,
+                SccpOutboundMessageRecordV1 {
+                    recorded_at_height: height,
+                    ..outbound_record()
+                },
+            )
+            .expect("valid ordered index")
+        };
+        let entries = BTreeSet::from([
+            index_at(1, SccpNetworkV1::EthereumMainnet, 1),
+            index_at(40, SccpNetworkV1::TronMainnet, 2),
+            index_at(40, SccpNetworkV1::EthereumMainnet, 3),
+            index_at(41, SccpNetworkV1::BscMainnet, 4),
+            index_at(u64::MAX, SccpNetworkV1::EthereumMainnet, 5),
+        ]);
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.recorded_at_height)
+                .collect::<Vec<_>>(),
+            [u64::MAX, 41, 40, 40, 1]
+        );
+
+        let selected = entries
+            .range(SccpOutboundMessageIndexKeyV1::range_start_at_or_before(40)..)
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selected
+                .iter()
+                .map(|entry| entry.recorded_at_height)
+                .collect::<Vec<_>>(),
+            [40, 40, 1]
+        );
+        assert_eq!(selected[0].lane.target, SccpNetworkV1::EthereumMainnet);
+        assert_eq!(selected[1].lane.target, SccpNetworkV1::TronMainnet);
+        assert!(
+            !SccpOutboundMessageIndexKeyV1::range_start_at_or_before(40).is_well_formed(),
+            "range sentinel must never be a persistable index entry"
+        );
+    }
+
+    #[test]
     fn inbound_record_requires_exact_backend_and_distinct_commitments() {
         let cases = [
             (
@@ -1208,6 +1548,14 @@ mod tests {
                 ..valid
             },
             SccpInboundMessageRecordV1 {
+                anchor_interval_height: 0,
+                ..valid
+            },
+            SccpInboundMessageRecordV1 {
+                anchor_interval_height: valid.trust_anchor.checkpoint_height - 1,
+                ..valid
+            },
+            SccpInboundMessageRecordV1 {
                 source_finality_height: 0,
                 ..valid
             },
@@ -1248,5 +1596,25 @@ mod tests {
             }
             .is_well_formed()
         );
+    }
+
+    #[test]
+    fn trust_anchor_interval_has_one_height_successor_overlap_and_current_is_open_ended() {
+        let mut anchor = trust_anchor(BridgeNativeProofBackendV1::EthereumBeacon);
+        anchor.checkpoint_height = 100;
+        assert!(!anchor.admits_anchor_interval_height(99, Some(200)));
+        assert!(anchor.admits_anchor_interval_height(100, Some(200)));
+        assert!(anchor.admits_anchor_interval_height(199, Some(200)));
+        assert!(anchor.admits_anchor_interval_height(200, Some(200)));
+        assert!(!anchor.admits_anchor_interval_height(201, Some(200)));
+        assert!(anchor.admits_anchor_interval_height(u64::MAX, None));
+
+        let next = SccpNativeTrustAnchorV1 {
+            anchor_hash: [0xA7; 32],
+            checkpoint_height: 200,
+            ..anchor
+        };
+        assert!(next.admits_anchor_interval_height(200, None));
+        assert!(next.admits_anchor_interval_height(201, None));
     }
 }

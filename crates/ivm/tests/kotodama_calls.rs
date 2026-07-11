@@ -1,6 +1,7 @@
 //! Kotodama function calls and calling convention tests (nested calls, multi-returns).
 
 use ivm::{IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+mod common;
 
 #[test]
 fn nested_function_calls_work() {
@@ -9,7 +10,7 @@ fn nested_function_calls_work() {
         seiyaku NestedCalls {
             fn inc(x: i64) -> i64 { return x + 1; }
             fn add_two(x: i64) -> i64 { let y = inc(x); return inc(y); }
-            fn main() -> i64 { return add_two(5); }
+            view fn main() -> i64 { return add_two(5); }
         }
     "#;
     let code = KotodamaCompiler::new()
@@ -17,6 +18,7 @@ fn nested_function_calls_work() {
         .expect("compile nested calls");
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute nested calls");
     assert_eq!(vm.register(10), 7);
 }
@@ -28,7 +30,7 @@ fn multi_return_call_and_tuple_use() {
         seiyaku MultiReturn {
             fn pair(x: i64) -> (i64, i64) { return (x, x + 1); }
             fn sum_pair(x: i64) -> i64 { let t = pair(x); return t.0 + t.1; }
-            fn main() -> i64 { return sum_pair(5); }
+            view fn main() -> i64 { return sum_pair(5); }
         }
     "#;
     let code = KotodamaCompiler::new()
@@ -36,6 +38,7 @@ fn multi_return_call_and_tuple_use() {
         .expect("compile multi-return");
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute multi-return");
     assert_eq!(vm.register(10), 11);
 }

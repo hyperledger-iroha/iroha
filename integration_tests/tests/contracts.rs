@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
+use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::prelude::*;
 use iroha_executor_data_model::permission::{
     governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
@@ -23,16 +24,18 @@ fn minimal_contract_artifact() -> Vec<u8> {
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
-        contract_name: "TestContract".to_owned(),
+        seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "integration-tests".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
             name: "main".to_owned(),
-            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -72,10 +75,6 @@ seiyaku ContractStateProbe {
   }
 
   hajimari() {
-    initialize_impl();
-  }
-
-  kotoage fn initialize() authorize("CanEnactGovernance") {
     initialize_impl();
   }
 
@@ -132,6 +131,126 @@ seiyaku DynamicAccessCounter {
         );
     }
     artifact
+}
+
+fn typed_core_query_pager_artifact() -> Vec<u8> {
+    let source = r#"
+seiyaku TypedCoreQueryPager {
+  view fn accounts(offset: i64, limit: i64) -> QueryPage<AccountView> {
+    ledger::query::accounts(offset: offset, limit: limit)
+  }
+
+  view fn assets(offset: i64, limit: i64) -> QueryPage<AssetView> {
+    ledger::query::assets(offset: offset, limit: limit)
+  }
+
+  view fn asset_definitions(offset: i64, limit: i64) -> QueryPage<AssetDefinitionView> {
+    ledger::query::asset_definitions(offset: offset, limit: limit)
+  }
+
+  view fn domains(offset: i64, limit: i64) -> QueryPage<DomainView> {
+    ledger::query::domains(offset: offset, limit: limit)
+  }
+
+  view fn nfts(offset: i64, limit: i64) -> QueryPage<NftView> {
+    ledger::query::nfts(offset: offset, limit: limit)
+  }
+}
+"#;
+    ivm::KotodamaCompiler::new()
+        .compile_source(source)
+        .expect("compile typed core-query pager program")
+}
+
+fn typed_core_query_page_payload(offset: i64, limit: i64) -> norito::json::Value {
+    norito::json::object([
+        ("offset", norito::json::Value::from(offset)),
+        ("limit", norito::json::Value::from(limit)),
+    ])
+    .expect("serialize typed core-query page arguments")
+}
+
+fn typed_query_page_parts(
+    result: &norito::json::Value,
+    view_name: &str,
+) -> Result<(Vec<String>, Option<i64>)> {
+    let items = result
+        .get("items")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre!("typed {view_name} page is missing its items list: {result:?}"))?;
+    let ids = items
+        .iter()
+        .map(|item| {
+            item.get("id")
+                .and_then(norito::json::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| eyre!("typed {view_name} is missing its id: {item:?}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let next_offset = result
+        .get("next_offset")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| eyre!("typed {view_name} page is missing next_offset: {result:?}"))?;
+    if next_offset.len() != 1 {
+        return Err(eyre!(
+            "typed {view_name} page contains a non-canonical next_offset: {result:?}"
+        ));
+    }
+    let next_offset = if let Some(offset) = next_offset.get("some") {
+        Some(offset.as_i64().ok_or_else(|| {
+            eyre!("typed {view_name} page contains a non-i64 next_offset: {result:?}")
+        })?)
+    } else if next_offset
+        .get("none")
+        .and_then(norito::json::Value::as_bool)
+        == Some(true)
+    {
+        None
+    } else {
+        return Err(eyre!(
+            "typed {view_name} page contains a non-canonical next_offset: {result:?}"
+        ));
+    };
+    Ok((ids, next_offset))
+}
+
+fn assert_typed_query_projection(
+    result: &norito::json::Value,
+    view_name: &str,
+    expected_fields: &[&str],
+) -> Result<()> {
+    let items = result
+        .get("items")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre!("typed {view_name} page is missing its items list: {result:?}"))?;
+    for item in items {
+        let object = item
+            .as_object()
+            .ok_or_else(|| eyre!("typed {view_name} is not an object: {item:?}"))?;
+        if object.len() != expected_fields.len()
+            || !expected_fields
+                .iter()
+                .all(|field| object.contains_key(*field))
+        {
+            return Err(eyre!(
+                "{view_name} must return only fields {expected_fields:?}: {item:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn assert_canonical_query_order<T>(ids: &[T], entity_name: &str)
+where
+    T: Clone + Ord + std::fmt::Debug,
+{
+    let mut sorted = ids.to_vec();
+    sorted.sort();
+    assert_eq!(
+        ids,
+        sorted.as_slice(),
+        "the ledger {entity_name} query must expose canonical ID order"
+    );
 }
 
 fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
@@ -606,12 +725,9 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
             bob_enact_permission,
             iroha_test_samples::BOB_ID.clone(),
         ));
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers),
-    )
-    .await?
-    else {
+    let context = stringify!(dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
     };
     assert_eq!(network.peers().len(), 4, "test requires four voting peers");
@@ -730,6 +846,289 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         peer_values.windows(2).all(|pair| pair[0] == pair[1]),
         "contract state differs across voting peers: {peer_values:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<()> {
+    let seeded_accounts = (0..6)
+        .map(|index| {
+            KeyPair::try_from_seed(
+                format!("typed-core-query-account-{index}").into_bytes(),
+                Algorithm::Ed25519,
+            )
+            .expect("derive deterministic typed-query account keypair")
+            .public_key()
+            .clone()
+        })
+        .map(AccountId::new)
+        .collect::<Vec<_>>();
+    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let mut builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_pipeline_time(Duration::from_secs(4))
+        .with_genesis_instruction(Grant::account_permission(
+            register_permission,
+            iroha_test_samples::ALICE_ID.clone(),
+        ));
+    for account_id in &seeded_accounts {
+        builder =
+            builder.with_genesis_instruction(Register::account(Account::new(account_id.clone())));
+    }
+    for index in 0_u64..6 {
+        let domain_id = DomainId::try_new(format!("typed-query-{index}"), "universal")?;
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), format!("coin{index}").parse()?);
+        let asset_id = AssetId::new(
+            asset_definition_id.clone(),
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        let nft_id = NftId::new(domain_id.clone(), format!("item{index}").parse()?);
+        builder = builder
+            .with_genesis_instruction(Register::domain(Domain::new(domain_id)))
+            .with_genesis_instruction(Register::asset_definition(
+                AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name(format!("Typed query asset {index}")),
+            ))
+            .with_genesis_instruction(Mint::asset_numeric(index + 1, asset_id))
+            .with_genesis_instruction(Register::nft(Nft::new(nft_id, Metadata::default())));
+    }
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(typed_core_query_pagination_is_deterministic_on_four_peers),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    assert_eq!(network.peers().len(), 4, "test requires four voting peers");
+
+    network.ensure_blocks(1).await?;
+    let deploy_client = network.peers()[0].client();
+    let http = integration_tests::http::client();
+    let contract_address = deploy_contract_artifact(
+        &deploy_client,
+        &http,
+        &typed_core_query_pager_artifact(),
+        "typed_core_query_pager",
+        "deploy typed core-query pager",
+    )
+    .await?;
+    let deploy_height = deploy_client.get_status()?.blocks;
+    network.ensure_blocks(deploy_height).await?;
+
+    let (account_ids, asset_ids, asset_definition_ids, domain_ids, nft_ids) =
+        tokio::task::spawn_blocking({
+            let client = deploy_client.clone();
+            move || -> Result<_> {
+                let account_ids = client
+                    .query(FindAccounts)
+                    .execute_all()?
+                    .into_iter()
+                    .map(|account| account.id().clone())
+                    .collect::<Vec<_>>();
+                let asset_ids = client
+                    .query(FindAssets::new())
+                    .execute_all()?
+                    .into_iter()
+                    .map(|asset| asset.id().clone())
+                    .collect::<Vec<_>>();
+                let asset_definition_ids = client
+                    .query(FindAssetsDefinitions::new())
+                    .execute_all()?
+                    .into_iter()
+                    .map(|definition| definition.id().clone())
+                    .collect::<Vec<_>>();
+                let domain_ids = client
+                    .query(FindDomains::new())
+                    .execute_all()?
+                    .into_iter()
+                    .map(|domain| domain.id().clone())
+                    .collect::<Vec<_>>();
+                let nft_ids = client
+                    .query(FindNfts::new())
+                    .execute_all()?
+                    .into_iter()
+                    .map(|nft| nft.id().clone())
+                    .collect::<Vec<_>>();
+                Ok((
+                    account_ids,
+                    asset_ids,
+                    asset_definition_ids,
+                    domain_ids,
+                    nft_ids,
+                ))
+            }
+        })
+        .await??;
+
+    assert_canonical_query_order(&account_ids, "account");
+    assert_canonical_query_order(&asset_ids, "asset");
+    assert_canonical_query_order(&asset_definition_ids, "asset-definition");
+    assert_canonical_query_order(&domain_ids, "domain");
+    assert_canonical_query_order(&nft_ids, "NFT");
+
+    let families: [(&str, &str, Vec<String>, &[&str]); 5] = [
+        (
+            "accounts",
+            "AccountView",
+            account_ids.into_iter().map(|id| id.to_string()).collect(),
+            &["id", "metadata"],
+        ),
+        (
+            "assets",
+            "AssetView",
+            asset_ids.into_iter().map(|id| id.to_string()).collect(),
+            &["id", "amount"],
+        ),
+        (
+            "asset_definitions",
+            "AssetDefinitionView",
+            asset_definition_ids
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect(),
+            &[
+                "id",
+                "name",
+                "description",
+                "owned_by",
+                "total_quantity",
+                "metadata",
+            ],
+        ),
+        (
+            "domains",
+            "DomainView",
+            domain_ids.into_iter().map(|id| id.to_string()).collect(),
+            &["id", "owned_by", "metadata"],
+        ),
+        (
+            "nfts",
+            "NftView",
+            nft_ids.into_iter().map(|id| id.to_string()).collect(),
+            &["id", "owned_by", "content"],
+        ),
+    ];
+    for (entrypoint, _, expected_ids, _) in &families {
+        assert!(
+            (6..=64).contains(&expected_ids.len()),
+            "the {entrypoint} fixture must fit one bounded page and contain two partial pages; \
+             found {} entities",
+            expected_ids.len()
+        );
+    }
+
+    let requests = [(0_i64, 3_i64), (3_i64, 3_i64), (0_i64, 64_i64)];
+    let mut peer_results = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        let mut family_pages = Vec::with_capacity(families.len());
+        for (entrypoint, _, _, _) in &families {
+            let mut pages = Vec::with_capacity(requests.len());
+            for &(offset, limit) in &requests {
+                let response = tokio::task::spawn_blocking({
+                    let client = peer.client();
+                    let contract_address = contract_address.clone();
+                    let entrypoint = *entrypoint;
+                    let payload = typed_core_query_page_payload(offset, limit);
+                    move || {
+                        client.post_contract_view_json(
+                            &iroha_test_samples::ALICE_ID,
+                            Some(&contract_address),
+                            None,
+                            entrypoint,
+                            Some(&payload),
+                            1_000_000,
+                        )
+                    }
+                })
+                .await??;
+                pages.push(response.get("result").cloned().ok_or_else(|| {
+                    eyre!("contract view response is missing result: {response:?}")
+                })?);
+            }
+            family_pages.push(pages);
+        }
+        peer_results.push(family_pages);
+    }
+
+    assert!(
+        peer_results.windows(2).all(|pair| pair[0] == pair[1]),
+        "typed page projections for the five core entity families differ across voting peers: \
+         {peer_results:?}"
+    );
+    let canonical_families = peer_results
+        .first()
+        .ok_or_else(|| eyre!("four-peer fixture returned no peer results"))?;
+    for (family_index, (entrypoint, view_name, expected_ids, expected_fields)) in
+        families.iter().enumerate()
+    {
+        let pages = &canonical_families[family_index];
+        let (first_ids, first_next) = typed_query_page_parts(&pages[0], view_name)?;
+        let (second_ids, second_next) = typed_query_page_parts(&pages[1], view_name)?;
+        let (all_ids, all_next) = typed_query_page_parts(&pages[2], view_name)?;
+
+        assert_eq!(
+            first_ids.as_slice(),
+            &expected_ids[..3],
+            "{entrypoint} first page must preserve canonical ID order"
+        );
+        assert_eq!(
+            first_next,
+            Some(3),
+            "{entrypoint} first page must point at its exact continuation"
+        );
+        assert_eq!(
+            second_ids.as_slice(),
+            &expected_ids[3..6],
+            "{entrypoint} second page must preserve canonical ID order"
+        );
+        assert_eq!(
+            second_next,
+            (expected_ids.len() > 6).then_some(6),
+            "{entrypoint} next_offset must exist exactly when another canonical page exists"
+        );
+        assert_eq!(
+            &all_ids, expected_ids,
+            "{entrypoint} maximum bounded page must include the complete fixture"
+        );
+        assert_eq!(
+            all_next, None,
+            "{entrypoint} final bounded page must return Option::none"
+        );
+        assert_typed_query_projection(&pages[2], view_name, expected_fields)?;
+    }
+
+    for (entrypoint, offset, limit) in [
+        ("accounts", -1_i64, 1_i64),
+        ("assets", 0, 0),
+        ("asset_definitions", 0, 65),
+        ("domains", -1, 64),
+        ("nfts", 0, 65),
+    ] {
+        let rejected = tokio::task::spawn_blocking({
+            let client = network.peers()[0].client();
+            let contract_address = contract_address.clone();
+            let payload = typed_core_query_page_payload(offset, limit);
+            move || {
+                client.post_contract_view_json(
+                    &iroha_test_samples::ALICE_ID,
+                    Some(&contract_address),
+                    None,
+                    entrypoint,
+                    Some(&payload),
+                    1_000_000,
+                )
+            }
+        })
+        .await?;
+        assert!(
+            rejected.is_err(),
+            "{entrypoint} must reject offset={offset}, limit={limit} at runtime"
+        );
+    }
 
     Ok(())
 }
@@ -898,7 +1297,7 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         .await?;
     }
 
-    let init_body = norito::json::object([
+    let hajimari_body = norito::json::object([
         (
             "authority",
             norito::json::to_value(&authority_literal).expect("serialize authority"),
@@ -917,51 +1316,58 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         ),
         (
             "entrypoint",
-            norito::json::to_value("initialize").expect("serialize entrypoint"),
+            norito::json::to_value("hajimari").expect("serialize entrypoint"),
         ),
         (
             "gas_limit",
             norito::json::to_value(&10_000u64).expect("serialize gas limit"),
         ),
     ])
-    .expect("serialize init body");
-    let init_baseline = client.get_status()?.txs_approved;
-    let init_resp = http
+    .expect("serialize hajimari body");
+    let hajimari_baseline = client.get_status()?.txs_approved;
+    let hajimari_resp = http
         .post(client.torii_url.join("/v1/contracts/call")?)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
-        .body(norito::json::to_json(&init_body)?)
+        .body(norito::json::to_json(&hajimari_body)?)
         .send()
         .await?;
-    if !init_resp.status().is_success() {
-        let status = init_resp.status();
-        let body = init_resp.text().await.unwrap_or_default();
-        return Err(eyre!("init returned {status}: {body}"));
+    if !hajimari_resp.status().is_success() {
+        let status = hajimari_resp.status();
+        let body = hajimari_resp.text().await.unwrap_or_default();
+        return Err(eyre!("hajimari returned {status}: {body}"));
     }
-    let init_payload: norito::json::Value = norito::json::from_str(&init_resp.text().await?)?;
-    if init_payload
+    let hajimari_payload: norito::json::Value =
+        norito::json::from_str(&hajimari_resp.text().await?)?;
+    if hajimari_payload
         .get("submitted")
         .and_then(norito::json::Value::as_bool)
         == Some(false)
     {
         return Err(eyre!(
-            "init produced unsigned scaffold instead of submitting: {init_payload:?}"
+            "hajimari produced unsigned scaffold instead of submitting: {hajimari_payload:?}"
         ));
     }
-    if let Some(init_tx_hash) = init_payload
+    if let Some(hajimari_tx_hash) = hajimari_payload
         .get("tx_hash_hex")
         .and_then(norito::json::Value::as_str)
     {
         wait_for_tx_applied(
             &http,
             &client.torii_url,
-            init_tx_hash,
+            hajimari_tx_hash,
             Duration::from_secs(30),
-            "init",
+            "hajimari",
         )
         .await?;
     } else {
-        wait_for_approved_txs(&client, init_baseline, Duration::from_secs(30), "init").await?;
+        wait_for_approved_txs(
+            &client,
+            hajimari_baseline,
+            Duration::from_secs(30),
+            "hajimari",
+        )
+        .await?;
     }
 
     let verify_body = norito::json::object([

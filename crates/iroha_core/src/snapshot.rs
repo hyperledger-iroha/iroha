@@ -945,6 +945,28 @@ fn snapshot_world_has_field(value: &json::Value, field: &str) -> bool {
     )
 }
 
+fn validate_snapshot_sccp_registry(value: &json::Value) -> Result<(), TryReadError> {
+    let json::Value::Object(state) = value else {
+        return Ok(());
+    };
+    let Some(json::Value::Object(world)) = state.get("world") else {
+        return Ok(());
+    };
+    let Some(registry_value) = world.get("sccp_registry") else {
+        return Ok(());
+    };
+    let wire: crate::state::SccpOnChainRegistryV1 = json::value::from_value(registry_value.clone())
+        .map_err(|error| TryReadError::InvalidSccpRegistry(error.to_string()))?;
+    let validated = crate::state::ValidatedSccpRegistryV1::try_from_wire(wire.clone())
+        .map_err(TryReadError::InvalidSccpRegistry)?;
+    if validated.registry() != &wire {
+        return Err(TryReadError::InvalidSccpRegistry(
+            "snapshot registry is not in canonical lane/route order".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn decode_instruction_by_id<T>(instruction: &InstructionBox) -> Option<T>
 where
     T: DecodeAll + 'static,
@@ -1314,6 +1336,10 @@ fn try_read_snapshot_bundle(
             return Err(TryReadError::Serialization(err));
         }
     };
+    // Snapshot signatures authenticate bytes, not semantic validity.  Reject
+    // hostile SCCP material before constructing any live state so an invalid
+    // verifying key can never be converted into an apparently empty registry.
+    validate_snapshot_sccp_registry(&value)?;
     let has_space_directory_manifest_section =
         snapshot_has_space_directory_manifest_section(&value);
     let has_offline_note_replay_keys = snapshot_world_has_field(&value, "offline_note_replay_keys");
@@ -2239,91 +2265,21 @@ mod tests {
         state_factory_with_kura(Kura::blank_kura_for_testing())
     }
 
-    fn sccp_route_manifest_for_snapshot_test() -> iroha_config::parameters::actual::SccpRouteManifest
-    {
-        iroha_config::parameters::actual::SccpRouteManifest {
+    fn sccp_registry_for_snapshot_test() -> crate::state::SccpOnChainRegistryV1 {
+        let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+            iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+            iroha_data_model::bridge::SccpRouteActivationV1::Staged,
+        );
+        crate::state::SccpOnChainRegistryV1 {
             version: 1,
-            route_id: "taira_eth_xor".to_owned(),
-            asset_key: "xor".to_owned(),
-            network: "sepolia".to_owned(),
-            chain: "ethereum-sepolia".to_owned(),
-            chain_id_hex: "0xaa36a7".to_owned(),
-            explorer_url: None,
-            explorer_host: None,
-            counterparty_account_codec: Some(iroha_sccp::SCCP_CODEC_EVM_ADDRESS20),
-            counterparty_account_codec_key: Some("evm_address20".to_owned()),
-            counterparty_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            verifier_target: "EvmContract".to_owned(),
-            production_ready: false,
-            disabled_reason: Some("testnet route".to_owned()),
-            network_id_hex: "0x00000000000000000000000000000000000000000000000000000000cd8690dc"
-                .to_owned(),
-            taira_xor_token_address: format!("0x{}", "11".repeat(20)),
-            taira_xor_bridge_address: format!("0x{}", "22".repeat(20)),
-            source_bridge_address: format!("0x{}", "33".repeat(20)),
-            destination_verifier_address: format!("0x{}", "44".repeat(20)),
-            ton_finalize_message_value_nano: None,
-            verifier_code_hash: format!("0x{}", "11".repeat(32)),
-            verifier_key_hash: format!("0x{}", "22".repeat(32)),
-            proof_artifact_hash: None,
-            proving_key_hash: None,
-            native_evm_prover_bundle_hash: None,
-            native_evm_prover_bundle: None,
-            destination_browser_prover: None,
-            source_browser_prover: None,
-            deployment_evidence_sha256: None,
-            destination_binding_key: "iroha:sccp:evm-destination-binding:v1:0:1:sepolia".to_owned(),
-            destination_binding_hash: format!("0x{}", "33".repeat(32)),
-            sora_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".to_owned(),
-            sora_custody_account_id:
-                iroha_config::parameters::defaults::nexus::fees::FEE_SINK_ACCOUNT_ID.to_owned(),
-            payload_amount_scale: 9,
-            post_deploy_full_toml_ready: None,
-            post_deploy_source_identity_hash: None,
-            post_deploy_source_event_transaction_id: None,
-            post_deploy_source_event_explorer_url: None,
-            post_deploy_route_canary_evidence_hash: None,
-            post_deploy_route_canary_transaction_id: None,
-            post_deploy_route_canary_explorer_url: None,
-            post_deploy_offline_full_toml_sha256: None,
+            lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                lane_id: route.lane_id,
+                native_trust_anchors: Vec::new(),
+                current_native_trust_anchor_hash: None,
+                routes: vec![route],
+            }],
         }
     }
-
-    fn sccp_snapshot_lane(
-        source_identity: iroha_data_model::bridge::SccpSourceIdentityV1,
-        route_manifest: Option<iroha_config::parameters::actual::SccpRouteManifest>,
-    ) -> crate::state::SccpGovernedLaneV1 {
-        crate::state::SccpGovernedLaneV1 {
-            lane_id: source_identity.lane,
-            source_identity,
-            activation: crate::state::SccpLaneActivationV1::Staged,
-            native_trust_anchor: None,
-            destination_rollout: None,
-            route_allowlist: None,
-            route_manifest,
-        }
-    }
-
-    fn sccp_snapshot_evm_identity(
-        source: iroha_data_model::bridge::SccpNetworkV1,
-        address: [u8; 20],
-    ) -> iroha_data_model::bridge::SccpSourceIdentityV1 {
-        let lane = iroha_data_model::bridge::SccpLaneIdV1 {
-            source,
-            target: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-        };
-        iroha_data_model::bridge::SccpSourceIdentityV1 {
-            lane,
-            emitter: iroha_data_model::bridge::SccpSourceEmitterV1::Evm(
-                iroha_data_model::bridge::SccpEvmSourceEmitterV1 {
-                    address,
-                    runtime_code_hash: [0x91; 32],
-                    route_config_hash: [0x92; 32],
-                },
-            ),
-        }
-    }
-
     fn kura_config_for_snapshot_test(
         store_dir: &Path,
         blocks_in_memory: NonZeroUsize,
@@ -3046,6 +3002,8 @@ mod tests {
         let tmp_root = tempdir().expect("snapshot tempdir");
         let kura = Kura::blank_kura_for_testing();
         let mut state = state_factory_with_kura(Arc::clone(&kura));
+        state.chain_id =
+            iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
         let block = signed_block_with_transaction(accepted_log_transaction(
             "malformed-historical-commit-qc-archive",
         ));
@@ -3099,7 +3057,7 @@ mod tests {
     }
 
     #[test]
-    async fn snapshot_roundtrip_preserves_sccp_route_manifests() {
+    async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
@@ -3107,43 +3065,27 @@ mod tests {
         state.chain_id =
             iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
         let block =
-            signed_block_with_transaction(accepted_log_transaction("sccp-route-manifest-snapshot"));
+            signed_block_with_transaction(accepted_log_transaction("exact-sccp-registry-snapshot"));
         store_block_and_mark_state_height(&mut state, &kura, block);
-        let route = sccp_route_manifest_for_snapshot_test();
-        let registry = crate::state::SccpOnChainRegistryV1 {
-            version: 1,
-            lanes: vec![sccp_snapshot_lane(
-                sccp_snapshot_evm_identity(
-                    iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
-                    [0x33; 20],
-                ),
-                Some(route.clone()),
-            )],
-        };
+        let registry = sccp_registry_for_snapshot_test();
+        let expected_key = registry.lanes[0].routes[0].key();
+        let expected_config = registry.lanes[0].routes[0]
+            .route_configuration_hash()
+            .expect("exact snapshot route configuration");
         {
-            let mut parameters = state.world.parameters.block();
-            parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                iroha_data_model::parameter::CustomParameter::new(
-                    crate::state::sccp_on_chain_registry_parameter_id(),
-                    iroha_primitives::json::Json::new(registry),
-                ),
-            ));
-            parameters.commit();
+            let mut cell = state.world.sccp_registry.block();
+            *cell.get_mut() = registry;
+            cell.commit();
         }
         let key_pair = checked_random_snapshot_keypair();
 
-        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
-
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
+            .expect("write exact SCCP registry snapshot");
         let snapshot_bytes =
             std::fs::read(store_dir.join(SNAPSHOT_FILE_NAME)).expect("snapshot bytes");
         let snapshot_value: json::Value =
             json::from_slice(&snapshot_bytes).expect("snapshot JSON should parse");
-        assert!(
-            snapshot_value
-                .as_object()
-                .is_some_and(|root| !root.contains_key("sccp_route_manifests")),
-            "SCCP routes must be journaled only inside the World custom parameter"
-        );
+        assert!(snapshot_world_has_field(&snapshot_value, "sccp_registry"));
 
         let snapshot_state = try_read_snapshot(
             &store_dir,
@@ -3157,26 +3099,31 @@ mod tests {
             StateTelemetry::new(<_>::default(), true),
         )
         .expect("snapshot read");
-        let registry = snapshot_state.sccp_registry_snapshot();
-        let restored = registry
-            .route_manifest_for_lane(registry.lanes()[0].lane_id)
-            .expect("restored ETH route");
-        assert_eq!(restored.route_id.as_str(), route.route_id.as_str());
-        assert_eq!(restored.chain_id_hex.as_str(), route.chain_id_hex.as_str());
+        let restored = snapshot_state.sccp_registry_snapshot();
+        let route = restored
+            .route(&expected_key)
+            .expect("exact SCCP route survives snapshot roundtrip");
+        assert_eq!(
+            route
+                .route_configuration_hash()
+                .expect("restored route configuration"),
+            expected_config
+        );
     }
 
     #[test]
     async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance() {
-        let assert_rejected = |parameter: iroha_data_model::parameter::CustomParameter,
-                               expected: &str| {
+        let assert_rejected = |registry: crate::state::SccpOnChainRegistryV1, expected: &str| {
             let tmp_root = tempdir().expect("temporary snapshot root");
             let store_dir = tmp_root.path().join("snapshot");
             let kura = Kura::blank_kura_for_testing();
-            let state = state_factory_with_kura(Arc::clone(&kura));
+            let mut state = state_factory_with_kura(Arc::clone(&kura));
+            state.chain_id =
+                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             {
-                let mut parameters = state.world.parameters.block();
-                parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(parameter));
-                parameters.commit();
+                let mut cell = state.world.sccp_registry.block();
+                *cell.get_mut() = registry;
+                cell.commit();
             }
             let mut serialized = String::new();
             serialize_state_snapshot(&state, &mut serialized, true);
@@ -3204,22 +3151,68 @@ mod tests {
         };
 
         assert_rejected(
-            iroha_data_model::parameter::CustomParameter::new(
-                crate::state::sccp_on_chain_registry_parameter_id(),
-                iroha_primitives::json::Json::new("malformed-registry"),
-            ),
-            "must be a JSON object",
+            crate::state::SccpOnChainRegistryV1 {
+                version: 2,
+                lanes: Vec::new(),
+            },
+            "version",
+        );
+        let mut valid = sccp_registry_for_snapshot_test();
+        let lane = valid.lanes.remove(0);
+        assert_rejected(
+            crate::state::SccpOnChainRegistryV1 {
+                version: 1,
+                lanes: vec![lane.clone(), lane],
+            },
+            "duplicate",
         );
 
-        assert_rejected(
-            iroha_data_model::parameter::CustomParameter::new(
-                crate::state::sccp_on_chain_registry_parameter_id(),
-                iroha_primitives::json::Json::new(
-                    "x".repeat(crate::state::SCCP_ON_CHAIN_REGISTRY_MAX_BYTES + 1),
-                ),
-            ),
-            "maximum",
+        let bsc_route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+            iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+            iroha_data_model::bridge::SccpRouteActivationV1::Staged,
         );
+        let mut reversed_lanes = vec![
+            sccp_registry_for_snapshot_test().lanes.remove(0),
+            iroha_data_model::bridge::SccpGovernedLaneV1 {
+                lane_id: bsc_route.lane_id,
+                native_trust_anchors: Vec::new(),
+                current_native_trust_anchor_hash: None,
+                routes: vec![bsc_route],
+            },
+        ];
+        reversed_lanes.sort_by_key(|lane| lane.lane_id);
+        reversed_lanes.reverse();
+        assert_rejected(
+            crate::state::SccpOnChainRegistryV1 {
+                version: 1,
+                lanes: reversed_lanes,
+            },
+            "canonical lane/route order",
+        );
+
+        let mut off_curve = sccp_registry_for_snapshot_test();
+        let deployment = match &mut off_curve.lanes[0].routes[0].destination {
+            iroha_data_model::bridge::SccpDestinationDeploymentV1::Evm(deployment) => deployment,
+            iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(_) => {
+                unreachable!("snapshot fixture is an EVM route")
+            }
+        };
+        // (1, 1) is a canonical BN254 field encoding but is not on
+        // y^2 = x^3 + 3.  Recompute the embedded key commitment so only the
+        // cryptographic curve check—not a stale hash—can reject this fixture.
+        let mut one = [0_u8; 32];
+        one[31] = 1;
+        deployment.verifying_key.alpha1.x = one;
+        deployment.verifying_key.alpha1.y = one;
+        deployment.verifier_key_hash =
+            iroha_data_model::bridge::sccp_groth16_bn254_verifying_key_hash_v1(
+                deployment.verifying_key,
+            )
+            .expect("off-curve point remains structurally canonical");
+        off_curve
+            .validate()
+            .expect("structural registry validation must not stand in for curve validation");
+        assert_rejected(off_curve, "non-curve");
     }
 
     #[test]
@@ -3240,13 +3233,11 @@ mod tests {
         };
         let record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
             destination_binding_hash: [0x4A; 32],
+            route_configuration_hash: [0x6A; 32],
             payload_hash: [0x5A; 32],
             recorded_at_height: u64::try_from(state.view().height()).expect("height fits u64"),
         };
-        state
-            .world
-            .sccp_outbound_messages
-            .insert(key.clone(), record);
+        state.insert_sccp_outbound_message_for_testing(key.clone(), record);
         let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();

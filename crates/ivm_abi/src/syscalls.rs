@@ -189,28 +189,28 @@ pub const SYSCALL_TLV_LEN: u32 = 0x77;
 
 /// JSON object field getters.
 ///
-/// All JSON_GET_* syscalls expect the root JSON value to be an object and the
-/// field to exist. Missing keys or type mismatches return a VM error.
+/// All JSON_GET_* syscalls return a compiler-owned `Option<T>` sum handle.
+/// Missing keys, non-object roots, and type mismatches return `Option::none`.
 ///
 /// Args: r10 = &Json, r11 = &Name key
-/// Ret:  r10 = value (either pointer in INPUT or integer)
+/// Ret:  r10 = `Option<T>` sum handle whose active payload is one ABI word.
 pub const SYSCALL_JSON_GET_I64: u32 = 0x78;
-/// Args: r10 = &Json, r11 = &Name key -> r10 = &Json (INPUT pointer)
+/// Active payload: one `&Json` pointer.
 pub const SYSCALL_JSON_GET_JSON: u32 = 0x79;
-/// Args: r10 = &Json, r11 = &Name key -> r10 = &Name (INPUT pointer)
+/// Active payload: one `&Name` pointer.
 pub const SYSCALL_JSON_GET_NAME: u32 = 0x7A;
-/// Args: r10 = &Json, r11 = &Name key -> r10 = &AccountId (INPUT pointer)
+/// Active payload: one `&AccountId` pointer.
 pub const SYSCALL_JSON_GET_ACCOUNT_ID: u32 = 0x7B;
-/// Args: r10 = &Json, r11 = &Name key -> r10 = &NftId (INPUT pointer)
+/// Active payload: one `&NftId` pointer.
 pub const SYSCALL_JSON_GET_NFT_ID: u32 = 0x7C;
-/// Args: r10 = &Json, r11 = &Name key -> r10 = &Blob (INPUT pointer)
+/// Active payload: one `&Blob` pointer containing decoded lowercase `0x` hex bytes.
 pub const SYSCALL_JSON_GET_BLOB_HEX: u32 = 0x7D;
-/// Args: r10 = &Json, r11 = &Name key -> r10 = &NoritoBytes(Numeric) (INPUT pointer)
+/// Args: r10 = &Json, r11 = &Name key -> r10 = `Option<Amount>` sum handle.
 ///
 /// Accepts JSON string numerics (for example `"0.00001"`) and integer JSON numbers.
 /// Floating-point JSON numbers are rejected to keep the ABI deterministic.
-pub const SYSCALL_JSON_GET_NUMERIC: u32 = 0x7F;
-/// Args: r10 = &Json, r11 = &Name key -> r10 = &AssetDefinitionId (INPUT pointer)
+pub const SYSCALL_JSON_GET_AMOUNT: u32 = 0x7F;
+/// Active payload: one `&AssetDefinitionId` pointer.
 pub const SYSCALL_JSON_GET_ASSET_DEFINITION_ID: u32 = 0x80;
 /// Construct an empty JSON object.
 ///
@@ -239,8 +239,8 @@ pub const SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT: u32 = 0x87;
 pub const SYSCALL_JSON_GET_NFT_ID_DIRECT: u32 = 0x88;
 /// Direct JSON blob getter that accepts validated TLVs from any allowed pointer region.
 pub const SYSCALL_JSON_GET_BLOB_HEX_DIRECT: u32 = 0x89;
-/// Direct JSON numeric getter that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_JSON_GET_NUMERIC_DIRECT: u32 = 0x8A;
+/// Direct JSON Amount getter that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_JSON_GET_AMOUNT_DIRECT: u32 = 0x8A;
 /// Direct JSON asset-definition getter that accepts validated TLVs from any allowed pointer region.
 pub const SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT: u32 = 0x8B;
 /// Direct JSON integer setter that accepts validated TLVs from any allowed pointer region.
@@ -547,16 +547,15 @@ pub const SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE: u32 = 0xC9;
 
 /// Execute an arbitrary Norito-encoded read-only query request.
 pub const SYSCALL_QUERY_EXECUTE_NORITO: u32 = 0x01_0000;
-/// Read one account by id.
-pub const SYSCALL_QUERY_GET_ACCOUNT: u32 = 0x01_0001;
-/// Read one asset by id.
-pub const SYSCALL_QUERY_GET_ASSET: u32 = 0x01_0002;
-/// Read one asset definition by id.
-pub const SYSCALL_QUERY_GET_ASSET_DEFINITION: u32 = 0x01_0003;
-/// Read one domain by id.
-pub const SYSCALL_QUERY_GET_DOMAIN: u32 = 0x01_0004;
-/// Read one NFT by id.
-pub const SYSCALL_QUERY_GET_NFT: u32 = 0x01_0005;
+/// Read one projected core-ledger entity by stable [`CoreQueryEntityTagV1`].
+///
+/// [`CoreQueryEntityTagV1`]: crate::core_query::CoreQueryEntityTagV1
+pub const SYSCALL_CORE_QUERY_GET: u32 = 0x01_0001;
+/// Read one bounded page of projected core-ledger entities by stable
+/// [`CoreQueryEntityTagV1`].
+///
+/// [`CoreQueryEntityTagV1`]: crate::core_query::CoreQueryEntityTagV1
+pub const SYSCALL_CORE_QUERY_PAGE: u32 = 0x01_0002;
 /// Read one runtime/system/custom parameter by canonical name.
 pub const SYSCALL_QUERY_GET_PARAMETER: u32 = 0x01_0006;
 /// Read one contract manifest by code hash.
@@ -578,12 +577,96 @@ pub const SYSCALL_SYSVAR_CONTRACT_ADDRESS: u32 = 0x01_0024;
 pub const SYSCALL_SYSVAR_ENTRYPOINT: u32 = 0x01_0025;
 /// Decode a complete schema-bound public argument record.
 ///
-/// Args: r10 = `&NoritoBytes(EntrypointArgumentRecordV1)`,
+/// Args: r10 = `&NoritoBytes(EntrypointArgumentRecordV1)` for raw hosts, or
+/// the host-issued domain-separated record binding for a prepared invocation;
 /// r11 = `&NoritoBytes(EntrypointArgumentSchemaV1)`.
 /// Ret: r10 = `&Blob(0u8 || [u64; word_count])`; the leading byte aligns the
 /// declaration-ordered flattened words, which contain sum tags, canonical
 /// scalar bits, or validated pointer-ABI addresses.
 pub const SYSCALL_DECODE_ARGUMENT_RECORD: u32 = 0x01_0026;
+
+/// Construct a canonical `Amount` from a non-negative signed 64-bit value.
+pub const SYSCALL_AMOUNT_FROM_I64: u32 = 0x01_0040;
+/// Convert a scale-zero canonical `u128` Numeric payload into an `Amount`.
+pub const SYSCALL_AMOUNT_FROM_U128: u32 = 0x01_0041;
+/// Convert a canonical scale-zero `Amount` into a signed 64-bit value.
+pub const SYSCALL_AMOUNT_TO_I64: u32 = 0x01_0042;
+/// Exact canonical `Amount` addition.
+pub const SYSCALL_AMOUNT_ADD: u32 = 0x01_0043;
+/// Exact canonical `Amount` subtraction; underflow traps.
+pub const SYSCALL_AMOUNT_SUB: u32 = 0x01_0044;
+/// Exact canonical `Amount` multiplication.
+pub const SYSCALL_AMOUNT_MUL: u32 = 0x01_0045;
+/// Exact finite-decimal `Amount` division; inexact results trap.
+pub const SYSCALL_AMOUNT_DIV_EXACT: u32 = 0x01_0046;
+/// Explicitly rounded `Amount` division.
+///
+/// Args: r10 = `&Amount` dividend, r11 = `&Amount` divisor, r12 = output
+/// scale in `0..=28`, r13 = [`AMOUNT_ROUND_FLOOR`],
+/// [`AMOUNT_ROUND_CEIL`], or [`AMOUNT_ROUND_NEAREST_EVEN`].
+pub const SYSCALL_AMOUNT_DIV_ROUND: u32 = 0x01_0047;
+/// Canonical `Amount` equality.
+pub const SYSCALL_AMOUNT_EQ: u32 = 0x01_0048;
+/// Canonical `Amount` inequality.
+pub const SYSCALL_AMOUNT_NE: u32 = 0x01_0049;
+/// Canonical `Amount` less-than comparison.
+pub const SYSCALL_AMOUNT_LT: u32 = 0x01_004A;
+/// Canonical `Amount` less-or-equal comparison.
+pub const SYSCALL_AMOUNT_LE: u32 = 0x01_004B;
+/// Canonical `Amount` greater-than comparison.
+pub const SYSCALL_AMOUNT_GT: u32 = 0x01_004C;
+/// Canonical `Amount` greater-or-equal comparison.
+pub const SYSCALL_AMOUNT_GE: u32 = 0x01_004D;
+/// Construct one native JSON value from a compiler-emitted schema and flattened words.
+///
+/// Args: r10 = `&NoritoBytes(JsonConstructionSchemaV1)`, r11 = aligned public
+/// word-table address, r12 = exact word count.
+/// Ret: r10 = `&Json`.
+pub const SYSCALL_JSON_BUILD: u32 = 0x01_004E;
+
+/// `amount.div_round` tag for rounding toward negative infinity.
+pub const AMOUNT_ROUND_FLOOR: u64 = 0;
+/// `amount.div_round` tag for rounding toward positive infinity.
+pub const AMOUNT_ROUND_CEIL: u64 = 1;
+/// `amount.div_round` tag for nearest rounding with ties to an even mantissa.
+pub const AMOUNT_ROUND_NEAREST_EVEN: u64 = 2;
+
+/// Return whether `number` belongs to the exact V1 Amount helper family.
+pub const fn is_amount_syscall(number: u32) -> bool {
+    matches!(
+        number,
+        SYSCALL_AMOUNT_FROM_I64
+            | SYSCALL_AMOUNT_FROM_U128
+            | SYSCALL_AMOUNT_TO_I64
+            | SYSCALL_AMOUNT_ADD
+            | SYSCALL_AMOUNT_SUB
+            | SYSCALL_AMOUNT_MUL
+            | SYSCALL_AMOUNT_DIV_EXACT
+            | SYSCALL_AMOUNT_DIV_ROUND
+            | SYSCALL_AMOUNT_EQ
+            | SYSCALL_AMOUNT_NE
+            | SYSCALL_AMOUNT_LT
+            | SYSCALL_AMOUNT_LE
+            | SYSCALL_AMOUNT_GT
+            | SYSCALL_AMOUNT_GE
+    )
+}
+
+/// Return whether `number` is one of the canonical typed JSON getters.
+#[must_use]
+pub const fn is_json_getter_syscall(number: u32) -> bool {
+    matches!(
+        number,
+        SYSCALL_JSON_GET_I64
+            | SYSCALL_JSON_GET_JSON
+            | SYSCALL_JSON_GET_NAME
+            | SYSCALL_JSON_GET_ACCOUNT_ID
+            | SYSCALL_JSON_GET_NFT_ID
+            | SYSCALL_JSON_GET_BLOB_HEX
+            | SYSCALL_JSON_GET_AMOUNT
+            | SYSCALL_JSON_GET_ASSET_DEFINITION_ID
+    )
+}
 
 /// Kotodama test-runner helper: resolve a fixture actor alias to an `AccountId` TLV.
 ///
@@ -626,7 +709,7 @@ pub const fn canonical_helper_syscall(number: u32) -> u32 {
         SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT => SYSCALL_JSON_GET_ACCOUNT_ID,
         SYSCALL_JSON_GET_NFT_ID_DIRECT => SYSCALL_JSON_GET_NFT_ID,
         SYSCALL_JSON_GET_BLOB_HEX_DIRECT => SYSCALL_JSON_GET_BLOB_HEX,
-        SYSCALL_JSON_GET_NUMERIC_DIRECT => SYSCALL_JSON_GET_NUMERIC,
+        SYSCALL_JSON_GET_AMOUNT_DIRECT => SYSCALL_JSON_GET_AMOUNT,
         SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT => SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
         SYSCALL_JSON_SET_I64_DIRECT => SYSCALL_JSON_SET_I64,
         SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => SYSCALL_JSON_SET_ACCOUNT_ID,
@@ -683,17 +766,22 @@ pub enum SyscallAccess {
     Dynamic,
 }
 
-/// Return the conservative host-state access class for an ABI v1 syscall.
+/// Return the explicitly registered host-state access class for a syscall.
 ///
-/// The fallback is [`SyscallAccess::Dynamic`]. New syscalls therefore fail
-/// closed for scheduling until their access behavior is classified here.
+/// Unlike [`syscall_access`], this function has no conservative fallback. Host
+/// metering uses it to distinguish a deliberately classified dynamic syscall
+/// from a newly allowed syscall whose security metadata was never registered.
+/// Such a syscall must fail closed during preparation.
 #[must_use]
-pub const fn syscall_access(number: u32) -> SyscallAccess {
+pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
+    if is_amount_syscall(number) || number == SYSCALL_JSON_BUILD {
+        return Some(SyscallAccess::None);
+    }
     if matches!(
         number,
         SYSCALL_STATE_MAP_KEY_AT | SYSCALL_STATE_VALUE_ENCODE | SYSCALL_STATE_VALUE_DECODE
     ) {
-        return SyscallAccess::None;
+        return Some(SyscallAccess::None);
     }
     if matches!(
         number,
@@ -703,20 +791,17 @@ pub const fn syscall_access(number: u32) -> SyscallAccess {
             | SYSCALL_STATE_LEN
             | SYSCALL_STATE_COUNT
     ) {
-        return SyscallAccess::StateRead;
+        return Some(SyscallAccess::StateRead);
     }
     if matches!(number, SYSCALL_STATE_SET | SYSCALL_STATE_DEL) {
-        return SyscallAccess::StateWrite;
+        return Some(SyscallAccess::StateWrite);
     }
     if matches!(
         number,
         SYSCALL_SMARTCONTRACT_EXECUTE_QUERY
             | SYSCALL_QUERY_EXECUTE_NORITO
-            | SYSCALL_QUERY_GET_ACCOUNT
-            | SYSCALL_QUERY_GET_ASSET
-            | SYSCALL_QUERY_GET_ASSET_DEFINITION
-            | SYSCALL_QUERY_GET_DOMAIN
-            | SYSCALL_QUERY_GET_NFT
+            | SYSCALL_CORE_QUERY_GET
+            | SYSCALL_CORE_QUERY_PAGE
             | SYSCALL_QUERY_GET_PARAMETER
             | SYSCALL_QUERY_GET_CONTRACT_MANIFEST
             | SYSCALL_QUERY_GET_CONTRACT_INSTANCE
@@ -732,7 +817,7 @@ pub const fn syscall_access(number: u32) -> SyscallAccess {
             | SYSCALL_SORACLOUD_READ_CONFIG
             | SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE
     ) {
-        return SyscallAccess::LedgerRead;
+        return Some(SyscallAccess::LedgerRead);
     }
     if matches!(
         number,
@@ -806,7 +891,7 @@ pub const fn syscall_access(number: u32) -> SyscallAccess {
             | SYSCALL_SORACLOUD_APPEND_JOURNAL
             | SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
     ) {
-        return SyscallAccess::LedgerWrite;
+        return Some(SyscallAccess::LedgerWrite);
     }
     if matches!(
         number,
@@ -816,7 +901,7 @@ pub const fn syscall_access(number: u32) -> SyscallAccess {
             | SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH
             | SYSCALL_COMMIT_OUTPUT
     ) {
-        return SyscallAccess::Dynamic;
+        return Some(SyscallAccess::Dynamic);
     }
     if matches!(
         number,
@@ -855,7 +940,7 @@ pub const fn syscall_access(number: u32) -> SyscallAccess {
             | SYSCALL_JSON_GET_ACCOUNT_ID
             | SYSCALL_JSON_GET_NFT_ID
             | SYSCALL_JSON_GET_BLOB_HEX
-            | SYSCALL_JSON_GET_NUMERIC
+            | SYSCALL_JSON_GET_AMOUNT
             | SYSCALL_JSON_GET_ASSET_DEFINITION_ID
             | SYSCALL_JSON_OBJECT
             | SYSCALL_JSON_SET_I64
@@ -866,7 +951,7 @@ pub const fn syscall_access(number: u32) -> SyscallAccess {
             | SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
             | SYSCALL_JSON_GET_NFT_ID_DIRECT
             | SYSCALL_JSON_GET_BLOB_HEX_DIRECT
-            | SYSCALL_JSON_GET_NUMERIC_DIRECT
+            | SYSCALL_JSON_GET_AMOUNT_DIRECT
             | SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
             | SYSCALL_JSON_SET_I64_DIRECT
             | SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT
@@ -924,17 +1009,31 @@ pub const fn syscall_access(number: u32) -> SyscallAccess {
             | SYSCALL_SYSVAR_ENTRYPOINT
             | SYSCALL_DECODE_ARGUMENT_RECORD
     ) {
-        return SyscallAccess::None;
+        return Some(SyscallAccess::None);
     }
-    SyscallAccess::Dynamic
+    None
 }
 
-/// Return a sorted list of syscall numbers considered for ABI hashing.
+/// Return the conservative host-state access class for an ABI v1 syscall.
 ///
-/// The ABI hash is a stable digest of the allowed syscall surface for a given
-/// `SyscallPolicy`. It binds contracts to a specific host ABI. When comparing
-/// runtime ABI against a manifest-provided `abi_hash`, nodes can reject
-/// execution if a mismatch is detected.
+/// The fallback is [`SyscallAccess::Dynamic`]. New or unknown syscalls
+/// therefore still serialize conservatively, while
+/// [`registered_syscall_access`] lets admission and host metering reject an
+/// allowed-but-unclassified syscall outright.
+#[must_use]
+pub const fn syscall_access(number: u32) -> SyscallAccess {
+    match registered_syscall_access(number) {
+        Some(access) => access,
+        None => SyscallAccess::Dynamic,
+    }
+}
+
+/// Return the sorted syscall-number component of the ABI hash descriptor.
+///
+/// The complete hash also binds pointer types and the typed V1 query,
+/// entrypoint, collection, and Amount protocol records. It binds contracts to
+/// a specific host ABI. When comparing runtime ABI against a manifest-provided
+/// `abi_hash`, nodes can reject execution if a mismatch is detected.
 pub fn abi_syscall_list() -> &'static [u32] {
     syscalls_for_policy(crate::SyscallPolicy::AbiV1)
 }
@@ -987,7 +1086,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_JSON_GET_ACCOUNT_ID,
             SYSCALL_JSON_GET_NFT_ID,
             SYSCALL_JSON_GET_BLOB_HEX,
-            SYSCALL_JSON_GET_NUMERIC,
+            SYSCALL_JSON_GET_AMOUNT,
             SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
             SYSCALL_JSON_OBJECT,
             SYSCALL_JSON_SET_I64,
@@ -998,7 +1097,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT,
             SYSCALL_JSON_GET_NFT_ID_DIRECT,
             SYSCALL_JSON_GET_BLOB_HEX_DIRECT,
-            SYSCALL_JSON_GET_NUMERIC_DIRECT,
+            SYSCALL_JSON_GET_AMOUNT_DIRECT,
             SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT,
             SYSCALL_JSON_SET_I64_DIRECT,
             SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT,
@@ -1088,6 +1187,23 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.push(SYSCALL_POINTER_TO_NORITO);
         v.push(SYSCALL_POINTER_FROM_NORITO);
         v.push(SYSCALL_TLV_EQ);
+        v.extend_from_slice(&[
+            SYSCALL_AMOUNT_FROM_I64,
+            SYSCALL_AMOUNT_FROM_U128,
+            SYSCALL_AMOUNT_TO_I64,
+            SYSCALL_AMOUNT_ADD,
+            SYSCALL_AMOUNT_SUB,
+            SYSCALL_AMOUNT_MUL,
+            SYSCALL_AMOUNT_DIV_EXACT,
+            SYSCALL_AMOUNT_DIV_ROUND,
+            SYSCALL_AMOUNT_EQ,
+            SYSCALL_AMOUNT_NE,
+            SYSCALL_AMOUNT_LT,
+            SYSCALL_AMOUNT_LE,
+            SYSCALL_AMOUNT_GT,
+            SYSCALL_AMOUNT_GE,
+            SYSCALL_JSON_BUILD,
+        ]);
         // Roles/permissions
         v.extend_from_slice(&[
             SYSCALL_CREATE_ROLE,
@@ -1127,11 +1243,8 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
             SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
             SYSCALL_QUERY_EXECUTE_NORITO,
-            SYSCALL_QUERY_GET_ACCOUNT,
-            SYSCALL_QUERY_GET_ASSET,
-            SYSCALL_QUERY_GET_ASSET_DEFINITION,
-            SYSCALL_QUERY_GET_DOMAIN,
-            SYSCALL_QUERY_GET_NFT,
+            SYSCALL_CORE_QUERY_GET,
+            SYSCALL_CORE_QUERY_PAGE,
             SYSCALL_QUERY_GET_PARAMETER,
             SYSCALL_QUERY_GET_CONTRACT_MANIFEST,
             SYSCALL_QUERY_GET_CONTRACT_INSTANCE,
@@ -1332,7 +1445,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_JSON_GET_NFT_ID => "JSON_GET_NFT_ID",
         SYSCALL_JSON_GET_BLOB_HEX => "JSON_GET_BLOB_HEX",
         SYSCALL_JSON_GET_ASSET_DEFINITION_ID => "JSON_GET_ASSET_DEFINITION_ID",
-        SYSCALL_JSON_GET_NUMERIC => "JSON_GET_NUMERIC",
+        SYSCALL_JSON_GET_AMOUNT => "JSON_GET_AMOUNT",
         SYSCALL_JSON_OBJECT => "JSON_OBJECT",
         SYSCALL_JSON_SET_I64 => "JSON_SET_I64",
         SYSCALL_JSON_SET_ACCOUNT_ID => "JSON_SET_ACCOUNT_ID",
@@ -1342,7 +1455,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT => "JSON_GET_ACCOUNT_ID_DIRECT",
         SYSCALL_JSON_GET_NFT_ID_DIRECT => "JSON_GET_NFT_ID_DIRECT",
         SYSCALL_JSON_GET_BLOB_HEX_DIRECT => "JSON_GET_BLOB_HEX_DIRECT",
-        SYSCALL_JSON_GET_NUMERIC_DIRECT => "JSON_GET_NUMERIC_DIRECT",
+        SYSCALL_JSON_GET_AMOUNT_DIRECT => "JSON_GET_AMOUNT_DIRECT",
         SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT => "JSON_GET_ASSET_DEFINITION_ID_DIRECT",
         SYSCALL_JSON_SET_I64_DIRECT => "JSON_SET_I64_DIRECT",
         SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => "JSON_SET_ACCOUNT_ID_DIRECT",
@@ -1378,11 +1491,8 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => "SMARTCONTRACT_EXECUTE_INSTRUCTION",
         SYSCALL_SMARTCONTRACT_EXECUTE_QUERY => "SMARTCONTRACT_EXECUTE_QUERY",
         SYSCALL_QUERY_EXECUTE_NORITO => "QUERY_EXECUTE_NORITO",
-        SYSCALL_QUERY_GET_ACCOUNT => "QUERY_GET_ACCOUNT",
-        SYSCALL_QUERY_GET_ASSET => "QUERY_GET_ASSET",
-        SYSCALL_QUERY_GET_ASSET_DEFINITION => "QUERY_GET_ASSET_DEFINITION",
-        SYSCALL_QUERY_GET_DOMAIN => "QUERY_GET_DOMAIN",
-        SYSCALL_QUERY_GET_NFT => "QUERY_GET_NFT",
+        SYSCALL_CORE_QUERY_GET => "CORE_QUERY_GET",
+        SYSCALL_CORE_QUERY_PAGE => "CORE_QUERY_PAGE",
         SYSCALL_QUERY_GET_PARAMETER => "QUERY_GET_PARAMETER",
         SYSCALL_QUERY_GET_CONTRACT_MANIFEST => "QUERY_GET_CONTRACT_MANIFEST",
         SYSCALL_QUERY_GET_CONTRACT_INSTANCE => "QUERY_GET_CONTRACT_INSTANCE",
@@ -1398,6 +1508,21 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SYSVAR_CONTRACT_ADDRESS => "SYSVAR_CONTRACT_ADDRESS",
         SYSCALL_SYSVAR_ENTRYPOINT => "SYSVAR_ENTRYPOINT",
         SYSCALL_DECODE_ARGUMENT_RECORD => "DECODE_ARGUMENT_RECORD",
+        SYSCALL_AMOUNT_FROM_I64 => "AMOUNT_FROM_I64",
+        SYSCALL_AMOUNT_FROM_U128 => "AMOUNT_FROM_U128",
+        SYSCALL_AMOUNT_TO_I64 => "AMOUNT_TO_I64",
+        SYSCALL_AMOUNT_ADD => "AMOUNT_ADD",
+        SYSCALL_AMOUNT_SUB => "AMOUNT_SUB",
+        SYSCALL_AMOUNT_MUL => "AMOUNT_MUL",
+        SYSCALL_AMOUNT_DIV_EXACT => "AMOUNT_DIV_EXACT",
+        SYSCALL_AMOUNT_DIV_ROUND => "AMOUNT_DIV_ROUND",
+        SYSCALL_AMOUNT_EQ => "AMOUNT_EQ",
+        SYSCALL_AMOUNT_NE => "AMOUNT_NE",
+        SYSCALL_AMOUNT_LT => "AMOUNT_LT",
+        SYSCALL_AMOUNT_LE => "AMOUNT_LE",
+        SYSCALL_AMOUNT_GT => "AMOUNT_GT",
+        SYSCALL_AMOUNT_GE => "AMOUNT_GE",
+        SYSCALL_JSON_BUILD => "JSON_BUILD",
         SYSCALL_SUBSCRIPTION_BILL => "SUBSCRIPTION_BILL",
         SYSCALL_SUBSCRIPTION_RECORD_USAGE => "SUBSCRIPTION_RECORD_USAGE",
         SYSCALL_RESOLVE_ACCOUNT_ALIAS => "RESOLVE_ACCOUNT_ALIAS",
@@ -1528,28 +1653,643 @@ pub fn render_abi_hashes_markdown_table() -> String {
     out
 }
 
-/// Compute the stable first-release ABI hash for the allowed syscall surface.
-///
-/// The hash is computed over the domain tag `b"IVM_ABI_V1"`, the fixed v1
-/// policy tag, and the sorted list of allowed syscall numbers as little-endian
-/// `u32`.
-pub fn compute_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
-    use iroha_crypto::Hash;
-    // Domain tag + policy tag
-    let mut bytes = Vec::with_capacity(8 + 1 + syscalls_for_policy(policy).len() * 4);
-    bytes.extend_from_slice(b"IVM_ABI_V1");
-    let crate::SyscallPolicy::AbiV1 = policy;
-    bytes.push(1);
-    // Policy-specific list is already sorted/deduped
-    for n in syscalls_for_policy(policy) {
-        bytes.extend_from_slice(&n.to_le_bytes());
+const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
+const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 1;
+const AMOUNT_MANTISSA_BITS_V1: u16 = 512;
+const AMOUNT_MAX_SCALE_V1: u8 = 28;
+
+// This is the base for invalid-surface sentinels. They cannot be emitted by
+// `iroha_crypto::Hash::new`: every valid Iroha hash has the low bit of its final
+// byte set. Returning an unmistakable sentinel is safer than silently hashing
+// an incomplete generated registry, while release tests require the compiled
+// surface to validate successfully.
+const INVALID_ABI_SURFACE_HASH: [u8; 32] = [0; 32];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AbiSyscallSurface {
+    number: u32,
+    args: &'static str,
+    ret: &'static str,
+    access: SyscallAccess,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiNamedTypeSurface {
+    name: &'static str,
+    ty: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiCoreQueryProjectionSurface {
+    name: &'static str,
+    entity_tag: u64,
+    fields: Vec<AbiNamedTypeSurface>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiQueryPageSurface {
+    name: &'static str,
+    fields: Vec<AbiNamedTypeSurface>,
+    items_capacity: u8,
+    next_offset_semantics: &'static str,
+    item_ordering: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiEntrypointSurface {
+    schema_version: u8,
+    amount_kind: &'static str,
+    amount_pointer_type_id: u16,
+    list_kind: &'static str,
+    list_layout: &'static str,
+    list_child_count: u8,
+    list_capacity_is_schema_bound: bool,
+    list_min_capacity: u8,
+    list_max_capacity: u8,
+    max_schema_nodes: u64,
+    max_schema_depth: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiAmountRoundingSurface {
+    name: &'static str,
+    tag: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiAmountSurface {
+    pointer_type_id: u16,
+    mantissa_bits: u16,
+    max_scale: u8,
+    sign_semantics: &'static str,
+    canonicalization: &'static str,
+    rounding_modes: Vec<AbiAmountRoundingSurface>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiSurface {
+    descriptor_format_version: u16,
+    policy_tag: u8,
+    syscalls: Vec<AbiSyscallSurface>,
+    pointer_type_ids: Vec<u16>,
+    core_query_projections: Vec<AbiCoreQueryProjectionSurface>,
+    query_page: AbiQueryPageSurface,
+    entrypoint: AbiEntrypointSurface,
+    amount: AbiAmountSurface,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AbiSurfaceError {
+    EmptySyscallSurface,
+    EmptyPointerSurface,
+    SyscallsNotStrictlySorted { previous: u32, current: u32 },
+    PointerTypesNotStrictlySorted { previous: u16, current: u16 },
+    MissingSignature(u32),
+    DuplicateSignature(u32),
+    UnexpectedSignature(u32),
+    EmptyArguments(u32),
+    EmptyReturn(u32),
+    SurfaceTooLarge,
+}
+
+fn invalid_abi_surface_hash(error: AbiSurfaceError) -> [u8; 32] {
+    let (tag, first, second) = match error {
+        AbiSurfaceError::EmptySyscallSurface => (1, 0, 0),
+        AbiSurfaceError::EmptyPointerSurface => (2, 0, 0),
+        AbiSurfaceError::SyscallsNotStrictlySorted { previous, current } => (3, previous, current),
+        AbiSurfaceError::PointerTypesNotStrictlySorted { previous, current } => {
+            (4, u32::from(previous), u32::from(current))
+        }
+        AbiSurfaceError::MissingSignature(number) => (5, number, 0),
+        AbiSurfaceError::DuplicateSignature(number) => (6, number, 0),
+        AbiSurfaceError::UnexpectedSignature(number) => (7, number, 0),
+        AbiSurfaceError::EmptyArguments(number) => (8, number, 0),
+        AbiSurfaceError::EmptyReturn(number) => (9, number, 0),
+        AbiSurfaceError::SurfaceTooLarge => (10, 0, 0),
+    };
+    let mut sentinel = INVALID_ABI_SURFACE_HASH;
+    sentinel[0] = tag;
+    sentinel[1..5].copy_from_slice(&first.to_le_bytes());
+    sentinel[5..9].copy_from_slice(&second.to_le_bytes());
+    sentinel
+}
+
+const fn syscall_access_tag(access: SyscallAccess) -> u8 {
+    match access {
+        SyscallAccess::None => 0,
+        SyscallAccess::StateRead => 1,
+        SyscallAccess::StateWrite => 2,
+        SyscallAccess::LedgerRead => 3,
+        SyscallAccess::LedgerWrite => 4,
+        SyscallAccess::Dynamic => 5,
     }
-    *Hash::new(&bytes).as_ref()
+}
+
+fn append_abi_field(bytes: &mut Vec<u8>, value: &[u8]) -> Result<(), AbiSurfaceError> {
+    let len = u64::try_from(value.len()).map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
+    bytes.extend_from_slice(&len.to_le_bytes());
+    bytes.extend_from_slice(value);
+    Ok(())
+}
+
+/// Canonical encoder for the ABI hash descriptor.
+///
+/// Every value is paired with a stable field name and both byte strings are
+/// length-prefixed. Nested records and sequence items are themselves framed
+/// fields, so no two different partitions of the same byte stream can alias.
+/// Inputs are explicit integers, booleans, and UTF-8 protocol names; encoding
+/// never depends on debug formatting, a codec configuration, or host hardware.
+#[derive(Default)]
+struct AbiDescriptorEncoder {
+    bytes: Vec<u8>,
+}
+
+impl AbiDescriptorEncoder {
+    fn field(&mut self, name: &str, value: &[u8]) -> Result<(), AbiSurfaceError> {
+        append_abi_field(&mut self.bytes, name.as_bytes())?;
+        append_abi_field(&mut self.bytes, value)
+    }
+
+    fn text(&mut self, name: &str, value: &str) -> Result<(), AbiSurfaceError> {
+        self.field(name, value.as_bytes())
+    }
+
+    fn bool(&mut self, name: &str, value: bool) -> Result<(), AbiSurfaceError> {
+        self.field(name, &[u8::from(value)])
+    }
+
+    fn u8(&mut self, name: &str, value: u8) -> Result<(), AbiSurfaceError> {
+        self.field(name, &[value])
+    }
+
+    fn u16(&mut self, name: &str, value: u16) -> Result<(), AbiSurfaceError> {
+        self.field(name, &value.to_le_bytes())
+    }
+
+    fn u32(&mut self, name: &str, value: u32) -> Result<(), AbiSurfaceError> {
+        self.field(name, &value.to_le_bytes())
+    }
+
+    fn u64(&mut self, name: &str, value: u64) -> Result<(), AbiSurfaceError> {
+        self.field(name, &value.to_le_bytes())
+    }
+
+    fn record(
+        &mut self,
+        name: &str,
+        encode: impl FnOnce(&mut Self) -> Result<(), AbiSurfaceError>,
+    ) -> Result<(), AbiSurfaceError> {
+        let mut record = Self::default();
+        encode(&mut record)?;
+        self.field(name, &record.bytes)
+    }
+
+    fn sequence<T>(
+        &mut self,
+        name: &str,
+        items: &[T],
+        mut encode_item: impl FnMut(&mut Self, &T) -> Result<(), AbiSurfaceError>,
+    ) -> Result<(), AbiSurfaceError> {
+        self.record(name, |sequence| {
+            let count = u64::try_from(items.len()).map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
+            sequence.u64("count", count)?;
+            for item in items {
+                sequence.record("item", |record| encode_item(record, item))?;
+            }
+            Ok(())
+        })
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+fn core_query_projection_surface_v1() -> Vec<AbiCoreQueryProjectionSurface> {
+    use crate::core_query::CoreQueryEntityTagV1 as Tag;
+
+    vec![
+        AbiCoreQueryProjectionSurface {
+            name: "AccountView",
+            entity_tag: Tag::Account.as_u64(),
+            fields: vec![
+                AbiNamedTypeSurface {
+                    name: "id",
+                    ty: "AccountId",
+                },
+                AbiNamedTypeSurface {
+                    name: "metadata",
+                    ty: "Json",
+                },
+            ],
+        },
+        AbiCoreQueryProjectionSurface {
+            name: "AssetView",
+            entity_tag: Tag::Asset.as_u64(),
+            fields: vec![
+                AbiNamedTypeSurface {
+                    name: "id",
+                    ty: "AssetId",
+                },
+                AbiNamedTypeSurface {
+                    name: "amount",
+                    ty: "Amount",
+                },
+            ],
+        },
+        AbiCoreQueryProjectionSurface {
+            name: "AssetDefinitionView",
+            entity_tag: Tag::AssetDefinition.as_u64(),
+            fields: vec![
+                AbiNamedTypeSurface {
+                    name: "id",
+                    ty: "AssetDefinitionId",
+                },
+                AbiNamedTypeSurface {
+                    name: "name",
+                    ty: "String",
+                },
+                AbiNamedTypeSurface {
+                    name: "description",
+                    ty: "Option<String>",
+                },
+                AbiNamedTypeSurface {
+                    name: "owned_by",
+                    ty: "AccountId",
+                },
+                AbiNamedTypeSurface {
+                    name: "total_quantity",
+                    ty: "Amount",
+                },
+                AbiNamedTypeSurface {
+                    name: "metadata",
+                    ty: "Json",
+                },
+            ],
+        },
+        AbiCoreQueryProjectionSurface {
+            name: "DomainView",
+            entity_tag: Tag::Domain.as_u64(),
+            fields: vec![
+                AbiNamedTypeSurface {
+                    name: "id",
+                    ty: "DomainId",
+                },
+                AbiNamedTypeSurface {
+                    name: "owned_by",
+                    ty: "AccountId",
+                },
+                AbiNamedTypeSurface {
+                    name: "metadata",
+                    ty: "Json",
+                },
+            ],
+        },
+        AbiCoreQueryProjectionSurface {
+            name: "NftView",
+            entity_tag: Tag::Nft.as_u64(),
+            fields: vec![
+                AbiNamedTypeSurface {
+                    name: "id",
+                    ty: "NftId",
+                },
+                AbiNamedTypeSurface {
+                    name: "owned_by",
+                    ty: "AccountId",
+                },
+                AbiNamedTypeSurface {
+                    name: "content",
+                    ty: "Json",
+                },
+            ],
+        },
+    ]
+}
+
+fn semantic_abi_surface_v1() -> Result<
+    (
+        Vec<AbiCoreQueryProjectionSurface>,
+        AbiQueryPageSurface,
+        AbiEntrypointSurface,
+        AbiAmountSurface,
+    ),
+    AbiSurfaceError,
+> {
+    use crate::{
+        core_query::QUERY_PAGE_CAPACITY_V1,
+        entrypoint::{
+            MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH, MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES,
+            MAX_ENTRYPOINT_LIST_CAPACITY_V1, MIN_ENTRYPOINT_LIST_CAPACITY_V1,
+        },
+        pointer_abi::PointerType,
+    };
+
+    let query_page_capacity =
+        u8::try_from(QUERY_PAGE_CAPACITY_V1).map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
+    let max_schema_nodes = u64::try_from(MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES)
+        .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
+    let max_schema_depth = u64::try_from(MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH)
+        .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
+    let amount_pointer_type_id = PointerType::Amount as u16;
+
+    Ok((
+        core_query_projection_surface_v1(),
+        AbiQueryPageSurface {
+            name: "QueryPage",
+            fields: vec![
+                AbiNamedTypeSurface {
+                    name: "items",
+                    ty: "List<T,64>",
+                },
+                AbiNamedTypeSurface {
+                    name: "next_offset",
+                    ty: "Option<i64>",
+                },
+            ],
+            items_capacity: query_page_capacity,
+            next_offset_semantics: "present-iff-another-canonical-page-exists;some-requires-nonempty-items;nonnegative;not-less-than-item-count;from-window=offset+item-count-with-checked-i64",
+            item_ordering: "canonical-entity-id-ascending",
+        },
+        AbiEntrypointSurface {
+            schema_version: 1,
+            amount_kind: "Amount",
+            amount_pointer_type_id,
+            list_kind: "List",
+            list_layout: "flat-preorder;exact-element-subtree-immediately-follows",
+            list_child_count: 1,
+            list_capacity_is_schema_bound: true,
+            list_min_capacity: MIN_ENTRYPOINT_LIST_CAPACITY_V1,
+            list_max_capacity: MAX_ENTRYPOINT_LIST_CAPACITY_V1,
+            max_schema_nodes,
+            max_schema_depth,
+        },
+        AbiAmountSurface {
+            pointer_type_id: amount_pointer_type_id,
+            mantissa_bits: AMOUNT_MANTISSA_BITS_V1,
+            max_scale: AMOUNT_MAX_SCALE_V1,
+            sign_semantics: "nonnegative",
+            canonicalization: "strip-fractional-trailing-zeroes;zero-scale-is-zero",
+            rounding_modes: vec![
+                AbiAmountRoundingSurface {
+                    name: "floor",
+                    tag: AMOUNT_ROUND_FLOOR,
+                },
+                AbiAmountRoundingSurface {
+                    name: "ceil",
+                    tag: AMOUNT_ROUND_CEIL,
+                },
+                AbiAmountRoundingSurface {
+                    name: "nearest_even",
+                    tag: AMOUNT_ROUND_NEAREST_EVEN,
+                },
+            ],
+        },
+    ))
+}
+
+fn collect_abi_syscall_surface(
+    syscalls: &[u32],
+    docs: &[SyscallDoc],
+) -> Result<Vec<AbiSyscallSurface>, AbiSurfaceError> {
+    if syscalls.is_empty() {
+        return Err(AbiSurfaceError::EmptySyscallSurface);
+    }
+    if let Some(pair) = syscalls.windows(2).find(|pair| pair[0] >= pair[1]) {
+        return Err(AbiSurfaceError::SyscallsNotStrictlySorted {
+            previous: pair[0],
+            current: pair[1],
+        });
+    }
+    for doc in docs {
+        if syscalls.binary_search(&doc.number).is_err() {
+            return Err(AbiSurfaceError::UnexpectedSignature(doc.number));
+        }
+    }
+
+    let mut surface = Vec::with_capacity(syscalls.len());
+    for &number in syscalls {
+        let mut rows = docs.iter().filter(|doc| doc.number == number);
+        let doc = rows
+            .next()
+            .ok_or(AbiSurfaceError::MissingSignature(number))?;
+        if rows.next().is_some() {
+            return Err(AbiSurfaceError::DuplicateSignature(number));
+        }
+        if doc.args.is_empty() {
+            return Err(AbiSurfaceError::EmptyArguments(number));
+        }
+        if doc.ret.is_empty() {
+            return Err(AbiSurfaceError::EmptyReturn(number));
+        }
+        surface.push(AbiSyscallSurface {
+            number,
+            args: doc.args,
+            ret: doc.ret,
+            access: syscall_access(number),
+        });
+    }
+    Ok(surface)
+}
+
+fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> {
+    if surface.syscalls.is_empty() {
+        return Err(AbiSurfaceError::EmptySyscallSurface);
+    }
+    if surface.pointer_type_ids.is_empty() {
+        return Err(AbiSurfaceError::EmptyPointerSurface);
+    }
+    if let Some(pair) = surface
+        .syscalls
+        .windows(2)
+        .find(|pair| pair[0].number >= pair[1].number)
+    {
+        return Err(AbiSurfaceError::SyscallsNotStrictlySorted {
+            previous: pair[0].number,
+            current: pair[1].number,
+        });
+    }
+    if let Some(pair) = surface
+        .pointer_type_ids
+        .windows(2)
+        .find(|pair| pair[0] >= pair[1])
+    {
+        return Err(AbiSurfaceError::PointerTypesNotStrictlySorted {
+            previous: pair[0],
+            current: pair[1],
+        });
+    }
+
+    for syscall in &surface.syscalls {
+        if syscall.args.is_empty() {
+            return Err(AbiSurfaceError::EmptyArguments(syscall.number));
+        }
+        if syscall.ret.is_empty() {
+            return Err(AbiSurfaceError::EmptyReturn(syscall.number));
+        }
+    }
+
+    let mut descriptor = AbiDescriptorEncoder::default();
+    descriptor.field("domain", ABI_V1_SURFACE_DOMAIN)?;
+    descriptor.u16(
+        "descriptor_format_version",
+        surface.descriptor_format_version,
+    )?;
+    descriptor.u8("policy_tag", surface.policy_tag)?;
+    descriptor.sequence("syscalls", &surface.syscalls, |record, syscall| {
+        record.u32("number", syscall.number)?;
+        record.text("arguments", syscall.args)?;
+        record.text("return", syscall.ret)?;
+        record.u8("access", syscall_access_tag(syscall.access))
+    })?;
+    descriptor.sequence(
+        "pointer_type_ids",
+        &surface.pointer_type_ids,
+        |record, type_id| record.u16("type_id", *type_id),
+    )?;
+    descriptor.record("core_query", |core_query| {
+        core_query.text("singular_result", "Option<View>")?;
+        core_query.sequence(
+            "projections",
+            &surface.core_query_projections,
+            |projection_record, projection| {
+                projection_record.text("name", projection.name)?;
+                projection_record.u64("entity_tag", projection.entity_tag)?;
+                projection_record.sequence("fields", &projection.fields, |field_record, field| {
+                    field_record.text("name", field.name)?;
+                    field_record.text("type", field.ty)
+                })
+            },
+        )?;
+        core_query.record("page", |page| {
+            page.text("name", surface.query_page.name)?;
+            page.sequence(
+                "fields",
+                &surface.query_page.fields,
+                |field_record, field| {
+                    field_record.text("name", field.name)?;
+                    field_record.text("type", field.ty)
+                },
+            )?;
+            page.u8("items_capacity", surface.query_page.items_capacity)?;
+            page.text(
+                "next_offset_semantics",
+                surface.query_page.next_offset_semantics,
+            )?;
+            page.text("item_ordering", surface.query_page.item_ordering)
+        })
+    })?;
+    descriptor.record("entrypoint", |entrypoint| {
+        entrypoint.u8("schema_version", surface.entrypoint.schema_version)?;
+        entrypoint.text("amount_kind", surface.entrypoint.amount_kind)?;
+        entrypoint.u16(
+            "amount_pointer_type_id",
+            surface.entrypoint.amount_pointer_type_id,
+        )?;
+        entrypoint.text("list_kind", surface.entrypoint.list_kind)?;
+        entrypoint.text("list_layout", surface.entrypoint.list_layout)?;
+        entrypoint.u8("list_child_count", surface.entrypoint.list_child_count)?;
+        entrypoint.bool(
+            "list_capacity_is_schema_bound",
+            surface.entrypoint.list_capacity_is_schema_bound,
+        )?;
+        entrypoint.u8("list_min_capacity", surface.entrypoint.list_min_capacity)?;
+        entrypoint.u8("list_max_capacity", surface.entrypoint.list_max_capacity)?;
+        entrypoint.u64("max_schema_nodes", surface.entrypoint.max_schema_nodes)?;
+        entrypoint.u64("max_schema_depth", surface.entrypoint.max_schema_depth)
+    })?;
+    descriptor.record("amount", |amount| {
+        amount.u16("pointer_type_id", surface.amount.pointer_type_id)?;
+        amount.u16("mantissa_bits", surface.amount.mantissa_bits)?;
+        amount.u8("max_scale", surface.amount.max_scale)?;
+        amount.text("sign_semantics", surface.amount.sign_semantics)?;
+        amount.text("canonicalization", surface.amount.canonicalization)?;
+        amount.sequence(
+            "rounding_modes",
+            &surface.amount.rounding_modes,
+            |rounding, mode| {
+                rounding.text("name", mode.name)?;
+                rounding.u64("tag", mode.tag)
+            },
+        )
+    })?;
+    Ok(descriptor.finish())
+}
+
+fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSurfaceError> {
+    let crate::SyscallPolicy::AbiV1 = policy;
+    let syscalls =
+        collect_abi_syscall_surface(syscalls_for_policy(policy), syscalls_doc_gen::DOCS)?;
+    let mut pointer_type_ids = crate::pointer_abi::policy_pointer_types(policy)
+        .iter()
+        .map(|pointer_type| *pointer_type as u16)
+        .collect::<Vec<_>>();
+    pointer_type_ids.sort_unstable();
+    let (core_query_projections, query_page, entrypoint, amount) = semantic_abi_surface_v1()?;
+    Ok(AbiSurface {
+        descriptor_format_version: ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION,
+        policy_tag: 1,
+        syscalls,
+        pointer_type_ids,
+        core_query_projections,
+        query_page,
+        entrypoint,
+        amount,
+    })
+}
+
+fn build_abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<Vec<u8>, AbiSurfaceError> {
+    encode_abi_surface(&collect_abi_surface(policy)?)
+}
+
+fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8], AbiSurfaceError> {
+    use std::sync::OnceLock;
+
+    static ABI_V1: OnceLock<Result<Vec<u8>, AbiSurfaceError>> = OnceLock::new();
+    let crate::SyscallPolicy::AbiV1 = policy;
+    match ABI_V1.get_or_init(|| build_abi_surface_descriptor(policy)) {
+        Ok(descriptor) => Ok(descriptor.as_slice()),
+        Err(error) => Err(*error),
+    }
+}
+
+/// Compute the stable first-release ABI hash for the complete allowed surface.
+///
+/// The domain-separated, versioned, length-prefixed descriptor binds the
+/// ABI-v1 policy tag; every sorted syscall signature and host-access class;
+/// every allowed pointer type; typed core-query entity tags, projections, and
+/// page semantics; recursive entrypoint `List` and `Amount` kinds; and the
+/// canonical Amount and rounding-mode rules. Gas prices remain bound
+/// independently by the gas-schedule hash. A malformed compiled registry
+/// returns a diagnostic sentinel with an invalid Iroha-hash marker; release
+/// tests require that path to be unreachable, and a valid Iroha hash can never
+/// equal such a sentinel.
+pub fn compute_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
+    match abi_surface_descriptor(policy) {
+        Ok(descriptor) => *iroha_crypto::Hash::new(descriptor).as_ref(),
+        Err(error) => invalid_abi_surface_hash(error),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn canonical_surface() -> AbiSurface {
+        collect_abi_surface(crate::SyscallPolicy::AbiV1).expect("canonical ABI-v1 surface")
+    }
+
+    fn descriptor_hash(surface: &AbiSurface) -> [u8; 32] {
+        let descriptor = encode_abi_surface(surface).expect("test surface is canonical");
+        *iroha_crypto::Hash::new(descriptor).as_ref()
+    }
+
+    fn assert_surface_mutation_changes_hash(mutator: impl FnOnce(&mut AbiSurface)) {
+        let canonical_surface = canonical_surface();
+        let canonical_hash = descriptor_hash(&canonical_surface);
+        let mut changed = canonical_surface;
+        mutator(&mut changed);
+        assert_ne!(descriptor_hash(&changed), canonical_hash);
+    }
 
     #[test]
     fn canonical_helper_syscall_maps_direct_aliases() {
@@ -1563,7 +2303,7 @@ mod tests {
             ),
             (SYSCALL_JSON_GET_NFT_ID_DIRECT, SYSCALL_JSON_GET_NFT_ID),
             (SYSCALL_JSON_GET_BLOB_HEX_DIRECT, SYSCALL_JSON_GET_BLOB_HEX),
-            (SYSCALL_JSON_GET_NUMERIC_DIRECT, SYSCALL_JSON_GET_NUMERIC),
+            (SYSCALL_JSON_GET_AMOUNT_DIRECT, SYSCALL_JSON_GET_AMOUNT),
             (
                 SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT,
                 SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
@@ -1640,7 +2380,11 @@ mod tests {
             SyscallAccess::None
         );
         assert_eq!(
-            syscall_access(SYSCALL_QUERY_GET_ACCOUNT),
+            syscall_access(SYSCALL_CORE_QUERY_GET),
+            SyscallAccess::LedgerRead
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_CORE_QUERY_PAGE),
             SyscallAccess::LedgerRead
         );
         assert_eq!(
@@ -1664,5 +2408,461 @@ mod tests {
                 "ABI syscall 0x{number:06x} lacks a registry name"
             );
         }
+    }
+
+    #[test]
+    fn abi_v1_has_one_canonical_signature_per_allowed_syscall() {
+        let allowed = abi_syscall_list();
+        assert_eq!(
+            syscalls_doc_gen::DOCS.len(),
+            allowed.len(),
+            "the canonical signature registry must exactly cover ABI v1"
+        );
+        for (&number, row) in allowed.iter().zip(syscalls_doc_gen::DOCS) {
+            assert_eq!(
+                row.number, number,
+                "canonical signatures must use sorted ABI-v1 syscall order"
+            );
+            assert!(
+                syscall_name(number).is_some_and(|name| !name.is_empty()),
+                "ABI syscall 0x{number:06x} must have a canonical name"
+            );
+            assert!(!row.args.is_empty());
+            assert!(!row.ret.is_empty());
+        }
+
+        let surface = collect_abi_syscall_surface(allowed, syscalls_doc_gen::DOCS)
+            .expect("the compiled ABI-v1 registry must be valid");
+        assert_eq!(surface.len(), allowed.len());
+        assert!(build_abi_surface_descriptor(crate::SyscallPolicy::AbiV1).is_ok());
+        assert!(abi_surface_descriptor(crate::SyscallPolicy::AbiV1).is_ok());
+        let hash = compute_abi_hash(crate::SyscallPolicy::AbiV1);
+        assert_ne!(hash, INVALID_ABI_SURFACE_HASH);
+        assert_eq!(hash[hash.len() - 1] & 1, 1, "valid Iroha hash marker");
+    }
+
+    #[test]
+    fn abi_hash_descriptor_binds_every_semantic_surface_component() {
+        let surface = canonical_surface();
+        let canonical = descriptor_hash(&surface);
+        assert_eq!(canonical, compute_abi_hash(crate::SyscallPolicy::AbiV1));
+
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.descriptor_format_version += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| changed.policy_tag += 1);
+        assert_surface_mutation_changes_hash(|changed| {
+            let last = changed.syscalls.last_mut().expect("ABI has syscalls");
+            last.number = last
+                .number
+                .checked_add(1)
+                .expect("last syscall number has headroom");
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.syscalls[0].args = "mutated arguments";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.syscalls[0].ret = "mutated return";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.syscalls[0].access = if changed.syscalls[0].access == SyscallAccess::Dynamic {
+                SyscallAccess::None
+            } else {
+                SyscallAccess::Dynamic
+            };
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            let _ = changed.syscalls.pop();
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            let _ = changed.pointer_type_ids.pop();
+        });
+    }
+
+    #[test]
+    fn abi_hash_descriptor_binds_core_query_tags_projection_shapes_and_page_semantics() {
+        use crate::core_query::{CoreQueryEntityTagV1 as Tag, QUERY_PAGE_CAPACITY_V1};
+
+        let surface = canonical_surface();
+        assert_eq!(
+            surface
+                .core_query_projections
+                .iter()
+                .map(|projection| projection.entity_tag)
+                .collect::<Vec<_>>(),
+            vec![
+                Tag::Account.as_u64(),
+                Tag::Asset.as_u64(),
+                Tag::AssetDefinition.as_u64(),
+                Tag::Domain.as_u64(),
+                Tag::Nft.as_u64(),
+            ]
+        );
+        assert_eq!(
+            surface
+                .core_query_projections
+                .iter()
+                .map(|projection| {
+                    (
+                        projection.name,
+                        projection
+                            .fields
+                            .iter()
+                            .map(|field| (field.name, field.ty))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "AccountView",
+                    vec![("id", "AccountId"), ("metadata", "Json")]
+                ),
+                ("AssetView", vec![("id", "AssetId"), ("amount", "Amount")]),
+                (
+                    "AssetDefinitionView",
+                    vec![
+                        ("id", "AssetDefinitionId"),
+                        ("name", "String"),
+                        ("description", "Option<String>"),
+                        ("owned_by", "AccountId"),
+                        ("total_quantity", "Amount"),
+                        ("metadata", "Json"),
+                    ]
+                ),
+                (
+                    "DomainView",
+                    vec![
+                        ("id", "DomainId"),
+                        ("owned_by", "AccountId"),
+                        ("metadata", "Json"),
+                    ]
+                ),
+                (
+                    "NftView",
+                    vec![
+                        ("id", "NftId"),
+                        ("owned_by", "AccountId"),
+                        ("content", "Json"),
+                    ]
+                ),
+            ]
+        );
+        assert_eq!(
+            usize::from(surface.query_page.items_capacity),
+            QUERY_PAGE_CAPACITY_V1
+        );
+        assert_eq!(
+            surface
+                .query_page
+                .fields
+                .iter()
+                .map(|field| (field.name, field.ty))
+                .collect::<Vec<_>>(),
+            vec![("items", "List<T,64>"), ("next_offset", "Option<i64>")]
+        );
+        assert_eq!(
+            surface.query_page.next_offset_semantics,
+            "present-iff-another-canonical-page-exists;some-requires-nonempty-items;nonnegative;not-less-than-item-count;from-window=offset+item-count-with-checked-i64"
+        );
+
+        for projection_index in 0..surface.core_query_projections.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.core_query_projections[projection_index].entity_tag += 10;
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.core_query_projections[projection_index].name = "MutatedView";
+            });
+            for field_index in 0..surface.core_query_projections[projection_index]
+                .fields
+                .len()
+            {
+                assert_surface_mutation_changes_hash(|changed| {
+                    changed.core_query_projections[projection_index].fields[field_index].name =
+                        "mutated_field";
+                });
+                assert_surface_mutation_changes_hash(|changed| {
+                    changed.core_query_projections[projection_index].fields[field_index].ty =
+                        "Blob";
+                });
+            }
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.core_query_projections[projection_index]
+                    .fields
+                    .swap(0, 1);
+            });
+        }
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.query_page.items_capacity -= 1;
+        });
+        for field_index in 0..surface.query_page.fields.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.query_page.fields[field_index].name = "mutated_field";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.query_page.fields[field_index].ty = "Blob";
+            });
+        }
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.query_page.fields.swap(0, 1);
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.query_page.next_offset_semantics = "present-on-every-page";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.query_page.item_ordering = "host-insertion-order";
+        });
+    }
+
+    #[test]
+    fn abi_hash_descriptor_binds_entrypoint_amount_and_recursive_list_semantics() {
+        use crate::{
+            entrypoint::{
+                EntrypointValueKindV1, MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH,
+                MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES, MAX_ENTRYPOINT_LIST_CAPACITY_V1,
+                MIN_ENTRYPOINT_LIST_CAPACITY_V1,
+            },
+            pointer_abi::PointerType,
+        };
+
+        let surface = canonical_surface();
+        let amount_kind = EntrypointValueKindV1::Amount;
+        assert!(amount_kind.is_pointer());
+        assert_eq!(surface.entrypoint.amount_kind, "Amount");
+        assert_eq!(
+            surface.entrypoint.amount_pointer_type_id,
+            PointerType::Amount as u16
+        );
+        assert_eq!(
+            surface.entrypoint.list_min_capacity,
+            MIN_ENTRYPOINT_LIST_CAPACITY_V1
+        );
+        assert_eq!(
+            surface.entrypoint.list_max_capacity,
+            MAX_ENTRYPOINT_LIST_CAPACITY_V1
+        );
+        assert_eq!(
+            surface.entrypoint.max_schema_nodes,
+            u64::try_from(MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES).expect("node limit fits u64")
+        );
+        assert_eq!(
+            surface.entrypoint.max_schema_depth,
+            u64::try_from(MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH).expect("depth limit fits u64")
+        );
+
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.schema_version += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.amount_kind = "Numeric";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.amount_pointer_type_id += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.list_layout = "nested-recursive-record";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.list_child_count += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.list_capacity_is_schema_bound = false;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.list_min_capacity += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.list_max_capacity -= 1;
+        });
+    }
+
+    #[test]
+    fn abi_hash_descriptor_binds_amount_pointer_rules_and_rounding_tags() {
+        use crate::pointer_abi::PointerType;
+
+        let surface = canonical_surface();
+        assert_eq!(surface.amount.pointer_type_id, PointerType::Amount as u16);
+        assert_eq!(
+            surface
+                .pointer_type_ids
+                .iter()
+                .filter(|&&type_id| type_id == PointerType::Amount as u16)
+                .count(),
+            1
+        );
+        assert_eq!(surface.amount.mantissa_bits, 512);
+        assert_eq!(surface.amount.max_scale, 28);
+        assert_eq!(
+            surface
+                .amount
+                .rounding_modes
+                .iter()
+                .map(|mode| (mode.name, mode.tag))
+                .collect::<Vec<_>>(),
+            vec![
+                ("floor", AMOUNT_ROUND_FLOOR),
+                ("ceil", AMOUNT_ROUND_CEIL),
+                ("nearest_even", AMOUNT_ROUND_NEAREST_EVEN),
+            ]
+        );
+
+        assert_surface_mutation_changes_hash(|changed| {
+            let amount_id = changed
+                .pointer_type_ids
+                .iter_mut()
+                .find(|type_id| **type_id == PointerType::Amount as u16)
+                .expect("Amount pointer type is allowed");
+            *amount_id += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.amount.pointer_type_id += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.amount.mantissa_bits -= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.amount.max_scale -= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.amount.sign_semantics = "signed";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.amount.canonicalization = "preserve-source-scale";
+        });
+        for mode_index in 0..surface.amount.rounding_modes.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.amount.rounding_modes[mode_index].name = "mutated_mode";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.amount.rounding_modes[mode_index].tag += 10;
+            });
+        }
+    }
+
+    #[test]
+    fn abi_descriptor_framing_distinguishes_ambiguous_byte_partitions() {
+        let mut first = AbiDescriptorEncoder::default();
+        first.field("ab", b"c").expect("small descriptor field");
+        first.field("d", b"ef").expect("small descriptor field");
+
+        let mut second = AbiDescriptorEncoder::default();
+        second.field("a", b"bc").expect("small descriptor field");
+        second.field("de", b"f").expect("small descriptor field");
+
+        assert_ne!(first.finish(), second.finish());
+    }
+
+    #[test]
+    fn abi_registry_validation_rejects_missing_duplicate_and_extra_rows() {
+        let number = SYSCALL_EXIT;
+        assert_eq!(
+            collect_abi_syscall_surface(&[number], &[]),
+            Err(AbiSurfaceError::MissingSignature(number))
+        );
+
+        let row = SyscallDoc {
+            number,
+            args: "r10=status:u64",
+            ret: "u64=status",
+            gas: "G_exit",
+        };
+        let duplicate = [
+            SyscallDoc {
+                number: row.number,
+                args: row.args,
+                ret: row.ret,
+                gas: row.gas,
+            },
+            SyscallDoc {
+                number: row.number,
+                args: row.args,
+                ret: row.ret,
+                gas: row.gas,
+            },
+        ];
+        assert_eq!(
+            collect_abi_syscall_surface(&[number], &duplicate),
+            Err(AbiSurfaceError::DuplicateSignature(number))
+        );
+
+        let extra = SyscallDoc {
+            number: SYSCALL_ABORT,
+            args: "-",
+            ret: "u64=0",
+            gas: "G_abort",
+        };
+        assert_eq!(
+            collect_abi_syscall_surface(&[number], &[extra]),
+            Err(AbiSurfaceError::UnexpectedSignature(SYSCALL_ABORT))
+        );
+        assert!(matches!(
+            collect_abi_syscall_surface(&[SYSCALL_ABORT, SYSCALL_EXIT], &duplicate),
+            Err(AbiSurfaceError::SyscallsNotStrictlySorted { .. })
+        ));
+    }
+
+    #[test]
+    fn invalid_surface_sentinels_cannot_be_mistaken_for_iroha_hashes() {
+        let errors = [
+            AbiSurfaceError::EmptySyscallSurface,
+            AbiSurfaceError::EmptyPointerSurface,
+            AbiSurfaceError::SyscallsNotStrictlySorted {
+                previous: 2,
+                current: 1,
+            },
+            AbiSurfaceError::PointerTypesNotStrictlySorted {
+                previous: 2,
+                current: 1,
+            },
+            AbiSurfaceError::MissingSignature(1),
+            AbiSurfaceError::DuplicateSignature(1),
+            AbiSurfaceError::UnexpectedSignature(1),
+            AbiSurfaceError::EmptyArguments(1),
+            AbiSurfaceError::EmptyReturn(1),
+            AbiSurfaceError::SurfaceTooLarge,
+        ];
+        let mut sentinels = errors.map(invalid_abi_surface_hash);
+        assert!(sentinels.iter().all(|sentinel| sentinel[31] & 1 == 0));
+        sentinels.sort_unstable();
+        assert!(sentinels.windows(2).all(|pair| pair[0] != pair[1]));
+    }
+
+    #[test]
+    fn gas_text_is_not_part_of_the_abi_surface_hash() {
+        let canonical = &syscalls_doc_gen::DOCS[0];
+        let changed_gas = SyscallDoc {
+            number: canonical.number,
+            args: canonical.args,
+            ret: canonical.ret,
+            gas: "a deliberately different gas schedule",
+        };
+        let canonical_surface =
+            collect_abi_syscall_surface(&[canonical.number], std::slice::from_ref(canonical))
+                .expect("single canonical row");
+        let changed_surface = collect_abi_syscall_surface(&[canonical.number], &[changed_gas])
+            .expect("single altered-gas row");
+        assert_eq!(canonical_surface, changed_surface);
+    }
+
+    #[test]
+    fn pointer_policy_hash_input_is_sorted_complete_and_unique() {
+        let policy = crate::SyscallPolicy::AbiV1;
+        let allowed = crate::pointer_abi::policy_pointer_types(policy);
+        for &pointer_type in crate::pointer_abi::PointerType::all() {
+            assert_eq!(
+                allowed.contains(&pointer_type),
+                pointer_type != crate::pointer_abi::PointerType::TestOnly,
+                "pointer policy completeness for {pointer_type:?}"
+            );
+        }
+        let mut ids = allowed
+            .iter()
+            .map(|pointer_type| *pointer_type as u16)
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+        let mut surface = canonical_surface();
+        surface.pointer_type_ids = ids;
+        assert!(encode_abi_surface(&surface).is_ok());
     }
 }

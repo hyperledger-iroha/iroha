@@ -19,6 +19,7 @@ fn pointer_type_ids_match_golden() {
         P::ProofBlob,
         P::SoracloudRequest,
         P::SoracloudResponse,
+        P::Amount,
     ];
     assert_eq!(
         P::all(),
@@ -42,6 +43,7 @@ fn pointer_type_ids_match_golden() {
     assert_eq!(P::ProofBlob as u16, 0x000D);
     assert_eq!(P::SoracloudRequest as u16, 0x000E);
     assert_eq!(P::SoracloudResponse as u16, 0x000F);
+    assert_eq!(P::Amount as u16, 0x0010);
 }
 
 #[test]
@@ -63,6 +65,7 @@ fn pointer_policy_allows_expected_types_for_v1() {
         P::ProofBlob,
         P::SoracloudRequest,
         P::SoracloudResponse,
+        P::Amount,
     ] {
         assert!(is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty));
     }

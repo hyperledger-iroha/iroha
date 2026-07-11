@@ -1,6 +1,6 @@
 //! Bounded variable-length signed integer with two's-complement encoding.
 //!
-//! The type wraps `num_bigint::BigInt`, enforces a 512-bit cap, and provides
+//! The type wraps `num_bigint::BigInt`, enforces a 512-bit magnitude cap, and provides
 //! Norito and JSON codecs that use a length-prefixed two's-complement byte
 //! representation. Small values stay compact; larger values are allowed until
 //! the hard limit is reached.
@@ -24,13 +24,17 @@ use num_traits::{One, Signed, Zero};
 
 /// Maximum number of bits representable by [`BigInt`].
 pub const MAX_BITS: usize = 512;
-const MAX_BYTES: usize = MAX_BITS / 8;
+// A positive 512-bit magnitude whose top bit is set needs one extra zero sign
+// byte in a minimal two's-complement encoding. The magnitude remains 512 bits.
+const MAX_ENCODED_BYTES: usize = MAX_BITS / 8 + 1;
 
 /// Errors returned by [`BigInt`] operations.
 #[derive(Debug, Clone, Copy, displaydoc::Display, thiserror::Error, PartialEq, Eq)]
 pub enum BigIntError {
     /// Value exceeds configured bit cap
     Overflow,
+    /// Two's-complement byte representation is not minimal
+    NonCanonical,
     /// Division by zero
     DivisionByZero,
 }
@@ -75,14 +79,9 @@ impl BigInt {
         self.inner.is_negative()
     }
 
-    /// Bit length of the minimal two's-complement representation.
+    /// Bit length of the unsigned magnitude.
     pub fn bit_len(&self) -> usize {
-        let bytes = self.inner.to_signed_bytes_le();
-        if bytes.is_empty() {
-            0
-        } else {
-            (bytes.len() - 1) * 8 + 8 - bytes.last().unwrap().leading_zeros() as usize
-        }
+        usize::try_from(self.inner.bits()).unwrap_or(usize::MAX)
     }
 
     /// Compute 10^exp with bound checking.
@@ -100,8 +99,12 @@ impl BigInt {
     ///
     /// # Errors
     /// Returns [`BigIntError::Overflow`] if the decoded value exceeds
-    /// [`MAX_BITS`].
+    /// [`MAX_BITS`]. This low-level constructor accepts fixed-width sign
+    /// extension; the Norito decoder separately enforces minimal encoding.
     pub fn from_twos_bytes(bytes: &[u8]) -> Result<Self, BigIntError> {
+        if bytes.len() > MAX_ENCODED_BYTES {
+            return Err(BigIntError::Overflow);
+        }
         let inner = InnerBigInt::from_signed_bytes_le(bytes);
         Self::from_inner(inner)
     }
@@ -166,12 +169,15 @@ impl BigInt {
         }
     }
 
-    fn from_inner(inner: InnerBigInt) -> Result<Self, BigIntError> {
-        let bytes = inner.to_signed_bytes_le();
-        if bytes.len() > MAX_BYTES {
+    pub(crate) fn from_inner(inner: InnerBigInt) -> Result<Self, BigIntError> {
+        if inner.bits() > MAX_BITS as u64 {
             return Err(BigIntError::Overflow);
         }
         Ok(Self { inner })
+    }
+
+    pub(crate) fn inner(&self) -> &InnerBigInt {
+        &self.inner
     }
 }
 
@@ -326,6 +332,9 @@ impl<'a> DecodeFromSlice<'a> for BigInt {
         let payload = &bytes[used_len..end];
         let value = BigInt::from_twos_bytes(payload)
             .map_err(|_| ncore::Error::Message("invalid bigint".into()))?;
+        if value.to_twos_bytes() != payload {
+            return Err(ncore::Error::Message(BigIntError::NonCanonical.to_string()));
+        }
         Ok((value, end))
     }
 }
@@ -427,11 +436,37 @@ mod tests {
 
     #[test]
     fn from_twos_bytes_rejects_overflow() {
-        let mut bytes = vec![0_u8; MAX_BYTES + 1];
-        bytes[MAX_BYTES] = 0x7f;
+        let mut bytes = vec![0_u8; MAX_ENCODED_BYTES];
+        bytes[MAX_ENCODED_BYTES - 1] = 0x01;
 
         let err = BigInt::from_twos_bytes(&bytes).expect_err("513-bit value must overflow");
         assert_eq!(err, BigIntError::Overflow);
+    }
+
+    #[test]
+    fn positive_unsigned_512_bit_magnitude_roundtrips() {
+        let mut bytes = vec![0xff_u8; MAX_BITS / 8];
+        bytes.push(0);
+        let value = BigInt::from_twos_bytes(&bytes).expect("unsigned 512-bit maximum must fit");
+        assert_eq!(value.bit_len(), MAX_BITS);
+        assert_eq!(value.to_twos_bytes(), bytes);
+        assert_eq!(
+            value.checked_add(&BigInt::one()),
+            Err(BigIntError::Overflow)
+        );
+    }
+
+    #[test]
+    fn norito_decode_rejects_redundant_sign_extension() {
+        for bytes in [&[0_u8][..], &[1, 0], &[0xff, 0xff]] {
+            let mut encoded =
+                norito::codec::Encode::encode(&u32::try_from(bytes.len()).expect("small length"));
+            encoded.extend_from_slice(bytes);
+            let error = <BigInt as DecodeFromSlice>::decode_from_slice(&encoded)
+                .expect_err("redundant sign extension must fail");
+            assert!(error.to_string().contains("not minimal"), "{error}");
+        }
+        assert_eq!(BigInt::from_twos_bytes(&[]), Ok(BigInt::zero()));
     }
 
     #[test]

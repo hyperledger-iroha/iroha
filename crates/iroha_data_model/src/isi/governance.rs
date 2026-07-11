@@ -1,8 +1,9 @@
-//! Governance instructions (sketch)
+//! Typed governance instructions.
 //!
-//! Minimal instruction shells to start wiring governance flows described in
-//! `gov.md`. Execution is not implemented here; these types exist to anchor
-//! serialization, registry, and CLI/endpoint integration.
+//! These canonical data-model types are serialized into transactions and are
+//! executed by the corresponding core governance paths. They also define the
+//! exact CLI and Torii draft surfaces; endpoint-local aliases are not part of
+//! the instruction format.
 
 use std::{string::String, vec::Vec};
 
@@ -51,6 +52,33 @@ pub enum VotingMode {
     Zk,
     /// Plain-text quadratic voting flow.
     Plain,
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonSerialize for VotingMode {
+    fn json_serialize(&self, out: &mut String) {
+        norito::json::write_json_string(
+            match self {
+                Self::Zk => "Zk",
+                Self::Plain => "Plain",
+            },
+            out,
+        );
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for VotingMode {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        match value.as_str() {
+            "Zk" => Ok(Self::Zk),
+            "Plain" => Ok(Self::Plain),
+            other => Err(norito::json::Error::unknown_field(other.to_owned())),
+        }
+    }
 }
 
 /// Council derivation method
@@ -684,6 +712,34 @@ mod tests {
         let mut cur = enc.as_slice();
         let dec = ProposeDeployContract::decode(&mut cur).unwrap();
         assert_eq!(p, dec);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn voting_mode_json_is_canonical_and_rejects_aliases() {
+        assert_eq!(
+            norito::json::to_json(&VotingMode::Zk).expect("serialize Zk voting mode"),
+            "\"Zk\""
+        );
+        assert_eq!(
+            norito::json::to_json(&VotingMode::Plain).expect("serialize Plain voting mode"),
+            "\"Plain\""
+        );
+        assert_eq!(
+            norito::json::from_str::<VotingMode>("\"Zk\"").expect("decode canonical Zk"),
+            VotingMode::Zk
+        );
+        assert_eq!(
+            norito::json::from_str::<VotingMode>("\"Plain\"").expect("decode canonical Plain"),
+            VotingMode::Plain
+        );
+        for alias in ["zk", "plain", "PLAIN", " Zk", "Zk ", "Quadratic"] {
+            let json = format!("\"{alias}\"");
+            assert!(
+                norito::json::from_str::<VotingMode>(&json).is_err(),
+                "noncanonical voting mode alias must reject: {alias:?}"
+            );
+        }
     }
 
     #[test]

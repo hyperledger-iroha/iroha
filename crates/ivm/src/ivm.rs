@@ -80,111 +80,7 @@ const SYSCALL_ARGS_3: &[usize] = &[10, 11, 12];
 const SYSCALL_ARGS_4: &[usize] = &[10, 11, 12, 13];
 const SYSCALL_ARGS_5: &[usize] = &[10, 11, 12, 13, 14];
 
-/// Registers whose values cross the public host boundary for an ABI syscall.
-///
-/// Most syscalls have one argument in r10. Multi-register and argument-free
-/// calls are listed explicitly so an unrelated private value left in a
-/// caller-saved argument register cannot cause a false privacy trap.
-fn syscall_public_input_registers(number: u32) -> &'static [usize] {
-    use crate::syscalls::*;
-
-    match canonical_helper_syscall(number) {
-        SYSCALL_ABORT
-        | SYSCALL_TRANSFER_V1_BATCH_BEGIN
-        | SYSCALL_TRANSFER_V1_BATCH_END
-        | SYSCALL_JSON_OBJECT
-        | SYSCALL_CREATE_NFTS_FOR_ALL_USERS
-        | SYSCALL_GET_AUTHORITY
-        | SYSCALL_SUBSCRIPTION_BILL
-        | SYSCALL_SUBSCRIPTION_RECORD_USAGE
-        | SYSCALL_CURRENT_TIME_MS
-        | SYSCALL_AXT_COMMIT
-        | SYSCALL_PROVE_EXECUTION
-        | SYSCALL_COMMIT_OUTPUT
-        | SYSCALL_SYSVAR_CHAIN_ID
-        | SYSCALL_SYSVAR_BLOCK_HEIGHT
-        | SYSCALL_SYSVAR_BLOCK_TIME_MS
-        | SYSCALL_SYSVAR_AUTHORITY
-        | SYSCALL_SYSVAR_CONTRACT_ADDRESS
-        | SYSCALL_SYSVAR_ENTRYPOINT => SYSCALL_ARGS_0,
-
-        SYSCALL_TRANSFER_ASSET_SCOPED | SYSCALL_SM4_CCM_SEAL | SYSCALL_SM4_CCM_OPEN => {
-            SYSCALL_ARGS_5
-        }
-
-        SYSCALL_TRANSFER_V1
-        | SYSCALL_VERIFY_SIGNATURE
-        | SYSCALL_SM2_VERIFY
-        | SYSCALL_SM4_GCM_SEAL
-        | SYSCALL_SM4_GCM_OPEN
-        | SYSCALL_VRF_VERIFY
-        | SYSCALL_GET_MERKLE_COMPACT
-        | SYSCALL_GET_REGISTER_MERKLE_COMPACT
-        | SYSCALL_ESCROW_OPEN_OFFER
-        | SYSCALL_ESCROW_RESOLVE_DISPUTE => SYSCALL_ARGS_4,
-
-        SYSCALL_SET_ACCOUNT_DETAIL
-        | SYSCALL_MINT_ASSET
-        | SYSCALL_BURN_ASSET
-        | SYSCALL_NFT_TRANSFER_ASSET
-        | SYSCALL_NFT_SET_METADATA
-        | SYSCALL_STATE_KEYS
-        | SYSCALL_STATE_MAP_KEY_AT
-        | SYSCALL_STATE_VALUE_ENCODE
-        | SYSCALL_JSON_SET_I64
-        | SYSCALL_JSON_SET_ACCOUNT_ID
-        | SYSCALL_CALL_CONTRACT
-        | SYSCALL_USE_ASSET_HANDLE => SYSCALL_ARGS_3,
-
-        SYSCALL_TRANSFER_DOMAIN
-        | SYSCALL_ADD_SIGNATORY
-        | SYSCALL_REMOVE_SIGNATORY
-        | SYSCALL_SET_ACCOUNT_QUORUM
-        | SYSCALL_NFT_MINT_ASSET
-        | SYSCALL_STATE_SET
-        | SYSCALL_BUILD_PATH_MAP_KEY
-        | SYSCALL_BUILD_PATH_KEY_NORITO
-        | SYSCALL_SCHEMA_ENCODE
-        | SYSCALL_SCHEMA_DECODE
-        | SYSCALL_POINTER_FROM_NORITO
-        | SYSCALL_TLV_EQ
-        | SYSCALL_NUMERIC_ADD
-        | SYSCALL_NUMERIC_SUB
-        | SYSCALL_NUMERIC_MUL
-        | SYSCALL_NUMERIC_DIV
-        | SYSCALL_NUMERIC_REM
-        | SYSCALL_NUMERIC_EQ
-        | SYSCALL_NUMERIC_NE
-        | SYSCALL_NUMERIC_LT
-        | SYSCALL_NUMERIC_LE
-        | SYSCALL_NUMERIC_GT
-        | SYSCALL_NUMERIC_GE
-        | SYSCALL_JSON_GET_I64
-        | SYSCALL_JSON_GET_JSON
-        | SYSCALL_JSON_GET_NAME
-        | SYSCALL_JSON_GET_ACCOUNT_ID
-        | SYSCALL_JSON_GET_NFT_ID
-        | SYSCALL_JSON_GET_BLOB_HEX
-        | SYSCALL_JSON_GET_NUMERIC
-        | SYSCALL_JSON_GET_ASSET_DEFINITION_ID
-        | SYSCALL_CREATE_ROLE
-        | SYSCALL_GRANT_ROLE
-        | SYSCALL_REVOKE_ROLE
-        | SYSCALL_GRANT_PERMISSION
-        | SYSCALL_REVOKE_PERMISSION
-        | SYSCALL_SET_TRIGGER_ENABLED
-        | SYSCALL_GET_ACCOUNT_BALANCE
-        | SYSCALL_AXT_TOUCH
-        | SYSCALL_VERIFY_DS_PROOF
-        | SYSCALL_ESCROW_OPEN_DISPUTE
-        | SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE
-        | SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
-        | SYSCALL_DECODE_ARGUMENT_RECORD
-        | SYSCALL_STATE_VALUE_DECODE => SYSCALL_ARGS_2,
-
-        _ => SYSCALL_ARGS_1,
-    }
-}
+include!(concat!(env!("OUT_DIR"), "/syscall_signatures.rs"));
 
 fn default_vector_length() -> usize {
     DEFAULT_VECTOR_LENGTH.clamp(1, LOGICAL_VECTOR_MAX)
@@ -1457,6 +1353,8 @@ pub struct IVM {
     /// their existing gas-budget view, but it is not available to nested VM
     /// execution until the syscall reports its actual cost.
     syscall_gas_reserve: u64,
+    /// Exact canonical entrypoint-argument gas escrowed before guest execution.
+    argument_decode_prepaid_gas: Option<u64>,
     cycles: u64,
     halted: bool,
     constraint_failed: bool,
@@ -1550,6 +1448,7 @@ impl Clone for IVM {
             // A clone is an independent VM, not a continuation of an active
             // host call, so fold any transient reserve into ordinary gas.
             syscall_gas_reserve: 0,
+            argument_decode_prepaid_gas: None,
             cycles: self.cycles,
             halted: self.halted,
             constraint_failed: self.constraint_failed,
@@ -1876,6 +1775,7 @@ impl IVM {
             gas_limit,
             gas_remaining: gas_limit,
             syscall_gas_reserve: 0,
+            argument_decode_prepaid_gas: None,
             cycles: 0,
             halted: false,
             constraint_failed: false,
@@ -2593,10 +2493,8 @@ impl IVM {
     /// When enabled and no explicit cycle limit has been set, the default
     /// [`zk::MAX_CYCLES`] value is used. Disabling ZK clears the cycle limit.
     pub fn set_zk_mode(&mut self, enabled: bool) {
-        if self.zk_mode && !enabled {
-            if !self.scrub_private_memory() {
-                return;
-            }
+        if self.zk_mode && !enabled && !self.scrub_private_memory() {
+            return;
         }
         self.zk_mode = enabled;
         if enabled {
@@ -2672,7 +2570,7 @@ impl IVM {
         }
         let strict_return_integrity = parsed.contract_interface.is_some();
         let header_len = parsed.header_len;
-        let literal_prefix = parsed.literal_prefix_len();
+        let literal_prefix = parsed.prefix_len();
         let literal_pointers = decode_literal_pointers(
             program,
             header_len,
@@ -2808,6 +2706,28 @@ impl IVM {
         self.gas_limit = limit;
         self.gas_remaining = limit;
         self.syscall_gas_reserve = 0;
+        self.argument_decode_prepaid_gas = None;
+    }
+
+    pub(crate) fn prepay_argument_decode(&mut self, gas: u64) -> Result<(), VMError> {
+        if self.argument_decode_prepaid_gas.is_some() {
+            return Err(VMError::DecodeError);
+        }
+        self.debit_gas(gas)?;
+        self.argument_decode_prepaid_gas = Some(gas);
+        Ok(())
+    }
+
+    pub(crate) fn argument_decode_is_prepaid(&self, gas: u64) -> bool {
+        self.argument_decode_prepaid_gas == Some(gas)
+    }
+
+    pub(crate) fn consume_prepaid_argument_decode(&mut self, gas: u64) -> Result<(), VMError> {
+        if !self.argument_decode_is_prepaid(gas) {
+            return Err(VMError::DecodeError);
+        }
+        self.argument_decode_prepaid_gas = None;
+        Ok(())
     }
 
     /// Structured trap diagnostic captured during the last failed execution, if any.
@@ -3131,7 +3051,7 @@ impl IVM {
             return true;
         }
 
-        let Ok(header) = self.memory.load_region(value, 7) else {
+        let Ok(header) = self.memory.inspect_region(value, 7) else {
             return false;
         };
         let payload_len = u32::from_be_bytes([header[3], header[4], header[5], header[6]]) as u64;
@@ -3259,6 +3179,88 @@ impl IVM {
         }
     }
 
+    fn preflight_host_tlv_allocations_from(
+        mut input_cursor: u64,
+        mut heap_allocated: u64,
+        heap_limit: u64,
+        tlv_lengths: &[usize],
+    ) -> Result<(), VMError> {
+        const ALIGN: u64 = 8;
+        for &length in tlv_lengths {
+            let length = u64::try_from(length).map_err(|_| VMError::OutOfMemory)?;
+            let input_start = input_cursor
+                .checked_add(ALIGN - 1)
+                .map(|value| value & !(ALIGN - 1))
+                .ok_or(VMError::OutOfMemory)?;
+            let input_end = input_start
+                .checked_add(length)
+                .ok_or(VMError::OutOfMemory)?;
+            if input_end <= Memory::INPUT_SIZE {
+                input_cursor = input_end;
+                continue;
+            }
+
+            let heap_length = length
+                .checked_add(ALIGN - 1)
+                .map(|value| value & !(ALIGN - 1))
+                .ok_or(VMError::OutOfMemory)?;
+            heap_allocated = heap_allocated
+                .checked_add(heap_length)
+                .ok_or(VMError::OutOfMemory)?;
+            if heap_allocated > heap_limit {
+                return Err(VMError::OutOfMemory);
+            }
+        }
+        Ok(())
+    }
+
+    /// Prove that a sequence of host TLV allocations can complete atomically
+    /// with the VM's current INPUT cursor and HEAP ownership.
+    ///
+    /// Callers use this before the first allocation so a bounded operation can
+    /// never publish a partial pointer table and then fail for lack of memory.
+    pub(crate) fn preflight_host_tlv_allocations(
+        &self,
+        tlv_lengths: &[usize],
+    ) -> Result<(), VMError> {
+        self.preflight_host_tlv_allocations_with_reserved_heap(tlv_lengths, 0)
+    }
+
+    /// Prove that host TLVs and a separate compiler-owned HEAP reservation fit
+    /// together before either allocation class mutates the VM.
+    pub(crate) fn preflight_host_tlv_allocations_with_reserved_heap(
+        &self,
+        tlv_lengths: &[usize],
+        reserved_heap_bytes: u64,
+    ) -> Result<(), VMError> {
+        let available_heap_limit = self
+            .memory
+            .heap_limit()
+            .checked_sub(reserved_heap_bytes)
+            .ok_or(VMError::OutOfMemory)?;
+        if self.memory.heap_allocated_len() > available_heap_limit {
+            return Err(VMError::OutOfMemory);
+        }
+        Self::preflight_host_tlv_allocations_from(
+            self.input_bump_next,
+            self.memory.heap_allocated_len(),
+            available_heap_limit,
+            tlv_lengths,
+        )
+    }
+
+    /// Prove that host TLVs and compiler-owned HEAP allocations fit a clean V1
+    /// VM before admitting an invocation.
+    pub(crate) fn preflight_fresh_host_tlv_allocations_with_reserved_heap(
+        tlv_lengths: &[usize],
+        reserved_heap_bytes: u64,
+    ) -> Result<(), VMError> {
+        let available_heap_limit = Memory::HEAP_SIZE
+            .checked_sub(reserved_heap_bytes)
+            .ok_or(VMError::OutOfMemory)?;
+        Self::preflight_host_tlv_allocations_from(0, 0, available_heap_limit, tlv_lengths)
+    }
+
     /// Require a prospective pointer-ABI envelope range to have public,
     /// VM-owned provenance.
     ///
@@ -3272,6 +3274,17 @@ impl IVM {
         len: u64,
     ) -> Result<(), VMError> {
         self.ensure_public_memory(address, len)?;
+        self.ensure_owned_tlv_range(address, len)
+    }
+
+    /// Require a prospective pointer-ABI envelope range to have VM-owned
+    /// provenance without scanning its complete payload.
+    ///
+    /// Quote preparation uses this after authenticating the seven-byte public
+    /// header. Private guest stores are stack-only, while owned pointer-ABI
+    /// regions exclude the stack, so the complete privacy scan is deferred to
+    /// post-debit envelope validation.
+    pub(crate) fn ensure_owned_tlv_range(&self, address: u64, len: u64) -> Result<(), VMError> {
         let end = address.checked_add(len).ok_or(VMError::NoritoInvalid)?;
         let in_code = end <= self.memory.code_len() && self.is_validated_literal_pointer(address);
         let in_heap = address >= Memory::HEAP_START
@@ -3288,6 +3301,24 @@ impl IVM {
             Ok(())
         } else {
             Err(VMError::NoritoInvalid)
+        }
+    }
+
+    /// Require a raw compiler-owned object to fit wholly within allocated HEAP.
+    ///
+    /// Unlike pointer-ABI envelopes, compiler-owned Lists may never alias code
+    /// literals or INPUT. Their schema is supplied out of band and their
+    /// provenance is the successful guest/host heap allocation itself.
+    pub(crate) fn ensure_owned_heap_range(&self, address: u64, len: u64) -> Result<(), VMError> {
+        self.ensure_public_memory(address, len)?;
+        let end = address.checked_add(len).ok_or(VMError::DecodeError)?;
+        let heap_end = Memory::HEAP_START
+            .checked_add(self.memory.heap_allocated_len())
+            .ok_or(VMError::DecodeError)?;
+        if address >= Memory::HEAP_START && end <= heap_end {
+            Ok(())
+        } else {
+            Err(VMError::DecodeError)
         }
     }
 
@@ -3730,6 +3761,7 @@ impl IVM {
         // Gas remaining is not reset here; set_gas_limit should be called if needed.
         self.gas_remaining = self.remaining_gas();
         self.syscall_gas_reserve = 0;
+        self.argument_decode_prepaid_gas = None;
         self.vector_length = if self.metadata.vector_length == 0 {
             default_vector_length()
         } else {
@@ -4266,40 +4298,8 @@ impl IVM {
             return;
         }
 
-        let has_public_r10_output = !syscall_public_input_registers(number).is_empty()
-            || matches!(
-                number,
-                crate::syscalls::SYSCALL_JSON_OBJECT
-                    | crate::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS
-                    | crate::syscalls::SYSCALL_GET_AUTHORITY
-                    | crate::syscalls::SYSCALL_CURRENT_TIME_MS
-                    | crate::syscalls::SYSCALL_PROVE_EXECUTION
-                    | crate::syscalls::SYSCALL_SYSVAR_CHAIN_ID
-                    | crate::syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT
-                    | crate::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS
-                    | crate::syscalls::SYSCALL_SYSVAR_AUTHORITY
-                    | crate::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS
-                    | crate::syscalls::SYSCALL_SYSVAR_ENTRYPOINT
-            );
-        if has_public_r10_output {
-            self.registers.set_tag(10, false);
-        }
-
-        if matches!(
-            number,
-            crate::syscalls::SYSCALL_PROVE_EXECUTION
-                | crate::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-                | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
-                | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
-                | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY
-                | crate::syscalls::SYSCALL_ZK_VERIFY_BATCH
-                | crate::syscalls::SYSCALL_STATE_LEN
-        ) {
-            self.registers.set_tag(11, false);
-        }
-        if number == crate::syscalls::SYSCALL_STATE_KEYS {
-            self.registers.set_tag(11, false);
-            self.registers.set_tag(12, false);
+        for &register in syscall_public_output_registers(number) {
+            self.registers.set_tag(register, false);
         }
     }
 
@@ -7579,11 +7579,124 @@ mod tests {
     use std::{
         any::Any,
         cell::Cell,
+        collections::BTreeMap,
         sync::atomic::{AtomicU32, Ordering as AtomicOrdering},
     };
 
     use super::*;
     use crate::{instruction, ivm_cache, metadata::LITERAL_SECTION_MAGIC};
+
+    #[test]
+    fn public_syscall_privacy_boundaries_match_the_normative_abi_signatures() {
+        fn count(declaration: &str, implicit_r10: bool) -> usize {
+            let explicit = (10usize..=14)
+                .rev()
+                .find(|register| declaration.contains(&format!("r{register}")))
+                .map_or(0, |register| register - 9);
+            let declaration = declaration.strip_suffix('"').unwrap_or(declaration);
+            if explicit == 0 && implicit_r10 && declaration != "-" {
+                1
+            } else {
+                explicit
+            }
+        }
+
+        let mut documented_inputs = BTreeMap::new();
+        let mut documented_outputs = BTreeMap::new();
+        let mut current_number = None;
+        for line in include_str!("../spec/syscalls.toml").lines() {
+            if let Some(raw) = line
+                .strip_prefix("number = \"")
+                .and_then(|raw| raw.strip_suffix('"'))
+            {
+                current_number = u32::from_str_radix(
+                    raw.strip_prefix("0x")
+                        .expect("syscall number is hexadecimal"),
+                    16,
+                )
+                .ok();
+                continue;
+            }
+            let Some(number) = current_number else {
+                continue;
+            };
+            if let Some(arguments) = line.strip_prefix("args = \"") {
+                assert!(
+                    documented_inputs
+                        .insert(number, count(arguments, false))
+                        .is_none(),
+                    "duplicate syscall input signature for {number:#x}"
+                );
+            } else if let Some(returns) = line.strip_prefix("ret = \"") {
+                assert!(
+                    documented_outputs
+                        .insert(number, count(returns, true))
+                        .is_none(),
+                    "duplicate syscall output signature for {number:#x}"
+                );
+            }
+        }
+
+        for &number in crate::syscalls::abi_syscall_list() {
+            let documented_input = *documented_inputs
+                .get(&number)
+                .unwrap_or_else(|| panic!("missing ABI input signature for syscall {number:#x}"));
+            let documented_output = *documented_outputs
+                .get(&number)
+                .unwrap_or_else(|| panic!("missing ABI output signature for syscall {number:#x}"));
+            let registers = |documented| match documented {
+                0 => SYSCALL_ARGS_0,
+                1 => SYSCALL_ARGS_1,
+                2 => SYSCALL_ARGS_2,
+                3 => SYSCALL_ARGS_3,
+                4 => SYSCALL_ARGS_4,
+                5 => SYSCALL_ARGS_5,
+                _ => panic!("unsupported ABI argument count {documented}"),
+            };
+            assert_eq!(
+                syscall_public_input_registers(number),
+                registers(documented_input),
+                "privacy input boundary disagrees with the ABI signature for syscall {number:#x}"
+            );
+            assert_eq!(
+                syscall_public_output_registers(number),
+                registers(documented_output),
+                "privacy output boundary disagrees with the ABI signature for syscall {number:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn syscall_output_declassification_uses_only_normative_signatures() {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_zk_mode(true);
+        for register in 10..=12 {
+            vm.registers.set_tag(register, true);
+        }
+
+        vm.apply_syscall_output_privacy(crate::syscalls::SYSCALL_STATE_KEYS);
+        for register in 10..=12 {
+            assert!(
+                !vm.registers.tag(register),
+                "documented public output r{register} retained a secret tag"
+            );
+        }
+
+        for register in 10..=14 {
+            vm.registers.set_tag(register, true);
+        }
+        vm.apply_syscall_output_privacy(0x00ff_fffe);
+        for register in 10..=14 {
+            assert!(
+                vm.registers.tag(register),
+                "unknown syscall declassified undocumented r{register}"
+            );
+        }
+
+        vm.registers.set_tag(10, false);
+        vm.apply_syscall_output_privacy(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT);
+        assert!(vm.registers.tag(10));
+    }
 
     #[test]
     fn ivm_is_send_sync_for_state_sharing() {
@@ -7848,7 +7961,7 @@ mod tests {
 
     fn program_with_unaligned_contract_prefix() -> (Vec<u8>, usize) {
         let interface = crate::metadata::EmbeddedContractInterfaceV1 {
-            contract_name: "TestContract".to_owned(),
+            seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: String::new(),
             features_bitmap: 0,
             access_set_hints: None,
@@ -7859,7 +7972,7 @@ mod tests {
         };
         let prefix = (0..32)
             .map(|len| crate::metadata::EmbeddedContractInterfaceV1 {
-                contract_name: "TestContract".to_owned(),
+                seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "x".repeat(len),
                 ..interface.clone()
             })
@@ -8280,11 +8393,9 @@ mod tests {
             (Memory::HEAP_START..Memory::INPUT_START).contains(&ptr),
             "host spill pointer should land in heap"
         );
-        let spilled = vm
-            .memory
-            .load_region(ptr, tlv.len() as u64)
-            .expect("read spilled TLV");
-        assert_eq!(spilled, tlv);
+        let spilled = vm.validate_tlv(ptr).expect("validate owned heap TLV");
+        assert_eq!(spilled.type_id, crate::pointer_abi::PointerType::Blob);
+        assert!(spilled.payload.is_empty());
     }
 
     #[test]
@@ -8304,11 +8415,9 @@ mod tests {
             (Memory::HEAP_START..Memory::INPUT_START).contains(&ptr),
             "host spill pointer should land in heap when only an undersized input tail remains"
         );
-        let spilled = vm
-            .memory
-            .load_region(ptr, tlv.len() as u64)
-            .expect("read spilled TLV");
-        assert_eq!(spilled, tlv);
+        let spilled = vm.validate_tlv(ptr).expect("validate owned heap TLV");
+        assert_eq!(spilled.type_id, crate::pointer_abi::PointerType::Blob);
+        assert!(spilled.payload.is_empty());
     }
 
     #[test]
@@ -8326,6 +8435,81 @@ mod tests {
             .alloc_host_tlv(&empty_blob_tlv())
             .expect_err("host TLV spill should fail without heap space");
         assert!(matches!(err, VMError::OutOfMemory));
+    }
+
+    #[test]
+    fn host_tlv_preflight_honors_exact_heap_reservation_without_partial_state() {
+        set_banner_enabled(false);
+        let small_tlv_len = empty_blob_tlv().len();
+        IVM::preflight_fresh_host_tlv_allocations_with_reserved_heap(
+            &[small_tlv_len],
+            Memory::HEAP_SIZE,
+        )
+        .expect("an INPUT-only TLV must coexist with an exact full-HEAP reservation");
+        assert!(matches!(
+            IVM::preflight_fresh_host_tlv_allocations_with_reserved_heap(
+                &[small_tlv_len],
+                Memory::HEAP_SIZE + 1,
+            ),
+            Err(VMError::OutOfMemory)
+        ));
+
+        let vm = IVM::new(u64::MAX);
+        let input_before = vm.input_bump_next;
+        let heap_before = vm.memory.heap_allocated_len();
+        assert!(matches!(
+            vm.preflight_host_tlv_allocations_with_reserved_heap(
+                &[Memory::INPUT_SIZE as usize, small_tlv_len],
+                Memory::HEAP_SIZE,
+            ),
+            Err(VMError::OutOfMemory)
+        ));
+        assert_eq!(vm.input_bump_next, input_before);
+        assert_eq!(vm.memory.heap_allocated_len(), heap_before);
+    }
+
+    #[test]
+    fn owned_tlv_validation_rejects_unallocated_heap_bytes() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let tlv = empty_blob_tlv();
+        vm.store_bytes(Memory::HEAP_START, &tlv)
+            .expect("write well-formed bytes into unallocated heap capacity");
+
+        assert!(matches!(
+            vm.validate_tlv(Memory::HEAP_START),
+            Err(VMError::NoritoInvalid)
+        ));
+
+        let ptr = vm
+            .alloc_heap(u64::try_from(tlv.len()).expect("TLV length fits u64"))
+            .expect("claim the heap prefix containing the envelope");
+        assert_eq!(ptr, Memory::HEAP_START);
+        vm.validate_tlv(ptr)
+            .expect("the same envelope is valid after its heap range is owned");
+    }
+
+    #[test]
+    fn argument_decode_escrow_requires_the_exact_prepaid_cost() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(100);
+        vm.prepay_argument_decode(40)
+            .expect("escrow argument decode gas");
+
+        assert_eq!(vm.remaining_gas(), 60);
+        assert!(vm.argument_decode_is_prepaid(40));
+        assert!(!vm.argument_decode_is_prepaid(41));
+        assert_eq!(
+            vm.consume_prepaid_argument_decode(41),
+            Err(VMError::DecodeError)
+        );
+        assert!(
+            vm.argument_decode_is_prepaid(40),
+            "a mismatched consumer must not discard the valid escrow"
+        );
+        vm.consume_prepaid_argument_decode(40)
+            .expect("consume matching argument decode escrow");
+        assert!(!vm.argument_decode_is_prepaid(40));
     }
 
     #[test]

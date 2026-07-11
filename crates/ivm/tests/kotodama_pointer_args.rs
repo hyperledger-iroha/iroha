@@ -10,6 +10,8 @@ use ivm::{
     mock_wsv::{MockWorldStateView, WsvHost},
     validate_tlv_bytes,
 };
+use ivm_abi::state_value::StateValueKindV1;
+mod common;
 
 fn account_from_public_key(public_key: &str) -> AccountId {
     AccountId::new(public_key.parse().expect("public key must be valid"))
@@ -48,6 +50,7 @@ fn pointer_map_default_roundtrip() {
 
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&bytecode).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &bytecode, "hajimari");
     let wsv = MockWorldStateView::new();
     let authority = account_from_public_key(AUTHORITY_PUBLIC_KEY);
     let host = WsvHost::new_with_subject(wsv, authority, HashMap::new());
@@ -59,10 +62,13 @@ fn pointer_map_default_roundtrip() {
     let base = Name::from_str("Owners").expect("valid state name");
     let stored = resolve_state_value(host, &base, 7).expect("state entry present");
 
-    // Expect NoritoBytes TLV wrapping the AccountId pointer TLV.
+    // State boundaries carry a schema-bound record inside NoritoBytes. The
+    // active pointer atom contains the original validated AccountId envelope.
     let outer = validate_tlv_bytes(&stored).expect("outer TLV");
     assert_eq!(outer.type_id, PointerType::NoritoBytes);
-    let inner = validate_tlv_bytes(outer.payload).expect("inner TLV");
+    let inner_envelope =
+        common::decode_pointer_state_value(outer.payload, StateValueKindV1::AccountId);
+    let inner = validate_tlv_bytes(&inner_envelope).expect("inner TLV");
     assert_eq!(inner.type_id, PointerType::AccountId);
 
     let decoded_account: AccountId =
@@ -74,10 +80,10 @@ fn pointer_map_default_roundtrip() {
     let hash: [u8; 32] = IrohaHash::new(inner.payload).into();
     let hash_offset = 7 + inner.payload.len();
     assert!(
-        outer.payload.len() >= hash_offset + hash.len(),
-        "outer TLV payload must contain embedded hash",
+        inner_envelope.len() >= hash_offset + hash.len(),
+        "pointer atom must contain the complete embedded envelope hash",
     );
-    let stored_hash = &outer.payload[hash_offset..hash_offset + hash.len()];
+    let stored_hash = &inner_envelope[hash_offset..hash_offset + hash.len()];
     assert_eq!(stored_hash, hash.as_ref());
 }
 
@@ -109,6 +115,7 @@ fn pointer_asset_state_storage_wraps_inner_pointer() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&bytecode).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &bytecode, "main");
     vm.run().expect("store asset pointer");
 
     let host_ref = vm.host_mut_any().expect("host access");
@@ -118,7 +125,9 @@ fn pointer_asset_state_storage_wraps_inner_pointer() {
 
     let outer = validate_tlv_bytes(&stored).expect("outer TLV");
     assert_eq!(outer.type_id, PointerType::NoritoBytes);
-    let inner = validate_tlv_bytes(outer.payload).expect("inner TLV");
+    let inner_envelope =
+        common::decode_pointer_state_value(outer.payload, StateValueKindV1::AssetDefinitionId);
+    let inner = validate_tlv_bytes(&inner_envelope).expect("inner TLV");
     assert_eq!(inner.type_id, PointerType::AssetDefinitionId);
 
     let decoded_asset: AssetDefinitionId =

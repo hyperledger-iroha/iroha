@@ -5,7 +5,7 @@
 pub enum SyntaxKind {
     /// Entire source file.
     Root,
-    /// `contract` or `module` source unit.
+    /// `seiyaku`/`誓約` or `module` source unit.
     SourceUnit,
     /// Source-unit item list.
     ItemList,
@@ -29,6 +29,24 @@ pub enum SyntaxKind {
     Attribute,
     /// Function parameter list.
     ParamList,
+    /// Source call argument list.
+    ArgumentList,
+    /// One `name: expression` call argument.
+    NamedArgument,
+    /// Named struct construction expression.
+    StructLiteral,
+    /// Bounded list literal expression.
+    ListExpr,
+    /// Capacity-proven bounded list comprehension expression.
+    ListComprehension,
+    /// Native JSON object construction expression.
+    JsonObjectExpr,
+    /// One native JSON object entry.
+    JsonObjectEntry,
+    /// Native JSON array construction expression.
+    JsonArrayExpr,
+    /// One shorthand or explicit struct literal field.
+    StructLiteralField,
     /// Function body or nested block.
     Block,
     /// Statement list.
@@ -45,6 +63,16 @@ pub enum SyntaxKind {
     ContinueStmt,
     /// Conditional statement.
     IfStmt,
+    /// Expression-valued conditional.
+    IfExpr,
+    /// Expression-valued exhaustive match.
+    MatchExpr,
+    /// One match arm.
+    MatchArm,
+    /// Namespaced `Option` or `Result` pattern.
+    SumPattern,
+    /// Final expression in a block without a semicolon.
+    TailExpr,
     /// Bounded loop statement.
     ForStmt,
     /// Tokens skipped during recovery.
@@ -60,6 +88,8 @@ pub enum SyntaxKind {
     Ident,
     /// Integer literal.
     Number,
+    /// Exact non-negative decimal Amount literal, including its `amt` suffix.
+    Amount,
     /// String or raw-string literal.
     String,
     /// Byte-string or raw-byte-string literal.
@@ -99,6 +129,8 @@ pub enum SyntaxKind {
     KwTrigger,
     /// `if`.
     KwIf,
+    /// `match`.
+    KwMatch,
     /// `else`.
     KwElse,
     /// `for`.
@@ -131,6 +163,8 @@ pub enum SyntaxKind {
     MinusEqual,
     /// `->`.
     Arrow,
+    /// `=>`.
+    FatArrow,
     /// `*`.
     Star,
     /// `*=`.

@@ -1,0 +1,17 @@
+{
+  "name": "@hyperledger-iroha/sccp-evm-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Locked audited Hardhat runtime for SCCP EVM contract smoke tests",
+  "engines": {
+    "node": ">=22 <27"
+  },
+  "dependencies": {
+    "ethers": "6.16.0",
+    "hardhat": "3.9.1",
+    "solc": "file:../authenticated-solc"
+  },
+  "overrides": {
+    "ws": "8.21.0"
+  }
+}

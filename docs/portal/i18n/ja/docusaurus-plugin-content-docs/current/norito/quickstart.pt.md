@@ -56,9 +56,9 @@ seiyaku Hello {
 
     kotoage fn write_detail() authorize("Admin") {
         ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
         );
     }
 
@@ -131,63 +131,3 @@ Norito のペイロード JSON サポートの開発:
   コンパイラ/ランナーのツールの作成、マニフェストのデプロイ、およびメタデータ IVM の実行が広範囲に行われます。
 - 繰り返しを繰り返します。`npm run sync-norito-snippets` ワークスペース パラメータを使用しません。
   再生スニペットは、`crates/ivm/docs/examples/` のフォントとしてポータルとアーティファクトの同期を実行し、OS ドキュメントを管理します。
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```

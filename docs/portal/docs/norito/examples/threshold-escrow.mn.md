@@ -112,14 +112,26 @@ seiyaku ThresholdEscrow {
         require(amount > Amount::from_i64(0), EscrowError::NonPositiveAmount);
         let next_funded = funded_amount_value + amount;
         require(next_funded <= target_amount_value, EscrowError::TargetExceeded);
-        ledger::asset::transfer(context::authority(), AccountId::parse(escrow_account_literal), AssetDefinitionId::parse(escrow_asset_definition_literal), amount, DataSpaceId::parse("0"));
+        ledger::asset::transfer(
+            source: context::authority(),
+            destination: AccountId::parse(escrow_account_literal),
+            asset_definition: AssetDefinitionId::parse(escrow_asset_definition_literal),
+            amount: amount,
+            dataspace: DataSpaceId::parse("0"),
+        );
         funded_amount_value = next_funded;
     }
 
     kotoage fn release_if_ready() authorize("Admin") {
         assert_open();
         require(funded_amount_value == target_amount_value, EscrowError::NotFullyFunded);
-        ledger::asset::transfer(AccountId::parse(escrow_account_literal), AccountId::parse(recipient_account_literal), AssetDefinitionId::parse(escrow_asset_definition_literal), funded_amount_value, DataSpaceId::parse("0"));
+        ledger::asset::transfer(
+            source: AccountId::parse(escrow_account_literal),
+            destination: AccountId::parse(recipient_account_literal),
+            asset_definition: AssetDefinitionId::parse(escrow_asset_definition_literal),
+            amount: funded_amount_value,
+            dataspace: DataSpaceId::parse("0"),
+        );
         is_open = false;
         is_released = true;
     }
@@ -129,7 +141,13 @@ seiyaku ThresholdEscrow {
         assert_payer();
         let funded = funded_amount_value;
         if (funded > Amount::from_i64(0)) {
-            ledger::asset::transfer(AccountId::parse(escrow_account_literal), context::authority(), AssetDefinitionId::parse(escrow_asset_definition_literal), funded, DataSpaceId::parse("0"));
+            ledger::asset::transfer(
+                source: AccountId::parse(escrow_account_literal),
+                destination: context::authority(),
+                asset_definition: AssetDefinitionId::parse(escrow_asset_definition_literal),
+                amount: funded,
+                dataspace: DataSpaceId::parse("0"),
+            );
         }
         is_open = false;
         is_refunded = true;

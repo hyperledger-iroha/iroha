@@ -72,7 +72,7 @@ Validation and execution rules:
 - The dataspace is derived from `contract_alias`.
 - `contract_address` is derived from `(chain_discriminant, authority,
   deploy_nonce, dataspace_id)`.
-- Reusing an existing `contract_alias` is the public upgrade path: Torii
+- Reusing an existing `contract_alias` is the public `kaizen`/`改善` path: Torii
   clears the prior alias binding, deactivates the retired address, binds the
   alias to the new address, and reports `previous_contract_address`.
 
@@ -83,8 +83,8 @@ Validation and execution rules:
 | `ok` | `bool` | `true` when the deploy transaction was queued. |
 | `contract_alias` | `ContractAlias` | Stable alias bound by the deploy. |
 | `contract_address` | `ContractAddress` | Fresh immutable address activated by this deploy. |
-| `previous_contract_address` | `Option<ContractAddress>` | Retired address when this deploy upgraded an existing alias. |
-| `upgraded` | `bool` | `true` when an existing alias binding was replaced. |
+| `previous_contract_address` | `Option<ContractAddress>` | Retired address when this deploy performed `kaizen`/`改善` on an existing alias. |
+| `kaizen` | `bool` | `true` when an existing alias binding was replaced. |
 | `dataspace` | `String` | Resolved dataspace alias. |
 | `deploy_nonce` | `u64` | Nonce consumed for address derivation. |
 | `tx_hash_hex` | `String` | Queued transaction hash. |
@@ -164,7 +164,7 @@ Executes a read-only view entrypoint locally.
   `multisig_account_id` or `multisig_account_alias`.
 - The contract target is selected by exactly one of `contract_address` or
   `contract_alias`.
-- `gas_limit` defaults to `5000` when omitted and must be positive when
+- `gas_limit` defaults to `1500000` when omitted and must be positive when
   supplied.
 - The route validates the signer against the live multisig spec, normalizes the
   contract payload, wraps the call in `MultisigPropose`, and returns

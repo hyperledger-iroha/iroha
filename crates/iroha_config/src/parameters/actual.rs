@@ -7954,6 +7954,8 @@ pub struct Zk {
     pub fastpq: Fastpq,
     /// Native STARK/FRI verification settings.
     pub stark: Stark,
+    /// SCCP proof-admission and deterministic verifier-work limits.
+    pub sccp: Sccp,
     /// Cap on the number of recent shielded Merkle roots kept per asset.
     pub root_history_cap: usize,
     /// Cap on the number of recent ballot ciphertexts kept per election.
@@ -8026,6 +8028,88 @@ pub struct Zk {
     pub registry_max_delta_per_block: u32,
     /// Gas schedule applied to confidential verification.
     pub gas: ConfidentialGas,
+}
+
+/// SCCP proof-admission and deterministic verifier-work limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sccp {
+    /// Maximum closed SCCP proofs in one transaction.
+    pub max_proofs_per_transaction: NonZeroU32,
+    /// Maximum closed SCCP proofs committed in one block.
+    pub max_proofs_per_block: NonZeroU32,
+    /// Maximum canonical bytes retained for one closed SCCP proof.
+    pub max_proof_bytes_per_proof: NonZeroU64,
+    /// Maximum aggregate SCCP proof bytes in one transaction.
+    pub max_proof_bytes_per_transaction: NonZeroU64,
+    /// Maximum aggregate SCCP proof bytes committed in one block.
+    pub max_proof_bytes_per_block: NonZeroU64,
+    /// Maximum native-finality continuation headers in one transaction.
+    pub max_native_headers_per_transaction: NonZeroU32,
+    /// Maximum native-finality continuation headers committed in one block.
+    pub max_native_headers_per_block: NonZeroU32,
+    /// Maximum Ethereum light-client updates in one transaction.
+    pub max_ethereum_light_client_updates_per_transaction: NonZeroU32,
+    /// Maximum Ethereum light-client updates committed in one block.
+    pub max_ethereum_light_client_updates_per_block: NonZeroU32,
+    /// Maximum framed native-finality header bytes in one transaction.
+    pub max_native_header_bytes_per_transaction: NonZeroU64,
+    /// Maximum framed native-finality header bytes committed in one block.
+    pub max_native_header_bytes_per_block: NonZeroU64,
+    /// Maximum secp256k1 recoveries in one transaction.
+    pub max_secp256k1_recoveries_per_transaction: NonZeroU32,
+    /// Maximum secp256k1 recoveries committed in one block.
+    pub max_secp256k1_recoveries_per_block: NonZeroU32,
+    /// Maximum BLS aggregate-signature checks in one transaction.
+    pub max_bls_aggregate_checks_per_transaction: NonZeroU32,
+    /// Maximum BLS aggregate-signature checks committed in one block.
+    pub max_bls_aggregate_checks_per_block: NonZeroU32,
+    /// Maximum BLS public-key contributions processed in one transaction.
+    pub max_bls_signer_contributions_per_transaction: NonZeroU32,
+    /// Maximum BLS public-key contributions committed in one block.
+    pub max_bls_signer_contributions_per_block: NonZeroU32,
+    /// Maximum BN254 Groth16 pairing-product checks in one transaction.
+    pub max_bn254_pairing_checks_per_transaction: NonZeroU32,
+    /// Maximum BN254 Groth16 pairing-product checks committed in one block.
+    pub max_bn254_pairing_checks_per_block: NonZeroU32,
+}
+
+impl Default for Sccp {
+    fn default() -> Self {
+        Self {
+            max_proofs_per_transaction: defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION,
+            max_proofs_per_block: defaults::zk::sccp::MAX_PROOFS_PER_BLOCK,
+            max_proof_bytes_per_proof: defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF,
+            max_proof_bytes_per_transaction: defaults::zk::sccp::MAX_PROOF_BYTES_PER_TRANSACTION,
+            max_proof_bytes_per_block: defaults::zk::sccp::MAX_PROOF_BYTES_PER_BLOCK,
+            max_native_headers_per_transaction:
+                defaults::zk::sccp::MAX_NATIVE_HEADERS_PER_TRANSACTION,
+            max_native_headers_per_block: defaults::zk::sccp::MAX_NATIVE_HEADERS_PER_BLOCK,
+            max_ethereum_light_client_updates_per_transaction:
+                defaults::zk::sccp::MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_TRANSACTION,
+            max_ethereum_light_client_updates_per_block:
+                defaults::zk::sccp::MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_BLOCK,
+            max_native_header_bytes_per_transaction:
+                defaults::zk::sccp::MAX_NATIVE_HEADER_BYTES_PER_TRANSACTION,
+            max_native_header_bytes_per_block:
+                defaults::zk::sccp::MAX_NATIVE_HEADER_BYTES_PER_BLOCK,
+            max_secp256k1_recoveries_per_transaction:
+                defaults::zk::sccp::MAX_SECP256K1_RECOVERIES_PER_TRANSACTION,
+            max_secp256k1_recoveries_per_block:
+                defaults::zk::sccp::MAX_SECP256K1_RECOVERIES_PER_BLOCK,
+            max_bls_aggregate_checks_per_transaction:
+                defaults::zk::sccp::MAX_BLS_AGGREGATE_CHECKS_PER_TRANSACTION,
+            max_bls_aggregate_checks_per_block:
+                defaults::zk::sccp::MAX_BLS_AGGREGATE_CHECKS_PER_BLOCK,
+            max_bls_signer_contributions_per_transaction:
+                defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION,
+            max_bls_signer_contributions_per_block:
+                defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK,
+            max_bn254_pairing_checks_per_transaction:
+                defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION,
+            max_bn254_pairing_checks_per_block:
+                defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_BLOCK,
+        }
+    }
 }
 
 /// CABAC runtime mode compiled into the host.

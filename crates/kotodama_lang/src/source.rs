@@ -114,6 +114,23 @@ pub struct TextRange {
     pub end: u32,
 }
 
+/// Exact source identity and half-open byte range retained across frontend phases.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceRange {
+    /// Stable source identity inside the compilation graph.
+    pub source: SourceId,
+    /// Exact UTF-8 byte range in that source.
+    pub range: TextRange,
+}
+
+impl SourceRange {
+    /// Construct one graph-stable source range.
+    #[must_use]
+    pub const fn new(source: SourceId, range: TextRange) -> Self {
+        Self { source, range }
+    }
+}
+
 impl TextRange {
     /// Construct a half-open range.
     #[must_use]
@@ -168,7 +185,7 @@ pub struct LineColumn {
 }
 
 /// Immutable source file with a precomputed line index.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceFile {
     id: SourceId,
     name: Arc<str>,

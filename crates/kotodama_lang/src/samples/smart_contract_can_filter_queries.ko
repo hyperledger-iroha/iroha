@@ -1,6 +1,10 @@
-// Minimal sample ensuring a contract can execute a benign metadata write.
+// Minimal sample ensuring a seiyaku can execute a benign metadata write.
 seiyaku FilterQueriesSample {
     kotoage fn run() authorize("Admin") {
-        ledger::account::set_detail(context::authority(), Name::parse("noop"), Json::parse("1"));
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("noop"),
+            value: Json::parse("1"),
+        );
     }
 }

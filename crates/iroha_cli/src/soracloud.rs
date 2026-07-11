@@ -16289,7 +16289,7 @@ button {
 }
 
 fn single_api_contract_ko(app_name: &str) -> String {
-    let contract_name = format!("{}_api_service", normalized_contract_identifier(app_name));
+    let seiyaku_name = format!("{}_api_service", normalized_contract_identifier(app_name));
     r#"seiyaku __CONTRACT_NAME__ {
   view fn main() -> Json {
     return {
@@ -16308,7 +16308,7 @@ fn single_api_contract_ko(app_name: &str) -> String {
   }
 }
 "#
-    .replace("__CONTRACT_NAME__", &contract_name)
+    .replace("__CONTRACT_NAME__", &seiyaku_name)
     .replace("__APP_NAME__", app_name)
 }
 
@@ -19440,9 +19440,9 @@ server.listen(PORT, "0.0.0.0", () => {{
 }
 
 fn split_app_vault_contract_ko(app_name: &str) -> String {
-    let contract_name = format!("{}_vault_api", normalized_contract_identifier(app_name));
+    let seiyaku_name = format!("{}_vault_api", normalized_contract_identifier(app_name));
     format!(
-        r#"seiyaku {contract_name} {{
+        r#"seiyaku {seiyaku_name} {{
   fn with_observed_height(payload: Json, observed_height: i64) -> Json {{
     return json_set_int(payload, Name::parse("observed_height"), observed_height);
   }}

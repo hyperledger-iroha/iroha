@@ -25,7 +25,9 @@ added with new IDs; existing IDs must not change.
 | 0x000D | ProofBlob | OK |
 | 0x000E | SoracloudRequest | OK |
 | 0x000F | SoracloudResponse | OK |
+| 0x0010 | Amount | OK |
 <!-- END GENERATED POINTER TYPES -->
+
 
 
 Notes
@@ -34,3 +36,7 @@ Notes
 - TLV structure is enforced regardless of policy; type IDs gate which categories are accepted for host syscalls.
 - `DataSpaceId`, `AxtDescriptor`, `AssetHandle`, and `ProofBlob` underpin the AXT (atomic cross-transaction) flow. Default and WSV hosts fully validate these pointers when servicing AXT syscalls, ensuring descriptor membership, capability binding equality, and proof material are honoured.
 - `SoracloudRequest` and `SoracloudResponse` carry Norito envelopes for the Soracloud runtime host ABI. They are only meaningful on the dedicated Soracloud syscall block and remain part of ABI v1.
+- `Amount` carries a canonical nonnegative `Numeric` mantissa of at most 512
+  bits with scale `0..=28`; trailing fractional zeros are forbidden and
+  canonical zero has scale zero. It is nominally distinct from the scale-zero
+  `u128` payloads carried by `NoritoBytes`; hosts reject cross-typed pointers.

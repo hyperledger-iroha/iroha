@@ -4,7 +4,7 @@
 seiyaku ZkUnshieldDemo {
     kotoage fn run() authorize("Admin") {
         debug::info("ZkUnshieldDemo: preparing pointers");
-        let to = AccountId::parse("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D");
+        let to = AccountId::parse("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", );
         let ad = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
         // In a real program, you would pass proof envelopes via NoritoBytes and
         // call zk verification builtins (backend-specific) prior to recording state.
@@ -15,7 +15,11 @@ seiyaku ZkUnshieldDemo {
         debug::info("ZkUnshieldDemo: (placeholder) would verify proof with vk_unshield");
         crypto::zk::verify_unshield(proof);
         // Example: tag detail to signal an attempted unshield (demo only)
-        ledger::account::set_detail(to, vk_name, Json::parse("{\"attempt\":true}"));
+        ledger::account::set_detail(
+            account: to,
+            key: vk_name,
+            value: Json::parse("{\"attempt\":true}"),
+        );
         debug::info("ZkUnshieldDemo: done");
     }
 }

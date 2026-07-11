@@ -6,6 +6,7 @@
 //! not representable as an `i64`. Explicit `wrapping_*` builtins bypass this
 //! module and lower to the single underlying primitive.
 
+use iroha_primitives::{AmountError, Numeric};
 use ivm_abi::{encoding, instruction, syscalls};
 
 use crate::{
@@ -116,6 +117,75 @@ pub(crate) fn evaluate_checked_i64(
                 operation,
                 left,
                 right,
+            })
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Invalid constant arithmetic over canonical nonnegative `Amount` values.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ConstantAmountError {
+    operation: BinaryOp,
+    source: AmountError,
+}
+
+impl ConstantAmountError {
+    /// Render the human detail without embedding its stable diagnostic code.
+    pub(crate) fn message(self) -> String {
+        let symbol = match self.operation {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            _ => "?",
+        };
+        format!("constant Amount `{symbol}` failed: {}", self.source)
+    }
+}
+
+impl core::fmt::Display for ConstantAmountError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            formatter,
+            "E_AMOUNT_CONSTANT_ARITHMETIC: {}",
+            (*self).message()
+        )
+    }
+}
+
+/// Evaluate a source expression composed entirely of `Amount` literals and
+/// exact Amount operators. `Ok(None)` means the expression is dynamic.
+pub(crate) fn evaluate_checked_amount(
+    expression: &TypedExpr,
+) -> Result<Option<Numeric>, ConstantAmountError> {
+    match &expression.expr {
+        ExprKind::AmountLiteral { value, .. } => Ok(Some(value.clone())),
+        ExprKind::Binary {
+            op: operation,
+            left,
+            right,
+        } if matches!(
+            operation,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+        ) =>
+        {
+            let Some(left) = evaluate_checked_amount(left)? else {
+                return Ok(None);
+            };
+            let Some(right) = evaluate_checked_amount(right)? else {
+                return Ok(None);
+            };
+            let result = match operation {
+                BinaryOp::Add => left.checked_amount_add(&right),
+                BinaryOp::Sub => left.checked_amount_sub(&right),
+                BinaryOp::Mul => left.checked_amount_mul(&right),
+                BinaryOp::Div => left.checked_amount_div_exact(&right),
+                _ => unreachable!("guard admits exact Amount arithmetic only"),
+            };
+            result.map(Some).map_err(|source| ConstantAmountError {
+                operation: *operation,
+                source,
             })
         }
         _ => Ok(None),
@@ -279,5 +349,53 @@ mod tests {
             evaluate_checked_i64(&neg_min),
             Err(ConstantOverflow::Neg(i64::MIN))
         );
+    }
+
+    fn amount(value: &str) -> TypedExpr {
+        let value = value
+            .parse::<Numeric>()
+            .expect("numeric literal")
+            .canonicalize_amount()
+            .expect("Amount literal");
+        TypedExpr {
+            expr: ExprKind::AmountLiteral {
+                spelling: format!("{value}amt"),
+                value,
+            },
+            ty: Type::Amount,
+        }
+    }
+
+    fn amount_binary(operation: BinaryOp, left: &str, right: &str) -> TypedExpr {
+        TypedExpr {
+            expr: ExprKind::Binary {
+                op: operation,
+                left: Box::new(amount(left)),
+                right: Box::new(amount(right)),
+            },
+            ty: Type::Amount,
+        }
+    }
+
+    #[test]
+    fn constant_amount_evaluation_is_exact_and_fail_closed() {
+        assert_eq!(
+            evaluate_checked_amount(&amount_binary(BinaryOp::Div, "1", "8")),
+            Ok(Some(Numeric::new(125, 3)))
+        );
+        assert!(matches!(
+            evaluate_checked_amount(&amount_binary(BinaryOp::Sub, "1", "2")),
+            Err(ConstantAmountError {
+                source: AmountError::Underflow,
+                ..
+            })
+        ));
+        assert!(matches!(
+            evaluate_checked_amount(&amount_binary(BinaryOp::Div, "1", "3")),
+            Err(ConstantAmountError {
+                source: AmountError::InexactDivision,
+                ..
+            })
+        ));
     }
 }

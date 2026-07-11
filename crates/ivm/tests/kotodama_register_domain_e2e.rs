@@ -7,6 +7,7 @@ use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
 };
+mod common;
 
 fn account(domain: &str, public_key: &str) -> AccountId {
     let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
@@ -42,6 +43,7 @@ fn kotodama_register_domain_e2e() {
 
     // Load and run
     vm.load_program(&program).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &program, "main");
     // Place a small INPUT TLV buffer to satisfy any pointer-ABI publish needs.
     vm.memory.preload_input(0, &[]).expect("preload input");
     vm.run().expect("register_domain should succeed");

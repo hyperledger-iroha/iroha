@@ -407,6 +407,20 @@ pub struct ProgramSummary {
 }
 
 impl ProgramSummary {
+    /// Prepare and summarize one complete deployable contract artifact.
+    ///
+    /// This is the public construction boundary for callers that need a
+    /// self-contained summary without managing an [`IvmCache`]. It validates
+    /// and predecodes the artifact and initializes the private prepared-runtime
+    /// cache carried by the returned summary.
+    ///
+    /// # Errors
+    /// Returns [`ivm::VMError`] when the bytes are not a valid deployable IVM
+    /// contract artifact.
+    pub fn from_artifact(bytecode: &[u8]) -> Result<Self, ivm::VMError> {
+        IvmCache::new().summarize_program(bytecode)
+    }
+
     /// Return the immutable validated contract shared by analysis and runtimes.
     #[must_use]
     pub fn prepared_contract(&self) -> &ivm::PreparedContract {
@@ -897,7 +911,7 @@ mod tests {
     fn minimal_program() -> Vec<u8> {
         let mut program = ivm::ProgramMetadata::default().encode();
         let interface = ivm::EmbeddedContractInterfaceV1 {
-            contract_name: "CacheFixture".to_owned(),
+            seiyaku_name: "CacheFixture".to_owned(),
             compiler_fingerprint: "iroha-core-cache-tests".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
@@ -908,6 +922,7 @@ mod tests {
                 params: Vec::new(),
                 argument_schema: None,
                 return_type: None,
+                return_schema: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -991,6 +1006,21 @@ mod tests {
         assert_eq!(stats.metadata_hits, 1);
         assert_eq!(stats.runtime_hits, 1);
         assert_eq!(stats.runtime_misses, 1);
+    }
+
+    #[test]
+    fn public_program_summary_constructor_initializes_prepared_runtime_state() {
+        const GAS_LIMIT: u64 = 10_000;
+        let program = minimal_program();
+        let summary = ProgramSummary::from_artifact(&program).expect("public summary constructor");
+
+        assert_eq!(summary.code_hash, ivm::contract_code_hash(&program));
+        assert_eq!(summary.prepared_contract().code_hash(), summary.code_hash);
+        assert_eq!(summary.prepared_contract().artifact(), program.as_slice());
+        let runtime = summary
+            .checkout_runtime(GAS_LIMIT)
+            .expect("summary owns initialized prepared runtime state");
+        assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
     }
 
     #[test]

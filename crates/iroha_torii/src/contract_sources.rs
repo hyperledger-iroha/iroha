@@ -493,10 +493,10 @@ fn persist_job_response(
 
 fn entrypoint_kind_label(kind: EntryPointKind) -> &'static str {
     match kind {
-        EntryPointKind::Public => "kotoage",
+        EntryPointKind::Kotoage => "kotoage",
         EntryPointKind::View => "view",
-        EntryPointKind::Init => "hajimari",
-        EntryPointKind::Upgrade => "kaizen",
+        EntryPointKind::Hajimari => "hajimari",
+        EntryPointKind::Kaizen => "kaizen",
     }
 }
 
@@ -513,14 +513,14 @@ fn entrypoint_signature(entrypoint: &EntrypointDescriptor) -> String {
         .map(|value| format!(" -> {value}"))
         .unwrap_or_default();
     match entrypoint.kind {
-        EntryPointKind::Public | EntryPointKind::View => format!(
+        EntryPointKind::Kotoage | EntryPointKind::View => format!(
             "{} fn {}({}){}",
             entrypoint_kind_label(entrypoint.kind),
             entrypoint.name,
             params,
             return_type
         ),
-        EntryPointKind::Init | EntryPointKind::Upgrade => format!(
+        EntryPointKind::Hajimari | EntryPointKind::Kaizen => format!(
             "{}({}){}",
             entrypoint_kind_label(entrypoint.kind),
             params,
@@ -559,12 +559,12 @@ fn render_pseudo_source(
     manifest: Option<&ContractManifest>,
     analysis: Option<&ProgramAnalysis>,
 ) -> String {
-    let contract_name = format!(
+    let seiyaku_name = format!(
         "Contract_{}",
         &code_hash.chars().take(8).collect::<String>()
     );
     let mut lines = Vec::new();
-    lines.push(format!("seiyaku {contract_name} {{"));
+    lines.push(format!("seiyaku {seiyaku_name} {{"));
     lines.push(
         "  // Decompiled pseudo-source derived from contract bytes and manifest hints.".to_owned(),
     );
@@ -1305,6 +1305,7 @@ mod tests {
             params: Vec::new(),
             argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -1314,7 +1315,7 @@ mod tests {
         };
 
         assert_eq!(
-            entrypoint_signature(&descriptor("run", EntryPointKind::Public)),
+            entrypoint_signature(&descriptor("run", EntryPointKind::Kotoage)),
             "kotoage fn run()",
         );
         assert_eq!(
@@ -1322,11 +1323,11 @@ mod tests {
             "view fn read()",
         );
         assert_eq!(
-            entrypoint_signature(&descriptor("hajimari", EntryPointKind::Init)),
+            entrypoint_signature(&descriptor("hajimari", EntryPointKind::Hajimari)),
             "hajimari()",
         );
         assert_eq!(
-            entrypoint_signature(&descriptor("kaizen", EntryPointKind::Upgrade)),
+            entrypoint_signature(&descriptor("kaizen", EntryPointKind::Kaizen)),
             "kaizen()",
         );
     }

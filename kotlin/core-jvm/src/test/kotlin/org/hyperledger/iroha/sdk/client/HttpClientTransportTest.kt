@@ -929,7 +929,7 @@ class HttpClientTransportTest {
                       "contract_alias": "router::universal",
                       "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                       "previous_contract_address": null,
-                      "upgraded": false,
+                      "kaizen": false,
                       "dataspace": "router",
                       "deploy_nonce": 7,
                       "tx_hash_hex": "${"11".repeat(32)}",
@@ -982,6 +982,7 @@ class HttpClientTransportTest {
         assertTrue(response.isPresent)
         val parsed = response.get()
         assertTrue(parsed.ok)
+        assertFalse(parsed.contracts.first().kaizen)
         assertEquals("mock-bundle-digest", parsed.bundleDigest)
         assertEquals("router::universal", parsed.contracts.first().contractAlias)
         assertEquals("router", parsed.contracts.first().dataspace)
@@ -2407,6 +2408,34 @@ class HttpClientTransportTest {
 
         assertEquals("Committed", PipelineStatusExtractor.extractStatusKind(payload).orElse(null))
         assertTrue(executor.observedExpectedHash)
+    }
+
+    @Test
+    fun waitForTransactionStatusSaturatesOverflowingDeadline() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """{"kind":"Transaction","content":{"status":{"kind":"Pending"}}}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val error = assertFailsWith<java.util.concurrent.CompletionException> {
+            transport.waitForTransactionStatus(
+                "feed",
+                PipelineStatusOptions(
+                    intervalMillis = 0L,
+                    timeoutMillis = Long.MAX_VALUE,
+                    maxAttempts = 2,
+                ),
+            ).join()
+        }
+
+        assertTrue(error.cause is TransactionTimeoutException)
+        assertEquals(2, (error.cause as TransactionTimeoutException).attempts)
+        assertEquals(2, executor.requestCount)
     }
 
     @Test

@@ -15,7 +15,6 @@ use alloc::{
 };
 
 use iroha_crypto::EcdsaSecp256k1Sha256;
-#[cfg(feature = "bls")]
 use iroha_crypto::{ethereum_bls_pop_fast_aggregate_verify, ethereum_bls_pop_validate_public_key};
 use iroha_data_model::bridge::sccp::{SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1};
 use tiny_keccak::{Hasher as _, Keccak};
@@ -62,16 +61,32 @@ const MIN_GAS_LIMIT: u64 = 5_000;
 const GAS_LIMIT_BOUND_DIVISOR: u64 = 1_024;
 const MAX_HEADER_BYTES: usize = 128 * 1_024;
 const MAX_EXTRA_BYTES: usize = 64 * 1_024;
-const MAX_HEADERS: usize = 4_096;
 const MAX_VALIDATORS: usize = 64;
 const MAX_TURN_LENGTH: u8 = 64;
 const MAX_ATTESTATION_EXTRA_BYTES: usize = 256;
-const MAX_RECEIPT_BYTES: usize = 1 * 1_024 * 1_024;
+const MAX_RECEIPT_BYTES: usize = 1_024 * 1_024;
 const MAX_RECEIPT_LOGS: usize = 1_024;
 const MAX_LOG_TOPICS: usize = 4;
 const MAX_MPT_NODES: usize = 128;
 const MAX_MPT_NODE_BYTES: usize = 512 * 1_024;
 const MAX_MPT_TOTAL_BYTES: usize = 4 * 1_024 * 1_024;
+
+/// Maximum number of post-anchor headers before the selected BSC target.
+///
+/// V1 requires governance to refresh a Parlia anchor at least once per
+/// 1,000-block epoch.  A proof may therefore select any header in the first
+/// complete epoch after its anchor, but cannot turn a stale checkpoint into an
+/// unbounded signature-replay job.
+pub const BSC_NATIVE_MAX_TARGET_HEADERS: usize = BSC_NATIVE_EPOCH_LENGTH as usize;
+/// Maximum number of headers after a BSC target before it becomes final.
+///
+/// A vote may refer to any of the three retained ancestor contexts.  The next
+/// contiguous vote can then make that target the finalized source, hence the
+/// exact worst case is `ancestor_depth + 1` headers.
+pub const BSC_NATIVE_MAX_FINALITY_SUFFIX_HEADERS: usize = BSC_NATIVE_ATTESTATION_ANCESTOR_DEPTH + 1;
+/// Maximum headers in one canonical native BSC finality continuation.
+pub const BSC_NATIVE_MAX_FINALITY_HEADERS: usize =
+    BSC_NATIVE_MAX_TARGET_HEADERS + BSC_NATIVE_MAX_FINALITY_SUFFIX_HEADERS;
 
 /// One Parlia validator and its fast-finality vote key.
 #[derive(
@@ -258,6 +273,27 @@ pub struct BscNativeFinalityProofV1 {
     pub target_header_index: u16,
 }
 
+/// Cheap deterministic reservation for native BSC finality verification.
+///
+/// The estimate is derived from proof framing only and performs no signature
+/// recovery, public-key validation, or aggregate verification.  BLS values are
+/// conservative upper bounds because deciding whether a canonical header
+/// carries an attestation requires parsing its RLP.  Core can reserve this work
+/// before dispatching any cryptographic verification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BscNativeFinalityWorkEstimateV1 {
+    /// Number of post-anchor continuation headers.
+    pub continuation_headers: u16,
+    /// Bytes in the anchor header and all continuation headers.
+    pub framed_header_bytes: u32,
+    /// Maximum secp256k1 recoveries: one anchor seal plus every continuation.
+    pub secp256k1_recoveries: u16,
+    /// Maximum BLS aggregate checks, one optional attestation per continuation.
+    pub bls_aggregate_checks_upper_bound: u16,
+    /// Maximum aggregate public-key contributions at the 64-validator cap.
+    pub bls_signer_contributions_upper_bound: u32,
+}
+
 /// Merkle-Patricia inclusion proof for one successful execution receipt.
 #[derive(
     Clone,
@@ -356,6 +392,27 @@ pub struct ValidatedBscNativeReceiptV1 {
     pub route_config_hash: H256,
 }
 
+/// Exact governed values that one native BSC receipt must authenticate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BscNativeReceiptExpectationV1<'a> {
+    /// Finalized receipts root under which inclusion must be proven.
+    pub receipts_root: H256,
+    /// Immutable concrete transfer-route emitter address.
+    pub emitter: [u8; 20],
+    /// Exact typed lane hash carried by the source event.
+    pub lane_hash: H256,
+    /// Exact lane-bound message identifier carried by the source event.
+    pub message_id: H256,
+    /// Exact SCCP source-event digest carried by the source event.
+    pub source_event_digest: H256,
+    /// Hash of the exact canonical payload carried by the source event.
+    pub payload_hash: H256,
+    /// Immutable concrete route-configuration hash carried by the source event.
+    pub route_config_hash: H256,
+    /// Exact canonical SCCP payload bytes carried by the source event.
+    pub canonical_payload: &'a [u8],
+}
+
 /// Authenticated direct emitter deployment fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValidatedBscNativeEmitterStateV1 {
@@ -421,14 +478,14 @@ pub enum BscNativeFinalityError {
     InvalidVoteAddressSet,
     /// A vote public key or aggregate signature was invalid.
     InvalidBlsSignature,
-    /// This build cannot verify the mandatory native BLS attestation.
-    BlsUnavailable,
     /// Epoch list was malformed, duplicated, unsorted, or conflicted with state.
     InvalidEpochRoster,
     /// A pending validator-set change was not finalized by the old set before use.
     UnauthenticatedEpochTransition,
     /// Target header index was absent or the target did not become finalized.
     TargetNotFinalized,
+    /// The target became final before the last supplied continuation header.
+    NonMinimalContinuation,
 }
 
 /// Fail-closed reason returned by receipt inclusion verification.
@@ -552,6 +609,27 @@ struct ParliaState {
     justification: VoteData,
     vote_contexts: Vec<VoteContext>,
     pending_epoch: Option<PendingEpoch>,
+}
+
+struct AnchorRosterState {
+    validators: Vec<Validator>,
+    active_validator_checkpoint: CanonicalBlock,
+    current_epoch_checkpoint: u64,
+    recents: BTreeMap<u64, [u8; 20]>,
+}
+
+struct AnchorVoteState {
+    justification: VoteData,
+    vote_contexts: Vec<VoteContext>,
+    pending_epoch: Option<PendingEpoch>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BscNativeFinalityWorkPerformedV1 {
+    continuation_headers: u16,
+    secp256k1_recoveries: u16,
+    bls_aggregate_checks: u16,
+    bls_signer_contributions: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -871,14 +949,13 @@ fn verify_execution_fields(
         .checked_mul(BLOB_GAS_PER_BLOB)
         .ok_or(BscNativeFinalityError::InvalidExecutionFields)?;
     if header.blob_gas_used > max_blob_gas
-        || header.blob_gas_used % BLOB_GAS_PER_BLOB != 0
-        || (header.number % BLOB_ELIGIBLE_BLOCK_INTERVAL != 0 && header.blob_gas_used != 0)
+        || !header.blob_gas_used.is_multiple_of(BLOB_GAS_PER_BLOB)
+        || (!header.number.is_multiple_of(BLOB_ELIGIBLE_BLOCK_INTERVAL)
+            && header.blob_gas_used != 0)
     {
         return Err(BscNativeFinalityError::InvalidExecutionFields);
     }
-    let expected_excess = if parent.number % BLOB_ELIGIBLE_BLOCK_INTERVAL != 0 {
-        parent.excess_blob_gas
-    } else {
+    let expected_excess = if parent.number.is_multiple_of(BLOB_ELIGIBLE_BLOCK_INTERVAL) {
         let target = BLOB_TARGET
             .checked_mul(BLOB_GAS_PER_BLOB)
             .ok_or(BscNativeFinalityError::InvalidExecutionFields)?;
@@ -887,6 +964,8 @@ fn verify_execution_fields(
             .checked_add(parent.blob_gas_used)
             .ok_or(BscNativeFinalityError::InvalidExecutionFields)?
             .saturating_sub(target)
+    } else {
+        parent.excess_blob_gas
     };
     if header.excess_blob_gas != expected_excess {
         return Err(BscNativeFinalityError::InvalidExecutionFields);
@@ -920,11 +999,8 @@ fn validators_from_wire(
         {
             return Err(BscNativeFinalityError::InvalidEpochRoster);
         }
-        #[cfg(feature = "bls")]
         ethereum_bls_pop_validate_public_key(&vote_key)
             .map_err(|_| BscNativeFinalityError::InvalidBlsSignature)?;
-        #[cfg(not(feature = "bls"))]
-        return Err(BscNativeFinalityError::BlsUnavailable);
         prior_address = Some(address);
         out.push(Validator { address, vote_key });
     }
@@ -932,7 +1008,7 @@ fn validators_from_wire(
 }
 
 fn validators_from_extra(bytes: &[u8]) -> Result<Vec<Validator>, BscNativeFinalityError> {
-    if bytes.is_empty() || bytes.len() % VALIDATOR_BYTES != 0 {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(VALIDATOR_BYTES) {
         return Err(BscNativeFinalityError::InvalidEpochRoster);
     }
     let count = bytes.len() / VALIDATOR_BYTES;
@@ -1008,7 +1084,7 @@ fn parse_extra(header: &ParsedHeader<'_>) -> Result<ParsedExtra, BscNativeFinali
         .try_into()
         .map_err(|_| BscNativeFinalityError::InvalidExtraData)?;
     let middle = &header.extra[EXTRA_VANITY_BYTES..seal_start];
-    let (epoch, attestation_bytes) = if header.number % BSC_NATIVE_EPOCH_LENGTH == 0 {
+    let (epoch, attestation_bytes) = if header.number.is_multiple_of(BSC_NATIVE_EPOCH_LENGTH) {
         let count = usize::from(
             *middle
                 .first()
@@ -1139,7 +1215,9 @@ fn pending_epoch_from_wire(
     pending: &BscNativePendingEpochV1,
 ) -> Result<PendingEpoch, BscNativeFinalityError> {
     if pending.checkpoint_number == 0
-        || pending.checkpoint_number % BSC_NATIVE_EPOCH_LENGTH != 0
+        || !pending
+            .checkpoint_number
+            .is_multiple_of(BSC_NATIVE_EPOCH_LENGTH)
         || !nonzero(&pending.checkpoint_hash)
         || pending.turn_length == 0
         || pending.turn_length > MAX_TURN_LENGTH
@@ -1162,13 +1240,10 @@ fn miner_history_check_len(validator_count: usize, turn_length: u8) -> Option<u6
     majority.checked_mul(u64::from(turn_length))?.checked_sub(1)
 }
 
-fn anchor_state(
+fn parse_and_validate_anchor_header(
     anchor: &BscNativeParliaAnchorV1,
-) -> Result<(ParliaState, H256, NetworkParameters), BscNativeFinalityError> {
-    if anchor.version != 1 {
-        return Err(BscNativeFinalityError::UnsupportedVersion);
-    }
-    let params = network_parameters(anchor.network).ok_or(BscNativeFinalityError::WrongNetwork)?;
+    params: NetworkParameters,
+) -> Result<(ParsedHeader<'_>, ParsedExtra), BscNativeFinalityError> {
     if anchor.epoch_length != BSC_NATIVE_EPOCH_LENGTH
         || anchor.block_interval_ms != BSC_NATIVE_BLOCK_INTERVAL_MS
         || anchor.turn_length == 0
@@ -1185,6 +1260,13 @@ fn anchor_state(
     if recovered != header.coinbase {
         return Err(BscNativeFinalityError::InvalidAnchor);
     }
+    Ok((header, parsed_extra))
+}
+
+fn validate_anchor_roster(
+    anchor: &BscNativeParliaAnchorV1,
+    header: &ParsedHeader<'_>,
+) -> Result<AnchorRosterState, BscNativeFinalityError> {
     let validators = validators_from_wire(&anchor.validators)?;
     let active_validator_checkpoint = CanonicalBlock {
         number: anchor.active_validator_checkpoint_number,
@@ -1192,19 +1274,18 @@ fn anchor_state(
     };
     let current_epoch_checkpoint = header.number - header.number % BSC_NATIVE_EPOCH_LENGTH;
     if active_validator_checkpoint.number == 0
-        || active_validator_checkpoint.number % BSC_NATIVE_EPOCH_LENGTH != 0
+        || !active_validator_checkpoint
+            .number
+            .is_multiple_of(BSC_NATIVE_EPOCH_LENGTH)
         || active_validator_checkpoint.number > header.number
         || active_validator_checkpoint
             .number
             .saturating_add(BSC_NATIVE_EPOCH_LENGTH)
             < current_epoch_checkpoint
         || !nonzero(&active_validator_checkpoint.hash)
-    {
-        return Err(BscNativeFinalityError::InvalidAnchor);
-    }
-    if validators
-        .binary_search_by_key(&header.coinbase, |validator| validator.address)
-        .is_err()
+        || validators
+            .binary_search_by_key(&header.coinbase, |validator| validator.address)
+            .is_err()
     {
         return Err(BscNativeFinalityError::InvalidAnchor);
     }
@@ -1239,23 +1320,36 @@ fn anchor_state(
             return Err(BscNativeFinalityError::InvalidAnchor);
         }
     }
+    Ok(AnchorRosterState {
+        validators,
+        active_validator_checkpoint,
+        current_epoch_checkpoint,
+        recents,
+    })
+}
+
+fn validate_anchor_votes(
+    anchor: &BscNativeParliaAnchorV1,
+    header: &ParsedHeader<'_>,
+    parsed_extra: &ParsedExtra,
+    roster: &AnchorRosterState,
+) -> Result<AnchorVoteState, BscNativeFinalityError> {
     let justification = VoteData {
         source_number: anchor.justification.source_number,
         source_hash: anchor.justification.source_hash,
         target_number: anchor.justification.target_number,
         target_hash: anchor.justification.target_hash,
     };
-    let invalid_justification_numbers = justification.source_number >= justification.target_number
-        || justification.target_number > header.number;
-    let invalid_justification_hashes =
-        !nonzero(&justification.source_hash) || !nonzero(&justification.target_hash);
-    if invalid_justification_numbers || invalid_justification_hashes {
-        return Err(BscNativeFinalityError::InvalidAnchor);
-    }
-    if (active_validator_checkpoint.number == justification.source_number
-        && active_validator_checkpoint.hash != justification.source_hash)
-        || (active_validator_checkpoint.number == justification.target_number
-            && active_validator_checkpoint.hash != justification.target_hash)
+    let source_not_before_target = justification.source_number >= justification.target_number;
+    let target_beyond_anchor = justification.target_number > header.number;
+    if source_not_before_target
+        || target_beyond_anchor
+        || !nonzero(&justification.source_hash)
+        || !nonzero(&justification.target_hash)
+        || (roster.active_validator_checkpoint.number == justification.source_number
+            && roster.active_validator_checkpoint.hash != justification.source_hash)
+        || (roster.active_validator_checkpoint.number == justification.target_number
+            && roster.active_validator_checkpoint.hash != justification.target_hash)
     {
         return Err(BscNativeFinalityError::InvalidAnchor);
     }
@@ -1281,7 +1375,7 @@ fn anchor_state(
         .as_ref()
         .map(pending_epoch_from_wire)
         .transpose()?;
-    if header.number % BSC_NATIVE_EPOCH_LENGTH == 0
+    if header.number.is_multiple_of(BSC_NATIVE_EPOCH_LENGTH)
         && pending_epoch.as_ref() != parsed_extra.epoch.as_ref()
     {
         return Err(BscNativeFinalityError::InvalidAnchor);
@@ -1289,17 +1383,30 @@ fn anchor_state(
     if pending_epoch.as_ref().is_some_and(|pending| {
         pending.checkpoint_number > header.number
             || header.number.saturating_sub(pending.checkpoint_number) >= BSC_NATIVE_EPOCH_LENGTH
-    }) {
-        return Err(BscNativeFinalityError::InvalidAnchor);
-    }
-    if pending_epoch.as_ref().is_some_and(|pending| {
-        pending.checkpoint_number != current_epoch_checkpoint
-            || active_validator_checkpoint.number == pending.checkpoint_number
+            || pending.checkpoint_number != roster.current_epoch_checkpoint
+            || roster.active_validator_checkpoint.number == pending.checkpoint_number
     }) || (pending_epoch.is_none()
-        && active_validator_checkpoint.number != current_epoch_checkpoint)
+        && roster.active_validator_checkpoint.number != roster.current_epoch_checkpoint)
     {
         return Err(BscNativeFinalityError::InvalidAnchor);
     }
+    Ok(AnchorVoteState {
+        justification,
+        vote_contexts,
+        pending_epoch,
+    })
+}
+
+fn anchor_state(
+    anchor: &BscNativeParliaAnchorV1,
+) -> Result<(ParliaState, H256, NetworkParameters), BscNativeFinalityError> {
+    if anchor.version != 1 {
+        return Err(BscNativeFinalityError::UnsupportedVersion);
+    }
+    let params = network_parameters(anchor.network).ok_or(BscNativeFinalityError::WrongNetwork)?;
+    let (header, parsed_extra) = parse_and_validate_anchor_header(anchor, params)?;
+    let roster = validate_anchor_roster(anchor, &header)?;
+    let votes = validate_anchor_votes(anchor, &header, &parsed_extra, &roster)?;
     let anchor_bytes =
         norito::to_bytes(anchor).map_err(|_| BscNativeFinalityError::AnchorEncoding)?;
     let anchor_hash = prefixed_blake2b(BSC_NATIVE_ANCHOR_PREFIX_V1, &anchor_bytes);
@@ -1317,12 +1424,12 @@ fn anchor_state(
                 excess_blob_gas: header.excess_blob_gas,
             },
             turn_length: anchor.turn_length,
-            validators,
-            active_validator_checkpoint,
-            recents,
-            justification,
-            vote_contexts,
-            pending_epoch,
+            validators: roster.validators,
+            active_validator_checkpoint: roster.active_validator_checkpoint,
+            recents: roster.recents,
+            justification: votes.justification,
+            vote_contexts: votes.vote_contexts,
+            pending_epoch: votes.pending_epoch,
         },
         anchor_hash,
         params,
@@ -1330,6 +1437,10 @@ fn anchor_state(
 }
 
 /// Return the canonical execution block number of a valid governed Parlia anchor.
+///
+/// # Errors
+///
+/// Returns a finality error when the anchor header is malformed or non-canonical.
 pub fn bsc_native_anchor_block_number(
     anchor: &BscNativeParliaAnchorV1,
 ) -> Result<u64, BscNativeFinalityError> {
@@ -1341,613 +1452,613 @@ pub fn bsc_native_anchor_block_number(
 // out-of-turn delay is consensus-visible and therefore cannot be replaced by
 // Rust's RNG or by a statistically equivalent shuffle.
 const GO_RNG_COOKED: [i64; 607] = [
-    -4181792142133755926,
-    -4576982950128230565,
-    1395769623340756751,
-    5333664234075297259,
-    -6347679516498800754,
-    9033628115061424579,
-    7143218595135194537,
-    4812947590706362721,
-    7937252194349799378,
-    5307299880338848416,
-    8209348851763925077,
-    -7107630437535961764,
-    4593015457530856296,
-    8140875735541888011,
-    -5903942795589686782,
-    -603556388664454774,
-    -7496297993371156308,
-    113108499721038619,
-    4569519971459345583,
-    -4160538177779461077,
-    -6835753265595711384,
-    -6507240692498089696,
-    6559392774825876886,
-    7650093201692370310,
-    7684323884043752161,
-    -8965504200858744418,
-    -2629915517445760644,
-    271327514973697897,
-    -6433985589514657524,
-    1065192797246149621,
-    3344507881999356393,
-    -4763574095074709175,
-    7465081662728599889,
-    1014950805555097187,
-    -4773931307508785033,
-    -5742262670416273165,
-    2418672789110888383,
-    5796562887576294778,
-    4484266064449540171,
-    3738982361971787048,
-    -4699774852342421385,
-    10530508058128498,
-    -589538253572429690,
-    -6598062107225984180,
-    8660405965245884302,
-    10162832508971942,
-    -2682657355892958417,
-    7031802312784620857,
-    6240911277345944669,
-    831864355460801054,
-    -1218937899312622917,
-    2116287251661052151,
-    2202309800992166967,
-    9161020366945053561,
-    4069299552407763864,
-    4936383537992622449,
-    457351505131524928,
-    -8881176990926596454,
-    -6375600354038175299,
-    -7155351920868399290,
-    4368649989588021065,
-    887231587095185257,
-    -3659780529968199312,
-    -2407146836602825512,
-    5616972787034086048,
-    -751562733459939242,
-    1686575021641186857,
-    -5177887698780513806,
-    -4979215821652996885,
-    -1375154703071198421,
-    5632136521049761902,
-    -8390088894796940536,
-    -193645528485698615,
-    -5979788902190688516,
-    -4907000935050298721,
-    -285522056888777828,
-    -2776431630044341707,
-    1679342092332374735,
-    6050638460742422078,
-    -2229851317345194226,
-    -1582494184340482199,
-    5881353426285907985,
-    812786550756860885,
-    4541845584483343330,
-    -6497901820577766722,
-    4980675660146853729,
-    -4012602956251539747,
-    -329088717864244987,
-    -2896929232104691526,
-    1495812843684243920,
-    -2153620458055647789,
-    7370257291860230865,
-    -2466442761497833547,
-    4706794511633873654,
-    -1398851569026877145,
-    8549875090542453214,
-    -9189721207376179652,
-    -7894453601103453165,
-    7297902601803624459,
-    1011190183918857495,
-    -6985347000036920864,
-    5147159997473910359,
-    -8326859945294252826,
-    2659470849286379941,
-    6097729358393448602,
-    -7491646050550022124,
-    -5117116194870963097,
-    -896216826133240300,
-    -745860416168701406,
-    5803876044675762232,
-    -787954255994554146,
-    -3234519180203704564,
-    -4507534739750823898,
-    -1657200065590290694,
-    505808562678895611,
-    -4153273856159712438,
-    -8381261370078904295,
-    572156825025677802,
-    1791881013492340891,
-    3393267094866038768,
-    -5444650186382539299,
-    2352769483186201278,
-    -7930912453007408350,
-    -325464993179687389,
-    -3441562999710612272,
-    -6489413242825283295,
-    5092019688680754699,
-    -227247482082248967,
-    4234737173186232084,
-    5027558287275472836,
-    4635198586344772304,
-    -536033143587636457,
-    5907508150730407386,
-    -8438615781380831356,
-    972392927514829904,
-    -3801314342046600696,
-    -4064951393885491917,
-    -174840358296132583,
-    2407211146698877100,
-    -1640089820333676239,
-    3940796514530962282,
-    -5882197405809569433,
-    3095313889586102949,
-    -1818050141166537098,
-    5832080132947175283,
-    7890064875145919662,
-    8184139210799583195,
-    -8073512175445549678,
-    -7758774793014564506,
-    -4581724029666783935,
-    3516491885471466898,
-    -8267083515063118116,
-    6657089965014657519,
-    5220884358887979358,
-    1796677326474620641,
-    5340761970648932916,
-    1147977171614181568,
-    5066037465548252321,
-    2574765911837859848,
-    1085848279845204775,
-    -5873264506986385449,
-    6116438694366558490,
-    2107701075971293812,
-    -7420077970933506541,
-    2469478054175558874,
-    -1855128755834809824,
-    -5431463669011098282,
-    -9038325065738319171,
-    -6966276280341336160,
-    7217693971077460129,
-    -8314322083775271549,
-    7196649268545224266,
-    -3585711691453906209,
-    -5267827091426810625,
-    8057528650917418961,
-    -5084103596553648165,
-    -2601445448341207749,
-    -7850010900052094367,
-    6527366231383600011,
-    3507654575162700890,
-    9202058512774729859,
-    1954818376891585542,
-    -2582991129724600103,
-    8299563319178235687,
-    -5321504681635821435,
-    7046310742295574065,
-    -2376176645520785576,
-    -7650733936335907755,
-    8850422670118399721,
-    3631909142291992901,
-    5158881091950831288,
-    -6340413719511654215,
-    4763258931815816403,
-    6280052734341785344,
-    -4979582628649810958,
-    2043464728020827976,
-    -2678071570832690343,
-    4562580375758598164,
-    5495451168795427352,
-    -7485059175264624713,
-    553004618757816492,
-    6895160632757959823,
-    -989748114590090637,
-    7139506338801360852,
-    -672480814466784139,
-    5535668688139305547,
-    2430933853350256242,
-    -3821430778991574732,
-    -1063731997747047009,
-    -3065878205254005442,
-    7632066283658143750,
-    6308328381617103346,
-    3681878764086140361,
-    3289686137190109749,
-    6587997200611086848,
-    244714774258135476,
-    -5143583659437639708,
-    8090302575944624335,
-    2945117363431356361,
-    -8359047641006034763,
-    3009039260312620700,
-    -793344576772241777,
-    401084700045993341,
-    -1968749590416080887,
-    4707864159563588614,
-    -3583123505891281857,
-    -3240864324164777915,
-    -5908273794572565703,
-    -3719524458082857382,
-    -5281400669679581926,
-    8118566580304798074,
-    3839261274019871296,
-    7062410411742090847,
-    -8481991033874568140,
-    6027994129690250817,
-    -6725542042704711878,
-    -2971981702428546974,
-    -7854441788951256975,
-    8809096399316380241,
-    6492004350391900708,
-    2462145737463489636,
-    -8818543617934476634,
-    -5070345602623085213,
-    -8961586321599299868,
-    -3758656652254704451,
-    -8630661632476012791,
-    6764129236657751224,
-    -709716318315418359,
-    -3403028373052861600,
-    -8838073512170985897,
-    -3999237033416576341,
-    -2920240395515973663,
-    -2073249475545404416,
-    368107899140673753,
-    -6108185202296464250,
-    -6307735683270494757,
-    4782583894627718279,
-    6718292300699989587,
-    8387085186914375220,
-    3387513132024756289,
-    4654329375432538231,
-    -292704475491394206,
-    -3848998599978456535,
-    7623042350483453954,
-    7725442901813263321,
-    9186225467561587250,
-    -5132344747257272453,
-    -6865740430362196008,
-    2530936820058611833,
-    1636551876240043639,
-    -3658707362519810009,
-    1452244145334316253,
-    -7161729655835084979,
-    -7943791770359481772,
-    9108481583171221009,
-    -3200093350120725999,
-    5007630032676973346,
-    2153168792952589781,
-    6720334534964750538,
-    -3181825545719981703,
-    3433922409283786309,
-    2285479922797300912,
-    3110614940896576130,
-    -2856812446131932915,
-    -3804580617188639299,
-    7163298419643543757,
-    4891138053923696990,
-    580618510277907015,
-    1684034065251686769,
-    4429514767357295841,
-    -8893025458299325803,
-    -8103734041042601133,
-    7177515271653460134,
-    4589042248470800257,
-    -1530083407795771245,
-    143607045258444228,
-    246994305896273627,
-    -8356954712051676521,
-    6473547110565816071,
-    3092379936208876896,
-    2058427839513754051,
-    -4089587328327907870,
-    8785882556301281247,
-    -3074039370013608197,
-    -637529855400303673,
-    6137678347805511274,
-    -7152924852417805802,
-    5708223427705576541,
-    -3223714144396531304,
-    4358391411789012426,
-    325123008708389849,
-    6837621693887290924,
-    4843721905315627004,
-    -3212720814705499393,
-    -3825019837890901156,
-    4602025990114250980,
-    1044646352569048800,
-    9106614159853161675,
-    -8394115921626182539,
-    -4304087667751778808,
-    2681532557646850893,
-    3681559472488511871,
-    -3915372517896561773,
-    -2889241648411946534,
-    -6564663803938238204,
-    -8060058171802589521,
-    581945337509520675,
-    3648778920718647903,
-    -4799698790548231394,
-    -7602572252857820065,
-    220828013409515943,
-    -1072987336855386047,
-    4287360518296753003,
-    -4633371852008891965,
-    5513660857261085186,
-    -2258542936462001533,
-    -8744380348503999773,
-    8746140185685648781,
-    228500091334420247,
-    1356187007457302238,
-    3019253992034194581,
-    3152601605678500003,
-    -8793219284148773595,
-    5559581553696971176,
-    4916432985369275664,
-    -8559797105120221417,
-    -5802598197927043732,
-    2868348622579915573,
-    -7224052902810357288,
-    -5894682518218493085,
-    2587672709781371173,
-    -7706116723325376475,
-    3092343956317362483,
-    -5561119517847711700,
-    972445599196498113,
-    -1558506600978816441,
-    1708913533482282562,
-    -2305554874185907314,
-    -6005743014309462908,
-    -6653329009633068701,
-    -483583197311151195,
-    2488075924621352812,
-    -4529369641467339140,
-    -4663743555056261452,
-    2997203966153298104,
-    1282559373026354493,
-    240113143146674385,
-    8665713329246516443,
-    628141331766346752,
-    -4651421219668005332,
-    -7750560848702540400,
-    7596648026010355826,
-    -3132152619100351065,
-    7834161864828164065,
-    7103445518877254909,
-    4390861237357459201,
-    -4780718172614204074,
-    -319889632007444440,
-    622261699494173647,
-    -3186110786557562560,
-    -8718967088789066690,
-    -1948156510637662747,
-    -8212195255998774408,
-    -7028621931231314745,
-    2623071828615234808,
-    -4066058308780939700,
-    -5484966924888173764,
-    -6683604512778046238,
-    -6756087640505506466,
-    5256026990536851868,
-    7841086888628396109,
-    6640857538655893162,
-    -8021284697816458310,
-    -7109857044414059830,
-    -1689021141511844405,
-    -4298087301956291063,
-    -4077748265377282003,
-    -998231156719803476,
-    2719520354384050532,
-    9132346697815513771,
-    4332154495710163773,
-    -2085582442760428892,
-    6994721091344268833,
-    -2556143461985726874,
-    -8567931991128098309,
-    59934747298466858,
-    -3098398008776739403,
-    -265597256199410390,
-    2332206071942466437,
-    -7522315324568406181,
-    3154897383618636503,
-    -7585605855467168281,
-    -6762850759087199275,
-    197309393502684135,
-    -8579694182469508493,
-    2543179307861934850,
-    4350769010207485119,
-    -4468719947444108136,
-    -7207776534213261296,
-    -1224312577878317200,
-    4287946071480840813,
-    8362686366770308971,
-    6486469209321732151,
-    -5605644191012979782,
-    -1669018511020473564,
-    4450022655153542367,
-    -7618176296641240059,
-    -3896357471549267421,
-    -4596796223304447488,
-    -6531150016257070659,
-    -8982326463137525940,
-    -4125325062227681798,
-    -1306489741394045544,
-    -8338554946557245229,
-    5329160409530630596,
-    7790979528857726136,
-    4955070238059373407,
-    -4304834761432101506,
-    -6215295852904371179,
-    3007769226071157901,
-    -6753025801236972788,
-    8928702772696731736,
-    7856187920214445904,
-    -4748497451462800923,
-    7900176660600710914,
-    -7082800908938549136,
-    -6797926979589575837,
-    -6737316883512927978,
-    4186670094382025798,
-    1883939007446035042,
-    -414705992779907823,
-    3734134241178479257,
-    4065968871360089196,
-    6953124200385847784,
-    -7917685222115876751,
-    -7585632937840318161,
-    -5567246375906782599,
-    -5256612402221608788,
-    3106378204088556331,
-    -2894472214076325998,
-    4565385105440252958,
-    1979884289539493806,
-    -6891578849933910383,
-    3783206694208922581,
-    8464961209802336085,
-    2843963751609577687,
-    3030678195484896323,
-    -4429654462759003204,
-    4459239494808162889,
-    402587895800087237,
-    8057891408711167515,
-    4541888170938985079,
-    1042662272908816815,
-    -3666068979732206850,
-    2647678726283249984,
-    2144477441549833761,
-    -3417019821499388721,
-    -2105601033380872185,
-    5916597177708541638,
-    -8760774321402454447,
-    8833658097025758785,
-    5970273481425315300,
-    563813119381731307,
-    -6455022486202078793,
-    1598828206250873866,
-    -4016978389451217698,
-    -2988328551145513985,
-    -6071154634840136312,
-    8469693267274066490,
-    125672920241807416,
-    -3912292412830714870,
-    -2559617104544284221,
-    -486523741806024092,
-    -4735332261862713930,
-    5923302823487327109,
-    -9082480245771672572,
-    -1808429243461201518,
-    7990420780896957397,
-    4317817392807076702,
-    3625184369705367340,
-    -6482649271566653105,
-    -3480272027152017464,
-    -3225473396345736649,
-    -368878695502291645,
-    -3981164001421868007,
-    -8522033136963788610,
-    7609280429197514109,
-    3020985755112334161,
-    -2572049329799262942,
-    2635195723621160615,
-    5144520864246028816,
-    -8188285521126945980,
-    1567242097116389047,
-    8172389260191636581,
-    -2885551685425483535,
-    -7060359469858316883,
-    -6480181133964513127,
-    -7317004403633452381,
-    6011544915663598137,
-    5932255307352610768,
-    2241128460406315459,
-    -8327867140638080220,
-    3094483003111372717,
-    4583857460292963101,
-    9079887171656594975,
-    -384082854924064405,
-    -3460631649611717935,
-    4225072055348026230,
-    -7385151438465742745,
-    3801620336801580414,
-    -399845416774701952,
-    -7446754431269675473,
-    7899055018877642622,
-    5421679761463003041,
-    5521102963086275121,
-    -4975092593295409910,
-    8735487530905098534,
-    -7462844945281082830,
-    -2080886987197029914,
-    -1000715163927557685,
-    -4253840471931071485,
-    -5828896094657903328,
-    6424174453260338141,
-    359248545074932887,
-    -5949720754023045210,
-    -2426265837057637212,
-    3030918217665093212,
-    -9077771202237461772,
-    -3186796180789149575,
-    740416251634527158,
-    -2142944401404840226,
-    6951781370868335478,
-    399922722363687927,
-    -8928469722407522623,
-    -1378421100515597285,
-    -8343051178220066766,
-    -3030716356046100229,
-    -8811767350470065420,
-    9026808440365124461,
-    6440783557497587732,
-    4615674634722404292,
-    539897290441580544,
-    2096238225866883852,
-    8751955639408182687,
-    -7316147128802486205,
-    7381039757301768559,
-    6157238513393239656,
-    -1473377804940618233,
-    8629571604380892756,
-    5280433031239081479,
-    7101611890139813254,
-    2479018537985767835,
-    7169176924412769570,
-    -1281305539061572506,
-    -7865612307799218120,
-    2278447439451174845,
-    3625338785743880657,
-    6477479539006708521,
-    8976185375579272206,
-    -3712000482142939688,
-    1326024180520890843,
-    7537449876596048829,
-    5464680203499696154,
-    3189671183162196045,
-    6346751753565857109,
-    -8982212049534145501,
-    -6127578587196093755,
-    -245039190118465649,
-    -6320577374581628592,
-    7208698530190629697,
-    7276901792339343736,
-    -7490986807540332668,
-    4133292154170828382,
-    2918308698224194548,
-    -7703910638917631350,
-    -3929437324238184044,
-    -4300543082831323144,
-    -6344160503358350167,
-    5896236396443472108,
-    -758328221503023383,
-    -1894351639983151068,
-    -307900319840287220,
-    -6278469401177312761,
-    -2171292963361310674,
-    8382142935188824023,
-    9103922860780351547,
-    4152330101494654406,
+    -4_181_792_142_133_755_926,
+    -4_576_982_950_128_230_565,
+    1_395_769_623_340_756_751,
+    5_333_664_234_075_297_259,
+    -6_347_679_516_498_800_754,
+    9_033_628_115_061_424_579,
+    7_143_218_595_135_194_537,
+    4_812_947_590_706_362_721,
+    7_937_252_194_349_799_378,
+    5_307_299_880_338_848_416,
+    8_209_348_851_763_925_077,
+    -7_107_630_437_535_961_764,
+    4_593_015_457_530_856_296,
+    8_140_875_735_541_888_011,
+    -5_903_942_795_589_686_782,
+    -603_556_388_664_454_774,
+    -7_496_297_993_371_156_308,
+    113_108_499_721_038_619,
+    4_569_519_971_459_345_583,
+    -4_160_538_177_779_461_077,
+    -6_835_753_265_595_711_384,
+    -6_507_240_692_498_089_696,
+    6_559_392_774_825_876_886,
+    7_650_093_201_692_370_310,
+    7_684_323_884_043_752_161,
+    -8_965_504_200_858_744_418,
+    -2_629_915_517_445_760_644,
+    271_327_514_973_697_897,
+    -6_433_985_589_514_657_524,
+    1_065_192_797_246_149_621,
+    3_344_507_881_999_356_393,
+    -4_763_574_095_074_709_175,
+    7_465_081_662_728_599_889,
+    1_014_950_805_555_097_187,
+    -4_773_931_307_508_785_033,
+    -5_742_262_670_416_273_165,
+    2_418_672_789_110_888_383,
+    5_796_562_887_576_294_778,
+    4_484_266_064_449_540_171,
+    3_738_982_361_971_787_048,
+    -4_699_774_852_342_421_385,
+    10_530_508_058_128_498,
+    -589_538_253_572_429_690,
+    -6_598_062_107_225_984_180,
+    8_660_405_965_245_884_302,
+    10_162_832_508_971_942,
+    -2_682_657_355_892_958_417,
+    7_031_802_312_784_620_857,
+    6_240_911_277_345_944_669,
+    831_864_355_460_801_054,
+    -1_218_937_899_312_622_917,
+    2_116_287_251_661_052_151,
+    2_202_309_800_992_166_967,
+    9_161_020_366_945_053_561,
+    4_069_299_552_407_763_864,
+    4_936_383_537_992_622_449,
+    457_351_505_131_524_928,
+    -8_881_176_990_926_596_454,
+    -6_375_600_354_038_175_299,
+    -7_155_351_920_868_399_290,
+    4_368_649_989_588_021_065,
+    887_231_587_095_185_257,
+    -3_659_780_529_968_199_312,
+    -2_407_146_836_602_825_512,
+    5_616_972_787_034_086_048,
+    -751_562_733_459_939_242,
+    1_686_575_021_641_186_857,
+    -5_177_887_698_780_513_806,
+    -4_979_215_821_652_996_885,
+    -1_375_154_703_071_198_421,
+    5_632_136_521_049_761_902,
+    -8_390_088_894_796_940_536,
+    -193_645_528_485_698_615,
+    -5_979_788_902_190_688_516,
+    -4_907_000_935_050_298_721,
+    -285_522_056_888_777_828,
+    -2_776_431_630_044_341_707,
+    1_679_342_092_332_374_735,
+    6_050_638_460_742_422_078,
+    -2_229_851_317_345_194_226,
+    -1_582_494_184_340_482_199,
+    5_881_353_426_285_907_985,
+    812_786_550_756_860_885,
+    4_541_845_584_483_343_330,
+    -6_497_901_820_577_766_722,
+    4_980_675_660_146_853_729,
+    -4_012_602_956_251_539_747,
+    -329_088_717_864_244_987,
+    -2_896_929_232_104_691_526,
+    1_495_812_843_684_243_920,
+    -2_153_620_458_055_647_789,
+    7_370_257_291_860_230_865,
+    -2_466_442_761_497_833_547,
+    4_706_794_511_633_873_654,
+    -1_398_851_569_026_877_145,
+    8_549_875_090_542_453_214,
+    -9_189_721_207_376_179_652,
+    -7_894_453_601_103_453_165,
+    7_297_902_601_803_624_459,
+    1_011_190_183_918_857_495,
+    -6_985_347_000_036_920_864,
+    5_147_159_997_473_910_359,
+    -8_326_859_945_294_252_826,
+    2_659_470_849_286_379_941,
+    6_097_729_358_393_448_602,
+    -7_491_646_050_550_022_124,
+    -5_117_116_194_870_963_097,
+    -896_216_826_133_240_300,
+    -745_860_416_168_701_406,
+    5_803_876_044_675_762_232,
+    -787_954_255_994_554_146,
+    -3_234_519_180_203_704_564,
+    -4_507_534_739_750_823_898,
+    -1_657_200_065_590_290_694,
+    505_808_562_678_895_611,
+    -4_153_273_856_159_712_438,
+    -8_381_261_370_078_904_295,
+    572_156_825_025_677_802,
+    1_791_881_013_492_340_891,
+    3_393_267_094_866_038_768,
+    -5_444_650_186_382_539_299,
+    2_352_769_483_186_201_278,
+    -7_930_912_453_007_408_350,
+    -325_464_993_179_687_389,
+    -3_441_562_999_710_612_272,
+    -6_489_413_242_825_283_295,
+    5_092_019_688_680_754_699,
+    -227_247_482_082_248_967,
+    4_234_737_173_186_232_084,
+    5_027_558_287_275_472_836,
+    4_635_198_586_344_772_304,
+    -536_033_143_587_636_457,
+    5_907_508_150_730_407_386,
+    -8_438_615_781_380_831_356,
+    972_392_927_514_829_904,
+    -3_801_314_342_046_600_696,
+    -4_064_951_393_885_491_917,
+    -174_840_358_296_132_583,
+    2_407_211_146_698_877_100,
+    -1_640_089_820_333_676_239,
+    3_940_796_514_530_962_282,
+    -5_882_197_405_809_569_433,
+    3_095_313_889_586_102_949,
+    -1_818_050_141_166_537_098,
+    5_832_080_132_947_175_283,
+    7_890_064_875_145_919_662,
+    8_184_139_210_799_583_195,
+    -8_073_512_175_445_549_678,
+    -7_758_774_793_014_564_506,
+    -4_581_724_029_666_783_935,
+    3_516_491_885_471_466_898,
+    -8_267_083_515_063_118_116,
+    6_657_089_965_014_657_519,
+    5_220_884_358_887_979_358,
+    1_796_677_326_474_620_641,
+    5_340_761_970_648_932_916,
+    1_147_977_171_614_181_568,
+    5_066_037_465_548_252_321,
+    2_574_765_911_837_859_848,
+    1_085_848_279_845_204_775,
+    -5_873_264_506_986_385_449,
+    6_116_438_694_366_558_490,
+    2_107_701_075_971_293_812,
+    -7_420_077_970_933_506_541,
+    2_469_478_054_175_558_874,
+    -1_855_128_755_834_809_824,
+    -5_431_463_669_011_098_282,
+    -9_038_325_065_738_319_171,
+    -6_966_276_280_341_336_160,
+    7_217_693_971_077_460_129,
+    -8_314_322_083_775_271_549,
+    7_196_649_268_545_224_266,
+    -3_585_711_691_453_906_209,
+    -5_267_827_091_426_810_625,
+    8_057_528_650_917_418_961,
+    -5_084_103_596_553_648_165,
+    -2_601_445_448_341_207_749,
+    -7_850_010_900_052_094_367,
+    6_527_366_231_383_600_011,
+    3_507_654_575_162_700_890,
+    9_202_058_512_774_729_859,
+    1_954_818_376_891_585_542,
+    -2_582_991_129_724_600_103,
+    8_299_563_319_178_235_687,
+    -5_321_504_681_635_821_435,
+    7_046_310_742_295_574_065,
+    -2_376_176_645_520_785_576,
+    -7_650_733_936_335_907_755,
+    8_850_422_670_118_399_721,
+    3_631_909_142_291_992_901,
+    5_158_881_091_950_831_288,
+    -6_340_413_719_511_654_215,
+    4_763_258_931_815_816_403,
+    6_280_052_734_341_785_344,
+    -4_979_582_628_649_810_958,
+    2_043_464_728_020_827_976,
+    -2_678_071_570_832_690_343,
+    4_562_580_375_758_598_164,
+    5_495_451_168_795_427_352,
+    -7_485_059_175_264_624_713,
+    553_004_618_757_816_492,
+    6_895_160_632_757_959_823,
+    -989_748_114_590_090_637,
+    7_139_506_338_801_360_852,
+    -672_480_814_466_784_139,
+    5_535_668_688_139_305_547,
+    2_430_933_853_350_256_242,
+    -3_821_430_778_991_574_732,
+    -1_063_731_997_747_047_009,
+    -3_065_878_205_254_005_442,
+    7_632_066_283_658_143_750,
+    6_308_328_381_617_103_346,
+    3_681_878_764_086_140_361,
+    3_289_686_137_190_109_749,
+    6_587_997_200_611_086_848,
+    244_714_774_258_135_476,
+    -5_143_583_659_437_639_708,
+    8_090_302_575_944_624_335,
+    2_945_117_363_431_356_361,
+    -8_359_047_641_006_034_763,
+    3_009_039_260_312_620_700,
+    -793_344_576_772_241_777,
+    401_084_700_045_993_341,
+    -1_968_749_590_416_080_887,
+    4_707_864_159_563_588_614,
+    -3_583_123_505_891_281_857,
+    -3_240_864_324_164_777_915,
+    -5_908_273_794_572_565_703,
+    -3_719_524_458_082_857_382,
+    -5_281_400_669_679_581_926,
+    8_118_566_580_304_798_074,
+    3_839_261_274_019_871_296,
+    7_062_410_411_742_090_847,
+    -8_481_991_033_874_568_140,
+    6_027_994_129_690_250_817,
+    -6_725_542_042_704_711_878,
+    -2_971_981_702_428_546_974,
+    -7_854_441_788_951_256_975,
+    8_809_096_399_316_380_241,
+    6_492_004_350_391_900_708,
+    2_462_145_737_463_489_636,
+    -8_818_543_617_934_476_634,
+    -5_070_345_602_623_085_213,
+    -8_961_586_321_599_299_868,
+    -3_758_656_652_254_704_451,
+    -8_630_661_632_476_012_791,
+    6_764_129_236_657_751_224,
+    -709_716_318_315_418_359,
+    -3_403_028_373_052_861_600,
+    -8_838_073_512_170_985_897,
+    -3_999_237_033_416_576_341,
+    -2_920_240_395_515_973_663,
+    -2_073_249_475_545_404_416,
+    368_107_899_140_673_753,
+    -6_108_185_202_296_464_250,
+    -6_307_735_683_270_494_757,
+    4_782_583_894_627_718_279,
+    6_718_292_300_699_989_587,
+    8_387_085_186_914_375_220,
+    3_387_513_132_024_756_289,
+    4_654_329_375_432_538_231,
+    -292_704_475_491_394_206,
+    -3_848_998_599_978_456_535,
+    7_623_042_350_483_453_954,
+    7_725_442_901_813_263_321,
+    9_186_225_467_561_587_250,
+    -5_132_344_747_257_272_453,
+    -6_865_740_430_362_196_008,
+    2_530_936_820_058_611_833,
+    1_636_551_876_240_043_639,
+    -3_658_707_362_519_810_009,
+    1_452_244_145_334_316_253,
+    -7_161_729_655_835_084_979,
+    -7_943_791_770_359_481_772,
+    9_108_481_583_171_221_009,
+    -3_200_093_350_120_725_999,
+    5_007_630_032_676_973_346,
+    2_153_168_792_952_589_781,
+    6_720_334_534_964_750_538,
+    -3_181_825_545_719_981_703,
+    3_433_922_409_283_786_309,
+    2_285_479_922_797_300_912,
+    3_110_614_940_896_576_130,
+    -2_856_812_446_131_932_915,
+    -3_804_580_617_188_639_299,
+    7_163_298_419_643_543_757,
+    4_891_138_053_923_696_990,
+    580_618_510_277_907_015,
+    1_684_034_065_251_686_769,
+    4_429_514_767_357_295_841,
+    -8_893_025_458_299_325_803,
+    -8_103_734_041_042_601_133,
+    7_177_515_271_653_460_134,
+    4_589_042_248_470_800_257,
+    -1_530_083_407_795_771_245,
+    143_607_045_258_444_228,
+    246_994_305_896_273_627,
+    -8_356_954_712_051_676_521,
+    6_473_547_110_565_816_071,
+    3_092_379_936_208_876_896,
+    2_058_427_839_513_754_051,
+    -4_089_587_328_327_907_870,
+    8_785_882_556_301_281_247,
+    -3_074_039_370_013_608_197,
+    -637_529_855_400_303_673,
+    6_137_678_347_805_511_274,
+    -7_152_924_852_417_805_802,
+    5_708_223_427_705_576_541,
+    -3_223_714_144_396_531_304,
+    4_358_391_411_789_012_426,
+    325_123_008_708_389_849,
+    6_837_621_693_887_290_924,
+    4_843_721_905_315_627_004,
+    -3_212_720_814_705_499_393,
+    -3_825_019_837_890_901_156,
+    4_602_025_990_114_250_980,
+    1_044_646_352_569_048_800,
+    9_106_614_159_853_161_675,
+    -8_394_115_921_626_182_539,
+    -4_304_087_667_751_778_808,
+    2_681_532_557_646_850_893,
+    3_681_559_472_488_511_871,
+    -3_915_372_517_896_561_773,
+    -2_889_241_648_411_946_534,
+    -6_564_663_803_938_238_204,
+    -8_060_058_171_802_589_521,
+    581_945_337_509_520_675,
+    3_648_778_920_718_647_903,
+    -4_799_698_790_548_231_394,
+    -7_602_572_252_857_820_065,
+    220_828_013_409_515_943,
+    -1_072_987_336_855_386_047,
+    4_287_360_518_296_753_003,
+    -4_633_371_852_008_891_965,
+    5_513_660_857_261_085_186,
+    -2_258_542_936_462_001_533,
+    -8_744_380_348_503_999_773,
+    8_746_140_185_685_648_781,
+    228_500_091_334_420_247,
+    1_356_187_007_457_302_238,
+    3_019_253_992_034_194_581,
+    3_152_601_605_678_500_003,
+    -8_793_219_284_148_773_595,
+    5_559_581_553_696_971_176,
+    4_916_432_985_369_275_664,
+    -8_559_797_105_120_221_417,
+    -5_802_598_197_927_043_732,
+    2_868_348_622_579_915_573,
+    -7_224_052_902_810_357_288,
+    -5_894_682_518_218_493_085,
+    2_587_672_709_781_371_173,
+    -7_706_116_723_325_376_475,
+    3_092_343_956_317_362_483,
+    -5_561_119_517_847_711_700,
+    972_445_599_196_498_113,
+    -1_558_506_600_978_816_441,
+    1_708_913_533_482_282_562,
+    -2_305_554_874_185_907_314,
+    -6_005_743_014_309_462_908,
+    -6_653_329_009_633_068_701,
+    -483_583_197_311_151_195,
+    2_488_075_924_621_352_812,
+    -4_529_369_641_467_339_140,
+    -4_663_743_555_056_261_452,
+    2_997_203_966_153_298_104,
+    1_282_559_373_026_354_493,
+    240_113_143_146_674_385,
+    8_665_713_329_246_516_443,
+    628_141_331_766_346_752,
+    -4_651_421_219_668_005_332,
+    -7_750_560_848_702_540_400,
+    7_596_648_026_010_355_826,
+    -3_132_152_619_100_351_065,
+    7_834_161_864_828_164_065,
+    7_103_445_518_877_254_909,
+    4_390_861_237_357_459_201,
+    -4_780_718_172_614_204_074,
+    -319_889_632_007_444_440,
+    622_261_699_494_173_647,
+    -3_186_110_786_557_562_560,
+    -8_718_967_088_789_066_690,
+    -1_948_156_510_637_662_747,
+    -8_212_195_255_998_774_408,
+    -7_028_621_931_231_314_745,
+    2_623_071_828_615_234_808,
+    -4_066_058_308_780_939_700,
+    -5_484_966_924_888_173_764,
+    -6_683_604_512_778_046_238,
+    -6_756_087_640_505_506_466,
+    5_256_026_990_536_851_868,
+    7_841_086_888_628_396_109,
+    6_640_857_538_655_893_162,
+    -8_021_284_697_816_458_310,
+    -7_109_857_044_414_059_830,
+    -1_689_021_141_511_844_405,
+    -4_298_087_301_956_291_063,
+    -4_077_748_265_377_282_003,
+    -998_231_156_719_803_476,
+    2_719_520_354_384_050_532,
+    9_132_346_697_815_513_771,
+    4_332_154_495_710_163_773,
+    -2_085_582_442_760_428_892,
+    6_994_721_091_344_268_833,
+    -2_556_143_461_985_726_874,
+    -8_567_931_991_128_098_309,
+    59_934_747_298_466_858,
+    -3_098_398_008_776_739_403,
+    -265_597_256_199_410_390,
+    2_332_206_071_942_466_437,
+    -7_522_315_324_568_406_181,
+    3_154_897_383_618_636_503,
+    -7_585_605_855_467_168_281,
+    -6_762_850_759_087_199_275,
+    197_309_393_502_684_135,
+    -8_579_694_182_469_508_493,
+    2_543_179_307_861_934_850,
+    4_350_769_010_207_485_119,
+    -4_468_719_947_444_108_136,
+    -7_207_776_534_213_261_296,
+    -1_224_312_577_878_317_200,
+    4_287_946_071_480_840_813,
+    8_362_686_366_770_308_971,
+    6_486_469_209_321_732_151,
+    -5_605_644_191_012_979_782,
+    -1_669_018_511_020_473_564,
+    4_450_022_655_153_542_367,
+    -7_618_176_296_641_240_059,
+    -3_896_357_471_549_267_421,
+    -4_596_796_223_304_447_488,
+    -6_531_150_016_257_070_659,
+    -8_982_326_463_137_525_940,
+    -4_125_325_062_227_681_798,
+    -1_306_489_741_394_045_544,
+    -8_338_554_946_557_245_229,
+    5_329_160_409_530_630_596,
+    7_790_979_528_857_726_136,
+    4_955_070_238_059_373_407,
+    -4_304_834_761_432_101_506,
+    -6_215_295_852_904_371_179,
+    3_007_769_226_071_157_901,
+    -6_753_025_801_236_972_788,
+    8_928_702_772_696_731_736,
+    7_856_187_920_214_445_904,
+    -4_748_497_451_462_800_923,
+    7_900_176_660_600_710_914,
+    -7_082_800_908_938_549_136,
+    -6_797_926_979_589_575_837,
+    -6_737_316_883_512_927_978,
+    4_186_670_094_382_025_798,
+    1_883_939_007_446_035_042,
+    -414_705_992_779_907_823,
+    3_734_134_241_178_479_257,
+    4_065_968_871_360_089_196,
+    6_953_124_200_385_847_784,
+    -7_917_685_222_115_876_751,
+    -7_585_632_937_840_318_161,
+    -5_567_246_375_906_782_599,
+    -5_256_612_402_221_608_788,
+    3_106_378_204_088_556_331,
+    -2_894_472_214_076_325_998,
+    4_565_385_105_440_252_958,
+    1_979_884_289_539_493_806,
+    -6_891_578_849_933_910_383,
+    3_783_206_694_208_922_581,
+    8_464_961_209_802_336_085,
+    2_843_963_751_609_577_687,
+    3_030_678_195_484_896_323,
+    -4_429_654_462_759_003_204,
+    4_459_239_494_808_162_889,
+    402_587_895_800_087_237,
+    8_057_891_408_711_167_515,
+    4_541_888_170_938_985_079,
+    1_042_662_272_908_816_815,
+    -3_666_068_979_732_206_850,
+    2_647_678_726_283_249_984,
+    2_144_477_441_549_833_761,
+    -3_417_019_821_499_388_721,
+    -2_105_601_033_380_872_185,
+    5_916_597_177_708_541_638,
+    -8_760_774_321_402_454_447,
+    8_833_658_097_025_758_785,
+    5_970_273_481_425_315_300,
+    563_813_119_381_731_307,
+    -6_455_022_486_202_078_793,
+    1_598_828_206_250_873_866,
+    -4_016_978_389_451_217_698,
+    -2_988_328_551_145_513_985,
+    -6_071_154_634_840_136_312,
+    8_469_693_267_274_066_490,
+    125_672_920_241_807_416,
+    -3_912_292_412_830_714_870,
+    -2_559_617_104_544_284_221,
+    -486_523_741_806_024_092,
+    -4_735_332_261_862_713_930,
+    5_923_302_823_487_327_109,
+    -9_082_480_245_771_672_572,
+    -1_808_429_243_461_201_518,
+    7_990_420_780_896_957_397,
+    4_317_817_392_807_076_702,
+    3_625_184_369_705_367_340,
+    -6_482_649_271_566_653_105,
+    -3_480_272_027_152_017_464,
+    -3_225_473_396_345_736_649,
+    -368_878_695_502_291_645,
+    -3_981_164_001_421_868_007,
+    -8_522_033_136_963_788_610,
+    7_609_280_429_197_514_109,
+    3_020_985_755_112_334_161,
+    -2_572_049_329_799_262_942,
+    2_635_195_723_621_160_615,
+    5_144_520_864_246_028_816,
+    -8_188_285_521_126_945_980,
+    1_567_242_097_116_389_047,
+    8_172_389_260_191_636_581,
+    -2_885_551_685_425_483_535,
+    -7_060_359_469_858_316_883,
+    -6_480_181_133_964_513_127,
+    -7_317_004_403_633_452_381,
+    6_011_544_915_663_598_137,
+    5_932_255_307_352_610_768,
+    2_241_128_460_406_315_459,
+    -8_327_867_140_638_080_220,
+    3_094_483_003_111_372_717,
+    4_583_857_460_292_963_101,
+    9_079_887_171_656_594_975,
+    -384_082_854_924_064_405,
+    -3_460_631_649_611_717_935,
+    4_225_072_055_348_026_230,
+    -7_385_151_438_465_742_745,
+    3_801_620_336_801_580_414,
+    -399_845_416_774_701_952,
+    -7_446_754_431_269_675_473,
+    7_899_055_018_877_642_622,
+    5_421_679_761_463_003_041,
+    5_521_102_963_086_275_121,
+    -4_975_092_593_295_409_910,
+    8_735_487_530_905_098_534,
+    -7_462_844_945_281_082_830,
+    -2_080_886_987_197_029_914,
+    -1_000_715_163_927_557_685,
+    -4_253_840_471_931_071_485,
+    -5_828_896_094_657_903_328,
+    6_424_174_453_260_338_141,
+    359_248_545_074_932_887,
+    -5_949_720_754_023_045_210,
+    -2_426_265_837_057_637_212,
+    3_030_918_217_665_093_212,
+    -9_077_771_202_237_461_772,
+    -3_186_796_180_789_149_575,
+    740_416_251_634_527_158,
+    -2_142_944_401_404_840_226,
+    6_951_781_370_868_335_478,
+    399_922_722_363_687_927,
+    -8_928_469_722_407_522_623,
+    -1_378_421_100_515_597_285,
+    -8_343_051_178_220_066_766,
+    -3_030_716_356_046_100_229,
+    -8_811_767_350_470_065_420,
+    9_026_808_440_365_124_461,
+    6_440_783_557_497_587_732,
+    4_615_674_634_722_404_292,
+    539_897_290_441_580_544,
+    2_096_238_225_866_883_852,
+    8_751_955_639_408_182_687,
+    -7_316_147_128_802_486_205,
+    7_381_039_757_301_768_559,
+    6_157_238_513_393_239_656,
+    -1_473_377_804_940_618_233,
+    8_629_571_604_380_892_756,
+    5_280_433_031_239_081_479,
+    7_101_611_890_139_813_254,
+    2_479_018_537_985_767_835,
+    7_169_176_924_412_769_570,
+    -1_281_305_539_061_572_506,
+    -7_865_612_307_799_218_120,
+    2_278_447_439_451_174_845,
+    3_625_338_785_743_880_657,
+    6_477_479_539_006_708_521,
+    8_976_185_375_579_272_206,
+    -3_712_000_482_142_939_688,
+    1_326_024_180_520_890_843,
+    7_537_449_876_596_048_829,
+    5_464_680_203_499_696_154,
+    3_189_671_183_162_196_045,
+    6_346_751_753_565_857_109,
+    -8_982_212_049_534_145_501,
+    -6_127_578_587_196_093_755,
+    -245_039_190_118_465_649,
+    -6_320_577_374_581_628_592,
+    7_208_698_530_190_629_697,
+    7_276_901_792_339_343_736,
+    -7_490_986_807_540_332_668,
+    4_133_292_154_170_828_382,
+    2_918_308_698_224_194_548,
+    -7_703_910_638_917_631_350,
+    -3_929_437_324_238_184_044,
+    -4_300_543_082_831_323_144,
+    -6_344_160_503_358_350_167,
+    5_896_236_396_443_472_108,
+    -758_328_221_503_023_383,
+    -1_894_351_639_983_151_068,
+    -307_900_319_840_287_220,
+    -6_278_469_401_177_312_761,
+    -2_171_292_963_361_310_674,
+    8_382_142_935_188_824_023,
+    9_103_922_860_780_351_547,
+    4_152_330_101_494_654_406,
 ];
 
 struct GoMathRand {
@@ -2004,13 +2115,15 @@ impl GoMathRand {
         }
         let mut value = self.uint32()?;
         let mut product = u64::from(value) * u64::from(n);
-        let mut low = product as u32;
+        let [low_0, low_1, low_2, low_3, _, _, _, _] = product.to_le_bytes();
+        let mut low = u32::from_le_bytes([low_0, low_1, low_2, low_3]);
         if low < n {
             let threshold = n.wrapping_neg() % n;
             while low < threshold {
                 value = self.uint32()?;
                 product = u64::from(value) * u64::from(n);
-                low = product as u32;
+                let [low_0, low_1, low_2, low_3, _, _, _, _] = product.to_le_bytes();
+                low = u32::from_le_bytes([low_0, low_1, low_2, low_3]);
             }
         }
         u32::try_from(product >> 32).map_err(|_| BscNativeFinalityError::ResourceLimit)
@@ -2191,24 +2304,21 @@ fn verify_attestation(
         return Err(BscNativeFinalityError::InvalidVoteAddressSet);
     }
     let message = vote_data_hash(attestation.data)?;
-    #[cfg(feature = "bls")]
     ethereum_bls_pop_fast_aggregate_verify(
         &public_keys,
         &message,
         &attestation.aggregate_signature,
     )
     .map_err(|_| BscNativeFinalityError::InvalidBlsSignature)?;
-    #[cfg(not(feature = "bls"))]
-    return Err(BscNativeFinalityError::BlsUnavailable);
     Ok(())
 }
 
 fn update_justification(state: &mut ParliaState, data: VoteData) {
-    if data.source_number.checked_add(1) != Some(data.target_number) {
+    if data.source_number.checked_add(1) == Some(data.target_number) {
+        state.justification = data;
+    } else {
         state.justification.target_number = data.target_number;
         state.justification.target_hash = data.target_hash;
-    } else {
-        state.justification = data;
     }
 }
 
@@ -2228,12 +2338,11 @@ fn checkpoint_is_finalized(
             ))
 }
 
-fn apply_header(
-    state: &mut ParliaState,
+fn validate_header_candidate(
+    state: &ParliaState,
     header: &ParsedHeader<'_>,
     params: NetworkParameters,
-    canonical_blocks: &mut Vec<CanonicalBlock>,
-) -> Result<(), BscNativeFinalityError> {
+) -> Result<(ParsedExtra, [u8; 20]), BscNativeFinalityError> {
     if header.number
         != state
             .number
@@ -2276,14 +2385,27 @@ fn apply_header(
     if header.timestamp_ms < minimum_timestamp || header.time < state.header.time {
         return Err(BscNativeFinalityError::InvalidTimestamp);
     }
-    if let Some(attestation) = &extra.attestation {
+    Ok((extra, proposer))
+}
+
+fn apply_header(
+    state: &mut ParliaState,
+    header: &ParsedHeader<'_>,
+    params: NetworkParameters,
+    canonical_blocks: &mut Vec<CanonicalBlock>,
+) -> Result<Option<u32>, BscNativeFinalityError> {
+    let (extra, proposer) = validate_header_candidate(state, header, params)?;
+    let bls_signer_contributions = if let Some(attestation) = &extra.attestation {
         verify_attestation(state, attestation, canonical_blocks)?;
-    }
-    if header.number % BSC_NATIVE_EPOCH_LENGTH == 0 {
+        Some(attestation.address_set.count_ones())
+    } else {
+        None
+    };
+    if header.number.is_multiple_of(BSC_NATIVE_EPOCH_LENGTH) {
         if state.pending_epoch.is_some() {
             return Err(BscNativeFinalityError::InvalidEpochRoster);
         }
-        state.pending_epoch = extra.epoch.clone();
+        state.pending_epoch.clone_from(&extra.epoch);
     } else if extra.epoch.is_some() {
         return Err(BscNativeFinalityError::InvalidEpochRoster);
     }
@@ -2352,7 +2474,7 @@ fn apply_header(
         blob_gas_used: header.blob_gas_used,
         excess_blob_gas: header.excess_blob_gas,
     };
-    Ok(())
+    Ok(bls_signer_contributions)
 }
 
 /// Hash a semantically valid governed native Parlia anchor.
@@ -2368,17 +2490,88 @@ pub fn bsc_native_anchor_hash(
     Ok(hash)
 }
 
-/// Verify native Parlia finality for one proof target.
+/// Return a cryptography-free upper bound for one native BSC finality proof.
+///
+/// The shape policy admits at most one full post-anchor epoch before the
+/// target and at most the four-header native fast-finality suffix after it.
+/// This function reads only vector lengths and byte lengths, making it suitable
+/// for consensus quota reservation before header parsing or signature work.
 ///
 /// # Errors
 ///
-/// Returns [`BscNativeFinalityError`] when the proof is malformed, exceeds a
-/// resource bound, is not anchored to the expected network and checkpoint, or
-/// does not prove that the selected header was finalized by Parlia.
-pub fn verify_bsc_native_finality(
+/// Returns [`BscNativeFinalityError::ResourceLimit`] when a count or byte bound
+/// is exceeded, or [`BscNativeFinalityError::TargetNotFinalized`] when the
+/// target index is outside the supplied continuation.
+pub fn bsc_native_finality_work_estimate(
+    proof: &BscNativeFinalityProofV1,
+) -> Result<BscNativeFinalityWorkEstimateV1, BscNativeFinalityError> {
+    let header_count = proof.headers_rlp.len();
+    if header_count == 0 || header_count > BSC_NATIVE_MAX_FINALITY_HEADERS {
+        return Err(BscNativeFinalityError::ResourceLimit);
+    }
+    let target_index = usize::from(proof.target_header_index);
+    if target_index >= header_count {
+        return Err(BscNativeFinalityError::TargetNotFinalized);
+    }
+    let suffix_headers = header_count
+        .checked_sub(target_index)
+        .and_then(|count| count.checked_sub(1))
+        .ok_or(BscNativeFinalityError::ResourceLimit)?;
+    if target_index >= BSC_NATIVE_MAX_TARGET_HEADERS
+        || suffix_headers > BSC_NATIVE_MAX_FINALITY_SUFFIX_HEADERS
+        || proof.anchor.header_rlp.len() > MAX_HEADER_BYTES
+        || proof
+            .headers_rlp
+            .iter()
+            .any(|header| header.len() > MAX_HEADER_BYTES)
+    {
+        return Err(BscNativeFinalityError::ResourceLimit);
+    }
+    let framed_header_bytes = proof
+        .headers_rlp
+        .iter()
+        .try_fold(proof.anchor.header_rlp.len(), |total, header| {
+            total.checked_add(header.len())
+        })
+        .and_then(|total| u32::try_from(total).ok())
+        .ok_or(BscNativeFinalityError::ResourceLimit)?;
+    let continuation_headers =
+        u16::try_from(header_count).map_err(|_| BscNativeFinalityError::ResourceLimit)?;
+    let secp256k1_recoveries = continuation_headers
+        .checked_add(1)
+        .ok_or(BscNativeFinalityError::ResourceLimit)?;
+    let bls_signer_contributions_upper_bound = u32::from(continuation_headers)
+        .checked_mul(
+            u32::try_from(MAX_VALIDATORS).map_err(|_| BscNativeFinalityError::ResourceLimit)?,
+        )
+        .ok_or(BscNativeFinalityError::ResourceLimit)?;
+    Ok(BscNativeFinalityWorkEstimateV1 {
+        continuation_headers,
+        framed_header_bytes,
+        secp256k1_recoveries,
+        bls_aggregate_checks_upper_bound: continuation_headers,
+        bls_signer_contributions_upper_bound,
+    })
+}
+
+fn bsc_target_is_finalized(
+    state: &ParliaState,
+    target_number: u64,
+    canonical_blocks: &[CanonicalBlock],
+) -> bool {
+    state.justification.source_number >= target_number
+        && find_canonical_block(
+            canonical_blocks,
+            state.justification.source_number,
+            state.justification.source_hash,
+        )
+}
+
+fn verify_bsc_native_finality_counted(
     proof: &BscNativeFinalityProofV1,
     expected_network: SccpNetworkV1,
     expected_anchor_hash: H256,
+    work: &mut BscNativeFinalityWorkPerformedV1,
 ) -> Result<ValidatedBscNativeFinalityV1, BscNativeFinalityError> {
     if proof.version != 1 || proof.anchor.version != 1 {
         return Err(BscNativeFinalityError::UnsupportedVersion);
@@ -2386,13 +2579,10 @@ pub fn verify_bsc_native_finality(
     if proof.anchor.network != expected_network {
         return Err(BscNativeFinalityError::WrongNetwork);
     }
-    if proof.headers_rlp.is_empty() || proof.headers_rlp.len() > MAX_HEADERS {
-        return Err(BscNativeFinalityError::ResourceLimit);
-    }
+    let _ = bsc_native_finality_work_estimate(proof)?;
     let target_index = usize::from(proof.target_header_index);
-    if target_index >= proof.headers_rlp.len() {
-        return Err(BscNativeFinalityError::TargetNotFinalized);
-    }
+
+    work.secp256k1_recoveries = work.secp256k1_recoveries.saturating_add(1);
     let (mut state, anchor_hash, params) = anchor_state(&proof.anchor)?;
     if anchor_hash != expected_anchor_hash {
         return Err(BscNativeFinalityError::AnchorHashMismatch);
@@ -2410,6 +2600,8 @@ pub fn verify_bsc_native_finality(
     let mut target = None;
     for (index, raw) in proof.headers_rlp.iter().enumerate() {
         let header = parse_header(raw)?;
+        work.continuation_headers = work.continuation_headers.saturating_add(1);
+        work.secp256k1_recoveries = work.secp256k1_recoveries.saturating_add(1);
         if index == target_index {
             target = Some((
                 header.number,
@@ -2418,28 +2610,52 @@ pub fn verify_bsc_native_finality(
                 header.receipts_root,
             ));
         }
-        apply_header(&mut state, &header, params, &mut canonical_blocks)?;
+        let bls_signer_contributions =
+            apply_header(&mut state, &header, params, &mut canonical_blocks)?;
+        if let Some(contributions) = bls_signer_contributions {
+            work.bls_aggregate_checks = work.bls_aggregate_checks.saturating_add(1);
+            work.bls_signer_contributions =
+                work.bls_signer_contributions.saturating_add(contributions);
+        }
+
+        if let Some((block_number, block_hash, state_root, receipts_root)) = target
+            && bsc_target_is_finalized(&state, block_number, &canonical_blocks)
+        {
+            if index + 1 != proof.headers_rlp.len() {
+                return Err(BscNativeFinalityError::NonMinimalContinuation);
+            }
+            return Ok(ValidatedBscNativeFinalityV1 {
+                anchor_hash,
+                block_number,
+                block_hash,
+                state_root,
+                receipts_root,
+                resulting_finalized_number: state.justification.source_number,
+                resulting_finalized_hash: state.justification.source_hash,
+            });
+        }
     }
-    let (block_number, block_hash, state_root, receipts_root) =
-        target.ok_or(BscNativeFinalityError::TargetNotFinalized)?;
-    if state.justification.source_number < block_number
-        || !find_canonical_block(
-            &canonical_blocks,
-            state.justification.source_number,
-            state.justification.source_hash,
-        )
-    {
-        return Err(BscNativeFinalityError::TargetNotFinalized);
-    }
-    Ok(ValidatedBscNativeFinalityV1 {
-        anchor_hash,
-        block_number,
-        block_hash,
-        state_root,
-        receipts_root,
-        resulting_finalized_number: state.justification.source_number,
-        resulting_finalized_hash: state.justification.source_hash,
-    })
+    Err(BscNativeFinalityError::TargetNotFinalized)
+}
+
+/// Verify native Parlia finality for one proof target.
+///
+/// # Errors
+///
+/// Returns [`BscNativeFinalityError`] when the proof is malformed, exceeds a
+/// resource bound, is not anchored to the expected network and checkpoint, or
+/// does not prove that the selected header was finalized by Parlia.
+pub fn verify_bsc_native_finality(
+    proof: &BscNativeFinalityProofV1,
+    expected_network: SccpNetworkV1,
+    expected_anchor_hash: H256,
+) -> Result<ValidatedBscNativeFinalityV1, BscNativeFinalityError> {
+    verify_bsc_native_finality_counted(
+        proof,
+        expected_network,
+        expected_anchor_hash,
+        &mut BscNativeFinalityWorkPerformedV1::default(),
+    )
 }
 
 fn mpt_proof_is_bounded(nodes: &[Vec<u8>]) -> bool {
@@ -2577,13 +2793,7 @@ fn receipt_payload(receipt: &[u8]) -> Option<&[u8]> {
 
 fn verify_receipt_event(
     receipt: &[u8],
-    emitter: [u8; 20],
-    lane_hash: H256,
-    message_id: H256,
-    source_event_digest: H256,
-    payload_hash: H256,
-    route_config_hash: H256,
-    canonical_payload: &[u8],
+    expected: &BscNativeReceiptExpectationV1<'_>,
 ) -> Result<(), BscNativeReceiptError> {
     if receipt.is_empty() || receipt.len() > MAX_RECEIPT_BYTES {
         return Err(BscNativeReceiptError::ResourceLimit);
@@ -2636,13 +2846,19 @@ fn verify_receipt_event(
             parsed_topics.push(topic);
         }
         let data = rlp_bytes(fields[2]).ok_or(BscNativeReceiptError::InvalidReceipt)?;
-        if address == emitter && parsed_topics.first() == Some(&event_topic) {
-            if parsed_topics.as_slice() != [event_topic, lane_hash, message_id, source_event_digest]
+        if address == expected.emitter && parsed_topics.first() == Some(&event_topic) {
+            if parsed_topics.as_slice()
+                != [
+                    event_topic,
+                    expected.lane_hash,
+                    expected.message_id,
+                    expected.source_event_digest,
+                ]
                 || !canonical_transfer_event_data_matches(
                     data,
-                    payload_hash,
-                    route_config_hash,
-                    canonical_payload,
+                    expected.payload_hash,
+                    expected.route_config_hash,
+                    expected.canonical_payload,
                 )
             {
                 return Err(BscNativeReceiptError::InvalidSourceEvent);
@@ -2711,14 +2927,7 @@ fn canonical_transfer_event_data_matches(
 /// root, or lacks exactly one expected SCCP source event.
 pub fn verify_bsc_native_receipt(
     proof: &BscNativeReceiptProofV1,
-    receipts_root: H256,
-    emitter: [u8; 20],
-    lane_hash: H256,
-    message_id: H256,
-    source_event_digest: H256,
-    payload_hash: H256,
-    route_config_hash: H256,
-    canonical_payload: &[u8],
+    expected: &BscNativeReceiptExpectationV1<'_>,
 ) -> Result<ValidatedBscNativeReceiptV1, BscNativeReceiptError> {
     if proof.receipt_bytes.is_empty()
         || proof.receipt_bytes.len() > MAX_RECEIPT_BYTES
@@ -2728,29 +2937,20 @@ pub fn verify_bsc_native_receipt(
     }
     let key =
         rlp_encode_u64(proof.transaction_index).ok_or(BscNativeReceiptError::InvalidMptProof)?;
-    let value = verify_mpt_inclusion(receipts_root, &key, &proof.proof_nodes)
+    let value = verify_mpt_inclusion(expected.receipts_root, &key, &proof.proof_nodes)
         .ok_or(BscNativeReceiptError::InvalidMptProof)?;
     if value != proof.receipt_bytes {
         return Err(BscNativeReceiptError::InvalidMptProof);
     }
-    verify_receipt_event(
-        &proof.receipt_bytes,
-        emitter,
-        lane_hash,
-        message_id,
-        source_event_digest,
-        payload_hash,
-        route_config_hash,
-        canonical_payload,
-    )?;
+    verify_receipt_event(&proof.receipt_bytes, expected)?;
     Ok(ValidatedBscNativeReceiptV1 {
         transaction_index: proof.transaction_index,
-        emitter,
-        lane_hash,
-        message_id,
-        payload_hash,
-        source_event_digest,
-        route_config_hash,
+        emitter: expected.emitter,
+        lane_hash: expected.lane_hash,
+        message_id: expected.message_id,
+        payload_hash: expected.payload_hash,
+        source_event_digest: expected.source_event_digest,
+        route_config_hash: expected.route_config_hash,
     })
 }
 
@@ -2831,7 +3031,10 @@ pub fn verify_bsc_native_source(
     let decoded_payload = decode_canonical_sccp_payload_bytes(canonical_payload)
         .ok_or(BscNativeSourceError::InvalidSourceIdentity)?;
     if !matches!(decoded_payload, SccpPayloadV1::Transfer(_))
-        || canonical_sccp_payload_bytes(&decoded_payload) != canonical_payload
+        || canonical_sccp_payload_bytes(&decoded_payload)
+            .ok()
+            .as_deref()
+            != Some(canonical_payload)
         || sccp_message_id(source_identity.lane, &decoded_payload) != Some(expected_message_id)
     {
         return Err(BscNativeSourceError::InvalidSourceIdentity);
@@ -2855,18 +3058,18 @@ pub fn verify_bsc_native_source(
         expected_anchor_hash,
     )
     .map_err(BscNativeSourceError::Finality)?;
-    let receipt = verify_bsc_native_receipt(
-        &proof.receipt,
-        finality.receipts_root,
-        emitter.address,
+    let receipt_expectation = BscNativeReceiptExpectationV1 {
+        receipts_root: finality.receipts_root,
+        emitter: emitter.address,
         lane_hash,
-        expected_message_id,
+        message_id: expected_message_id,
         source_event_digest,
-        expected_payload_hash,
-        emitter.route_config_hash,
+        payload_hash: expected_payload_hash,
+        route_config_hash: emitter.route_config_hash,
         canonical_payload,
-    )
-    .map_err(BscNativeSourceError::Receipt)?;
+    };
+    let receipt = verify_bsc_native_receipt(&proof.receipt, &receipt_expectation)
+        .map_err(BscNativeSourceError::Receipt)?;
     let emitter_state = verify_bsc_native_emitter_state(
         &proof.emitter_state,
         finality.state_root,
@@ -3119,17 +3322,17 @@ mod tests {
         lane_hash: H256,
         digest: H256,
     ) -> Result<ValidatedBscNativeReceiptV1, BscNativeReceiptError> {
-        verify_bsc_native_receipt(
-            proof,
-            root,
+        let expected = BscNativeReceiptExpectationV1 {
+            receipts_root: root,
             emitter,
             lane_hash,
-            test_message_id(),
-            digest,
-            crate::payload_hash(test_payload()),
-            test_route_config_hash(),
-            test_payload(),
-        )
+            message_id: test_message_id(),
+            source_event_digest: digest,
+            payload_hash: crate::payload_hash(test_payload()),
+            route_config_hash: test_route_config_hash(),
+            canonical_payload: test_payload(),
+        };
+        verify_bsc_native_receipt(proof, &expected)
     }
 
     fn hex_bytes(hex: &str) -> Vec<u8> {
@@ -3430,7 +3633,7 @@ mod tests {
             number: state.number,
             hash: state.hash,
         }];
-        apply_header(&mut valid_state, &valid, params, &mut canonical).unwrap();
+        let _ = apply_header(&mut valid_state, &valid, params, &mut canonical).unwrap();
 
         let wrong_parent_raw = signed_header([0xee; 32], state.number + 1, next_time, 2, &[]);
         let wrong_parent = parse_header(&wrong_parent_raw).unwrap();
@@ -3609,6 +3812,70 @@ mod tests {
     }
 
     #[test]
+    fn finality_work_estimate_enforces_epoch_target_and_native_suffix_bounds() {
+        let anchor = anchor();
+        let anchor_header_bytes = anchor.header_rlp.len();
+        let mut proof = BscNativeFinalityProofV1 {
+            version: 1,
+            anchor,
+            headers_rlp: vec![vec![0xc0]],
+            target_header_index: 0,
+        };
+        let estimate = bsc_native_finality_work_estimate(&proof).unwrap();
+        assert_eq!(estimate.continuation_headers, 1);
+        assert_eq!(estimate.secp256k1_recoveries, 2);
+        assert_eq!(estimate.bls_aggregate_checks_upper_bound, 1);
+        assert_eq!(
+            estimate.bls_signer_contributions_upper_bound,
+            u32::try_from(MAX_VALIDATORS).unwrap()
+        );
+        assert_eq!(
+            estimate.framed_header_bytes,
+            u32::try_from(anchor_header_bytes + 1).unwrap()
+        );
+
+        proof.headers_rlp = vec![vec![0xc0]; BSC_NATIVE_MAX_FINALITY_HEADERS];
+        proof.target_header_index = u16::try_from(BSC_NATIVE_MAX_TARGET_HEADERS - 1).unwrap();
+        let boundary = bsc_native_finality_work_estimate(&proof).unwrap();
+        assert_eq!(
+            usize::from(boundary.continuation_headers),
+            BSC_NATIVE_MAX_FINALITY_HEADERS
+        );
+
+        proof.target_header_index = u16::try_from(BSC_NATIVE_MAX_TARGET_HEADERS).unwrap();
+        assert_eq!(
+            bsc_native_finality_work_estimate(&proof),
+            Err(BscNativeFinalityError::ResourceLimit)
+        );
+
+        proof.target_header_index = 0;
+        proof.headers_rlp = vec![vec![0xc0]; BSC_NATIVE_MAX_FINALITY_SUFFIX_HEADERS + 2];
+        assert_eq!(
+            bsc_native_finality_work_estimate(&proof),
+            Err(BscNativeFinalityError::ResourceLimit)
+        );
+
+        proof.headers_rlp = vec![vec![0xc0]; BSC_NATIVE_MAX_FINALITY_HEADERS + 1];
+        assert_eq!(
+            bsc_native_finality_work_estimate(&proof),
+            Err(BscNativeFinalityError::ResourceLimit)
+        );
+
+        proof.headers_rlp = vec![vec![0; MAX_HEADER_BYTES + 1]];
+        assert_eq!(
+            bsc_native_finality_work_estimate(&proof),
+            Err(BscNativeFinalityError::ResourceLimit)
+        );
+
+        proof.headers_rlp = vec![vec![0xc0]];
+        proof.target_header_index = 1;
+        assert_eq!(
+            bsc_native_finality_work_estimate(&proof),
+            Err(BscNativeFinalityError::TargetNotFinalized)
+        );
+    }
+
+    #[test]
     fn vote_attestation_rejects_source_target_confusion_bitmap_replay_and_quorum() {
         let anchor = anchor();
         let (state, _, _) = anchor_state(&anchor).unwrap();
@@ -3743,6 +4010,84 @@ mod tests {
         assert_eq!(result.block_number, 1_002);
         assert_eq!(result.block_hash, header1_hash);
         assert_eq!(result.resulting_finalized_number, 1_002);
+
+        let mut exact_work = BscNativeFinalityWorkPerformedV1::default();
+        verify_bsc_native_finality_counted(
+            &finalized,
+            SccpNetworkV1::BscMainnet,
+            anchor_hash,
+            &mut exact_work,
+        )
+        .unwrap();
+        assert_eq!(exact_work.continuation_headers, 3);
+        assert_eq!(exact_work.secp256k1_recoveries, 4);
+        assert_eq!(exact_work.bls_aggregate_checks, 3);
+        assert_eq!(exact_work.bls_signer_contributions, 3);
+
+        let append_valid_headers = |proof: &mut BscNativeFinalityProofV1, count: u64| {
+            let last = parse_header(proof.headers_rlp.last().unwrap()).unwrap();
+            let mut parent = last.block_hash;
+            let mut number = last.number;
+            let mut timestamp_ms = last.timestamp_ms;
+            for _ in 0..count {
+                number += 1;
+                timestamp_ms += BSC_NATIVE_BLOCK_INTERVAL_MS;
+                let header = signed_header(parent, number, timestamp_ms, 2, &[]);
+                parent = keccak256(&header);
+                proof.headers_rlp.push(header);
+            }
+        };
+        let assert_all_headers_valid = |proof: &BscNativeFinalityProofV1| {
+            let (mut state, _, params) = anchor_state(&proof.anchor).unwrap();
+            let mut canonical_blocks = vec![CanonicalBlock {
+                number: state.number,
+                hash: state.hash,
+            }];
+            for context in state.vote_contexts.iter().skip(1) {
+                canonical_blocks.push(CanonicalBlock {
+                    number: context.target_number,
+                    hash: context.target_hash,
+                });
+            }
+            for raw in &proof.headers_rlp {
+                let header = parse_header(raw).unwrap();
+                let _ = apply_header(&mut state, &header, params, &mut canonical_blocks).unwrap();
+            }
+        };
+
+        let mut one_surplus = finalized.clone();
+        append_valid_headers(&mut one_surplus, 1);
+        assert_all_headers_valid(&one_surplus);
+        let mut one_surplus_work = BscNativeFinalityWorkPerformedV1::default();
+        assert_eq!(
+            verify_bsc_native_finality_counted(
+                &one_surplus,
+                SccpNetworkV1::BscMainnet,
+                anchor_hash,
+                &mut one_surplus_work,
+            ),
+            Err(BscNativeFinalityError::NonMinimalContinuation)
+        );
+        assert_eq!(one_surplus_work, exact_work);
+
+        let mut many_surplus = finalized.clone();
+        append_valid_headers(&mut many_surplus, 32);
+        assert_all_headers_valid(&many_surplus);
+        let mut many_surplus_work = BscNativeFinalityWorkPerformedV1::default();
+        assert_eq!(
+            verify_bsc_native_finality_counted(
+                &many_surplus,
+                SccpNetworkV1::BscMainnet,
+                anchor_hash,
+                &mut many_surplus_work,
+            ),
+            Err(BscNativeFinalityError::ResourceLimit)
+        );
+        assert_eq!(
+            many_surplus_work,
+            BscNativeFinalityWorkPerformedV1::default(),
+            "over-window continuations fail before anchor or signature work"
+        );
 
         let mut bad_signature = finalized;
         let parsed = parse_header(&bad_signature.headers_rlp[0]).unwrap();

@@ -1,6 +1,5 @@
 package org.hyperledger.iroha.android.client.transport;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -25,21 +24,40 @@ public final class UrlConnectionTransportExecutor
 
   private final Duration connectTimeout;
   private final Duration readTimeout;
+  private final long maximumResponseBytes;
 
   /** Creates an executor with no explicit timeouts (uses JVM/Android defaults). */
   public UrlConnectionTransportExecutor() {
-    this(null, null);
+    this(null, null, BoundedResponseBodyReader.DEFAULT_MAXIMUM_RESPONSE_BYTES);
   }
 
   /** Creates an executor that applies the same timeout to connect and read operations. */
   public UrlConnectionTransportExecutor(final Duration timeout) {
-    this(timeout, timeout);
+    this(timeout, timeout, BoundedResponseBodyReader.DEFAULT_MAXIMUM_RESPONSE_BYTES);
   }
 
   /** Creates an executor with distinct connect/read timeouts (nullable to use defaults). */
   public UrlConnectionTransportExecutor(final Duration connectTimeout, final Duration readTimeout) {
+    this(
+        connectTimeout,
+        readTimeout,
+        BoundedResponseBodyReader.DEFAULT_MAXIMUM_RESPONSE_BYTES);
+  }
+
+  /** Creates an executor with default timeouts and a custom buffered-response limit. */
+  public UrlConnectionTransportExecutor(final long maximumResponseBytes) {
+    this(null, null, maximumResponseBytes);
+  }
+
+  /** Creates an executor with distinct timeouts and a custom buffered-response limit. */
+  public UrlConnectionTransportExecutor(
+      final Duration connectTimeout,
+      final Duration readTimeout,
+      final long maximumResponseBytes) {
+    BoundedResponseBodyReader.validateMaximum(maximumResponseBytes);
     this.connectTimeout = connectTimeout;
     this.readTimeout = readTimeout;
+    this.maximumResponseBytes = maximumResponseBytes;
   }
 
   @Override
@@ -61,7 +79,9 @@ public final class UrlConnectionTransportExecutor
       writeRequestBody(request, connection);
       final int status = connection.getResponseCode();
       final String message = emptyIfNull(connection.getResponseMessage());
-      final byte[] body = readBody(connection, status);
+      final long responseLimit = responseLimit(request, maximumResponseBytes);
+      final byte[] body =
+          readBody(connection, status, request.method(), responseLimit);
       final Map<String, List<String>> headers = normalizeHeaders(connection.getHeaderFields());
       return new TransportResponse(status, body, message, headers);
     } catch (final IOException ex) {
@@ -128,21 +148,34 @@ public final class UrlConnectionTransportExecutor
     connection.getOutputStream().write(request.body());
   }
 
-  private static byte[] readBody(final HttpURLConnection connection, final int status)
+  private static byte[] readBody(
+      final HttpURLConnection connection,
+      final int status,
+      final String requestMethod,
+      final long maximumResponseBytes)
       throws IOException {
+    final Map<String, List<String>> headers = normalizeHeaders(connection.getHeaderFields());
+    final boolean bodyExpected = responseMayHaveBody(requestMethod, status);
+    if (!bodyExpected) {
+      return BoundedResponseBodyReader.read(null, headers, maximumResponseBytes, false);
+    }
     final InputStream stream = responseStream(connection, status);
-    if (stream == null) {
-      return new byte[0];
-    }
-    try (InputStream responseBody = stream;
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
-      final byte[] chunk = new byte[4096];
-      int read;
-      while ((read = responseBody.read(chunk)) != -1) {
-        buffer.write(chunk, 0, read);
-      }
-      return buffer.toByteArray();
-    }
+    return BoundedResponseBodyReader.read(stream, headers, maximumResponseBytes, true);
+  }
+
+  private static boolean responseMayHaveBody(final String requestMethod, final int status) {
+    return !"HEAD".equalsIgnoreCase(requestMethod)
+        && (status < 100 || status >= 200)
+        && status != HttpURLConnection.HTTP_NO_CONTENT
+        && status != HttpURLConnection.HTTP_NOT_MODIFIED;
+  }
+
+  private static long responseLimit(
+      final TransportRequest request, final long executorMaximumResponseBytes) {
+    final Long requestMaximum = request.maximumResponseBytes();
+    return requestMaximum == null
+        ? executorMaximumResponseBytes
+        : Math.min(executorMaximumResponseBytes, requestMaximum.longValue());
   }
 
   private static InputStream responseStream(final HttpURLConnection connection, final int status)

@@ -2,59 +2,92 @@
 lang: az
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
-source_last_modified: "2025-12-29T18:16:35.921274+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: 465d8cf704022986b169ab93133517428f8cf2ffe01a498cbda458f4a5b2e69b
+source_last_modified: "2026-07-11"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# Körpü sübutları
+> Bu səhifə qısaldılmış tərcümə xülasəsidir, tam tərcümə deyil. İdarəetmə,
+> API, sübut semantikası və buraxılış tələbləri üçün dəqiq normativ mənbə
+> [ingiliscə əsas səhifədir](bridge_proofs.md).
 
-Körpü sübut təqdimatları standart təlimat yolundan (`SubmitBridgeProof`) keçir və təsdiqlənmiş statusla sübut reyestrinə düşür. Cari səth ICS tipli Merkle sübutlarını və bərkidilmiş saxlama və manifest bağlama ilə şəffaf ZK yüklərini əhatə edir.
+# SCCP V1 körpü sübutları — qısa xülasə
 
-## Qəbul qaydaları
+## İlk buraxılışın sərhədi
 
-- Aralıqlar sıralanmalı/boş olmamalıdır və `zk.bridge_proof_max_range_len`-ə hörmət edilməlidir (0 qapağı söndürür).
-- İsteğe bağlı hündürlüklü pəncərələr köhnəlmiş/gələcək sübutları rədd edir: `zk.bridge_proof_max_past_age_blocks` və `zk.bridge_proof_max_future_drift_blocks` sübutu qəbul edən blokun hündürlüyü ilə ölçülür (0 qoruyucu barmaqlıqları söndürür).
-- Körpü sübutları eyni arxa tərəf üçün mövcud sübutla üst-üstə düşə bilməz (bağlı sübutlar qorunur və üst-üstə düşür).
-- Manifest xeşləri sıfırdan fərqli olmalıdır; faydalı yüklərin ölçüsü `zk.max_proof_size_bytes` ilə məhdudlaşdırılır.
-- ICS yükləri konfiqurasiya edilmiş Merkle dərinlik qapağına uyğun gəlir və elan edilmiş hash funksiyasından istifadə edərək yolu yoxlayır; şəffaf faydalı yüklər boş olmayan backend etiketi elan etməlidir.
-- bərkidilmiş sübutlar saxlama budamasından azaddır; bağlanmamış sübutlar hələ də qlobal `zk.proof_history_cap`/grace/batch parametrlərinə hörmət edir.
+SCCP V1 ilk buraxılış üçün qapalı protokoldur. Yalnız `ethereum-mainnet`,
+`bsc-mainnet` və `tron-mainnet` xarici mənbələri dəstəklənir; yeganə SORA
+təyinatı `sora-taira`dır. Solana, TON, xüsusi şəbəkələr və başqa SORA təyinatları
+dəstəklənmir və təhlükəsiz şəkildə rədd edilir.
 
-## Torii API səthi
+Bu buraxılışda `SubmitBridgeProof` yalnız tipli `NativeProtocol` və
+`SccpDestination` sübutlarını qəbul edir. Ümumi `Ics` və `TransparentZk`
+təqdimatı mövcud deyil və səlahiyyətli on-chain verifier yaradılanadək rədd
+olunur.
 
-- `GET /v1/zk/proofs` və `GET /v1/zk/proofs/count` körpüdən xəbərdar filtrləri qəbul edir:
-  - `bridge_only=true` yalnız körpü sübutlarını qaytarır.
-  - `bridge_pinned_only=true` bərkidilmiş körpü sübutlarına qədər daralır.
-  - `bridge_start_from_height` / `bridge_end_until_height` körpü diapazonu pəncərəsini sıxın.
-- `GET /v1/zk/proof/{backend}/{hash}` sübut id/status/VK bağlamaları ilə yanaşı körpü metadatasını (aralıq, manifest hash, faydalı yükün xülasəsi) qaytarır.
-- Tam Norito sübut qeydi (faydalı yük baytları daxil olmaqla) node yoxlayıcılar üçün `GET /v1/proofs/{proof_id}` vasitəsilə mövcuddur.
+## Tipli reyestr və replay müdafiəsi
 
-## Körpü qəbz hadisələri
+`SccpRegistryV1` lane-ə bağlanmış, tipli və yalnız əlavə olunan (append-only)
+reyestrdir. Hər lane ən çox 64 saxlanılan route revision və 4,096 saxlanılan
+native trust anchor tutur. Tarixi qeydlər gizli şəkildə silinmir; həddə çatdıqda
+növbəti əlavə vəziyyəti dəyişmədən atomik olaraq rədd edilir.
 
-Körpü zolaqları `RecordBridgeReceipt` təlimatı vasitəsilə yazılmış qəbzlər yayır. Bu göstərişin icrası
-`BridgeReceipt` faydalı yükünü qeyd edir və hadisə zamanı `DataEvent::Bridge(BridgeEvent::Emitted)` yayır
-axın, əvvəlki yalnız giriş stubunu əvəz edir. CLI `iroha bridge emit-receipt` köməkçisi təqdim edir
-indeksləşdiricilərin qəbzləri deterministik şəkildə istehlak edə bilməsi üçün yazılmış təlimat.
+Anchor intervalı autentifikasiya olunmuş consensus irəliləyişi ilə ölçülür:
+Ethereum finalized beacon slot-dan, BSC və TRON isə finalized native block
+height-dan istifadə edir. Köhnə anchor varisinin checkpoint-i də daxil olmaqla
+qüvvədə qalır; son cari anchor açıq sonludur. Terminal route-un finality cutoff-u
+tarixi anchor-un varis checkpoint-i ilə dəqiq eyni olmalıdır.
 
-## Xarici yoxlama eskizi (ICS)
+Davamlı inbound qeydi həm event/source finality height-i, həm də təsdiqlənmiş
+`anchor_interval_height`-ı saxlayır. Lane və anchor hash ilə açarlanan davamlı
+high-water indeksi əvvəl qəbul edilmiş koordinatdan aşağı varis checkpoint
+seçilməsinə imkan vermir. Snapshot hydration indeksi davamlı qeydlərdən yenidən
+hesablayır və dəqiq bərabərlik tələb edir; çatışmayan, köhnəlmiş, zədələnmiş və ya
+əsassız indeks rədd edilir. İstifadə edilmiş message id-lər replay-i dayandırmaq
+üçün davamlı saxlanılır.
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
+## Tək keçidli yoxlama və iş hədləri
 
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+Destination və native sübutları bir dəfə strukturlaşdırılır, bir dəfə bağlanır
+və bahalı kriptoqrafiyadan əvvəl deterministik iş ehtiyatı ayrılır. Destination
+yolu BN254 pairing-product və lokal BLS finality-ni hərəsini yalnız bir dəfə
+yoxlayır. Native yollar canonical shortest-prefix tələb edir: BSC üçün ən çox
+1,004, TRON üçün ən çox 54 header.
+
+`[zk.sccp]` proof sayı/bytes, native headers/bytes, Ethereum light-client
+updates, secp256k1 recoveries, BLS aggregate checks/key contributions və BN254
+pairing checks üçün sıfırdan böyük transaction və block limitləri qoyur. Bu
+qəbul limitləri consensus-bound-dur, bütün validatorlarda eyni config-file
+dəyərləri olmalıdır və environment-variable alternativləri yoxdur.
+
+İlk buraxılışın standart limitləri:
+
+| İş ölçüsü | Transaction | Block |
+|---|---:|---:|
+| proofs | 1 | 4 |
+| canonical proof bytes | 8 MiB | 32 MiB |
+| BSC/TRON continuation headers | 1,004 | 4,016 |
+| Ethereum light-client updates | 128 | 512 |
+| framed native-finality bytes | 8 MiB | 32 MiB |
+| secp256k1 recoveries | 1,005 | 4,020 |
+| BLS aggregate checks | 1,004 | 4,016 |
+| BLS key/contribution work items | 131,713 | 526,852 |
+| BN254 pairing-product checks | 1 | 4 |
+
+Bir proof ən çox 8 MiB canonical bytes daşıya bilər. Yarımçıq saxlanmış və ya
+rədd edilmiş transaction üçün ayrılmış iş block-a sızmır.
+
+## Torii və HTTP hədləri
+
+Torii hər SCCP endpoint-i üçün JSON body həddini body oxunmadan, yaddaş
+ayrılmadan və kriptoqrafik yoxlamadan əvvəl tətbiq edir. Böyük `Content-Length`
+və ya chunked body HTTP `413` ilə rədd edilir. Müştəri açılmış HTTP cavabını da
+sabit hədd daxilində oxuyur; çatışmayan və ya saxta `Content-Length` həddi keçə
+bilməz.
+
+JSON, base64 və Norito girişləri canonical olmalıdır. Naməlum fields, təkrar
+keys, uyğun gəlməyən network/route/anchor, replay, iş kvotasının aşılması və ya
+yoxlama xətası heç bir qismən vəziyyət dəyişikliyi etmədən rədd edilir.

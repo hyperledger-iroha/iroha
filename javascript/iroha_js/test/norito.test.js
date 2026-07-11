@@ -31,6 +31,45 @@ function noncanonicalStandardBase64PadBitAlias(encoded) {
   return chars.join("");
 }
 
+function testCrc64Ecma(payload) {
+  const mask = 0xffff_ffff_ffff_ffffn;
+  const polynomial = 0xc96c_5795_d787_0f42n;
+  let crc = mask;
+  for (const byte of payload) {
+    crc ^= BigInt(byte);
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc & 1n) === 0n ? crc >> 1n : (crc >> 1n) ^ polynomial;
+    }
+  }
+  return BigInt.asUintN(64, crc ^ mask);
+}
+
+function rewriteNestedInstructionFrameCrcs(buffer) {
+  const outerPayloadLength = Number(buffer.readBigUInt64LE(23));
+  const outerPayloadStart = buffer.length - outerPayloadLength;
+  let cursor = outerPayloadStart;
+  const wireIdLength = Number(buffer.readBigUInt64LE(cursor));
+  cursor += 8 + wireIdLength;
+  const innerWrapperLength = Number(buffer.readBigUInt64LE(cursor));
+  const innerWrapperStart = cursor + 8;
+  assert.equal(innerWrapperStart + innerWrapperLength, buffer.length);
+  const innerFrameLength = Number(buffer.readBigUInt64LE(innerWrapperStart));
+  const innerFrameStart = innerWrapperStart + 8;
+  assert.equal(innerFrameStart + innerFrameLength, buffer.length);
+  const innerPayloadLength = Number(buffer.readBigUInt64LE(innerFrameStart + 23));
+  const innerPayloadStart = innerFrameStart + innerFrameLength - innerPayloadLength;
+  buffer.writeBigUInt64LE(
+    testCrc64Ecma(
+      buffer.subarray(innerPayloadStart, innerPayloadStart + innerPayloadLength),
+    ),
+    innerFrameStart + 31,
+  );
+  buffer.writeBigUInt64LE(
+    testCrc64Ecma(buffer.subarray(outerPayloadStart)),
+    31,
+  );
+}
+
 const REGISTER_DOMAIN = {
   Register: {
     Domain: {
@@ -363,6 +402,516 @@ baseTest("noritoEncodeInstruction uses the pure JS codec for supported instructi
   });
   assert.ok(encoded.length > 32);
   assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+
+});
+
+baseTest("contract manifest codec preserves the canonical seiyaku name", () => {
+  const instruction = {
+    RegisterSmartContractCode: {
+      manifest: {
+        seiyaku_name: "Ledger",
+        entrypoints: null,
+        kotoba: null,
+      },
+    },
+  };
+  let encoded;
+  withMissingNativeBinding(() => {
+    encoded = Buffer.from(noritoEncodeInstruction(instruction));
+  });
+  assert.deepEqual(noritoDecodeInstruction(encoded), {
+    RegisterSmartContractCode: {
+      manifest: {
+        seiyaku_name: "Ledger",
+        code_hash: null,
+        abi_hash: null,
+        compiler_fingerprint: null,
+        features_bitmap: null,
+        access_set_hints: null,
+        entrypoints: null,
+        states: null,
+        error_codes: null,
+        kotoba: null,
+        provenance: null,
+      },
+    },
+  });
+});
+
+baseTest("contract manifest codec matches Rust V1 trigger bytes", () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "fixtures", "contract_manifest_v1.json"), "utf8"),
+  );
+  const instruction = {
+    RegisterSmartContractCode: { manifest: fixture.manifest },
+  };
+  const encoded = withMissingNativeBinding(() =>
+    Buffer.from(noritoEncodeInstruction(instruction)),
+  );
+  const rustManifest = Buffer.from(fixture.manifest_compact_hex, "hex");
+  assert.notEqual(
+    encoded.indexOf(rustManifest),
+    -1,
+    "instruction embeds the exact Rust-generated compact manifest payload",
+  );
+  assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+
+  const signedInstruction = {
+    RegisterSmartContractCode: {
+      manifest: {
+        ...fixture.manifest,
+        provenance: fixture.signed_provenance,
+      },
+    },
+  };
+  const signedEncoded = withMissingNativeBinding(() =>
+    Buffer.from(noritoEncodeInstruction(signedInstruction)),
+  );
+  assert.notEqual(
+    signedEncoded.indexOf(Buffer.from(fixture.signed_manifest_compact_hex, "hex")),
+    -1,
+    "provenance uses the exact Rust PublicKey and Signature wire layout",
+  );
+  assert.deepEqual(noritoDecodeInstruction(signedEncoded), signedInstruction);
+});
+
+baseTest("contract manifest codec roundtrips every V1 descriptor field", () => {
+  const filterFixture = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "fixtures", "contract_manifest_v1.json"), "utf8"),
+  ).manifest.entrypoints[0].triggers[0].filter;
+  const leaf = (kind) => ({
+    nodes: [{ kind: "Leaf", value: { kind, value: null } }],
+  });
+  const manifest = {
+    seiyaku_name: "Ledger",
+    code_hash: "aa".repeat(32),
+    abi_hash: "bb".repeat(32),
+    compiler_fingerprint: "kotodama_lang",
+    features_bitmap: 42,
+    access_set_hints: {
+      read_keys: ["state:Balances"],
+      write_keys: ["state:Balances"],
+      dynamic_reads: [
+        {
+          base_key: "state:Balances",
+          key_type: "AccountId",
+          bound_kind: "take",
+          max_keys: 4,
+        },
+      ],
+      dynamic_writes: [],
+    },
+    entrypoints: [
+      {
+        name: "transfer",
+        kind: { kind: "Kotoage", value: null },
+        params: [
+          { name: "amount", type_name: "Amount" },
+          { name: "tags", type_name: "List<Name, 64>" },
+        ],
+        argument_schema: {
+          fields: [
+            { name: "amount", ty: leaf("Amount") },
+            {
+              name: "tags",
+              ty: {
+                nodes: [
+                  { kind: "List", value: { capacity: 64 } },
+                  { kind: "Leaf", value: { kind: "Name", value: null } },
+                ],
+              },
+            },
+          ],
+        },
+        return_type: "Result<bool, string>",
+        return_schema: {
+          nodes: [
+            { kind: "Result", value: null },
+            { kind: "Leaf", value: { kind: "Bool", value: null } },
+            { kind: "Leaf", value: { kind: "String", value: null } },
+          ],
+        },
+        permission: "TransferAsset",
+        read_keys: ["state:Balances"],
+        write_keys: ["state:Balances"],
+        access_hints_complete: true,
+        access_hints_skipped: [],
+        triggers: [
+          {
+            id: "settle",
+            repeats: { Exactly: 3 },
+            filter: filterFixture,
+            authority: null,
+            metadata: { priority: 7 },
+            callback: { namespace: null, entrypoint: "transfer" },
+          },
+        ],
+      },
+    ],
+    states: [{ name: "Balances", type_name: "StateMap<AccountId, Amount>" }],
+    error_codes: [{ namespace: "LedgerError", name: "Denied", code: 7 }],
+    kotoba: [
+      {
+        msg_id: "ledger.denied",
+        translations: [
+          { lang: "en", text: "" },
+          { lang: "ja", text: "拒否" },
+        ],
+      },
+    ],
+    provenance: {
+      signer: `ed0120${"11".repeat(32)}`,
+      signature: "22".repeat(64).toUpperCase(),
+    },
+  };
+  const encoded = withMissingNativeBinding(() =>
+    Buffer.from(
+      noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }),
+    ),
+  );
+  const decoded = noritoDecodeInstruction(encoded);
+  assert.deepEqual(decoded.RegisterSmartContractCode.manifest, {
+    ...manifest,
+    code_hash: "hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#0E5B",
+    abi_hash: "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2",
+  });
+});
+
+baseTest("contract manifest codec rejects noncanonical and retired layouts", () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "fixtures", "contract_manifest_v1.json"), "utf8"),
+  );
+  const encodeManifest = (manifest) =>
+    withMissingNativeBinding(() =>
+      noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }),
+    );
+
+  assert.throws(
+    () => encodeManifest({ ...fixture.manifest, contract_name: "Legacy" }),
+    /unknown field contract_name/u,
+  );
+  assert.throws(
+    () =>
+      encodeManifest({
+        ...fixture.manifest,
+        entrypoints: [
+          { ...fixture.manifest.entrypoints[0], kind: { kind: "Public", value: null } },
+        ],
+      }),
+    /Kotoage, View, Hajimari, or Kaizen/u,
+  );
+  assert.throws(
+    () =>
+      encodeManifest({
+        ...fixture.manifest,
+        entrypoints: [
+          {
+            ...fixture.manifest.entrypoints[0],
+            argument_schema: {
+              fields: [
+                {
+                  name: "bad",
+                  ty: {
+                    nodes: [
+                      { kind: "Leaf", value: { kind: "Opaque", value: null } },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    /unsupported value kind Opaque|not a canonical V1 entrypoint value kind/u,
+  );
+  assert.throws(
+    () =>
+      encodeManifest({
+        ...fixture.manifest,
+        entrypoints: [
+          {
+            ...fixture.manifest.entrypoints[0],
+            argument_schema: {
+              fields: [
+                {
+                  name: "legacy_list",
+                  ty: {
+                    nodes: [
+                      {
+                        kind: "List",
+                        value: {
+                          element: {
+                            nodes: [
+                              {
+                                kind: "Leaf",
+                                value: { kind: "Name", value: null },
+                              },
+                            ],
+                          },
+                          capacity: 64,
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    /unknown field element|contain (?:only|exactly) capacity/u,
+  );
+
+  const badFilter = Buffer.from(
+    fixture.event_filter_box.norito_frame_hex,
+    "hex",
+  );
+  badFilter[6] ^= 0x01;
+  assert.throws(
+    () =>
+      encodeManifest({
+        ...fixture.manifest,
+        entrypoints: [
+          {
+            ...fixture.manifest.entrypoints[0],
+            triggers: [
+              {
+                ...fixture.manifest.entrypoints[0].triggers[0],
+                filter: badFilter.toString("base64"),
+              },
+            ],
+          },
+        ],
+      }),
+    /schema hash did not match/u,
+  );
+  assert.throws(
+    () =>
+      encodeManifest({
+        ...fixture.manifest,
+        provenance: {
+          signer: `ed0120${"11".repeat(32)}`,
+          signature: "00".repeat(64),
+        },
+      }),
+    /must not be all zero/u,
+  );
+});
+
+baseTest("contract manifest codec validates every flat query schema and ordinary structs", () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "fixtures", "contract_manifest_v1.json"), "utf8"),
+  );
+  const leaf = (kind) => ({ kind: "Leaf", value: { kind, value: null } });
+  const layouts = [
+    ["AccountView", ["id", "metadata"], [leaf("AccountId"), leaf("Json")]],
+    ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Amount")]],
+    [
+      "AssetDefinitionView",
+      ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+      [
+        leaf("AssetDefinitionId"),
+        leaf("String"),
+        { kind: "Option", value: null },
+        leaf("String"),
+        leaf("AccountId"),
+        leaf("Amount"),
+        leaf("Json"),
+      ],
+    ],
+    [
+      "DomainView",
+      ["id", "owned_by", "metadata"],
+      [leaf("DomainId"), leaf("AccountId"), leaf("Json")],
+    ],
+    [
+      "NftView",
+      ["id", "owned_by", "content"],
+      [leaf("NftId"), leaf("AccountId"), leaf("Json")],
+    ],
+  ];
+  const instruction = (returnType, nodes) => ({
+    RegisterSmartContractCode: {
+      manifest: {
+        ...fixture.manifest,
+        entrypoints: [
+          {
+            ...fixture.manifest.entrypoints[0],
+            name: "read",
+            kind: { kind: "View", value: null },
+            return_type: returnType,
+            return_schema: { nodes },
+            permission: null,
+            triggers: [],
+          },
+        ],
+      },
+    },
+  });
+  const roundtrip = (returnType, nodes) => {
+    const value = instruction(returnType, nodes);
+    const encoded = withMissingNativeBinding(() => noritoEncodeInstruction(value));
+    assert.deepEqual(noritoDecodeInstruction(encoded), value);
+  };
+
+  for (const [name, fields, children] of layouts) {
+    const view = [{ kind: "Struct", value: { name, fields } }, ...children];
+    roundtrip(name, view);
+    roundtrip(`Option<${name}>`, [{ kind: "Option", value: null }, ...view]);
+    roundtrip(`QueryPage<${name}>`, [
+      {
+        kind: "Struct",
+        value: { name: "QueryPage", fields: ["items", "next_offset"] },
+      },
+      { kind: "List", value: { capacity: 64 } },
+      ...view,
+      { kind: "Option", value: null },
+      leaf("Int"),
+    ]);
+  }
+  roundtrip("struct Pair", [
+    { kind: "Struct", value: { name: "Pair", fields: ["left", "right"] } },
+    leaf("Int"),
+    leaf("Bool"),
+  ]);
+});
+
+baseTest("contract manifest codec rejects malformed and forged flat schema tapes", () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "fixtures", "contract_manifest_v1.json"), "utf8"),
+  );
+  const leaf = (kind) => ({ kind: "Leaf", value: { kind, value: null } });
+  const encodeNodes = (nodes) =>
+    withMissingNativeBinding(() =>
+      noritoEncodeInstruction({
+        RegisterSmartContractCode: {
+          manifest: {
+            ...fixture.manifest,
+            entrypoints: [
+              {
+                ...fixture.manifest.entrypoints[0],
+                name: "read",
+                kind: { kind: "View", value: null },
+                return_type: "schema-under-test",
+                return_schema: { nodes },
+                permission: null,
+                triggers: [],
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+  for (const malformed of [
+    [],
+    [{ kind: "List", value: { capacity: 1 } }],
+    [leaf("Int"), leaf("Bool")],
+    [
+      { kind: "List", value: { capacity: 1, element: { nodes: [leaf("Int")] } } },
+      leaf("Int"),
+    ],
+    [{ kind: "List", value: { capacity: 0 } }, leaf("Int")],
+    [{ kind: "List", value: { capacity: 65 } }, leaf("Int")],
+    [
+      ...Array.from({ length: 256 }, () => ({
+        kind: "List",
+        value: { capacity: 1 },
+      })),
+      leaf("Int"),
+    ],
+  ]) {
+    assert.throws(() => encodeNodes(malformed), /canonical|capacity|complete|exactly capacity/u);
+  }
+
+  const reservedViews = [
+    ["AccountView", ["id", "metadata"], [leaf("AccountId"), leaf("Json")]],
+    ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Amount")]],
+    [
+      "AssetDefinitionView",
+      ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+      [
+        leaf("AssetDefinitionId"),
+        leaf("String"),
+        { kind: "Option", value: null },
+        leaf("String"),
+        leaf("AccountId"),
+        leaf("Amount"),
+        leaf("Json"),
+      ],
+    ],
+    [
+      "DomainView",
+      ["id", "owned_by", "metadata"],
+      [leaf("DomainId"), leaf("AccountId"), leaf("Json")],
+    ],
+    [
+      "NftView",
+      ["id", "owned_by", "content"],
+      [leaf("NftId"), leaf("AccountId"), leaf("Json")],
+    ],
+  ];
+  for (const [name, fields, children] of reservedViews) {
+    const forged = [
+      { kind: "Struct", value: { name, fields } },
+      ...structuredClone(children),
+    ];
+    forged[1].value.kind = "Bool";
+    assert.throws(() => encodeNodes(forged), /forged reserved query-view/u);
+
+    const forgedPage = [
+      {
+        kind: "Struct",
+        value: { name: "QueryPage", fields: ["items", "next_offset"] },
+      },
+      { kind: "List", value: { capacity: 32 } },
+      { kind: "Struct", value: { name, fields } },
+      ...children,
+      { kind: "Option", value: null },
+      leaf("Int"),
+    ];
+    assert.throws(() => encodeNodes(forgedPage), /forged QueryPage/u);
+  }
+
+  const validCapacity = Buffer.from(
+    encodeNodes([{ kind: "List", value: { capacity: 63 } }, leaf("Int")]),
+  );
+  const comparisonCapacity = Buffer.from(
+    encodeNodes([{ kind: "List", value: { capacity: 62 } }, leaf("Int")]),
+  );
+  const capacityOffsets = Array.from(validCapacity.keys()).filter(
+    (index) => validCapacity[index] === 63 && comparisonCapacity[index] === 62,
+  );
+  assert.equal(capacityOffsets.length, 1);
+  for (const invalidCapacity of [0, 65]) {
+    const forged = Buffer.from(validCapacity);
+    forged[capacityOffsets[0]] = invalidCapacity;
+    rewriteNestedInstructionFrameCrcs(forged);
+    assert.throws(
+      () => withMissingNativeBinding(() => noritoDecodeInstruction(forged)),
+      /capacity.*1\.\.64/u,
+    );
+  }
+
+  const forgedViewWire = Buffer.from(
+    encodeNodes([
+      {
+        kind: "Struct",
+        value: { name: "AccountViex", fields: ["id", "metadata"] },
+      },
+      leaf("Bool"),
+      leaf("Json"),
+    ]),
+  );
+  const forgedName = Buffer.from("AccountViex", "utf8");
+  const nameOffset = forgedViewWire.indexOf(forgedName);
+  assert.notEqual(nameOffset, -1);
+  forgedViewWire[nameOffset + forgedName.length - 1] = "w".charCodeAt(0);
+  rewriteNestedInstructionFrameCrcs(forgedViewWire);
+  assert.throws(
+    () => withMissingNativeBinding(() => noritoDecodeInstruction(forgedViewWire)),
+    /forged reserved query-view/u,
+  );
 });
 
 baseTest("native multisig proposal DTO embeds pure JS instructions with compact inner frames", () => {
@@ -687,14 +1236,10 @@ baseTest("noritoEncodeInstruction requires native binding for unsupported instru
   });
 });
 
-baseTest("noritoDecodeInstruction requires native binding for canonical bytes", () => {
+baseTest("noritoDecodeInstruction decodes supported canonical bytes without native binding", () => {
   const bytes = loadInstructionBytes("mint_asset_numeric.json");
-  withMissingNativeBinding(() => {
-    assert.throws(
-      () => noritoDecodeInstruction(bytes),
-      /Native binding required/,
-    );
-  });
+  const decoded = withMissingNativeBinding(() => noritoDecodeInstruction(bytes));
+  assert.ok(decoded?.Mint?.Asset);
 });
 
 baseTest("noritoEncodeInstruction passes pre-encoded payloads through without native binding", () => {

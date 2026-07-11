@@ -13,37 +13,61 @@ seiyaku PredictionMarket {
     kotoage fn main() authorize("MarketUser") {
         let caller = context::authority();
         let asset = AssetDefinitionId::parse("61CtjvNd9T3THAR65GsMVHr82Bjc");
-        let pool = AccountId::parse("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE");
-        let alice = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-        let bob = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
-        let oracle_yes = AccountId::parse("sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888");
-        let oracle_no = AccountId::parse("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D");
+        let pool = AccountId::parse("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE", );
+        let alice = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", );
+        let bob = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", );
+        let oracle_yes = AccountId::parse("sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888", );
+        let oracle_no = AccountId::parse("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", );
         let stake = Amount::from_i64(10);
         let payout = Amount::from_i64(20);
         if (caller == oracle_yes) {
             if (!resolved && alice_staked && bob_staked) {
-                ledger::asset::transfer(pool, alice, asset, payout, DataSpaceId::parse("0"));
+                ledger::asset::transfer(
+                    source: pool,
+                    destination: alice,
+                    asset_definition: asset,
+                    amount: payout,
+                    dataspace: DataSpaceId::parse("0"),
+                );
                 resolved = true;
             }
             return;
         }
         if (caller == oracle_no) {
             if (!resolved && alice_staked && bob_staked) {
-                ledger::asset::transfer(pool, bob, asset, payout, DataSpaceId::parse("0"));
+                ledger::asset::transfer(
+                    source: pool,
+                    destination: bob,
+                    asset_definition: asset,
+                    amount: payout,
+                    dataspace: DataSpaceId::parse("0"),
+                );
                 resolved = true;
             }
             return;
         }
         if (caller == alice) {
             if (!resolved &&!alice_staked) {
-                ledger::asset::transfer(caller, pool, asset, stake, DataSpaceId::parse("0"));
+                ledger::asset::transfer(
+                    source: caller,
+                    destination: pool,
+                    asset_definition: asset,
+                    amount: stake,
+                    dataspace: DataSpaceId::parse("0"),
+                );
                 alice_staked = true;
             }
             return;
         }
         if (caller == bob) {
             if (!resolved &&!bob_staked) {
-                ledger::asset::transfer(caller, pool, asset, stake, DataSpaceId::parse("0"));
+                ledger::asset::transfer(
+                    source: caller,
+                    destination: pool,
+                    asset_definition: asset,
+                    amount: stake,
+                    dataspace: DataSpaceId::parse("0"),
+                );
                 bob_staked = true;
             }
             return;

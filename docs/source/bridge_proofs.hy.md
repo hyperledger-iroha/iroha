@@ -2,59 +2,95 @@
 lang: hy
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
-source_last_modified: "2025-12-29T18:16:35.921274+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: 465d8cf704022986b169ab93133517428f8cf2ffe01a498cbda458f4a5b2e69b
+source_last_modified: "2026-07-11"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# Կամուրջի ապացույցներ
+> Այս էջը թարգմանված համառոտագիր է, ոչ թե ամբողջական թարգմանություն։
+> Կառավարման, API-ների, ապացույցների իմաստաբանության և թողարկման պահանջների
+> ճշգրիտ նորմատիվ աղբյուրը [անգլերեն կանոնական էջն է](bridge_proofs.md)։
 
-Կամուրջի ապացույցների ներկայացումները անցնում են ստանդարտ հրահանգների ուղով (`SubmitBridgeProof`) և հաստատված կարգավիճակով տեղավորվում ապացույցների գրանցամատյանում: Ընթացիկ մակերեսը ծածկում է ICS-ի ոճի Merkle proof-ները և թափանցիկ-ZK օգտակար բեռները՝ ամրացված պահմամբ և բացահայտ կապով:
+# SCCP V1 կամրջի ապացույցներ — համառոտագիր
 
-## Ընդունման կանոններ
+## Առաջին թողարկման շրջանակը
 
-- Շրջանակները պետք է պատվիրված/ոչ դատարկ լինեն և հարգեն `zk.bridge_proof_max_range_len` (0-ն անջատում է գլխարկը):
-- Ընտրովի բարձրության պատուհանները մերժում են հնացած/ապագա ապացույցները. `zk.bridge_proof_max_past_age_blocks` և `zk.bridge_proof_max_future_drift_blocks` չափվում են այն բլոկի բարձրության համեմատ, որը կլանում է ապացույցը (0-ն անջատում է պաշտպանիչ բազրիքները):
-- Կամուրջի ապացույցները չեն կարող համընկնել գոյություն ունեցող ապացույցների հետ նույն հետևի համար (կապված ապացույցները պահպանվում են և արգելափակում են համընկնումները):
-- Մանիֆեստի հեշերը պետք է լինեն ոչ զրոյական; ծանրաբեռնվածության չափը սահմանվում է `zk.max_proof_size_bytes`-ով:
-- ICS օգտակար բեռները հարգում են կազմաձևված Merkle խորության գլխարկը և ստուգում են ուղին՝ օգտագործելով հայտարարված հեշ ֆունկցիան; թափանցիկ օգտակար բեռները պետք է հայտարարեն ոչ դատարկ հետնամասի պիտակ:
-- Ամրացված ապացույցները ազատված են պահպանման էտումից. չամրացված ապացույցները դեռևս հարգում են `zk.proof_history_cap`/grace/խմբաքանակի գլոբալ կարգավորումները:
+SCCP V1-ը առաջին թողարկման փակ արձանագրություն է։ Աջակցվող միակ արտաքին
+աղբյուրներն են `ethereum-mainnet`, `bsc-mainnet` և `tron-mainnet`, իսկ SORA-ի
+միակ նպատակակետը `sora-taira`-ն է։ Solana-ն, TON-ը, հատուկ ցանցերը և SORA-ի
+այլ նպատակակետերը չեն աջակցվում և անվտանգ կերպով մերժվում են։
 
-## Torii API մակերես
+Այս թողարկման մեջ `SubmitBridgeProof`-ն ընդունում է միայն տիպավորված
+`NativeProtocol` և `SccpDestination` ապացույցները։ Ընդհանուր `Ics` կամ
+`TransparentZk` ներկայացումը հասանելի չէ և մերժվում է, մինչև շղթայում
+հեղինակավոր ստուգիչ չլինի։
 
-- `GET /v1/zk/proofs` և `GET /v1/zk/proofs/count` ընդունում են կամուրջների մասին տեղեկացված զտիչներ.
-  - `bridge_only=true`-ը վերադարձնում է միայն կամրջի ապացույցները:
-  - `bridge_pinned_only=true`-ը նեղանում է մինչև ամրացված կամուրջները:
-  - `bridge_start_from_height` / `bridge_end_until_height` սեղմել կամրջի միջակայքի պատուհանը:
-- `GET /v1/zk/proof/{backend}/{hash}`-ը վերադարձնում է կամուրջի մետատվյալները (միջակայք, մանիֆեստի հեշ, օգտակար բեռնվածքի ամփոփում) ապացուցման id/status/VK կապերի հետ մեկտեղ:
-- Norito ամբողջական ապացույցի գրառումը (ներառյալ օգտակար բայթերը) մնում է հասանելի `GET /v1/proofs/{proof_id}`-ի միջոցով՝ անջատված հաստատիչների համար:
+## Տիպավորված գրանցամատյան և replay-ի պաշտպանություն
 
-## Կամուրջի ստացման իրադարձություններ
+`SccpRegistryV1`-ը lane-ին կապված, տիպավորված և միայն հավելվող (append-only)
+գրանցամատյան է։ Յուրաքանչյուր lane պահպանում է առավելագույնը 64 route revision
+և 4,096 native trust anchor։ Պատմական գրառումները լռելյայն չեն հեռացվում․
+սահմանին հասնելուց հետո հաջորդ հավելումը ատոմապես մերժվում է՝ առանց վիճակի
+փոփոխության։
 
-Կամուրջի ուղիները տպագրված անդորրագրեր են հաղորդում `RecordBridgeReceipt` հրահանգի միջոցով: Այս հրահանգի կատարումը
-գրանցում է `BridgeReceipt` օգտակար բեռ և թողարկում `DataEvent::Bridge(BridgeEvent::Emitted)` միջոցառմանը
-հոսք՝ փոխարինելով միայն գրանցամատյանում պարունակվող նախկին կոճակը: CLI `iroha bridge emit-receipt` օգնականը ներկայացնում է
-մուտքագրված հրահանգ, որպեսզի ինդեքսավորողները կարողանան դետերմինիստական կերպով սպառել անդորրագրերը:
+Anchor interval-ները չափվում են վավերացված consensus առաջընթացի կոորդինատով․
+Ethereum-ը կիրառում է finalized beacon slot-ը, իսկ BSC-ն և TRON-ը՝ finalized
+native block height-ը։ Հին anchor-ը վավեր է մինչև հաջորդ checkpoint-ը՝ ներառյալ
+սահմանային կետը, իսկ վերջին ընթացիկ anchor-ը բաց վերջ ունի։ Ավարտված route-ի
+finality cutoff-ը պետք է ճշգրտորեն հավասար լինի պատմական anchor-ի հաջորդ
+checkpoint-ին։
 
-## Արտաքին հաստատման ուրվագիծ (ICS)
+Մշտական inbound գրառումն առանձին պահպանում է event/source finality height-ը և
+ստուգված `anchor_interval_height`-ը։ Lane-ով և anchor hash-ով բանալված մշտական
+high-water ինդեքսը թույլ չի տալիս կառավարմանը ընտրել արդեն ընդունված
+կոորդինատից ցածր հաջորդ checkpoint։ Snapshot hydration-ը ինդեքսը վերահաշվում
+է մշտական գրառումներից և պահանջում ճշգրիտ հավասարություն՝ մերժելով բացակայող,
+հնացած, սխալ կամ չհիմնավորված ինդեքսը։ Օգտագործված message id-ները նույնպես
+մշտապես պահվում են replay-ը կանխելու համար։
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
+## Մեկ անցումով ստուգում և աշխատանքի սահմաններ
 
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+Destination և native ապացույցները կառուցվածքավորվում են մեկ անգամ, կապվում են
+մեկ անգամ, և թանկ կրիպտոգրաֆիայից առաջ պահուստավորվում է դետերմինիստական
+աշխատանքը։ Destination ուղին մեկ անգամ ստուգում է BN254 pairing-product-ը և
+մեկ անգամ՝ տեղային BLS finality-ն։ Native ուղիները պահանջում են canonical
+shortest-prefix. առավելագույնը 1,004 header BSC-ի և 54՝ TRON-ի համար։
+
+`[zk.sccp]`-ն սահմանում է ոչ զրոյական transaction և block սահմաններ proof-երի
+քանակի/bytes-ի, native headers/bytes-ի, Ethereum light-client updates-ի,
+secp256k1 recoveries-ի, BLS aggregate checks/key contributions-ի և BN254
+pairing checks-ի համար։ Ընդունման այս սահմանները consensus-bound են․ բոլոր
+validator-ները պետք է օգտագործեն config file-ի նույն արժեքները, և environment
+variable override գոյություն չունի։
+
+Առաջին թողարկման լռելյայն սահմաններն են․
+
+| Աշխատանքի չափում | Transaction | Block |
+|---|---:|---:|
+| proofs | 1 | 4 |
+| canonical proof bytes | 8 MiB | 32 MiB |
+| BSC/TRON continuation headers | 1,004 | 4,016 |
+| Ethereum light-client updates | 128 | 512 |
+| framed native-finality bytes | 8 MiB | 32 MiB |
+| secp256k1 recoveries | 1,005 | 4,020 |
+| BLS aggregate checks | 1,004 | 4,016 |
+| BLS key/contribution work items | 131,713 | 526,852 |
+| BN254 pairing-product checks | 1 | 4 |
+
+Մեկ proof-ը կարող է պարունակել առավելագույնը 8 MiB canonical bytes։ Լքված կամ
+մերժված transaction-ի համար պահուստավորված աշխատանքը block չի անցնում։
+
+## Torii և HTTP սահմաններ
+
+Torii-ն յուրաքանչյուր SCCP endpoint-ի համար կիրառում է առանձին JSON body
+սահման՝ նախքան body-ն կարդալը, հիշողություն հատկացնելը կամ կրիպտոգրաֆիկ
+ստուգումը։ Չափազանց մեծ `Content-Length` կամ chunked body-ն մերժվում է HTTP
+`413`-ով։ Հաճախորդը նաև decoded HTTP response-ը կարդում է հաստատուն սահմանի
+ներքո, ուստի բացակայող կամ կեղծ `Content-Length`-ը չի կարող շրջանցել այն։
+
+Բոլոր JSON, base64 և Norito մուտքերը պետք է canonical լինեն։ Անհայտ fields-ը,
+կրկնվող keys-ը, սխալ network/route/anchor-ը, replay-ը, աշխատանքի քվոտայի
+գերազանցումը կամ ստուգման ձախողումը մերժվում են՝ առանց վիճակի մասնակի փոփոխության։

@@ -1,10 +1,21 @@
 import { blake2b256 } from "../blake2b.js";
+import {
+  isCanonicalKotodamaEntrypoint as isCanonicalEntrypointName,
+  isCanonicalKotodamaIdentifier as isCanonicalIdentifier,
+} from "../kotodamaIdentifiers.js";
 
 const CONTRACT_HASH_DOMAIN = new TextEncoder().encode("iroha:ivm:contract-artifact:v1\0");
 const DIAGNOSTIC_PHASES = new Set(["lex", "parse", "semantic", "lowering", "artifact"]);
 const DIAGNOSTIC_SEVERITIES = new Set(["error", "warning"]);
+const MANIFEST_ENTRYPOINT_KINDS = new Set([
+  "Kotoage",
+  "View",
+  "Hajimari",
+  "Kaizen",
+]);
 const MAX_DIAGNOSTICS = 64;
 const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
+const UTF8_ENCODER = new TextEncoder();
 
 function isRecord(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -54,11 +65,53 @@ function normalizeHashHex(value, label) {
   if (typeof value !== "string") {
     throw new TypeError(`Kotodama compiler response is missing ${label}`);
   }
-  const hex = value.replace(/^(?:hash:|0x)/i, "");
-  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
-    throw new TypeError(`Kotodama compiler response contains an invalid ${label}`);
+  if (/^[0-9a-fA-F]{64}$/u.test(value)) {
+    return requireIrohaHashMarker(value.toLowerCase(), label);
   }
-  return hex.toLowerCase();
+  const literal = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u.exec(value);
+  if (literal === null) {
+    throw new TypeError(
+      `Kotodama compiler response contains an invalid or noncanonical ${label}`,
+    );
+  }
+  const [, body, checksum] = literal;
+  const expected = crc16Literal("hash", body);
+  if (checksum !== expected) {
+    throw new TypeError(
+      `Kotodama compiler response contains an invalid ${label} checksum; expected ${expected}`,
+    );
+  }
+  return requireIrohaHashMarker(body.toLowerCase(), label);
+}
+
+function requireIrohaHashMarker(hex, label) {
+  if ((Number.parseInt(hex.slice(-2), 16) & 1) !== 1) {
+    throw new TypeError(
+      `Kotodama compiler response contains an invalid ${label} marker bit`,
+    );
+  }
+  return hex;
+}
+
+function crc16Literal(tag, body) {
+  let crc = 0xffff;
+  const processByte = (byte) => {
+    crc ^= (byte & 0xff) << 8;
+    for (let index = 0; index < 8; index += 1) {
+      crc =
+        (crc & 0x8000) !== 0
+          ? ((crc << 1) ^ 0x1021) & 0xffff
+          : (crc << 1) & 0xffff;
+    }
+  };
+  for (const byte of UTF8_ENCODER.encode(tag)) {
+    processByte(byte);
+  }
+  processByte(0x3a);
+  for (const byte of UTF8_ENCODER.encode(body)) {
+    processByte(byte);
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0");
 }
 
 function toHex(bytes) {
@@ -89,7 +142,10 @@ function artifactHashHex(artifactBytes) {
   const input = new Uint8Array(CONTRACT_HASH_DOMAIN.length + artifactBytes.length);
   input.set(CONTRACT_HASH_DOMAIN);
   input.set(artifactBytes, CONTRACT_HASH_DOMAIN.length);
-  return toHex(blake2b256(input));
+  const digest = blake2b256(input);
+  // `iroha_crypto::Hash::prehashed` reserves the low bit of the final byte.
+  digest[digest.length - 1] |= 1;
+  return toHex(digest);
 }
 
 function parseSidecar(raw, kind, artifactHash) {
@@ -103,6 +159,141 @@ function parseSidecar(raw, kind, artifactHash) {
     throw new Error(`Kotodama compiler returned an invalid or mismatched ${kind} sidecar`);
   }
   return sidecar.entries;
+}
+
+function validateCompilerManifest(manifest) {
+  if (Object.prototype.hasOwnProperty.call(manifest, "contract_name")) {
+    throw new TypeError(
+      "Kotodama manifest must use seiyaku_name; contract_name is not a V1 field",
+    );
+  }
+  if (!isCanonicalIdentifier(manifest.seiyaku_name, { declaration: true })) {
+    throw new TypeError(
+      "Kotodama manifest seiyaku_name must be a canonical V1 declaration identifier",
+    );
+  }
+  if (
+    typeof manifest.compiler_fingerprint !== "string" ||
+    manifest.compiler_fingerprint.trim() === ""
+  ) {
+    throw new TypeError("Kotodama manifest compiler_fingerprint must not be empty");
+  }
+  validateCompilerManifestStates(manifest.states);
+  validateCompilerManifestErrorCodes(manifest.error_codes);
+  if (manifest.entrypoints === undefined || manifest.entrypoints === null) {
+    return;
+  }
+  if (!Array.isArray(manifest.entrypoints)) {
+    throw new TypeError("Kotodama manifest entrypoints must be an array or null");
+  }
+  const names = new Set();
+  const lifecycleKinds = new Set();
+  manifest.entrypoints.forEach((entrypoint, index) => {
+    const entry = requireRecord(entrypoint, `Kotodama manifest entrypoint ${index}`);
+    const kind = requireRecord(entry.kind, `Kotodama manifest entrypoint ${index}.kind`);
+    if (!isCanonicalEntrypointName(entry.name)) {
+      throw new TypeError(
+        `Kotodama manifest entrypoint ${index}.name is not a canonical V1 identifier or branded lifecycle selector`,
+      );
+    }
+    if (names.has(entry.name)) {
+      throw new TypeError(`Kotodama manifest contains duplicate entrypoint ${entry.name}`);
+    }
+    names.add(entry.name);
+    if (!MANIFEST_ENTRYPOINT_KINDS.has(kind.kind)) {
+      throw new TypeError(
+        `Kotodama manifest entrypoint ${index}.kind must be Kotoage, View, Hajimari, or Kaizen`,
+      );
+    }
+    if (kind.value !== null) {
+      throw new TypeError(`Kotodama manifest entrypoint ${index}.kind.value must be null`);
+    }
+    const lifecycleKind =
+      entry.name === "hajimari" || entry.name === "始まり"
+        ? "Hajimari"
+        : entry.name === "kaizen" || entry.name === "改善"
+          ? "Kaizen"
+          : null;
+    if (
+      (lifecycleKind === null && (kind.kind === "Hajimari" || kind.kind === "Kaizen")) ||
+      (lifecycleKind !== null && kind.kind !== lifecycleKind)
+    ) {
+      throw new TypeError(
+        `Kotodama manifest entrypoint ${index}.kind does not match its branded lifecycle selector`,
+      );
+    }
+    if (kind.kind === "Kotoage" && (typeof entry.permission !== "string" || entry.permission.trim() === "")) {
+      throw new TypeError(
+        `Kotodama manifest kotoage/言挙げ entrypoint ${index} is missing caller authorization`,
+      );
+    }
+    if ((kind.kind === "Hajimari" || kind.kind === "Kaizen") && entry.permission != null) {
+      throw new TypeError(
+        `Kotodama manifest hajimari/始まり and kaizen/改善 entrypoint ${index} must use runtime authorization`,
+      );
+    }
+    if (lifecycleKind !== null) {
+      if (lifecycleKinds.has(lifecycleKind)) {
+        throw new TypeError(`Kotodama manifest contains duplicate ${lifecycleKind} entrypoints`);
+      }
+      lifecycleKinds.add(lifecycleKind);
+    }
+  });
+
+}
+
+function validateCompilerManifestStates(states) {
+  if (states === undefined || states === null) {
+    return;
+  }
+  if (!Array.isArray(states)) {
+    throw new TypeError("Kotodama manifest states must be an array or null");
+  }
+  const names = new Set();
+  states.forEach((value, index) => {
+    const state = requireRecord(value, `Kotodama manifest state ${index}`);
+    if (!isCanonicalIdentifier(state.name, { declaration: true })) {
+      throw new TypeError(`Kotodama manifest state ${index}.name is not canonical`);
+    }
+    if (names.has(state.name)) {
+      throw new TypeError(`Kotodama manifest contains duplicate state ${state.name}`);
+    }
+    names.add(state.name);
+    if (typeof state.type_name !== "string" || state.type_name.trim() === "") {
+      throw new TypeError(`Kotodama manifest state ${index}.type_name must not be empty`);
+    }
+  });
+}
+
+function validateCompilerManifestErrorCodes(errorCodes) {
+  if (errorCodes === undefined || errorCodes === null) {
+    return;
+  }
+  if (!Array.isArray(errorCodes)) {
+    throw new TypeError("Kotodama manifest error_codes must be an array or null");
+  }
+  const paths = new Set();
+  const codes = new Set();
+  errorCodes.forEach((value, index) => {
+    const errorCode = requireRecord(value, `Kotodama manifest error code ${index}`);
+    if (
+      !isCanonicalIdentifier(errorCode.namespace, { declaration: true }) ||
+      !isCanonicalIdentifier(errorCode.name)
+    ) {
+      throw new TypeError(
+        `Kotodama manifest error code ${index} must use canonical namespace and variant identifiers`,
+      );
+    }
+    if (!Number.isSafeInteger(errorCode.code) || errorCode.code <= 0 || errorCode.code > 0xffff_ffff) {
+      throw new TypeError(`Kotodama manifest error code ${index}.code must be a non-zero u32`);
+    }
+    const path = `${errorCode.namespace}::${errorCode.name}`;
+    if (paths.has(path) || codes.has(errorCode.code)) {
+      throw new TypeError(`Kotodama manifest contains a duplicate error path or code at ${path}`);
+    }
+    paths.add(path);
+    codes.add(errorCode.code);
+  });
 }
 
 function validatePosition(value, label) {
@@ -245,6 +436,7 @@ export function normalizeCompilerOutput(output) {
   if (normalizeHashHex(manifest.abi_hash, "manifest abi_hash") !== abiHashHex) {
     throw new Error("Kotodama compiler manifest abi_hash does not match abiHash");
   }
+  validateCompilerManifest(manifest);
 
   const sourceMap = parseSidecar(output.sourceMapJson, "source-map", codeHashHex);
   const budgetReport = parseSidecar(output.budgetReportJson, "budget", codeHashHex);

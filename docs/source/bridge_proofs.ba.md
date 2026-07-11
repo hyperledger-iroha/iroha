@@ -2,59 +2,91 @@
 lang: ba
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
-source_last_modified: "2025-12-29T18:16:35.921274+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: 465d8cf704022986b169ab93133517428f8cf2ffe01a498cbda458f4a5b2e69b
+source_last_modified: "2026-07-11"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# Күпер .
+> Был бит — ҡыҫҡартылған тәржемә йомғағы, тулы тәржемә түгел. Идара итеү,
+> API, иҫбатлау мәғәнәһе һәм релиз талаптары өсөн аныҡ норматив сығанаҡ —
+> [инглизсә төп бит](bridge_proofs.md).
 
-Күпер иҫбатлаусы тапшырыуҙар стандарт инструкция юлы аша үтә (`SubmitBridgeProof`) һәм раҫланған статуслы иҫбатлау реестрында ер. Ток өҫтө ҡаплай ICS-стиль Merkle иҫбатлау һәм үтә күренмәле-ZK файҙалы йөктәр менән пинированный һаҡлау һәм асыҡ бәйләү.
+# SCCP V1 күпер иҫбатлауҙары — ҡыҫҡаса йомғаҡ
 
-## Ҡабул итеү ҡағиҙәләре
+## Беренсе релиз сиктәре
 
-- Диапазондарҙы заказ бирергә/бушҡа һәм хөрмәт итергә кәрәк `zk.bridge_proof_max_range_len` (0 ҡапҡасты өҙөп).
-- Опциональ бейеклектәге тәҙрәләр иҫке/киләсәктә дәлилдәрҙе кире ҡаға: `zk.bridge_proof_max_past_age_blocks` һәм `zk.bridge_proof_max_future_drift_blocks` блок бейеклегенә ҡаршы үлсәнә, улар иҫбатлауҙы ингестировать (0 ҡоршауҙарҙы өҙөп).
-- Күпер дәлилдәре шул уҡ бэкэнд өсөн булған дәлилде ҡапламауы ла ихтимал (пеннированный дәлилдәр һаҡлана һәм ҡапланыуҙы блоклай).
-- Манифест хештары нуль булмаған булырға тейеш; файҙалы йөктәр ҙурлыҡтағы `zk.max_proof_size_bytes` менән ҡапланған.
-- ICS файҙалы йөкләмәләр настроить конфигурацияланған Merkle тәрәнлеге ҡапҡасы һәм юлды раҫлау ҡулланып иғлан ителгән хеш функцияһы; үтә күренмәле файҙалы йөктәр иғлан итергә тейеш, буш булмаған бэкэнд ярлыҡ.
-- Пиннированный дәлилдәр һаҡлауҙан азат ителә; unpinned дәлилдәр һаман да донъя `zk.proof_history_cap`/рәхмәт/партия параметрҙарын хөрмәт итә.
+SCCP V1 — беренсе релиз өсөн ябыҡ протокол. Тышҡы сығанаҡтарҙан тик
+`ethereum-mainnet`, `bsc-mainnet` һәм `tron-mainnet` ҡына хуплана; берҙән-бер
+SORA тәғәйенләнеше — `sora-taira`. Solana, TON, махсус селтәрҙәр һәм башҡа SORA
+тәғәйенләнештәре хупланмай һәм хәүефһеҙ рәүештә кире ҡағыла.
 
-## Torii API өҫтө
+Был релизда `SubmitBridgeProof` тик типланған `NativeProtocol` һәм
+`SccpDestination` иҫбатлауҙарын ҡабул итә. Дөйөм `Ics` йәки `TransparentZk`
+тапшырыу мөмкин түгел һәм абруйлы on-chain verifier барлыҡҡа килгәнсе кире
+ҡағыла.
 
-- `GET /v1/zk/proofs` һәм `GET /v1/zk/proofs/count` күпер-аңлы фильтрҙар ҡабул итә:
-  - `bridge_only=true` күперле дәлилдәрҙе генә ҡайтара.
-  - `bridge_pinned_only=true` тарайтыу өсөн күперле дәлилдәрҙе ҡыҫтырылған.
-  - `bridge_start_from_height` / `bridge_end_until_height` күпер диапазоны тәҙрәһен ҡыҫҡыс.
-- `GET /v1/zk/proof/{backend}/{hash}` ҡайтарыу күпер метамағлүмәттәр (диапазон, асыҡ хеш, файҙалы йөк резюме) менән бер рәттән иҫбатлау id/статус/ВК бәйләүҙәр.
-- Тулы Norito дәлил яҙмаһы (шул иҫәптән файҙалы йөк байттары) `GET /v1/proofs/{proof_id}` аша төйөндән тыш тикшерелеүселәр өсөн мөмкин.
+## Типланған реестр һәм replay-ҙан һаҡлау
 
-## Күпер квитанция саралары
+`SccpRegistryV1` lane-ға бәйләнгән, типланған һәм тик өҫтәлә торған (append-only)
+реестр. Һәр lane иң күбе 64 һаҡланған route revision һәм 4,096 һаҡланған native
+trust anchor тота. Тарихи яҙмалар йәшерен рәүештә юйылмай; сиккә еткәс, киләһе
+өҫтәү хәлде үҙгәртмәйенсә атомар кире ҡағыла.
 
-Күпер һыҙаттары `RecordBridgeReceipt` инструкцияһы аша тип квитанциялар сығара. Был күрһәтмә башҡарыу
-18NI000000018X файҙалы йөкләмәһен теркәй һәм сарала `DataEvent::Bridge(BridgeEvent::Emitted)` сығарыла
-ағым, алмаштырыу өсөн алдан лог-тик стаб. CLI `iroha bridge emit-receipt` ярҙамсыһы тапшыра
-тип инструкция шулай индексерҙар ҡуллана ала квитанциялар детерминистик.
+Anchor интервалы раҫланған consensus үҫеш координатаһы менән үлсәнә: Ethereum
+finalized beacon slot ҡуллана, BSC һәм TRON finalized native block height
+ҡуллана. Иҫке anchor алмашсының checkpoint-ы ингән сиккә тиклем ғәмәлдә ҡала;
+һуңғы ағымдағы anchor-ҙың осо асыҡ. Тамамланған route-тың finality cutoff-ы
+тарихи anchor-ҙың алмашсы checkpoint-ына теүәл тиң булырға тейеш.
 
-## Тышҡы тикшерелгән эскиз (ИКС)
+Даими inbound яҙма event/source finality height менән раҫланған
+`anchor_interval_height`-ты айырым һаҡлай. Lane һәм anchor hash буйынса асҡыслы
+high-water индексы элек ҡабул ителгән координатанан түбән алмашсы checkpoint
+һайларға бирмәй. Snapshot hydration индексты даими яҙмаларҙан яңынан иҫәпләй һәм
+теүәл тигеҙлек талап итә; юғалған, иҫкергән, боҙолған йәки нигеҙһеҙ индекс кире
+ҡағыла. Ҡулланылған message id-ҙар replay-ҙы туҡтатыу өсөн даими һаҡлана.
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
+## Бер үтеүле тикшереү һәм эш сиктәре
 
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+Destination һәм native иҫбатлауҙары бер тапҡыр структуралана, бер тапҡыр
+бәйләнә, ә ҡиммәтле криптографияға тиклем детерминистик эш резервы алына.
+Destination юлы BN254 pairing-product менән урындағы BLS finality-ҙы һәр береһен
+тик бер тапҡыр тикшерә. Native юлдар canonical shortest-prefix талап итә: BSC
+өсөн иң күбе 1,004 header, TRON өсөн 54 header.
+
+`[zk.sccp]` proof һаны/bytes, native headers/bytes, Ethereum light-client
+updates, secp256k1 recoveries, BLS aggregate checks/key contributions һәм BN254
+pairing checks өсөн нулдән ҙур transaction һәм block лимиттары ҡуя. Был ҡабул
+итеү лимиттары consensus-bound; бөтә validator-ҙарҙа config file ҡиммәттәре бер
+иш булырға тейеш һәм environment-variable алмаштырыуы юҡ.
+
+Беренсе релиздың ғәҙәти лимиттары:
+
+| Эш үлсәме | Transaction | Block |
+|---|---:|---:|
+| proofs | 1 | 4 |
+| canonical proof bytes | 8 MiB | 32 MiB |
+| BSC/TRON continuation headers | 1,004 | 4,016 |
+| Ethereum light-client updates | 128 | 512 |
+| framed native-finality bytes | 8 MiB | 32 MiB |
+| secp256k1 recoveries | 1,005 | 4,020 |
+| BLS aggregate checks | 1,004 | 4,016 |
+| BLS key/contribution work items | 131,713 | 526,852 |
+| BN254 pairing-product checks | 1 | 4 |
+
+Бер proof иң күбе 8 MiB canonical bytes тота ала. Туҡтатылған йәки кире ҡағылған
+transaction өсөн резервланған эш block эсенә үтмәй.
+
+## Torii һәм HTTP сиктәре
+
+Torii һәр SCCP endpoint өсөн JSON body лимитын body уҡылғанға, хәтер бүленгәнгә
+йәки криптографик тикшереү башланғанға тиклем ҡуллана. Артыҡ ҙур
+`Content-Length` йәки chunked body HTTP `413` менән кире ҡағыла. Клиент асылған
+HTTP яуабын да сикләнгән күләмдә генә уҡый; юҡ йәки ялған `Content-Length`
+лимитты уҙа алмай.
+
+JSON, base64 һәм Norito индереүҙәре canonical булырға тейеш. Билдәһеҙ fields,
+ҡабатланған keys, тап килмәгән network/route/anchor, replay, эш квотаһын арттырыу
+йәки тикшереү хатаһы хәлде өлөшләтә үҙгәртмәйенсә кире ҡағыла.

@@ -30,6 +30,47 @@ fn pointer_abi_test_compiler() -> KotodamaCompiler {
     })
 }
 
+fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
+    let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
+    let entrypoint = metadata
+        .contract_interface
+        .as_ref()
+        .expect("Kotodama V1 artifact must embed CNTR")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == name)
+        .unwrap_or_else(|| panic!("missing Kotodama V1 entrypoint `{name}`"));
+    let entrypoint_pc = u64::try_from(metadata.prefix_len()).expect("program prefix fits u64")
+        + entrypoint.entry_pc;
+    vm.set_program_counter(entrypoint_pc)
+        .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
+}
+
+fn prepare_kotodama_arguments(
+    program: &[u8],
+    entrypoint_name: &str,
+    payload: &Json,
+) -> ivm::PreparedArgumentRecord {
+    let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
+    let schema = metadata
+        .contract_interface
+        .as_ref()
+        .expect("Kotodama V1 artifact must embed CNTR")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == entrypoint_name)
+        .unwrap_or_else(|| panic!("missing Kotodama V1 entrypoint `{entrypoint_name}`"))
+        .argument_schema
+        .as_ref()
+        .unwrap_or_else(|| {
+            panic!("Kotodama V1 entrypoint `{entrypoint_name}` must declare an argument schema")
+        });
+    let canonical = ivm::encode_argument_record_from_json(schema, payload)
+        .unwrap_or_else(|error| panic!("encode `{entrypoint_name}` arguments: {error}"));
+    ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), u64::MAX)
+        .unwrap_or_else(|error| panic!("prepare `{entrypoint_name}` arguments: {error:?}"))
+}
+
 fn parsed_asset_definition_literal(literal: &str) -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(literal).expect("canonical asset definition literal")
 }
@@ -97,6 +138,7 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     host.set_query_state(&query_view);
     let mut vm = IVM::new(50_000_000);
     vm.load_program(&program).expect("load program");
+    select_kotodama_entrypoint(&mut vm, &program, "execute");
     vm.run_with_host(&mut host).expect("run VM");
 
     // Drain queued ISIs
@@ -214,13 +256,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
             let amount: Amount = Amount::from_i64(1);
             PoolAsset[key] = AssetDefinitionId::parse("{asset_literal}");
             let asset = PoolAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
-            ledger::asset::transfer(
-              context::authority(),
-              context::authority(),
-              asset,
-              amount,
-              DataSpaceId::parse("0")
-            );
+            ledger::asset::transfer(source: context::authority(), destination: context::authority(), asset_definition: asset, amount: amount, dataspace: DataSpaceId::parse("0"));
           }}
         }}
     "#
@@ -238,6 +274,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     host.set_query_state(&query_view);
     let mut vm = IVM::new(50_000_000);
     vm.load_program(&program).expect("load program");
+    select_kotodama_entrypoint(&mut vm, &program, "main");
     vm.run_with_host(&mut host)
         .expect("state-loaded pointers should be accepted by transfer_asset");
 
@@ -327,13 +364,7 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
             let key = Name::parse("pool");
             let amount: Amount = Amount::from_i64(1);
             let asset = PoolAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
-            ledger::asset::transfer(
-              context::authority(),
-              context::authority(),
-              asset,
-              amount,
-              DataSpaceId::parse("0")
-            );
+            ledger::asset::transfer(source: context::authority(), destination: context::authority(), asset_definition: asset, amount: amount, dataspace: DataSpaceId::parse("0"));
           }}
         }}
     "#
@@ -347,6 +378,7 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     let mut write_vm = IVM::new(50_000_000);
     write_vm.set_host(CoreHost::new(authority.clone()));
     write_vm.load_program(&write_program).expect("load writer");
+    select_kotodama_entrypoint(&mut write_vm, &write_program, "main");
     write_vm.run().expect("writer run");
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
     assert_eq!(overlay.len(), 1, "expected one durable state write");
@@ -372,6 +404,7 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     read_host.set_durable_state_snapshot_from_world(&view.world);
     read_host.set_query_state(&view);
     read_vm.load_program(&read_program).expect("load reader");
+    select_kotodama_entrypoint(&mut read_vm, &read_program, "main");
     read_vm
         .run_with_host(&mut read_host)
         .expect("name-keyed state-loaded pointers should survive cross-call");
@@ -416,13 +449,7 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
             let amount: Amount = Amount::from_i64(1);
             let vault = VaultAccount.get(key).unwrap_or(AccountId::parse("{vault_literal}"));
             let asset = PoolAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
-            ledger::asset::transfer(
-              context::authority(),
-              vault,
-              asset,
-              amount,
-              DataSpaceId::parse("0")
-            );
+            ledger::asset::transfer(source: context::authority(), destination: vault, asset_definition: asset, amount: amount, dataspace: DataSpaceId::parse("0"));
           }}
         }}
     "#
@@ -434,6 +461,7 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     let mut write_vm = IVM::new(50_000_000);
     write_vm.set_host(CoreHost::new(authority.clone()));
     write_vm.load_program(&write_program).expect("load writer");
+    select_kotodama_entrypoint(&mut write_vm, &write_program, "main");
     write_vm.run().expect("writer run");
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
     assert_eq!(overlay.len(), 2, "expected two durable state writes");
@@ -459,6 +487,7 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     read_host.set_durable_state_snapshot_from_world(&view.world);
     read_host.set_query_state(&view);
     read_vm.load_program(&read_program).expect("load reader");
+    select_kotodama_entrypoint(&mut read_vm, &read_program, "main");
     read_vm
         .run_with_host(&mut read_host)
         .expect("mixed state-loaded pointers should survive cross-call");
@@ -498,19 +527,13 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
           kotoage fn main() authorize("TransferAsset") {{
             let key = Name::parse("pool");
             let ev = Json::parse("{{\"provider\":\"{authority_literal}\",\"base_amount\":1000}}");
-            let provider = json::get_account_id(ev, Name::parse("provider"));
-            let base_amount = json::get_amount(ev, Name::parse("base_amount"));
+            let provider = ev.get_account_id(Name::parse("provider")).unwrap_or(AccountId::parse("{authority_literal}"));
             let zero: Amount = Amount::from_i64(0);
+            let base_amount = ev.get_amount(Name::parse("base_amount")).unwrap_or(zero);
             let vault = VaultAccount.get(key).unwrap_or(AccountId::parse("{vault_literal}"));
             let asset = BaseAsset.get(key).unwrap_or(AssetDefinitionId::parse("{asset_literal}"));
             if base_amount > zero {{
-              ledger::asset::transfer(
-                provider,
-                vault,
-                asset,
-                base_amount,
-                DataSpaceId::parse("0")
-              );
+              ledger::asset::transfer(source: provider, destination: vault, asset_definition: asset, amount: base_amount, dataspace: DataSpaceId::parse("0"));
             }}
           }}
         }}
@@ -523,6 +546,7 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     let mut write_vm = IVM::new(50_000_000);
     write_vm.set_host(CoreHost::new(authority.clone()));
     write_vm.load_program(&write_program).expect("load writer");
+    select_kotodama_entrypoint(&mut write_vm, &write_program, "main");
     write_vm.run().expect("writer run");
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
     assert_eq!(overlay.len(), 2, "expected two durable state writes");
@@ -548,6 +572,7 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     read_host.set_durable_state_snapshot_from_world(&view.world);
     read_host.set_query_state(&view);
     read_vm.load_program(&read_program).expect("load reader");
+    select_kotodama_entrypoint(&mut read_vm, &read_program, "main");
     read_vm
         .run_with_host(&mut read_host)
         .expect("event-fed state-loaded transfer_asset should survive cross-call");
@@ -592,20 +617,8 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
             let vault = VaultAccount.get(pool).unwrap_or(provider);
             let base_asset = BaseAsset.get(pool).unwrap_or(AssetDefinitionId::parse("6qLb5RYJbzychndCXgFa9aZzjWyx"));
             let quote_asset = QuoteAsset.get(pool).unwrap_or(AssetDefinitionId::parse("7Dsw1EgqCsPmv9HpEztf26xEL2qo"));
-            ledger::asset::transfer(
-              provider,
-              vault,
-              base_asset,
-              base_amount,
-              DataSpaceId::parse("0")
-            );
-            ledger::asset::transfer(
-              provider,
-              vault,
-              quote_asset,
-              quote_amount,
-              DataSpaceId::parse("0")
-            );
+            ledger::asset::transfer(source: provider, destination: vault, asset_definition: base_asset, amount: base_amount, dataspace: DataSpaceId::parse("0"));
+            ledger::asset::transfer(source: provider, destination: vault, asset_definition: quote_asset, amount: quote_amount, dataspace: DataSpaceId::parse("0"));
             SeededBase[bin_id] = base_amount;
             SeededQuote[bin_id] = quote_amount;
           }
@@ -648,15 +661,22 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
         "bin_step": 1,
         "active_bin": 0
     }));
+    let init_arguments = prepare_kotodama_arguments(&program, "init_pool", &init_args);
     let mut init_vm = IVM::new(50_000_000);
-    let init_host =
-        CoreHost::with_accounts_and_args(authority.clone(), Arc::clone(&accounts), init_args);
+    let init_host = CoreHost::with_accounts_and_argument_record(
+        authority.clone(),
+        Arc::clone(&accounts),
+        Some(init_arguments.clone()),
+    );
     init_vm.load_program(&program).expect("load dlmm_pool");
     init_vm
         .set_program_counter(init_pool_pc)
         .expect("set init_pool pc");
     init_vm.set_register(1, init_vm.memory.code_len());
     init_vm.set_host(init_host);
+    init_arguments
+        .precharge_vm(&mut init_vm)
+        .expect("precharge init_pool arguments");
     init_vm.run().expect("init_pool run");
     let overlay = CoreHost::with_host(&mut init_vm, CoreHost::drain_durable_state_overlay);
     assert!(
@@ -685,9 +705,13 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
         "base_amount": 1000,
         "quote_amount": 1000
     }));
+    let seed_arguments = prepare_kotodama_arguments(&program, "seed_bin", &seed_args);
     let mut seed_vm = IVM::new(50_000_000);
-    let mut seed_host =
-        CoreHostImpl::with_accounts_and_args(authority.clone(), Arc::clone(&accounts), seed_args);
+    let mut seed_host = CoreHostImpl::with_accounts_and_argument_record(
+        authority.clone(),
+        Arc::clone(&accounts),
+        Some(seed_arguments.clone()),
+    );
     seed_host.set_durable_state_snapshot_from_world(&view.world);
     seed_host.set_query_state(&view);
     seed_vm.load_program(&program).expect("load dlmm_pool");
@@ -695,6 +719,9 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
         .set_program_counter(seed_bin_pc)
         .expect("set seed_bin pc");
     seed_vm.set_register(1, seed_vm.memory.code_len());
+    seed_arguments
+        .precharge_vm(&mut seed_vm)
+        .expect("precharge seed_bin arguments");
     seed_vm.run_with_host(&mut seed_host).expect("seed_bin run");
 
     let queued = seed_host.drain_instructions();

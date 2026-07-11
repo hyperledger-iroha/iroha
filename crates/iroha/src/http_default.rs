@@ -16,6 +16,10 @@ use crate::http::{Method, RequestBuilder, Response};
 
 type Bytes = Vec<u8>;
 
+const DEFAULT_MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+const RESPONSE_INITIAL_ALLOCATION_BYTES: usize = 16 * 1024;
+const RESPONSE_READ_BUFFER_BYTES: usize = 16 * 1024;
+
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
 
@@ -31,6 +35,7 @@ struct PendingRequest {
     headers: Vec<(HeaderName, HeaderValue)>,
     body: Option<Vec<u8>>,
     timeout: Option<std::time::Duration>,
+    max_response_bytes: usize,
 }
 
 #[derive(Debug)]
@@ -40,6 +45,7 @@ struct PreparedRequest {
     headers: Vec<(HeaderName, HeaderValue)>,
     body: Vec<u8>,
     timeout: Option<std::time::Duration>,
+    max_response_bytes: usize,
 }
 
 /// Default request builder implemented on top of `reqwest`.
@@ -68,6 +74,7 @@ impl DefaultRequestBuilder {
                 headers: pending.headers,
                 body: pending.body.unwrap_or_default(),
                 timeout: pending.timeout,
+                max_response_bytes: pending.max_response_bytes,
             },
         })
     }
@@ -77,6 +84,21 @@ impl DefaultRequestBuilder {
     pub fn timeout(self, timeout: std::time::Duration) -> Self {
         self.and_then(|mut pending| {
             pending.timeout = Some(timeout);
+            Ok(pending)
+        })
+    }
+
+    /// Bound the decoded HTTP response body retained in memory.
+    ///
+    /// The limit applies even when a peer omits or lies about `Content-Length` and after any
+    /// transparent content decoding performed by the HTTP transport.
+    #[must_use]
+    pub fn max_response_bytes(self, max_response_bytes: usize) -> Self {
+        self.and_then(|mut pending| {
+            if max_response_bytes == 0 {
+                return Err(eyre!("HTTP response byte limit must be positive"));
+            }
+            pending.max_response_bytes = max_response_bytes;
             Ok(pending)
         })
     }
@@ -96,6 +118,7 @@ pub struct RequestSnapshot {
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
     pub timeout: Option<std::time::Duration>,
+    pub max_response_bytes: usize,
 }
 
 #[cfg(test)]
@@ -161,6 +184,7 @@ impl DefaultRequest {
             headers: headers_vec,
             body: self.prepared.body.clone(),
             timeout: self.prepared.timeout,
+            max_response_bytes: self.prepared.max_response_bytes,
         }
     }
 }
@@ -205,6 +229,7 @@ impl DefaultRequest {
             headers,
             body,
             timeout,
+            max_response_bytes,
         } = self.prepared;
 
         let client = http_client();
@@ -222,7 +247,11 @@ impl DefaultRequest {
             .send()
             .wrap_err_with(|| format!("Failed to send http {method} request to {url}"))?;
 
-        ClientResponse(response).try_into()
+        ClientResponse {
+            response,
+            max_response_bytes,
+        }
+        .try_into()
     }
 }
 
@@ -235,6 +264,7 @@ impl RequestBuilder for DefaultRequestBuilder {
                 headers: Vec::new(),
                 body: None,
                 timeout: None,
+                max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
             }),
         }
     }
@@ -354,22 +384,126 @@ fn http_client() -> &'static BlockingClient {
     })
 }
 
-struct ClientResponse(reqwest::blocking::Response);
+struct ClientResponse {
+    response: reqwest::blocking::Response,
+    max_response_bytes: usize,
+}
+
+fn read_bounded_response_body(
+    reader: &mut impl std::io::Read,
+    advertised_length: Option<u64>,
+    max_response_bytes: usize,
+) -> Result<Vec<u8>> {
+    if max_response_bytes == 0 {
+        return Err(eyre!("HTTP response byte limit must be positive"));
+    }
+
+    let max_response_bytes_u64 = u64::try_from(max_response_bytes).unwrap_or(u64::MAX);
+    if let Some(length) = advertised_length.filter(|length| *length > max_response_bytes_u64) {
+        return Err(eyre!(
+            "HTTP response Content-Length {length} exceeds the {max_response_bytes}-byte limit"
+        ));
+    }
+
+    let initial_capacity = response_initial_capacity(advertised_length, max_response_bytes);
+    let mut body = Vec::new();
+    reserve_response_body_capacity(&mut body, initial_capacity, max_response_bytes)?;
+    let mut buffer = [0_u8; RESPONSE_READ_BUFFER_BYTES];
+
+    loop {
+        let remaining = max_response_bytes - body.len();
+        let read_capacity = remaining.min(buffer.len());
+        if read_capacity == 0 {
+            let read = read_response_body_chunk(reader, &mut buffer[..1])?;
+            if read == 0 {
+                break;
+            }
+            return Err(eyre!(
+                "HTTP response body exceeds the {max_response_bytes}-byte limit"
+            ));
+        }
+
+        let read = read_response_body_chunk(reader, &mut buffer[..read_capacity])?;
+        if read == 0 {
+            break;
+        }
+        let required_len = body
+            .len()
+            .checked_add(read)
+            .ok_or_else(|| eyre!("HTTP response body length overflow"))?;
+        reserve_response_body_capacity(&mut body, required_len, max_response_bytes)?;
+        body.extend_from_slice(&buffer[..read]);
+    }
+    Ok(body)
+}
+
+fn response_initial_capacity(advertised_length: Option<u64>, max_response_bytes: usize) -> usize {
+    advertised_length
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or(RESPONSE_INITIAL_ALLOCATION_BYTES)
+        .min(RESPONSE_INITIAL_ALLOCATION_BYTES)
+        .min(max_response_bytes)
+}
+
+fn read_response_body_chunk(reader: &mut impl std::io::Read, buffer: &mut [u8]) -> Result<usize> {
+    loop {
+        match reader.read(buffer) {
+            Ok(read) if read <= buffer.len() => return Ok(read),
+            Ok(read) => {
+                return Err(eyre!(
+                    "HTTP response reader reported {read} bytes for a {}-byte buffer",
+                    buffer.len()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error).wrap_err("Failed to read HTTP response body"),
+        }
+    }
+}
+
+fn reserve_response_body_capacity(
+    body: &mut Vec<u8>,
+    required_len: usize,
+    max_response_bytes: usize,
+) -> Result<()> {
+    if required_len > max_response_bytes {
+        return Err(eyre!(
+            "HTTP response body exceeds the {max_response_bytes}-byte limit"
+        ));
+    }
+    if required_len <= body.capacity() {
+        return Ok(());
+    }
+
+    let target_capacity = body
+        .capacity()
+        .saturating_mul(2)
+        .max(required_len)
+        .min(max_response_bytes);
+    let additional = target_capacity
+        .checked_sub(body.len())
+        .ok_or_else(|| eyre!("HTTP response body capacity accounting underflow"))?;
+    body.try_reserve_exact(additional)
+        .wrap_err_with(|| format!("Failed to reserve {target_capacity} HTTP response body bytes"))
+}
 
 impl TryFrom<ClientResponse> for Response<Bytes> {
     type Error = Error;
 
     fn try_from(response: ClientResponse) -> Result<Self> {
-        let ClientResponse(response) = response;
+        let ClientResponse {
+            mut response,
+            max_response_bytes,
+        } = response;
         let status = response.status();
+        let advertised_length = response.content_length();
         let headers: Vec<(HeaderName, HeaderValue)> = response
             .headers()
             .iter()
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
-        let body = response
-            .bytes()
-            .wrap_err("Failed to get response as bytes")?;
+        let body =
+            read_bounded_response_body(&mut response, advertised_length, max_response_bytes)?;
 
         let mut builder = Response::builder().status(status);
         let headers_map = builder
@@ -379,7 +513,7 @@ impl TryFrom<ClientResponse> for Response<Bytes> {
             headers_map.insert(key, value);
         }
         builder
-            .body(body.to_vec())
+            .body(body)
             .wrap_err("Failed to construct response bytes body")
     }
 }
@@ -403,6 +537,7 @@ mod tests {
         let result = with_send_hook(
             Arc::new(|snapshot| {
                 assert_eq!(snapshot.url.as_str(), "http://127.0.0.1/status");
+                assert_eq!(snapshot.max_response_bytes, DEFAULT_MAX_RESPONSE_BYTES);
                 Response::builder()
                     .status(http::StatusCode::OK)
                     .body(Vec::new())
@@ -429,6 +564,7 @@ mod tests {
         let result = with_send_hook(
             Arc::new(|snapshot| {
                 assert_eq!(snapshot.url.as_str(), "http://127.0.0.1/status");
+                assert_eq!(snapshot.max_response_bytes, DEFAULT_MAX_RESPONSE_BYTES);
                 Response::builder()
                     .status(http::StatusCode::OK)
                     .body(Vec::new())
@@ -462,5 +598,232 @@ mod tests {
             || rt.block_on(async { request.send() }),
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn builder_response_limit_is_forwarded() {
+        let request = DefaultRequestBuilder::new(
+            crate::http::Method::GET,
+            Url::parse("http://127.0.0.1/status").expect("url"),
+        )
+        .max_response_bytes(4096)
+        .build()
+        .expect("build request");
+
+        let result = with_send_hook(
+            Arc::new(|snapshot| {
+                assert_eq!(snapshot.max_response_bytes, 4096);
+                Response::builder()
+                    .status(http::StatusCode::OK)
+                    .body(Vec::new())
+                    .map_err(Into::into)
+            }),
+            || request.send(),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn builder_rejects_zero_response_limit() {
+        let error = DefaultRequestBuilder::new(
+            crate::http::Method::GET,
+            Url::parse("http://127.0.0.1/status").expect("url"),
+        )
+        .max_response_bytes(0)
+        .build()
+        .expect_err("zero response limit must be rejected");
+
+        assert!(error.to_string().contains("must be positive"));
+    }
+
+    #[test]
+    fn bounded_response_rejects_zero_limit_without_reading() {
+        struct PanicReader;
+
+        impl std::io::Read for PanicReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                panic!("zero response limit must reject before reading")
+            }
+        }
+
+        let error = read_bounded_response_body(&mut PanicReader, None, 0)
+            .expect_err("zero response limit must be rejected");
+        assert!(error.to_string().contains("must be positive"));
+    }
+
+    #[test]
+    fn bounded_response_rejects_advertised_oversize_without_reading() {
+        struct PanicReader;
+
+        impl std::io::Read for PanicReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                panic!("oversized Content-Length must reject before reading")
+            }
+        }
+
+        let error = read_bounded_response_body(&mut PanicReader, Some(9), 8)
+            .expect_err("advertised oversized response must reject");
+        assert!(error.to_string().contains("Content-Length"));
+    }
+
+    #[test]
+    fn bounded_response_accepts_exact_limit() {
+        for advertised_length in [None, Some(0), Some(1), Some(8)] {
+            let mut reader = std::io::Cursor::new(b"12345678");
+            let body = read_bounded_response_body(&mut reader, advertised_length, 8)
+                .expect("exact-limit response must be accepted");
+
+            assert_eq!(body, b"12345678");
+        }
+    }
+
+    #[test]
+    fn bounded_response_rejects_missing_understated_or_encoded_content_length() {
+        // A small advertised length with a larger decoded reader models transparent
+        // decompression without coupling this unit test to a particular content codec.
+        for advertised_length in [None, Some(0), Some(1), Some(8)] {
+            let mut reader = std::io::Cursor::new(b"123456789");
+            let error = read_bounded_response_body(&mut reader, advertised_length, 8)
+                .expect_err("actual oversized response must reject");
+
+            assert!(error.to_string().contains("body exceeds"));
+        }
+    }
+
+    #[test]
+    fn bounded_response_does_not_preallocate_from_large_content_length() {
+        let advertised_length = u64::from(u32::MAX);
+        let max_response_bytes = usize::try_from(advertised_length)
+            .expect("supported targets represent a u32 response limit");
+
+        assert_eq!(
+            response_initial_capacity(Some(advertised_length), max_response_bytes),
+            RESPONSE_INITIAL_ALLOCATION_BYTES
+        );
+        assert_eq!(response_initial_capacity(None, 7), 7);
+
+        let mut reader = std::io::Cursor::new(Vec::<u8>::new());
+        let body =
+            read_bounded_response_body(&mut reader, Some(advertised_length), max_response_bytes)
+                .expect("empty body with an in-range advertised length must be readable");
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn bounded_response_never_reserves_beyond_limit() {
+        let mut body = Vec::with_capacity(16);
+        let original_capacity = body.capacity();
+        let error = reserve_response_body_capacity(&mut body, 9, 8)
+            .expect_err("capacity above the response limit must be rejected");
+
+        assert!(error.to_string().contains("body exceeds"));
+        assert_eq!(body.capacity(), original_capacity);
+    }
+
+    #[test]
+    fn bounded_response_reads_only_one_sentinel_byte_beyond_limit() {
+        #[derive(Default)]
+        struct InfiniteReader {
+            requested_lengths: Vec<usize>,
+        }
+
+        impl std::io::Read for InfiniteReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.requested_lengths.push(buffer.len());
+                buffer.fill(0x5a);
+                Ok(buffer.len())
+            }
+        }
+
+        let mut reader = InfiniteReader::default();
+        let error = read_bounded_response_body(&mut reader, None, 8)
+            .expect_err("an unbounded reader must be rejected after the sentinel byte");
+
+        assert!(error.to_string().contains("body exceeds"));
+        assert_eq!(reader.requested_lengths, [8, 1]);
+    }
+
+    #[test]
+    fn bounded_response_rejects_reader_length_contract_violation_without_panicking() {
+        struct MisreportingReader;
+
+        impl std::io::Read for MisreportingReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                Ok(buffer.len() + 1)
+            }
+        }
+
+        let error = read_bounded_response_body(&mut MisreportingReader, None, 8)
+            .expect_err("a reader cannot report more bytes than its buffer");
+        assert!(error.to_string().contains("reader reported"));
+    }
+
+    #[test]
+    fn bounded_response_propagates_reader_failure() {
+        struct FailingReader;
+
+        impl std::io::Read for FailingReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("adversarial read failure"))
+            }
+        }
+
+        let error = read_bounded_response_body(&mut FailingReader, None, 8)
+            .expect_err("reader failure must reject");
+        assert!(error.to_string().contains("Failed to read"));
+    }
+
+    #[test]
+    fn bounded_response_discards_partial_body_on_reader_failure() {
+        struct PartialThenFailingReader {
+            first_read: bool,
+        }
+
+        impl std::io::Read for PartialThenFailingReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if self.first_read {
+                    return Err(std::io::Error::other("adversarial failure after bytes"));
+                }
+                self.first_read = true;
+                buffer[..4].copy_from_slice(b"1234");
+                Ok(4)
+            }
+        }
+
+        let error = read_bounded_response_body(
+            &mut PartialThenFailingReader { first_read: false },
+            None,
+            8,
+        )
+        .expect_err("partial body followed by a reader failure must reject");
+        assert!(format!("{error:#}").contains("adversarial failure after bytes"));
+    }
+
+    #[test]
+    fn bounded_response_retries_interrupted_reads() {
+        struct InterruptedReader {
+            state: u8,
+        }
+
+        impl std::io::Read for InterruptedReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                match self.state {
+                    0 => {
+                        self.state = 1;
+                        Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+                    }
+                    1 => {
+                        self.state = 2;
+                        buffer[..4].copy_from_slice(b"1234");
+                        Ok(4)
+                    }
+                    _ => Ok(0),
+                }
+            }
+        }
+
+        let body = read_bounded_response_body(&mut InterruptedReader { state: 0 }, None, 8)
+            .expect("interrupted reads must be retried");
+        assert_eq!(body, b"1234");
     }
 }

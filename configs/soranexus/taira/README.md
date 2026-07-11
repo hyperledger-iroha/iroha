@@ -197,29 +197,40 @@ That avoids the common drift where the copied nginx snippet still points at
 different loopback ports such as `127.0.0.1:29080..29083`, which turns
 `GET /v1/mcp` and the generic public API surface into `502 Bad Gateway`.
 
-## SCCP TAIRA/TRON Nile Route
+## SCCP V1 on Taira
 
-For the `taira_tron_xor` Nile smoke route, generate the full validator config
-from the route manifest instead of hand-merging the `[zk]` overlay:
+Taira is the only SORA settlement target for SCCP V1. The exact runtime target
+is the public chain id above and I105 discriminant `369` (`0x0171`). Do not use
+the generic/default `753` discriminant for SCCP authorities or recipients.
 
-```bash
-node scripts/sccp_tron_taira_xor_deploy.mjs route-config \
-  --manifest artifacts/sccp-tron/nile-taira-xor-route.manifest.json \
-  --base-config configs/soranexus/taira/config.toml \
-  --out artifacts/sccp-tron/nile-taira-xor-route.full-taira-config.toml
-```
+SCCP policy is not a validator-local `[zk]` overlay and is not loaded from a
+route manifest. Consensus owns one typed `SccpRegistryV1`, changed through
+authorized `ApplySccpRouteGovernance` transactions. Rendered validator bundles
+therefore use the normal Taira configuration; never hand-merge SCCP route
+material into per-host TOML files.
 
-Install the generated full config on every public Taira validator and restart
-Iroha/Torii. Then rerun the wallet preflight without `--manifest-file`:
+The public read-only discovery surface is:
 
-```bash
-cd ../iroha-demo-javascript
-VITE_SCCP_TRON_NETWORK=nile node scripts/e2e/sccp-route-preflight.mjs \
-  --tron-network nile --check-tron-contracts true
-```
+- `GET /v1/sccp/capabilities`;
+- `GET /v1/sccp/registry`;
+- `GET /v1/sccp/proofs/message/{message_id}`;
+- `GET /v1/sccp/proof-requests/{message_id}`; and
+- `GET /v1/sccp/messages/recent`.
 
-The route is not ready for live UI bridge smoke until the public endpoint
-advertises `route=taira_tron_xor` and `asset=xor` from `/v1/sccp/manifests`.
+The exact submit endpoints are `POST /v1/bridge/proofs/submit` for a governed
+destination artifact and `POST /v1/bridge/messages` for a native inbound proof.
+Preparation omits both detached-signing fields; direct submission provides both
+`signature_b64` and the prepared `transaction_payload_b64` with the exact
+positive `creation_time_ms`. Do not send private keys, governance credentials,
+or node-local route overrides to Torii.
+
+Ethereum, BSC, and TRON mainnet are the production remote profiles. Sepolia,
+BSC testnet, Nile, and Shasta are test profiles only and cannot certify public
+Taira production readiness. A lane becomes usable only after typed governance,
+authenticated contract/native-verifier readback, audited proof material, and
+the signed SCCP release-evidence corridor all succeed. The retired
+`/v1/sccp/manifests` route readiness check and the old Nile route-config script
+are not part of the first-release operator workflow.
 
 ## Validator container image
 
@@ -594,7 +605,7 @@ clear volatile consensus state before debugging ingress or MCP. It also verifies
 that the same direct node serves:
 
 - `/v1/sccp/capabilities`
-- `/v1/sccp/manifests`
+- `/v1/sccp/registry`
 - `/v1/zk/proofs/count`
 - `/v1/sumeragi/validator-sets`
 - `/v1/nexus/public_lanes/0/{validators,stake}`

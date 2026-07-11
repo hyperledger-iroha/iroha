@@ -358,7 +358,7 @@ class _MockState:
                         "contract_alias": "router::universal",
                         "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                         "previous_contract_address": None,
-                        "upgraded": False,
+                        "kaizen": False,
                         "dataspace": "universal",
                         "deploy_nonce": 0,
                         "tx_hash_hex": "11" * 32,
@@ -435,6 +435,34 @@ class _MockState:
                 "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
                 "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
                 "recent_messages_path": "/v1/sccp/messages/recent",
+                "registry_limits": {
+                    "max_governed_lanes": 16,
+                    "max_live_governed_routes": 64,
+                    "max_live_routes_per_lane": 8,
+                    "max_retained_routes_per_lane": 64,
+                    "max_retained_native_trust_anchors_per_lane": 4_096,
+                },
+                "resource_limits": {
+                    "max_proofs_per_transaction": 1,
+                    "max_proofs_per_block": 4,
+                    "max_proof_bytes_per_proof": 8 * 1024 * 1024,
+                    "max_proof_bytes_per_transaction": 8 * 1024 * 1024,
+                    "max_proof_bytes_per_block": 32 * 1024 * 1024,
+                    "max_native_headers_per_transaction": 1_004,
+                    "max_native_headers_per_block": 4_016,
+                    "max_ethereum_light_client_updates_per_transaction": 128,
+                    "max_ethereum_light_client_updates_per_block": 512,
+                    "max_native_header_bytes_per_transaction": 8 * 1024 * 1024,
+                    "max_native_header_bytes_per_block": 32 * 1024 * 1024,
+                    "max_secp256k1_recoveries_per_transaction": 1_005,
+                    "max_secp256k1_recoveries_per_block": 4_020,
+                    "max_bls_aggregate_checks_per_transaction": 1_004,
+                    "max_bls_aggregate_checks_per_block": 4_016,
+                    "max_bls_signer_contributions_per_transaction": 131_713,
+                    "max_bls_signer_contributions_per_block": 526_852,
+                    "max_bn254_pairing_checks_per_transaction": 1,
+                    "max_bn254_pairing_checks_per_block": 4,
+                },
                 "proof_submit_path": "/v1/bridge/proofs/submit",
                 "native_message_submit_path": "/v1/bridge/messages",
             }
@@ -454,7 +482,7 @@ class _MockState:
                 "backend": "bridge/sccp/native/bsc-parlia-v1",
                 "counterparty_domain": 2,
                 "counterparty_chain": "bsc-mainnet",
-                "manifest_hash_hex": "33" * 32,
+                "route_configuration_hash_hex": "33" * 32,
                 "range_start_height": 1,
                 "range_end_height": 1,
                 "creation_time_ms": 1,
@@ -570,8 +598,8 @@ class _MockState:
         limit = _parse_int(params.get("limit"))
         from_height = _parse_int(params.get("from"))
         if from_height is not None:
-            if not 0 <= from_height <= 0xFFFF_FFFF_FFFF_FFFF:
-                raise ValueError("SCCP recent-message from must be a u64")
+            if not 1 <= from_height <= 0xFFFF_FFFF_FFFF_FFFF:
+                raise ValueError("SCCP recent-message from must be a positive u64")
             items = [
                 item
                 for item in items
@@ -580,8 +608,8 @@ class _MockState:
                 and item["height"] <= from_height
             ]
         if limit is not None:
-            if not 0 <= limit <= 50:
-                raise ValueError("SCCP recent-message limit must be in 0..50")
+            if not 1 <= limit <= 50:
+                raise ValueError("SCCP recent-message limit must be in 1..50")
             items = items[:limit]
         payload["items"] = items
         return _json_response(HTTPStatus.OK, payload)
@@ -620,7 +648,12 @@ class _MockState:
             raise ValueError(f"invalid SCCP bridge submit JSON: {err}") from err
         if not isinstance(payload, dict):
             raise ValueError("SCCP bridge submit payload must be an object")
-        common = {"authority", "signature_b64", "creation_time_ms"}
+        common = {
+            "authority",
+            "signature_b64",
+            "transaction_payload_b64",
+            "creation_time_ms",
+        }
         if endpoint == "proof":
             allowed = common | {"destination_proof_b64"}
             required = "destination_proof_b64"
@@ -634,6 +667,13 @@ class _MockState:
             raise ValueError(f"unknown or retired bridge submit field `{unknown}`")
         if "authority" not in payload or required not in payload:
             raise ValueError(f"authority and {required} are required")
+        signed = "signature_b64" in payload
+        if signed != ("transaction_payload_b64" in payload):
+            raise ValueError(
+                "signature_b64 and transaction_payload_b64 must be omitted or provided together"
+            )
+        if signed and "creation_time_ms" not in payload:
+            raise ValueError("creation_time_ms is required for signed SCCP submission")
         response = dict(configured)
         if "creation_time_ms" in payload:
             response["creation_time_ms"] = payload["creation_time_ms"]
@@ -1196,7 +1236,7 @@ class _MockState:
                     "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
                 )[:59],
                 "previous_contract_address": None,
-                "upgraded": False,
+                "kaizen": False,
                 "dataspace": contract["contract_alias"].rsplit("::", 1)[-1],
                 "deploy_nonce": index,
                 "code_hash_hex": "22" * 32,

@@ -112,6 +112,22 @@ seiyaku ExplicitDemo {}
                 "cat > demo.ko <<'KO'\ncontract Demo {}\n",
             )
 
+    def test_dash_heredoc_matches_shell_tab_stripping(self) -> None:
+        fences = DOCS.extract_source_fences(
+            Path("docs/demo.md"),
+            "cat > demo.ko <<-'KO'\n"
+            "\tmodule Demo {\n"
+            "\t  fn helper() {}\n"
+            "\t}\n"
+            "\tKO\n",
+        )
+
+        self.assertEqual(len(fences), 1)
+        self.assertEqual(
+            fences[0].source,
+            "module Demo {\n  fn helper() {}\n}\n",
+        )
+
     def test_manifest_is_strict_and_binds_grammar_to_checked_documents(self) -> None:
         source = "```kotodama\nseiyaku A {}\n```\n"
         self.write_document("docs/source/grammar.md", source)
@@ -211,10 +227,11 @@ seiyaku ExplicitDemo {}
         ):
             DOCS.collect_source_fences(document_set, self.root)
 
-    def test_compiler_checks_every_source_and_passes_zk_explicitly(self) -> None:
+    def test_compiler_checks_and_builds_every_deployable_source(self) -> None:
         fences = (
             DOCS.SourceFence(Path("grammar.md"), 4, 5, "seiyaku A {}\n", False),
-            DOCS.SourceFence(Path("examples.md"), 8, 9, "seiyaku B {}\n", True),
+            DOCS.SourceFence(Path("examples.md"), 8, 9, "誓約 B {}\n", True),
+            DOCS.SourceFence(Path("modules.md"), 12, 13, "module Shared {}\n", False),
         )
         calls: list[tuple[list[str], str]] = []
 
@@ -228,11 +245,14 @@ seiyaku ExplicitDemo {}
         with mock.patch.object(DOCS.subprocess, "run", side_effect=run):
             DOCS.compile_source_fences(fences, Path("/bin/koto"), self.root, 5)
 
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0][0][1:2], ["check"])
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0][0][1:2], ["build"])
         self.assertNotIn("--zk", calls[0][0])
+        self.assertEqual(calls[1][0][1:2], ["build"])
         self.assertIn("--zk", calls[1][0])
-        self.assertEqual(calls[1][1], "seiyaku B {}\n")
+        self.assertEqual(calls[1][1], "誓約 B {}\n")
+        self.assertEqual(calls[2][0][1:2], ["check"])
+        self.assertEqual(calls[2][1], "module Shared {}\n")
 
     def test_compiler_deduplicates_identical_sources_by_execution_mode(self) -> None:
         fences = (
@@ -249,6 +269,30 @@ seiyaku ExplicitDemo {}
             DOCS.compile_source_fences(fences, Path("/bin/koto"), self.root, 5)
 
         self.assertEqual(run.call_count, 2)
+
+    def test_codegen_failures_are_aggregated_with_document_locations(self) -> None:
+        fences = (
+            DOCS.SourceFence(Path("grammar.md"), 4, 5, "seiyaku A {}\n", False),
+        )
+
+        def fail_build(
+            command: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            if command[1] == "build":
+                return subprocess.CompletedProcess(
+                    command, 1, "", "K5001: assembler rejected source"
+                )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.object(
+            DOCS.subprocess, "run", side_effect=fail_build
+        ), self.assertRaises(DOCS.DocumentationCheckError) as caught:
+            DOCS.compile_source_fences(fences, Path("/bin/koto"), self.root, 5)
+
+        message = str(caught.exception)
+        self.assertIn("grammar.md:4", message)
+        self.assertIn("failed `koto build`", message)
+        self.assertIn("K5001", message)
 
     def test_compiler_failures_are_aggregated_with_document_locations(self) -> None:
         fences = (
@@ -288,9 +332,13 @@ seiyaku ExplicitDemo {}
             ),
         )
         self.assertEqual(document_set.source_roots, (Path("docs"),))
-        self.assertEqual(len(fences), 1293)
+        # The V1 reset removed the parallel English-syntax copies from every
+        # translated example. Each of the 671 tracked documents still carries
+        # at least one canonical source, while the normative grammar contributes
+        # the additional distinct examples.
+        self.assertEqual(len(fences), 676)
         self.assertEqual(len({fence.document for fence in fences}), 671)
-        self.assertEqual(len({(fence.source, fence.zk) for fence in fences}), 13)
+        self.assertEqual(len({(fence.source, fence.zk) for fence in fences}), 14)
 
 
 if __name__ == "__main__":

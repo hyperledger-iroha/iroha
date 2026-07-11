@@ -70,10 +70,11 @@ pub struct SoracloudHfGeneratedSourceBinding {
 fn hf_generated_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypointDescriptor {
     ivm::EmbeddedEntrypointDescriptor {
         name: name.to_owned(),
-        kind: EntryPointKind::Public,
+        kind: EntryPointKind::View,
         params: Vec::new(),
         argument_schema: None,
         return_type: None,
+        return_schema: None,
         permission: None,
         read_keys: Vec::new(),
         write_keys: Vec::new(),
@@ -103,14 +104,14 @@ pub fn soracloud_hf_generated_service_contract_artifact() -> Vec<u8> {
         abi_version: 1,
     };
     let contract_interface = ivm::EmbeddedContractInterfaceV1 {
-        contract_name: "SoracloudRuntime".to_owned(),
+        seiyaku_name: "SoracloudRuntime".to_owned(),
         compiler_fingerprint: "iroha-soracloud-hf-generated".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: [
             hf_generated_entrypoint(HF_GENERATED_ENTRYPOINT_INFER, 0),
-            hf_generated_entrypoint(HF_GENERATED_ENTRYPOINT_METADATA, 0),
+            hf_generated_entrypoint(HF_GENERATED_ENTRYPOINT_METADATA, 4),
         ]
         .into_iter()
         .collect(),
@@ -119,6 +120,7 @@ pub fn soracloud_hf_generated_service_contract_artifact() -> Vec<u8> {
     };
     let mut bytes = metadata.encode();
     bytes.extend_from_slice(&contract_interface.encode_section());
+    bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     bytes
 }

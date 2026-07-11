@@ -36,13 +36,13 @@ Convención de llamadas de puntero-ABI (llamadas al sistema de contrato intelige
 Tabla de llamadas al sistema canónicas (subconjunto)| Hexágono | Nombre | Argumentos (en `r10+`) | Devoluciones | Gas (base + variable) | Notas |
 |------|----------------------|-------------------------------------------------------------------------|-------------|------------------------------|-------|
 | 0x1A | SET_ACCOUNT_DETAIL | `&AccountId`, `&Name`, `&Json` | `u64=0` | `G_set_detail + bytes(val)` | Escribe un detalle para la cuenta |
-| 0x22 | MINT_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_mint` | Casas de moneda `amount` de activo a cuenta |
-| 0x23 | QUEMAR_ACTIVO | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_burn` | Quema `amount` de la cuenta |
-| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
+| 0x22 | MINT_ASSET | `&AccountId`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_mint` | Casas de moneda `amount` de activo a cuenta |
+| 0x23 | QUEMAR_ACTIVO | `&AccountId`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_burn` | Quema `amount` de la cuenta |
+| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | – | `u64=0` | `G_transfer` | Comenzar el alcance del lote de transferencia FASTPQ |
 | 0x2A | TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` | Vaciar lote de transferencia FASTPQ acumulado |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Aplique un lote codificado con Norito en una única llamada al sistema |
-| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
+| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
 | 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Registra un nuevo NFT |
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | Transfiere la propiedad de NFT |
 | 0x27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | Actualiza los metadatos de NFT |

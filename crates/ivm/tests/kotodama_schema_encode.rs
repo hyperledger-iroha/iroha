@@ -1,9 +1,9 @@
-//! Kotodama schema encode/decode roundtrip via CoreHost.
+//! Kotodama rejects retired source-level schema codec plumbing.
 
-use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
 
 #[test]
-fn kotodama_schema_encode_decode_roundtrip() {
+fn kotodama_source_rejects_retired_schema_codec_helpers() {
     let src = r#"
         seiyaku SchemaCodecRoundtrip {
         view fn main() {
@@ -15,11 +15,9 @@ fn kotodama_schema_encode_decode_roundtrip() {
         }
         }
     "#;
-    let code = KotodamaCompiler::new()
+    let error = KotodamaCompiler::new()
         .compile_source(src)
-        .expect("compile schema roundtrip");
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_host(CoreHost::new());
-    vm.load_program(&code).expect("load");
-    vm.run().expect("run");
+        .expect_err("source-level schema codec helpers are compiler-internal");
+    assert!(error.contains("codec::schema::encode"), "{error}");
+    assert!(error.contains("codec::schema::decode"), "{error}");
 }

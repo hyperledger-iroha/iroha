@@ -1,16 +1,21 @@
 //! Kotodama integration tests for SM3/SM2 syscalls.
 
+use std::collections::BTreeMap;
+
 use hex::decode;
 use iroha_crypto::{Hash, Sm2PrivateKey, Sm2PublicKey, Sm3Digest};
-use ivm::{Memory, PointerType, kotodama::compiler::Compiler as KotodamaCompiler};
+use iroha_data_model::prelude::Name;
+use iroha_primitives::json::Json;
+use ivm::{IVM, PointerType, ProgramMetadata, kotodama::compiler::Compiler as KotodamaCompiler};
+mod common;
 
 fn new_sm_host() -> ivm::host::DefaultHost {
     ivm::host::DefaultHost::new().with_sm_enabled(true)
 }
 
-fn make_blob_tlv(payload: &[u8]) -> Vec<u8> {
+fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
-    out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
+    out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
     out.push(1);
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     out.extend_from_slice(payload.as_ref());
@@ -19,22 +24,58 @@ fn make_blob_tlv(payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn preload_blob(vm: &mut ivm::IVM, offset: &mut u64, payload: &[u8]) -> u64 {
-    let tlv = make_blob_tlv(payload);
-    let ptr = vm.alloc_input_tlv(&tlv).expect("preload blob into INPUT");
-    // Keep caller cursor in step with the VM bump pointer to avoid overlaps during INPUT_PUBLISH_TLV.
-    let ptr_off = ptr
-        .checked_sub(Memory::INPUT_START)
-        .expect("pointer must lie within INPUT");
-    *offset = ptr_off + tlv.len() as u64;
-    ptr
+fn install_sm_entrypoint(
+    vm: &mut IVM,
+    program: &[u8],
+    entrypoint_name: &str,
+    byte_fields: &[(&str, &[u8])],
+    integer_fields: &[(&str, i64)],
+) {
+    let parsed = ProgramMetadata::parse(program).expect("parse SM contract artifact");
+    let entrypoint = parsed
+        .contract_interface
+        .as_ref()
+        .expect("SM contract interface")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == entrypoint_name)
+        .unwrap_or_else(|| panic!("missing SM entrypoint `{entrypoint_name}`"));
+    let schema = entrypoint
+        .argument_schema
+        .as_ref()
+        .expect("parameterized SM entrypoint schema");
+    let mut payload = norito::json::Map::new();
+    for (name, value) in byte_fields {
+        payload.insert(
+            (*name).to_owned(),
+            norito::json::Value::String(format!("0x{}", hex::encode(value))),
+        );
+    }
+    for (name, value) in integer_fields {
+        payload.insert(
+            (*name).to_owned(),
+            norito::json::to_value(value).expect("encode integer argument"),
+        );
+    }
+    let record = ivm::encode_argument_record_from_json(
+        schema,
+        &Json::from(norito::json::Value::Object(payload)),
+    )
+    .expect("encode SM entrypoint argument record");
+    let key: Name = "trigger_event_json".parse().expect("public input key");
+    vm.set_host(new_sm_host().with_public_inputs(BTreeMap::from([(
+        key,
+        make_tlv(PointerType::NoritoBytes, &record),
+    )])));
+    vm.load_program(program).expect("load SM contract artifact");
+    common::select_kotodama_entrypoint(vm, program, entrypoint_name);
 }
 
 #[test]
 fn kotodama_sm3_hash_returns_expected_digest() {
     let src = r#"
         seiyaku Sm3Hash {
-        fn sm_hash(msg: bytes) -> bytes {
+        view fn sm_hash(msg: bytes) -> bytes {
             return crypto::sm3(msg);
         }
         }
@@ -46,13 +87,8 @@ fn kotodama_sm3_hash_returns_expected_digest() {
     let message = b"kotodama-sm3";
     let expected = Sm3Digest::hash(message);
 
-    let mut vm = ivm::IVM::new(10_000);
-    vm.set_host(new_sm_host());
-    vm.load_program(&code).expect("load program");
-
-    let mut offset = 0;
-    let p_msg = preload_blob(&mut vm, &mut offset, message);
-    vm.set_register(10, p_msg);
+    let mut vm = IVM::new(1_000_000);
+    install_sm_entrypoint(&mut vm, &code, "sm_hash", &[("msg", message)], &[]);
 
     vm.run().expect("vm run");
 
@@ -69,8 +105,8 @@ fn kotodama_sm3_hash_returns_expected_digest() {
 fn compile_sm2_verify() -> Vec<u8> {
     let src = r#"
         seiyaku Sm2Verify {
-        fn verify(msg: bytes, sig: bytes, pk: bytes) -> bool {
-            return crypto::sm2::verify(msg, sig, pk);
+        view fn verify(msg: bytes, sig: bytes, pk: bytes) -> bool {
+            return crypto::sm2::verify(message: msg, signature: sig, public_key: pk);
         }
         }
     "#;
@@ -82,8 +118,8 @@ fn compile_sm2_verify() -> Vec<u8> {
 fn compile_sm2_verify_with_distid() -> Vec<u8> {
     let src = r#"
         seiyaku Sm2VerifyWithDistid {
-        fn verify_with_distid(msg: bytes, sig: bytes, pk: bytes, distid: bytes) -> bool {
-            return crypto::sm2::verify(msg, sig, pk, distid);
+        view fn verify_with_distid(msg: bytes, sig: bytes, pk: bytes, distid: bytes) -> bool {
+            return crypto::sm2::verify(message: msg, signature: sig, public_key: pk, distid: distid);
         }
         }
     "#;
@@ -95,8 +131,8 @@ fn compile_sm2_verify_with_distid() -> Vec<u8> {
 fn compile_sm4_gcm_seal() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4GcmSeal {
-        fn seal(key: bytes, nonce: bytes, aad: bytes, pt: bytes) -> bytes {
-            return crypto::sm4_gcm::seal(key, nonce, aad, pt);
+        view fn seal(key: bytes, nonce: bytes, aad: bytes, pt: bytes) -> bytes {
+            return crypto::sm4_gcm::seal(key: key, nonce: nonce, aad: aad, payload: pt);
         }
         }
     "#;
@@ -108,8 +144,8 @@ fn compile_sm4_gcm_seal() -> Vec<u8> {
 fn compile_sm4_gcm_open() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4GcmOpen {
-        fn open(key: bytes, nonce: bytes, aad: bytes, ct: bytes) -> bytes {
-            return crypto::sm4_gcm::open(key, nonce, aad, ct);
+        view fn open(key: bytes, nonce: bytes, aad: bytes, ct: bytes) -> bytes {
+            return crypto::sm4_gcm::open(key: key, nonce: nonce, aad: aad, payload: ct);
         }
         }
     "#;
@@ -121,8 +157,8 @@ fn compile_sm4_gcm_open() -> Vec<u8> {
 fn compile_sm4_ccm_seal() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4CcmSeal {
-        fn seal(key: bytes, nonce: bytes, aad: bytes, pt: bytes, tag_len: i64) -> bytes {
-            return crypto::sm4_ccm::seal(key, nonce, aad, pt, tag_len);
+        view fn seal(key: bytes, nonce: bytes, aad: bytes, pt: bytes, tag_len: i64) -> bytes {
+            return crypto::sm4_ccm::seal(key: key, nonce: nonce, aad: aad, payload: pt, tag_length: tag_len);
         }
         }
     "#;
@@ -134,8 +170,8 @@ fn compile_sm4_ccm_seal() -> Vec<u8> {
 fn compile_sm4_ccm_open() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4CcmOpen {
-        fn open(key: bytes, nonce: bytes, aad: bytes, ct: bytes, tag_len: i64) -> bytes {
-            return crypto::sm4_ccm::open(key, nonce, aad, ct, tag_len);
+        view fn open(key: bytes, nonce: bytes, aad: bytes, ct: bytes, tag_len: i64) -> bytes {
+            return crypto::sm4_ccm::open(key: key, nonce: nonce, aad: aad, payload: ct, tag_length: tag_len);
         }
         }
     "#;
@@ -161,19 +197,18 @@ fn kotodama_sm2_verify_accepts_valid_signature() {
     let sig_bytes = private.sign(message).to_bytes();
     let pk_bytes = public.to_sec1_bytes(false);
 
-    let mut vm = ivm::IVM::new(10_000);
-    vm.set_host(new_sm_host());
-    vm.load_program(&code).expect("load program");
-
-    let mut offset = 0;
-    let p_msg = preload_blob(&mut vm, &mut offset, message);
-    let p_sig = preload_blob(&mut vm, &mut offset, sig_bytes.as_ref());
-    let p_pk = preload_blob(&mut vm, &mut offset, &pk_bytes);
-
-    vm.set_register(10, p_msg);
-    vm.set_register(11, p_sig);
-    vm.set_register(12, p_pk);
-    vm.set_register(13, 0);
+    let mut vm = IVM::new(1_000_000);
+    install_sm_entrypoint(
+        &mut vm,
+        &code,
+        "verify",
+        &[
+            ("msg", message),
+            ("sig", sig_bytes.as_ref()),
+            ("pk", &pk_bytes),
+        ],
+        &[],
+    );
 
     vm.run().expect("vm run");
     assert_eq!(vm.register(10), 1, "crypto::sm2::verify should succeed");
@@ -189,19 +224,18 @@ fn kotodama_sm2_verify_rejects_malformed_signature() {
     sig_bytes[0] ^= 0xFF;
     let pk_bytes = public.to_sec1_bytes(false);
 
-    let mut vm = ivm::IVM::new(10_000);
-    vm.set_host(new_sm_host());
-    vm.load_program(&code).expect("load program");
-
-    let mut offset = 0;
-    let p_msg = preload_blob(&mut vm, &mut offset, message);
-    let p_sig = preload_blob(&mut vm, &mut offset, sig_bytes.as_ref());
-    let p_pk = preload_blob(&mut vm, &mut offset, &pk_bytes);
-
-    vm.set_register(10, p_msg);
-    vm.set_register(11, p_sig);
-    vm.set_register(12, p_pk);
-    vm.set_register(13, 0);
+    let mut vm = IVM::new(1_000_000);
+    install_sm_entrypoint(
+        &mut vm,
+        &code,
+        "verify",
+        &[
+            ("msg", message),
+            ("sig", sig_bytes.as_ref()),
+            ("pk", &pk_bytes),
+        ],
+        &[],
+    );
 
     vm.run().expect("vm run");
     assert_eq!(vm.register(10), 0, "malformed signature must fail");
@@ -217,19 +251,18 @@ fn kotodama_sm2_verify_rejects_signature_for_other_message() {
     let pk_bytes = public.to_sec1_bytes(false);
     let other_message = b"kotodama-sm2-nonce-reuse";
 
-    let mut vm = ivm::IVM::new(10_000);
-    vm.set_host(new_sm_host());
-    vm.load_program(&code).expect("load program");
-
-    let mut offset = 0;
-    let p_msg = preload_blob(&mut vm, &mut offset, other_message);
-    let p_sig = preload_blob(&mut vm, &mut offset, sig_bytes.as_ref());
-    let p_pk = preload_blob(&mut vm, &mut offset, &pk_bytes);
-
-    vm.set_register(10, p_msg);
-    vm.set_register(11, p_sig);
-    vm.set_register(12, p_pk);
-    vm.set_register(13, 0);
+    let mut vm = IVM::new(1_000_000);
+    install_sm_entrypoint(
+        &mut vm,
+        &code,
+        "verify",
+        &[
+            ("msg", other_message),
+            ("sig", sig_bytes.as_ref()),
+            ("pk", &pk_bytes),
+        ],
+        &[],
+    );
 
     vm.run().expect("vm run");
     assert_eq!(
@@ -254,37 +287,37 @@ fn kotodama_sm2_verify_with_distid_enforces_identifier() {
     let wrong_dist = b"other-dist";
 
     // Success with matching distid
-    let mut vm = ivm::IVM::new(10_000);
-    vm.set_host(new_sm_host());
-    vm.load_program(&code).expect("load program");
-    let mut offset = 0;
-    let p_msg = preload_blob(&mut vm, &mut offset, message);
-    let p_sig = preload_blob(&mut vm, &mut offset, sig_bytes.as_ref());
-    let p_pk = preload_blob(&mut vm, &mut offset, &pk_bytes);
-    let p_dist = preload_blob(&mut vm, &mut offset, dist_bytes);
-
-    vm.set_register(10, p_msg);
-    vm.set_register(11, p_sig);
-    vm.set_register(12, p_pk);
-    vm.set_register(13, p_dist);
+    let mut vm = IVM::new(1_000_000);
+    install_sm_entrypoint(
+        &mut vm,
+        &code,
+        "verify_with_distid",
+        &[
+            ("msg", message),
+            ("sig", sig_bytes.as_ref()),
+            ("pk", &pk_bytes),
+            ("distid", dist_bytes),
+        ],
+        &[],
+    );
 
     vm.run().expect("vm run");
     assert_eq!(vm.register(10), 1, "matching distid should verify");
 
     // Failure with mismatched distid
-    let mut vm_fail = ivm::IVM::new(10_000);
-    vm_fail.set_host(new_sm_host());
-    vm_fail.load_program(&code).expect("load program");
-    let mut offset_fail = 0;
-    let p_msg_fail = preload_blob(&mut vm_fail, &mut offset_fail, message);
-    let p_sig_fail = preload_blob(&mut vm_fail, &mut offset_fail, sig_bytes.as_ref());
-    let p_pk_fail = preload_blob(&mut vm_fail, &mut offset_fail, &pk_bytes);
-    let p_dist_fail = preload_blob(&mut vm_fail, &mut offset_fail, wrong_dist);
-
-    vm_fail.set_register(10, p_msg_fail);
-    vm_fail.set_register(11, p_sig_fail);
-    vm_fail.set_register(12, p_pk_fail);
-    vm_fail.set_register(13, p_dist_fail);
+    let mut vm_fail = IVM::new(1_000_000);
+    install_sm_entrypoint(
+        &mut vm_fail,
+        &code,
+        "verify_with_distid",
+        &[
+            ("msg", message),
+            ("sig", sig_bytes.as_ref()),
+            ("pk", &pk_bytes),
+            ("distid", wrong_dist),
+        ],
+        &[],
+    );
 
     vm_fail.run().expect("vm run");
     assert_eq!(
@@ -304,20 +337,19 @@ fn kotodama_sm4_gcm_seal_matches_vector() {
     let expected_cipher = decode("6468017fde4979a107326ee77d8a265c").expect("hex cipher");
     let expected_tag = decode("cadf422b1af7ec6df46004dc8d3ba855").expect("hex tag");
 
-    let mut vm = ivm::IVM::new(10_000);
-    vm.set_host(new_sm_host());
-    vm.load_program(&code).expect("load program");
-
-    let mut offset = 0;
-    let p_key = preload_blob(&mut vm, &mut offset, &key);
-    let p_nonce = preload_blob(&mut vm, &mut offset, &nonce);
-    let p_aad = preload_blob(&mut vm, &mut offset, &aad);
-    let p_pt = preload_blob(&mut vm, &mut offset, &plaintext);
-
-    vm.set_register(10, p_key);
-    vm.set_register(11, p_nonce);
-    vm.set_register(12, p_aad);
-    vm.set_register(13, p_pt);
+    let mut vm = IVM::new(1_000_000);
+    install_sm_entrypoint(
+        &mut vm,
+        &code,
+        "seal",
+        &[
+            ("key", &key),
+            ("nonce", &nonce),
+            ("aad", &aad),
+            ("pt", &plaintext),
+        ],
+        &[],
+    );
 
     vm.run().expect("vm run");
 
@@ -350,20 +382,19 @@ fn kotodama_sm4_gcm_open_returns_plaintext() {
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
 
-    let mut vm = ivm::IVM::new(10_000);
-    vm.set_host(new_sm_host());
-    vm.load_program(&code).expect("load program");
-
-    let mut offset = 0;
-    let p_key = preload_blob(&mut vm, &mut offset, &key);
-    let p_nonce = preload_blob(&mut vm, &mut offset, &nonce);
-    let p_aad = preload_blob(&mut vm, &mut offset, &aad);
-    let p_ct = preload_blob(&mut vm, &mut offset, &cipher_tag);
-
-    vm.set_register(10, p_key);
-    vm.set_register(11, p_nonce);
-    vm.set_register(12, p_aad);
-    vm.set_register(13, p_ct);
+    let mut vm = IVM::new(1_000_000);
+    install_sm_entrypoint(
+        &mut vm,
+        &code,
+        "open",
+        &[
+            ("key", &key),
+            ("nonce", &nonce),
+            ("aad", &aad),
+            ("ct", &cipher_tag),
+        ],
+        &[],
+    );
 
     vm.run().expect("vm run");
 
@@ -389,20 +420,19 @@ fn kotodama_sm4_gcm_open_rejects_bad_tag() {
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
 
-    let mut vm = ivm::IVM::new(10_000);
-    vm.set_host(new_sm_host());
-    vm.load_program(&code).expect("load program");
-
-    let mut offset = 0;
-    let p_key = preload_blob(&mut vm, &mut offset, &key);
-    let p_nonce = preload_blob(&mut vm, &mut offset, &nonce);
-    let p_aad = preload_blob(&mut vm, &mut offset, &aad);
-    let p_ct = preload_blob(&mut vm, &mut offset, &cipher_tag);
-
-    vm.set_register(10, p_key);
-    vm.set_register(11, p_nonce);
-    vm.set_register(12, p_aad);
-    vm.set_register(13, p_ct);
+    let mut vm = IVM::new(1_000_000);
+    install_sm_entrypoint(
+        &mut vm,
+        &code,
+        "open",
+        &[
+            ("key", &key),
+            ("nonce", &nonce),
+            ("aad", &aad),
+            ("ct", &cipher_tag),
+        ],
+        &[],
+    );
 
     vm.run().expect("vm run");
     assert_eq!(vm.register(10), 0, "open must fail for tampered tag");
@@ -418,21 +448,22 @@ fn kotodama_sm4_ccm_seal_matches_vector() {
     let expected_cipher = decode("a9550cebab5f227d9590e8979caafd1f").expect("hex cipher");
     let expected_tag = decode("03a1f305").expect("hex tag");
 
-    let mut vm = ivm::IVM::new(10_000);
-    vm.set_host(new_sm_host());
-    vm.load_program(&code).expect("load program");
-
-    let mut offset = 0;
-    let p_key = preload_blob(&mut vm, &mut offset, &key);
-    let p_nonce = preload_blob(&mut vm, &mut offset, &nonce);
-    let p_aad = preload_blob(&mut vm, &mut offset, &aad);
-    let p_pt = preload_blob(&mut vm, &mut offset, &plaintext);
-
-    vm.set_register(10, p_key);
-    vm.set_register(11, p_nonce);
-    vm.set_register(12, p_aad);
-    vm.set_register(13, p_pt);
-    vm.set_register(14, expected_tag.len() as u64);
+    let mut vm = IVM::new(1_000_000);
+    install_sm_entrypoint(
+        &mut vm,
+        &code,
+        "seal",
+        &[
+            ("key", &key),
+            ("nonce", &nonce),
+            ("aad", &aad),
+            ("pt", &plaintext),
+        ],
+        &[(
+            "tag_len",
+            i64::try_from(expected_tag.len()).expect("tag length fits i64"),
+        )],
+    );
 
     vm.run().expect("vm run");
 
@@ -465,21 +496,22 @@ fn kotodama_sm4_ccm_open_returns_plaintext() {
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
 
-    let mut vm = ivm::IVM::new(10_000);
-    vm.set_host(new_sm_host());
-    vm.load_program(&code).expect("load program");
-
-    let mut offset = 0;
-    let p_key = preload_blob(&mut vm, &mut offset, &key);
-    let p_nonce = preload_blob(&mut vm, &mut offset, &nonce);
-    let p_aad = preload_blob(&mut vm, &mut offset, &aad);
-    let p_ct = preload_blob(&mut vm, &mut offset, &cipher_tag);
-
-    vm.set_register(10, p_key);
-    vm.set_register(11, p_nonce);
-    vm.set_register(12, p_aad);
-    vm.set_register(13, p_ct);
-    vm.set_register(14, tag.len() as u64);
+    let mut vm = IVM::new(1_000_000);
+    install_sm_entrypoint(
+        &mut vm,
+        &code,
+        "open",
+        &[
+            ("key", &key),
+            ("nonce", &nonce),
+            ("aad", &aad),
+            ("ct", &cipher_tag),
+        ],
+        &[(
+            "tag_len",
+            i64::try_from(tag.len()).expect("tag length fits i64"),
+        )],
+    );
 
     vm.run().expect("vm run");
 
@@ -505,21 +537,22 @@ fn kotodama_sm4_ccm_open_rejects_bad_tag() {
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
 
-    let mut vm = ivm::IVM::new(10_000);
-    vm.set_host(new_sm_host());
-    vm.load_program(&code).expect("load program");
-
-    let mut offset = 0;
-    let p_key = preload_blob(&mut vm, &mut offset, &key);
-    let p_nonce = preload_blob(&mut vm, &mut offset, &nonce);
-    let p_aad = preload_blob(&mut vm, &mut offset, &aad);
-    let p_ct = preload_blob(&mut vm, &mut offset, &cipher_tag);
-
-    vm.set_register(10, p_key);
-    vm.set_register(11, p_nonce);
-    vm.set_register(12, p_aad);
-    vm.set_register(13, p_ct);
-    vm.set_register(14, tag.len() as u64);
+    let mut vm = IVM::new(1_000_000);
+    install_sm_entrypoint(
+        &mut vm,
+        &code,
+        "open",
+        &[
+            ("key", &key),
+            ("nonce", &nonce),
+            ("aad", &aad),
+            ("ct", &cipher_tag),
+        ],
+        &[(
+            "tag_len",
+            i64::try_from(tag.len()).expect("tag length fits i64"),
+        )],
+    );
 
     vm.run().expect("vm run");
     assert_eq!(

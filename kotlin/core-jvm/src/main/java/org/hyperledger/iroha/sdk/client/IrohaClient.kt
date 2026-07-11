@@ -28,40 +28,27 @@ interface IrohaClient {
         return future
     }
 
-    /**
-     * Posts a JSON bridge-proof submission DTO to Torii's `/v1/bridge/proofs/submit` route.
-     *
-     * This helper is for UI/mobile clients that already hold the SCCP proof package assembled by
-     * the app-side prover flow.
-     */
-    fun postBridgeProofSubmitJson(encodedBridgeProofSubmitJson: ByteArray): CompletableFuture<ClientResponse> {
+    /** Submits one canonical SCCP destination-proof artifact. */
+    fun submitSccpDestinationProof(
+        request: SccpDestinationProofSubmitRequest,
+    ): CompletableFuture<ClientResponse> {
         val future = CompletableFuture<ClientResponse>()
         future.completeExceptionally(
-            UnsupportedOperationException("postBridgeProofSubmitJson not supported")
+            UnsupportedOperationException("submitSccpDestinationProof not supported")
         )
         return future
     }
 
-    /**
-     * Encodes and posts a bridge-proof submission DTO to Torii's `/v1/bridge/proofs/submit` route.
-     */
-    fun submitBridgeProof(request: BridgeProofSubmitRequest): CompletableFuture<ClientResponse> =
-        postBridgeProofSubmitJson(request.toJsonBytes())
-
-    /**
-     * Posts a JSON bridge-message submission DTO to Torii's `/v1/bridge/messages` route.
-     */
-    fun postBridgeMessageSubmitJson(encodedBridgeMessageSubmitJson: ByteArray): CompletableFuture<ClientResponse> {
+    /** Submits one canonical protocol-native external-to-SORA SCCP proof. */
+    fun submitSccpNativeMessage(
+        request: SccpNativeMessageSubmitRequest,
+    ): CompletableFuture<ClientResponse> {
         val future = CompletableFuture<ClientResponse>()
         future.completeExceptionally(
-            UnsupportedOperationException("postBridgeMessageSubmitJson not supported")
+            UnsupportedOperationException("submitSccpNativeMessage not supported")
         )
         return future
     }
-
-    /** Encodes and posts a native-proof-only bridge message settlement request. */
-    fun submitBridgeMessage(request: BridgeMessageSubmitRequest): CompletableFuture<ClientResponse> =
-        postBridgeMessageSubmitJson(request.toJsonBytes())
 
     /**
      * Submits an already versioned Norito transaction entrypoint to the node.
@@ -128,6 +115,15 @@ interface IrohaClient {
         val future = CompletableFuture<Optional<AccountAliasResolution>>()
         future.completeExceptionally(
             IllegalStateException("resolveAccountAlias requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Fetches the complete Kotodama manifest registered for one code hash. */
+    fun getContractManifest(codeHash: String): CompletableFuture<ContractManifestRecord> {
+        val future = CompletableFuture<ContractManifestRecord>()
+        future.completeExceptionally(
+            IllegalStateException("getContractManifest requires a concrete IrohaClient implementation")
         )
         return future
     }

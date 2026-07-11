@@ -2,55 +2,63 @@
 lang: pt
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: f3f6049cbf3aa135e35e4cf06967993c11c1c571ca97dd11c469142dd620be77
-source_last_modified: "2025-12-11T23:36:13.998930+00:00"
-translation_last_reviewed: 2026-01-01
+source_hash: 465d8cf704022986b169ab93133517428f8cf2ffe01a498cbda458f4a5b2e69b
+source_last_modified: "2026-07-11T15:09:39+04:00"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# Provas de bridge
+> Este é um resumo localizado e abreviado, atualizado em 2026-07-11, não uma
+> tradução normativa integral. Para os tipos exatos, contratos de API e
+> requisitos de lançamento, consulte a
+> [página canónica em inglês](bridge_proofs.md).
 
-As submissoes de provas de bridge seguem o caminho padrao de instrucao (`SubmitBridgeProof`) e chegam ao registro de provas com status verificado. A superficie atual cobre provas Merkle estilo ICS e payloads transparent-ZK com retencao fixa e vinculo a manifest.
+# Provas de bridge SCCP V1 — resumo abreviado
 
-## Regras de aceitacao
+## Limite do primeiro lançamento
 
-- Os intervalos devem estar ordenados/nao vazios e respeitar `zk.bridge_proof_max_range_len` (0 desativa o limite).
-- Janelas de altura opcionais rejeitam provas antigas/futuras: `zk.bridge_proof_max_past_age_blocks` e `zk.bridge_proof_max_future_drift_blocks` sao medidos contra a altura do bloco que ingere a prova (0 desativa as guardas).
-- Provas de bridge nao podem sobrepor uma prova existente para o mesmo backend (provas fixadas sao preservadas e bloqueiam sobreposicoes).
-- Hashes de manifest nao podem ser zero; payloads sao limitados por `zk.max_proof_size_bytes`.
-- Payloads ICS respeitam o limite de profundidade Merkle configurado e verificam o caminho usando a funcao hash declarada; payloads transparentes devem declarar uma etiqueta de backend nao vazia.
-- Provas fixadas estao isentas da poda por retencao; provas nao fixadas ainda respeitam `zk.proof_history_cap`/grace/batch globais.
+- SCCP V1 é uma superfície fechada: apenas Ethereum mainnet, BSC mainnet e TRON
+  mainnet são suportadas, e `sora-taira` é o único destino SORA. Qualquer outro
+  perfil de rede ou identidade SORA é rejeitado.
+- `SubmitBridgeProof` aceita somente provas tipadas `NativeProtocol` e
+  `SccpDestination`, vinculadas à rota. A submissão de payloads genéricos `Ics`
+  e `TransparentZk` não está disponível e é rejeitada de forma fail-closed.
 
-## Superficie de API Torii
+## Registro tipado e histórico
 
-- `GET /v1/zk/proofs` e `GET /v1/zk/proofs/count` aceitam filtros conscientes de bridge:
-  - `bridge_only=true` retorna apenas provas de bridge.
-  - `bridge_pinned_only=true` restringe a provas de bridge fixadas.
-  - `bridge_start_from_height` / `bridge_end_until_height` limitam a janela de intervalo do bridge.
-- `GET /v1/zk/proof/{backend}/{hash}` retorna metadados de bridge (intervalo, hash do manifest, resumo do payload) junto com o id/status da prova e os vinculos de VK.
-- O registro completo de provas Norito (incluindo bytes do payload) permanece disponivel via `GET /v1/proofs/{proof_id}` para verificadores fora do nodo.
+- `SccpRegistryV1` é tipado e append-only. Cada lane retém no máximo 64 revisões
+  de rota e 4.096 native trust anchors. Registros nunca são removidos
+  implicitamente; a próxima inclusão além do limite é rejeitada atomicamente.
+- O intervalo de anchor usa uma coordenada de consenso autenticada: o finalized
+  beacon slot no Ethereum e o finalized native block height no BSC/TRON. Um
+  anchor antigo permanece válido até o checkpoint sucessor, inclusive, e não
+  depois dele.
+- O registro inbound durável conserva separadamente event/finality height e
+  `anchor_interval_height`. O high-water por lane+anchor só aumenta; um
+  checkpoint sucessor não pode ficar abaixo dele. A hidratação do snapshot
+  recalcula o índice por completo e rejeita valores ausentes, obsoletos ou
+  excedentes. A reutilização de message id e qualquer replay também são
+  rejeitados.
 
-## Eventos de recibo de bridge
+## Verificação única e limites determinísticos
 
-As lanes de bridge emitem recibos tipados via a instrucao `RecordBridgeReceipt`. Ao executar essa instrucao, um payload `BridgeReceipt` e registrado e `DataEvent::Bridge(BridgeEvent::Emitted)` e emitido no stream de eventos, substituindo o stub anterior apenas de logs. O helper de CLI `iroha bridge emit-receipt` envia a instrucao tipada para que indexadores possam consumir recibos de forma determinista.
+- Cada prova native ou destination é decodificada canonicamente uma só vez e
+  passa uma só vez pela verificação criptográfica cara. Antes disso, o consenso
+  reserva uma estimativa conservadora de trabalho independente do hardware.
+- `[zk.sccp]` define limites obrigatórios e não nulos por prova, transação e
+  bloco para quantidade/bytes de provas, native headers, atualizações do light
+  client Ethereum, bytes de headers, recuperações secp256k1, verificações e
+  contribuições BLS e verificações pairing-product BN254. Esses limites de
+  admissão são vinculados ao consenso e devem ser idênticos em todos os
+  validadores.
 
-## Esboco de verificacao externa (ICS)
+## Limites do Torii
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
-
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+`/v1/bridge/proofs/submit` e `/v1/bridge/messages` aplicam limites de corpo HTTP
+específicos por endpoint. Autenticação, rate limit e `Content-Length` são
+verificados antes de ler o corpo; corpos chunked são lidos somente até o limite
+rígido. Uma requisição grande demais retorna `413`; transport/JSON malformado
+retorna `400` separadamente. O payload de transação detached é limitado a
+16 MiB e o payload de assinatura a 16 KiB.

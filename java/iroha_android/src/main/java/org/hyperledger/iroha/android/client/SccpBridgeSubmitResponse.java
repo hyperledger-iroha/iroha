@@ -14,10 +14,16 @@ import org.hyperledger.iroha.android.sccp.SccpNetworkV1;
 /** Unified strict detached-signing response returned by both SCCP submit endpoints. */
 public final class SccpBridgeSubmitResponse {
   private static final Pattern HASH = Pattern.compile("[0-9a-f]{64}");
-  private static final Pattern BACKEND = Pattern.compile("bridge/[a-z0-9/_-]+");
+  private static final Set<String> CLOSED_BACKENDS =
+      Set.of(
+          "evm-groth16-bn254-v1",
+          "tron-groth16-bn254-v1",
+          "bridge/sccp/native/ethereum-beacon-v1",
+          "bridge/sccp/native/bsc-parlia-v1",
+          "bridge/sccp/native/tron-dpos-v1");
   private static final NoritoJavaCodecAdapter TRANSACTION_CODEC = new NoritoJavaCodecAdapter();
   private static final Set<String> FIELDS =
-      Set.of("submitted", "payload_kind", "message_id_hex", "backend", "counterparty_domain", "counterparty_chain", "manifest_hash_hex", "range_start_height", "range_end_height", "creation_time_ms", "tx_hash_hex", "transaction_payload_b64", "signing_message_b64");
+      Set.of("submitted", "payload_kind", "message_id_hex", "backend", "counterparty_domain", "counterparty_chain", "route_configuration_hash_hex", "range_start_height", "range_end_height", "creation_time_ms", "tx_hash_hex", "transaction_payload_b64", "signing_message_b64");
 
   public final boolean submitted;
   public final SccpModels.PayloadKindV1 payloadKind;
@@ -25,7 +31,7 @@ public final class SccpBridgeSubmitResponse {
   public final String backend;
   public final int counterpartyDomain;
   public final String counterpartyChain;
-  public final String manifestHashHex;
+  public final String routeConfigurationHashHex;
   public final long rangeStartHeight;
   public final long rangeEndHeight;
   public final long creationTimeMs;
@@ -36,12 +42,13 @@ public final class SccpBridgeSubmitResponse {
   private SccpBridgeSubmitResponse(
       final boolean submitted, final SccpModels.PayloadKindV1 payloadKind, final String messageIdHex,
       final String backend, final int counterpartyDomain, final String counterpartyChain,
-      final String manifestHashHex, final long rangeStartHeight, final long rangeEndHeight,
+      final String routeConfigurationHashHex, final long rangeStartHeight, final long rangeEndHeight,
       final long creationTimeMs, final String txHashHex, final String transactionPayloadB64,
       final String signingMessageB64) {
     this.submitted = submitted; this.payloadKind = payloadKind; this.messageIdHex = messageIdHex;
     this.backend = backend; this.counterpartyDomain = counterpartyDomain;
-    this.counterpartyChain = counterpartyChain; this.manifestHashHex = manifestHashHex;
+    this.counterpartyChain = counterpartyChain;
+    this.routeConfigurationHashHex = routeConfigurationHashHex;
     this.rangeStartHeight = rangeStartHeight; this.rangeEndHeight = rangeEndHeight;
     this.creationTimeMs = creationTimeMs; this.txHashHex = txHashHex;
     this.transactionPayloadB64 = transactionPayloadB64; this.signingMessageB64 = signingMessageB64;
@@ -85,8 +92,8 @@ public final class SccpBridgeSubmitResponse {
         SccpModels.PayloadKindV1.fromWireKey(text(value, "payload_kind"));
     if (kind == null) throw new IllegalArgumentException("payload_kind is unknown or retired");
     final String backend = text(value, "backend");
-    if (backend.length() > 128 || !BACKEND.matcher(backend).matches()) {
-      throw new IllegalArgumentException("backend must be a canonical bridge backend label");
+    if (!CLOSED_BACKENDS.contains(backend)) {
+      throw new IllegalArgumentException("backend must be one closed SCCP verifier label");
     }
     final int counterpartyDomain = intValue(value, "counterparty_domain", 1, 5);
     final String counterpartyChain = text(value, "counterparty_chain");
@@ -97,10 +104,14 @@ public final class SccpBridgeSubmitResponse {
       throw new IllegalArgumentException(
           "counterparty_chain and counterparty_domain must identify one exact external network");
     }
+    if (!backendsForDomain(counterpartyDomain).contains(backend)) {
+      throw new IllegalArgumentException(
+          "backend does not match the exact counterparty family");
+    }
     return new SccpBridgeSubmitResponse(
         submitted, kind, hash(value, "message_id_hex"), backend,
         counterpartyDomain, counterpartyChain,
-        hash(value, "manifest_hash_hex"), start, end, creationTime,
+        hash(value, "route_configuration_hash_hex"), start, end, creationTime,
         txHash, transactionPayload, signingMessage);
   }
 
@@ -145,6 +156,12 @@ public final class SccpBridgeSubmitResponse {
   private static String optionalHash(final Map<String, Object> value, final String field) { return value.get(field) == null ? null : hash(value, field); }
   private static byte[] canonicalBase64(
       final String value, final String field, final Integer exactBytes) {
+    final int maximumBytes =
+        exactBytes == null ? SccpSubmitEncoding.MAX_TRANSACTION_PAYLOAD_BYTES : exactBytes;
+    final int maximumLength = 4 * ((maximumBytes + 2) / 3);
+    if (value.length() > maximumLength) {
+      throw new IllegalArgumentException(field + " exceeds its size bound");
+    }
     final byte[] decoded;
     try { decoded = Base64.getDecoder().decode(value); }
     catch (final IllegalArgumentException ex) { throw new IllegalArgumentException(field + " must be canonical base64", ex); }
@@ -158,9 +175,6 @@ public final class SccpBridgeSubmitResponse {
   private static byte[] validateCanonicalTransactionPayload(
       final String value, final long creationTimeMs) {
     final byte[] bytes = canonicalBase64(value, "transaction_payload_b64", null);
-    if (bytes.length > SccpSubmitEncoding.MAX_ARTIFACT_BYTES) {
-      throw new IllegalArgumentException("transaction_payload_b64 exceeds its size bound");
-    }
     final TransactionPayload payload;
     final byte[] canonical;
     try {
@@ -178,5 +192,16 @@ public final class SccpBridgeSubmitResponse {
           "transaction payload creation time does not match creation_time_ms");
     }
     return bytes;
+  }
+
+  private static Set<String> backendsForDomain(final int domain) {
+    return switch (domain) {
+      case 1 ->
+          Set.of(
+              "evm-groth16-bn254-v1", "bridge/sccp/native/ethereum-beacon-v1");
+      case 2 -> Set.of("evm-groth16-bn254-v1", "bridge/sccp/native/bsc-parlia-v1");
+      case 5 -> Set.of("tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1");
+      default -> Set.of();
+    };
   }
 }

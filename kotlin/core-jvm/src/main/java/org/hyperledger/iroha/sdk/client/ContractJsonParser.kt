@@ -7,6 +7,11 @@ import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 /** Minimal JSON parser for Torii contract deploy/call responses. */
 object ContractJsonParser {
 
+    /** Parse the complete `/v1/contracts/code/{code_hash}` manifest response. */
+    @JvmStatic
+    fun parseManifestRecord(payload: ByteArray): ContractManifestRecord =
+        ContractManifestJsonParser.parseRecord(payload)
+
     @JvmStatic
     fun parseDeployResponse(payload: ByteArray): ContractDeployResponse {
         val root = expectObject(parse(payload, "contract deploy response"), "contract deploy response")
@@ -28,7 +33,7 @@ object ContractJsonParser {
                     contractAlias = optionalString(contract["contract_alias"]),
                     contractAddress = optionalString(contract["contract_address"]),
                     previousContractAddress = optionalString(contract["previous_contract_address"]),
-                    upgraded = contract["upgraded"] == true,
+                    kaizen = contract["kaizen"] == true,
                     dataspace = optionalString(contract["dataspace"]),
                     deployNonce = if (contract.containsKey("deploy_nonce")) {
                         asOptionalLong(contract["deploy_nonce"], "contract deploy response.contracts[$index].deploy_nonce")

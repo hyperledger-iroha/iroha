@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { verifyNativeBinding } from "../src/native.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const JS_DIR = path.resolve(SCRIPT_DIR, "..");
@@ -229,30 +230,22 @@ async function collectNativeInfo(jsDir) {
     return null;
   }
   const stat = await fs.stat(nativePath);
-  const sha256 = await hashFile(nativePath, "sha256");
+  const verification = verifyNativeBinding(nativePath, { manifestPath });
+  if (!verification.ok) {
+    throw new Error(
+      `Native release evidence failed checksum verification (${verification.status})`,
+    );
+  }
+  const sha256 = verification.sha256;
   const sha512 = await hashFile(nativePath, "sha512");
   const platformKey = `${process.platform}-${process.arch}`;
-  let expectedSha256 = null;
-  let manifestEntries = null;
-  if (await exists(manifestPath)) {
-    try {
-      const raw = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-      manifestEntries = raw?.entries ?? raw;
-      expectedSha256 =
-        manifestEntries?.[platformKey]?.sha256 ??
-        manifestEntries?.[platformKey.toLowerCase()]?.sha256 ??
-        null;
-    } catch {
-      expectedSha256 = null;
-    }
-  }
   return {
     filename: path.basename(nativePath),
     relativePath: path.relative(REPO_ROOT, nativePath),
     size: stat.size,
     sha256,
     sha512,
-    expectedSha256,
+    expectedSha256: verification.expectedSha256,
     platform: platformKey,
     manifestFilename: (await exists(manifestPath)) ? path.basename(manifestPath) : null,
   };

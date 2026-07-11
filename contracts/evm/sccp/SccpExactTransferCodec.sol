@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity ^0.7.4;
+pragma solidity 0.8.24;
 
 /**
  * @title SccpExactTransferCodec
@@ -19,6 +19,30 @@ library SccpExactTransferCodec {
 
     uint256 internal constant MAX_TEXT_BYTES = 256;
     uint256 internal constant MAX_U128 = (uint256(1) << 128) - 1;
+    bytes private constant I105_BASE58_ALPHABET =
+        "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    bytes private constant I105_KANA_ALPHABET =
+        hex"efbdb2efbe9befbe8aefbe86efbe8eefbe8defbe84efbe81efbe98efbe87efbe99efbda6efbe9cefbdb6efbe96efbe80efbe9aefbdbfefbe82efbe88efbe85efbe97efbe91efbdb3e383b0efbe89efbdb5efbdb8efbe94efbe8fefbdb9efbe8cefbdbaefbdb4efbe83efbdb1efbdbbefbdb7efbe95efbe92efbe90efbdbce383b1efbe8befbe93efbdbeefbdbd";
+    uint256 private constant I105_CHECKSUM_DIGITS = 6;
+    uint256 private constant I105_BASE = 105;
+    uint32 private constant BECH32M_CONST = 0x2bc830a3;
+    uint256 private constant ED25519_FIELD =
+        0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed;
+    uint256 private constant ED25519_D =
+        0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3;
+    uint256 private constant ED25519_SQRT_M1 =
+        0x2b8324804fc1df0b2b4d00993dfbd7a72f431806ad2fe478c4ee1b274a0ea0b0;
+    uint256 private constant ED25519_SQRT_EXPONENT =
+        0x0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd;
+    uint256 private constant ED25519_Y_MASK = (uint256(1) << 255) - 1;
+    uint256 private constant ED25519_TORSION_Y_1 =
+        0x7a03ac9277fdc74ec6cc392cfa53202a0f67100d760b3cba4fd84d3d706a17c7;
+    uint256 private constant ED25519_TORSION_Y_2 =
+        0x05fc536d880238b13933c6d305acdfd5f098eff289f4c345b027b2c28f95e826;
+    uint256 private constant SECP256K1_FIELD =
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f;
+    uint256 private constant SECP256K1_SQRT_EXPONENT =
+        0x3fffffffffffffffffffffffffffffffffffffffffffffffffffffffbfffff0c;
 
     struct TransferFields {
         uint32 sourceDomain;
@@ -109,7 +133,7 @@ library SccpExactTransferCodec {
     function transferPayload(TransferFields memory fields) internal pure returns (bytes memory) {
         require(fields.amount != 0 && fields.amount <= MAX_U128, "Amount exceeds SCCP u128");
         require(fields.routeRevision != 0, "Route revision is required");
-        require(isCanonicalText(fields.assetId) && isCanonicalText(fields.routeId),
+        require(_isPrintableAsciiText(fields.assetId) && _isPrintableAsciiText(fields.routeId),
             "Noncanonical route text");
         bytes memory header = abi.encodePacked(
             bytes1(0x02), // SccpPayloadV1::Transfer
@@ -138,10 +162,499 @@ library SccpExactTransferCodec {
     }
 
     function isCanonicalText(bytes memory value) internal pure returns (bool) {
+        return isCanonicalTextRange(value, 0, value.length);
+    }
+
+    /**
+     * Validate the only irreversible-burn recipient admitted by SCCP V1.
+     *
+     * This is intentionally stricter than generic canonical text and generic
+     * I105 validation. It requires Taira's named `test` sentinel (discriminant
+     * 369), a minimal base-105/checksum round trip, the exact single-key
+     * AccountAddress bytes `02 00 01 20 || ed25519_key`, and the same canonical,
+     * decompressible, non-weak Ed25519 key policy as Rust admission.
+     */
+    function isCanonicalTairaRecipient(bytes memory value) internal pure returns (bool) {
+        return isCanonicalTairaRecipientRange(value, 0, value.length);
+    }
+
+    /** Validate an exact Taira recipient slice without allocating a copy. */
+    function isCanonicalTairaRecipientRange(
+        bytes memory value,
+        uint256 start,
+        uint256 length
+    ) internal pure returns (bool) {
+        if (length == 0 || length > MAX_TEXT_BYTES || start > value.length
+            || value.length - start < length) return false;
+        uint256 end = start + length;
+        if (!_hasPrefix(value, start, end, "test")) return false;
+        (bool symbolsValid, uint8[] memory digits, uint256 digitCount) =
+            _decodeI105Symbols(value, start + 4, end);
+        if (!symbolsValid || digitCount <= I105_CHECKSUM_DIGITS) return false;
+        uint256 payloadDigits = digitCount - I105_CHECKSUM_DIGITS;
+        bytes memory canonical = _decodeBase105(digits, payloadDigits);
+        if (canonical.length != 36
+            || canonical[0] != bytes1(0x02)
+            || canonical[1] != bytes1(0x00)
+            || canonical[2] != bytes1(0x01)
+            || canonical[3] != bytes1(0x20)
+            || !_base105ReencodesExactly(canonical, digits, payloadDigits)) return false;
+        uint8[6] memory checksum = _i105Checksum(canonical);
+        for (uint256 i = 0; i < I105_CHECKSUM_DIGITS; i++) {
+            if (digits[payloadDigits + i] != checksum[i]) return false;
+        }
+        return _isAdmittedEd25519Key(canonical, 4);
+    }
+
+    /**
+     * Validate a canonical public-Taira AccountId admitted by the V1 routes.
+     *
+     * AccountAddress layout and policy checks exactly mirror Rust's V1
+     * `AccountId` encoding. The contract-side controller set is deliberately
+     * closed to Ed25519 and compressed secp256k1 keys, including canonical
+     * multisig policies composed from those keys. Other Rust controller curves
+     * stay fail-closed until the destination contracts can perform their full
+     * public-key admission checks instead of accepting length-shaped material.
+     */
+    function isCanonicalTairaAccountRange(
+        bytes memory value,
+        uint256 start,
+        uint256 length
+    ) internal pure returns (bool) {
+        if (length == 0 || length > MAX_TEXT_BYTES || start > value.length
+            || value.length - start < length) return false;
+        uint256 end = start + length;
+        return _hasPrefix(value, start, end, "test")
+            && _isCanonicalI105Payload(value, start + 4, end);
+    }
+
+    function _isPrintableAsciiText(bytes memory value) private pure returns (bool) {
         if (value.length == 0 || value.length > MAX_TEXT_BYTES) return false;
         for (uint256 i = 0; i < value.length; i++) {
             uint8 character = uint8(value[i]);
             if (character < 0x21 || character > 0x7e) return false;
+        }
+        return true;
+    }
+
+    /** Validate one SCCP canonical-text slice without allocating a copy. */
+    function isCanonicalTextRange(
+        bytes memory value,
+        uint256 start,
+        uint256 length
+    ) internal pure returns (bool) {
+        if (length == 0 || length > MAX_TEXT_BYTES || start > value.length
+            || value.length - start < length) return false;
+        bool printableAscii = true;
+        for (uint256 i = 0; i < length; i++) {
+            uint8 character = uint8(value[start + i]);
+            if (character < 0x21 || character > 0x7e) {
+                printableAscii = false;
+                break;
+            }
+        }
+        return printableAscii || isCanonicalI105Range(value, start, length);
+    }
+
+    /**
+     * Validate an exact canonical I105 account literal.
+     *
+     * The non-ASCII canonical-text branch is deliberately closed: it accepts
+     * only the 105 published symbols, performs a minimal base-105 round trip,
+     * checks the six Bech32m digits over the decoded account bytes, and checks
+     * the first-release AccountAddress controller layout and closed
+     * Ed25519/secp256k1 key policy. Merely well-formed UTF-8 (including
+     * arbitrary kana) is not sufficient.
+     */
+    function isCanonicalI105Range(
+        bytes memory value,
+        uint256 start,
+        uint256 length
+    ) internal pure returns (bool) {
+        if (length == 0 || length > MAX_TEXT_BYTES || start > value.length
+            || value.length - start < length) return false;
+        uint256 end = start + length;
+        if (_hasPrefix(value, start, end, "sora")) {
+            return _isCanonicalI105Payload(value, start + 4, end);
+        }
+        if (_hasPrefix(value, start, end, "test")) {
+            return _isCanonicalI105Payload(value, start + 4, end);
+        }
+        if (_hasPrefix(value, start, end, "dev")) {
+            return _isCanonicalI105Payload(value, start + 3, end);
+        }
+        if (uint8(value[start]) != 0x6e) return false; // `n`
+
+        // Custom discriminants use the shortest decimal `n<0..65535>` form.
+        // Try every possible split because decimal characters are also base-105
+        // symbols, and require one unambiguous, structurally valid result.
+        uint256 discriminant;
+        uint256 accepted;
+        for (uint256 digits = 1; digits <= 5 && start + 1 + digits < end; digits++) {
+            uint8 character = uint8(value[start + digits]);
+            if (character < 0x30 || character > 0x39) break;
+            if (digits == 1 && character == 0x30 && start + 1 + digits < end
+                && uint8(value[start + 1 + digits]) >= 0x30
+                && uint8(value[start + 1 + digits]) <= 0x39) break;
+            discriminant = discriminant * 10 + uint256(character - 0x30);
+            if (discriminant > uint256(type(uint16).max)) break;
+            if (discriminant == 0 || discriminant == 369 || discriminant == 753) continue;
+            if (_isCanonicalI105Payload(value, start + 1 + digits, end)) accepted++;
+        }
+        return accepted == 1;
+    }
+
+    function _isCanonicalI105Payload(
+        bytes memory value,
+        uint256 start,
+        uint256 end
+    ) private pure returns (bool) {
+        (bool symbolsValid, uint8[] memory digits, uint256 digitCount) =
+            _decodeI105Symbols(value, start, end);
+        if (!symbolsValid || digitCount <= I105_CHECKSUM_DIGITS) return false;
+        uint256 payloadDigits = digitCount - I105_CHECKSUM_DIGITS;
+        bytes memory canonical = _decodeBase105(digits, payloadDigits);
+        if (canonical.length == 0 || !_isCanonicalAccountAddress(canonical)
+            || !_base105ReencodesExactly(canonical, digits, payloadDigits)) return false;
+        uint8[6] memory checksum = _i105Checksum(canonical);
+        for (uint256 i = 0; i < I105_CHECKSUM_DIGITS; i++) {
+            if (digits[payloadDigits + i] != checksum[i]) return false;
+        }
+        return true;
+    }
+
+    function _decodeI105Symbols(bytes memory value, uint256 start, uint256 end)
+        private pure returns (bool, uint8[] memory digits, uint256 count)
+    {
+        digits = new uint8[](end - start);
+        uint256 cursor = start;
+        while (cursor < end) {
+            uint8 first = uint8(value[cursor]);
+            bool found;
+            uint8 digit;
+            if (first < 0x80) {
+                (found, digit) = _asciiI105Digit(first);
+                cursor++;
+            } else {
+                if (end - cursor < 3) return (false, digits, 0);
+                (found, digit) = _kanaI105Digit(
+                    value[cursor], value[cursor + 1], value[cursor + 2]
+                );
+                cursor += 3;
+            }
+            if (!found) return (false, digits, 0);
+            digits[count++] = digit;
+        }
+        return (true, digits, count);
+    }
+
+    function _asciiI105Digit(uint8 character) private pure returns (bool, uint8) {
+        bytes memory alphabet = I105_BASE58_ALPHABET;
+        for (uint256 i = 0; i < alphabet.length; i++) {
+            if (uint8(alphabet[i]) == character) return (true, uint8(i));
+        }
+        return (false, 0);
+    }
+
+    function _kanaI105Digit(bytes1 a, bytes1 b, bytes1 c)
+        private pure returns (bool, uint8)
+    {
+        bytes memory alphabet = I105_KANA_ALPHABET;
+        for (uint256 i = 0; i < 47; i++) {
+            uint256 offset = i * 3;
+            if (alphabet[offset] == a && alphabet[offset + 1] == b
+                && alphabet[offset + 2] == c) return (true, uint8(58 + i));
+        }
+        return (false, 0);
+    }
+
+    function _decodeBase105(uint8[] memory digits, uint256 length)
+        private pure returns (bytes memory canonical)
+    {
+        uint256 leadingZeros;
+        while (leadingZeros < length && digits[leadingZeros] == 0) leadingZeros++;
+        bytes memory scratch = new bytes(length);
+        uint256 used;
+        for (uint256 i = leadingZeros; i < length; i++) {
+            uint256 carry = digits[i];
+            uint256 cursor = length;
+            for (uint256 j = 0; j < used; j++) {
+                cursor--;
+                uint256 accumulator = uint256(uint8(scratch[cursor])) * I105_BASE + carry;
+                scratch[cursor] = bytes1(uint8(accumulator));
+                carry = accumulator >> 8;
+            }
+            while (carry != 0) {
+                if (cursor == 0) return new bytes(0);
+                cursor--;
+                scratch[cursor] = bytes1(uint8(carry));
+                carry >>= 8;
+                used++;
+            }
+        }
+        canonical = new bytes(leadingZeros + used);
+        for (uint256 i = 0; i < used; i++) {
+            canonical[leadingZeros + i] = scratch[length - used + i];
+        }
+    }
+
+    function _base105ReencodesExactly(
+        bytes memory canonical,
+        uint8[] memory expected,
+        uint256 expectedLength
+    ) private pure returns (bool) {
+        uint256 leadingZeros;
+        while (leadingZeros < canonical.length && canonical[leadingZeros] == bytes1(0)) {
+            leadingZeros++;
+        }
+        bytes memory work = new bytes(canonical.length);
+        for (uint256 i = 0; i < canonical.length; i++) work[i] = canonical[i];
+        uint8[] memory reversed = new uint8[](expectedLength + 1);
+        uint256 count;
+        uint256 first = leadingZeros;
+        while (first < work.length) {
+            uint256 remainder;
+            for (uint256 i = first; i < work.length; i++) {
+                uint256 accumulator = (remainder << 8) | uint256(uint8(work[i]));
+                work[i] = bytes1(uint8(accumulator / I105_BASE));
+                remainder = accumulator % I105_BASE;
+            }
+            reversed[count++] = uint8(remainder);
+            while (first < work.length && work[first] == bytes1(0)) first++;
+        }
+        count += leadingZeros;
+        if (count == 0) count = 1;
+        if (count != expectedLength) return false;
+        for (uint256 i = 0; i < leadingZeros; i++) {
+            if (expected[i] != 0) return false;
+        }
+        for (uint256 i = leadingZeros; i < count; i++) {
+            if (expected[i] != reversed[count - 1 - i]) return false;
+        }
+        return true;
+    }
+
+    function _i105Checksum(bytes memory canonical)
+        private pure returns (uint8[6] memory checksum)
+    {
+        uint32 polymod = 1;
+        // expand_hrp("snx") = [3, 3, 3, 0, 19, 14, 24]
+        uint8[7] memory hrp = [uint8(3), 3, 3, 0, 19, 14, 24];
+        for (uint256 i = 0; i < hrp.length; i++) polymod = _polymodStep(polymod, hrp[i]);
+        uint256 accumulator;
+        uint256 bits;
+        for (uint256 i = 0; i < canonical.length; i++) {
+            accumulator = (accumulator << 8) | uint256(uint8(canonical[i]));
+            bits += 8;
+            while (bits >= 5) {
+                bits -= 5;
+                polymod = _polymodStep(polymod, uint8((accumulator >> bits) & 31));
+            }
+            accumulator &= bits == 0 ? 0 : (uint256(1) << bits) - 1;
+        }
+        if (bits != 0) polymod = _polymodStep(polymod, uint8((accumulator << (5 - bits)) & 31));
+        for (uint256 i = 0; i < I105_CHECKSUM_DIGITS; i++) polymod = _polymodStep(polymod, 0);
+        polymod ^= BECH32M_CONST;
+        for (uint256 i = 0; i < I105_CHECKSUM_DIGITS; i++) {
+            checksum[i] = uint8((polymod >> (5 * (I105_CHECKSUM_DIGITS - 1 - i))) & 31);
+        }
+    }
+
+    function _polymodStep(uint32 current, uint8 value) private pure returns (uint32) {
+        uint32 top = current >> 25;
+        uint32 next = ((current & 0x01ffffff) << 5) ^ uint32(value);
+        if ((top & 1) != 0) next ^= 0x3b6a57b2;
+        if ((top & 2) != 0) next ^= 0x26508e6d;
+        if ((top & 4) != 0) next ^= 0x1ea119fa;
+        if ((top & 8) != 0) next ^= 0x3d4233dd;
+        if ((top & 16) != 0) next ^= 0x2a1462b3;
+        return next;
+    }
+
+    function _isCanonicalAccountAddress(bytes memory canonical) private pure returns (bool) {
+        if (canonical.length < 4) return false;
+        uint8 header = uint8(canonical[0]);
+        if (header == 0x02) return _isCanonicalSingleKey(canonical);
+        if (header == 0x0a) return _isCanonicalMultisig(canonical);
+        return false;
+    }
+
+    function _isAdmittedEd25519Key(bytes memory canonical, uint256 start)
+        private pure returns (bool)
+    {
+        uint256 encoded;
+        for (uint256 i = 0; i < 32; i++) {
+            encoded |= uint256(uint8(canonical[start + i])) << (i * 8);
+        }
+        uint256 y = encoded & ED25519_Y_MASK;
+        if (y >= ED25519_FIELD || _isSmallOrderEd25519Y(y)) return false;
+        (bool decompressed, uint256 x) = _recoverEd25519X(y);
+        if (!decompressed) return false;
+        // Both signs are canonical for nonzero x; x=0 has only sign bit zero.
+        return x != 0 || (encoded >> 255) == 0;
+    }
+
+    function _recoverEd25519X(uint256 y) private pure returns (bool, uint256 x) {
+        uint256 y2 = mulmod(y, y, ED25519_FIELD);
+        uint256 u = addmod(y2, ED25519_FIELD - 1, ED25519_FIELD);
+        uint256 v = addmod(mulmod(ED25519_D, y2, ED25519_FIELD), 1, ED25519_FIELD);
+        uint256 v3 = mulmod(mulmod(v, v, ED25519_FIELD), v, ED25519_FIELD);
+        uint256 v7 = mulmod(mulmod(v3, v3, ED25519_FIELD), v, ED25519_FIELD);
+        x = mulmod(
+            mulmod(u, v3, ED25519_FIELD),
+            _powModField(
+                mulmod(u, v7, ED25519_FIELD), ED25519_SQRT_EXPONENT, ED25519_FIELD
+            ),
+            ED25519_FIELD
+        );
+        uint256 check = mulmod(v, mulmod(x, x, ED25519_FIELD), ED25519_FIELD);
+        if (check != u) {
+            uint256 negativeU = u == 0 ? 0 : ED25519_FIELD - u;
+            if (check != negativeU) return (false, 0);
+            x = mulmod(x, ED25519_SQRT_M1, ED25519_FIELD);
+            check = mulmod(v, mulmod(x, x, ED25519_FIELD), ED25519_FIELD);
+            if (check != u) return (false, 0);
+        }
+        return (true, x);
+    }
+
+    function _powModField(uint256 base, uint256 exponent, uint256 modulus)
+        private pure returns (uint256 result)
+    {
+        result = 1;
+        while (exponent != 0) {
+            if ((exponent & 1) != 0) result = mulmod(result, base, modulus);
+            base = mulmod(base, base, modulus);
+            exponent >>= 1;
+        }
+    }
+
+    function _isSmallOrderEd25519Y(uint256 y) private pure returns (bool) {
+        // These five y coordinates cover all eight canonical E[8] encodings;
+        // the sign bit selects the paired point where x is nonzero.
+        return y == 0 || y == 1 || y == ED25519_FIELD - 1
+            || y == ED25519_TORSION_Y_1 || y == ED25519_TORSION_Y_2;
+    }
+
+    function _isCanonicalSingleKey(bytes memory canonical) private pure returns (bool) {
+        uint8 tag = uint8(canonical[1]);
+        uint8 curve = uint8(canonical[2]);
+        // Both V1 destination-supported key payloads fit the canonical u8
+        // length tag. Rust's extended tag is reserved for larger algorithms
+        // that these contracts intentionally reject fail-closed.
+        if (tag != 0) return false;
+        uint256 keyLength = uint8(canonical[3]);
+        return 4 + keyLength == canonical.length
+            && _isCanonicalKeyShape(canonical, 4, keyLength, curve);
+    }
+
+    function _isCanonicalMultisig(bytes memory canonical) private pure returns (bool) {
+        if (canonical.length < 7 || uint8(canonical[1]) != 1 || uint8(canonical[2]) != 1) {
+            return false;
+        }
+        uint256 threshold = _u16be(canonical, 3);
+        uint256 members = _u16be(canonical, 5);
+        if (threshold == 0 || members == 0) return false;
+        uint256 cursor = 7;
+        uint256 totalWeight;
+        uint8 previousCurve;
+        uint256 previousStart;
+        uint256 previousLength;
+        for (uint256 member = 0; member < members; member++) {
+            if (cursor > canonical.length || canonical.length - cursor < 5) return false;
+            uint8 curve = uint8(canonical[cursor++]);
+            uint256 weight = _u16be(canonical, cursor); cursor += 2;
+            uint256 keyLength = _u16be(canonical, cursor); cursor += 2;
+            if (weight == 0 || cursor > canonical.length
+                || canonical.length - cursor < keyLength
+                || !_isCanonicalKeyShape(canonical, cursor, keyLength, curve)) return false;
+            if (member != 0 && !_keyStrictlyFollows(
+                canonical, previousCurve, previousStart, previousLength,
+                curve, cursor, keyLength
+            )) return false;
+            totalWeight += weight;
+            previousCurve = curve;
+            previousStart = cursor;
+            previousLength = keyLength;
+            cursor += keyLength;
+        }
+        return cursor == canonical.length && threshold <= totalWeight;
+    }
+
+    function _isCanonicalKeyShape(
+        bytes memory canonical,
+        uint256 start,
+        uint256 length,
+        uint8 curve
+    ) private pure returns (bool) {
+        if (curve == 1) {
+            return length == 32 && _isAdmittedEd25519Key(canonical, start);
+        }
+        return curve == 4 && length == 33
+            && _isAdmittedSecp256k1Key(canonical, start);
+    }
+
+    function _isAdmittedSecp256k1Key(bytes memory canonical, uint256 start)
+        private pure returns (bool)
+    {
+        uint8 prefix = uint8(canonical[start]);
+        if (prefix != 2 && prefix != 3) return false;
+        uint256 x;
+        for (uint256 i = 1; i < 33; i++) {
+            x = (x << 8) | uint256(uint8(canonical[start + i]));
+        }
+        if (x >= SECP256K1_FIELD) return false;
+        uint256 x2 = mulmod(x, x, SECP256K1_FIELD);
+        uint256 rhs = addmod(mulmod(x2, x, SECP256K1_FIELD), 7, SECP256K1_FIELD);
+        uint256 y = _powModField(rhs, SECP256K1_SQRT_EXPONENT, SECP256K1_FIELD);
+        if (mulmod(y, y, SECP256K1_FIELD) != rhs) return false;
+        // A y=0 point has only the even compressed spelling. secp256k1 has no
+        // such prime-subgroup point, but retaining the canonical SEC1 rule
+        // keeps this check exact if the curve assumptions are ever revisited.
+        return y != 0 || prefix == 2;
+    }
+
+    function _keyStrictlyFollows(
+        bytes memory canonical,
+        uint8 previousCurve,
+        uint256 previousStart,
+        uint256 previousLength,
+        uint8 curve,
+        uint256 start,
+        uint256 length
+    ) private pure returns (bool) {
+        uint8 previousRank = _curveSortRank(previousCurve);
+        uint8 rank = _curveSortRank(curve);
+        if (previousRank == 0 || rank == 0) return false;
+        if (rank != previousRank) return rank > previousRank;
+        uint256 common = previousLength < length ? previousLength : length;
+        for (uint256 i = 0; i < common; i++) {
+            uint8 left = uint8(canonical[previousStart + i]);
+            uint8 right = uint8(canonical[start + i]);
+            if (left != right) return right > left;
+        }
+        return length > previousLength;
+    }
+
+    function _curveSortRank(uint8 curve) private pure returns (uint8) {
+        // Rust sorts multisig members by the concatenation of the algorithm
+        // name, one zero byte, and the public key. `ed25519` precedes
+        // `secp256k1` lexicographically.
+        if (curve == 1) return 1;
+        if (curve == 4) return 2;
+        return 0;
+    }
+
+    function _u16be(bytes memory value, uint256 start) private pure returns (uint256) {
+        return (uint256(uint8(value[start])) << 8) | uint256(uint8(value[start + 1]));
+    }
+
+    function _hasPrefix(bytes memory value, uint256 start, uint256 end, bytes memory prefix)
+        private pure returns (bool)
+    {
+        if (end - start < prefix.length) return false;
+        for (uint256 i = 0; i < prefix.length; i++) {
+            if (value[start + i] != prefix[i]) return false;
         }
         return true;
     }
@@ -277,7 +790,7 @@ library SccpExactTransferCodec {
         for (uint256 i = 0; i < 8; i++) { v[i] = h[i]; v[i + 8] = _iv(i); }
         v[12] ^= counterLow;
         v[13] ^= counterHigh;
-        if (finalBlock) v[14] ^= uint64(-1);
+        if (finalBlock) v[14] ^= type(uint64).max;
         for (uint256 round = 0; round < 12; round++) {
             uint8[16] memory s = _sigma(round);
             _g(v, 0, 4, 8, 12, m[s[0]], m[s[1]]);
@@ -295,14 +808,25 @@ library SccpExactTransferCodec {
     function _g(uint64[16] memory v, uint256 a, uint256 b, uint256 c, uint256 d, uint64 x, uint64 y)
         private pure
     {
-        v[a] = v[a] + v[b] + x;
+        // BLAKE2b specifies these four additions modulo 2^64. This is the only
+        // arithmetic in the SCCP contracts that intentionally wraps; every
+        // token amount, nonce, length, and offset remains checked by Solidity.
+        v[a] = _add64(_add64(v[a], v[b]), x);
         v[d] = _rotr(v[d] ^ v[a], 32);
-        v[c] = v[c] + v[d];
+        v[c] = _add64(v[c], v[d]);
         v[b] = _rotr(v[b] ^ v[c], 24);
-        v[a] = v[a] + v[b] + y;
+        v[a] = _add64(_add64(v[a], v[b]), y);
         v[d] = _rotr(v[d] ^ v[a], 16);
-        v[c] = v[c] + v[d];
+        v[c] = _add64(v[c], v[d]);
         v[b] = _rotr(v[b] ^ v[c], 63);
+    }
+
+    function _add64(uint64 left, uint64 right) private pure returns (uint64 result) {
+        // The explicit mask documents BLAKE2b's intended modulo-2^64 behavior
+        // under Solidity 0.8.24 without weakening checked arithmetic elsewhere.
+        assembly {
+            result := and(add(left, right), 0xffffffffffffffff)
+        }
     }
 
     function _rotr(uint64 value, uint256 shift) private pure returns (uint64) {

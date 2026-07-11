@@ -30,11 +30,8 @@ macro_rules! define_v1_keywords {
     };
 }
 
-/// Canonical V1 operator and punctuation spellings for language tooling.
-pub const V1_OPERATORS: &[&str] = &[
-    "+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=", "&&", "||", "!", "=", "+=", "-=",
-    "*=", "/=", "%=", "->", "::", ".", ",", ":", ";", "?", "(", ")", "{", "}", "[", "]",
-];
+/// Normative machine-readable lexical grammar used to generate V1 tables.
+pub const V1_LEXICAL_GRAMMAR: &str = include_str!("../grammar/v1.lex");
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::upper_case_acronyms)]
@@ -49,15 +46,16 @@ pub enum TokenKind {
     Continue,
     State,
     Struct,
-    /// Stable contract error declaration (`error enum Name`).
+    /// Stable seiyaku error declaration (`error enum Name`).
     Error,
     /// Enumeration keyword used after `error`.
     Enum,
     /// Caller-authorization modifier (`authorize("Permission")`).
     Authorize,
-    /// Contract-level trigger declaration (`trigger name -> callback { ... }`).
+    /// Seiyaku-level trigger declaration (`trigger name -> callback { ... }`).
     Trigger,
     If,
+    Match,
     Else,
     For,
     /// Membership keyword used by bounded `for ... in ...` loops.
@@ -68,15 +66,16 @@ pub enum TokenKind {
     Module,
     /// Public transaction entrypoint modifier (`kotoage` or `言挙げ`).
     Kotoage,
-    /// Contract initializer (`hajimari` or `始まり`).
+    /// Seiyaku lifecycle declaration (`hajimari` or `始まり`).
     Hajimari,
-    /// Contract upgrade hook (`kaizen` or `改善`).
+    /// Seiyaku lifecycle declaration (`kaizen` or `改善`).
     Kaizen,
     /// Read-only public function modifier (`view`).
     View,
     True,
     False,
     Arrow,
+    FatArrow,
     Ident(String),
     /// Unsuffixed or explicitly suffixed integer token.
     ///
@@ -84,6 +83,8 @@ pub enum TokenKind {
     /// `i64` type to unsuffixed literals and requires the adjacent `u128`
     /// suffix for values of that type.
     Number(u128),
+    /// Exact source spelling of a non-negative decimal Amount literal.
+    AmountLiteral(String),
     String(String),
     Bytes(Vec<u8>),
     Plus,
@@ -122,37 +123,7 @@ pub enum TokenKind {
     EOF,
 }
 
-define_v1_keywords! {
-    "authorize" => Authorize,
-    "break" => Break,
-    "const" => Const,
-    "continue" => Continue,
-    "else" => Else,
-    "enum" => Enum,
-    "error" => Error,
-    "false" => False,
-    "fn" => Fn,
-    "for" => For,
-    "hajimari" => Hajimari,
-    "始まり" => Hajimari,
-    "if" => If,
-    "in" => In,
-    "kaizen" => Kaizen,
-    "改善" => Kaizen,
-    "kotoage" => Kotoage,
-    "言挙げ" => Kotoage,
-    "let" => Let,
-    "module" => Module,
-    "return" => Return,
-    "seiyaku" => Seiyaku,
-    "誓約" => Seiyaku,
-    "state" => State,
-    "struct" => Struct,
-    "trigger" => Trigger,
-    "true" => True,
-    "var" => Var,
-    "view" => View,
-}
+include!(concat!(env!("OUT_DIR"), "/kotodama_v1_lexical.rs"));
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
@@ -195,15 +166,54 @@ pub(crate) fn lower_lexed(
     budget: FrontendBudget,
     lexed: crate::syntax::lexer::Lexed,
 ) -> Result<Vec<Token>, DiagnosticBundle> {
-    let retained = budget.max_diagnostics().saturating_sub(1);
-    let mut diagnostics = lexed.diagnostics;
-    let mut omitted = lexed
-        .omitted_diagnostics
-        .saturating_add(diagnostics.len().saturating_sub(retained));
-    diagnostics.truncate(retained);
-    let mut tokens = Vec::with_capacity(lexed.tokens.len());
+    let (tokens, diagnostics) = lower_lexed_recovering(source, budget, lexed);
+    if diagnostics.is_empty() {
+        Ok(tokens)
+    } else {
+        Err(DiagnosticBundle::new(diagnostics))
+    }
+}
 
-    for token in lexed.tokens {
+/// Lower every valid token from one lossless scan while retaining lexical
+/// diagnostics for CST recovery.
+///
+/// Compiler-facing callers use [`lower_lexed`] and therefore still fail
+/// closed on any lexical error. The lossless parser uses this form so one bad
+/// token does not collapse otherwise recognisable declarations into a single
+/// root error node.
+pub(crate) fn lower_lexed_recovering(
+    source: &SourceFile,
+    budget: FrontendBudget,
+    lexed: crate::syntax::lexer::Lexed,
+) -> (Vec<Token>, Vec<Diagnostic>) {
+    let crate::syntax::lexer::Lexed {
+        tokens,
+        diagnostics,
+        omitted_diagnostics,
+    } = lexed;
+    lower_green_tokens(
+        source,
+        budget,
+        tokens.iter(),
+        diagnostics,
+        omitted_diagnostics,
+    )
+}
+
+fn lower_green_tokens<'token>(
+    source: &SourceFile,
+    budget: FrontendBudget,
+    green_tokens: impl IntoIterator<Item = &'token crate::syntax::cst::GreenToken>,
+    mut diagnostics: Vec<Diagnostic>,
+    omitted_diagnostics: usize,
+) -> (Vec<Token>, Vec<Diagnostic>) {
+    let retained = budget.max_diagnostics().saturating_sub(1);
+    let mut omitted =
+        omitted_diagnostics.saturating_add(diagnostics.len().saturating_sub(retained));
+    diagnostics.truncate(retained);
+    let mut tokens = Vec::new();
+
+    for token in green_tokens {
         if token.kind.is_trivia() || token.kind == SyntaxKind::ErrorToken {
             continue;
         }
@@ -238,11 +248,7 @@ pub(crate) fn lower_lexed(
             None,
         ));
     }
-    if diagnostics.is_empty() {
-        Ok(tokens)
-    } else {
-        Err(DiagnosticBundle::new(diagnostics))
-    }
+    (tokens, diagnostics)
 }
 
 fn lexical_diagnostic(
@@ -278,6 +284,7 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         }
         SyntaxKind::Ident => TokenKind::Ident(text.to_owned()),
         SyntaxKind::Number => TokenKind::Number(parse_integer_literal(text)?),
+        SyntaxKind::Amount => TokenKind::AmountLiteral(text.to_owned()),
         SyntaxKind::String => TokenKind::String(decode_string_literal(text)?),
         SyntaxKind::Bytes => TokenKind::Bytes(decode_byte_literal(text)?),
         SyntaxKind::Eof => TokenKind::EOF,
@@ -295,6 +302,7 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         SyntaxKind::KwAuthorize => TokenKind::Authorize,
         SyntaxKind::KwTrigger => TokenKind::Trigger,
         SyntaxKind::KwIf => TokenKind::If,
+        SyntaxKind::KwMatch => TokenKind::Match,
         SyntaxKind::KwElse => TokenKind::Else,
         SyntaxKind::KwFor => TokenKind::For,
         SyntaxKind::KwIn => TokenKind::In,
@@ -311,6 +319,7 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         SyntaxKind::Minus => TokenKind::Minus,
         SyntaxKind::MinusEqual => TokenKind::MinusEqual,
         SyntaxKind::Arrow => TokenKind::Arrow,
+        SyntaxKind::FatArrow => TokenKind::FatArrow,
         SyntaxKind::Star => TokenKind::Star,
         SyntaxKind::StarEqual => TokenKind::StarEqual,
         SyntaxKind::Slash => TokenKind::Slash,
@@ -356,6 +365,15 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         | SyntaxKind::TestTargetItem
         | SyntaxKind::Attribute
         | SyntaxKind::ParamList
+        | SyntaxKind::ArgumentList
+        | SyntaxKind::NamedArgument
+        | SyntaxKind::StructLiteral
+        | SyntaxKind::StructLiteralField
+        | SyntaxKind::ListExpr
+        | SyntaxKind::ListComprehension
+        | SyntaxKind::JsonObjectExpr
+        | SyntaxKind::JsonObjectEntry
+        | SyntaxKind::JsonArrayExpr
         | SyntaxKind::Block
         | SyntaxKind::StatementList
         | SyntaxKind::LetStmt
@@ -364,6 +382,11 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         | SyntaxKind::BreakStmt
         | SyntaxKind::ContinueStmt
         | SyntaxKind::IfStmt
+        | SyntaxKind::IfExpr
+        | SyntaxKind::MatchExpr
+        | SyntaxKind::MatchArm
+        | SyntaxKind::SumPattern
+        | SyntaxKind::TailExpr
         | SyntaxKind::ForStmt
         | SyntaxKind::ErrorNode
         | SyntaxKind::Missing => {
@@ -541,7 +564,7 @@ fn read_unicode_escape(characters: &mut impl Iterator<Item = char>) -> Result<ch
 mod tests {
     use super::{
         MAX_NESTING_DEPTH, MAX_SOURCE_BYTES, MAX_TOKENS, TokenKind, V1_KEYWORD_TOKEN_KINDS,
-        V1_KEYWORDS, lex, lex_source,
+        V1_KEYWORDS, lex, lex_source, lower_lexed, lower_lexed_recovering,
     };
     use crate::{
         source::{FrontendBudget, SourceFile, SourceId},
@@ -638,9 +661,57 @@ mod tests {
     fn decimal_fraction_literal_is_rejected() {
         let error = lex("1_234.50_0").expect_err("fractional literal must be rejected");
         assert!(
-            error.contains("decimal fractions are not part of Kotodama V1"),
+            error.contains("E_AMOUNT_SUFFIX")
+                && error.contains("decimal fractions require the adjacent lowercase `amt` suffix"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn amount_literals_retain_their_exact_spelling() {
+        let tokens = lex("10amt 1.250_0amt 0.000amt").expect("lex Amount literals");
+        let spellings = tokens
+            .iter()
+            .filter_map(|token| match &token.kind {
+                TokenKind::AmountLiteral(spelling) => Some(spelling.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(spellings, ["10amt", "1.250_0amt", "0.000amt"]);
+    }
+
+    #[test]
+    fn malformed_amount_suffixes_have_stable_diagnostics() {
+        for spelling in ["1.25am", "1.25Amt", "1.25amount", "10Amt", "10amt1"] {
+            let error = lex(spelling).expect_err("malformed Amount suffix must fail");
+            assert!(
+                error.contains("E_AMOUNT_SUFFIX"),
+                "unexpected diagnostic for `{spelling}`: {error}"
+            );
+        }
+        for spelling in ["0x10amt", "0b10amt", "1.amt"] {
+            let error = lex(spelling).expect_err("malformed Amount spelling must fail");
+            assert!(
+                error.contains("E_AMOUNT_MALFORMED"),
+                "unexpected diagnostic for `{spelling}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn separated_fractional_amount_suffix_has_stable_diagnostic() {
+        let error = lex("1.25 amt").expect_err("separated suffix must fail");
+        assert!(error.contains("E_AMOUNT_SUFFIX_SEPARATED"), "{error}");
+    }
+
+    #[test]
+    fn amount_token_does_not_change_integer_suffix_behavior() {
+        let tokens = lex("10 10i64 10u128").expect("lex integers");
+        assert!(matches!(tokens[0].kind, TokenKind::Number(10)));
+        assert!(matches!(tokens[1].kind, TokenKind::Number(10)));
+        assert!(matches!(&tokens[2].kind, TokenKind::Ident(suffix) if suffix == "i64"));
+        assert!(matches!(tokens[3].kind, TokenKind::Number(10)));
+        assert!(matches!(&tokens[4].kind, TokenKind::Ident(suffix) if suffix == "u128"));
     }
 
     #[test]
@@ -792,6 +863,29 @@ mod tests {
             .map(|token| token.range)
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn recovering_lowering_retains_valid_tokens_without_admitting_bad_source() {
+        let text = "seiyaku Broken { fn run() { let value: i64 = @; } }";
+        let source = SourceFile::new(SourceId(43), "recovering.ko", text);
+        let lossless = crate::syntax::lexer::lex(&source, FrontendBudget::v1());
+
+        let (tokens, diagnostics) =
+            lower_lexed_recovering(&source, FrontendBudget::v1(), lossless.clone());
+        assert!(
+            tokens.iter().any(|token| token.kind == TokenKind::Fn),
+            "valid declaration tokens must remain available to CST recovery"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "K0100")
+        );
+        assert!(
+            lower_lexed(&source, FrontendBudget::v1(), lossless).is_err(),
+            "compiler-facing lowering must still fail closed"
+        );
     }
 
     #[test]

@@ -525,6 +525,72 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpInboundMessageKeyV1 {
     }
 }
 
+impl JsonKeyCodec for crate::bridge::sccp::SccpInboundAnchorHighWaterKeyV1 {
+    fn encode_json_key(&self, out: &mut String) {
+        let encoded = format!(
+            "sccp-inbound-anchor-high-water-v1:{}:{}:{}",
+            self.lane.source.profile_key(),
+            self.lane.target.profile_key(),
+            hex::encode(self.anchor_hash)
+        );
+        json::write_json_string(&encoded, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        const PREFIX: &str = "sccp-inbound-anchor-high-water-v1";
+
+        let mut parts = encoded.split(':');
+        if parts.next() != Some(PREFIX) {
+            return Err(json::Error::Message(
+                "SCCP inbound anchor high-water key must use the canonical V1 prefix".into(),
+            ));
+        }
+        let source = parts
+            .next()
+            .and_then(crate::bridge::sccp::SccpNetworkV1::from_profile_key)
+            .ok_or_else(|| {
+                json::Error::Message("unknown or non-canonical SCCP source profile".into())
+            })?;
+        let target = parts
+            .next()
+            .and_then(crate::bridge::sccp::SccpNetworkV1::from_profile_key)
+            .ok_or_else(|| {
+                json::Error::Message("unknown or non-canonical SCCP target profile".into())
+            })?;
+        let anchor_hash_hex = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP anchor hash".into()))?;
+        if parts.next().is_some() {
+            return Err(json::Error::Message(
+                "too many SCCP inbound anchor high-water key parts".into(),
+            ));
+        }
+        if anchor_hash_hex.len() != 64
+            || !anchor_hash_hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(json::Error::Message(
+                "SCCP anchor hash must be exactly 64 lowercase hexadecimal characters".into(),
+            ));
+        }
+        let anchor_hash = hex::decode(anchor_hash_hex)
+            .map_err(|err| json::Error::Message(err.to_string()))?
+            .try_into()
+            .map_err(|_| json::Error::Message("SCCP anchor hash must be 32 bytes".into()))?;
+        crate::bridge::sccp::SccpInboundAnchorHighWaterKeyV1::new(
+            crate::bridge::sccp::SccpLaneIdV1 { source, target },
+            anchor_hash,
+        )
+        .ok_or_else(|| {
+            json::Error::Message(
+                "SCCP inbound anchor high-water key must contain an external-to-SORA lane and nonzero anchor hash"
+                    .into(),
+            )
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use iroha_crypto::KeyPair;
@@ -533,8 +599,8 @@ mod tests {
 
     use crate::account::AccountId;
     use crate::bridge::sccp::{
-        SccpInboundMessageKeyV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageIndexKeyV1,
-        SccpOutboundMessageKeyV1,
+        SccpInboundAnchorHighWaterKeyV1, SccpInboundMessageKeyV1, SccpLaneIdV1, SccpNetworkV1,
+        SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
     };
 
     fn checked_random_keypair() -> KeyPair {
@@ -677,7 +743,7 @@ mod tests {
         let key = SccpInboundMessageKeyV1::new(
             SccpLaneIdV1 {
                 source: SccpNetworkV1::EthereumMainnet,
-                target: SccpNetworkV1::SoraNexus,
+                target: SccpNetworkV1::SoraTaira,
             },
             [0xab; 32],
         )
@@ -687,7 +753,7 @@ mod tests {
         assert_eq!(
             encoded,
             concat!(
-                "\"sccp-inbound-v1:ethereum-mainnet:sora-nexus:",
+                "\"sccp-inbound-v1:ethereum-mainnet:sora-taira:",
                 "abababababababababababababababababababababababababababababababab\""
             )
         );
@@ -706,43 +772,116 @@ mod tests {
         let message_id = "abababababababababababababababababababababababababababababababab";
         let zero_id = "0000000000000000000000000000000000000000000000000000000000000000";
         let hostile = [
-            format!("ethereum-mainnet:sora-nexus:{message_id}"),
-            format!("SCCP-INBOUND-V1:ethereum-mainnet:sora-nexus:{message_id}"),
-            format!("sccp-inbound-v1:Ethereum-Mainnet:sora-nexus:{message_id}"),
-            format!("sccp-inbound-v1:ethereum_mainnet:sora-nexus:{message_id}"),
-            format!("sccp-inbound-v1:eth-mainnet:sora-nexus:{message_id}"),
-            format!("sccp-inbound-v1:1:sora-nexus:{message_id}"),
-            format!("sccp-inbound-v1:unknown:sora-nexus:{message_id}"),
+            format!("sccp-inbound-v1:ethereum-mainnet:sora-nexus:{message_id}"),
+            format!("ethereum-mainnet:sora-taira:{message_id}"),
+            format!("SCCP-INBOUND-V1:ethereum-mainnet:sora-taira:{message_id}"),
+            format!("sccp-inbound-v1:Ethereum-Mainnet:sora-taira:{message_id}"),
+            format!("sccp-inbound-v1:ethereum_mainnet:sora-taira:{message_id}"),
+            format!("sccp-inbound-v1:eth-mainnet:sora-taira:{message_id}"),
+            format!("sccp-inbound-v1:1:sora-taira:{message_id}"),
+            format!("sccp-inbound-v1:unknown:sora-taira:{message_id}"),
             format!("sccp-inbound-v1:ethereum-mainnet:unknown:{message_id}"),
-            format!("sccp-inbound-v1:ethereum-mainnet:SORA-NEXUS:{message_id}"),
+            format!("sccp-inbound-v1:ethereum-mainnet:SORA-TAIRA:{message_id}"),
             format!("sccp-inbound-v1:ethereum-mainnet:sora:{message_id}"),
-            format!("sccp-inbound-v1:sora-nexus:ethereum-mainnet:{message_id}"),
+            format!("sccp-inbound-v1:sora-taira:ethereum-mainnet:{message_id}"),
             format!("sccp-inbound-v1:ethereum-mainnet:bsc-mainnet:{message_id}"),
-            format!("sccp-inbound-v1:sora-nexus:sora-taira:{message_id}"),
-            format!("sccp-inbound-v1:ethereum-mainnet:sora-nexus:{zero_id}"),
+            format!("sccp-inbound-v1:sora-taira:sora-taira:{message_id}"),
+            format!("sccp-inbound-v1:ethereum-mainnet:sora-taira:{zero_id}"),
             format!(
-                "sccp-inbound-v1:ethereum-mainnet:sora-nexus:{}",
+                "sccp-inbound-v1:ethereum-mainnet:sora-taira:{}",
                 &message_id[..62]
             ),
-            format!("sccp-inbound-v1:ethereum-mainnet:sora-nexus:{message_id}ab"),
+            format!("sccp-inbound-v1:ethereum-mainnet:sora-taira:{message_id}ab"),
             format!(
-                "sccp-inbound-v1:ethereum-mainnet:sora-nexus:{}",
+                "sccp-inbound-v1:ethereum-mainnet:sora-taira:{}",
                 message_id.to_uppercase()
             ),
             format!(
-                "sccp-inbound-v1:ethereum-mainnet:sora-nexus:g{}",
+                "sccp-inbound-v1:ethereum-mainnet:sora-taira:g{}",
                 &message_id[1..]
             ),
-            format!("sccp-inbound-v1:ethereum-mainnet:sora-nexus: {message_id}"),
-            format!("sccp-inbound-v1:ethereum-mainnet:sora-nexus:{message_id}:trailing"),
-            format!(":sccp-inbound-v1:ethereum-mainnet:sora-nexus:{message_id}"),
-            "sccp-inbound-v1:ethereum-mainnet:sora-nexus:".to_owned(),
+            format!("sccp-inbound-v1:ethereum-mainnet:sora-taira: {message_id}"),
+            format!("sccp-inbound-v1:ethereum-mainnet:sora-taira:{message_id}:trailing"),
+            format!(":sccp-inbound-v1:ethereum-mainnet:sora-taira:{message_id}"),
+            "sccp-inbound-v1:ethereum-mainnet:sora-taira:".to_owned(),
             "".to_owned(),
         ];
 
         for encoded in hostile {
             assert!(
                 SccpInboundMessageKeyV1::decode_json_key(&encoded).is_err(),
+                "accepted non-canonical or invalid key {encoded:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sccp_inbound_anchor_high_water_key_json_key_codec_is_canonical() {
+        let key = SccpInboundAnchorHighWaterKeyV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::BscMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            [0xcd; 32],
+        )
+        .expect("valid inbound anchor high-water key");
+        let mut encoded = String::new();
+        key.encode_json_key(&mut encoded);
+        assert_eq!(
+            encoded,
+            concat!(
+                "\"sccp-inbound-anchor-high-water-v1:bsc-mainnet:sora-taira:",
+                "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\""
+            )
+        );
+
+        let mut parser = Parser::new(&encoded);
+        let raw_key = parser.parse_string().expect("parse encoded json key");
+        assert_eq!(
+            SccpInboundAnchorHighWaterKeyV1::decode_json_key(&raw_key)
+                .expect("decode canonical inbound anchor high-water key"),
+            key
+        );
+    }
+
+    #[test]
+    fn sccp_inbound_anchor_high_water_key_json_key_codec_rejects_malleability() {
+        let anchor_hash = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+        let zero_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+        let hostile = [
+            format!("bsc-mainnet:sora-taira:{anchor_hash}"),
+            format!("SCCP-INBOUND-ANCHOR-HIGH-WATER-V1:bsc-mainnet:sora-taira:{anchor_hash}"),
+            format!("sccp-inbound-anchor-high-water-v1:Bsc-Mainnet:sora-taira:{anchor_hash}"),
+            format!("sccp-inbound-anchor-high-water-v1:bsc_mainnet:sora-taira:{anchor_hash}"),
+            format!("sccp-inbound-anchor-high-water-v1:bsc:sora-taira:{anchor_hash}"),
+            format!("sccp-inbound-anchor-high-water-v1:bsc-mainnet:sora-nexus:{anchor_hash}"),
+            format!("sccp-inbound-anchor-high-water-v1:sora-taira:bsc-mainnet:{anchor_hash}"),
+            format!("sccp-inbound-anchor-high-water-v1:bsc-mainnet:ethereum-mainnet:{anchor_hash}"),
+            format!("sccp-inbound-anchor-high-water-v1:bsc-mainnet:sora-taira:{zero_hash}"),
+            format!(
+                "sccp-inbound-anchor-high-water-v1:bsc-mainnet:sora-taira:{}",
+                &anchor_hash[..62]
+            ),
+            format!("sccp-inbound-anchor-high-water-v1:bsc-mainnet:sora-taira:{anchor_hash}cd"),
+            format!(
+                "sccp-inbound-anchor-high-water-v1:bsc-mainnet:sora-taira:{}",
+                anchor_hash.to_uppercase()
+            ),
+            format!(
+                "sccp-inbound-anchor-high-water-v1:bsc-mainnet:sora-taira:g{}",
+                &anchor_hash[1..]
+            ),
+            format!("sccp-inbound-anchor-high-water-v1:bsc-mainnet:sora-taira: {anchor_hash}"),
+            format!(
+                "sccp-inbound-anchor-high-water-v1:bsc-mainnet:sora-taira:{anchor_hash}:trailing"
+            ),
+            "sccp-inbound-anchor-high-water-v1:bsc-mainnet:sora-taira:".to_owned(),
+            String::new(),
+        ];
+
+        for encoded in hostile {
+            assert!(
+                SccpInboundAnchorHighWaterKeyV1::decode_json_key(&encoded).is_err(),
                 "accepted non-canonical or invalid key {encoded:?}"
             );
         }

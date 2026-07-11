@@ -18,17 +18,39 @@ seiyaku LendingSimple {
     }
 
     // Borrow after checking ratio >= min_ratio_bps.
-    kotoage fn borrow(user: AccountId, _vault_account: AccountId, debt_asset: AssetDefinitionId, amount: Amount, collateral_value: Amount, current_debt_value: Amount, min_ratio_bps: Amount) authorize("Admin") {
+    kotoage fn borrow(
+        user: AccountId,
+        _vault_account: AccountId,
+        debt_asset: AssetDefinitionId,
+        amount: Amount,
+        collateral_value: Amount,
+        current_debt_value: Amount,
+        min_ratio_bps: Amount,
+    ) authorize("Admin") {
         let new_debt_value = current_debt_value + amount;
-        let ratio = collateral_ratio_bps(collateral_value, new_debt_value);
+        let ratio = collateral_ratio_bps(
+            collateral_value: collateral_value,
+            debt_value: new_debt_value,
+        );
         require(ratio >= min_ratio_bps, LendingError::InsufficientCollateral);
         // Mint borrowed asset to user
-        ledger::asset::mint(user, debt_asset, amount);
+        ledger::asset::mint(account: user, asset_definition: debt_asset, amount: amount);
     }
 
     // Repay by transferring tokens from user to vault and burning.
-    kotoage fn repay(user: AccountId, vault_account: AccountId, debt_asset: AssetDefinitionId, amount: Amount) authorize("Admin") {
-        ledger::asset::transfer(user, vault_account, debt_asset, amount, DataSpaceId::parse("0"));
-        ledger::asset::burn(vault_account, debt_asset, amount);
+    kotoage fn repay(
+        user: AccountId,
+        vault_account: AccountId,
+        debt_asset: AssetDefinitionId,
+        amount: Amount,
+    ) authorize("Admin") {
+        ledger::asset::transfer(
+            source: user,
+            destination: vault_account,
+            asset_definition: debt_asset,
+            amount: amount,
+            dataspace: DataSpaceId::parse("0"),
+        );
+        ledger::asset::burn(account: vault_account, asset_definition: debt_asset, amount: amount);
     }
 }

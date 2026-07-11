@@ -51,6 +51,7 @@ fn kotodama_state_map_set_writes_corehost_state() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run kotodama");
 
     // Query CoreHost state via its reversible canonical-Norito key path.
@@ -82,8 +83,8 @@ fn kotodama_nested_struct_map_roundtrip() {
             struct Outer { inner: Inner; }
             state state_outer: StateMap<i64, Outer>;
             kotoage fn main() -> i64 authorize("WriteState") {
-                state_outer[7] = Outer(Inner(33));
-                return state_outer.get(7).unwrap_or(Outer(Inner(0))).inner.value;
+                state_outer[7] = Outer { inner: Inner { value: 33 } };
+                return state_outer.get(7).unwrap_or(Outer { inner: Inner { value: 0 } }).inner.value;
             }
         }
     "#;
@@ -93,6 +94,7 @@ fn kotodama_nested_struct_map_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load nested map program");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute nested map program");
     assert_eq!(vm.register(10), 33);
 }
@@ -177,6 +179,7 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&code).expect("load loop program");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute loop program");
     // Read back the mirrored entries written inside the loop.
     let mut get_prog_bytes = Vec::new();

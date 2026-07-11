@@ -4,7 +4,9 @@ use std::{
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
 };
 
-use super::ir::{BasicBlock, Function, Instr, Label, Program, Temp, Terminator};
+#[cfg(test)]
+use super::ir::Program;
+use super::ir::{BasicBlock, Function, Instr, Label, Temp, Terminator};
 
 /// Result of register allocation for a function.
 #[derive(Debug, PartialEq)]
@@ -137,6 +139,10 @@ struct Interval {
     end: usize,
 }
 
+#[cfg(test)]
+/// Legacy transport-IR optimizer retained only for regression comparison.
+///
+/// Production optimization is owned by the strict SSA MIR.
 /// Apply deterministic, semantics-preserving optimizations before register
 /// allocation.
 ///
@@ -161,13 +167,86 @@ pub(crate) fn optimize_program(program: &mut Program) {
     }
 }
 
+#[cfg(test)]
+/// Legacy transport-IR whole-program DCE retained for regression tests.
+/// Remove functions that cannot be reached from any deployable or test root.
+///
+/// Kotodama has no function pointers in V1, so the complete inter-function
+/// graph is represented by direct [`Instr::Call`] and [`Instr::CallMulti`]
+/// instructions. Running this after intra-function CFG simplification means a
+/// call in a folded-away block cannot keep an otherwise dead helper alive.
+/// Missing roots, duplicate symbols, and unresolved callees fail closed instead
+/// of silently changing the executable graph.
+pub(crate) fn retain_reachable_functions(
+    program: &mut Program,
+    roots: &BTreeSet<String>,
+) -> Result<(), String> {
+    let mut function_indices = HashMap::with_capacity(program.functions.len());
+    for (index, function) in program.functions.iter().enumerate() {
+        if function_indices
+            .insert(function.name.clone(), index)
+            .is_some()
+        {
+            return Err(format!(
+                "duplicate lowered function symbol `{}` during whole-program DCE",
+                function.name
+            ));
+        }
+    }
+
+    let mut pending = Vec::with_capacity(roots.len());
+    for root in roots.iter().rev() {
+        let Some(index) = function_indices.get(root).copied() else {
+            return Err(format!(
+                "missing lowered root function `{root}` during whole-program DCE"
+            ));
+        };
+        pending.push(index);
+    }
+
+    let mut reachable = BTreeSet::new();
+    while let Some(index) = pending.pop() {
+        if !reachable.insert(index) {
+            continue;
+        }
+        let function = &program.functions[index];
+        let mut callees = BTreeSet::new();
+        for block in &function.blocks {
+            for instruction in &block.instrs {
+                if let Instr::Call { callee, .. } | Instr::CallMulti { callee, .. } = instruction {
+                    callees.insert(callee.as_str());
+                }
+            }
+        }
+        for callee in callees.into_iter().rev() {
+            let Some(callee_index) = function_indices.get(callee).copied() else {
+                return Err(format!(
+                    "unresolved lowered callee `{callee}` from `{}` during whole-program DCE",
+                    function.name
+                ));
+            };
+            pending.push(callee_index);
+        }
+    }
+
+    let mut index = 0usize;
+    program.functions.retain(|_| {
+        let keep = reachable.contains(&index);
+        index = index.saturating_add(1);
+        keep
+    });
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 enum ConstantState {
     Unknown,
     Integer(i64),
     Overdefined,
 }
 
+#[cfg(test)]
 fn merge_constant_state(left: ConstantState, right: ConstantState) -> ConstantState {
     match (left, right) {
         (ConstantState::Unknown, value) | (value, ConstantState::Unknown) => value,
@@ -180,6 +259,7 @@ fn merge_constant_state(left: ConstantState, right: ConstantState) -> ConstantSt
     }
 }
 
+#[cfg(test)]
 fn constant_state(constants: &HashMap<Temp, ConstantState>, temp: Temp) -> ConstantState {
     constants
         .get(&temp)
@@ -187,6 +267,7 @@ fn constant_state(constants: &HashMap<Temp, ConstantState>, temp: Temp) -> Const
         .unwrap_or(ConstantState::Unknown)
 }
 
+#[cfg(test)]
 fn integer_constant(constants: &HashMap<Temp, ConstantState>, temp: Temp) -> Option<i64> {
     match constant_state(constants, temp) {
         ConstantState::Integer(value) => Some(value),
@@ -194,6 +275,7 @@ fn integer_constant(constants: &HashMap<Temp, ConstantState>, temp: Temp) -> Opt
     }
 }
 
+#[cfg(test)]
 fn merge_definition(
     constants: &mut HashMap<Temp, ConstantState>,
     dest: Temp,
@@ -208,6 +290,7 @@ fn merge_definition(
     true
 }
 
+#[cfg(test)]
 fn checked_binary_constant(op: super::ast::BinaryOp, left: i64, right: i64) -> Option<i64> {
     use super::ast::BinaryOp;
 
@@ -228,6 +311,7 @@ fn checked_binary_constant(op: super::ast::BinaryOp, left: i64, right: i64) -> O
     }
 }
 
+#[cfg(test)]
 fn wrapping_binary_constant(op: super::ast::BinaryOp, left: i64, right: i64) -> Option<i64> {
     use super::ast::BinaryOp;
 
@@ -248,6 +332,7 @@ fn wrapping_binary_constant(op: super::ast::BinaryOp, left: i64, right: i64) -> 
     }
 }
 
+#[cfg(test)]
 fn unary_constant(op: super::ast::UnaryOp, operand: i64) -> Option<i64> {
     match op {
         super::ast::UnaryOp::Neg => operand.checked_neg(),
@@ -255,6 +340,7 @@ fn unary_constant(op: super::ast::UnaryOp, operand: i64) -> Option<i64> {
     }
 }
 
+#[cfg(test)]
 fn instruction_constant_state(
     instruction: &Instr,
     constants: &HashMap<Temp, ConstantState>,
@@ -305,6 +391,7 @@ fn instruction_constant_state(
 /// constant only when every reachable definition converges to the same value.
 /// Treating unknown definitions as the lattice bottom lets loop-carried copies
 /// settle without making block traversal order observable.
+#[cfg(test)]
 fn infer_integer_constants(function: &Function) -> HashMap<Temp, ConstantState> {
     let mut constants = HashMap::new();
     loop {
@@ -329,6 +416,7 @@ fn infer_integer_constants(function: &Function) -> HashMap<Temp, ConstantState> 
     }
 }
 
+#[cfg(test)]
 fn simplify_binary_instruction(
     dest: Temp,
     op: super::ast::BinaryOp,
@@ -387,6 +475,7 @@ fn simplify_binary_instruction(
     }
 }
 
+#[cfg(test)]
 fn simplify_wrapping_binary_instruction(
     dest: Temp,
     op: super::ast::BinaryOp,
@@ -426,6 +515,7 @@ fn simplify_wrapping_binary_instruction(
     }
 }
 
+#[cfg(test)]
 fn fold_integer_instructions(
     function: &mut Function,
     constants: &HashMap<Temp, ConstantState>,
@@ -468,6 +558,7 @@ fn fold_integer_instructions(
     changed
 }
 
+#[cfg(test)]
 fn resolve_trampoline(mut label: Label, trampolines: &HashMap<Label, Label>) -> Label {
     let original = label;
     let mut visited = HashSet::new();
@@ -480,6 +571,7 @@ fn resolve_trampoline(mut label: Label, trampolines: &HashMap<Label, Label>) -> 
     label
 }
 
+#[cfg(test)]
 fn simplify_control_flow(
     function: &mut Function,
     constants: &HashMap<Temp, ConstantState>,
@@ -551,6 +643,7 @@ fn simplify_control_flow(
     changed
 }
 
+#[cfg(test)]
 fn retarget_simple_definition(instruction: &mut Instr, from: Temp, to: Temp) -> bool {
     let dest = match instruction {
         Instr::Const { dest, .. }
@@ -574,6 +667,7 @@ fn retarget_simple_definition(instruction: &mut Instr, from: Temp, to: Temp) -> 
     true
 }
 
+#[cfg(test)]
 fn is_simple_definition(instruction: &Instr, temp: Temp) -> bool {
     matches!(
         instruction,
@@ -597,6 +691,7 @@ fn is_simple_definition(instruction: &Instr, temp: Temp) -> bool {
 /// to a single block and a source with exactly one use makes dominance and
 /// lifetime preservation explicit; multi-definition join/loop copies remain
 /// untouched.
+#[cfg(test)]
 fn coalesce_local_copies(function: &mut Function) -> bool {
     let mut any_changed = false;
     loop {
@@ -653,6 +748,7 @@ fn coalesce_local_copies(function: &mut Function) -> bool {
     }
 }
 
+#[cfg(test)]
 fn retain_reachable_blocks(function: &mut Function) {
     let label_to_idx: HashMap<Label, usize> = function
         .blocks
@@ -688,6 +784,7 @@ fn retain_reachable_blocks(function: &mut Function) {
     });
 }
 
+#[cfg(test)]
 fn eliminate_dead_pure_instructions(function: &mut Function) -> bool {
     let label_to_idx: HashMap<Label, usize> = function
         .blocks
@@ -748,6 +845,7 @@ fn eliminate_dead_pure_instructions(function: &mut Function) -> bool {
     changed
 }
 
+#[cfg(test)]
 fn is_dead_code_eliminable(instruction: &Instr) -> bool {
     match instruction {
         Instr::Const { .. }
@@ -813,6 +911,9 @@ fn instruction_preserves_argument_registers(instruction: &Instr) -> bool {
             | Instr::Valcom { .. }
             | Instr::PointerFromString { .. }
             | Instr::Load64Imm { .. }
+            | Instr::Load64 { .. }
+            | Instr::Store64Imm { .. }
+            | Instr::Store64 { .. }
             | Instr::MapLoadPair { .. }
             | Instr::MapGet { .. }
             | Instr::MapSet { .. }
@@ -1087,6 +1188,7 @@ fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
         Instr::Unary { operand, .. } | Instr::WrappingNeg { operand, .. } => visit(*operand),
         Instr::NumericFromInt { value, .. }
         | Instr::NumericToInt { value, .. }
+        | Instr::AmountFromU128 { value, .. }
         | Instr::NumericNeg { value, .. } => visit(*value),
         Instr::Min { a, b, .. }
         | Instr::Max { a, b, .. }
@@ -1104,6 +1206,15 @@ fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
         | Instr::Isqrt { src, .. }
         | Instr::Pubkgen { src, .. }
         | Instr::Load64Imm { base: src, .. } => visit(*src),
+        Instr::Load64 { address, .. } => visit(*address),
+        Instr::Store64Imm { base, value, .. } => {
+            visit(*base);
+            visit(*value);
+        }
+        Instr::Store64 { address, value } => {
+            visit(*address);
+            visit(*value);
+        }
         Instr::Poseidon6 { args, .. } => {
             for temp in args {
                 visit(*temp);
@@ -1119,6 +1230,11 @@ fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
             for temp in args {
                 visit(*temp);
             }
+        }
+        Instr::CoreQueryGet { key, .. } => visit(*key),
+        Instr::CoreQueryPage { offset, limit, .. } => {
+            visit(*offset);
+            visit(*limit);
         }
         Instr::MapGet { map, key, .. } => {
             visit(*map);
@@ -1570,7 +1686,7 @@ fn compute_liveness(
     (live_in, live_out)
 }
 
-fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
+pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
     use Instr::*;
     match instr {
         Const { .. }
@@ -1601,9 +1717,10 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*right);
         }
         Unary { operand, .. } | WrappingNeg { operand, .. } => f(*operand),
-        NumericFromInt { value, .. } | NumericToInt { value, .. } | NumericNeg { value, .. } => {
-            f(*value)
-        }
+        NumericFromInt { value, .. }
+        | NumericToInt { value, .. }
+        | AmountFromU128 { value, .. }
+        | NumericNeg { value, .. } => f(*value),
         NumericBinary { left, right, .. } | NumericCompare { left, right, .. } => {
             f(*left);
             f(*right);
@@ -1620,16 +1737,6 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         DivCeil { num, denom, .. } => {
             f(*num);
             f(*denom);
-        }
-        CallContract {
-            contract,
-            entrypoint,
-            payload,
-            ..
-        } => {
-            f(*contract);
-            f(*entrypoint);
-            f(*payload);
         }
         InvokeEntrypointAs {
             actor,
@@ -1813,6 +1920,15 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*value);
         }
         Load64Imm { base, .. } => f(*base),
+        Load64 { address, .. } => f(*address),
+        Store64Imm { base, value, .. } => {
+            f(*base);
+            f(*value);
+        }
+        Store64 { address, value } => {
+            f(*address);
+            f(*value);
+        }
         TuplePack { items, .. } => {
             for temp in items {
                 f(*temp);
@@ -1978,6 +2094,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | Instr::VendorExecuteQuery { payload, .. }
         | Instr::QueryExecuteNorito { payload, .. }
         | Instr::QueryGet { key: payload, .. }
+        | Instr::CoreQueryGet { key: payload, .. }
         | Instr::SmartContractLifecycle { payload, .. }
         | Instr::ZkRootsGet { payload, .. }
         | Instr::ZkVoteGetTally { payload, .. }
@@ -1985,6 +2102,10 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | Instr::SoracloudHostCall {
             request: payload, ..
         } => f(*payload),
+        Instr::CoreQueryPage { offset, limit, .. } => {
+            f(*offset);
+            f(*limit);
+        }
         Instr::GetAccountBalance { account, asset, .. } => {
             f(*account);
             f(*asset);
@@ -2195,7 +2316,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
     }
 }
 
-fn visit_terminator_uses<F: FnMut(Temp)>(term: &Terminator, mut f: F) {
+pub(crate) fn visit_terminator_uses<F: FnMut(Temp)>(term: &Terminator, mut f: F) {
     match term {
         Terminator::Return(Some(temp)) => f(*temp),
         Terminator::Return2(t0, t1) => {
@@ -2243,7 +2364,6 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::ChainId { dest }
         | Instr::ContractAddress { dest }
         | Instr::Entrypoint { dest }
-        | Instr::CallContract { dest, .. }
         | Instr::QueryExecuteNorito { dest, .. }
         | Instr::QueryGet { dest, .. }
         | Instr::GetAccountBalance { dest, .. }
@@ -2264,6 +2384,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::PointerToNorito { dest, .. }
         | Instr::PointerFromNorito { dest, .. }
         | Instr::Load64Imm { dest, .. }
+        | Instr::Load64 { dest, .. }
         | Instr::StateGet { dest, .. }
         | Instr::StateKeys { dest, .. }
         | Instr::StateMapKeyAt { dest, .. }
@@ -2273,11 +2394,12 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::StateCount { dest, .. }
         | Instr::NumericFromInt { dest, .. }
         | Instr::NumericToInt { dest, .. }
+        | Instr::AmountFromU128 { dest, .. }
         | Instr::NumericNeg { dest, .. }
         | Instr::NumericBinary { dest, .. }
         | Instr::NumericCompare { dest, .. }
         | Instr::DirectHelperSyscall { dest, .. } => Some(*dest),
-        Instr::SchemaInfo { dest, .. } => Some(*dest),
+        Instr::SchemaInfo { dest, .. } | Instr::CoreQueryGet { dest, .. } => Some(*dest),
         Instr::Sm3Hash { dest, .. }
         | Instr::Sha256Hash { dest, .. }
         | Instr::Sha3Hash { dest, .. }
@@ -2382,6 +2504,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::DebugPrint { .. }
         | Instr::DebugLog { .. }
         | Instr::MapSet { .. }
+        | Instr::Store64Imm { .. }
+        | Instr::Store64 { .. }
         | Instr::SetNftData { .. }
         | Instr::BurnNft { .. }
         | Instr::TransferDomain { .. }
@@ -2401,7 +2525,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::ExpectRejectAs { .. } => None,
         Instr::CallMulti { .. }
         | Instr::InvokeEntrypointAsMulti { .. }
-        | Instr::MapLoadPair { .. } => None,
+        | Instr::MapLoadPair { .. }
+        | Instr::CoreQueryPage { .. } => None,
     }
 }
 
@@ -2421,6 +2546,14 @@ pub(crate) fn visit_instr_defs<F: FnMut(Temp)>(instruction: &Instr, mut visit: F
             for dest in dests {
                 visit(*dest);
             }
+        }
+        Instr::CoreQueryPage {
+            items_dest,
+            next_offset_dest,
+            ..
+        } => {
+            visit(*items_dest);
+            visit(*next_offset_dest);
         }
         _ => {}
     }
@@ -2866,6 +2999,72 @@ mod tests {
                 dest: result,
                 name: "value".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn whole_program_dce_keeps_only_transitively_reachable_functions_and_fails_closed() {
+        let function = |name: &str, instructions: Vec<Instr>| Function {
+            name: name.to_owned(),
+            params: vec![],
+            blocks: vec![BasicBlock {
+                label: Label(0),
+                instrs: instructions,
+                terminator: Terminator::Return(None),
+            }],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+        let mut program = Program {
+            functions: vec![
+                function("dead", vec![Instr::StateDel { path: Temp(90) }]),
+                function(
+                    "root",
+                    vec![Instr::Call {
+                        callee: "helper".to_owned(),
+                        args: Vec::new(),
+                        dest: None,
+                    }],
+                ),
+                function("helper", Vec::new()),
+            ],
+        };
+
+        retain_reachable_functions(&mut program, &BTreeSet::from(["root".to_owned()]))
+            .expect("reachable direct-call graph");
+        assert_eq!(
+            program
+                .functions
+                .iter()
+                .map(|function| function.name.as_str())
+                .collect::<Vec<_>>(),
+            ["root", "helper"],
+        );
+
+        let mut unresolved = Program {
+            functions: vec![function(
+                "root",
+                vec![Instr::Call {
+                    callee: "missing".to_owned(),
+                    args: Vec::new(),
+                    dest: None,
+                }],
+            )],
+        };
+        let error =
+            retain_reachable_functions(&mut unresolved, &BTreeSet::from(["root".to_owned()]))
+                .expect_err("unresolved direct callee must fail closed");
+        assert!(
+            error.contains("unresolved lowered callee `missing`"),
+            "{error}"
+        );
+
+        let error =
+            retain_reachable_functions(&mut unresolved, &BTreeSet::from(["absent".to_owned()]))
+                .expect_err("missing executable root must fail closed");
+        assert!(
+            error.contains("missing lowered root function `absent`"),
+            "{error}"
         );
     }
 

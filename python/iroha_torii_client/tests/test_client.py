@@ -1088,7 +1088,7 @@ def test_deploy_contract_encodes_alias_first_payload_and_parses_response() -> No
                         "contract_alias": "router::universal",
                         "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                         "previous_contract_address": None,
-                        "upgraded": False,
+                        "kaizen": False,
                         "dataspace": "universal",
                         "deploy_nonce": 7,
                         "tx_hash_hex": "11" * 32,
@@ -1768,6 +1768,26 @@ def test_get_governance_contract_parses_response() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "alias",
+    ["", "zk", "plain", "ZK", "PLAIN", " Zk", "Plain ", "quadratic"],
+)
+def test_propose_contract_deploy_rejects_noncanonical_voting_mode(alias: str) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(ValueError, match="exactly 'Zk' or 'Plain'"):
+        client.propose_contract_deploy(
+            contract_alias="router::universal",
+            abi_version="1",
+            code_hash="22" * 32,
+            abi_hash="33" * 32,
+            mode=alias,
+        )
+
+    assert session.calls == []
+
+
 def test_list_telemetry_peers_info_parses_payload() -> None:
     session = RecordingSession()
     session.queue(
@@ -2156,7 +2176,7 @@ def test_contract_helpers_against_mock_server() -> None:
                             "contract_alias": "router::universal",
                             "contract_address": contract_address,
                             "previous_contract_address": None,
-                            "upgraded": False,
+                            "kaizen": False,
                             "dataspace": "universal",
                             "deploy_nonce": 1,
                             "tx_hash_hex": "11" * 32,

@@ -1,15 +1,18 @@
 //! Intermediate representation for Kotodama programs.
 //!
-//! The IR is a simple three-address code with basic blocks. Each temporary
-//! value is assigned once and identified by a `Temp` index. Control flow is
-//! expressed with explicit jumps between labeled blocks.
+//! This lowering IR is three-address code with explicit basic-block jumps. It
+//! retains deterministic edge assignments as the compiler's de-SSA transport
+//! form. Before code generation, [`crate::ssa`] converts it to strict SSA MIR
+//! with explicit Phi nodes, verifies dominance and definition uniqueness, and
+//! deterministically lowers it back for register allocation.
 
 use std::collections::{BTreeSet, HashMap};
 
 use iroha_primitives::numeric::Numeric;
 
 use super::{
-    ast::{BinaryOp, STATE_MAP_GET_INTRINSIC, UnaryOp},
+    abi_schema::{json_construction_schema, state_value_kind_for_type, state_value_schema},
+    ast::{BinaryOp, PatternBinding, STATE_MAP_GET_INTRINSIC, SumVariant, UnaryOp},
     builtins::{Builtin, BuiltinLowering, PointerConstructor},
     semantic::{
         self, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem, TypedParam, TypedProgram,
@@ -21,7 +24,7 @@ pub const TEST_TRIGGER_EVENT_OVERRIDE_KEY: &str = "__koto_test_trigger_event_jso
 const INVOKE_ENTRYPOINT_PREFIX: &str = "__invoke_entrypoint__";
 
 fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {
-    if let semantic::ExprKind::Ident(name) = &expr.expr {
+    if let semantic::ExprKind::Ident(name) = expr.kind() {
         Some(name.clone())
     } else {
         None
@@ -32,15 +35,6 @@ fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {
 struct StateMapSpec {
     key: Type,
     value: Type,
-}
-
-fn aggregate_components(ty: &Type) -> Option<Vec<Type>> {
-    match semantic::resolve_struct_type(ty) {
-        Type::Tuple(items) => Some(items),
-        Type::Option(value) => Some(vec![Type::Bool, *value]),
-        Type::Result(ok, err) => Some(vec![Type::Bool, *ok, *err]),
-        _ => None,
-    }
 }
 
 fn function_value_word_types(ty: &Type) -> Option<Vec<Type>> {
@@ -56,14 +50,11 @@ fn function_value_word_types(ty: &Type) -> Option<Vec<Type>> {
                     append(&item, words);
                 }
             }
-            Type::Option(inner) => {
-                words.push(Type::Bool);
-                append(&inner, words);
-            }
-            Type::Result(ok, err) => {
-                words.push(Type::Bool);
-                append(&ok, words);
-                append(&err, words);
+            // Sums are compiler-owned heap values. Their complete ABI value is
+            // one validated raw handle; inactive branches are never flattened
+            // into public registers or populated with placeholders.
+            handle @ (Type::Option(_) | Type::Result(_, _) | Type::List(_, _)) => {
+                words.push(handle);
             }
             leaf => words.push(leaf),
         }
@@ -71,13 +62,55 @@ fn function_value_word_types(ty: &Type) -> Option<Vec<Type>> {
 
     if !matches!(
         semantic::resolve_struct_type(ty),
-        Type::Struct { .. } | Type::Tuple(_) | Type::Option(_) | Type::Result(_, _)
+        Type::Struct { .. }
+            | Type::Tuple(_)
+            | Type::Option(_)
+            | Type::Result(_, _)
+            | Type::List(_, _)
     ) {
         return None;
     }
     let mut words = Vec::new();
     append(ty, &mut words);
     Some(words)
+}
+
+fn runtime_value_word_types(ty: &Type) -> Vec<Type> {
+    let mut words = Vec::new();
+    fn append(ty: &Type, words: &mut Vec<Type>) {
+        match semantic::resolve_struct_type(ty) {
+            Type::Struct { fields, .. } => {
+                for (_, field_ty) in fields {
+                    append(&field_ty, words);
+                }
+            }
+            Type::Tuple(items) => {
+                for item in items {
+                    append(&item, words);
+                }
+            }
+            handle @ (Type::Option(_) | Type::Result(_, _) | Type::List(_, _)) => {
+                words.push(handle);
+            }
+            leaf => words.push(leaf),
+        }
+    }
+    append(ty, &mut words);
+    words
+}
+
+fn runtime_word_is_pointer(ty: &Type) -> bool {
+    matches!(
+        semantic::resolve_struct_type(ty),
+        Type::FixedU128
+            | Type::Amount
+            | Type::String
+            | Type::Bytes
+            | Type::Json
+            | Type::Option(_)
+            | Type::Result(_, _)
+            | Type::List(_, _)
+    ) || semantic::is_pointer_type(ty)
 }
 
 fn function_param_word_name(param: &str, index: usize) -> String {
@@ -144,6 +177,15 @@ pub struct BasicBlock {
     pub terminator: Terminator,
 }
 
+/// Nominal wide-numeric ABI family selected by semantic typing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WideNumericKind {
+    /// Scale-zero unsigned `u128`, encoded as `NoritoBytes`.
+    U128,
+    /// Canonical non-negative decimal `Amount`.
+    Amount,
+}
+
 /// Non-control-flow instructions.
 #[derive(Debug, PartialEq)]
 pub enum Instr {
@@ -188,9 +230,16 @@ pub enum Instr {
     NumericFromInt {
         dest: Temp,
         value: Temp,
+        kind: WideNumericKind,
     },
     /// Convert a Numeric NoritoBytes payload pointer (scale = 0, unsigned) to an int (i64).
     NumericToInt {
+        dest: Temp,
+        value: Temp,
+        kind: WideNumericKind,
+    },
+    /// Convert a scale-zero `u128` pointer into a nominal `Amount` pointer.
+    AmountFromU128 {
         dest: Temp,
         value: Temp,
     },
@@ -205,6 +254,7 @@ pub enum Instr {
         op: BinaryOp,
         left: Temp,
         right: Temp,
+        kind: WideNumericKind,
     },
     /// Numeric comparison using NoritoBytes payloads (result is 0/1).
     NumericCompare {
@@ -212,6 +262,7 @@ pub enum Instr {
         op: BinaryOp,
         left: Temp,
         right: Temp,
+        kind: WideNumericKind,
     },
     /// ABI helper syscall that accepts already-validated pointer-ABI operands directly.
     DirectHelperSyscall {
@@ -477,7 +528,7 @@ pub enum Instr {
     Assert {
         cond: Temp,
     },
-    /// Abort execution with a stable contract error code if `cond` is non-zero.
+    /// Abort execution with a stable seiyaku error code if `cond` is non-zero.
     ///
     /// This is a non-ZK assertion primitive intended for fast on-chain checks.
     AbortIf {
@@ -532,6 +583,27 @@ pub enum Instr {
         dest: Temp,
         base: Temp,
         imm: i16,
+    },
+    /// Load a 64-bit value from an already-computed memory address.
+    Load64 {
+        dest: Temp,
+        address: Temp,
+    },
+    /// Store a 64-bit value to memory at `[base + imm]`.
+    ///
+    /// Bounded collection lowering uses this primitive to initialise and
+    /// mutate its single contiguous compiler-owned allocation. The offset is
+    /// expressed in bytes and code generation expands addresses outside the
+    /// instruction immediate range without changing observable behaviour.
+    Store64Imm {
+        base: Temp,
+        imm: i16,
+        value: Temp,
+    },
+    /// Store a 64-bit value to an already-computed memory address.
+    Store64 {
+        address: Temp,
+        value: Temp,
     },
     /// Pack multiple scalar temps into a tuple value represented by `dest`.
     /// Codegen treats this as metadata; no code is emitted.
@@ -734,13 +806,6 @@ pub enum Instr {
         dest: Temp,
         alias: Temp,
     },
-    /// Synchronous deployed-contract call using a contract-address literal, entrypoint name, and Json payload.
-    CallContract {
-        dest: Temp,
-        contract: Temp,
-        entrypoint: Temp,
-        payload: Temp,
-    },
     /// Load trigger event payload (`Json*`) into `dest` (host-provided).
     GetTriggerEvent {
         dest: Temp,
@@ -846,13 +911,30 @@ pub enum Instr {
         dest: Temp,
         payload: Temp,
     },
-    /// Direct typed query helper: r10 = pointer key, syscall returns NoritoBytes in r10.
+    /// Specialist byte-returning query helper retained outside the five V1
+    /// projected core families.
     QueryGet {
         dest: Temp,
         key: Temp,
         syscall: u32,
     },
-    /// Host balance query: r10 = &AccountId, r11 = &AssetDefinitionId; returns &NoritoBytes(Numeric).
+    /// Typed singular core query selected by a stable V1 entity tag.
+    CoreQueryGet {
+        dest: Temp,
+        key: Temp,
+        entity: ivm_abi::core_query::CoreQueryEntityTagV1,
+    },
+    /// Typed plural core query selected by a stable V1 entity tag.
+    CoreQueryPage {
+        /// Raw `List<View, 64>` handle returned in syscall register r10.
+        items_dest: Temp,
+        /// Raw `Option<i64>` next-offset handle returned in syscall register r11.
+        next_offset_dest: Temp,
+        entity: ivm_abi::core_query::CoreQueryEntityTagV1,
+        offset: Temp,
+        limit: Temp,
+    },
+    /// Host balance query: r10 = &AccountId, r11 = &AssetDefinitionId; returns &Amount.
     GetAccountBalance {
         dest: Temp,
         account: Temp,
@@ -1013,49 +1095,49 @@ pub enum Instr {
         key: Temp,
         value: Temp,
     },
-    /// JSON getters: (&Json, &Name key) -> int
+    /// JSON getter returning one active-only `Option<i64>` handle.
     JsonGetInt {
         dest: Temp,
         json: Temp,
         key: Temp,
     },
-    /// JSON getters: (&Json, &Name key) -> &NoritoBytes(Numeric)
+    /// JSON getter returning one active-only `Option<Amount>` handle.
     JsonGetNumeric {
         dest: Temp,
         json: Temp,
         key: Temp,
     },
-    /// JSON getters: (&Json, &Name key) -> &Json
+    /// JSON getter returning one active-only `Option<Json>` handle.
     JsonGetJson {
         dest: Temp,
         json: Temp,
         key: Temp,
     },
-    /// JSON getters: (&Json, &Name key) -> &Name
+    /// JSON getter returning one active-only `Option<Name>` handle.
     JsonGetName {
         dest: Temp,
         json: Temp,
         key: Temp,
     },
-    /// JSON getters: (&Json, &Name key) -> &AccountId
+    /// JSON getter returning one active-only `Option<AccountId>` handle.
     JsonGetAccountId {
         dest: Temp,
         json: Temp,
         key: Temp,
     },
-    /// JSON getters: (&Json, &Name key) -> &AssetDefinitionId
+    /// JSON getter returning one active-only `Option<AssetDefinitionId>` handle.
     JsonGetAssetDefinitionId {
         dest: Temp,
         json: Temp,
         key: Temp,
     },
-    /// JSON getters: (&Json, &Name key) -> &NftId
+    /// JSON getter returning one active-only `Option<NftId>` handle.
     JsonGetNftId {
         dest: Temp,
         json: Temp,
         key: Temp,
     },
-    /// JSON getters: (&Json, &Name key) -> &Blob
+    /// JSON getter returning one active-only `Option<bytes>` handle.
     JsonGetBlobHex {
         dest: Temp,
         json: Temp,
@@ -1184,6 +1266,8 @@ pub enum DataRefKind {
     ProofBlob,
     SoracloudRequest,
     SoracloudResponse,
+    /// Canonical non-negative decimal amount.
+    Amount,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1207,6 +1291,7 @@ fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
         Type::ProofBlob => Some(DataRefKind::ProofBlob),
         Type::SoracloudRequest => Some(DataRefKind::SoracloudRequest),
         Type::SoracloudResponse => Some(DataRefKind::SoracloudResponse),
+        Type::Amount => Some(DataRefKind::Amount),
         Type::String | Type::Bytes => Some(DataRefKind::Blob),
         _ => None,
     }
@@ -1219,6 +1304,14 @@ fn is_pointer_eq_type(ty: &Type) -> bool {
     ) || semantic::is_pointer_type(ty)
 }
 
+fn wide_numeric_kind_for_type(ty: &Type) -> Option<WideNumericKind> {
+    match semantic::resolve_struct_type(ty) {
+        Type::FixedU128 => Some(WideNumericKind::U128),
+        Type::Amount => Some(WideNumericKind::Amount),
+        _ => None,
+    }
+}
+
 fn lower_map_key_eq(ctx: &mut LowerCtx, key_ty: &Type, left: Temp, right: Temp) -> Temp {
     if semantic::is_wide_numeric_type(key_ty) {
         let t = ctx.new_temp();
@@ -1227,6 +1320,8 @@ fn lower_map_key_eq(ctx: &mut LowerCtx, key_ty: &Type, left: Temp, right: Temp) 
             op: BinaryOp::Eq,
             left,
             right,
+            kind: wide_numeric_kind_for_type(key_ty)
+                .expect("wide numeric map key has a nominal ABI kind"),
         });
         t
     } else if is_pointer_eq_type(key_ty) {
@@ -1257,93 +1352,6 @@ fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
         other if semantic::is_pointer_type(&other) => Some(KeyCodec::Pointer),
         _ => None,
     }
-}
-
-fn state_value_kind_for_type(ty: &Type) -> Option<ivm_abi::state_value::StateValueKindV1> {
-    use ivm_abi::state_value::StateValueKindV1 as Kind;
-
-    Some(match semantic::resolve_struct_type(ty) {
-        Type::Int => Kind::Int,
-        Type::FixedU128 => Kind::U128,
-        Type::Amount => Kind::Amount,
-        Type::Bool => Kind::Bool,
-        Type::String => Kind::String,
-        Type::Json => Kind::Json,
-        Type::Bytes => Kind::Bytes,
-        Type::AccountId => Kind::AccountId,
-        Type::AssetDefinitionId => Kind::AssetDefinitionId,
-        Type::AssetId => Kind::AssetId,
-        Type::DomainId => Kind::DomainId,
-        Type::NftId => Kind::NftId,
-        Type::Name => Kind::Name,
-        Type::DataSpaceId => Kind::DataSpaceId,
-        Type::AxtDescriptor => Kind::AxtDescriptor,
-        Type::AssetHandle => Kind::AssetHandle,
-        Type::ProofBlob => Kind::ProofBlob,
-        Type::SoracloudRequest => Kind::SoracloudRequest,
-        Type::SoracloudResponse => Kind::SoracloudResponse,
-        Type::Unit
-        | Type::Secret(_)
-        | Type::StateMap(_, _)
-        | Type::Option(_)
-        | Type::Result(_, _)
-        | Type::Tuple(_)
-        | Type::Struct { .. }
-        | Type::NamedStruct(_) => return None,
-    })
-}
-
-fn append_state_value_schema_nodes(
-    ty: &Type,
-    nodes: &mut Vec<ivm_abi::state_value::StateValueNodeV1>,
-) -> bool {
-    use ivm_abi::state_value::StateValueNodeV1 as Node;
-
-    match semantic::resolve_struct_type(ty) {
-        Type::Struct { name, fields } => {
-            nodes.push(Node::Struct {
-                name,
-                fields: fields.iter().map(|(name, _)| name.clone()).collect(),
-            });
-            fields
-                .iter()
-                .all(|(_, field_ty)| append_state_value_schema_nodes(field_ty, nodes))
-        }
-        Type::Tuple(items) => {
-            let Ok(arity) = u16::try_from(items.len()) else {
-                return false;
-            };
-            nodes.push(Node::Tuple { arity });
-            items
-                .iter()
-                .all(|item| append_state_value_schema_nodes(item, nodes))
-        }
-        Type::Option(inner) => {
-            nodes.push(Node::Option);
-            append_state_value_schema_nodes(&inner, nodes)
-        }
-        Type::Result(ok, err) => {
-            nodes.push(Node::Result);
-            append_state_value_schema_nodes(&ok, nodes)
-                && append_state_value_schema_nodes(&err, nodes)
-        }
-        leaf => {
-            let Some(kind) = state_value_kind_for_type(&leaf) else {
-                return false;
-            };
-            nodes.push(Node::Leaf(kind));
-            true
-        }
-    }
-}
-
-fn state_value_schema(ty: &Type) -> Option<ivm_abi::state_value::StateValueSchemaV1> {
-    let mut nodes = Vec::new();
-    if !append_state_value_schema_nodes(ty, &mut nodes) {
-        return None;
-    }
-    let schema = ivm_abi::state_value::StateValueSchemaV1 { nodes };
-    schema.validate().then_some(schema)
 }
 
 fn emit_state_value_schema_ref(ctx: &mut LowerCtx, ty: &Type) -> Option<Temp> {
@@ -1386,44 +1394,9 @@ fn collect_state_value_words(
             });
             collect_state_value_words(ctx, item, item_ty, words)
         }),
-        Type::Option(inner) => {
-            let tag = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: tag,
-                tuple: value,
-                index: 0,
-            });
-            words.push(tag);
-            let payload = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: payload,
-                tuple: value,
-                index: 1,
-            });
-            collect_state_value_words(ctx, payload, &inner, words)
-        }
-        Type::Result(ok, err) => {
-            let tag = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: tag,
-                tuple: value,
-                index: 0,
-            });
-            words.push(tag);
-            let ok_value = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: ok_value,
-                tuple: value,
-                index: 1,
-            });
-            let err_value = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: err_value,
-                tuple: value,
-                index: 2,
-            });
-            collect_state_value_words(ctx, ok_value, &ok, words)
-                && collect_state_value_words(ctx, err_value, &err, words)
+        Type::Option(_) | Type::Result(_, _) | Type::List(_, _) => {
+            words.push(value);
+            true
         }
         leaf => {
             if state_value_kind_for_type(&leaf).is_none() {
@@ -1433,6 +1406,97 @@ fn collect_state_value_words(
             true
         }
     }
+}
+
+fn collect_json_construction_words(
+    ctx: &mut LowerCtx,
+    expr: &TypedExpr,
+    vars: &mut HashMap<String, Temp>,
+    words: &mut Vec<Temp>,
+) -> bool {
+    match expr.kind() {
+        semantic::ExprKind::JsonObject(entries) => entries
+            .iter()
+            .all(|(_, value)| collect_json_construction_words(ctx, value, vars, words)),
+        semantic::ExprKind::JsonArray(elements) => elements
+            .iter()
+            .all(|element| collect_json_construction_words(ctx, element, vars, words)),
+        _ => {
+            let value = lower_expr(ctx, expr, vars);
+            collect_state_value_words(ctx, value, &expr.ty, words)
+        }
+    }
+}
+
+fn lower_json_construction(
+    ctx: &mut LowerCtx,
+    expr: &TypedExpr,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let construction = match json_construction_schema(expr) {
+        Ok(construction) => construction,
+        Err(error) => {
+            ctx.record_error(format!("internal error: {error}"));
+            return emit_i64_const(ctx, 0);
+        }
+    };
+    let expected_words = construction.word_count;
+    let encoded_schema = construction.encoded;
+
+    let schema_ref = ctx.new_temp();
+    ctx.current_instr(Instr::DataRef {
+        dest: schema_ref,
+        kind: DataRefKind::NoritoBytes,
+        value: format!("0x{}", hex::encode(encoded_schema)),
+    });
+
+    let mut words = Vec::with_capacity(expected_words);
+    if !collect_json_construction_words(ctx, expr, vars, &mut words)
+        || words.len() != expected_words
+        || words.len() > ivm_abi::state_value::MAX_STATE_VALUE_WORDS
+    {
+        ctx.record_error("internal error: native JSON value-word schema mismatch".into());
+        return emit_i64_const(ctx, 0);
+    }
+
+    let table = if words.is_empty() {
+        emit_i64_const(ctx, 0)
+    } else {
+        let Some(byte_len) = words
+            .len()
+            .checked_mul(std::mem::size_of::<u64>())
+            .and_then(|bytes| i64::try_from(bytes).ok())
+        else {
+            ctx.record_error("native JSON value table exceeds the V1 byte limit".into());
+            return emit_i64_const(ctx, 0);
+        };
+        let bytes = emit_i64_const(ctx, byte_len);
+        let table = ctx.new_temp();
+        ctx.current_instr(Instr::Alloc { dest: table, bytes });
+        for (index, word) in words.into_iter().enumerate() {
+            let Some(offset) = index
+                .checked_mul(std::mem::size_of::<u64>())
+                .and_then(|offset| i16::try_from(offset).ok())
+            else {
+                ctx.record_error("native JSON value-table offset exceeds the V1 limit".into());
+                return emit_i64_const(ctx, 0);
+            };
+            ctx.current_instr(Instr::Store64Imm {
+                base: table,
+                imm: offset,
+                value: word,
+            });
+        }
+        table
+    };
+    let word_count = emit_i64_const(ctx, i64::try_from(expected_words).unwrap_or(i64::MAX));
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::DirectHelperSyscall {
+        dest,
+        syscall: ivm_abi::syscalls::SYSCALL_JSON_BUILD,
+        args: vec![schema_ref, table, word_count],
+    });
+    dest
 }
 
 fn collect_function_value_words(ctx: &mut LowerCtx, value: Temp, ty: &Type, words: &mut Vec<Temp>) {
@@ -1459,45 +1523,7 @@ fn collect_function_value_words(ctx: &mut LowerCtx, value: Temp, ty: &Type, word
                 collect_function_value_words(ctx, item, item_ty, words);
             }
         }
-        Type::Option(inner) => {
-            let tag = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: tag,
-                tuple: value,
-                index: 0,
-            });
-            words.push(tag);
-            let payload = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: payload,
-                tuple: value,
-                index: 1,
-            });
-            collect_function_value_words(ctx, payload, &inner, words);
-        }
-        Type::Result(ok, err) => {
-            let tag = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: tag,
-                tuple: value,
-                index: 0,
-            });
-            words.push(tag);
-            let ok_value = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: ok_value,
-                tuple: value,
-                index: 1,
-            });
-            let err_value = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: err_value,
-                tuple: value,
-                index: 2,
-            });
-            collect_function_value_words(ctx, ok_value, &ok, words);
-            collect_function_value_words(ctx, err_value, &err, words);
-        }
+        Type::Option(_) | Type::Result(_, _) | Type::List(_, _) => words.push(value),
         _ => words.push(value),
     }
 }
@@ -1559,87 +1585,12 @@ fn rebuild_state_value_from_table(
             ctx.current_instr(Instr::TuplePack { dest, items });
             Some(dest)
         }
-        Type::Option(inner) => {
-            let tag = load_state_value_word(ctx, table, index)?;
-            let value = rebuild_state_value_from_table(ctx, table, &inner, index)?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack {
-                dest,
-                items: vec![tag, value],
-            });
-            Some(dest)
-        }
-        Type::Result(ok, err) => {
-            let tag = load_state_value_word(ctx, table, index)?;
-            let ok_value = rebuild_state_value_from_table(ctx, table, &ok, index)?;
-            let err_value = rebuild_state_value_from_table(ctx, table, &err, index)?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack {
-                dest,
-                items: vec![tag, ok_value, err_value],
-            });
-            Some(dest)
+        Type::Option(_) | Type::Result(_, _) | Type::List(_, _) => {
+            load_state_value_word(ctx, table, index)
         }
         leaf => {
             state_value_kind_for_type(&leaf)?;
             load_state_value_word(ctx, table, index)
-        }
-    }
-}
-
-fn rebuild_state_value_from_words(
-    ctx: &mut LowerCtx,
-    ty: &Type,
-    words: &[Temp],
-    index: &mut usize,
-) -> Option<Temp> {
-    match semantic::resolve_struct_type(ty) {
-        Type::Struct { fields, .. } => {
-            let items = fields
-                .iter()
-                .map(|(_, field_ty)| rebuild_state_value_from_words(ctx, field_ty, words, index))
-                .collect::<Option<Vec<_>>>()?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack { dest, items });
-            Some(dest)
-        }
-        Type::Tuple(types) => {
-            let items = types
-                .iter()
-                .map(|item_ty| rebuild_state_value_from_words(ctx, item_ty, words, index))
-                .collect::<Option<Vec<_>>>()?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack { dest, items });
-            Some(dest)
-        }
-        Type::Option(inner) => {
-            let tag = *words.get(*index)?;
-            *index = index.saturating_add(1);
-            let value = rebuild_state_value_from_words(ctx, &inner, words, index)?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack {
-                dest,
-                items: vec![tag, value],
-            });
-            Some(dest)
-        }
-        Type::Result(ok, err) => {
-            let tag = *words.get(*index)?;
-            *index = index.saturating_add(1);
-            let ok_value = rebuild_state_value_from_words(ctx, &ok, words, index)?;
-            let err_value = rebuild_state_value_from_words(ctx, &err, words, index)?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack {
-                dest,
-                items: vec![tag, ok_value, err_value],
-            });
-            Some(dest)
-        }
-        leaf => {
-            state_value_kind_for_type(&leaf)?;
-            let word = *words.get(*index)?;
-            *index = index.saturating_add(1);
-            Some(word)
         }
     }
 }
@@ -1669,28 +1620,10 @@ fn rebuild_function_value_from_words(
             ctx.current_instr(Instr::TuplePack { dest, items });
             Some(dest)
         }
-        Type::Option(inner) => {
-            let tag = *words.get(*index)?;
+        Type::Option(_) | Type::Result(_, _) | Type::List(_, _) => {
+            let word = *words.get(*index)?;
             *index = index.saturating_add(1);
-            let value = rebuild_function_value_from_words(ctx, &inner, words, index)?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack {
-                dest,
-                items: vec![tag, value],
-            });
-            Some(dest)
-        }
-        Type::Result(ok, err) => {
-            let tag = *words.get(*index)?;
-            *index = index.saturating_add(1);
-            let ok_value = rebuild_function_value_from_words(ctx, &ok, words, index)?;
-            let err_value = rebuild_function_value_from_words(ctx, &err, words, index)?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack {
-                dest,
-                items: vec![tag, ok_value, err_value],
-            });
-            Some(dest)
+            Some(word)
         }
         _ => {
             let word = *words.get(*index)?;
@@ -1698,6 +1631,1440 @@ fn rebuild_function_value_from_words(
             Some(word)
         }
     }
+}
+
+fn sum_layout_for_type(ty: &Type) -> Option<ivm_abi::sum::SumLayoutV1> {
+    let word_count = |payload: &Type| u64::try_from(runtime_value_word_types(payload).len()).ok();
+    match semantic::resolve_struct_type(ty) {
+        Type::Option(payload) => ivm_abi::sum::SumLayoutV1::option(word_count(&payload)?).ok(),
+        // The canonical tag is zero for `err` and one for `ok`.
+        Type::Result(ok, err) => {
+            ivm_abi::sum::SumLayoutV1::try_new(word_count(&err)?, word_count(&ok)?).ok()
+        }
+        _ => None,
+    }
+}
+
+fn sum_active_payload_type(ty: &Type, tag: u64) -> Option<Option<Type>> {
+    match (semantic::resolve_struct_type(ty), tag) {
+        (Type::Option(_), 0) => Some(None),
+        (Type::Option(payload), 1) => Some(Some(*payload)),
+        (Type::Result(_, err), 0) => Some(Some(*err)),
+        (Type::Result(ok, _), 1) => Some(Some(*ok)),
+        _ => None,
+    }
+}
+
+/// Allocate one canonical active-only sum value.
+///
+/// The allocation reserves the larger branch once, writes the discriminant,
+/// and writes only the selected branch. In particular, this helper never
+/// evaluates or constructs an inactive payload.
+fn emit_sum_value(ctx: &mut LowerCtx, sum_ty: &Type, tag: u64, payload: Option<Temp>) -> Temp {
+    let Some(layout) = sum_layout_for_type(sum_ty) else {
+        ctx.record_error("internal error: invalid sum layout".into());
+        let invalid = ctx.new_temp();
+        ctx.current_instr(Instr::Const {
+            dest: invalid,
+            value: 0,
+        });
+        return invalid;
+    };
+    let Some(payload_ty) = sum_active_payload_type(sum_ty, tag) else {
+        ctx.record_error("internal error: invalid sum tag".into());
+        let invalid = ctx.new_temp();
+        ctx.current_instr(Instr::Const {
+            dest: invalid,
+            value: 0,
+        });
+        return invalid;
+    };
+
+    let mut payload_words = Vec::new();
+    match (payload, payload_ty.as_ref()) {
+        (Some(value), Some(payload_ty)) => {
+            collect_function_value_words(ctx, value, payload_ty, &mut payload_words);
+        }
+        (None, None) => {}
+        _ => ctx.record_error("internal error: sum active payload mismatch".into()),
+    }
+    let actual_words = u64::try_from(payload_words.len()).unwrap_or(u64::MAX);
+    if layout.validate_active_width(tag, actual_words).is_err() {
+        ctx.record_error("internal error: sum active payload width mismatch".into());
+    }
+
+    let bytes = layout
+        .allocation_bytes()
+        .ok()
+        .and_then(|bytes| i64::try_from(bytes).ok())
+        .unwrap_or_else(|| {
+            ctx.record_error("internal error: sum allocation exceeds V1 limits".into());
+            8
+        });
+    let byte_count = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: byte_count,
+        value: bytes,
+    });
+    let value = ctx.new_temp();
+    ctx.current_instr(Instr::Alloc {
+        dest: value,
+        bytes: byte_count,
+    });
+    let tag_temp = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: tag_temp,
+        value: i64::try_from(tag).expect("canonical sum tag fits i64"),
+    });
+    ctx.current_instr(Instr::Store64Imm {
+        base: value,
+        imm: 0,
+        value: tag_temp,
+    });
+    for (index, word) in payload_words.into_iter().enumerate() {
+        let offset = index
+            .checked_add(1)
+            .and_then(|word_index| word_index.checked_mul(8))
+            .and_then(|offset| i16::try_from(offset).ok());
+        let Some(imm) = offset else {
+            ctx.record_error("internal error: sum payload offset exceeds V1 limits".into());
+            break;
+        };
+        ctx.current_instr(Instr::Store64Imm {
+            base: value,
+            imm,
+            value: word,
+        });
+    }
+    value
+}
+
+fn load_sum_tag(ctx: &mut LowerCtx, value: Temp) -> Temp {
+    let tag = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: tag,
+        base: value,
+        imm: 0,
+    });
+    tag
+}
+
+fn load_sum_payload(ctx: &mut LowerCtx, value: Temp, payload_ty: &Type) -> Temp {
+    let word_types = runtime_value_word_types(payload_ty);
+    let mut words = Vec::with_capacity(word_types.len());
+    for index in 0..word_types.len() {
+        let imm = index
+            .checked_add(1)
+            .and_then(|word_index| word_index.checked_mul(8))
+            .and_then(|offset| i16::try_from(offset).ok())
+            .unwrap_or_else(|| {
+                ctx.record_error("internal error: sum payload offset exceeds V1 limits".into());
+                0
+            });
+        let word = ctx.new_temp();
+        ctx.current_instr(Instr::Load64Imm {
+            dest: word,
+            base: value,
+            imm,
+        });
+        words.push(word);
+    }
+    let mut index = 0;
+    let payload = rebuild_function_value_from_words(ctx, payload_ty, &words, &mut index)
+        .unwrap_or_else(|| {
+            ctx.record_error("internal error: cannot rebuild sum payload".into());
+            value
+        });
+    if index != words.len() {
+        ctx.record_error("internal error: sum payload word count mismatch".into());
+    }
+    payload
+}
+
+fn list_layout_for_type(ty: &Type) -> Option<(Type, ivm_abi::list::ListLayoutV1)> {
+    let Type::List(element, capacity) = semantic::resolve_struct_type(ty) else {
+        return None;
+    };
+    let element_words = u64::try_from(runtime_value_word_types(&element).len()).ok()?;
+    let layout = ivm_abi::list::ListLayoutV1::try_new(u64::from(capacity), element_words).ok()?;
+    Some((*element, layout))
+}
+
+fn emit_i64_const(ctx: &mut LowerCtx, value: i64) -> Temp {
+    let temp = ctx.new_temp();
+    ctx.current_instr(Instr::Const { dest: temp, value });
+    temp
+}
+
+fn emit_list_allocation(ctx: &mut LowerCtx, list_ty: &Type, initial_len: u64) -> Temp {
+    let Some((_, layout)) = list_layout_for_type(list_ty) else {
+        ctx.record_error("internal error: invalid List layout".into());
+        return emit_i64_const(ctx, 0);
+    };
+    if initial_len > u64::from(layout.capacity()) {
+        ctx.record_error("internal error: List initial length exceeds capacity".into());
+    }
+    let bytes = layout
+        .allocation_bytes()
+        .ok()
+        .and_then(|bytes| i64::try_from(bytes).ok())
+        .unwrap_or_else(|| {
+            ctx.record_error("internal error: List allocation exceeds V1 limits".into());
+            16
+        });
+    let bytes = emit_i64_const(ctx, bytes);
+    let list = ctx.new_temp();
+    ctx.current_instr(Instr::Alloc { dest: list, bytes });
+    let len = emit_i64_const(ctx, i64::try_from(initial_len).unwrap_or(i64::MAX));
+    ctx.current_instr(Instr::Store64Imm {
+        base: list,
+        imm: 0,
+        value: len,
+    });
+    let capacity = emit_i64_const(ctx, i64::from(layout.capacity()));
+    ctx.current_instr(Instr::Store64Imm {
+        base: list,
+        imm: 8,
+        value: capacity,
+    });
+    list
+}
+
+fn emit_list_slot_base(ctx: &mut LowerCtx, list: Temp, index: Temp, element_words: usize) -> Temp {
+    let stride = element_words
+        .checked_mul(8)
+        .and_then(|stride| i64::try_from(stride).ok())
+        .unwrap_or_else(|| {
+            ctx.record_error("internal error: List element stride exceeds V1 limits".into());
+            8
+        });
+    let stride = emit_i64_const(ctx, stride);
+    let offset = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: offset,
+        op: BinaryOp::Mul,
+        left: index,
+        right: stride,
+    });
+    let slot = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: slot,
+        op: BinaryOp::Add,
+        left: list,
+        right: offset,
+    });
+    slot
+}
+
+fn emit_list_word_address(ctx: &mut LowerCtx, slot: Temp, word_index: usize) -> Temp {
+    let offset = word_index
+        .checked_add(2)
+        .and_then(|word| word.checked_mul(8))
+        .and_then(|offset| i64::try_from(offset).ok())
+        .unwrap_or_else(|| {
+            ctx.record_error("internal error: List word offset exceeds V1 limits".into());
+            16
+        });
+    let offset = emit_i64_const(ctx, offset);
+    let address = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: address,
+        op: BinaryOp::Add,
+        left: slot,
+        right: offset,
+    });
+    address
+}
+
+fn load_list_element(ctx: &mut LowerCtx, list: Temp, index: Temp, element_ty: &Type) -> Temp {
+    let word_types = runtime_value_word_types(element_ty);
+    let slot = emit_list_slot_base(ctx, list, index, word_types.len());
+    let mut words = Vec::with_capacity(word_types.len());
+    for word_index in 0..word_types.len() {
+        let address = emit_list_word_address(ctx, slot, word_index);
+        let word = ctx.new_temp();
+        ctx.current_instr(Instr::Load64 {
+            dest: word,
+            address,
+        });
+        words.push(word);
+    }
+    let mut word_index = 0;
+    let element = rebuild_function_value_from_words(ctx, element_ty, &words, &mut word_index)
+        .unwrap_or_else(|| {
+            ctx.record_error("internal error: cannot rebuild List element".into());
+            list
+        });
+    if word_index != words.len() {
+        ctx.record_error("internal error: List element word count mismatch".into());
+    }
+    element
+}
+
+fn store_list_element(
+    ctx: &mut LowerCtx,
+    list: Temp,
+    index: Temp,
+    element: Temp,
+    element_ty: &Type,
+) {
+    let word_types = runtime_value_word_types(element_ty);
+    let mut words = Vec::with_capacity(word_types.len());
+    collect_function_value_words(ctx, element, element_ty, &mut words);
+    if words.len() != word_types.len() {
+        ctx.record_error("internal error: List element word count mismatch".into());
+        return;
+    }
+    let slot = emit_list_slot_base(ctx, list, index, words.len());
+    for (word_index, word) in words.into_iter().enumerate() {
+        let address = emit_list_word_address(ctx, slot, word_index);
+        ctx.current_instr(Instr::Store64 {
+            address,
+            value: word,
+        });
+    }
+}
+
+fn clear_list_element(ctx: &mut LowerCtx, list: Temp, index: Temp, element_ty: &Type) {
+    let element_words = runtime_value_word_types(element_ty).len();
+    let slot = emit_list_slot_base(ctx, list, index, element_words);
+    let zero = emit_i64_const(ctx, 0);
+    for word_index in 0..element_words {
+        let address = emit_list_word_address(ctx, slot, word_index);
+        ctx.current_instr(Instr::Store64 {
+            address,
+            value: zero,
+        });
+    }
+}
+
+fn emit_list_index_is_present(ctx: &mut LowerCtx, index: Temp, len: Temp) -> Temp {
+    let zero = emit_i64_const(ctx, 0);
+    let non_negative = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: non_negative,
+        op: BinaryOp::Ge,
+        left: index,
+        right: zero,
+    });
+    let below_len = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: below_len,
+        op: BinaryOp::Lt,
+        left: index,
+        right: len,
+    });
+    let present = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: present,
+        op: BinaryOp::And,
+        left: non_negative,
+        right: below_len,
+    });
+    present
+}
+
+fn lower_list_literal(
+    ctx: &mut LowerCtx,
+    elements: &[TypedExpr],
+    list_ty: &Type,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let Some((element_ty, _)) = list_layout_for_type(list_ty) else {
+        ctx.record_error("internal error: typed List literal lacks List type".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let list = emit_list_allocation(
+        ctx,
+        list_ty,
+        u64::try_from(elements.len()).unwrap_or(u64::MAX),
+    );
+    for (index, element) in elements.iter().enumerate() {
+        let value = lower_expr(ctx, element, vars);
+        let index = emit_i64_const(ctx, i64::try_from(index).unwrap_or(i64::MAX));
+        store_list_element(ctx, list, index, value, &element_ty);
+    }
+    list
+}
+
+fn lower_list_comprehension(
+    ctx: &mut LowerCtx,
+    expression: &TypedExpr,
+    item: &str,
+    source: &TypedExpr,
+    condition: Option<&TypedExpr>,
+    list_ty: &Type,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let source_list = lower_expr(ctx, source, vars);
+    let Type::List(source_element, _) = semantic::resolve_struct_type(&source.ty) else {
+        ctx.record_error("internal error: List comprehension source lost its List type".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let Some((result_element, _)) = list_layout_for_type(list_ty) else {
+        ctx.record_error("internal error: List comprehension result lost its List type".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let result = emit_list_allocation(ctx, list_ty, 0);
+    let source_len = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: source_len,
+        base: source_list,
+        imm: 0,
+    });
+    let index = emit_i64_const(ctx, 0);
+    let one = emit_i64_const(ctx, 1);
+    let header = ctx.new_label();
+    let body = ctx.new_label();
+    let append = ctx.new_label();
+    let step = ctx.new_label();
+    let end = ctx.new_label();
+    ctx.finish_current(Terminator::Jump(header));
+
+    ctx.start_block(header);
+    let keep_going = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: keep_going,
+        op: BinaryOp::Lt,
+        left: index,
+        right: source_len,
+    });
+    ctx.finish_current(Terminator::Branch {
+        cond: keep_going,
+        then_bb: body,
+        else_bb: end,
+    });
+
+    ctx.start_block(body);
+    let item_value = load_list_element(ctx, source_list, index, &source_element);
+    let mut comprehension_vars = vars.clone();
+    comprehension_vars.insert(item.to_owned(), item_value);
+    if let Some(condition) = condition {
+        let condition = lower_expr(ctx, condition, &mut comprehension_vars);
+        ctx.finish_current(Terminator::Branch {
+            cond: condition,
+            then_bb: append,
+            else_bb: step,
+        });
+    } else {
+        ctx.finish_current(Terminator::Jump(append));
+    }
+
+    ctx.start_block(append);
+    let value = lower_expr(ctx, expression, &mut comprehension_vars);
+    let result_len = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: result_len,
+        base: result,
+        imm: 0,
+    });
+    store_list_element(ctx, result, result_len, value, &result_element);
+    ctx.current_instr(Instr::Binary {
+        dest: result_len,
+        op: BinaryOp::Add,
+        left: result_len,
+        right: one,
+    });
+    ctx.current_instr(Instr::Store64Imm {
+        base: result,
+        imm: 0,
+        value: result_len,
+    });
+    ctx.finish_current(Terminator::Jump(step));
+
+    ctx.start_block(step);
+    ctx.current_instr(Instr::Binary {
+        dest: index,
+        op: BinaryOp::Add,
+        left: index,
+        right: one,
+    });
+    ctx.finish_current(Terminator::Jump(header));
+
+    ctx.start_block(end);
+    result
+}
+
+fn emit_product_value_eq(
+    ctx: &mut LowerCtx,
+    left: Temp,
+    right: Temp,
+    fields: impl IntoIterator<Item = Type>,
+) -> Temp {
+    let mut result = emit_i64_const(ctx, 1);
+    for (index, field_ty) in fields.into_iter().enumerate() {
+        let left_field = ctx.new_temp();
+        ctx.current_instr(Instr::TupleGet {
+            dest: left_field,
+            tuple: left,
+            index,
+        });
+        let right_field = ctx.new_temp();
+        ctx.current_instr(Instr::TupleGet {
+            dest: right_field,
+            tuple: right,
+            index,
+        });
+        let equal = emit_typed_value_eq(ctx, left_field, right_field, &field_ty);
+        let combined = ctx.new_temp();
+        ctx.current_instr(Instr::Binary {
+            dest: combined,
+            op: BinaryOp::And,
+            left: result,
+            right: equal,
+        });
+        result = combined;
+    }
+    result
+}
+
+/// Compare two compiler-owned sums without observing their inactive payloads.
+fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> Temp {
+    let left_tag = load_sum_tag(ctx, left);
+    let right_tag = load_sum_tag(ctx, right);
+    let tags_equal = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: tags_equal,
+        op: BinaryOp::Eq,
+        left: left_tag,
+        right: right_tag,
+    });
+
+    let matching_tags = ctx.new_label();
+    let different_tags = ctx.new_label();
+    let end = ctx.new_label();
+    let result = ctx.new_temp();
+    ctx.finish_current(Terminator::Branch {
+        cond: tags_equal,
+        then_bb: matching_tags,
+        else_bb: different_tags,
+    });
+
+    ctx.start_block(different_tags);
+    let false_value = emit_i64_const(ctx, 0);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: false_value,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+
+    ctx.start_block(matching_tags);
+    match semantic::resolve_struct_type(ty) {
+        Type::Option(payload) => {
+            let some = ctx.new_label();
+            let none = ctx.new_label();
+            ctx.finish_current(Terminator::Branch {
+                cond: left_tag,
+                then_bb: some,
+                else_bb: none,
+            });
+
+            ctx.start_block(none);
+            let true_value = emit_i64_const(ctx, 1);
+            ctx.current_instr(Instr::Copy {
+                dest: result,
+                src: true_value,
+            });
+            ctx.finish_current(Terminator::Jump(end));
+
+            ctx.start_block(some);
+            let left_payload = load_sum_payload(ctx, left, &payload);
+            let right_payload = load_sum_payload(ctx, right, &payload);
+            let equal = emit_typed_value_eq(ctx, left_payload, right_payload, &payload);
+            ctx.current_instr(Instr::Copy {
+                dest: result,
+                src: equal,
+            });
+            ctx.finish_current(Terminator::Jump(end));
+        }
+        Type::Result(ok, err) => {
+            let success = ctx.new_label();
+            let failure = ctx.new_label();
+            ctx.finish_current(Terminator::Branch {
+                cond: left_tag,
+                then_bb: success,
+                else_bb: failure,
+            });
+
+            ctx.start_block(failure);
+            let left_error = load_sum_payload(ctx, left, &err);
+            let right_error = load_sum_payload(ctx, right, &err);
+            let equal = emit_typed_value_eq(ctx, left_error, right_error, &err);
+            ctx.current_instr(Instr::Copy {
+                dest: result,
+                src: equal,
+            });
+            ctx.finish_current(Terminator::Jump(end));
+
+            ctx.start_block(success);
+            let left_value = load_sum_payload(ctx, left, &ok);
+            let right_value = load_sum_payload(ctx, right, &ok);
+            let equal = emit_typed_value_eq(ctx, left_value, right_value, &ok);
+            ctx.current_instr(Instr::Copy {
+                dest: result,
+                src: equal,
+            });
+            ctx.finish_current(Terminator::Jump(end));
+        }
+        _ => {
+            ctx.record_error("internal error: aggregate equality expected Option or Result".into());
+            let false_value = emit_i64_const(ctx, 0);
+            ctx.current_instr(Instr::Copy {
+                dest: result,
+                src: false_value,
+            });
+            ctx.finish_current(Terminator::Jump(end));
+        }
+    }
+
+    ctx.start_block(end);
+    result
+}
+
+/// Compare two bounded Lists by length and recursively by their active elements.
+fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &Type) -> Temp {
+    let left_len = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: left_len,
+        base: left,
+        imm: 0,
+    });
+    let right_len = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: right_len,
+        base: right,
+        imm: 0,
+    });
+    let lengths_equal = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: lengths_equal,
+        op: BinaryOp::Eq,
+        left: left_len,
+        right: right_len,
+    });
+
+    let compare_elements = ctx.new_label();
+    let header = ctx.new_label();
+    let body = ctx.new_label();
+    let step = ctx.new_label();
+    let different = ctx.new_label();
+    let equal = ctx.new_label();
+    let end = ctx.new_label();
+    let result = ctx.new_temp();
+    let index = emit_i64_const(ctx, 0);
+    let one = emit_i64_const(ctx, 1);
+    ctx.finish_current(Terminator::Branch {
+        cond: lengths_equal,
+        then_bb: compare_elements,
+        else_bb: different,
+    });
+
+    ctx.start_block(compare_elements);
+    ctx.finish_current(Terminator::Jump(header));
+
+    ctx.start_block(header);
+    let keep_going = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: keep_going,
+        op: BinaryOp::Lt,
+        left: index,
+        right: left_len,
+    });
+    ctx.finish_current(Terminator::Branch {
+        cond: keep_going,
+        then_bb: body,
+        else_bb: equal,
+    });
+
+    ctx.start_block(body);
+    let left_element = load_list_element(ctx, left, index, element_ty);
+    let right_element = load_list_element(ctx, right, index, element_ty);
+    let elements_equal = emit_typed_value_eq(ctx, left_element, right_element, element_ty);
+    ctx.finish_current(Terminator::Branch {
+        cond: elements_equal,
+        then_bb: step,
+        else_bb: different,
+    });
+
+    ctx.start_block(step);
+    ctx.current_instr(Instr::Binary {
+        dest: index,
+        op: BinaryOp::Add,
+        left: index,
+        right: one,
+    });
+    ctx.finish_current(Terminator::Jump(header));
+
+    ctx.start_block(different);
+    let false_value = emit_i64_const(ctx, 0);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: false_value,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+
+    ctx.start_block(equal);
+    let true_value = emit_i64_const(ctx, 1);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: true_value,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+
+    ctx.start_block(end);
+    result
+}
+
+/// Emit canonical structural equality for one List element schema.
+fn emit_typed_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> Temp {
+    match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } => emit_product_value_eq(
+            ctx,
+            left,
+            right,
+            fields.into_iter().map(|(_, field_ty)| field_ty),
+        ),
+        Type::Tuple(items) => emit_product_value_eq(ctx, left, right, items),
+        Type::Option(_) | Type::Result(_, _) => emit_sum_value_eq(ctx, left, right, ty),
+        Type::List(element, _) => emit_list_value_eq(ctx, left, right, &element),
+        leaf => {
+            let equal = ctx.new_temp();
+            if let Some(kind) = wide_numeric_kind_for_type(&leaf) {
+                ctx.current_instr(Instr::NumericCompare {
+                    dest: equal,
+                    op: BinaryOp::Eq,
+                    left,
+                    right,
+                    kind,
+                });
+            } else if is_pointer_eq_type(&leaf) {
+                ctx.current_instr(Instr::PointerEq {
+                    dest: equal,
+                    left,
+                    right,
+                });
+            } else if matches!(leaf, Type::Int | Type::Bool) {
+                ctx.current_instr(Instr::Binary {
+                    dest: equal,
+                    op: BinaryOp::Eq,
+                    left,
+                    right,
+                });
+            } else {
+                ctx.record_error(format!(
+                    "internal error: List.contains cannot compare `{leaf:?}`"
+                ));
+                let false_value = emit_i64_const(ctx, 0);
+                ctx.current_instr(Instr::Copy {
+                    dest: equal,
+                    src: false_value,
+                });
+            }
+            equal
+        }
+    }
+}
+
+fn lower_list_get(
+    ctx: &mut LowerCtx,
+    args: &[TypedExpr],
+    result_ty: &Type,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let list = lower_expr(ctx, &args[0], vars);
+    let index = lower_expr_as_int(ctx, &args[1], vars);
+    let len = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: len,
+        base: list,
+        imm: 0,
+    });
+    let present = emit_list_index_is_present(ctx, index, len);
+    let some = ctx.new_label();
+    let none = ctx.new_label();
+    let end = ctx.new_label();
+    let result = ctx.new_temp();
+    ctx.finish_current(Terminator::Branch {
+        cond: present,
+        then_bb: some,
+        else_bb: none,
+    });
+
+    ctx.start_block(some);
+    let Type::Option(element_ty) = semantic::resolve_struct_type(result_ty) else {
+        ctx.record_error("internal error: List.get result is not Option<T>".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let value = load_list_element(ctx, list, index, &element_ty);
+    let value = emit_sum_value(ctx, result_ty, 1, Some(value));
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: value,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+
+    ctx.start_block(none);
+    let value = emit_sum_value(ctx, result_ty, 0, None);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: value,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+    ctx.start_block(end);
+    result
+}
+
+fn lower_list_try_set(
+    ctx: &mut LowerCtx,
+    args: &[TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let list = lower_expr(ctx, &args[0], vars);
+    let index = lower_expr_as_int(ctx, &args[1], vars);
+    let value = lower_expr(ctx, &args[2], vars);
+    let Type::List(element_ty, _) = semantic::resolve_struct_type(&args[0].ty) else {
+        ctx.record_error("internal error: List.try_set receiver lost List type".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let len = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: len,
+        base: list,
+        imm: 0,
+    });
+    let present = emit_list_index_is_present(ctx, index, len);
+    let success = ctx.new_label();
+    let failure = ctx.new_label();
+    let end = ctx.new_label();
+    let result = ctx.new_temp();
+    ctx.finish_current(Terminator::Branch {
+        cond: present,
+        then_bb: success,
+        else_bb: failure,
+    });
+
+    ctx.start_block(success);
+    store_list_element(ctx, list, index, value, &element_ty);
+    let one = emit_i64_const(ctx, 1);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: one,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+
+    ctx.start_block(failure);
+    let zero = emit_i64_const(ctx, 0);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: zero,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+    ctx.start_block(end);
+    result
+}
+
+fn lower_list_try_push(
+    ctx: &mut LowerCtx,
+    args: &[TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let list = lower_expr(ctx, &args[0], vars);
+    let value = lower_expr(ctx, &args[1], vars);
+    let Type::List(element_ty, capacity) = semantic::resolve_struct_type(&args[0].ty) else {
+        ctx.record_error("internal error: List.try_push receiver lost List type".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let len = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: len,
+        base: list,
+        imm: 0,
+    });
+    let capacity = emit_i64_const(ctx, i64::from(capacity));
+    let has_capacity = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: has_capacity,
+        op: BinaryOp::Lt,
+        left: len,
+        right: capacity,
+    });
+    let success = ctx.new_label();
+    let failure = ctx.new_label();
+    let end = ctx.new_label();
+    let result = ctx.new_temp();
+    ctx.finish_current(Terminator::Branch {
+        cond: has_capacity,
+        then_bb: success,
+        else_bb: failure,
+    });
+
+    ctx.start_block(success);
+    store_list_element(ctx, list, len, value, &element_ty);
+    let one = emit_i64_const(ctx, 1);
+    let new_len = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: new_len,
+        op: BinaryOp::Add,
+        left: len,
+        right: one,
+    });
+    ctx.current_instr(Instr::Store64Imm {
+        base: list,
+        imm: 0,
+        value: new_len,
+    });
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: one,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+
+    ctx.start_block(failure);
+    let zero = emit_i64_const(ctx, 0);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: zero,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+    ctx.start_block(end);
+    result
+}
+
+fn lower_list_pop(
+    ctx: &mut LowerCtx,
+    args: &[TypedExpr],
+    result_ty: &Type,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let list = lower_expr(ctx, &args[0], vars);
+    let Type::Option(element_ty) = semantic::resolve_struct_type(result_ty) else {
+        ctx.record_error("internal error: List.pop result is not Option<T>".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let len = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: len,
+        base: list,
+        imm: 0,
+    });
+    let zero = emit_i64_const(ctx, 0);
+    let non_empty = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: non_empty,
+        op: BinaryOp::Gt,
+        left: len,
+        right: zero,
+    });
+    let some = ctx.new_label();
+    let none = ctx.new_label();
+    let end = ctx.new_label();
+    let result = ctx.new_temp();
+    ctx.finish_current(Terminator::Branch {
+        cond: non_empty,
+        then_bb: some,
+        else_bb: none,
+    });
+
+    ctx.start_block(some);
+    let one = emit_i64_const(ctx, 1);
+    let new_len = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: new_len,
+        op: BinaryOp::Sub,
+        left: len,
+        right: one,
+    });
+    let value = load_list_element(ctx, list, new_len, &element_ty);
+    clear_list_element(ctx, list, new_len, &element_ty);
+    ctx.current_instr(Instr::Store64Imm {
+        base: list,
+        imm: 0,
+        value: new_len,
+    });
+    let value = emit_sum_value(ctx, result_ty, 1, Some(value));
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: value,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+
+    ctx.start_block(none);
+    let value = emit_sum_value(ctx, result_ty, 0, None);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: value,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+    ctx.start_block(end);
+    result
+}
+
+fn lower_list_contains(
+    ctx: &mut LowerCtx,
+    args: &[TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let list = lower_expr(ctx, &args[0], vars);
+    let needle = lower_expr(ctx, &args[1], vars);
+    let Type::List(element_ty, _) = semantic::resolve_struct_type(&args[0].ty) else {
+        ctx.record_error("internal error: List.contains receiver lost List type".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let len = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: len,
+        base: list,
+        imm: 0,
+    });
+    let index = emit_i64_const(ctx, 0);
+    let one = emit_i64_const(ctx, 1);
+    let result = emit_i64_const(ctx, 0);
+    let header = ctx.new_label();
+    let body = ctx.new_label();
+    let found = ctx.new_label();
+    let step = ctx.new_label();
+    let end = ctx.new_label();
+    ctx.finish_current(Terminator::Jump(header));
+
+    ctx.start_block(header);
+    let keep_going = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: keep_going,
+        op: BinaryOp::Lt,
+        left: index,
+        right: len,
+    });
+    ctx.finish_current(Terminator::Branch {
+        cond: keep_going,
+        then_bb: body,
+        else_bb: end,
+    });
+
+    ctx.start_block(body);
+    let candidate = load_list_element(ctx, list, index, &element_ty);
+    let equal = emit_typed_value_eq(ctx, candidate, needle, &element_ty);
+    ctx.finish_current(Terminator::Branch {
+        cond: equal,
+        then_bb: found,
+        else_bb: step,
+    });
+
+    ctx.start_block(found);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: one,
+    });
+    ctx.finish_current(Terminator::Jump(end));
+
+    ctx.start_block(step);
+    ctx.current_instr(Instr::Binary {
+        dest: index,
+        op: BinaryOp::Add,
+        left: index,
+        right: one,
+    });
+    ctx.finish_current(Terminator::Jump(header));
+    ctx.start_block(end);
+    result
+}
+
+fn lower_list_take(
+    ctx: &mut LowerCtx,
+    args: &[TypedExpr],
+    result_ty: &Type,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let source = lower_expr(ctx, &args[0], vars);
+    let limit = lower_expr_as_int(ctx, &args[1], vars);
+    let Type::List(source_element, _) = semantic::resolve_struct_type(&args[0].ty) else {
+        ctx.record_error("internal error: List.take receiver lost List type".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let Some((result_element, _)) = list_layout_for_type(result_ty) else {
+        ctx.record_error("internal error: List.take result lost List type".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let result = emit_list_allocation(ctx, result_ty, 0);
+    let source_len = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: source_len,
+        base: source,
+        imm: 0,
+    });
+    let index = emit_i64_const(ctx, 0);
+    let one = emit_i64_const(ctx, 1);
+    let header = ctx.new_label();
+    let body = ctx.new_label();
+    let end = ctx.new_label();
+    ctx.finish_current(Terminator::Jump(header));
+
+    ctx.start_block(header);
+    let below_len = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: below_len,
+        op: BinaryOp::Lt,
+        left: index,
+        right: source_len,
+    });
+    let below_limit = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: below_limit,
+        op: BinaryOp::Lt,
+        left: index,
+        right: limit,
+    });
+    let keep_going = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: keep_going,
+        op: BinaryOp::And,
+        left: below_len,
+        right: below_limit,
+    });
+    ctx.finish_current(Terminator::Branch {
+        cond: keep_going,
+        then_bb: body,
+        else_bb: end,
+    });
+
+    ctx.start_block(body);
+    let value = load_list_element(ctx, source, index, &source_element);
+    store_list_element(ctx, result, index, value, &result_element);
+    let new_len = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: new_len,
+        op: BinaryOp::Add,
+        left: index,
+        right: one,
+    });
+    ctx.current_instr(Instr::Store64Imm {
+        base: result,
+        imm: 0,
+        value: new_len,
+    });
+    ctx.current_instr(Instr::Copy {
+        dest: index,
+        src: new_len,
+    });
+    ctx.finish_current(Terminator::Jump(header));
+    ctx.start_block(end);
+    result
+}
+
+fn lower_list_enumerate(
+    ctx: &mut LowerCtx,
+    args: &[TypedExpr],
+    result_ty: &Type,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let source = lower_expr(ctx, &args[0], vars);
+    let Type::List(source_element, _) = semantic::resolve_struct_type(&args[0].ty) else {
+        ctx.record_error("internal error: List.enumerate receiver lost List type".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let Some((result_element, _)) = list_layout_for_type(result_ty) else {
+        ctx.record_error("internal error: List.enumerate result lost List type".into());
+        return emit_i64_const(ctx, 0);
+    };
+    let result = emit_list_allocation(ctx, result_ty, 0);
+    let source_len = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm {
+        dest: source_len,
+        base: source,
+        imm: 0,
+    });
+    let index = emit_i64_const(ctx, 0);
+    let one = emit_i64_const(ctx, 1);
+    let header = ctx.new_label();
+    let body = ctx.new_label();
+    let end = ctx.new_label();
+    ctx.finish_current(Terminator::Jump(header));
+
+    ctx.start_block(header);
+    let keep_going = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: keep_going,
+        op: BinaryOp::Lt,
+        left: index,
+        right: source_len,
+    });
+    ctx.finish_current(Terminator::Branch {
+        cond: keep_going,
+        then_bb: body,
+        else_bb: end,
+    });
+
+    ctx.start_block(body);
+    let value = load_list_element(ctx, source, index, &source_element);
+    let pair = ctx.new_temp();
+    ctx.current_instr(Instr::TuplePack {
+        dest: pair,
+        items: vec![index, value],
+    });
+    store_list_element(ctx, result, index, pair, &result_element);
+    let new_len = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: new_len,
+        op: BinaryOp::Add,
+        left: index,
+        right: one,
+    });
+    ctx.current_instr(Instr::Store64Imm {
+        base: result,
+        imm: 0,
+        value: new_len,
+    });
+    ctx.current_instr(Instr::Copy {
+        dest: index,
+        src: new_len,
+    });
+    ctx.finish_current(Terminator::Jump(header));
+    ctx.start_block(end);
+    result
+}
+
+fn lower_list_intrinsic(
+    ctx: &mut LowerCtx,
+    name: &str,
+    args: &[TypedExpr],
+    result_ty: &Type,
+    vars: &mut HashMap<String, Temp>,
+) -> Option<Temp> {
+    Some(match name {
+        semantic::LIST_LEN_INTRINSIC => {
+            let list = lower_expr(ctx, &args[0], vars);
+            let len = ctx.new_temp();
+            ctx.current_instr(Instr::Load64Imm {
+                dest: len,
+                base: list,
+                imm: 0,
+            });
+            len
+        }
+        semantic::LIST_GET_INTRINSIC => lower_list_get(ctx, args, result_ty, vars),
+        semantic::LIST_TRY_SET_INTRINSIC => lower_list_try_set(ctx, args, vars),
+        semantic::LIST_TRY_PUSH_INTRINSIC => lower_list_try_push(ctx, args, vars),
+        semantic::LIST_POP_INTRINSIC => lower_list_pop(ctx, args, result_ty, vars),
+        semantic::LIST_CONTAINS_INTRINSIC => lower_list_contains(ctx, args, vars),
+        semantic::LIST_TAKE_INTRINSIC => lower_list_take(ctx, args, result_ty, vars),
+        semantic::LIST_ENUMERATE_INTRINSIC => lower_list_enumerate(ctx, args, result_ty, vars),
+        _ => return None,
+    })
+}
+
+fn lower_amount_intrinsic(
+    ctx: &mut LowerCtx,
+    name: &str,
+    args: &[TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Option<Temp> {
+    if name != semantic::AMOUNT_DIV_ROUND_INTRINSIC {
+        return None;
+    }
+    if args.len() != 4 {
+        ctx.record_error(
+            "internal error: Amount.div_round requires dividend, divisor, scale, and mode".into(),
+        );
+        return Some(emit_i64_const(ctx, 0));
+    }
+    let syscall_args = args
+        .iter()
+        .map(|argument| lower_expr(ctx, argument, vars))
+        .collect::<Vec<_>>();
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::DirectHelperSyscall {
+        dest,
+        syscall: ivm_abi::syscalls::SYSCALL_AMOUNT_DIV_ROUND,
+        args: syscall_args,
+    });
+    Some(dest)
+}
+
+fn sum_pattern_tag(pattern: &semantic::TypedSumPattern) -> u64 {
+    match pattern.pattern.variant {
+        SumVariant::OptionNone | SumVariant::ResultErr => 0,
+        SumVariant::OptionSome | SumVariant::ResultOk => 1,
+    }
+}
+
+fn bind_sum_pattern(
+    ctx: &mut LowerCtx,
+    pattern: &semantic::TypedSumPattern,
+    value: Temp,
+    vars: &mut HashMap<String, Temp>,
+) {
+    let Some(payload_ty) = &pattern.payload_type else {
+        return;
+    };
+    let Some(binding) = &pattern.pattern.binding else {
+        return;
+    };
+    if let PatternBinding::Name(name) = binding {
+        let payload = load_sum_payload(ctx, value, payload_ty);
+        vars.insert(name.clone(), payload);
+    }
+}
+
+fn propagation_match_return<'a>(
+    value_ty: &Type,
+    return_ty: &Type,
+    arms: &'a [semantic::TypedMatchArm],
+) -> Option<(&'a semantic::TypedMatchArm, &'a semantic::TypedMatchArm)> {
+    if arms.len() != 2 {
+        return None;
+    }
+    let success = arms.iter().find(|arm| sum_pattern_tag(&arm.pattern) == 1)?;
+    let failure = arms.iter().find(|arm| sum_pattern_tag(&arm.pattern) == 0)?;
+
+    let success_binding = match success.pattern.pattern.binding.as_ref()? {
+        PatternBinding::Name(name) => name,
+        PatternBinding::Wildcard => return None,
+    };
+    if !success.body.statements.is_empty()
+        || !matches!(
+            success.body.tail.as_deref(),
+            Some(TypedExpr {
+                expr: semantic::ExprKind::Ident(name),
+                ..
+            }) if name == success_binding
+        )
+    {
+        return None;
+    }
+
+    let [TypedStatement::Return(Some(returned))] = failure.body.statements.as_slice() else {
+        return None;
+    };
+    if failure.body.tail.is_some()
+        || semantic::resolve_struct_type(&returned.ty) != semantic::resolve_struct_type(return_ty)
+    {
+        return None;
+    }
+
+    match (
+        semantic::resolve_struct_type(value_ty),
+        semantic::resolve_struct_type(return_ty),
+    ) {
+        (Type::Option(_), Type::Option(_)) => (failure.pattern.pattern.variant
+            == SumVariant::OptionNone
+            && failure.pattern.pattern.binding.is_none()
+            && matches!(&returned.expr, semantic::ExprKind::OptionNone))
+        .then_some((success, failure)),
+        (Type::Result(_, source_error), Type::Result(_, target_error))
+            if source_error == target_error =>
+        {
+            let failure_binding = match failure.pattern.pattern.binding.as_ref()? {
+                PatternBinding::Name(name) => name,
+                PatternBinding::Wildcard => return None,
+            };
+            match &returned.expr {
+                semantic::ExprKind::ResultErr { error }
+                    if matches!(
+                        error.as_ref(),
+                        TypedExpr {
+                            expr: semantic::ExprKind::Ident(name),
+                            ..
+                        } if name == failure_binding
+                    ) =>
+                {
+                    Some((success, failure))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn lower_propagation(
+    ctx: &mut LowerCtx,
+    value: &TypedExpr,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let sum = lower_expr(ctx, value, vars);
+    let tag = load_sum_tag(ctx, sum);
+    let success_label = ctx.new_label();
+    let failure_label = ctx.new_label();
+    ctx.finish_current(Terminator::Branch {
+        cond: tag,
+        then_bb: success_label,
+        else_bb: failure_label,
+    });
+
+    ctx.start_block(failure_label);
+    let return_ty = ctx.function_return_type.clone();
+    let propagated = match (
+        sum_layout_for_type(&value.ty),
+        sum_layout_for_type(&return_ty),
+    ) {
+        // A failed sum has no active success payload. Reusing its canonical
+        // handle is sound when the complete source and destination allocations
+        // have the same shape.
+        (Some(source), Some(target)) if source == target => sum,
+        (Some(_), Some(_)) => match (
+            semantic::resolve_struct_type(&value.ty),
+            semantic::resolve_struct_type(&return_ty),
+        ) {
+            (Type::Option(_), Type::Option(_)) => emit_sum_value(ctx, &return_ty, 0, None),
+            (Type::Result(_, source_error), Type::Result(_, _)) => {
+                // Semantic analysis requires the exact same error type, with
+                // no implicit conversion. Only that active payload is read and
+                // copied into the destination layout; the differently-sized
+                // inactive success branch remains canonical zero.
+                let error = load_sum_payload(ctx, sum, &source_error);
+                emit_sum_value(ctx, &return_ty, 0, Some(error))
+            }
+            _ => {
+                ctx.record_error("internal error: propagation changed Option/Result family".into());
+                sum
+            }
+        },
+        _ => {
+            ctx.record_error("internal error: invalid propagation return layout".into());
+            sum
+        }
+    };
+    finish_value_return(ctx, propagated, &return_ty);
+
+    ctx.start_block(success_label);
+    let payload_ty = match semantic::resolve_struct_type(&value.ty) {
+        Type::Option(payload) | Type::Result(payload, _) => *payload,
+        _ => {
+            ctx.record_error("internal error: propagation operand is not a sum".into());
+            Type::Unit
+        }
+    };
+    load_sum_payload(ctx, sum, &payload_ty)
+}
+
+fn copy_runtime_value_words(ctx: &mut LowerCtx, value: Temp, ty: &Type, destinations: &[Temp]) {
+    let mut words = Vec::with_capacity(destinations.len());
+    collect_function_value_words(ctx, value, ty, &mut words);
+    if words.len() != destinations.len() {
+        ctx.record_error("internal error: branch result word count mismatch".into());
+    }
+    for (dest, src) in destinations.iter().zip(words) {
+        ctx.current_instr(Instr::Copy { dest: *dest, src });
+    }
+}
+
+fn rebuild_runtime_value(ctx: &mut LowerCtx, ty: &Type, words: &[Temp]) -> Temp {
+    let mut index = 0;
+    let value =
+        rebuild_function_value_from_words(ctx, ty, words, &mut index).unwrap_or_else(|| {
+            ctx.record_error("internal error: cannot rebuild branch result".into());
+            words.first().copied().unwrap_or_else(|| {
+                let invalid = ctx.new_temp();
+                ctx.current_instr(Instr::Const {
+                    dest: invalid,
+                    value: 0,
+                });
+                invalid
+            })
+        });
+    if index != words.len() {
+        ctx.record_error("internal error: branch result ABI width mismatch".into());
+    }
+    value
 }
 
 fn decode_aggregate_state_value(ctx: &mut LowerCtx, blob: Temp, ty: &Type) -> Option<Temp> {
@@ -1712,13 +3079,6 @@ fn decode_aggregate_state_value(ctx: &mut LowerCtx, blob: Temp, ty: &Type) -> Op
     let value = rebuild_state_value_from_table(ctx, table, ty, &mut index)?;
     let expected = state_value_schema(ty)?.word_kinds()?.len();
     (index == expected).then_some(value)
-}
-
-fn is_aggregate_state_value_type(ty: &Type) -> bool {
-    matches!(
-        semantic::resolve_struct_type(ty),
-        Type::Struct { .. } | Type::Tuple(_) | Type::Option(_) | Type::Result(_, _)
-    )
 }
 
 fn is_canonical_state_value_type(ty: &Type) -> bool {
@@ -1915,8 +3275,7 @@ fn entrypoint_impl_symbol(name: &str) -> String {
 // Zero-argument entrypoints can jump straight into the implementation body
 // because there is no payload-decoding work for a wrapper to perform.
 fn needs_entrypoint_wrapper(func: &TypedFunction) -> bool {
-    (matches!(func.modifiers.kind, super::ast::FunctionKind::View)
-        || func.modifiers.visibility == super::ast::FunctionVisibility::Public)
+    !matches!(func.modifiers.kind, super::ast::FunctionKind::Private)
         && !func.param_types.is_empty()
 }
 
@@ -1929,13 +3288,14 @@ fn lower_function_named(
     function_param_specs: &HashMap<String, Vec<TypedParam>>,
 ) -> Result<Function, String> {
     let mut ctx = LowerCtx::new(
+        func.ret_ty.clone().unwrap_or(Type::Unit),
         dyn_iter_cap,
         call_renames.clone(),
         function_param_specs.clone(),
     );
     let entry = ctx.new_label();
     ctx.start_block(entry);
-    // Ephemeral state allocation for contract-level `state` declarations.
+    // Ephemeral state allocation for seiyaku-level `state` declarations.
     let mut vars = HashMap::new();
     let mut param_temps = Vec::new();
     let lowered_params = lowered_function_params(&func.param_types);
@@ -2016,8 +3376,18 @@ fn lower_function_named(
         }
     }
 
-    lower_block(&mut ctx, &func.body, &mut vars);
-    ctx.finish_current(Terminator::Return(None));
+    let tail = lower_block_tail_with_live_after(&mut ctx, &func.body, &mut vars, &BTreeSet::new());
+    if let Some(value) = tail {
+        let tail_ty = func
+            .body
+            .tail
+            .as_ref()
+            .map(|tail| tail.ty.clone())
+            .unwrap_or(Type::Unit);
+        finish_value_return(&mut ctx, value, &tail_ty);
+    } else {
+        ctx.finish_current(Terminator::Return(None));
+    }
 
     let function = Function {
         name: symbol_name.to_string(),
@@ -2042,6 +3412,7 @@ fn lower_entrypoint_wrapper(
     test_mode: bool,
 ) -> Result<Function, String> {
     let mut ctx = LowerCtx::new(
+        func.ret_ty.clone().unwrap_or(Type::Unit),
         dyn_iter_cap,
         call_renames.clone(),
         function_param_specs.clone(),
@@ -2142,9 +3513,9 @@ fn lower_entrypoint_wrapper(
             dest: None,
         });
         Terminator::Return(None)
-    } else if let Some(items) = aggregate_components(return_ty) {
-        let mut dests = Vec::with_capacity(items.len());
-        for _ in items {
+    } else if let Some(word_types) = function_value_word_types(return_ty) {
+        let mut dests = Vec::with_capacity(word_types.len());
+        for _ in word_types {
             dests.push(ctx.new_temp());
         }
         ctx.current_instr(Instr::CallMulti {
@@ -2287,9 +3658,9 @@ fn lower_invoke_entrypoint_call(
             value: 0,
         });
         unit
-    } else if let Some(items) = aggregate_components(result_ty) {
-        let mut dests = Vec::with_capacity(items.len());
-        for _ in items {
+    } else if let Some(word_types) = function_value_word_types(result_ty) {
+        let mut dests = Vec::with_capacity(word_types.len());
+        for _ in word_types {
             dests.push(ctx.new_temp());
         }
         ctx.current_instr(Instr::CallMulti {
@@ -2297,12 +3668,11 @@ fn lower_invoke_entrypoint_call(
             args: Vec::new(),
             dests: dests.clone(),
         });
-        let tuple = ctx.new_temp();
-        ctx.current_instr(Instr::TuplePack {
-            dest: tuple,
-            items: dests,
-        });
-        tuple
+        let mut index = 0_usize;
+        let value = rebuild_function_value_from_words(ctx, result_ty, &dests, &mut index)
+            .expect("validated aggregate return type must rebuild from ABI words");
+        debug_assert_eq!(index, dests.len());
+        value
     } else {
         let dest = ctx.new_temp();
         ctx.current_instr(Instr::Call {
@@ -2362,17 +3732,17 @@ fn lower_blob_literal(ctx: &mut LowerCtx, value: &str) -> Temp {
     dest
 }
 
-fn entrypoint_argument_kind(
-    param_name: &str,
+fn entrypoint_value_kind(
+    value_name: &str,
     ty: &Type,
-) -> Result<ivm_abi::entrypoint::EntrypointArgumentKindV1, String> {
-    use ivm_abi::entrypoint::EntrypointArgumentKindV1 as Kind;
+) -> Result<ivm_abi::entrypoint::EntrypointValueKindV1, String> {
+    use ivm_abi::entrypoint::EntrypointValueKindV1 as Kind;
 
     let resolved = semantic::resolve_struct_type(ty);
     Ok(match resolved {
         Type::Int => Kind::Int,
         Type::FixedU128 => Kind::U128,
-        Type::Amount => Kind::Numeric,
+        Type::Amount => Kind::Amount,
         Type::Bool => Kind::Bool,
         Type::String => Kind::String,
         Type::Json => Kind::Json,
@@ -2386,66 +3756,96 @@ fn entrypoint_argument_kind(
         Type::Bytes => Kind::Blob,
         other => {
             return Err(format!(
-                "entrypoint parameter `{param_name}` uses unsupported public type {:?}",
-                other
+                "entrypoint value `{value_name}` uses unsupported public type {:?}",
+                other,
             ));
         }
     })
 }
 
-fn append_entrypoint_argument_type_nodes(
-    param_name: &str,
+fn append_entrypoint_value_type_nodes(
+    value_name: &str,
     ty: &Type,
-    nodes: &mut Vec<ivm_abi::entrypoint::EntrypointArgumentTypeNodeV1>,
+    nodes: &mut Vec<ivm_abi::entrypoint::EntrypointValueTypeNodeV1>,
 ) -> Result<(), String> {
-    use ivm_abi::entrypoint::EntrypointArgumentTypeNodeV1 as Node;
+    use ivm_abi::entrypoint::{
+        EntrypointListTypeNodeV1 as ListNode, EntrypointStructTypeNodeV1 as StructNode,
+        EntrypointValueTypeNodeV1 as Node,
+    };
 
     match semantic::resolve_struct_type(ty) {
         Type::Struct { name, fields } => {
-            nodes.push(Node::Struct {
+            nodes.push(Node::Struct(StructNode {
                 name,
                 fields: fields.iter().map(|(name, _)| name.clone()).collect(),
-            });
+            }));
             for (_, field_ty) in fields {
-                append_entrypoint_argument_type_nodes(param_name, &field_ty, nodes)?;
+                append_entrypoint_value_type_nodes(value_name, &field_ty, nodes)?;
             }
         }
         Type::Tuple(items) => {
-            let arity = u16::try_from(items.len()).map_err(|_| {
-                format!("entrypoint parameter `{param_name}` tuple arity exceeds u16")
-            })?;
-            nodes.push(Node::Tuple { arity });
+            let arity = u16::try_from(items.len())
+                .map_err(|_| format!("entrypoint value `{value_name}` tuple arity exceeds u16"))?;
+            nodes.push(Node::Tuple(arity));
             for item in items {
-                append_entrypoint_argument_type_nodes(param_name, &item, nodes)?;
+                append_entrypoint_value_type_nodes(value_name, &item, nodes)?;
             }
         }
         Type::Option(inner) => {
             nodes.push(Node::Option);
-            append_entrypoint_argument_type_nodes(param_name, &inner, nodes)?;
+            append_entrypoint_value_type_nodes(value_name, &inner, nodes)?;
         }
         Type::Result(ok, err) => {
             nodes.push(Node::Result);
-            append_entrypoint_argument_type_nodes(param_name, &ok, nodes)?;
-            append_entrypoint_argument_type_nodes(param_name, &err, nodes)?;
+            append_entrypoint_value_type_nodes(value_name, &ok, nodes)?;
+            append_entrypoint_value_type_nodes(value_name, &err, nodes)?;
         }
-        leaf => nodes.push(Node::Leaf(entrypoint_argument_kind(param_name, &leaf)?)),
+        Type::List(element, capacity) => {
+            nodes.push(Node::List(ListNode { capacity }));
+            append_entrypoint_value_type_nodes(value_name, &element, nodes)?;
+        }
+        leaf => nodes.push(Node::Leaf(entrypoint_value_kind(value_name, &leaf)?)),
     }
     Ok(())
 }
 
-fn entrypoint_argument_type(
-    param_name: &str,
+fn entrypoint_value_type(
+    value_name: &str,
     ty: &Type,
-) -> Result<ivm_abi::entrypoint::EntrypointArgumentTypeV1, String> {
+) -> Result<ivm_abi::entrypoint::EntrypointValueTypeV1, String> {
     let mut nodes = Vec::new();
-    append_entrypoint_argument_type_nodes(param_name, ty, &mut nodes)?;
-    let ty = ivm_abi::entrypoint::EntrypointArgumentTypeV1 { nodes };
+    append_entrypoint_value_type_nodes(value_name, ty, &mut nodes)?;
+    let ty = ivm_abi::entrypoint::EntrypointValueTypeV1 { nodes };
     if !ty.validate() {
         return Err(format!(
-            "entrypoint parameter `{param_name}` exceeds ABI v1 type depth, node, or word limits"
+            "entrypoint value `{value_name}` exceeds ABI v1 type depth, node, or word limits"
         ));
     }
     Ok(ty)
+}
+
+/// Build the exact recursive schema for a non-unit public return value.
+pub(crate) fn entrypoint_return_schema(
+    entrypoint_name: &str,
+    ty: Option<&Type>,
+) -> Result<Option<ivm_abi::entrypoint::EntrypointValueTypeV1>, String> {
+    let Some(ty) = ty else {
+        return Ok(None);
+    };
+    if matches!(semantic::resolve_struct_type(ty), Type::Unit) {
+        return Ok(None);
+    }
+    let schema = entrypoint_value_type(entrypoint_name, ty)?;
+    let words = schema
+        .word_count()
+        .ok_or_else(|| format!("entrypoint `{entrypoint_name}` has an invalid return schema"))?;
+    if words > ivm_abi::entrypoint::MAX_ENTRYPOINT_RETURN_WORDS {
+        return Err(format!(
+            "entrypoint `{entrypoint_name}` returns {words} flattened words, exceeding the ABI v1 public register limit of {}",
+            ivm_abi::entrypoint::MAX_ENTRYPOINT_RETURN_WORDS,
+        ));
+    }
+    Ok(Some(schema))
 }
 
 pub(crate) fn entrypoint_argument_schema(
@@ -2459,7 +3859,7 @@ pub(crate) fn entrypoint_argument_schema(
         .map(|param| {
             Ok(ivm_abi::entrypoint::EntrypointArgumentFieldV1 {
                 name: param.name.clone(),
-                ty: entrypoint_argument_type(&param.name, &param.ty)?,
+                ty: entrypoint_value_type(&param.name, &param.ty)?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -2502,8 +3902,43 @@ fn push_copy(block: &mut BasicBlock, dest: Temp, src: Temp) {
     block.instrs.push(Instr::Copy { dest, src });
 }
 
+fn merge_conditional_envs(
+    ctx: &mut LowerCtx,
+    entry_env: &HashMap<String, Temp>,
+    then_env: &HashMap<String, Temp>,
+    else_env: &HashMap<String, Temp>,
+    then_exit: usize,
+    else_exit: usize,
+    vars: &mut HashMap<String, Temp>,
+) {
+    let mut mutated = BTreeSet::new();
+    for (name, entry_temp) in entry_env {
+        let then_temp = then_env.get(name).copied().unwrap_or(*entry_temp);
+        let else_temp = else_env.get(name).copied().unwrap_or(*entry_temp);
+        if then_temp != *entry_temp || else_temp != *entry_temp {
+            mutated.insert(name.clone());
+        }
+    }
+    for name in mutated {
+        let join_temp = ctx.new_temp();
+        let entry_temp = entry_env
+            .get(&name)
+            .copied()
+            .expect("entry env must contain variable");
+        let then_temp = then_env.get(&name).copied().unwrap_or(entry_temp);
+        let else_temp = else_env.get(&name).copied().unwrap_or(entry_temp);
+        if let Some(block) = ctx.blocks.get_mut(then_exit) {
+            push_copy(block, join_temp, then_temp);
+        }
+        if let Some(block) = ctx.blocks.get_mut(else_exit) {
+            push_copy(block, join_temp, else_temp);
+        }
+        vars.insert(name, join_temp);
+    }
+}
+
 fn collect_expr_reads(expr: &TypedExpr, reads: &mut BTreeSet<String>) {
-    match &expr.expr {
+    match expr.kind() {
         semantic::ExprKind::Binary { left, right, .. } => {
             collect_expr_reads(left, reads);
             collect_expr_reads(right, reads);
@@ -2520,9 +3955,68 @@ fn collect_expr_reads(expr: &TypedExpr, reads: &mut BTreeSet<String>) {
             collect_expr_reads(then_expr, reads);
             collect_expr_reads(else_expr, reads);
         }
-        semantic::ExprKind::Call { args, .. } | semantic::ExprKind::Tuple(args) => {
+        semantic::ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_expr_reads(condition, reads);
+            collect_block_reads(then_branch, reads);
+            collect_block_reads(else_branch, reads);
+        }
+        semantic::ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_expr_reads(value, reads);
+            collect_block_reads(then_branch, reads);
+            collect_block_reads(else_branch, reads);
+        }
+        semantic::ExprKind::Match { value, arms } => {
+            collect_expr_reads(value, reads);
+            for arm in arms {
+                collect_block_reads(&arm.body, reads);
+            }
+        }
+        semantic::ExprKind::JsonObject(entries) => {
+            for (_, value) in entries {
+                collect_expr_reads(value, reads);
+            }
+        }
+        semantic::ExprKind::JsonArray(elements) => {
+            for element in elements {
+                collect_expr_reads(element, reads);
+            }
+        }
+        semantic::ExprKind::OptionSome { value }
+        | semantic::ExprKind::ResultOk { value }
+        | semantic::ExprKind::ResultErr { error: value }
+        | semantic::ExprKind::Propagate { value } => collect_expr_reads(value, reads),
+        semantic::ExprKind::Call { args, .. }
+        | semantic::ExprKind::NamedCall { args, .. }
+        | semantic::ExprKind::Tuple(args)
+        | semantic::ExprKind::List(args) => {
             for arg in args {
                 collect_expr_reads(arg, reads);
+            }
+        }
+        semantic::ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            collect_expr_reads(source, reads);
+            collect_expr_reads(expression, reads);
+            if let Some(condition) = condition {
+                collect_expr_reads(condition, reads);
+            }
+        }
+        semantic::ExprKind::StructLiteral { fields, .. } => {
+            for (_, value) in fields {
+                collect_expr_reads(value, reads);
             }
         }
         semantic::ExprKind::Member { object, .. } => collect_expr_reads(object, reads),
@@ -2535,9 +4029,11 @@ fn collect_expr_reads(expr: &TypedExpr, reads: &mut BTreeSet<String>) {
         }
         semantic::ExprKind::Number(_)
         | semantic::ExprKind::Decimal(_)
+        | semantic::ExprKind::AmountLiteral { .. }
         | semantic::ExprKind::Bool(_)
         | semantic::ExprKind::String(_)
-        | semantic::ExprKind::Bytes(_) => {}
+        | semantic::ExprKind::Bytes(_)
+        | semantic::ExprKind::OptionNone => {}
     }
 }
 
@@ -2545,10 +4041,13 @@ fn collect_block_reads(block: &TypedBlock, reads: &mut BTreeSet<String>) {
     for statement in &block.statements {
         collect_statement_reads(statement, reads);
     }
+    if let Some(tail) = &block.tail {
+        collect_expr_reads(tail, reads);
+    }
 }
 
 fn collect_statement_reads(statement: &TypedStatement, reads: &mut BTreeSet<String>) {
-    match statement {
+    match statement.kind() {
         TypedStatement::Let { value, .. } | TypedStatement::Expr(value) => {
             collect_expr_reads(value, reads);
         }
@@ -2560,6 +4059,18 @@ fn collect_statement_reads(statement: &TypedStatement, reads: &mut BTreeSet<Stri
             else_branch,
         } => {
             collect_expr_reads(cond, reads);
+            collect_block_reads(then_branch, reads);
+            if let Some(else_branch) = else_branch {
+                collect_block_reads(else_branch, reads);
+            }
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_expr_reads(value, reads);
             collect_block_reads(then_branch, reads);
             if let Some(else_branch) = else_branch {
                 collect_block_reads(else_branch, reads);
@@ -2606,11 +4117,21 @@ fn collect_block_mutations(block: &TypedBlock, mutations: &mut BTreeSet<String>)
 }
 
 fn collect_statement_mutations(statement: &TypedStatement, mutations: &mut BTreeSet<String>) {
-    match statement {
+    match statement.kind() {
         TypedStatement::Let { name, .. } => {
             mutations.insert(name.clone());
         }
         TypedStatement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_block_mutations(then_branch, mutations);
+            if let Some(else_branch) = else_branch {
+                collect_block_mutations(else_branch, mutations);
+            }
+        }
+        TypedStatement::IfLet {
             then_branch,
             else_branch,
             ..
@@ -2653,13 +4174,13 @@ fn live_before_statement(
     statement: &TypedStatement,
     live_after: &BTreeSet<String>,
 ) -> BTreeSet<String> {
-    let mut live = match statement {
+    let mut live = match statement.kind() {
         // A return has no fallthrough edge. Keeping only its expression reads
         // prevents unreachable trailing statements from extending lifetimes.
         TypedStatement::Return(_) => BTreeSet::new(),
         _ => live_after.clone(),
     };
-    if let TypedStatement::Let { name, .. } = statement {
+    if let TypedStatement::Let { name, .. } = statement.kind() {
         live.remove(name);
     }
     collect_statement_reads(statement, &mut live);
@@ -2671,10 +4192,16 @@ fn block_live_after_sets(
     outer_live_after: &BTreeSet<String>,
 ) -> Vec<BTreeSet<String>> {
     let mut live = outer_live_after.clone();
+    if let Some(tail) = &block.tail {
+        collect_expr_reads(tail, &mut live);
+    }
     let mut result = vec![BTreeSet::new(); block.statements.len()];
     for (index, statement) in block.statements.iter().enumerate().rev() {
         result[index] = live.clone();
-        live = if matches!(statement, TypedStatement::Break | TypedStatement::Continue) {
+        live = if matches!(
+            statement.kind(),
+            TypedStatement::Break | TypedStatement::Continue
+        ) {
             // Neither statement falls through to the remaining source block.
             // The caller supplies the union of loop-header and loop-exit
             // liveness, which is conservative for both target kinds.
@@ -2756,19 +4283,55 @@ fn copy_env_to_loop_phi(ctx: &mut LowerCtx, env: &HashMap<String, Temp>) {
     }
 }
 
-fn lower_block(ctx: &mut LowerCtx, block: &TypedBlock, vars: &mut HashMap<String, Temp>) {
-    lower_block_with_live_after(ctx, block, vars, &BTreeSet::new());
-}
-
 fn lower_block_with_live_after(
     ctx: &mut LowerCtx,
     block: &TypedBlock,
     vars: &mut HashMap<String, Temp>,
     outer_live_after: &BTreeSet<String>,
 ) {
+    let _ = lower_block_tail_with_live_after(ctx, block, vars, outer_live_after);
+}
+
+fn lower_block_tail_with_live_after(
+    ctx: &mut LowerCtx,
+    block: &TypedBlock,
+    vars: &mut HashMap<String, Temp>,
+    outer_live_after: &BTreeSet<String>,
+) -> Option<Temp> {
     let live_after = block_live_after_sets(block, outer_live_after);
     for (statement, statement_live_after) in block.statements.iter().zip(live_after.iter()) {
         lower_statement(ctx, statement, vars, statement_live_after);
+    }
+    block.tail.as_ref().map(|tail| lower_expr(ctx, tail, vars))
+}
+
+fn lower_expression_block(
+    ctx: &mut LowerCtx,
+    block: &TypedBlock,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    lower_block_tail_with_live_after(ctx, block, vars, &BTreeSet::new()).unwrap_or_else(|| {
+        let unit = ctx.new_temp();
+        ctx.current_instr(Instr::Const {
+            dest: unit,
+            value: 0,
+        });
+        unit
+    })
+}
+
+fn finish_value_return(ctx: &mut LowerCtx, value: Temp, ty: &Type) {
+    if function_value_word_types(ty).is_some() {
+        let mut outs = Vec::new();
+        collect_function_value_words(ctx, value, ty, &mut outs);
+        match outs.as_slice() {
+            [] => ctx.finish_current(Terminator::Return(None)),
+            [only] => ctx.finish_current(Terminator::Return(Some(*only))),
+            [first, second] => ctx.finish_current(Terminator::Return2(*first, *second)),
+            _ => ctx.finish_current(Terminator::ReturnN(outs)),
+        }
+    } else {
+        ctx.finish_current(Terminator::Return(Some(value)));
     }
 }
 
@@ -2819,31 +4382,53 @@ fn lower_statement(
             ctx.finish_current(Terminator::Jump(end_label));
             let else_idx = ctx.blocks.len() - 1;
 
-            let mut mutated: BTreeSet<String> = BTreeSet::new();
-            for (name, entry_temp) in entry_env.iter() {
-                let then_temp = then_vars.get(name).copied().unwrap_or(*entry_temp);
-                let else_temp = else_vars.get(name).copied().unwrap_or(*entry_temp);
-                if then_temp != *entry_temp || else_temp != *entry_temp {
-                    mutated.insert(name.clone());
-                }
-            }
-            for name in mutated {
-                let join_temp = ctx.new_temp();
-                let entry_temp = entry_env
-                    .get(&name)
-                    .copied()
-                    .expect("entry env must contain variable");
-                let then_temp = then_vars.get(&name).copied().unwrap_or(entry_temp);
-                let else_temp = else_vars.get(&name).copied().unwrap_or(entry_temp);
-                if let Some(block) = ctx.blocks.get_mut(then_idx) {
-                    push_copy(block, join_temp, then_temp);
-                }
-                if let Some(block) = ctx.blocks.get_mut(else_idx) {
-                    push_copy(block, join_temp, else_temp);
-                }
-                vars.insert(name, join_temp);
-            }
+            merge_conditional_envs(
+                ctx, &entry_env, &then_vars, &else_vars, then_idx, else_idx, vars,
+            );
 
+            ctx.start_block(end_label);
+        }
+        TypedStatement::IfLet {
+            pattern,
+            value,
+            then_branch,
+            else_branch,
+        } => {
+            let entry_env = vars.clone();
+            let sum = lower_expr(ctx, value, vars);
+            let tag = load_sum_tag(ctx, sum);
+            let then_label = ctx.new_label();
+            let else_label = ctx.new_label();
+            let end_label = ctx.new_label();
+            let (tag_one, tag_zero) = if sum_pattern_tag(pattern) == 1 {
+                (then_label, else_label)
+            } else {
+                (else_label, then_label)
+            };
+            ctx.finish_current(Terminator::Branch {
+                cond: tag,
+                then_bb: tag_one,
+                else_bb: tag_zero,
+            });
+
+            ctx.start_block(then_label);
+            let mut then_vars = entry_env.clone();
+            bind_sum_pattern(ctx, pattern, sum, &mut then_vars);
+            lower_block_with_live_after(ctx, then_branch, &mut then_vars, live_after);
+            ctx.finish_current(Terminator::Jump(end_label));
+            let then_idx = ctx.blocks.len() - 1;
+
+            ctx.start_block(else_label);
+            let mut else_vars = entry_env.clone();
+            if let Some(else_branch) = else_branch {
+                lower_block_with_live_after(ctx, else_branch, &mut else_vars, live_after);
+            }
+            ctx.finish_current(Terminator::Jump(end_label));
+            let else_idx = ctx.blocks.len() - 1;
+
+            merge_conditional_envs(
+                ctx, &entry_env, &then_vars, &else_vars, then_idx, else_idx, vars,
+            );
             ctx.start_block(end_label);
         }
         TypedStatement::While { cond, body } => {
@@ -2974,30 +4559,8 @@ fn lower_statement(
         }
         TypedStatement::Return(opt) => {
             if let Some(e) = opt {
-                // Aggregate returns use the V1 multi-register return convention.
-                if let Some(components) = aggregate_components(&e.ty) {
-                    let tup = lower_expr(ctx, e, vars);
-                    let mut outs = Vec::with_capacity(components.len());
-                    for i in 0..components.len() {
-                        let d = ctx.new_temp();
-                        ctx.current_instr(Instr::TupleGet {
-                            dest: d,
-                            tuple: tup,
-                            index: i,
-                        });
-                        outs.push(d);
-                    }
-                    match outs.len() {
-                        0 => ctx.finish_current(Terminator::Return(None)),
-                        1 => ctx.finish_current(Terminator::Return(Some(outs[0]))),
-                        2 => ctx.finish_current(Terminator::Return2(outs[0], outs[1])),
-                        _ => ctx.finish_current(Terminator::ReturnN(outs)),
-                    }
-                } else {
-                    // Non-tuple return
-                    let t = lower_expr(ctx, e, vars);
-                    ctx.finish_current(Terminator::Return(Some(t)));
-                }
+                let value = lower_expr(ctx, e, vars);
+                finish_value_return(ctx, value, &e.ty);
             } else {
                 ctx.finish_current(Terminator::Return(None));
             }
@@ -3367,7 +4930,12 @@ fn lower_expr_as_int(
     let value = lower_expr(ctx, expr, vars);
     if semantic::is_wide_numeric_type(&expr.ty) {
         let out = ctx.new_temp();
-        ctx.current_instr(Instr::NumericToInt { dest: out, value });
+        ctx.current_instr(Instr::NumericToInt {
+            dest: out,
+            value,
+            kind: wide_numeric_kind_for_type(&expr.ty)
+                .expect("wide numeric expression has a nominal ABI kind"),
+        });
         out
     } else {
         value
@@ -3380,12 +4948,22 @@ fn lower_expr_as_numeric(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let value = lower_expr(ctx, expr, vars);
-    if semantic::is_wide_numeric_type(&expr.ty) {
-        value
-    } else {
-        let out = ctx.new_temp();
-        ctx.current_instr(Instr::NumericFromInt { dest: out, value });
-        out
+    match wide_numeric_kind_for_type(&expr.ty) {
+        Some(WideNumericKind::Amount) => value,
+        Some(WideNumericKind::U128) => {
+            let out = ctx.new_temp();
+            ctx.current_instr(Instr::AmountFromU128 { dest: out, value });
+            out
+        }
+        None => {
+            let out = ctx.new_temp();
+            ctx.current_instr(Instr::NumericFromInt {
+                dest: out,
+                value,
+                kind: WideNumericKind::Amount,
+            });
+            out
+        }
     }
 }
 
@@ -3608,7 +5186,7 @@ fn lower_pointer_constructor_call(
     }
     let arg = &args[0];
     let (kind, target_ty) = pointer_constructor_kind_and_type(constructor);
-    if let semantic::ExprKind::String(s) = &arg.expr {
+    if let semantic::ExprKind::String(s) = arg.kind() {
         if constructor == PointerConstructor::AccountId
             && account_id_literal_uses_alias_resolution(s)
         {
@@ -3631,7 +5209,7 @@ fn lower_pointer_constructor_call(
         return dest;
     }
     if constructor == PointerConstructor::NoritoBytes
-        && let semantic::ExprKind::Bytes(bytes) = &arg.expr
+        && let semantic::ExprKind::Bytes(bytes) = arg.kind()
     {
         let dest = ctx.new_temp();
         let hex = hex::encode(bytes);
@@ -3708,22 +5286,32 @@ fn lower_transfer_batch_call(
             index: 3,
         });
         let amount = if let Type::Tuple(items) = semantic::resolve_struct_type(&entry.ty) {
-            let entry_ty = items.get(3);
-            if entry_ty.is_some_and(semantic::is_wide_numeric_type) {
-                amount_raw
-            } else {
-                let out = ctx.new_temp();
-                ctx.current_instr(Instr::NumericFromInt {
-                    dest: out,
-                    value: amount_raw,
-                });
-                out
+            match items.get(3).and_then(wide_numeric_kind_for_type) {
+                Some(WideNumericKind::Amount) => amount_raw,
+                Some(WideNumericKind::U128) => {
+                    let out = ctx.new_temp();
+                    ctx.current_instr(Instr::AmountFromU128 {
+                        dest: out,
+                        value: amount_raw,
+                    });
+                    out
+                }
+                None => {
+                    let out = ctx.new_temp();
+                    ctx.current_instr(Instr::NumericFromInt {
+                        dest: out,
+                        value: amount_raw,
+                        kind: WideNumericKind::Amount,
+                    });
+                    out
+                }
             }
         } else {
             let out = ctx.new_temp();
             ctx.current_instr(Instr::NumericFromInt {
                 dest: out,
                 value: amount_raw,
+                kind: WideNumericKind::Amount,
             });
             out
         };
@@ -3799,6 +5387,15 @@ fn lower_surface_builtin_call(
         }
         Builtin::NumericNeg => {
             let value = lower_expr(ctx, &args[0], vars);
+            if matches!(
+                wide_numeric_kind_for_type(&args[0].ty),
+                Some(WideNumericKind::Amount)
+            ) {
+                ctx.record_error("Amount is non-negative and cannot be negated".into());
+                let dest = ctx.new_temp();
+                ctx.current_instr(Instr::Const { dest, value: 0 });
+                return dest;
+            }
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::NumericNeg { dest, value });
             dest
@@ -4037,7 +5634,12 @@ fn lower_surface_builtin_call(
         Builtin::NumericToInt => {
             let value = lower_expr(ctx, &args[0], vars);
             let dest = ctx.new_temp();
-            ctx.current_instr(Instr::NumericToInt { dest, value });
+            ctx.current_instr(Instr::NumericToInt {
+                dest,
+                value,
+                kind: wide_numeric_kind_for_type(&args[0].ty)
+                    .expect("numeric_to_int operand has a nominal ABI kind"),
+            });
             dest
         }
         builtin @ (Builtin::NumericAdd
@@ -4053,6 +5655,8 @@ fn lower_surface_builtin_call(
                 op: numeric_binary_builtin_op(builtin).expect("numeric binary builtin op"),
                 left,
                 right,
+                kind: wide_numeric_kind_for_type(&args[0].ty)
+                    .expect("numeric binary operand has a nominal ABI kind"),
             });
             dest
         }
@@ -4070,6 +5674,8 @@ fn lower_surface_builtin_call(
                 op: numeric_compare_builtin_op(builtin).expect("numeric compare builtin op"),
                 left,
                 right,
+                kind: wide_numeric_kind_for_type(&args[0].ty)
+                    .expect("numeric comparison operand has a nominal ABI kind"),
             });
             dest
         }
@@ -4248,8 +5854,56 @@ fn lower_surface_builtin_call(
         | Builtin::QueryGetAsset
         | Builtin::QueryGetAssetDefinition
         | Builtin::QueryGetDomain
-        | Builtin::QueryGetNft
-        | Builtin::QueryGetParameter
+        | Builtin::QueryGetNft => {
+            let key = lower_expr(ctx, &args[0], vars);
+            let entity = match builtin {
+                Builtin::QueryGetAccount => ivm_abi::core_query::CoreQueryEntityTagV1::Account,
+                Builtin::QueryGetAsset => ivm_abi::core_query::CoreQueryEntityTagV1::Asset,
+                Builtin::QueryGetAssetDefinition => {
+                    ivm_abi::core_query::CoreQueryEntityTagV1::AssetDefinition
+                }
+                Builtin::QueryGetDomain => ivm_abi::core_query::CoreQueryEntityTagV1::Domain,
+                Builtin::QueryGetNft => ivm_abi::core_query::CoreQueryEntityTagV1::Nft,
+                _ => unreachable!("matched only V1 core-query builtins"),
+            };
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::CoreQueryGet { dest, key, entity });
+            dest
+        }
+        Builtin::QueryPageAccounts
+        | Builtin::QueryPageAssets
+        | Builtin::QueryPageAssetDefinitions
+        | Builtin::QueryPageDomains
+        | Builtin::QueryPageNfts => {
+            let offset = lower_expr_as_int(ctx, &args[0], vars);
+            let limit = lower_expr_as_int(ctx, &args[1], vars);
+            let entity = match builtin {
+                Builtin::QueryPageAccounts => ivm_abi::core_query::CoreQueryEntityTagV1::Account,
+                Builtin::QueryPageAssets => ivm_abi::core_query::CoreQueryEntityTagV1::Asset,
+                Builtin::QueryPageAssetDefinitions => {
+                    ivm_abi::core_query::CoreQueryEntityTagV1::AssetDefinition
+                }
+                Builtin::QueryPageDomains => ivm_abi::core_query::CoreQueryEntityTagV1::Domain,
+                Builtin::QueryPageNfts => ivm_abi::core_query::CoreQueryEntityTagV1::Nft,
+                _ => unreachable!("matched only V1 core-query page builtins"),
+            };
+            let items_dest = ctx.new_temp();
+            let next_offset_dest = ctx.new_temp();
+            ctx.current_instr(Instr::CoreQueryPage {
+                items_dest,
+                next_offset_dest,
+                entity,
+                offset,
+                limit,
+            });
+            let page = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack {
+                dest: page,
+                items: vec![items_dest, next_offset_dest],
+            });
+            page
+        }
+        Builtin::QueryGetParameter
         | Builtin::QueryGetContractManifest
         | Builtin::QueryGetContractInstance => {
             let key = lower_expr(ctx, &args[0], vars);
@@ -4329,19 +5983,6 @@ fn lower_surface_builtin_call(
             let payload = lower_expr(ctx, &args[0], vars);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::VendorExecuteQuery { dest, payload });
-            dest
-        }
-        Builtin::CallContract => {
-            let contract = lower_expr(ctx, &args[0], vars);
-            let entrypoint = lower_expr(ctx, &args[1], vars);
-            let payload = lower_expr(ctx, &args[2], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::CallContract {
-                dest,
-                contract,
-                entrypoint,
-                payload,
-            });
             dest
         }
         Builtin::ResolveAccountAlias => {
@@ -4464,7 +6105,7 @@ fn lower_surface_builtin_call(
         Builtin::MintAsset => {
             let acc = lower_expr(ctx, &args[0], vars);
             let asset = lower_expr(ctx, &args[1], vars);
-            let amt = match &args[2].expr {
+            let amt = match args[2].kind() {
                 semantic::ExprKind::Number(0) if !semantic::is_wide_numeric_type(&args[2].ty) => {
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -5573,8 +7214,149 @@ fn lower_surface_builtin_call(
     }
 }
 
+/// Return whether a named argument must be captured at its source position.
+///
+/// Literal leaves are total and independent of mutable compiler state, so a
+/// builtin may continue to consume them directly (and, for literal-only ABI
+/// fields, entirely at compile time). Every other value is captured exactly
+/// once before ABI-slot permutation. `StateMap` handles are declarations, not
+/// runtime values, and their lowering is performed by the callee ABI helper.
+fn named_argument_requires_capture(argument: &TypedExpr) -> bool {
+    if matches!(
+        semantic::resolve_struct_type(&argument.ty),
+        Type::StateMap(_, _)
+    ) {
+        return false;
+    }
+    !matches!(
+        argument.kind(),
+        semantic::ExprKind::Number(_)
+            | semantic::ExprKind::Decimal(_)
+            | semantic::ExprKind::AmountLiteral { .. }
+            | semantic::ExprKind::Bool(_)
+            | semantic::ExprKind::String(_)
+            | semantic::ExprKind::Bytes(_)
+    )
+}
+
+/// Lower a named call by capturing observable argument evaluations in source
+/// order and then reusing their temporary identities in declaration/ABI order.
+///
+/// The cache is compiler-only: it emits no copies, tuple shuffles, or heap
+/// allocations. Literal-only operands remain available to builtin lowering so
+/// compile-time ABI fields retain the exact code generated by positional calls.
+fn lower_named_call(
+    ctx: &mut LowerCtx,
+    result_ty: &Type,
+    name: &str,
+    args: &[TypedExpr],
+    evaluation_order: &[usize],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let mut seen = vec![false; args.len()];
+    let mut captured = vec![None; args.len()];
+    for &index in evaluation_order {
+        if index >= args.len() || seen[index] {
+            ctx.record_error(format!(
+                "internal error: named call `{name}` has an invalid source evaluation order"
+            ));
+            continue;
+        }
+        seen[index] = true;
+        if named_argument_requires_capture(&args[index]) {
+            captured[index] = Some(lower_expr(ctx, &args[index], vars));
+        }
+    }
+    for (index, was_seen) in seen.iter().copied().enumerate() {
+        if !was_seen {
+            ctx.record_error(format!(
+                "internal error: named call `{name}` omits ABI argument slot {index} from its source evaluation order"
+            ));
+            if named_argument_requires_capture(&args[index]) {
+                captured[index] = Some(lower_expr(ctx, &args[index], vars));
+            }
+        }
+    }
+
+    // Re-enter the ordinary call lowering path with the validated ABI-ordered
+    // expressions. The Vec allocation belongs to the compiler only; its
+    // backing storage stays stable while the scoped pointer-to-temp cache is
+    // active.
+    let positional = TypedExpr {
+        expr: semantic::ExprKind::Call {
+            name: name.to_owned(),
+            args: args.to_vec(),
+        },
+        ty: result_ty.clone(),
+    };
+    let positional_args = match positional.kind() {
+        semantic::ExprKind::Call { args, .. } => args,
+        _ => unreachable!("constructed a positional call"),
+    };
+    let scope = captured
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, temp)| {
+            temp.map(|temp| (std::ptr::from_ref(&positional_args[index]), temp))
+        })
+        .collect();
+    ctx.prelowered_argument_scopes.push(scope);
+    let value = lower_expr(ctx, &positional, vars);
+    ctx.prelowered_argument_scopes
+        .pop()
+        .expect("named argument cache scope must be balanced");
+    value
+}
+
 fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, Temp>) -> Temp {
+    if let Some(temp) = ctx.prelowered_argument(expr) {
+        return temp;
+    }
     match &expr.expr {
+        semantic::ExprKind::JsonObject(_) | semantic::ExprKind::JsonArray(_) => {
+            lower_json_construction(ctx, expr, vars)
+        }
+        semantic::ExprKind::StructLiteral { fields, .. } => {
+            let lowered = fields
+                .iter()
+                .map(|(name, value)| (name.as_str(), lower_expr(ctx, value, vars)))
+                .collect::<Vec<_>>();
+            let semantic::Type::Struct {
+                fields: declared_fields,
+                ..
+            } = &expr.ty
+            else {
+                ctx.record_error("named struct literal lost its declared field layout".into());
+                let value = ctx.new_temp();
+                ctx.current_instr(Instr::Const {
+                    dest: value,
+                    value: 0,
+                });
+                return value;
+            };
+            let mut items = Vec::with_capacity(declared_fields.len());
+            for (declared_name, _) in declared_fields {
+                let Some((_, value)) = lowered
+                    .iter()
+                    .find(|(source_name, _)| *source_name == declared_name.as_str())
+                else {
+                    ctx.record_error(format!(
+                        "named struct literal is missing lowered field `{declared_name}`"
+                    ));
+                    let placeholder = ctx.new_temp();
+                    ctx.current_instr(Instr::Const {
+                        dest: placeholder,
+                        value: 0,
+                    });
+                    items.push(placeholder);
+                    continue;
+                };
+                items.push(*value);
+            }
+            let value = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack { dest: value, items });
+            value
+        }
         semantic::ExprKind::Tuple(elems) => {
             let mut items = Vec::with_capacity(elems.len());
             for e in elems {
@@ -5584,6 +7366,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             ctx.current_instr(Instr::TuplePack { dest: tup, items });
             tup
         }
+        semantic::ExprKind::List(elements) => lower_list_literal(ctx, elements, &expr.ty, vars),
+        semantic::ExprKind::ListComprehension {
+            expression,
+            item,
+            source,
+            condition,
+        } => lower_list_comprehension(
+            ctx,
+            expression,
+            item,
+            source,
+            condition.as_deref(),
+            &expr.ty,
+            vars,
+        ),
         semantic::ExprKind::Number(n) => {
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: *n });
@@ -5605,6 +7402,15 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                 }
             }
+            t
+        }
+        semantic::ExprKind::AmountLiteral { value, .. } => {
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::DataRef {
+                dest: t,
+                kind: DataRefKind::Amount,
+                value: value.to_string(),
+            });
             t
         }
         semantic::ExprKind::Bool(b) => {
@@ -5672,6 +7478,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             }
             let v = lower_expr(ctx, inner, vars);
             if matches!(op, UnaryOp::Neg) && semantic::is_wide_numeric_type(&inner.ty) {
+                let kind = wide_numeric_kind_for_type(&inner.ty)
+                    .expect("wide numeric unary operand has a nominal ABI kind");
+                if kind == WideNumericKind::Amount {
+                    ctx.record_error("Amount is non-negative and cannot be negated".into());
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    return t;
+                }
                 let zero_int = ctx.new_temp();
                 ctx.current_instr(Instr::Const {
                     dest: zero_int,
@@ -5681,6 +7495,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 ctx.current_instr(Instr::NumericFromInt {
                     dest: zero_numeric,
                     value: zero_int,
+                    kind,
                 });
                 let t = ctx.new_temp();
                 ctx.current_instr(Instr::NumericBinary {
@@ -5688,6 +7503,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     op: BinaryOp::Sub,
                     left: zero_numeric,
                     right: v,
+                    kind,
                 });
                 t
             } else {
@@ -5706,12 +7522,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             let dst_ty = semantic::resolve_struct_type(&expr.ty);
             if semantic::is_wide_numeric_type(&dst_ty) && matches!(src_ty, Type::Int) {
                 let t = ctx.new_temp();
-                ctx.current_instr(Instr::NumericFromInt { dest: t, value: v });
+                ctx.current_instr(Instr::NumericFromInt {
+                    dest: t,
+                    value: v,
+                    kind: wide_numeric_kind_for_type(&dst_ty)
+                        .expect("wide numeric cast target has a nominal ABI kind"),
+                });
+                return t;
+            }
+            if matches!(dst_ty, Type::Amount) && matches!(src_ty, Type::FixedU128) {
+                let t = ctx.new_temp();
+                ctx.current_instr(Instr::AmountFromU128 { dest: t, value: v });
                 return t;
             }
             if matches!(dst_ty, Type::Int) && semantic::is_wide_numeric_type(&src_ty) {
                 let t = ctx.new_temp();
-                ctx.current_instr(Instr::NumericToInt { dest: t, value: v });
+                ctx.current_instr(Instr::NumericToInt {
+                    dest: t,
+                    value: v,
+                    kind: wide_numeric_kind_for_type(&src_ty)
+                        .expect("wide numeric cast source has a nominal ABI kind"),
+                });
                 return t;
             }
             v
@@ -5738,6 +7569,30 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     Ok(None) => {}
                 }
             }
+            if matches!(
+                op,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+            ) && matches!(semantic::resolve_struct_type(&expr.ty), Type::Amount)
+            {
+                match crate::checked_arithmetic::evaluate_checked_amount(expr) {
+                    Ok(Some(value)) => {
+                        let dest = ctx.new_temp();
+                        ctx.current_instr(Instr::DataRef {
+                            dest,
+                            kind: DataRefKind::Amount,
+                            value: value.to_string(),
+                        });
+                        return dest;
+                    }
+                    Err(error) => {
+                        ctx.record_error(error.to_string());
+                        let dest = ctx.new_temp();
+                        ctx.current_instr(Instr::Const { dest, value: 0 });
+                        return dest;
+                    }
+                    Ok(None) => {}
+                }
+            }
             let l = lower_expr(ctx, left, vars);
             let r = lower_expr(ctx, right, vars);
             let lhs_wide = semantic::is_wide_numeric_type(&left.ty);
@@ -5753,6 +7608,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     op: *op,
                     left: l,
                     right: r,
+                    kind: wide_numeric_kind_for_type(&left.ty)
+                        .or_else(|| wide_numeric_kind_for_type(&right.ty))
+                        .expect("wide numeric binary expression has a nominal ABI kind"),
                 });
                 return t;
             }
@@ -5772,6 +7630,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     op: *op,
                     left: l,
                     right: r,
+                    kind: wide_numeric_kind_for_type(&left.ty)
+                        .or_else(|| wide_numeric_kind_for_type(&right.ty))
+                        .expect("wide numeric comparison has a nominal ABI kind"),
                 });
                 return t;
             }
@@ -5810,56 +7671,182 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             then_expr,
             else_expr,
         } => {
-            // Evaluate condition and branch to compute the value into a shared result temp.
             let cond_t = lower_expr(ctx, cond, vars);
             let then_label = ctx.new_label();
             let else_label = ctx.new_label();
             let end_label = ctx.new_label();
-            let result = ctx.new_temp();
-            // Branch on condition
+            let result_words = runtime_value_word_types(&expr.ty)
+                .into_iter()
+                .map(|_| ctx.new_temp())
+                .collect::<Vec<_>>();
             ctx.finish_current(Terminator::Branch {
                 cond: cond_t,
                 then_bb: then_label,
                 else_bb: else_label,
             });
 
-            // Then branch: compute then value and move into result
             ctx.start_block(then_label);
             let then_v = lower_expr(ctx, then_expr, &mut vars.clone());
-            let z_then = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: z_then,
-                value: 0,
-            });
-            ctx.current_instr(Instr::Binary {
-                dest: result,
-                op: BinaryOp::Add,
-                left: then_v,
-                right: z_then,
-            });
+            copy_runtime_value_words(ctx, then_v, &expr.ty, &result_words);
             ctx.finish_current(Terminator::Jump(end_label));
 
-            // Else branch: compute else value and move into result
             ctx.start_block(else_label);
             let else_v = lower_expr(ctx, else_expr, &mut vars.clone());
-            let z_else = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: z_else,
-                value: 0,
-            });
-            ctx.current_instr(Instr::Binary {
-                dest: result,
-                op: BinaryOp::Add,
-                left: else_v,
-                right: z_else,
-            });
+            copy_runtime_value_words(ctx, else_v, &expr.ty, &result_words);
             ctx.finish_current(Terminator::Jump(end_label));
 
-            // Merge block
             ctx.start_block(end_label);
-            result
+            rebuild_runtime_value(ctx, &expr.ty, &result_words)
         }
+        semantic::ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            let condition = lower_expr(ctx, condition, vars);
+            let then_label = ctx.new_label();
+            let else_label = ctx.new_label();
+            let end_label = ctx.new_label();
+            let result_words = runtime_value_word_types(&expr.ty)
+                .into_iter()
+                .map(|_| ctx.new_temp())
+                .collect::<Vec<_>>();
+            ctx.finish_current(Terminator::Branch {
+                cond: condition,
+                then_bb: then_label,
+                else_bb: else_label,
+            });
+
+            ctx.start_block(then_label);
+            let then_value = lower_expression_block(ctx, then_branch, &mut vars.clone());
+            copy_runtime_value_words(ctx, then_value, &expr.ty, &result_words);
+            ctx.finish_current(Terminator::Jump(end_label));
+
+            ctx.start_block(else_label);
+            let else_value = lower_expression_block(ctx, else_branch, &mut vars.clone());
+            copy_runtime_value_words(ctx, else_value, &expr.ty, &result_words);
+            ctx.finish_current(Terminator::Jump(end_label));
+
+            ctx.start_block(end_label);
+            rebuild_runtime_value(ctx, &expr.ty, &result_words)
+        }
+        semantic::ExprKind::IfLet {
+            pattern,
+            value,
+            then_branch,
+            else_branch,
+        } => {
+            let sum = lower_expr(ctx, value, vars);
+            let tag = load_sum_tag(ctx, sum);
+            let then_label = ctx.new_label();
+            let else_label = ctx.new_label();
+            let end_label = ctx.new_label();
+            let result_words = runtime_value_word_types(&expr.ty)
+                .into_iter()
+                .map(|_| ctx.new_temp())
+                .collect::<Vec<_>>();
+            let (tag_one, tag_zero) = if sum_pattern_tag(pattern) == 1 {
+                (then_label, else_label)
+            } else {
+                (else_label, then_label)
+            };
+            ctx.finish_current(Terminator::Branch {
+                cond: tag,
+                then_bb: tag_one,
+                else_bb: tag_zero,
+            });
+
+            ctx.start_block(then_label);
+            let mut then_vars = vars.clone();
+            bind_sum_pattern(ctx, pattern, sum, &mut then_vars);
+            let then_value = lower_expression_block(ctx, then_branch, &mut then_vars);
+            copy_runtime_value_words(ctx, then_value, &expr.ty, &result_words);
+            ctx.finish_current(Terminator::Jump(end_label));
+
+            ctx.start_block(else_label);
+            let else_value = lower_expression_block(ctx, else_branch, &mut vars.clone());
+            copy_runtime_value_words(ctx, else_value, &expr.ty, &result_words);
+            ctx.finish_current(Terminator::Jump(end_label));
+
+            ctx.start_block(end_label);
+            rebuild_runtime_value(ctx, &expr.ty, &result_words)
+        }
+        semantic::ExprKind::Match { value, arms } => {
+            // Normalize the canonical exhaustive early-return spelling of
+            // same-family propagation before CFG construction. This keeps
+            // postfix `?` genuine zero-cost syntax sugar: both source forms
+            // enter the exact same lowering helper and therefore produce the
+            // same optimized IR and executable bytes.
+            if propagation_match_return(&value.ty, &ctx.function_return_type, arms).is_some() {
+                return lower_propagation(ctx, value, vars);
+            }
+            let sum = lower_expr(ctx, value, vars);
+            let tag = load_sum_tag(ctx, sum);
+            let tag_one_arm = arms
+                .iter()
+                .find(|arm| sum_pattern_tag(&arm.pattern) == 1)
+                .expect("semantic analysis guarantees the tag-one arm");
+            let tag_zero_arm = arms
+                .iter()
+                .find(|arm| sum_pattern_tag(&arm.pattern) == 0)
+                .expect("semantic analysis guarantees the tag-zero arm");
+            let tag_one_label = ctx.new_label();
+            let tag_zero_label = ctx.new_label();
+            let end_label = ctx.new_label();
+            let result_words = runtime_value_word_types(&expr.ty)
+                .into_iter()
+                .map(|_| ctx.new_temp())
+                .collect::<Vec<_>>();
+            ctx.finish_current(Terminator::Branch {
+                cond: tag,
+                then_bb: tag_one_label,
+                else_bb: tag_zero_label,
+            });
+
+            ctx.start_block(tag_one_label);
+            let mut tag_one_vars = vars.clone();
+            bind_sum_pattern(ctx, &tag_one_arm.pattern, sum, &mut tag_one_vars);
+            let tag_one_value = lower_expression_block(ctx, &tag_one_arm.body, &mut tag_one_vars);
+            copy_runtime_value_words(ctx, tag_one_value, &expr.ty, &result_words);
+            ctx.finish_current(Terminator::Jump(end_label));
+
+            ctx.start_block(tag_zero_label);
+            let mut tag_zero_vars = vars.clone();
+            bind_sum_pattern(ctx, &tag_zero_arm.pattern, sum, &mut tag_zero_vars);
+            let tag_zero_value =
+                lower_expression_block(ctx, &tag_zero_arm.body, &mut tag_zero_vars);
+            copy_runtime_value_words(ctx, tag_zero_value, &expr.ty, &result_words);
+            ctx.finish_current(Terminator::Jump(end_label));
+
+            ctx.start_block(end_label);
+            rebuild_runtime_value(ctx, &expr.ty, &result_words)
+        }
+        semantic::ExprKind::OptionSome { value } => {
+            let payload = lower_expr(ctx, value, vars);
+            emit_sum_value(ctx, &expr.ty, 1, Some(payload))
+        }
+        semantic::ExprKind::OptionNone => emit_sum_value(ctx, &expr.ty, 0, None),
+        semantic::ExprKind::ResultOk { value } => {
+            let payload = lower_expr(ctx, value, vars);
+            emit_sum_value(ctx, &expr.ty, 1, Some(payload))
+        }
+        semantic::ExprKind::ResultErr { error } => {
+            let payload = lower_expr(ctx, error, vars);
+            emit_sum_value(ctx, &expr.ty, 0, Some(payload))
+        }
+        semantic::ExprKind::Propagate { value } => lower_propagation(ctx, value, vars),
+        semantic::ExprKind::NamedCall {
+            name,
+            args,
+            evaluation_order,
+        } => lower_named_call(ctx, &expr.ty, name, args, evaluation_order, vars),
         semantic::ExprKind::Call { name, args } => {
+            if let Some(value) = lower_amount_intrinsic(ctx, name, args, vars) {
+                return value;
+            }
+            if let Some(value) = lower_list_intrinsic(ctx, name, args, &expr.ty, vars) {
+                return value;
+            }
             if let Some(entrypoint) = name.strip_prefix(INVOKE_ENTRYPOINT_PREFIX) {
                 return lower_invoke_entrypoint_call(ctx, entrypoint, &args[0], &expr.ty, vars);
             }
@@ -5886,11 +7873,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     t
                 }
                 "invoke_entrypoint_as" => {
-                    let actor = match &args[0].expr {
+                    let actor = match args[0].kind() {
                         semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
                         _ => panic!("invoke_entrypoint_as actor must be a literal string"),
                     };
-                    let entrypoint = match &args[1].expr {
+                    let entrypoint = match args[1].kind() {
                         semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
                         _ => panic!("invoke_entrypoint_as entrypoint must be a literal string"),
                     };
@@ -5908,16 +7895,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                             ctx.current_instr(Instr::Const { dest: t, value: 0 });
                             t
                         }
-                        aggregate if aggregate_components(aggregate).is_some() => {
-                            let items = aggregate_components(aggregate)
-                                .expect("aggregate return components checked");
-                            let dests: Vec<Temp> = items.iter().map(|_| ctx.new_temp()).collect();
+                        aggregate if function_value_word_types(aggregate).is_some() => {
+                            let word_types = function_value_word_types(aggregate)
+                                .expect("aggregate return word types checked");
+                            let dests: Vec<Temp> =
+                                word_types.iter().map(|_| ctx.new_temp()).collect();
                             let mut return_pointer_mask = 0u64;
-                            for (idx, item_ty) in items.iter().enumerate() {
-                                if semantic::is_pointer_type(item_ty)
-                                    || semantic::is_blob_like(item_ty)
-                                    || *item_ty == semantic::Type::Json
-                                {
+                            for (idx, item_ty) in word_types.iter().enumerate() {
+                                if runtime_word_is_pointer(item_ty) {
                                     return_pointer_mask |= 1u64 << idx;
                                 }
                             }
@@ -5928,12 +7913,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                                 payload,
                                 return_pointer_mask,
                             });
-                            let tuple = ctx.new_temp();
-                            ctx.current_instr(Instr::TuplePack {
-                                dest: tuple,
-                                items: dests,
-                            });
-                            tuple
+                            let mut index = 0_usize;
+                            let value = rebuild_function_value_from_words(
+                                ctx, aggregate, &dests, &mut index,
+                            )
+                            .expect("validated aggregate return must rebuild from ABI words");
+                            debug_assert_eq!(index, dests.len());
+                            value
                         }
                         _ => {
                             let dest = ctx.new_temp();
@@ -5942,20 +7928,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                                 actor,
                                 entrypoint,
                                 payload,
-                                returns_pointer: semantic::is_pointer_type(&expr.ty)
-                                    || semantic::is_blob_like(&expr.ty)
-                                    || expr.ty == semantic::Type::Json,
+                                returns_pointer: runtime_word_is_pointer(&expr.ty),
                             });
                             dest
                         }
                     }
                 }
                 "expect_reject_as" => {
-                    let actor = match &args[0].expr {
+                    let actor = match args[0].kind() {
                         semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
                         _ => panic!("expect_reject_as actor must be a literal string"),
                     };
-                    let entrypoint = match &args[1].expr {
+                    let entrypoint = match args[1].kind() {
                         semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
                         _ => panic!("expect_reject_as entrypoint must be a literal string"),
                     };
@@ -5970,7 +7954,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     t
                 }
                 "actor_account" => {
-                    let actor = match &args[0].expr {
+                    let actor = match args[0].kind() {
                         semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
                         _ => panic!("actor_account actor must be a literal string"),
                     };
@@ -5979,7 +7963,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     dest
                 }
                 "actor_public_key" => {
-                    let actor = match &args[0].expr {
+                    let actor = match args[0].kind() {
                         semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
                         _ => panic!("actor_public_key actor must be a literal string"),
                     };
@@ -5988,7 +7972,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     dest
                 }
                 "actor_sign" => {
-                    let actor = match &args[0].expr {
+                    let actor = match args[0].kind() {
                         semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
                         _ => panic!("actor_sign actor must be a literal string"),
                     };
@@ -6037,22 +8021,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                             ctx.current_instr(Instr::Const { dest: t, value: 0 });
                             t
                         }
-                        aggregate if aggregate_components(aggregate).is_some() => {
-                            let ts = aggregate_components(aggregate)
-                                .expect("aggregate return components checked");
-                            // Multi-return: move r10.. into temps, then pack to a tuple temp
-                            let mut items = Vec::with_capacity(ts.len());
-                            for _ in 0..ts.len() {
-                                items.push(ctx.new_temp());
+                        aggregate if function_value_word_types(aggregate).is_some() => {
+                            let word_types = function_value_word_types(aggregate)
+                                .expect("aggregate return word types checked");
+                            // Multi-return: move the flattened ABI words from r10 onward, then
+                            // rebuild the compiler-only aggregate shape.
+                            let mut words = Vec::with_capacity(word_types.len());
+                            for _ in word_types {
+                                words.push(ctx.new_temp());
                             }
                             ctx.current_instr(Instr::CallMulti {
                                 callee: ctx.call_target(name),
                                 args: arg_tmps,
-                                dests: items.clone(),
+                                dests: words.clone(),
                             });
-                            let tup = ctx.new_temp();
-                            ctx.current_instr(Instr::TuplePack { dest: tup, items });
-                            tup
+                            let mut index = 0_usize;
+                            let value = rebuild_function_value_from_words(
+                                ctx, aggregate, &words, &mut index,
+                            )
+                            .expect("validated aggregate return must rebuild from ABI words");
+                            debug_assert_eq!(index, words.len());
+                            value
                         }
                         _ => {
                             let d = ctx.new_temp();
@@ -6085,7 +8074,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
         semantic::ExprKind::Member { object, field } => {
             // Support nested struct field access via flattened variables: base#i#j
             fn flatten_member_chain(e: &semantic::TypedExpr) -> Option<(String, Vec<usize>)> {
-                match &e.expr {
+                match e.kind() {
                     semantic::ExprKind::Member { object, field } => {
                         let (base, mut rest) = flatten_member_chain(object)?;
                         let idx = if let Ok(i) = field.parse::<usize>() {
@@ -6173,61 +8162,15 @@ fn lower_sum_type_call(
     args: &[semantic::TypedExpr],
     vars: &mut HashMap<String, Temp>,
 ) -> Option<Temp> {
-    let tagged = |ctx: &mut LowerCtx, tag: i64, values: Vec<Temp>| {
-        let tag_temp = ctx.new_temp();
-        ctx.current_instr(Instr::Const {
-            dest: tag_temp,
-            value: tag,
-        });
-        let mut items = Vec::with_capacity(values.len() + 1);
-        items.push(tag_temp);
-        items.extend(values);
-        let result = ctx.new_temp();
-        ctx.current_instr(Instr::TuplePack {
-            dest: result,
-            items,
-        });
-        result
-    };
-
     Some(match name {
-        "option_some" => {
-            let value = lower_expr(ctx, &args[0], vars);
-            tagged(ctx, 1, vec![value])
-        }
-        "option_none" => {
-            let placeholder = lower_expr(ctx, &args[0], vars);
-            tagged(ctx, 0, vec![placeholder])
-        }
-        "result_ok" => {
-            let value = lower_expr(ctx, &args[0], vars);
-            let error_placeholder = lower_expr(ctx, &args[1], vars);
-            tagged(ctx, 1, vec![value, error_placeholder])
-        }
-        "result_err" => {
-            let value_placeholder = lower_expr(ctx, &args[0], vars);
-            let error = lower_expr(ctx, &args[1], vars);
-            tagged(ctx, 0, vec![value_placeholder, error])
-        }
         STATE_MAP_GET_INTRINSIC => lower_state_map_get_option(ctx, args, vars),
         "is_some" | "is_ok" => {
             let tagged_value = lower_expr(ctx, &args[0], vars);
-            let tag = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: tag,
-                tuple: tagged_value,
-                index: 0,
-            });
-            tag
+            load_sum_tag(ctx, tagged_value)
         }
         "is_none" | "is_err" => {
             let tagged_value = lower_expr(ctx, &args[0], vars);
-            let tag = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: tag,
-                tuple: tagged_value,
-                index: 0,
-            });
+            let tag = load_sum_tag(ctx, tagged_value);
             let inverted = ctx.new_temp();
             ctx.current_instr(Instr::Unary {
                 dest: inverted,
@@ -6236,8 +8179,8 @@ fn lower_sum_type_call(
             });
             inverted
         }
-        "unwrap_or" => lower_tagged_unwrap(ctx, &args[0], &args[1], 1, true, vars),
-        "unwrap_err_or" => lower_tagged_unwrap(ctx, &args[0], &args[1], 2, false, vars),
+        "unwrap_or" => lower_tagged_unwrap(ctx, &args[0], &args[1], true, vars),
+        "unwrap_err_or" => lower_tagged_unwrap(ctx, &args[0], &args[1], false, vars),
         _ => return None,
     })
 }
@@ -6246,23 +8189,15 @@ fn lower_tagged_unwrap(
     ctx: &mut LowerCtx,
     tagged_expr: &semantic::TypedExpr,
     fallback_expr: &semantic::TypedExpr,
-    payload_index: usize,
     payload_when_tagged: bool,
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let tagged = lower_expr(ctx, tagged_expr, vars);
-    let tag = ctx.new_temp();
-    ctx.current_instr(Instr::TupleGet {
-        dest: tag,
-        tuple: tagged,
-        index: 0,
-    });
-    let payload = ctx.new_temp();
-    ctx.current_instr(Instr::TupleGet {
-        dest: payload,
-        tuple: tagged,
-        index: payload_index,
-    });
+    // `unwrap_or` is eager (the lazy spelling would be `unwrap_or_else`, which
+    // V1 does not expose), so capture the fallback before branching. This also
+    // keeps positional and named-call evaluation semantics identical.
+    let fallback = lower_expr(ctx, fallback_expr, vars);
+    let tag = load_sum_tag(ctx, tagged);
     let payload_block = ctx.new_label();
     let fallback_block = ctx.new_label();
     let end_block = ctx.new_label();
@@ -6271,90 +8206,33 @@ fn lower_tagged_unwrap(
     } else {
         (fallback_block, payload_block)
     };
-
-    let payload_ty = semantic::resolve_struct_type(&fallback_expr.ty);
-    if is_aggregate_state_value_type(&payload_ty) {
-        let Some(word_count) = state_value_schema(&payload_ty)
-            .and_then(|schema| schema.word_kinds())
-            .map(|words| words.len())
-        else {
-            ctx.record_error("aggregate sum payload is not lowerable".into());
-            return payload;
-        };
-        let result_words = (0..word_count).map(|_| ctx.new_temp()).collect::<Vec<_>>();
-        ctx.finish_current(Terminator::Branch {
-            cond: tag,
-            then_bb,
-            else_bb,
-        });
-
-        ctx.start_block(payload_block);
-        let mut payload_words = Vec::with_capacity(word_count);
-        if !collect_state_value_words(ctx, payload, &payload_ty, &mut payload_words)
-            || payload_words.len() != word_count
-        {
-            ctx.record_error("aggregate sum payload has an invalid runtime shape".into());
-        }
-        for (dest, src) in result_words.iter().zip(payload_words) {
-            ctx.current_instr(Instr::Copy { dest: *dest, src });
-        }
-        ctx.finish_current(Terminator::Jump(end_block));
-
-        ctx.start_block(fallback_block);
-        let fallback = lower_expr(ctx, fallback_expr, vars);
-        let mut fallback_words = Vec::with_capacity(word_count);
-        if !collect_state_value_words(ctx, fallback, &payload_ty, &mut fallback_words)
-            || fallback_words.len() != word_count
-        {
-            ctx.record_error("aggregate fallback has an invalid runtime shape".into());
-        }
-        for (dest, src) in result_words.iter().zip(fallback_words) {
-            ctx.current_instr(Instr::Copy { dest: *dest, src });
-        }
-        ctx.finish_current(Terminator::Jump(end_block));
-
-        ctx.start_block(end_block);
-        let mut index = 0;
-        let result = rebuild_state_value_from_words(ctx, &payload_ty, &result_words, &mut index)
-            .unwrap_or_else(|| {
-                ctx.record_error("aggregate sum result cannot be reconstructed".into());
-                payload
-            });
-        if index != word_count {
-            ctx.record_error("aggregate sum result word count mismatch".into());
-        }
-        return result;
-    }
-
     ctx.finish_current(Terminator::Branch {
         cond: tag,
         then_bb,
         else_bb,
     });
 
-    let result = ctx.new_temp();
+    let payload_ty = semantic::resolve_struct_type(&fallback_expr.ty);
+    let result_words = runtime_value_word_types(&payload_ty)
+        .into_iter()
+        .map(|_| ctx.new_temp())
+        .collect::<Vec<_>>();
     ctx.start_block(payload_block);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: payload,
-    });
+    let payload = load_sum_payload(ctx, tagged, &payload_ty);
+    copy_runtime_value_words(ctx, payload, &payload_ty, &result_words);
     ctx.finish_current(Terminator::Jump(end_block));
 
     ctx.start_block(fallback_block);
-    let fallback = lower_expr(ctx, fallback_expr, vars);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: fallback,
-    });
+    copy_runtime_value_words(ctx, fallback, &payload_ty, &result_words);
     ctx.finish_current(Terminator::Jump(end_block));
     ctx.start_block(end_block);
-    result
+    rebuild_runtime_value(ctx, &payload_ty, &result_words)
 }
 
-/// Decode a present durable value and merge it with the unique all-zero/null
-/// placeholder used by the inactive arm of `Option`.  The host codec rejects a
-/// zero record pointer, so the presence branch is semantically significant: a
-/// missing map key must never be mistaken for an initialized aggregate value.
+/// Decode a present durable value and materialize the selected `Option` arm.
+///
+/// The absent branch allocates only a tag-bearing `Option::none`; it never
+/// constructs or evaluates a value payload.
 fn lower_present_or_inactive_state_value(
     ctx: &mut LowerCtx,
     blob: Temp,
@@ -6363,8 +8241,9 @@ fn lower_present_or_inactive_state_value(
     delete_when_present: Option<Temp>,
 ) -> Option<Temp> {
     let resolved = semantic::resolve_struct_type(value_ty);
-    let word_count = state_value_schema(&resolved)?.word_kinds()?.len();
-    let result_words = (0..word_count).map(|_| ctx.new_temp()).collect::<Vec<_>>();
+    state_value_schema(&resolved)?.word_kinds()?;
+    let option_ty = Type::Option(Box::new(resolved.clone()));
+    let result = ctx.new_temp();
     let present_block = ctx.new_label();
     let absent_block = ctx.new_label();
     let end_block = ctx.new_label();
@@ -6375,51 +8254,34 @@ fn lower_present_or_inactive_state_value(
     });
 
     ctx.start_block(present_block);
-    let mut decoded_words = Vec::with_capacity(word_count);
-    if let Some(decoded) = decode_aggregate_state_value(ctx, blob, &resolved) {
-        if !collect_state_value_words(ctx, decoded, &resolved, &mut decoded_words)
-            || decoded_words.len() != word_count
-        {
-            ctx.record_error("durable state value has an invalid runtime shape".into());
-            decoded_words.clear();
-        }
-    } else {
-        ctx.record_error("durable state value is not decodable".into());
-    }
-    if decoded_words.len() != word_count {
-        let zero = ctx.new_temp();
-        ctx.current_instr(Instr::Const {
-            dest: zero,
-            value: 0,
-        });
-        decoded_words.resize(word_count, zero);
-    }
-    for (dest, src) in result_words.iter().zip(decoded_words) {
-        ctx.current_instr(Instr::Copy { dest: *dest, src });
-    }
+    let decoded = decode_aggregate_state_value(ctx, blob, &resolved)?;
+    let some = emit_sum_value(ctx, &option_ty, 1, Some(decoded));
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: some,
+    });
     if let Some(path) = delete_when_present {
         ctx.current_instr(Instr::StateDel { path });
     }
     ctx.finish_current(Terminator::Jump(end_block));
 
     ctx.start_block(absent_block);
-    let zero = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: zero,
-        value: 0,
+    let none = emit_sum_value(ctx, &option_ty, 0, None);
+    ctx.current_instr(Instr::Copy {
+        dest: result,
+        src: none,
     });
-    for dest in &result_words {
-        ctx.current_instr(Instr::Copy {
-            dest: *dest,
-            src: zero,
-        });
-    }
     ctx.finish_current(Terminator::Jump(end_block));
 
     ctx.start_block(end_block);
-    let mut index = 0;
-    let value = rebuild_state_value_from_words(ctx, &resolved, &result_words, &mut index)?;
-    (index == word_count).then_some(value)
+    Some(result)
+}
+
+fn state_map_value_type(map: &semantic::TypedExpr) -> Option<Type> {
+    match semantic::resolve_struct_type(&map.ty) {
+        Type::StateMap(_, value) => Some(*value),
+        _ => None,
+    }
 }
 
 fn lower_state_map_get_option(
@@ -6429,17 +8291,18 @@ fn lower_state_map_get_option(
 ) -> Temp {
     let map = &args[0];
     let key = lower_expr(ctx, &args[1], vars);
+    let declared_value_ty = state_map_value_type(map).unwrap_or(Type::Unit);
     let Some(base) = state_map_base_name(map) else {
         ctx.record_error("StateMap.get receiver is not a durable state map".into());
-        return lower_absent_option(ctx);
+        return lower_absent_option(ctx, &declared_value_ty);
     };
     let Some(spec) = ctx.state_map_configs.get(&base).cloned() else {
         ctx.record_error(format!("StateMap.get receiver `{base}` is not declared"));
-        return lower_absent_option(ctx);
+        return lower_absent_option(ctx, &declared_value_ty);
     };
     let Some(key_codec) = key_codec_for_type(&spec.key) else {
         ctx.record_error("StateMap.get key type is not lowerable".into());
-        return lower_absent_option(ctx);
+        return lower_absent_option(ctx, &spec.value);
     };
     let path = build_state_path(ctx, &base, key, &key_codec);
     let blob = ctx.new_temp();
@@ -6457,18 +8320,12 @@ fn lower_state_map_get_option(
         right: zero,
     });
 
-    let value = lower_present_or_inactive_state_value(ctx, blob, present, &spec.value, None)
-        .unwrap_or_else(|| {
+    lower_present_or_inactive_state_value(ctx, blob, present, &spec.value, None).unwrap_or_else(
+        || {
             ctx.record_error("StateMap.get value type is not lowerable".into());
-            zero
-        });
-
-    let option = ctx.new_temp();
-    ctx.current_instr(Instr::TuplePack {
-        dest: option,
-        items: vec![present, value],
-    });
-    option
+            lower_absent_option(ctx, &spec.value)
+        },
+    )
 }
 
 fn lower_state_map_remove_option(
@@ -6478,17 +8335,18 @@ fn lower_state_map_remove_option(
 ) -> Temp {
     let map = &args[0];
     let key = lower_expr(ctx, &args[1], vars);
+    let declared_value_ty = state_map_value_type(map).unwrap_or(Type::Unit);
     let Some(base) = state_map_base_name(map) else {
         ctx.record_error("StateMap.remove receiver is not a durable state map".into());
-        return lower_absent_option(ctx);
+        return lower_absent_option(ctx, &declared_value_ty);
     };
     let Some(spec) = ctx.state_map_configs.get(&base).cloned() else {
         ctx.record_error(format!("StateMap.remove receiver `{base}` is not declared"));
-        return lower_absent_option(ctx);
+        return lower_absent_option(ctx, &declared_value_ty);
     };
     let Some(key_codec) = key_codec_for_type(&spec.key) else {
         ctx.record_error("StateMap.remove key type is not lowerable".into());
-        return lower_absent_option(ctx);
+        return lower_absent_option(ctx, &spec.value);
     };
     let path = build_state_path(ctx, &base, key, &key_codec);
     let blob = ctx.new_temp();
@@ -6506,31 +8364,20 @@ fn lower_state_map_remove_option(
         right: zero,
     });
 
-    let value = lower_present_or_inactive_state_value(ctx, blob, present, &spec.value, Some(path))
+    lower_present_or_inactive_state_value(ctx, blob, present, &spec.value, Some(path))
         .unwrap_or_else(|| {
             ctx.record_error("StateMap.remove value type is not lowerable".into());
-            zero
-        });
-    let option = ctx.new_temp();
-    ctx.current_instr(Instr::TuplePack {
-        dest: option,
-        items: vec![present, value],
-    });
-    option
+            lower_absent_option(ctx, &spec.value)
+        })
 }
 
-fn lower_absent_option(ctx: &mut LowerCtx) -> Temp {
-    let zero = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: zero,
-        value: 0,
-    });
-    let option = ctx.new_temp();
-    ctx.current_instr(Instr::TuplePack {
-        dest: option,
-        items: vec![zero, zero],
-    });
-    option
+fn lower_absent_option(ctx: &mut LowerCtx, value_ty: &Type) -> Temp {
+    emit_sum_value(
+        ctx,
+        &Type::Option(Box::new(semantic::resolve_struct_type(value_ty))),
+        0,
+        None,
+    )
 }
 
 fn account_id_literal_uses_alias_resolution(raw: &str) -> bool {
@@ -6580,13 +8427,21 @@ struct LowerCtx {
     state_runtime_roots: HashMap<String, Temp>,
     /// Dynamic iteration cap for first-release dynamic bounds.
     _dyn_iter_cap: usize,
+    /// Declared return type used when `?` must materialize a differently-sized
+    /// failure value for the enclosing function.
+    function_return_type: Type,
     call_renames: HashMap<String, String>,
     function_param_specs: HashMap<String, Vec<TypedParam>>,
+    /// Scoped compiler-only identities for named arguments already evaluated
+    /// in source order. Raw pointers are compared only while the owning typed
+    /// expression Vec is alive and are never dereferenced.
+    prelowered_argument_scopes: Vec<Vec<(*const TypedExpr, Temp)>>,
     error: Option<String>,
 }
 
 impl LowerCtx {
     fn new(
+        function_return_type: Type,
         dyn_iter_cap: usize,
         call_renames: HashMap<String, String>,
         function_param_specs: HashMap<String, Vec<TypedParam>>,
@@ -6601,10 +8456,21 @@ impl LowerCtx {
             state_name_literals: Default::default(),
             state_runtime_roots: Default::default(),
             _dyn_iter_cap: dyn_iter_cap,
+            function_return_type,
             call_renames,
             function_param_specs,
+            prelowered_argument_scopes: Vec::new(),
             error: None,
         }
+    }
+
+    fn prelowered_argument(&self, expression: &TypedExpr) -> Option<Temp> {
+        let identity = std::ptr::from_ref(expression);
+        self.prelowered_argument_scopes
+            .iter()
+            .rev()
+            .flat_map(|scope| scope.iter())
+            .find_map(|(candidate, temp)| std::ptr::eq(*candidate, identity).then_some(*temp))
     }
 
     fn new_temp(&mut self) -> Temp {
@@ -6755,7 +8621,7 @@ fn build_state_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &KeyCo
 }
 
 fn lowerable_state_handle_name(ctx: &LowerCtx, expr: &semantic::TypedExpr) -> Option<String> {
-    match &expr.expr {
+    match expr.kind() {
         semantic::ExprKind::Ident(name) => {
             if ctx.state_runtime_roots.contains_key(name)
                 || ctx.state_name_literals.contains_key(name)
@@ -6906,6 +8772,112 @@ mod tests {
         assert_eq!(ir.functions.len(), 1);
         let f = &ir.functions[0];
         assert_eq!(f.blocks.len(), 1); // only entry block
+    }
+
+    #[test]
+    fn named_calls_evaluate_in_source_order_and_permute_only_temp_references() {
+        let src = r#"
+            fn first() -> i64 { 1 }
+            fn second() -> i64 { 2 }
+            fn combine(left: i64, right: i64) -> i64 { left * 10 + right }
+            fn run() -> i64 { combine(right: second(), left: first()) }
+        "#;
+        let typed = analyze(&parse(src).expect("parse named call")).expect("analyze named call");
+        let ir = lower(&typed).expect("lower named call");
+        let run = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "run")
+            .expect("run function");
+
+        let calls = run
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter())
+            .filter_map(|instruction| match instruction {
+                Instr::Call { callee, args, dest } => {
+                    Some((callee.as_str(), args.as_slice(), *dest))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls
+                .iter()
+                .map(|(callee, _, _)| *callee)
+                .collect::<Vec<_>>(),
+            ["second", "first", "combine"]
+        );
+        let second = calls[0].2.expect("second returns a value");
+        let first = calls[1].2.expect("first returns a value");
+        assert_eq!(calls[2].1, [first, second]);
+    }
+
+    #[test]
+    fn named_list_intrinsic_evaluates_source_order_before_abi_slots() {
+        let source = r#"
+            fn index() -> i64 { 0 }
+            fn replacement() -> i64 { 9 }
+            fn mutate() -> bool {
+                var values: List<i64, 2> = [1];
+                values.try_set(value: replacement(), index: index())
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse named List intrinsic"))
+                .expect("analyze named List intrinsic"),
+        )
+        .expect("lower named List intrinsic");
+        let mutate = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "mutate")
+            .expect("mutate function");
+        let calls = mutate
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter())
+            .filter_map(|instruction| match instruction {
+                Instr::Call { callee, .. } => Some(callee.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls, ["replacement", "index"]);
+    }
+
+    #[test]
+    fn named_amount_intrinsic_evaluates_dynamic_arguments_in_source_order() {
+        let source = r#"
+            fn divisor() -> Amount { 2amt }
+            fn scale() -> i64 { 2 }
+            fn rounded(value: Amount) -> Amount {
+                value.div_round(
+                    scale: scale(),
+                    mode: Rounding::floor,
+                    divisor: divisor(),
+                )
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse named Amount intrinsic"))
+                .expect("analyze named Amount intrinsic"),
+        )
+        .expect("lower named Amount intrinsic");
+        let rounded = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "rounded")
+            .expect("rounded function");
+        let calls = rounded
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter())
+            .filter_map(|instruction| match instruction {
+                Instr::Call { callee, .. } => Some(callee.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls, ["scale", "divisor"]);
     }
 
     #[test]
@@ -7113,7 +9085,7 @@ mod tests {
                 .fields
                 .iter()
                 .map(|field| {
-                    let [ivm_abi::entrypoint::EntrypointArgumentTypeNodeV1::Leaf(kind)] =
+                    let [ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Leaf(kind)] =
                         field.ty.nodes.as_slice()
                     else {
                         panic!("scalar test parameter must use one leaf node");
@@ -7122,27 +9094,21 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             vec![
-                ("count", ivm_abi::entrypoint::EntrypointArgumentKindV1::Int),
-                ("total", ivm_abi::entrypoint::EntrypointArgumentKindV1::U128),
-                ("ready", ivm_abi::entrypoint::EntrypointArgumentKindV1::Bool),
-                (
-                    "text",
-                    ivm_abi::entrypoint::EntrypointArgumentKindV1::String
-                ),
-                ("label", ivm_abi::entrypoint::EntrypointArgumentKindV1::Name),
-                (
-                    "asset",
-                    ivm_abi::entrypoint::EntrypointArgumentKindV1::AssetId
-                ),
+                ("count", ivm_abi::entrypoint::EntrypointValueKindV1::Int),
+                ("total", ivm_abi::entrypoint::EntrypointValueKindV1::U128),
+                ("ready", ivm_abi::entrypoint::EntrypointValueKindV1::Bool),
+                ("text", ivm_abi::entrypoint::EntrypointValueKindV1::String),
+                ("label", ivm_abi::entrypoint::EntrypointValueKindV1::Name),
+                ("asset", ivm_abi::entrypoint::EntrypointValueKindV1::AssetId),
                 (
                     "domain",
-                    ivm_abi::entrypoint::EntrypointArgumentKindV1::DomainId
+                    ivm_abi::entrypoint::EntrypointValueKindV1::DomainId
                 ),
                 (
                     "dataspace",
-                    ivm_abi::entrypoint::EntrypointArgumentKindV1::DataSpaceId
+                    ivm_abi::entrypoint::EntrypointValueKindV1::DataSpaceId
                 ),
-                ("bytes", ivm_abi::entrypoint::EntrypointArgumentKindV1::Blob),
+                ("bytes", ivm_abi::entrypoint::EntrypointValueKindV1::Blob),
             ]
         );
     }
@@ -7191,10 +9157,10 @@ mod tests {
             .expect("wrapper implementation call");
         assert_eq!(
             call_args.len(),
-            9,
-            "all recursive ABI words must cross the call"
+            6,
+            "products flatten recursively while each sum crosses as one raw handle"
         );
-        assert_eq!(implementation.params.len(), 9);
+        assert_eq!(implementation.params.len(), 6);
         assert!(
             implementation
                 .params
@@ -7209,9 +9175,867 @@ mod tests {
                 .flat_map(|block| &block.instrs)
                 .filter(|instr| matches!(instr, Instr::TuplePack { .. }))
                 .count(),
-            4,
-            "struct, tuple, Option, and Result shapes must be rebuilt in the callee"
+            2,
+            "only product shapes are rebuilt; Option and Result remain raw handles"
         );
+    }
+
+    #[test]
+    fn nested_aggregate_returns_use_every_flattened_abi_word() {
+        let src = r#"
+            seiyaku AggregateReturn {
+                struct Pair { count: i64, ready: bool }
+
+                fn make() -> Result<Option<Pair>, (string, bool)> {
+                    return Result::ok(Option::some(Pair { count: 7, ready: true }));
+                }
+
+                view fn inspect(seed: i64) -> Result<Option<Pair>, (string, bool)> {
+                    let _ = seed;
+                    return make();
+                }
+            }
+        "#;
+        let program = parse(src).expect("parse nested aggregate return");
+        let typed = analyze(&program).expect("analyze nested aggregate return");
+        let ir = lower(&typed).expect("lower nested aggregate return");
+
+        for name in ["make", "__entrypoint_impl__inspect"] {
+            let function = ir
+                .functions
+                .iter()
+                .find(|function| function.name == name)
+                .unwrap_or_else(|| panic!("missing function `{name}`"));
+            assert!(
+                function
+                    .blocks
+                    .iter()
+                    .any(|block| matches!(&block.terminator, Terminator::Return(Some(_)))),
+                "`{name}` must return one active-only sum handle"
+            );
+        }
+
+        let wrapper = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "inspect")
+            .expect("entrypoint wrapper");
+        assert!(wrapper.blocks.iter().any(|block| {
+            matches!(&block.terminator, Terminator::ReturnN(words) if words.len() == 1)
+        }));
+
+        let implementation = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "__entrypoint_impl__inspect")
+            .expect("entrypoint implementation");
+        assert!(implementation.blocks.iter().any(|block| {
+            block.instrs.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::CallMulti { callee, dests, .. }
+                        if callee == "make" && dests.len() == 1
+                )
+            })
+        }));
+    }
+
+    #[test]
+    fn inactive_sum_has_no_payload_construction_or_store() {
+        let source = r#"
+            seiyaku InactivePlaceholder {
+                state counter: i64;
+
+                hajimari() { counter = 0; }
+
+                fn poison() -> i64 {
+                    counter = counter + 1;
+                    return 99;
+                }
+
+                view fn inspect() -> Option<i64> {
+                    return Option::none;
+                }
+            }
+        "#;
+        let program = parse(source).expect("parse active-only Option");
+        let typed = analyze(&program).expect("analyze active-only Option");
+        let ir = lower(&typed).expect("lower active-only Option");
+        let implementation = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "inspect")
+            .expect("view implementation");
+        assert!(implementation.blocks.iter().all(|block| {
+            block.instrs.iter().all(|instruction| {
+                !matches!(instruction, Instr::Call { callee, .. } if callee == "poison")
+            })
+        }));
+        let stores = implementation
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter_map(|instruction| match instruction {
+                Instr::Store64Imm { imm, .. } => Some(*imm),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stores, vec![0], "Option::none writes only its tag");
+        assert!(
+            implementation
+                .blocks
+                .iter()
+                .any(|block| { matches!(&block.terminator, Terminator::Return(Some(_))) })
+        );
+    }
+
+    #[test]
+    fn tail_expression_lowers_identically_to_explicit_return() {
+        let tail = lower(
+            &analyze(&parse("fn identity(value: i64) -> i64 { value }").expect("parse tail"))
+                .expect("analyze tail"),
+        )
+        .expect("lower tail");
+        let explicit = lower(
+            &analyze(
+                &parse("fn identity(value: i64) -> i64 { return value; }").expect("parse return"),
+            )
+            .expect("analyze return"),
+        )
+        .expect("lower return");
+        fn reachable_blocks(function: &Function) -> Vec<&BasicBlock> {
+            let mut pending = vec![function.entry];
+            let mut reachable = BTreeSet::new();
+            while let Some(label) = pending.pop() {
+                if !reachable.insert(label.0) {
+                    continue;
+                }
+                let block = function
+                    .blocks
+                    .iter()
+                    .find(|block| block.label == label)
+                    .expect("terminator target must exist");
+                match block.terminator {
+                    Terminator::Jump(target) => pending.push(target),
+                    Terminator::Branch {
+                        then_bb, else_bb, ..
+                    } => {
+                        pending.push(then_bb);
+                        pending.push(else_bb);
+                    }
+                    Terminator::Return(_) | Terminator::Return2(_, _) | Terminator::ReturnN(_) => {}
+                }
+            }
+            function
+                .blocks
+                .iter()
+                .filter(|block| reachable.contains(&block.label.0))
+                .collect()
+        }
+
+        assert_eq!(
+            reachable_blocks(&tail.functions[0]),
+            reachable_blocks(&explicit.functions[0]),
+            "tail-expression sugar must add no reachable runtime work"
+        );
+    }
+
+    #[test]
+    fn exhaustive_match_reads_only_the_selected_sum_payload() {
+        let source = r#"
+            fn project(value: Option<i64>) -> i64 {
+                match value {
+                    Option::some(item) => item,
+                    Option::none => 0,
+                }
+            }
+        "#;
+        let lowered = lower(&analyze(&parse(source).expect("parse match")).expect("analyze match"))
+            .expect("lower match");
+        let instructions = lowered.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Instr::Load64Imm { imm: 0, .. }))
+                .count(),
+            1,
+            "match reads the discriminant once"
+        );
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Instr::Load64Imm { imm: 8, .. }))
+                .count(),
+            1,
+            "only the payload-bearing arm reads offset 8"
+        );
+    }
+
+    #[test]
+    fn propagation_returns_original_error_handle_without_conversion() {
+        let source = r#"
+            fn propagate(value: Result<i64, bool>) -> Result<i64, bool> {
+                let payload = value?;
+                Result::ok(payload)
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse propagation")).expect("analyze propagation"),
+        )
+        .expect("lower propagation");
+        let function = &lowered.functions[0];
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .filter(|block| matches!(block.terminator, Terminator::Return(Some(_))))
+                .count(),
+            2,
+            "error and success paths return independently"
+        );
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instrs)
+                .filter(|instruction| matches!(instruction, Instr::Alloc { .. }))
+                .count(),
+            1,
+            "the propagated error reuses its handle; only Result::ok allocates"
+        );
+    }
+
+    #[test]
+    fn propagation_reallocates_failure_when_the_success_layout_changes() {
+        fn memory_profile(function: &Function) -> (usize, usize, usize) {
+            let instructions = function.blocks.iter().flat_map(|block| block.instrs.iter());
+            instructions.fold((0, 0, 0), |mut counts, instruction| {
+                match instruction {
+                    Instr::Alloc { .. } => counts.0 += 1,
+                    Instr::Load64Imm { .. } => counts.1 += 1,
+                    Instr::Store64Imm { .. } => counts.2 += 1,
+                    _ => {}
+                }
+                counts
+            })
+        }
+
+        let propagated = r#"
+            fn widen(value: Result<i64, bool>) -> Result<(i64, i64), bool> {
+                let payload = value?;
+                Result::ok((payload, payload))
+            }
+        "#;
+        let explicit = r#"
+            fn widen(value: Result<i64, bool>) -> Result<(i64, i64), bool> {
+                let payload = match value {
+                    Result::ok(payload) => payload,
+                    Result::err(failure) => { return Result::err(failure); },
+                };
+                Result::ok((payload, payload))
+            }
+        "#;
+        let propagated = lower(
+            &analyze(&parse(propagated).expect("parse propagation")).expect("analyze propagation"),
+        )
+        .expect("lower propagation");
+        let explicit = lower(
+            &analyze(&parse(explicit).expect("parse explicit match"))
+                .expect("analyze explicit match"),
+        )
+        .expect("lower explicit match");
+
+        assert_eq!(
+            propagated.functions[0], explicit.functions[0],
+            "postfix Result propagation and its canonical exhaustive match must share exact IR"
+        );
+
+        assert_eq!(
+            memory_profile(&propagated.functions[0]),
+            memory_profile(&explicit.functions[0]),
+            "`?` must have the same allocation/load/store profile as the canonical explicit match"
+        );
+        assert_eq!(
+            memory_profile(&propagated.functions[0]).0,
+            2,
+            "the widened error and success paths each allocate the destination layout once"
+        );
+
+        let option = r#"
+            fn widen(value: Option<i64>) -> Option<(i64, i64)> {
+                let payload = value?;
+                Option::some((payload, payload))
+            }
+        "#;
+        let explicit_option = r#"
+            fn widen(value: Option<i64>) -> Option<(i64, i64)> {
+                let payload = match value {
+                    Option::some(payload) => payload,
+                    Option::none => { return Option::none; },
+                };
+                Option::some((payload, payload))
+            }
+        "#;
+        let option = lower(
+            &analyze(&parse(option).expect("parse Option propagation"))
+                .expect("analyze Option propagation"),
+        )
+        .expect("lower Option propagation");
+        let explicit_option = lower(
+            &analyze(&parse(explicit_option).expect("parse explicit Option match"))
+                .expect("analyze explicit Option match"),
+        )
+        .expect("lower explicit Option match");
+        assert_eq!(
+            option.functions[0], explicit_option.functions[0],
+            "postfix Option propagation and its canonical exhaustive match must share exact IR"
+        );
+        assert_eq!(
+            memory_profile(&option.functions[0]).0,
+            2,
+            "a widened Option::none must reserve the destination layout"
+        );
+    }
+
+    #[test]
+    fn typed_query_page_lowers_to_one_host_call_and_two_typed_handles() {
+        let source = r#"
+            fn page(offset: i64, limit: i64) -> QueryPage<AccountView> {
+                ledger::query::accounts(offset: offset, limit: limit)
+            }
+
+            fn account(id: AccountId) -> Option<AccountView> {
+                ledger::query::account(id)
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse typed query page"))
+                .expect("analyze typed query page"),
+        )
+        .expect("lower typed query page");
+        let function = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "page")
+            .expect("page function");
+        let pages = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter_map(|instruction| match instruction {
+                Instr::CoreQueryPage {
+                    items_dest,
+                    next_offset_dest,
+                    entity,
+                    ..
+                } => Some((*items_dest, *next_offset_dest, *entity)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(pages.len(), 1, "one source page performs one host query");
+        assert_eq!(
+            pages[0].2,
+            ivm_abi::core_query::CoreQueryEntityTagV1::Account
+        );
+        assert!(function.blocks.iter().any(|block| {
+            block.instrs.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::TuplePack { items, .. }
+                        if items.as_slice() == [pages[0].0, pages[0].1]
+                )
+            })
+        }));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .any(|block| { matches!(block.terminator, Terminator::Return2(_, _)) })
+        );
+
+        let singular = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "account")
+            .expect("account function");
+        assert_eq!(
+            singular
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instrs)
+                .filter(|instruction| {
+                    matches!(
+                        instruction,
+                        Instr::CoreQueryGet {
+                            entity: ivm_abi::core_query::CoreQueryEntityTagV1::Account,
+                            ..
+                        }
+                    )
+                })
+                .count(),
+            1,
+            "one singular source query performs one typed host query"
+        );
+        assert!(
+            singular
+                .blocks
+                .iter()
+                .any(|block| { matches!(block.terminator, Terminator::Return(Some(_))) })
+        );
+    }
+
+    #[test]
+    fn native_json_lowers_to_one_schema_bound_build_and_one_word_table() {
+        let source = r#"
+            fn build(
+                owner: AccountId,
+                label: string,
+                maybe: Option<Amount>,
+            ) -> Json {
+                let labels: List<string, 4> = ["secondary", label];
+                json {
+                    owner: owner,
+                    amount: 1.25amt,
+                    primary: json ["primary", label],
+                    labels: labels,
+                    maybe: maybe,
+                }
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse native JSON")).expect("analyze native JSON"),
+        )
+        .expect("lower native JSON");
+        let function = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "build")
+            .expect("build function");
+        let instructions = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        let builds = instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instr::DirectHelperSyscall {
+                    syscall,
+                    args,
+                    dest,
+                } if *syscall == ivm_abi::syscalls::SYSCALL_JSON_BUILD => {
+                    Some((*dest, args.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            builds.len(),
+            1,
+            "native JSON performs exactly one host build"
+        );
+        let [schema_ref, table, word_count] = builds[0].1.as_slice() else {
+            panic!("JSON_BUILD must receive schema, word table, and word count");
+        };
+        let encoded_schema = instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Instr::DataRef {
+                    dest,
+                    kind: DataRefKind::NoritoBytes,
+                    value,
+                } if dest == schema_ref => value.strip_prefix("0x"),
+                _ => None,
+            })
+            .expect("static JSON construction schema");
+        let schema_bytes = hex::decode(encoded_schema).expect("schema hex");
+        let schema: ivm_abi::json::JsonConstructionSchemaV1 =
+            norito::decode_from_bytes(&schema_bytes).expect("decode construction schema");
+        assert!(schema.validate());
+        assert_eq!(schema.word_count(), Some(6));
+        assert!(matches!(
+            &schema.nodes[0],
+            ivm_abi::json::JsonConstructionNodeV1::Object { keys }
+                if keys.iter().map(String::as_str).eq([
+                    "owner", "amount", "primary", "labels", "maybe"
+                ])
+        ));
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instruction| {
+                    matches!(instruction, Instr::Store64Imm { base, .. } if base == table)
+                })
+                .count(),
+            6,
+            "every schema word is written once into one contiguous table"
+        );
+        assert!(instructions.iter().any(|instruction| {
+            matches!(instruction, Instr::Const { dest, value: 6 } if dest == word_count)
+        }));
+        assert!(
+            instructions
+                .iter()
+                .all(|instruction| !matches!(instruction, Instr::JsonObject { .. }))
+        );
+    }
+
+    #[test]
+    fn list_layout_flattens_nested_sum_handles_to_one_word() {
+        let nested = Type::List(
+            Box::new(Type::Option(Box::new(Type::Result(
+                Box::new(Type::Amount),
+                Box::new(Type::Bool),
+            )))),
+            64,
+        );
+        let (element, layout) = list_layout_for_type(&nested).expect("valid nested List layout");
+        assert!(matches!(element, Type::Option(_)));
+        assert_eq!(layout.capacity(), 64);
+        assert_eq!(layout.element_words(), 1);
+        assert_eq!(layout.allocation_bytes(), Ok((2 + 64) * 8));
+
+        let enumerated = Type::List(Box::new(Type::Tuple(vec![Type::Int, Type::Amount])), 4);
+        let (_, layout) = list_layout_for_type(&enumerated).expect("pair List layout");
+        assert_eq!(layout.element_words(), 2);
+    }
+
+    #[test]
+    fn list_literal_and_comprehension_use_only_contiguous_ir_operations() {
+        let source = r#"
+            fn doubled() -> List<i64, 4> {
+                let values: List<i64, 4> = [1, 2, 3];
+                [value * 2 for value in values if value > 1]
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse List comprehension"))
+                .expect("analyze List comprehension"),
+        )
+        .expect("lower List comprehension");
+        let instructions = lowered.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Instr::Alloc { .. }))
+                .count(),
+            2,
+            "literal and result each use one contiguous allocation"
+        );
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instr::Load64 { .. }))
+        );
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instr::Store64 { .. }))
+        );
+        assert!(instructions.iter().all(|instruction| {
+            !matches!(instruction, Instr::Call { callee, .. } if callee.contains("list"))
+        }));
+    }
+
+    #[test]
+    fn identity_comprehension_does_not_exceed_bounded_copy_baseline() {
+        fn instruction_count(source: &str) -> usize {
+            lower(
+                &analyze(&parse(source).expect("parse bounded copy"))
+                    .expect("analyze bounded copy"),
+            )
+            .expect("lower bounded copy")
+            .functions[0]
+                .blocks
+                .iter()
+                .map(|block| block.instrs.len() + 1)
+                .sum()
+        }
+
+        let comprehension = instruction_count(
+            "fn copy() -> List<i64, 4> { let source: List<i64, 4> = [1, 2]; [value for value in source] }",
+        );
+        let bounded_baseline = instruction_count(
+            "fn copy() -> List<i64, 4> { let source: List<i64, 4> = [1, 2]; source.take(4) }",
+        );
+        assert!(
+            comprehension <= bounded_baseline,
+            "identity List sugar emitted {comprehension} operations versus {bounded_baseline} for the bounded copy baseline"
+        );
+    }
+
+    #[test]
+    fn every_list_method_lowers_without_runtime_helper_calls() {
+        let source = r#"
+            fn methods() {
+                var values: List<i64, 4> = [1, 2];
+                values.len();
+                values.get(0);
+                values.try_set(index: 0, value: 3);
+                values.try_push(4);
+                values.contains(3);
+                values.pop();
+                values.take(2);
+                values.enumerate();
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse List methods")).expect("analyze List methods"),
+        )
+        .expect("lower List methods");
+        let instructions = lowered.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        assert!(instructions.iter().all(|instruction| {
+            !matches!(instruction, Instr::Call { callee, .. } if callee.starts_with("__kotodama_list_"))
+        }));
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instr::Alloc { .. }))
+        );
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instr::Load64Imm { imm: 0, .. }))
+        );
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instr::Store64Imm { imm: 0, .. }))
+        );
+    }
+
+    #[test]
+    fn list_take_zero_lowers_to_a_bounded_empty_copy() {
+        let source =
+            "fn empty() -> List<i64, 1> { let values: List<i64, 4> = [1, 2]; values.take(0) }";
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse List.take(0)")).expect("analyze List.take(0)"),
+        )
+        .expect("lower List.take(0)");
+        let function = &lowered.functions[0];
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instrs)
+                .any(|instruction| matches!(instruction, Instr::Const { value: 0, .. })),
+            "the zero limit must remain an explicit deterministic bound"
+        );
+        assert!(function.blocks.iter().all(|block| {
+            block.instrs.iter().all(|instruction| {
+                !matches!(instruction, Instr::Call { callee, .. } if callee.starts_with("__kotodama_list_"))
+            })
+        }));
+    }
+
+    #[test]
+    fn recursive_list_contains_dereferences_aggregate_handles() {
+        let source = r#"
+            struct Envelope {
+                labels: Option<List<i64, 2>>,
+                outcome: Result<(i64, bool), i64>,
+            }
+
+            fn contains_nested(needle: Envelope) -> bool {
+                let values: List<Envelope, 2> = [
+                    Envelope {
+                        labels: Option::some([1, 2]),
+                        outcome: Result::ok((7, true)),
+                    },
+                ];
+                values.contains(needle)
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse recursive List.contains"))
+                .expect("analyze recursive List.contains"),
+        )
+        .expect("lower recursive List.contains");
+        let function = &lowered.functions[0];
+        let instructions = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+
+        assert!(
+            instructions
+                .iter()
+                .all(|instruction| !matches!(instruction, Instr::PointerEq { .. })),
+            "compiler-owned aggregate handles must never be compared by pointer identity"
+        );
+        assert!(
+            instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Instr::Load64Imm { imm: 0, .. }))
+                .count()
+                >= 5,
+            "nested List lengths and active sum tags must be loaded structurally"
+        );
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instr::TupleGet { .. })),
+            "struct and tuple fields must be compared structurally"
+        );
+        assert!(
+            function
+                .blocks
+                .iter()
+                .filter(|block| matches!(block.terminator, Terminator::Branch { .. }))
+                .count()
+                >= 6,
+            "sum tags and nested List bounds must guard active payload reads"
+        );
+    }
+
+    #[test]
+    fn failed_list_mutation_branches_have_no_stores() {
+        let source = r#"
+            fn set(index: i64) -> bool {
+                var values: List<i64, 1> = [1];
+                values.try_set(index: index, value: 2)
+            }
+
+            fn push() -> bool {
+                var values: List<i64, 1> = [1];
+                values.try_push(2)
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse failed mutation paths"))
+                .expect("analyze failed mutation paths"),
+        )
+        .expect("lower failed mutation paths");
+        for function in &lowered.functions {
+            let branch = function
+                .blocks
+                .iter()
+                .find_map(|block| match block.terminator {
+                    Terminator::Branch { else_bb, .. } => Some(else_bb),
+                    _ => None,
+                })
+                .expect("mutation has a bounds branch");
+            let failure = function
+                .blocks
+                .iter()
+                .find(|block| block.label == branch)
+                .expect("failure block exists");
+            assert!(failure.instrs.iter().all(|instruction| !matches!(
+                instruction,
+                Instr::Store64 { .. } | Instr::Store64Imm { .. }
+            )));
+        }
+    }
+
+    #[test]
+    fn entrypoint_list_schema_is_recursive_and_capacity_bound() {
+        use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
+
+        let ty = Type::List(Box::new(Type::Option(Box::new(Type::Amount))), 64);
+        let schema = entrypoint_return_schema("items", Some(&ty))
+            .expect("build List return schema")
+            .expect("non-unit return schema");
+        let [Node::List(list), Node::Option, Node::Leaf(_)] = schema.nodes.as_slice() else {
+            panic!("expected one flat List<Option<Amount>> preorder tape");
+        };
+        assert_eq!(list.capacity, 64);
+        assert_eq!(schema.word_count(), Some(1));
+    }
+
+    #[test]
+    fn query_page_entrypoint_schemas_are_structural_and_roundtrip_for_all_views() {
+        use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
+
+        let source = r#"
+            seiyaku TypedPages {
+                view fn accounts(offset: i64, limit: i64) -> QueryPage<AccountView> {
+                    ledger::query::accounts(offset: offset, limit: limit)
+                }
+                view fn assets(offset: i64, limit: i64) -> QueryPage<AssetView> {
+                    ledger::query::assets(offset: offset, limit: limit)
+                }
+                view fn asset_definitions(offset: i64, limit: i64) -> QueryPage<AssetDefinitionView> {
+                    ledger::query::asset_definitions(offset: offset, limit: limit)
+                }
+                view fn domains(offset: i64, limit: i64) -> QueryPage<DomainView> {
+                    ledger::query::domains(offset: offset, limit: limit)
+                }
+                view fn nfts(offset: i64, limit: i64) -> QueryPage<NftView> {
+                    ledger::query::nfts(offset: offset, limit: limit)
+                }
+            }
+        "#;
+        let typed = analyze(&parse(source).expect("parse all typed query pages"))
+            .expect("analyze all typed query pages");
+        let mut encoded_schemas = BTreeSet::new();
+
+        for (entrypoint_name, view_name) in [
+            ("accounts", "AccountView"),
+            ("assets", "AssetView"),
+            ("asset_definitions", "AssetDefinitionView"),
+            ("domains", "DomainView"),
+            ("nfts", "NftView"),
+        ] {
+            let function = typed
+                .items
+                .iter()
+                .map(|item| match item {
+                    TypedItem::Function(function) => function,
+                })
+                .find(|function| function.name == entrypoint_name)
+                .unwrap_or_else(|| panic!("missing {entrypoint_name} entrypoint"));
+            let schema = entrypoint_return_schema(entrypoint_name, function.ret_ty.as_ref())
+                .expect("build structural query-page schema")
+                .expect("query page has a public return schema");
+            let [
+                Node::Struct(page),
+                Node::List(items),
+                Node::Struct(view),
+                ..,
+            ] = schema.nodes.as_slice()
+            else {
+                panic!("unexpected {entrypoint_name} schema: {schema:?}");
+            };
+            assert_eq!(page.name, "QueryPage");
+            assert_eq!(page.fields, ["items", "next_offset"]);
+            assert_eq!(items.capacity, 64);
+            assert_eq!(view.name, view_name);
+            assert!(matches!(
+                schema
+                    .nodes
+                    .as_slice()
+                    .get(schema.nodes.len().saturating_sub(2)..),
+                Some([
+                    Node::Option,
+                    Node::Leaf(ivm_abi::entrypoint::EntrypointValueKindV1::Int)
+                ])
+            ));
+            assert!(schema.validate());
+            assert_eq!(schema.word_count(), Some(2));
+
+            let encoded = norito::to_bytes(&schema).expect("encode query-page schema");
+            let decoded: ivm_abi::entrypoint::EntrypointValueTypeV1 =
+                norito::decode_from_bytes(&encoded).expect("decode query-page schema");
+            assert_eq!(decoded, schema);
+            assert!(
+                encoded_schemas.insert(encoded),
+                "{view_name} specialization must have a distinct structural schema"
+            );
+        }
+        assert_eq!(encoded_schemas.len(), 5);
     }
 
     #[test]
@@ -7245,8 +10069,8 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let next = test::invoke_entrypoint("run", Json::parse("{\"count\": 7}"));
-                    test::assert_eq(next, 8);
+                    let next = test::invoke_entrypoint(entrypoint: "run", arguments: Json::parse("{\"count\": 7}"));
+                    test::assert_eq(actual: next, expected: 8);
                 }
             }
         "#;
@@ -7311,9 +10135,9 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let pair = test::invoke_entrypoint("run", Json::parse("{\"count\": 7}"));
-                    test::assert_eq(pair.0, 7);
-                    test::assert_eq(pair.1, 8);
+                    let pair = test::invoke_entrypoint(entrypoint: "run", arguments: Json::parse("{\"count\": 7}"));
+                    test::assert_eq(actual: pair.0, expected: 7);
+                    test::assert_eq(actual: pair.1, expected: 8);
                 }
             }
         "#;
@@ -7361,8 +10185,16 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let next = test::invoke_entrypoint_as("issuer", "run", Json::parse("{\"count\": 7}"));
-                    test::expect_reject_as("issuer", "run", Json::parse("{\"count\": -1}"));
+                    let next = test::invoke_entrypoint_as(
+                        actor: "issuer",
+                        entrypoint: "run",
+                        arguments: Json::parse("{\"count\": 7}"),
+                    );
+                    test::expect_reject_as(
+                        actor: "issuer",
+                        entrypoint: "run",
+                        arguments: Json::parse("{\"count\": -1}"),
+                    );
                     let _ = next;
                 }
             }
@@ -7412,9 +10244,13 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let pair = test::invoke_entrypoint_as("issuer", "run", Json::parse("{\"count\": 7}"));
-                    test::assert_eq(pair.0, 7);
-                    test::assert_eq(pair.1, 8);
+                    let pair = test::invoke_entrypoint_as(
+                        actor: "issuer",
+                        entrypoint: "run",
+                        arguments: Json::parse("{\"count\": 7}"),
+                    );
+                    test::assert_eq(actual: pair.0, expected: 7);
+                    test::assert_eq(actual: pair.1, expected: 8);
                 }
             }
         "#;
@@ -8298,8 +11134,8 @@ fn either(value: bool) -> bool { return value || rhs(); }
     }
 
     #[test]
-    fn lower_get_numeric_builtin() {
-        let src = "fn main() { let ev = context::trigger_event(); let _amount: Amount = ev.get_numeric(Name::parse(\"amount\")); }";
+    fn lower_get_amount_builtin() {
+        let src = "fn main() { let ev = context::trigger_event(); let _amount: Option<Amount> = ev.get_amount(Name::parse(\"amount\")); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -8489,8 +11325,15 @@ fn either(value: bool) -> bool { return value || rhs(); }
             seiyaku C {
                 struct TransferArgs { domain: DomainId; to: AccountId; }
                 fn main() {
-                    let args = TransferArgs(DomainId::parse("wonderland.universal"), AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
-                    ledger::domain::transfer(context::authority(), args.domain, args.to);
+                    let args = TransferArgs {
+                        domain: DomainId::parse("wonderland.universal"),
+                        to: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+                    };
+                    ledger::domain::transfer(
+                        source: context::authority(),
+                        domain: args.domain,
+                        destination: args.to,
+                    );
                 }
             }
         "#;
@@ -8573,8 +11416,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
 
     #[test]
     fn lower_get_or_on_state_map_reads_without_writing() {
-        let src =
-            "state balances: StateMap<i64, i64>; fn f() -> i64 { return balances.get_or(1, 7); }";
+        let src = "state balances: StateMap<i64, i64>; fn f() -> i64 { return balances.get_or(key: 1, default: 7); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -8644,7 +11486,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
                 struct Ledger { counter: i64; flag: bool; }
                 state ledger: Ledger;
 
-                hajimari() { ledger = Ledger(0, false); }
+                hajimari() { ledger = Ledger { counter: 0, flag: false }; }
 
                 fn main() {
                     let snapshot = ledger;
@@ -8692,16 +11534,101 @@ fn either(value: bool) -> bool { return value || rhs(); }
     }
 
     #[test]
+    fn named_struct_literal_lowers_in_declaration_order() {
+        let program = parse(
+            r#"
+            module NamedStruct {
+                struct Pair { first: i64; second: i64; }
+                fn main() -> Pair { return Pair { second: 2, first: 1 }; }
+            }
+            "#,
+        )
+        .expect("parse named struct literal");
+        let typed = analyze(&program).expect("analyze named struct literal");
+        let lowered = lower(&typed).expect("lower named struct literal");
+        let main = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .expect("main function");
+        let constants = main
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter_map(|instruction| match instruction {
+                Instr::Const { dest, value } => Some((*dest, *value)),
+                _ => None,
+            })
+            .collect::<HashMap<_, _>>();
+        let items = main
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .find_map(|instruction| match instruction {
+                Instr::TuplePack { items, .. } if items.len() == 2 => Some(items),
+                _ => None,
+            })
+            .expect("struct TuplePack");
+        assert_eq!(constants.get(&items[0]), Some(&1));
+        assert_eq!(constants.get(&items[1]), Some(&2));
+    }
+
+    #[test]
+    fn named_struct_literal_evaluates_fields_in_source_order_before_layout() {
+        let program = parse(
+            r#"
+            module NamedStructEffects {
+                struct Pair { first: i64; second: i64; }
+                fn first() -> i64 { 1 }
+                fn second() -> i64 { 2 }
+                fn main() -> Pair { Pair { second: second(), first: first() } }
+            }
+            "#,
+        )
+        .expect("parse effectful named struct literal");
+        let lowered = lower(&analyze(&program).expect("analyze named struct effects"))
+            .expect("lower named struct effects");
+        let main = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .expect("main function");
+        let calls = main
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter())
+            .filter_map(|instruction| match instruction {
+                Instr::Call { callee, dest, .. } => Some((callee.as_str(), *dest)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls.iter().map(|(callee, _)| *callee).collect::<Vec<_>>(),
+            ["second", "first"]
+        );
+        let packed = main
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter())
+            .find_map(|instruction| match instruction {
+                Instr::TuplePack { items, .. } if items.len() == 2 => Some(items),
+                _ => None,
+            })
+            .expect("struct TuplePack");
+        assert_eq!(packed, &[calls[1].1.unwrap(), calls[0].1.unwrap()]);
+    }
+
+    #[test]
     fn lower_state_struct_assignment_encodes_and_writes_once() {
         let src = r#"
             seiyaku C {
                 struct Ledger { counter: i64; flag: bool; }
                 state ledger: Ledger;
 
-                hajimari() { ledger = Ledger(0, false); }
+                hajimari() { ledger = Ledger { counter: 0, flag: false }; }
 
                 fn main() {
-                    ledger = Ledger(7, true);
+                    ledger = Ledger { counter: 7, flag: true };
                 }
             }
         "#;
@@ -8753,7 +11680,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
                 hajimari() {}
 
                 fn main() {
-                    ledgers[7] = Ledger(9, true);
+                    ledgers[7] = Ledger { counter: 9, flag: true };
                     let _snapshot = ledgers.get(7);
                 }
             }
@@ -8966,14 +11893,123 @@ fn either(value: bool) -> bool { return value || rhs(); }
     }
 
     #[test]
+    fn exact_amount_constants_fold_and_invalid_arithmetic_is_diagnosed() {
+        let safe = parse("fn main() -> Amount { return 1amt / 8amt; }")
+            .expect("parse exact Amount constant");
+        let safe = lower(&analyze(&safe).expect("analyze exact Amount constant"))
+            .expect("lower exact Amount constant");
+        assert!(safe.functions[0].blocks.iter().any(|block| {
+            block.instrs.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::DataRef {
+                        kind: DataRefKind::Amount,
+                        value,
+                        ..
+                    } if value == "0.125"
+                )
+            })
+        }));
+
+        for source in [
+            "fn main() -> Amount { return 1amt - 2amt; }",
+            "fn main() -> Amount { return 1amt / 3amt; }",
+        ] {
+            let program = parse(source).expect("parse invalid constant Amount arithmetic");
+            let error = analyze(&program)
+                .expect_err("invalid constant Amount arithmetic must fail semantic checking");
+            assert_eq!(error.code, "E_AMOUNT_CONSTANT_ARITHMETIC");
+        }
+    }
+
+    #[test]
+    fn rounded_amount_division_is_constant_folded_or_one_direct_syscall() {
+        let dynamic = parse(
+            "fn rounded(value: Amount, divisor: Amount, scale: i64) -> Amount { \
+                return value.div_round( \
+                    divisor: divisor, \
+                    scale: scale, \
+                    mode: Rounding::nearest_even, \
+                ); \
+            }",
+        )
+        .expect("parse dynamic rounded Amount division");
+        let dynamic = lower(&analyze(&dynamic).expect("analyze rounded Amount division"))
+            .expect("lower rounded Amount division");
+        let calls = dynamic.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter_map(|instruction| match instruction {
+                Instr::DirectHelperSyscall { syscall, args, .. }
+                    if *syscall == ivm_abi::syscalls::SYSCALL_AMOUNT_DIV_ROUND =>
+                {
+                    Some(args)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].len(), 4);
+        let mode = calls[0][3];
+        assert!(dynamic.functions[0].blocks.iter().any(|block| {
+            block.instrs.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::Const { dest, value }
+                        if *dest == mode
+                            && *value
+                                == ivm_abi::syscalls::AMOUNT_ROUND_NEAREST_EVEN as i64
+                )
+            })
+        }));
+
+        let folded = parse(
+            "fn rounded() -> Amount { \
+                return 1amt.div_round( \
+                    divisor: 8amt, \
+                    scale: 2, \
+                    mode: Rounding::nearest_even, \
+                ); \
+            }",
+        )
+        .expect("parse constant rounded Amount division");
+        let folded = lower(&analyze(&folded).expect("analyze constant rounded Amount division"))
+            .expect("lower constant rounded Amount division");
+        assert!(folded.functions[0].blocks.iter().any(|block| {
+            block.instrs.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::DataRef {
+                        kind: DataRefKind::Amount,
+                        value,
+                        ..
+                    } if value == "0.12"
+                )
+            })
+        }));
+        assert!(folded.functions[0].blocks.iter().all(|block| {
+            block.instrs.iter().all(|instruction| {
+                !matches!(
+                    instruction,
+                    Instr::DirectHelperSyscall {
+                        syscall: ivm_abi::syscalls::SYSCALL_AMOUNT_DIV_ROUND,
+                        ..
+                    }
+                )
+            })
+        }));
+    }
+
+    #[test]
     fn wrapping_builtins_have_distinct_ir() {
         let program = parse(
             r#"
 fn main(left: i64, right: i64) -> (i64, i64, i64, i64) {
     return (
-        math::wrapping_add(left, right),
-        math::wrapping_sub(left, right),
-        math::wrapping_mul(left, right),
+        math::wrapping_add(left: left, right: right),
+        math::wrapping_sub(left: left, right: right),
+        math::wrapping_mul(left: left, right: right),
         math::wrapping_neg(left)
     );
 }

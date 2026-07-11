@@ -1,4 +1,4 @@
-//! Native TRON DPoS header-finality verification for SCCP.
+//! Native TRON `DPoS` header-finality verification for SCCP.
 //!
 //! TRON witnesses sign only `BlockHeader.raw_data`.  There is no native quorum
 //! signature over a target block and there is no witness-set handover seal.
@@ -35,10 +35,24 @@ const TRON_SINGLE_REPEAT: u32 = 1;
 const TRON_SOLIDIFIED_THRESHOLD_PERCENT: u8 = 70;
 const TRON_ACTIVE_WITNESS_COUNT: usize = 27;
 const TRON_MAX_RAW_HEADER_BYTES: usize = 16 * 1024;
-const TRON_MAX_FINALITY_HEADERS: usize = 8_192;
 const TRON_MAX_TRANSACTION_BYTES: usize = 512 * 1024;
 const TRON_MAX_TRANSACTION_SIGNATURES: usize = 32;
 const TRON_MAX_TRANSACTION_MERKLE_DEPTH: usize = 64;
+
+/// Maximum post-anchor headers before the selected TRON target.
+///
+/// V1 requires a governed checkpoint no more than one complete 27-witness
+/// scheduling round before the target.
+pub const TRON_NATIVE_MAX_TARGET_HEADERS: usize = TRON_ACTIVE_WITNESS_COUNT;
+/// Maximum headers after a TRON target before it becomes solid.
+///
+/// One complete active-witness round is enough to include all 27 producers in
+/// a healthy schedule and therefore the required 19 distinct producers for
+/// the native 70% solid-height order statistic.
+pub const TRON_NATIVE_MAX_FINALITY_SUFFIX_HEADERS: usize = TRON_ACTIVE_WITNESS_COUNT;
+/// Maximum headers in one canonical native TRON finality continuation.
+pub const TRON_NATIVE_MAX_FINALITY_HEADERS: usize =
+    TRON_NATIVE_MAX_TARGET_HEADERS + TRON_NATIVE_MAX_FINALITY_SUFFIX_HEADERS;
 
 fn sha256_bytes(payload: &[u8]) -> H256 {
     Sha256::digest(payload).into()
@@ -105,7 +119,7 @@ pub struct TronNativeWitnessV1 {
     pub latest_block_number: u64,
 }
 
-/// Consensus state required to continue native TRON DPoS verification.
+/// Consensus state required to continue native TRON `DPoS` verification.
 #[derive(
     Clone,
     Debug,
@@ -130,7 +144,7 @@ pub struct TronNativeDposAnchorV1 {
     /// Checkpoint block timestamp in milliseconds.
     #[norito(with = "crate::json_utils::u64_string")]
     pub timestamp_ms: u64,
-    /// Network genesis block timestamp used by the DPoS absolute-slot rule.
+    /// Network genesis block timestamp used by the `DPoS` absolute-slot rule.
     #[norito(with = "crate::json_utils::u64_string")]
     pub genesis_timestamp_ms: u64,
     /// First scheduled maintenance timestamp after the checkpoint.
@@ -179,7 +193,7 @@ pub struct TronNativeSignedHeaderV1 {
     pub witness_signature: Vec<u8>,
 }
 
-/// Native TRON finality proof continued from a governed DPoS checkpoint.
+/// Native TRON finality proof continued from a governed `DPoS` checkpoint.
 #[derive(
     Clone,
     Debug,
@@ -199,6 +213,21 @@ pub struct TronNativeFinalityProofV1 {
     pub headers: Vec<TronNativeSignedHeaderV1>,
     /// Zero-based header containing the SCCP transaction.
     pub target_header_index: u16,
+}
+
+/// Cheap deterministic reservation for native TRON finality verification.
+///
+/// The estimate uses proof framing only and performs no protobuf parsing,
+/// hashing, or secp256k1 recovery, so Core can reserve consensus work before
+/// dispatching cryptographic verification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TronNativeFinalityWorkEstimateV1 {
+    /// Number of post-anchor continuation headers.
+    pub continuation_headers: u16,
+    /// Bytes in all raw headers and their witness signatures.
+    pub framed_header_bytes: u32,
+    /// Maximum secp256k1 witness-key recoveries, one per continuation header.
+    pub secp256k1_recoveries: u16,
 }
 
 /// Inclusion proof for one full native TRON transaction protobuf.
@@ -239,7 +268,7 @@ pub struct TronNativeTransactionProofV1 {
     norito::derive::JsonDeserialize,
 )]
 pub struct TronNativeSourceProofV1 {
-    /// Native DPoS continuation that makes the transaction block solid.
+    /// Native `DPoS` continuation that makes the transaction block solid.
     pub finality: TronNativeFinalityProofV1,
     /// Full successful transaction and native Merkle inclusion proof.
     pub transaction: TronNativeTransactionProofV1,
@@ -336,6 +365,8 @@ pub enum TronNativeFinalityError {
     InvalidWitnessSignature,
     /// The supplied continuation does not make the target block solid.
     TargetNotSolid,
+    /// The target became solid before the last supplied continuation header.
+    NonMinimalContinuation,
 }
 
 /// Fail-closed reason returned by native TRON transaction verification.
@@ -351,7 +382,7 @@ pub enum TronNativeTransactionError {
     WrongContract,
     /// The successful call sender differed from the canonical payload sender.
     WrongCaller,
-    /// The TriggerSmartContract call does not carry the exact SCCP event payload.
+    /// The `TriggerSmartContract` call does not carry the exact SCCP event payload.
     WrongCallData,
     /// The native transaction Merkle branch does not reconstruct the header root.
     InvalidMerkleProof,
@@ -364,7 +395,7 @@ pub enum TronNativeSourceError {
     InvalidSourceIdentity,
     /// The canonical typed identity does not match the governed registry hash.
     SourceIdentityHashMismatch,
-    /// Native DPoS finality verification failed.
+    /// Native `DPoS` finality verification failed.
     Finality(TronNativeFinalityError),
     /// Native transaction decoding or inclusion verification failed.
     Transaction(TronNativeTransactionError),
@@ -399,7 +430,7 @@ fn push_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
-/// Return canonical bytes for a governed native TRON DPoS checkpoint.
+/// Return canonical bytes for a governed native TRON `DPoS` checkpoint.
 pub fn canonical_tron_native_anchor_bytes(anchor: &TronNativeDposAnchorV1) -> Option<Vec<u8>> {
     validate_anchor(anchor)?;
     let mut out =
@@ -427,7 +458,7 @@ pub fn canonical_tron_native_anchor_bytes(anchor: &TronNativeDposAnchorV1) -> Op
     Some(out)
 }
 
-/// Hash a canonical governed native TRON DPoS checkpoint.
+/// Hash a canonical governed native TRON `DPoS` checkpoint.
 pub fn tron_native_anchor_hash(anchor: &TronNativeDposAnchorV1) -> Option<H256> {
     Some(prefixed_blake2b(
         TRON_NATIVE_ANCHOR_PREFIX_V1,
@@ -570,7 +601,7 @@ fn parse_tron_raw_header(raw_data: &[u8]) -> Option<ParsedTronRawHeaderV1> {
             (7, 0) => number = Some(read_protobuf_varint_at(raw_data, &mut cursor)?),
             (8, 0) => {
                 let value = read_protobuf_varint_at(raw_data, &mut cursor)?;
-                if value == 0 || value > i64::MAX as u64 {
+                if value == 0 || i64::try_from(value).is_err() {
                     return None;
                 }
                 witness_id = Some(value);
@@ -580,7 +611,7 @@ fn parse_tron_raw_header(raw_data: &[u8]) -> Option<ParsedTronRawHeaderV1> {
             }
             (10, 0) => {
                 let value = u32::try_from(read_protobuf_varint_at(raw_data, &mut cursor)?).ok()?;
-                if value == 0 || value > i32::MAX as u32 {
+                if value == 0 || i32::try_from(value).is_err() {
                     return None;
                 }
                 header_version = Some(value);
@@ -602,9 +633,9 @@ fn parse_tron_raw_header(raw_data: &[u8]) -> Option<ParsedTronRawHeaderV1> {
         account_state_root,
     };
     (parsed.number != 0
-        && parsed.number <= i64::MAX as u64
+        && i64::try_from(parsed.number).is_ok()
         && parsed.timestamp_ms != 0
-        && parsed.timestamp_ms <= i64::MAX as u64
+        && i64::try_from(parsed.timestamp_ms).is_ok()
         && parsed.parent_block_id.iter().any(|byte| *byte != 0)
         && is_tron_address(&parsed.witness_address)
         && parsed
@@ -634,11 +665,233 @@ fn recover_tron_address(raw_hash: H256, signature: &[u8]) -> Option<[u8; TRON_AD
     Some(address)
 }
 
-/// Verify a native TRON DPoS continuation and return the authenticated target.
-pub fn verify_tron_native_finality(
+#[derive(Clone, Copy)]
+struct TronNativeFinalityTargetV1 {
+    header: ParsedTronRawHeaderV1,
+    block_id: H256,
+    transaction_root: H256,
+}
+
+struct TronNativeFinalityReplayV1 {
+    expected_parent: H256,
+    previous_number: u64,
+    previous_timestamp: u64,
+    previous_slot: u64,
+    latest_block_numbers: Vec<u64>,
+    target: Option<TronNativeFinalityTargetV1>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TronNativeFinalityWorkPerformedV1 {
+    continuation_headers: u16,
+    secp256k1_recoveries: u16,
+}
+
+impl TronNativeFinalityReplayV1 {
+    fn from_anchor(anchor: &TronNativeDposAnchorV1) -> Result<Self, TronNativeFinalityError> {
+        let previous_slot = anchor
+            .timestamp_ms
+            .checked_sub(anchor.genesis_timestamp_ms)
+            .ok_or(TronNativeFinalityError::InvalidAnchor)?
+            / TRON_BLOCK_INTERVAL_MS;
+        Ok(Self {
+            expected_parent: anchor.block_id,
+            previous_number: anchor.block_number,
+            previous_timestamp: anchor.timestamp_ms,
+            previous_slot,
+            latest_block_numbers: anchor
+                .witnesses
+                .iter()
+                .map(|witness| witness.latest_block_number)
+                .collect(),
+            target: None,
+        })
+    }
+}
+
+fn tron_native_header_schedule(
+    anchor: &TronNativeDposAnchorV1,
+    header: &ParsedTronRawHeaderV1,
+    header_index: usize,
+    replay: &TronNativeFinalityReplayV1,
+) -> Result<(u64, usize), TronNativeFinalityError> {
+    if header.timestamp_ms <= replay.previous_timestamp
+        || header.timestamp_ms <= anchor.genesis_timestamp_ms
+        || (anchor.require_aligned_timestamps
+            && !header.timestamp_ms.is_multiple_of(TRON_BLOCK_INTERVAL_MS))
+    {
+        return Err(TronNativeFinalityError::InvalidTimestamp);
+    }
+    if header.timestamp_ms >= anchor.next_maintenance_time_ms {
+        return Err(TronNativeFinalityError::MaintenanceBoundary);
+    }
+    let absolute_slot = header
+        .timestamp_ms
+        .checked_sub(anchor.genesis_timestamp_ms)
+        .ok_or(TronNativeFinalityError::InvalidTimestamp)?
+        / TRON_BLOCK_INTERVAL_MS;
+    if absolute_slot <= replay.previous_slot {
+        return Err(TronNativeFinalityError::InvalidTimestamp);
+    }
+    let schedule_slot = if header_index == 0 && anchor.anchor_is_maintenance {
+        let first_slot_time = replay
+            .previous_timestamp
+            .checked_sub(replay.previous_timestamp % TRON_BLOCK_INTERVAL_MS)
+            .and_then(|aligned| {
+                aligned.checked_add(
+                    TRON_BLOCK_INTERVAL_MS
+                        .checked_mul(u64::from(anchor.maintenance_skip_slots).checked_add(1)?)?,
+                )
+            })
+            .ok_or(TronNativeFinalityError::InvalidTimestamp)?;
+        if header.timestamp_ms < first_slot_time {
+            return Err(TronNativeFinalityError::InvalidTimestamp);
+        }
+        let relative_slot = header
+            .timestamp_ms
+            .checked_sub(first_slot_time)
+            .ok_or(TronNativeFinalityError::InvalidTimestamp)?
+            / TRON_BLOCK_INTERVAL_MS;
+        replay
+            .previous_slot
+            .checked_add(relative_slot)
+            .and_then(|slot| slot.checked_add(1))
+            .ok_or(TronNativeFinalityError::InvalidTimestamp)?
+    } else {
+        absolute_slot
+    };
+    let single_repeat = usize::try_from(anchor.single_repeat)
+        .map_err(|_| TronNativeFinalityError::InvalidAnchor)?;
+    let schedule_span = anchor
+        .witnesses
+        .len()
+        .checked_mul(single_repeat)
+        .ok_or(TronNativeFinalityError::InvalidAnchor)?;
+    let scheduled_position = usize::try_from(
+        schedule_slot
+            % u64::try_from(schedule_span).map_err(|_| TronNativeFinalityError::InvalidAnchor)?,
+    )
+    .map_err(|_| TronNativeFinalityError::InvalidTimestamp)?
+        / single_repeat;
+    Ok((absolute_slot, scheduled_position))
+}
+
+fn replay_tron_native_header(
+    anchor: &TronNativeDposAnchorV1,
+    signed_header: &TronNativeSignedHeaderV1,
+    header_index: usize,
+    target_index: usize,
+    replay: &mut TronNativeFinalityReplayV1,
+) -> Result<(), TronNativeFinalityError> {
+    let header = parse_tron_raw_header(&signed_header.raw_data)
+        .ok_or(TronNativeFinalityError::InvalidHeaderEncoding)?;
+    let raw_hash = sha256_bytes(&signed_header.raw_data);
+    let block_id = tron_block_id(header.number, raw_hash);
+    if header.number
+        != replay
+            .previous_number
+            .checked_add(1)
+            .ok_or(TronNativeFinalityError::HeaderChainMismatch)?
+        || header.parent_block_id != replay.expected_parent
+    {
+        return Err(TronNativeFinalityError::HeaderChainMismatch);
+    }
+    let (absolute_slot, scheduled_position) =
+        tron_native_header_schedule(anchor, &header, header_index, replay)?;
+    let scheduled = anchor
+        .witnesses
+        .get(scheduled_position)
+        .ok_or(TronNativeFinalityError::InvalidAnchor)?;
+    if scheduled.account_address.as_slice() != header.witness_address {
+        return Err(TronNativeFinalityError::WrongScheduledWitness);
+    }
+    let expected_signer: [u8; TRON_ADDRESS_BYTES] = scheduled
+        .signing_address
+        .as_slice()
+        .try_into()
+        .map_err(|_| TronNativeFinalityError::InvalidAnchor)?;
+    if recover_tron_address(raw_hash, &signed_header.witness_signature) != Some(expected_signer) {
+        return Err(TronNativeFinalityError::InvalidWitnessSignature);
+    }
+    *replay
+        .latest_block_numbers
+        .get_mut(scheduled_position)
+        .ok_or(TronNativeFinalityError::InvalidAnchor)? = header.number;
+    if header_index == target_index {
+        let transaction_root = header
+            .transaction_root
+            .ok_or(TronNativeFinalityError::InvalidHeaderEncoding)?;
+        replay.target = Some(TronNativeFinalityTargetV1 {
+            header,
+            block_id,
+            transaction_root,
+        });
+    }
+    replay.expected_parent = block_id;
+    replay.previous_number = header.number;
+    replay.previous_timestamp = header.timestamp_ms;
+    replay.previous_slot = absolute_slot;
+    Ok(())
+}
+
+/// Return a cryptography-free upper bound for one native TRON finality proof.
+///
+/// The shape policy admits one complete witness round before the target and
+/// one complete witness round after it.  This function reads only vector and
+/// byte lengths, so callers can reserve work before parsing or recovery.
+///
+/// # Errors
+///
+/// Returns [`TronNativeFinalityError::InvalidProofShape`] when the proof falls
+/// outside the V1 target, suffix, per-header, or aggregate byte bounds.
+pub fn tron_native_finality_work_estimate(
+    proof: &TronNativeFinalityProofV1,
+) -> Result<TronNativeFinalityWorkEstimateV1, TronNativeFinalityError> {
+    let header_count = proof.headers.len();
+    let target_index = usize::from(proof.target_header_index);
+    if header_count == 0
+        || header_count > TRON_NATIVE_MAX_FINALITY_HEADERS
+        || target_index >= header_count
+    {
+        return Err(TronNativeFinalityError::InvalidProofShape);
+    }
+    let suffix_headers = header_count
+        .checked_sub(target_index)
+        .and_then(|count| count.checked_sub(1))
+        .ok_or(TronNativeFinalityError::InvalidProofShape)?;
+    if target_index >= TRON_NATIVE_MAX_TARGET_HEADERS
+        || suffix_headers > TRON_NATIVE_MAX_FINALITY_SUFFIX_HEADERS
+        || proof.headers.iter().any(|header| {
+            header.raw_data.len() > TRON_MAX_RAW_HEADER_BYTES
+                || header.witness_signature.len() != TRON_SIGNATURE_BYTES
+        })
+    {
+        return Err(TronNativeFinalityError::InvalidProofShape);
+    }
+    let framed_header_bytes = proof
+        .headers
+        .iter()
+        .try_fold(0_usize, |total, header| {
+            total
+                .checked_add(header.raw_data.len())?
+                .checked_add(header.witness_signature.len())
+        })
+        .and_then(|total| u32::try_from(total).ok())
+        .ok_or(TronNativeFinalityError::InvalidProofShape)?;
+    let continuation_headers =
+        u16::try_from(header_count).map_err(|_| TronNativeFinalityError::InvalidProofShape)?;
+    Ok(TronNativeFinalityWorkEstimateV1 {
+        continuation_headers,
+        framed_header_bytes,
+        secp256k1_recoveries: continuation_headers,
+    })
+}
+
+fn verify_tron_native_finality_counted(
     proof: &TronNativeFinalityProofV1,
     expected_network: SccpNetworkV1,
     expected_anchor_hash: H256,
+    work: &mut TronNativeFinalityWorkPerformedV1,
 ) -> Result<ValidatedTronNativeFinalityV1, TronNativeFinalityError> {
     if proof.version != 1 || proof.anchor.version != 1 {
         return Err(TronNativeFinalityError::UnsupportedVersion);
@@ -646,6 +899,7 @@ pub fn verify_tron_native_finality(
     if proof.anchor.network != expected_network || tron_network_tag(expected_network).is_none() {
         return Err(TronNativeFinalityError::WrongNetwork);
     }
+    let _ = tron_native_finality_work_estimate(proof)?;
     validate_anchor(&proof.anchor).ok_or(TronNativeFinalityError::InvalidAnchor)?;
     let anchor_hash =
         tron_native_anchor_hash(&proof.anchor).ok_or(TronNativeFinalityError::InvalidAnchor)?;
@@ -653,145 +907,58 @@ pub fn verify_tron_native_finality(
         return Err(TronNativeFinalityError::AnchorHashMismatch);
     }
     let target_index = usize::from(proof.target_header_index);
-    if proof.headers.is_empty()
-        || proof.headers.len() > TRON_MAX_FINALITY_HEADERS
-        || target_index >= proof.headers.len()
-    {
-        return Err(TronNativeFinalityError::InvalidProofShape);
-    }
-
-    let mut expected_parent = proof.anchor.block_id;
-    let mut previous_number = proof.anchor.block_number;
-    let mut previous_timestamp = proof.anchor.timestamp_ms;
-    let mut previous_slot = previous_timestamp
-        .checked_sub(proof.anchor.genesis_timestamp_ms)
-        .ok_or(TronNativeFinalityError::InvalidAnchor)?
-        / TRON_BLOCK_INTERVAL_MS;
-    let mut latest = proof
-        .anchor
-        .witnesses
-        .iter()
-        .map(|witness| witness.latest_block_number)
-        .collect::<Vec<_>>();
-    let mut target = None;
-
+    let mut replay = TronNativeFinalityReplayV1::from_anchor(&proof.anchor)?;
     for (index, signed_header) in proof.headers.iter().enumerate() {
-        let header = parse_tron_raw_header(&signed_header.raw_data)
-            .ok_or(TronNativeFinalityError::InvalidHeaderEncoding)?;
-        let raw_hash = sha256_bytes(&signed_header.raw_data);
-        let block_id = tron_block_id(header.number, raw_hash);
-        if header.number
-            != previous_number
-                .checked_add(1)
-                .ok_or(TronNativeFinalityError::HeaderChainMismatch)?
-            || header.parent_block_id != expected_parent
-        {
-            return Err(TronNativeFinalityError::HeaderChainMismatch);
-        }
-        if header.timestamp_ms <= previous_timestamp
-            || header.timestamp_ms <= proof.anchor.genesis_timestamp_ms
-            || (proof.anchor.require_aligned_timestamps
-                && !header.timestamp_ms.is_multiple_of(TRON_BLOCK_INTERVAL_MS))
-        {
-            return Err(TronNativeFinalityError::InvalidTimestamp);
-        }
-        if header.timestamp_ms >= proof.anchor.next_maintenance_time_ms {
-            return Err(TronNativeFinalityError::MaintenanceBoundary);
-        }
-        let absolute_slot = header
-            .timestamp_ms
-            .checked_sub(proof.anchor.genesis_timestamp_ms)
-            .ok_or(TronNativeFinalityError::InvalidTimestamp)?
-            / TRON_BLOCK_INTERVAL_MS;
-        if absolute_slot <= previous_slot {
-            return Err(TronNativeFinalityError::InvalidTimestamp);
-        }
-        let schedule_slot = if index == 0 && proof.anchor.anchor_is_maintenance {
-            let first_slot_time = previous_timestamp
-                .checked_sub(previous_timestamp % TRON_BLOCK_INTERVAL_MS)
-                .and_then(|aligned| {
-                    aligned.checked_add(TRON_BLOCK_INTERVAL_MS.checked_mul(
-                        u64::from(proof.anchor.maintenance_skip_slots).checked_add(1)?,
-                    )?)
-                })
-                .ok_or(TronNativeFinalityError::InvalidTimestamp)?;
-            if header.timestamp_ms < first_slot_time {
-                return Err(TronNativeFinalityError::InvalidTimestamp);
-            }
-            let relative_slot = header
-                .timestamp_ms
-                .checked_sub(first_slot_time)
-                .ok_or(TronNativeFinalityError::InvalidTimestamp)?
-                / TRON_BLOCK_INTERVAL_MS;
-            previous_slot
-                .checked_add(relative_slot)
-                .and_then(|slot| slot.checked_add(1))
-                .ok_or(TronNativeFinalityError::InvalidTimestamp)?
-        } else {
-            absolute_slot
-        };
-        let schedule_span = proof
-            .anchor
-            .witnesses
-            .len()
-            .checked_mul(
-                usize::try_from(proof.anchor.single_repeat)
-                    .map_err(|_| TronNativeFinalityError::InvalidAnchor)?,
-            )
-            .ok_or(TronNativeFinalityError::InvalidAnchor)?;
-        let scheduled_position = usize::try_from(
-            schedule_slot
-                % u64::try_from(schedule_span)
-                    .map_err(|_| TronNativeFinalityError::InvalidAnchor)?,
-        )
-        .map_err(|_| TronNativeFinalityError::InvalidTimestamp)?
-            / usize::try_from(proof.anchor.single_repeat)
-                .map_err(|_| TronNativeFinalityError::InvalidAnchor)?;
-        let scheduled = proof
-            .anchor
-            .witnesses
-            .get(scheduled_position)
-            .ok_or(TronNativeFinalityError::InvalidAnchor)?;
-        if scheduled.account_address.as_slice() != header.witness_address {
-            return Err(TronNativeFinalityError::WrongScheduledWitness);
-        }
-        let expected_signer: [u8; TRON_ADDRESS_BYTES] = scheduled
-            .signing_address
-            .as_slice()
-            .try_into()
-            .map_err(|_| TronNativeFinalityError::InvalidAnchor)?;
-        if recover_tron_address(raw_hash, &signed_header.witness_signature) != Some(expected_signer)
-        {
-            return Err(TronNativeFinalityError::InvalidWitnessSignature);
-        }
-        latest[scheduled_position] = header.number;
-        if index == target_index {
-            let transaction_root = header
-                .transaction_root
-                .ok_or(TronNativeFinalityError::InvalidHeaderEncoding)?;
-            target = Some((header, block_id, transaction_root));
-        }
-        expected_parent = block_id;
-        previous_number = header.number;
-        previous_timestamp = header.timestamp_ms;
-        previous_slot = absolute_slot;
-    }
+        work.continuation_headers = work.continuation_headers.saturating_add(1);
+        work.secp256k1_recoveries = work.secp256k1_recoveries.saturating_add(1);
+        replay_tron_native_header(
+            &proof.anchor,
+            signed_header,
+            index,
+            target_index,
+            &mut replay,
+        )?;
 
-    let resulting_solid = solid_height(&latest).ok_or(TronNativeFinalityError::InvalidAnchor)?;
-    let (target_header, target_block_id, transaction_root) =
-        target.ok_or(TronNativeFinalityError::InvalidProofShape)?;
-    if resulting_solid < target_header.number {
-        return Err(TronNativeFinalityError::TargetNotSolid);
+        if let Some(target) = replay.target {
+            let resulting_solid = solid_height(&replay.latest_block_numbers)
+                .ok_or(TronNativeFinalityError::InvalidAnchor)?;
+            if resulting_solid >= target.header.number {
+                if index + 1 != proof.headers.len() {
+                    return Err(TronNativeFinalityError::NonMinimalContinuation);
+                }
+                return Ok(ValidatedTronNativeFinalityV1 {
+                    anchor_hash,
+                    block_number: target.header.number,
+                    block_id: target.block_id,
+                    transaction_root: target.transaction_root,
+                    account_state_root: target.header.account_state_root,
+                    witness_address: target.header.witness_address,
+                    resulting_solid_block_number: resulting_solid,
+                });
+            }
+        }
     }
-    Ok(ValidatedTronNativeFinalityV1 {
-        anchor_hash,
-        block_number: target_header.number,
-        block_id: target_block_id,
-        transaction_root,
-        account_state_root: target_header.account_state_root,
-        witness_address: target_header.witness_address,
-        resulting_solid_block_number: resulting_solid,
-    })
+    Err(TronNativeFinalityError::TargetNotSolid)
+}
+
+/// Verify a native TRON `DPoS` continuation and return the authenticated target.
+///
+/// # Errors
+///
+/// Returns an error if the checkpoint is malformed or mismatched, a header is
+/// noncanonical or violates native scheduling, its producer signature is
+/// invalid, or the supplied continuation does not solidify the target block.
+pub fn verify_tron_native_finality(
+    proof: &TronNativeFinalityProofV1,
+    expected_network: SccpNetworkV1,
+    expected_anchor_hash: H256,
+) -> Result<ValidatedTronNativeFinalityV1, TronNativeFinalityError> {
+    verify_tron_native_finality_counted(
+        proof,
+        expected_network,
+        expected_anchor_hash,
+        &mut TronNativeFinalityWorkPerformedV1::default(),
+    )
 }
 
 fn transaction_encoding_error() -> TronNativeTransactionError {
@@ -825,7 +992,7 @@ fn transaction_field_key(
     Ok((field, wire))
 }
 
-fn parse_tron_any<'a>(bytes: &'a [u8]) -> Result<&'a [u8], TronNativeTransactionError> {
+fn parse_tron_any(bytes: &[u8]) -> Result<&[u8], TronNativeTransactionError> {
     let mut cursor = 0usize;
     let mut previous = 0u32;
     let mut type_url = None;
@@ -922,7 +1089,6 @@ fn parse_tron_contract_sccp_call(
     let mut previous = 0u32;
     let mut contract_type = None;
     let mut parameter = None;
-    let mut permission_id = None;
     while cursor < bytes.len() {
         let (field, wire) = transaction_field_key(bytes, &mut cursor)?;
         if field <= previous {
@@ -934,10 +1100,9 @@ fn parse_tron_contract_sccp_call(
             (2, 2) => parameter = Some(read_transaction_bytes_field(bytes, &mut cursor)?),
             (5, 0) => {
                 let id = read_transaction_varint(bytes, &mut cursor)?;
-                if id == 0 || id > i32::MAX as u64 {
+                if id == 0 || i32::try_from(id).is_err() {
                     return Err(transaction_encoding_error());
                 }
-                permission_id = Some(id);
             }
             _ => return Err(transaction_encoding_error()),
         }
@@ -945,7 +1110,6 @@ fn parse_tron_contract_sccp_call(
     if contract_type != Some(31) {
         return Err(TronNativeTransactionError::WrongCallData);
     }
-    let _permission_id = permission_id;
     let trigger = parse_tron_any(parameter.ok_or_else(transaction_encoding_error)?)?;
     parse_tron_trigger_sccp_call(
         trigger,
@@ -1005,13 +1169,13 @@ fn parse_tron_raw_transaction_sccp_call(
         || ref_block_hash
             .is_none_or(|value| value.len() != 8 || value.iter().all(|byte| *byte == 0))
         || ref_block_num == 0
-        || ref_block_num > i64::MAX as u64
+        || i64::try_from(ref_block_num).is_err()
         || timestamp == 0
-        || timestamp > i64::MAX as u64
+        || i64::try_from(timestamp).is_err()
         || expiration <= timestamp
-        || expiration > i64::MAX as u64
+        || i64::try_from(expiration).is_err()
         || fee_limit == 0
-        || fee_limit > i64::MAX as u64
+        || i64::try_from(fee_limit).is_err()
     {
         return Err(transaction_encoding_error());
     }
@@ -1031,7 +1195,7 @@ fn verify_tron_transaction_success(bytes: &[u8]) -> Result<(), TronNativeTransac
         match (field, wire) {
             (1, 0) => {
                 let fee = read_transaction_varint(bytes, &mut cursor)?;
-                if fee == 0 || fee > i64::MAX as u64 {
+                if fee == 0 || i64::try_from(fee).is_err() {
                     return Err(transaction_encoding_error());
                 }
             }
@@ -1152,7 +1316,12 @@ fn tron_transaction_merkle_root(
     (branch_index == branch.len()).then_some(current)
 }
 
-/// Verify a full successful TriggerSmartContract transaction and native inclusion.
+/// Verify a full successful `TriggerSmartContract` transaction and native inclusion.
+///
+/// # Errors
+///
+/// Returns an error if the proof shape, transaction protobuf, exact governed
+/// call, successful result, or transaction-Merkle inclusion is invalid.
 pub fn verify_tron_native_sccp_transaction(
     proof: &TronNativeTransactionProofV1,
     expected_transaction_root: H256,
@@ -1167,7 +1336,8 @@ pub fn verify_tron_native_sccp_transaction(
     else {
         return Err(TronNativeTransactionError::InvalidProofShape);
     };
-    let canonical_payload = canonical_sccp_payload_bytes(payload);
+    let canonical_payload = canonical_sccp_payload_bytes(payload)
+        .map_err(|_| TronNativeTransactionError::InvalidProofShape)?;
     let expected_lane_hash =
         sccp_lane_id_hash_v1(lane).ok_or(TronNativeTransactionError::InvalidProofShape)?;
     let expected_message_id =
@@ -1251,6 +1421,11 @@ pub fn verify_tron_native_sccp_transaction(
 /// and its transaction Merkle inclusion.  The registry governs the exact
 /// runtime-code/configuration identity because TRON headers do not commit those
 /// contract records.
+///
+/// # Errors
+///
+/// Returns an error if the governed source identity or message statement does
+/// not match, or if native finality or transaction verification fails.
 pub fn verify_tron_native_source(
     proof: &TronNativeSourceProofV1,
     source_identity: &SccpSourceIdentityV1,
@@ -1283,7 +1458,8 @@ pub fn verify_tron_native_source(
     {
         return Err(TronNativeSourceError::InvalidSourceIdentity);
     }
-    let canonical_payload = canonical_sccp_payload_bytes(payload);
+    let canonical_payload = canonical_sccp_payload_bytes(payload)
+        .map_err(|_| TronNativeSourceError::InvalidSourceIdentity)?;
     if payload_hash(&canonical_payload) != expected_payload_hash
         || sccp_message_id(source_identity.lane, payload) != Some(expected_message_id)
     {
@@ -1504,7 +1680,8 @@ mod tests {
             source: SccpNetworkV1::TronMainnet,
             target: SccpNetworkV1::SoraTaira,
         };
-        let canonical_payload = canonical_sccp_payload_bytes(&payload);
+        let canonical_payload =
+            canonical_sccp_payload_bytes(&payload).expect("valid TRON SCCP test payload encodes");
         let message_id = sccp_message_id(lane, &payload).unwrap();
         let payload_hash = payload_hash(&canonical_payload);
         let source_event_digest =
@@ -1583,7 +1760,9 @@ mod tests {
         }
     }
 
-    fn proof_with_target_root(target_transaction_root: H256) -> (TronNativeFinalityProofV1, H256) {
+    fn proof_with_target_root_and_signers(
+        target_transaction_root: H256,
+    ) -> (TronNativeFinalityProofV1, H256, Vec<KeyPair>) {
         let fixture = fixture();
         let anchor_hash = tron_native_anchor_hash(&fixture.anchor).expect("anchor hash");
         let mut parent = fixture.anchor.block_id;
@@ -1619,7 +1798,43 @@ mod tests {
                 target_header_index: 0,
             },
             anchor_hash,
+            fixture.signers,
         )
+    }
+
+    fn proof_with_target_root(target_transaction_root: H256) -> (TronNativeFinalityProofV1, H256) {
+        let (proof, anchor_hash, _) = proof_with_target_root_and_signers(target_transaction_root);
+        (proof, anchor_hash)
+    }
+
+    fn append_valid_headers(
+        proof: &mut TronNativeFinalityProofV1,
+        signers: &[KeyPair],
+        count: usize,
+    ) {
+        let last = parse_tron_raw_header(&proof.headers.last().unwrap().raw_data).unwrap();
+        let mut parent = tron_block_id(
+            last.number,
+            sha256_bytes(&proof.headers.last().unwrap().raw_data),
+        );
+        let mut number = last.number;
+        let mut timestamp_ms = last.timestamp_ms;
+        for _ in 0..count {
+            number += 1;
+            timestamp_ms += TRON_BLOCK_INTERVAL_MS;
+            let slot = (timestamp_ms - proof.anchor.genesis_timestamp_ms) / TRON_BLOCK_INTERVAL_MS;
+            let scheduled = usize::try_from(slot % TRON_ACTIVE_WITNESS_COUNT as u64).unwrap();
+            let raw = raw_header(
+                number,
+                timestamp_ms,
+                parent,
+                signer_address(&signers[scheduled]),
+                None,
+            );
+            let signed = sign_header(&signers[scheduled], raw);
+            parent = tron_block_id(number, sha256_bytes(&signed.raw_data));
+            proof.headers.push(signed);
+        }
     }
 
     fn proof_with_distinct_confirmations() -> (TronNativeFinalityProofV1, H256) {
@@ -1627,19 +1842,158 @@ mod tests {
     }
 
     #[test]
+    fn finality_work_estimate_enforces_witness_round_target_and_suffix_bounds() {
+        let fixture = fixture();
+        let header = TronNativeSignedHeaderV1 {
+            raw_data: vec![0x01, 0x02],
+            witness_signature: vec![0x03; TRON_SIGNATURE_BYTES],
+        };
+        let mut proof = TronNativeFinalityProofV1 {
+            version: 1,
+            anchor: fixture.anchor,
+            headers: vec![header.clone()],
+            target_header_index: 0,
+        };
+        let estimate = tron_native_finality_work_estimate(&proof).unwrap();
+        assert_eq!(estimate.continuation_headers, 1);
+        assert_eq!(estimate.secp256k1_recoveries, 1);
+        assert_eq!(
+            estimate.framed_header_bytes,
+            u32::try_from(2 + TRON_SIGNATURE_BYTES).unwrap()
+        );
+
+        proof.headers = vec![header.clone(); TRON_NATIVE_MAX_FINALITY_HEADERS];
+        proof.target_header_index = u16::try_from(TRON_NATIVE_MAX_TARGET_HEADERS - 1).unwrap();
+        let boundary = tron_native_finality_work_estimate(&proof).unwrap();
+        assert_eq!(
+            usize::from(boundary.continuation_headers),
+            TRON_NATIVE_MAX_FINALITY_HEADERS
+        );
+
+        proof.target_header_index = u16::try_from(TRON_NATIVE_MAX_TARGET_HEADERS).unwrap();
+        assert_eq!(
+            tron_native_finality_work_estimate(&proof),
+            Err(TronNativeFinalityError::InvalidProofShape)
+        );
+
+        proof.target_header_index = 0;
+        proof.headers = vec![header.clone(); TRON_NATIVE_MAX_FINALITY_SUFFIX_HEADERS + 2];
+        assert_eq!(
+            tron_native_finality_work_estimate(&proof),
+            Err(TronNativeFinalityError::InvalidProofShape)
+        );
+
+        proof.headers = vec![header.clone(); TRON_NATIVE_MAX_FINALITY_HEADERS + 1];
+        assert_eq!(
+            tron_native_finality_work_estimate(&proof),
+            Err(TronNativeFinalityError::InvalidProofShape)
+        );
+
+        proof.headers = vec![TronNativeSignedHeaderV1 {
+            raw_data: vec![0; TRON_MAX_RAW_HEADER_BYTES + 1],
+            witness_signature: vec![0; TRON_SIGNATURE_BYTES],
+        }];
+        assert_eq!(
+            tron_native_finality_work_estimate(&proof),
+            Err(TronNativeFinalityError::InvalidProofShape)
+        );
+
+        proof.headers = vec![TronNativeSignedHeaderV1 {
+            raw_data: vec![0x01],
+            witness_signature: vec![0; TRON_SIGNATURE_BYTES - 1],
+        }];
+        assert_eq!(
+            tron_native_finality_work_estimate(&proof),
+            Err(TronNativeFinalityError::InvalidProofShape)
+        );
+
+        proof.headers = vec![header];
+        proof.target_header_index = 1;
+        assert_eq!(
+            tron_native_finality_work_estimate(&proof),
+            Err(TronNativeFinalityError::InvalidProofShape)
+        );
+    }
+
+    #[test]
     fn native_dpos_accepts_target_only_after_nineteen_distinct_producers() {
-        let (proof, anchor_hash) = proof_with_distinct_confirmations();
+        let (proof, anchor_hash, signers) = proof_with_target_root_and_signers([0xD5; 32]);
         let validated =
             verify_tron_native_finality(&proof, SccpNetworkV1::TronMainnet, anchor_hash)
                 .expect("native finality");
         assert_eq!(validated.block_number, 101);
         assert!(validated.resulting_solid_block_number >= 101);
 
+        let mut exact_work = TronNativeFinalityWorkPerformedV1::default();
+        verify_tron_native_finality_counted(
+            &proof,
+            SccpNetworkV1::TronMainnet,
+            anchor_hash,
+            &mut exact_work,
+        )
+        .unwrap();
+        assert_eq!(exact_work.continuation_headers, 19);
+        assert_eq!(exact_work.secp256k1_recoveries, 19);
+
         let mut only_eighteen = proof.clone();
         only_eighteen.headers.pop();
         assert_eq!(
             verify_tron_native_finality(&only_eighteen, SccpNetworkV1::TronMainnet, anchor_hash,),
             Err(TronNativeFinalityError::TargetNotSolid)
+        );
+
+        let mut one_surplus = proof.clone();
+        append_valid_headers(&mut one_surplus, &signers, 1);
+        let mut one_surplus_work = TronNativeFinalityWorkPerformedV1::default();
+        assert_eq!(
+            verify_tron_native_finality_counted(
+                &one_surplus,
+                SccpNetworkV1::TronMainnet,
+                anchor_hash,
+                &mut one_surplus_work,
+            ),
+            Err(TronNativeFinalityError::NonMinimalContinuation)
+        );
+        assert_eq!(one_surplus_work, exact_work);
+
+        let mut many_surplus = proof.clone();
+        append_valid_headers(&mut many_surplus, &signers, 8);
+        assert_eq!(many_surplus.headers.len(), TRON_ACTIVE_WITNESS_COUNT);
+        let mut many_surplus_work = TronNativeFinalityWorkPerformedV1::default();
+        assert_eq!(
+            verify_tron_native_finality_counted(
+                &many_surplus,
+                SccpNetworkV1::TronMainnet,
+                anchor_hash,
+                &mut many_surplus_work,
+            ),
+            Err(TronNativeFinalityError::NonMinimalContinuation)
+        );
+        assert_eq!(
+            many_surplus_work, exact_work,
+            "no appended witness signature is recovered"
+        );
+
+        let mut over_window = proof;
+        append_valid_headers(&mut over_window, &signers, 36);
+        assert_eq!(
+            over_window.headers.len(),
+            TRON_NATIVE_MAX_FINALITY_HEADERS + 1
+        );
+        let mut over_window_work = TronNativeFinalityWorkPerformedV1::default();
+        assert_eq!(
+            verify_tron_native_finality_counted(
+                &over_window,
+                SccpNetworkV1::TronMainnet,
+                anchor_hash,
+                &mut over_window_work,
+            ),
+            Err(TronNativeFinalityError::InvalidProofShape)
+        );
+        assert_eq!(
+            over_window_work,
+            TronNativeFinalityWorkPerformedV1::default(),
+            "over-window continuations fail before anchor or signature work"
         );
     }
 
@@ -2020,7 +2374,7 @@ mod tests {
                 statement.route_config_hash,
                 SccpLaneIdV1 {
                     source: SccpNetworkV1::TronMainnet,
-                    target: SccpNetworkV1::SoraNexus,
+                    target: SccpNetworkV1::SoraTaira,
                 },
                 &SccpPayloadV1::Transfer(test_transfer()),
             ),

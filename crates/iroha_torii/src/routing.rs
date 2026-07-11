@@ -140,10 +140,10 @@ use iroha_data_model::soranet::privacy_metrics::{
 };
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_sccp::{
-    NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1, NexusQcRefV1,
-    NexusSccpMessageProofV1, SccpHubCommitmentV1, SccpNormalizedCodecValueV1,
-    SccpPayloadProjectionV1, SccpPayloadV1, sccp_message_payload_kind_key,
-    sccp_message_source_domain, sccp_message_target_domain, sccp_payload_projection,
+    SccpNormalizedCodecValueV1, SccpPayloadProjectionV1, SccpPayloadV1, TairaBridgeFinalityProofV1,
+    TairaCommitQcV1, TairaConsensusPhaseV1, TairaQcRefV1, TairaSccpMessageProofV1,
+    sccp_message_payload_kind_key, sccp_message_source_domain, sccp_message_target_domain,
+    sccp_payload_projection,
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{
@@ -4269,8 +4269,6 @@ pub struct ProofListQuery {
     pub status: Option<String>,
     /// When true, only bridge proof records are returned.
     pub bridge_only: Option<bool>,
-    /// When true, only pinned bridge proof records are returned (implies bridge_only).
-    pub bridge_pinned_only: Option<bool>,
     /// Minimum bridge range start height (inclusive).
     pub bridge_start_from_height: Option<u64>,
     /// Maximum bridge range end height (inclusive).
@@ -4306,16 +4304,19 @@ fn parse_status_opt(s: Option<&str>) -> Option<iroha_data_model::proof::ProofSta
 fn bridge_record_to_json(
     record: &iroha_data_model::bridge::BridgeProofRecord,
 ) -> norito::json::Value {
-    use iroha_data_model::bridge::BridgeProofPayload;
+    use iroha_data_model::bridge::{BridgeProofBinding, BridgeProofPayload};
     let mut obj = norito::json::Map::new();
-    obj.insert(
-        "pinned".into(),
-        norito::json::Value::from(record.proof.pinned),
+    let (binding_kind, binding_hash) = match record.proof.binding() {
+        BridgeProofBinding::VerifierManifest(hash) => ("verifier_manifest", hash),
+        BridgeProofBinding::SccpRouteConfigurationV1(hash) => ("sccp_route_configuration_v1", hash),
+    };
+    let mut binding = norito::json::Map::new();
+    binding.insert("kind".into(), norito::json::Value::from(binding_kind));
+    binding.insert(
+        "hash".into(),
+        norito::json::Value::from(hex::encode(binding_hash)),
     );
-    obj.insert(
-        "manifest_hash".into(),
-        norito::json::Value::from(hex::encode(record.proof.manifest_hash)),
-    );
+    obj.insert("binding".into(), norito::json::Value::Object(binding));
     obj.insert(
         "commitment".into(),
         norito::json::Value::from(hex::encode(record.commitment)),
@@ -4389,10 +4390,6 @@ fn bridge_record_to_json(
             payload.insert(
                 "backend".into(),
                 norito::json::Value::from(destination.backend.backend_label()),
-            );
-            payload.insert(
-                "route_configuration_hash".into(),
-                norito::json::Value::from(hex::encode(destination.route_configuration_hash)),
             );
             payload.insert(
                 "artifact_len_bytes".into(),
@@ -4479,14 +4476,12 @@ pub async fn handle_list_proofs(
         }
     }
 
-    let pinned_only = q.bridge_pinned_only.unwrap_or(false);
-    let bridge_only = pinned_only || q.bridge_only.unwrap_or(false);
+    let bridge_only = q.bridge_only.unwrap_or(false);
 
     let filters = CoreProofFilters {
         backend: q.backend.as_deref(),
         status: status_req,
         bridge_only,
-        pinned_only,
         bridge_min_range_start: q.bridge_start_from_height,
         bridge_max_range_end: q.bridge_end_until_height,
         has_tag,
@@ -4677,14 +4672,12 @@ pub async fn handle_count_proofs(
         }
     }
 
-    let pinned_only = q.bridge_pinned_only.unwrap_or(false);
-    let bridge_only = pinned_only || q.bridge_only.unwrap_or(false);
+    let bridge_only = q.bridge_only.unwrap_or(false);
 
     let filters = CoreProofFilters {
         backend: q.backend.as_deref(),
         status: status_req,
         bridge_only,
-        pinned_only,
         bridge_min_range_start: q.bridge_start_from_height,
         bridge_max_range_end: q.bridge_end_until_height,
         has_tag,
@@ -6164,26 +6157,52 @@ fn sccp_internal_error(message: impl Into<String>) -> Error {
     ))
 }
 
+fn sccp_bundle_response<T>(value: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
+where
+    T: Clone + Send + norito::core::NoritoSerialize + norito::json::JsonSerialize,
+{
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    if matches!(format, crate::utils::ResponseFormat::Norito) {
+        let mut response = crate::NoritoBody(value.clone()).into_response();
+        response
+            .headers_mut()
+            .insert(header::VARY, axum::http::HeaderValue::from_static("Accept"));
+        return Ok(response);
+    }
+
+    let body = json::to_json_pretty(value).map_err(norito_internal_error)?;
+    let mut response = Response::new(Body::from(body));
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    response
+        .headers_mut()
+        .insert(header::VARY, axum::http::HeaderValue::from_static("Accept"));
+    Ok(response)
+}
+
 fn parse_sccp_message_id_hex(value: &str) -> Result<[u8; 32]> {
-    let value = value.trim();
-    let trimmed = value.strip_prefix("0x").unwrap_or(value);
-    if trimmed.len() != 64 {
+    if value.len() != 64 {
         return Err(sccp_bad_request(
-            "message_id must be lowercase 32-byte hex with optional 0x prefix",
+            "message_id must be exactly 64 lowercase hexadecimal characters",
         ));
     }
-    if !trimmed
+    if !value
         .as_bytes()
         .iter()
         .copied()
         .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     {
         return Err(sccp_bad_request(
-            "message_id must be lowercase 32-byte hex with optional 0x prefix",
+            "message_id must be exactly 64 lowercase hexadecimal characters",
         ));
     }
     let mut out = [0u8; 32];
-    hex::decode_to_slice(trimmed, &mut out)
+    hex::decode_to_slice(value, &mut out)
         .map_err(|err| sccp_bad_request(format!("invalid message_id: {err}")))?;
     if out == [0; 32] {
         return Err(sccp_bad_request("message_id must be nonzero"));
@@ -6206,6 +6225,8 @@ pub fn reject_sccp_query(raw_query: Option<&str>) -> Result<()> {
 
 /// Validate the only two canonical query fields accepted by recent-message discovery.
 pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
+    const RECENT_SCCP_MESSAGES_CAP: u64 = 50;
+
     let Some(query) = raw_query.filter(|query| !query.is_empty()) else {
         return Ok(());
     };
@@ -6231,9 +6252,8 @@ pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
                 "recent SCCP query field `{key}` must appear at most once"
             )));
         }
-        let canonical_value = value
-            .parse::<u64>()
-            .is_ok_and(|parsed| parsed.to_string() == value);
+        let parsed = value.parse::<u64>().ok();
+        let canonical_value = parsed.is_some_and(|parsed| parsed.to_string() == value);
         if value.is_empty()
             || !value.bytes().all(|byte| byte.is_ascii_digit())
             || (value.len() > 1 && value.starts_with('0'))
@@ -6243,8 +6263,165 @@ pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
                 "recent SCCP query field `{key}` must be one canonical unsigned decimal integer"
             )));
         }
+        let parsed = parsed.expect("canonical SCCP query integer parsed above");
+        match key {
+            "from" if parsed == 0 => {
+                return Err(sccp_bad_request(
+                    "recent SCCP query field `from` must be a positive block height",
+                ));
+            }
+            "limit" if !(1..=RECENT_SCCP_MESSAGES_CAP).contains(&parsed) => {
+                return Err(sccp_bad_request(format!(
+                    "recent SCCP query field `limit` must be between 1 and {RECENT_SCCP_MESSAGES_CAP}"
+                )));
+            }
+            _ => {}
+        }
     }
     Ok(())
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Fixed SCCP V1 route-registry capacity limits.
+pub struct SccpRegistryLimitsDto {
+    /// Maximum governed lanes retained by the registry.
+    pub max_governed_lanes: u32,
+    /// Maximum nonterminal route revisions across all lanes.
+    pub max_live_governed_routes: u32,
+    /// Maximum nonterminal route revisions in one lane.
+    pub max_live_routes_per_lane: u32,
+    /// Maximum retained route revisions in one lane, including retired revisions.
+    pub max_retained_routes_per_lane: u32,
+    /// Maximum retained native trust anchors in one lane.
+    pub max_retained_native_trust_anchors_per_lane: u32,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Consensus-critical SCCP proof and deterministic verifier-work limits.
+pub struct SccpResourceLimitsDto {
+    /// Maximum closed SCCP proofs in one transaction.
+    pub max_proofs_per_transaction: u32,
+    /// Maximum closed SCCP proofs committed in one block.
+    pub max_proofs_per_block: u32,
+    /// Maximum canonical bytes retained for one closed SCCP proof.
+    pub max_proof_bytes_per_proof: u64,
+    /// Maximum aggregate SCCP proof bytes in one transaction.
+    pub max_proof_bytes_per_transaction: u64,
+    /// Maximum aggregate SCCP proof bytes committed in one block.
+    pub max_proof_bytes_per_block: u64,
+    /// Maximum native-finality continuation headers in one transaction.
+    pub max_native_headers_per_transaction: u32,
+    /// Maximum native-finality continuation headers committed in one block.
+    pub max_native_headers_per_block: u32,
+    /// Maximum Ethereum light-client updates in one transaction.
+    pub max_ethereum_light_client_updates_per_transaction: u32,
+    /// Maximum Ethereum light-client updates committed in one block.
+    pub max_ethereum_light_client_updates_per_block: u32,
+    /// Maximum framed native-finality header bytes in one transaction.
+    pub max_native_header_bytes_per_transaction: u64,
+    /// Maximum framed native-finality header bytes committed in one block.
+    pub max_native_header_bytes_per_block: u64,
+    /// Maximum secp256k1 recoveries in one transaction.
+    pub max_secp256k1_recoveries_per_transaction: u32,
+    /// Maximum secp256k1 recoveries committed in one block.
+    pub max_secp256k1_recoveries_per_block: u32,
+    /// Maximum BLS aggregate-signature checks in one transaction.
+    pub max_bls_aggregate_checks_per_transaction: u32,
+    /// Maximum BLS aggregate-signature checks committed in one block.
+    pub max_bls_aggregate_checks_per_block: u32,
+    /// Maximum BLS key-validation and signer-contribution work in one transaction.
+    pub max_bls_signer_contributions_per_transaction: u32,
+    /// Maximum BLS key-validation and signer-contribution work committed in one block.
+    pub max_bls_signer_contributions_per_block: u32,
+    /// Maximum BN254 pairing-product checks in one transaction.
+    pub max_bn254_pairing_checks_per_transaction: u32,
+    /// Maximum BN254 pairing-product checks committed in one block.
+    pub max_bn254_pairing_checks_per_block: u32,
+}
+
+impl SccpRegistryLimitsDto {
+    fn v1() -> Self {
+        Self {
+            max_governed_lanes: u32::try_from(iroha_data_model::bridge::SCCP_V1_MAX_GOVERNED_LANES)
+                .expect("SCCP governed-lane limit fits u32"),
+            max_live_governed_routes: u32::try_from(
+                iroha_data_model::bridge::SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
+            )
+            .expect("SCCP global live-route limit fits u32"),
+            max_live_routes_per_lane: u32::try_from(
+                iroha_data_model::bridge::SCCP_V1_MAX_LIVE_ROUTES_PER_LANE,
+            )
+            .expect("SCCP lane live-route limit fits u32"),
+            max_retained_routes_per_lane: u32::try_from(
+                iroha_data_model::bridge::SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE,
+            )
+            .expect("SCCP retained-route limit fits u32"),
+            max_retained_native_trust_anchors_per_lane: u32::try_from(
+                iroha_data_model::bridge::SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE,
+            )
+            .expect("SCCP retained-anchor limit fits u32"),
+        }
+    }
+}
+
+impl From<iroha_config::parameters::actual::Sccp> for SccpResourceLimitsDto {
+    fn from(sccp: iroha_config::parameters::actual::Sccp) -> Self {
+        Self {
+            max_proofs_per_transaction: sccp.max_proofs_per_transaction.get(),
+            max_proofs_per_block: sccp.max_proofs_per_block.get(),
+            max_proof_bytes_per_proof: sccp.max_proof_bytes_per_proof.get(),
+            max_proof_bytes_per_transaction: sccp.max_proof_bytes_per_transaction.get(),
+            max_proof_bytes_per_block: sccp.max_proof_bytes_per_block.get(),
+            max_native_headers_per_transaction: sccp.max_native_headers_per_transaction.get(),
+            max_native_headers_per_block: sccp.max_native_headers_per_block.get(),
+            max_ethereum_light_client_updates_per_transaction: sccp
+                .max_ethereum_light_client_updates_per_transaction
+                .get(),
+            max_ethereum_light_client_updates_per_block: sccp
+                .max_ethereum_light_client_updates_per_block
+                .get(),
+            max_native_header_bytes_per_transaction: sccp
+                .max_native_header_bytes_per_transaction
+                .get(),
+            max_native_header_bytes_per_block: sccp.max_native_header_bytes_per_block.get(),
+            max_secp256k1_recoveries_per_transaction: sccp
+                .max_secp256k1_recoveries_per_transaction
+                .get(),
+            max_secp256k1_recoveries_per_block: sccp.max_secp256k1_recoveries_per_block.get(),
+            max_bls_aggregate_checks_per_transaction: sccp
+                .max_bls_aggregate_checks_per_transaction
+                .get(),
+            max_bls_aggregate_checks_per_block: sccp.max_bls_aggregate_checks_per_block.get(),
+            max_bls_signer_contributions_per_transaction: sccp
+                .max_bls_signer_contributions_per_transaction
+                .get(),
+            max_bls_signer_contributions_per_block: sccp
+                .max_bls_signer_contributions_per_block
+                .get(),
+            max_bn254_pairing_checks_per_transaction: sccp
+                .max_bn254_pairing_checks_per_transaction
+                .get(),
+            max_bn254_pairing_checks_per_block: sccp.max_bn254_pairing_checks_per_block.get(),
+        }
+    }
 }
 
 #[derive(
@@ -6255,6 +6432,7 @@ pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Stable first-release SCCP HTTP surface discovery.
 pub struct SccpCapabilitiesDto {
     /// Capability schema version. First release is exactly `1`.
@@ -6269,6 +6447,10 @@ pub struct SccpCapabilitiesDto {
     pub proof_request_path: String,
     /// Newest-first indexed outbound-message endpoint.
     pub recent_messages_path: String,
+    /// Fixed SCCP V1 route-registry capacity limits.
+    pub registry_limits: SccpRegistryLimitsDto,
+    /// Consensus-critical proof and deterministic verifier-work limits.
+    pub resource_limits: SccpResourceLimitsDto,
     /// Closed destination-proof submission endpoint when the application API is enabled.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -6280,6 +6462,7 @@ pub struct SccpCapabilitiesDto {
 }
 
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 /// Canonical readback and proof-request links for one finalized outbound message.
 pub struct SccpRecentMessageLinksDto {
     /// Canonical SCCP bundle lookup path.
@@ -6289,6 +6472,7 @@ pub struct SccpRecentMessageLinksDto {
 }
 
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 /// Compact newest-first SCCP outbound-message discovery record.
 pub struct SccpRecentMessageDto {
     /// Finalized SORA block height containing the message.
@@ -6321,15 +6505,14 @@ pub struct SccpRecentMessageDto {
     pub recipient: Option<String>,
     /// Decimal-string transfer amount.
     pub amount: String,
-    /// Normalized closed transfer projection when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub payload_projection: Option<SccpPayloadProjectionV1>,
+    /// Required normalized closed transfer projection.
+    pub payload_projection: SccpPayloadProjectionV1,
     /// Canonical bundle and state-derived proof-request links.
     pub links: SccpRecentMessageLinksDto,
 }
 
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 /// Newest-first SCCP recent-message discovery response.
 pub struct SccpRecentMessagesDto {
     /// Finalized outbound messages selected by the ordered consensus index.
@@ -6429,7 +6612,7 @@ fn sccp_historical_route_for_record<'a>(
 #[derive(Clone, Debug)]
 struct SccpExactProofMaterial {
     indexed: SccpIndexedOutboundRecord,
-    bundle: NexusSccpMessageProofV1,
+    bundle: TairaSccpMessageProofV1,
     request: iroha_sccp::SccpGroth16Bn254ProofRequestV1,
 }
 
@@ -6469,6 +6652,8 @@ fn sccp_capabilities_snapshot(state: &CoreState) -> SccpCapabilitiesDto {
         message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
         proof_request_path: "/v1/sccp/proof-requests/{message_id}".to_owned(),
         recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
+        registry_limits: SccpRegistryLimitsDto::v1(),
+        resource_limits: state.zk_snapshot().sccp.into(),
         #[cfg(feature = "app_api")]
         proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
         #[cfg(not(feature = "app_api"))]
@@ -6534,13 +6719,9 @@ mod sccp_first_release_api_tests {
             parse_sccp_message_id_hex(&canonical).expect("canonical message id"),
             [0x11; 32]
         );
-        assert_eq!(
-            parse_sccp_message_id_hex(&format!("0x{canonical}"))
-                .expect("canonical prefixed message id"),
-            [0x11; 32]
-        );
         for malformed in [
             canonical.to_uppercase(),
+            format!("0x{canonical}"),
             format!("0X{canonical}"),
             format!(" {canonical}"),
             format!("{canonical} "),
@@ -6592,14 +6773,39 @@ mod sccp_first_release_api_tests {
             "from=1&",
             "from",
             "from=",
+            "from=0",
             "from=01",
             "from=+1",
             "from=%31",
             "from=18446744073709551616",
+            "limit=0",
+            "limit=51",
+            "limit=18446744073709551615",
         ] {
             assert!(
                 validate_sccp_recent_query(Some(invalid)).is_err(),
                 "noncanonical recent query must reject: {invalid}"
+            );
+        }
+
+        let state = empty_taira_state();
+        for window in [
+            HistoryWindowQuery {
+                from: Some(0),
+                limit: Some(1),
+            },
+            HistoryWindowQuery {
+                from: Some(1),
+                limit: Some(0),
+            },
+            HistoryWindowQuery {
+                from: Some(1),
+                limit: Some(51),
+            },
+        ] {
+            assert!(
+                collect_recent_sccp_messages(&state, &window).is_err(),
+                "direct handler window must enforce SCCP bounds: {window:?}"
             );
         }
     }
@@ -6639,6 +6845,173 @@ mod sccp_first_release_api_tests {
     }
 
     #[test]
+    fn recent_index_seek_and_take_are_bounded_on_large_history() {
+        use std::{cell::Cell, collections::BTreeSet};
+
+        const HISTORY: u64 = 50_000;
+        const FROM: u64 = 137;
+        const LIMIT: usize = 7;
+        let lane = iroha_data_model::bridge::SccpLaneIdV1 {
+            source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+            target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+        };
+        let mut history = BTreeSet::new();
+        for height in 1..=HISTORY {
+            let mut message_id = [0_u8; 32];
+            message_id[..8].copy_from_slice(&height.to_le_bytes());
+            assert!(
+                history.insert(iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1 {
+                    recorded_at_height: height,
+                    lane,
+                    message_id,
+                })
+            );
+        }
+
+        let visited = Cell::new(0_usize);
+        let start =
+            iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::range_start_at_or_before(FROM);
+        let selected = take_bounded_recent_sccp_index_keys(
+            history.range(start..).map(|entry| {
+                visited.set(visited.get() + 1);
+                *entry
+            }),
+            LIMIT,
+        );
+
+        assert_eq!(visited.get(), LIMIT, "selection consumed more than its cap");
+        assert_eq!(
+            selected
+                .iter()
+                .map(|entry| entry.recorded_at_height)
+                .collect::<Vec<_>>(),
+            (FROM - u64::try_from(LIMIT).expect("small limit") + 1..=FROM)
+                .rev()
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            selected
+                .iter()
+                .all(|entry| entry.recorded_at_height <= FROM)
+        );
+    }
+
+    #[test]
+    fn recent_index_records_group_each_block_height_exactly_once() {
+        let indexed_at = |height: u64, id: u8| {
+            let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(
+                iroha_data_model::bridge::SccpLaneIdV1 {
+                    source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                    target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+                },
+                [id; 32],
+            )
+            .expect("valid outbound key");
+            SccpIndexedOutboundRecord {
+                key,
+                record: iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+                    destination_binding_hash: [0xa1; 32],
+                    route_configuration_hash: [0xa2; 32],
+                    payload_hash: [0xa3; 32],
+                    recorded_at_height: height,
+                },
+            }
+        };
+        let groups = group_sccp_indexed_records_by_height(vec![
+            indexed_at(41, 1),
+            indexed_at(40, 2),
+            indexed_at(41, 3),
+            indexed_at(7, 4),
+            indexed_at(40, 5),
+        ]);
+
+        assert_eq!(groups.len(), 3);
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| (
+                    group[0].record.recorded_at_height,
+                    group
+                        .iter()
+                        .map(|item| item.key.message_id[0])
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>(),
+            [(41, vec![1, 3]), (40, vec![2, 5]), (7, vec![4])]
+        );
+    }
+
+    #[test]
+    fn recent_projection_rejects_text_recipients_for_evm_and_tron() {
+        let context_for = |target| {
+            iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
+                iroha_data_model::bridge::SccpLaneIdV1 {
+                    source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                    target,
+                },
+                [0xb1; 32],
+                [0xb2; 32],
+            )
+            .expect("valid outbound context")
+        };
+        let projection_for = |target| {
+            let recipient = match target {
+                iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia => {
+                    SccpNormalizedCodecValueV1::EvmAddress20 { bytes: [0x91; 20] }
+                }
+                iroha_data_model::bridge::SccpNetworkV1::TronNile => {
+                    let mut bytes = [0x92; 21];
+                    bytes[0] = 0x41;
+                    SccpNormalizedCodecValueV1::TronAddress21 { bytes }
+                }
+                _ => panic!("unsupported fixture target"),
+            };
+            SccpPayloadProjectionV1::Transfer(iroha_sccp::SccpTransferProjectionV1 {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                dest_domain: target.domain_id(),
+                nonce: 7,
+                route_revision: 1,
+                asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                asset_id: SccpNormalizedCodecValueV1::CanonicalText {
+                    value: "xor".to_owned(),
+                },
+                amount: 77,
+                sender: SccpNormalizedCodecValueV1::CanonicalText {
+                    value: "alice".to_owned(),
+                },
+                recipient,
+                route_id: SccpNormalizedCodecValueV1::CanonicalText {
+                    value: "xor-route".to_owned(),
+                },
+            })
+        };
+
+        for target in [
+            iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+            iroha_data_model::bridge::SccpNetworkV1::TronNile,
+        ] {
+            let context = context_for(target);
+            let projection = projection_for(target);
+            validate_recent_message_projection(&projection, context)
+                .expect("exact chain-family projection");
+            assert_eq!(recent_message_projection_recipient(&projection), None);
+
+            let mut hostile = projection.clone();
+            let SccpPayloadProjectionV1::Transfer(transfer) = &mut hostile;
+            transfer.recipient = SccpNormalizedCodecValueV1::CanonicalText {
+                value: "impossible-recipient".to_owned(),
+            };
+            assert!(validate_recent_message_projection(&hostile, context).is_err());
+
+            let mut wrong_amount = projection.clone();
+            let SccpPayloadProjectionV1::Transfer(transfer) = &mut wrong_amount;
+            transfer.amount = 0;
+            assert!(validate_recent_message_projection(&wrong_amount, context).is_err());
+        }
+    }
+
+    #[test]
     fn empty_authoritative_locator_returns_not_found_without_block_scan() {
         let state = empty_taira_state();
         assert!(
@@ -6661,7 +7034,34 @@ mod sccp_first_release_api_tests {
             capabilities.proof_request_path,
             "/v1/sccp/proof-requests/{message_id}"
         );
+        assert_eq!(capabilities.registry_limits.max_governed_lanes, 16);
+        assert_eq!(
+            capabilities
+                .registry_limits
+                .max_retained_native_trust_anchors_per_lane,
+            4_096
+        );
+        assert_eq!(
+            capabilities.resource_limits.max_proofs_per_transaction,
+            state.zk_snapshot().sccp.max_proofs_per_transaction.get()
+        );
+        assert_eq!(
+            capabilities
+                .resource_limits
+                .max_bls_signer_contributions_per_block,
+            state
+                .zk_snapshot()
+                .sccp
+                .max_bls_signer_contributions_per_block
+                .get()
+        );
         let encoded = norito::json::to_json(&capabilities).expect("capabilities JSON");
+        for required in ["registry_limits", "resource_limits"] {
+            assert!(
+                encoded.contains(required),
+                "required SCCP capability limit surface is missing: {required}"
+            );
+        }
         for retired in ["manifests", "artifacts", "jobs", "allow_unready"] {
             assert!(
                 !encoded.contains(retired),
@@ -6699,6 +7099,13 @@ mod sccp_first_release_api_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("application/json")
         );
+        assert_eq!(
+            json_response
+                .headers()
+                .get(axum::http::header::VARY)
+                .and_then(|value| value.to_str().ok()),
+            Some("Accept")
+        );
         let json_bytes = axum::body::to_bytes(json_response.into_body(), usize::MAX)
             .await
             .expect("registry JSON body");
@@ -6721,6 +7128,13 @@ mod sccp_first_release_api_tests {
                 .and_then(|value| value.to_str().ok()),
             Some(crate::utils::NORITO_MIME_TYPE)
         );
+        assert_eq!(
+            norito_response
+                .headers()
+                .get(axum::http::header::VARY)
+                .and_then(|value| value.to_str().ok()),
+            Some("Accept")
+        );
         let norito_bytes = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
             .await
             .expect("registry Norito body");
@@ -6739,6 +7153,7 @@ mod sccp_first_release_api_tests {
         let request = BridgeProofSubmitDto {
             authority: AccountId::new(key_pair.public_key().clone()),
             signature_b64: None,
+            transaction_payload_b64: None,
             destination_proof_b64: "AA==".to_owned(),
             creation_time_ms: Some(7),
         };
@@ -6815,6 +7230,210 @@ mod sccp_first_release_api_tests {
 
     #[cfg(feature = "app_api")]
     #[test]
+    fn submit_signing_state_rejects_mixed_implicit_and_multisig_direct_forms() {
+        use iroha_data_model::account::{MultisigMember, MultisigPolicy};
+
+        let key_pair = KeyPair::try_from_seed(
+            b"iroha:torii:sccp:state-machine".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive SCCP state-machine key");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        assert!(
+            !validate_sccp_submit_signing_state(&authority, None, None, None)
+                .expect("prepare state")
+        );
+        for (signature, payload, creation_time) in [
+            (Some("AA=="), None, Some(1)),
+            (None, Some("AA=="), Some(1)),
+            (Some("AA=="), Some("AA=="), None),
+            (Some("AA=="), Some("AA=="), Some(0)),
+        ] {
+            assert!(
+                validate_sccp_submit_signing_state(&authority, signature, payload, creation_time,)
+                    .is_err(),
+                "invalid signing state accepted: {signature:?} {payload:?} {creation_time:?}"
+            );
+        }
+
+        let policy = MultisigPolicy::new(
+            1,
+            vec![
+                MultisigMember::new(key_pair.public_key().clone(), 1)
+                    .expect("valid multisig member"),
+            ],
+        )
+        .expect("valid multisig policy");
+        let multisig = AccountId::new_multisig(policy);
+        assert!(
+            validate_sccp_submit_signing_state(&multisig, Some("AA=="), Some("AA=="), Some(1),)
+                .expect_err("multisig direct submission must reject")
+                .to_string()
+                .contains("multisig")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn direct_submit_reuses_prepared_payload_when_server_default_changes() {
+        use base64::Engine as _;
+        use iroha_data_model::{
+            bridge::{BridgeProof, BridgeProofPayload, BridgeProofRange},
+            isi::bridge::SubmitBridgeProof,
+        };
+
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let bridge_proof = BridgeProof {
+            range: BridgeProofRange {
+                start_height: fixture.request.public_inputs.finality_height,
+                end_height: fixture.request.public_inputs.finality_height,
+            },
+            payload: BridgeProofPayload::SccpDestination(fixture.bridge_proof.clone()),
+        };
+        let chain_id: ChainId = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+            .parse()
+            .expect("Taira chain id");
+        let key_pair = KeyPair::try_from_seed(
+            b"iroha:torii:sccp:default-race".to_vec(),
+            Algorithm::Secp256k1,
+        )
+        .expect("derive generic SCCP signer");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let creation_time_ms = 1_700_000_000_777_u64;
+        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        builder.set_creation_time(Duration::from_millis(creation_time_ms));
+        let builder = builder.with_instructions([SubmitBridgeProof::new(bridge_proof.clone())]);
+        let payload_bytes = builder.encode_payload();
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&payload_bytes);
+        let signature = Signature::try_new(key_pair.private_key(), &builder.payload_hash_bytes())
+            .expect("sign prepared SCCP payload");
+        let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
+
+        let mut state = empty_taira_state();
+        let mut changed_pipeline = state.pipeline_snapshot();
+        changed_pipeline.gas.accepted_assets = vec!["changed-default#missing".to_owned()];
+        state.set_pipeline(changed_pipeline);
+
+        let transaction = build_exact_sccp_signed_transaction(
+            &state,
+            &chain_id,
+            &authority,
+            creation_time_ms,
+            &bridge_proof,
+            &payload_b64,
+            &signature_b64,
+            "race test",
+        )
+        .expect("changed live default must not alter an exact prepared payload");
+        assert_eq!(
+            norito::codec::encode_adaptive(transaction.payload()),
+            payload_bytes
+        );
+        assert!(transaction.metadata().is_empty());
+        transaction
+            .verify_signature()
+            .expect("exact generic signature remains valid");
+    }
+
+    #[cfg(feature = "app_api")]
+    fn native_registry_fixture(
+        activation: iroha_data_model::bridge::SccpRouteActivationV1,
+        trust_anchor: iroha_data_model::bridge::SccpNativeTrustAnchorV1,
+    ) -> Arc<iroha_core::state::ValidatedSccpRegistryV1> {
+        let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+            iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+            activation,
+        );
+        let lane_id = route.lane_id;
+        iroha_core::state::ValidatedSccpRegistryV1::try_from_wire(
+            iroha_data_model::bridge::SccpRegistryV1 {
+                version: 1,
+                lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                    lane_id,
+                    native_trust_anchors: vec![trust_anchor],
+                    current_native_trust_anchor_hash: Some(trust_anchor.anchor_hash),
+                    routes: vec![route],
+                }],
+            },
+        )
+        .expect("valid exact native SCCP registry fixture")
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn native_route_resolution_verifies_exact_governed_proof_and_configuration() {
+        let (proof, source_identity, trust_anchor) =
+            iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
+        let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+            iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+            iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
+        );
+        assert_eq!(route.source_identity, source_identity);
+        let expected = route
+            .route_configuration_hash()
+            .expect("fixture route configuration");
+        let registry = native_registry_fixture(
+            iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
+            trust_anchor,
+        );
+        assert_eq!(
+            governed_sccp_native_route_configuration_hash(registry.as_ref(), &proof)
+                .expect("exact native proof must verify"),
+            expected
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn native_route_resolution_rejects_inactive_stale_and_cryptographically_tampered_proofs() {
+        let (proof, _source_identity, trust_anchor) =
+            iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
+
+        let inactive = native_registry_fixture(
+            iroha_data_model::bridge::SccpRouteActivationV1::Staged,
+            trust_anchor,
+        );
+        assert!(
+            governed_sccp_native_route_configuration_hash(inactive.as_ref(), &proof)
+                .expect_err("staged route must not authorize native admission")
+                .to_string()
+                .contains("no inbound-active governed route")
+        );
+
+        let mut stale_anchor = trust_anchor;
+        stale_anchor.anchor_hash[0] ^= 1;
+        let stale = native_registry_fixture(
+            iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
+            stale_anchor,
+        );
+        assert!(
+            governed_sccp_native_route_configuration_hash(stale.as_ref(), &proof)
+                .expect_err("stale governed anchor must reject")
+                .to_string()
+                .contains("failed governed verification")
+        );
+
+        let exact = native_registry_fixture(
+            iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
+            trust_anchor,
+        );
+        let mut tampered = proof;
+        let iroha_sccp::SccpNativeSourceProofV1::EthereumBeacon(native) =
+            &mut tampered.source.proof
+        else {
+            unreachable!("Ethereum fixture uses the beacon backend")
+        };
+        native.finalized_execution.block_hash[0] ^= 1;
+        assert!(
+            governed_sccp_native_route_configuration_hash(exact.as_ref(), &tampered)
+                .expect_err("cryptographically tampered native proof must reject")
+                .to_string()
+                .contains("failed governed verification")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
     fn native_submit_json_rejects_redundant_public_key() {
         let key_pair = KeyPair::try_from_seed(
             b"iroha:torii:sccp:native-submit-json".to_vec(),
@@ -6824,6 +7443,7 @@ mod sccp_first_release_api_tests {
         let request = BridgeMessageSubmitDto {
             authority: AccountId::new(key_pair.public_key().clone()),
             signature_b64: None,
+            transaction_payload_b64: None,
             native_proof_b64: "AA==".to_owned(),
             creation_time_ms: None,
         };
@@ -6862,16 +7482,16 @@ fn hash_to_h256(hash: &iroha_crypto::Hash) -> [u8; 32] {
 
 fn sccp_consensus_phase(
     phase: iroha_data_model::block::consensus::CertPhase,
-) -> NexusConsensusPhaseV1 {
+) -> TairaConsensusPhaseV1 {
     match phase {
-        iroha_data_model::block::consensus::CertPhase::Prepare => NexusConsensusPhaseV1::Prepare,
-        iroha_data_model::block::consensus::CertPhase::Commit => NexusConsensusPhaseV1::Commit,
-        iroha_data_model::block::consensus::CertPhase::NewView => NexusConsensusPhaseV1::NewView,
+        iroha_data_model::block::consensus::CertPhase::Prepare => TairaConsensusPhaseV1::Prepare,
+        iroha_data_model::block::consensus::CertPhase::Commit => TairaConsensusPhaseV1::Commit,
+        iroha_data_model::block::consensus::CertPhase::NewView => TairaConsensusPhaseV1::NewView,
     }
 }
 
-fn sccp_qc_ref(reference: &iroha_data_model::block::consensus::QcRef) -> NexusQcRefV1 {
-    NexusQcRefV1 {
+fn sccp_qc_ref(reference: &iroha_data_model::block::consensus::QcRef) -> TairaQcRefV1 {
+    TairaQcRefV1 {
         height: reference.height,
         view: reference.view,
         epoch: reference.epoch,
@@ -6886,28 +7506,28 @@ fn build_sccp_finality_proof_bytes(
 ) -> Result<Vec<u8>> {
     let Some(block_root) = finality_proof.block_header.sccp_commitment_root() else {
         return Err(sccp_bad_request(
-            "requested Nexus block does not anchor an SCCP commitment root",
+            "requested Taira block does not anchor an SCCP commitment root",
         ));
     };
     if block_root != commitment_root {
         return Err(sccp_bad_request(
-            "requested SCCP commitment root does not match the finalized Nexus block header",
+            "requested SCCP commitment root does not match the finalized Taira block header",
         ));
     }
     let block_header_bytes = to_bytes(&finality_proof.block_header).map_err(|err| {
         sccp_internal_error(format!(
-            "failed to encode finalized Nexus block header for SCCP proof: {err}"
+            "failed to encode finalized Taira block header for SCCP proof: {err}"
         ))
     })?;
 
-    to_bytes(&NexusBridgeFinalityProofV1 {
+    to_bytes(&TairaBridgeFinalityProofV1 {
         version: 1,
         chain_id: finality_proof.chain_id.as_str().to_owned(),
         height: finality_proof.height,
         block_hash: hash_of_to_h256(&finality_proof.block_hash),
         commitment_root,
         block_header_bytes,
-        commit_qc: NexusCommitQcV1 {
+        commit_qc: TairaCommitQcV1 {
             version: 1,
             phase: sccp_consensus_phase(finality_proof.commit_qc.phase),
             height: finality_proof.commit_qc.height,
@@ -6943,27 +7563,9 @@ fn build_sccp_finality_proof_bytes(
     })
     .map_err(|err| {
         sccp_internal_error(format!(
-            "failed to encode Nexus SCCP finality proof payload: {err}"
+            "failed to encode Taira SCCP finality proof payload: {err}"
         ))
     })
-}
-
-fn build_sccp_message_finality_proof_bytes(
-    finality_proof: &iroha_data_model::bridge::BridgeFinalityProof,
-    _commitment: &SccpHubCommitmentV1,
-    payload: &SccpPayloadV1,
-    commitment_root: [u8; 32],
-) -> Result<Vec<u8>> {
-    let source_domain = sccp_message_source_domain(payload);
-    if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
-        return build_sccp_finality_proof_bytes(finality_proof, commitment_root);
-    }
-
-    // External messages are admitted and replay-indexed through their protocol-native proof.
-    // They must never be reconstructed as if Nexus finality proved source-chain consensus.
-    Err(sccp_bad_request(
-        "non-SORA SCCP message proof generation requires protocol-native admission",
-    ))
 }
 
 fn validate_sccp_durable_outbox_record(
@@ -6996,82 +7598,38 @@ fn validate_sccp_durable_outbox_record(
     Ok(())
 }
 
-fn sccp_message_bundle_from_recorded_messages(
+fn reconstruct_sccp_message_bundles_from_block(
     state: &CoreState,
     height: u64,
-    messages: &[iroha_core::bridge::RecordedSccpMessage],
-    index: usize,
-) -> Result<NexusSccpMessageProofV1> {
-    let message = messages.get(index).ok_or_else(|| {
-        sccp_internal_error(format!(
-            "SCCP message index {index} is out of bounds for block {height}"
-        ))
-    })?;
-    for recorded in messages {
+    block: &iroha_data_model::block::SignedBlock,
+    indexed_records: &[SccpIndexedOutboundRecord],
+) -> Result<Vec<TairaSccpMessageProofV1>> {
+    if indexed_records.is_empty() {
+        return Ok(Vec::new());
+    }
+    if indexed_records
+        .iter()
+        .any(|indexed| indexed.record.recorded_at_height != height)
+    {
+        return Err(sccp_internal_error(format!(
+            "SCCP recent-message block group mixes records outside height {height}"
+        )));
+    }
+
+    let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(block);
+    for recorded in &messages {
         validate_sccp_durable_outbox_record(state, height, recorded)?;
     }
-    let Some(commitment_root) = iroha_core::bridge::sccp_commitment_root_from_messages(messages)
+    let Some(commitment_root) = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
     else {
         return Err(sccp_internal_error(format!(
             "failed to reconstruct SCCP commitment root for block {height}"
         )));
     };
-    let commitments: Vec<_> = messages
-        .iter()
-        .map(|message| message.commitment.clone())
-        .collect();
-    let merkle_proof =
-        iroha_sccp::commitment_merkle_proof(&commitments, index).ok_or_else(|| {
-            sccp_internal_error(format!(
-                "failed to derive SCCP Merkle proof for message {} in block {height}",
-                hex::encode(message.commitment.message_id)
-            ))
-        })?;
-    let finality_proof = iroha_core::bridge::build_finality_proof(state, height)
-        .map_err(map_bridge_finality_error)?;
-
-    Ok(NexusSccpMessageProofV1 {
-        version: 1,
-        commitment_root,
-        commitment: message.commitment.clone(),
-        merkle_proof,
-        payload: message.payload.clone(),
-        finality_proof: build_sccp_message_finality_proof_bytes(
-            &finality_proof,
-            &message.commitment,
-            &message.payload,
-            commitment_root,
-        )?,
-    })
-}
-
-fn reconstruct_sccp_message_bundle_from_block(
-    state: &CoreState,
-    height: u64,
-    block: &iroha_data_model::block::SignedBlock,
-    message_id: [u8; 32],
-) -> Result<Option<NexusSccpMessageProofV1>> {
-    let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(block);
-    let Some(index) = messages
-        .iter()
-        .position(|message| message.commitment.message_id == message_id)
-    else {
-        return Ok(None);
-    };
-    if sccp_message_source_domain(&messages[index].payload) != iroha_sccp::SCCP_DOMAIN_SORA {
-        return Err(sccp_bad_request(
-            "SCCP transparent proof readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
-        ));
-    }
-
-    let Some(commitment_root) = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
-    else {
-        return Ok(None);
-    };
     let Some(anchored_root) = block.header().sccp_commitment_root() else {
         return Err(sccp_internal_error(format!(
             "SCCP message {} is present in block {height}, but the finalized block header does not anchor an SCCP commitment root",
-            hex::encode(message_id)
+            hex::encode(indexed_records[0].key.message_id)
         )));
     };
     if anchored_root != commitment_root {
@@ -7082,66 +7640,126 @@ fn reconstruct_sccp_message_bundle_from_block(
         )));
     }
 
-    Ok(Some(sccp_message_bundle_from_recorded_messages(
-        state, height, &messages, index,
-    )?))
+    let commitments = messages
+        .iter()
+        .map(|message| message.commitment.clone())
+        .collect::<Vec<_>>();
+    let mut message_positions = BTreeMap::new();
+    for (index, message) in messages.iter().enumerate() {
+        if message_positions
+            .insert(message.commitment.message_id, index)
+            .is_some()
+        {
+            return Err(sccp_internal_error(format!(
+                "finalized block {height} contains a duplicate SCCP message identifier {}",
+                hex::encode(message.commitment.message_id)
+            )));
+        }
+    }
+    let finality_proof = iroha_core::bridge::build_finality_proof(state, height)
+        .map_err(map_bridge_finality_error)?;
+    let finality_proof_bytes = build_sccp_finality_proof_bytes(&finality_proof, commitment_root)?;
+
+    let mut bundles = Vec::with_capacity(indexed_records.len());
+    for indexed in indexed_records {
+        let index = *message_positions
+            .get(&indexed.key.message_id)
+            .ok_or_else(|| {
+                sccp_internal_error(format!(
+                    "SCCP message {} is indexed at height {height}, but that block contains no matching successful record",
+                    hex::encode(indexed.key.message_id)
+                ))
+            })?;
+        let message = &messages[index];
+        if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
+            return Err(sccp_bad_request(
+                "SCCP transparent proof readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
+            ));
+        }
+        let merkle_proof =
+            iroha_sccp::commitment_merkle_proof(&commitments, index).ok_or_else(|| {
+                sccp_internal_error(format!(
+                    "failed to derive SCCP Merkle proof for message {} in block {height}",
+                    hex::encode(message.commitment.message_id)
+                ))
+            })?;
+        let bundle = TairaSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment: message.commitment.clone(),
+            merkle_proof,
+            payload: message.payload.clone(),
+            finality_proof: finality_proof_bytes.clone(),
+        };
+        if bundle.commitment.context.lane != indexed.key.lane
+            || bundle.commitment.context.destination_binding_hash
+                != indexed.record.destination_binding_hash
+            || bundle.commitment.context.route_configuration_hash
+                != indexed.record.route_configuration_hash
+            || bundle.commitment.payload_hash != indexed.record.payload_hash
+        {
+            return Err(sccp_internal_error(format!(
+                "SCCP message {} disagrees with its indexed lane, destination binding, route configuration, or payload",
+                hex::encode(indexed.key.message_id)
+            )));
+        }
+        bundles.push(bundle);
+    }
+    Ok(bundles)
 }
 
-fn reconstruct_sccp_message_bundle_from_indexed_record(
+fn reconstruct_sccp_message_bundles_from_indexed_records(
     state: &CoreState,
-    indexed: SccpIndexedOutboundRecord,
-) -> Result<NexusSccpMessageProofV1> {
-    let height = usize::try_from(indexed.record.recorded_at_height).map_err(|_| {
+    indexed_records: &[SccpIndexedOutboundRecord],
+) -> Result<Vec<TairaSccpMessageProofV1>> {
+    let Some(first) = indexed_records.first() else {
+        return Ok(Vec::new());
+    };
+    let recorded_at_height = first.record.recorded_at_height;
+    let height = usize::try_from(recorded_at_height).map_err(|_| {
         sccp_internal_error(format!(
             "SCCP message {} records a block height that is not representable on this host",
-            hex::encode(indexed.key.message_id)
+            hex::encode(first.key.message_id)
         ))
     })?;
     let height_nz = NonZeroUsize::new(height).ok_or_else(|| {
         sccp_internal_error(format!(
             "SCCP message {} records forbidden block height zero",
-            hex::encode(indexed.key.message_id)
+            hex::encode(first.key.message_id)
         ))
     })?;
     let block = state.block_by_height(height_nz).ok_or_else(|| {
         sccp_internal_error(format!(
             "SCCP message {} is indexed at height {}, but the finalized block body is unavailable",
-            hex::encode(indexed.key.message_id),
-            indexed.record.recorded_at_height
+            hex::encode(first.key.message_id),
+            recorded_at_height
         ))
     })?;
-    let bundle = reconstruct_sccp_message_bundle_from_block(
+    reconstruct_sccp_message_bundles_from_block(
         state,
-        indexed.record.recorded_at_height,
+        recorded_at_height,
         block.as_ref(),
-        indexed.key.message_id,
-    )?
-    .ok_or_else(|| {
+        indexed_records,
+    )
+}
+
+fn reconstruct_sccp_message_bundle_from_indexed_record(
+    state: &CoreState,
+    indexed: SccpIndexedOutboundRecord,
+) -> Result<TairaSccpMessageProofV1> {
+    let mut bundles = reconstruct_sccp_message_bundles_from_indexed_records(state, &[indexed])?;
+    bundles.pop().ok_or_else(|| {
         sccp_internal_error(format!(
-            "SCCP message {} is indexed at height {}, but that block contains no matching successful record",
-            hex::encode(indexed.key.message_id),
-            indexed.record.recorded_at_height
-        ))
-    })?;
-    if bundle.commitment.context.lane != indexed.key.lane
-        || bundle.commitment.context.destination_binding_hash
-            != indexed.record.destination_binding_hash
-        || bundle.commitment.context.route_configuration_hash
-            != indexed.record.route_configuration_hash
-        || bundle.commitment.payload_hash != indexed.record.payload_hash
-    {
-        return Err(sccp_internal_error(format!(
-            "SCCP message {} disagrees with its indexed lane, destination binding, route configuration, or payload",
+            "SCCP message {} produced no reconstructed finalized bundle",
             hex::encode(indexed.key.message_id)
-        )));
-    }
-    Ok(bundle)
+        ))
+    })
 }
 
 fn sccp_message_bundle_for_request(
     state: &CoreState,
     message_id: [u8; 32],
-) -> Result<Option<NexusSccpMessageProofV1>> {
+) -> Result<Option<TairaSccpMessageProofV1>> {
     let Some(indexed) = sccp_indexed_outbound_record(state, message_id)? else {
         return Ok(None);
     };
@@ -7149,7 +7767,7 @@ fn sccp_message_bundle_for_request(
 }
 
 fn sccp_committed_outbound_context(
-    bundle: &NexusSccpMessageProofV1,
+    bundle: &TairaSccpMessageProofV1,
 ) -> Result<iroha_data_model::bridge::SccpOutboundMessageContextV1> {
     let context = bundle.commitment.context;
     if !context.is_well_formed()
@@ -7196,9 +7814,51 @@ fn recent_message_projection_amount(projection: &SccpPayloadProjectionV1) -> Str
     }
 }
 
+fn validate_recent_message_projection(
+    projection: &SccpPayloadProjectionV1,
+    context: iroha_data_model::bridge::SccpOutboundMessageContextV1,
+) -> Result<()> {
+    let SccpPayloadProjectionV1::Transfer(transfer) = projection;
+    let recipient_matches_target = match (context.lane.target, &transfer.recipient) {
+        (
+            iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia
+            | iroha_data_model::bridge::SccpNetworkV1::BscMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+            SccpNormalizedCodecValueV1::EvmAddress20 { .. },
+        )
+        | (
+            iroha_data_model::bridge::SccpNetworkV1::TronMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::TronNile
+            | iroha_data_model::bridge::SccpNetworkV1::TronShasta,
+            SccpNormalizedCodecValueV1::TronAddress21 { .. },
+        ) => true,
+        _ => false,
+    };
+    if transfer.version != 1
+        || transfer.source_domain != context.lane.source.domain_id()
+        || transfer.dest_domain != context.lane.target.domain_id()
+        || transfer.route_revision == 0
+        || transfer.asset_home_domain != iroha_sccp::SCCP_DOMAIN_SORA
+        || transfer.amount == 0
+        || !matches!(
+            &transfer.sender,
+            SccpNormalizedCodecValueV1::CanonicalText { .. }
+        )
+        || projection_text_value(&transfer.asset_id).is_none()
+        || projection_text_value(&transfer.route_id).is_none()
+        || !recipient_matches_target
+    {
+        return Err(sccp_internal_error(
+            "finalized SCCP message has an impossible normalized transfer projection",
+        ));
+    }
+    Ok(())
+}
+
 fn recent_message_entry_from_bundle(
     height: u64,
-    bundle: &NexusSccpMessageProofV1,
+    bundle: &TairaSccpMessageProofV1,
 ) -> Result<SccpRecentMessageDto> {
     let context = sccp_committed_outbound_context(bundle)?;
     let message_id_hex = hex::encode(bundle.commitment.message_id);
@@ -7207,6 +7867,7 @@ fn recent_message_entry_from_bundle(
             "finalized SCCP message {message_id_hex} has no valid closed transfer projection"
         ))
     })?;
+    validate_recent_message_projection(&payload_projection, context)?;
     let asset_id = recent_message_projection_asset_id(&payload_projection);
     let route_id = recent_message_projection_route_id(&payload_projection);
     let recipient = recent_message_projection_recipient(&payload_projection);
@@ -7224,12 +7885,32 @@ fn recent_message_entry_from_bundle(
         route_id,
         recipient,
         amount,
-        payload_projection: Some(payload_projection),
+        payload_projection,
         links: SccpRecentMessageLinksDto {
             bundle_path: format!("/v1/sccp/proofs/message/{message_id_hex}"),
             proof_request_path: format!("/v1/sccp/proof-requests/{message_id_hex}"),
         },
     })
+}
+
+fn take_bounded_recent_sccp_index_keys(
+    ordered: impl Iterator<Item = iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1>,
+    limit: usize,
+) -> Vec<iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1> {
+    ordered.take(limit).collect()
+}
+
+fn group_sccp_indexed_records_by_height(
+    records: Vec<SccpIndexedOutboundRecord>,
+) -> Vec<Vec<SccpIndexedOutboundRecord>> {
+    let mut groups: BTreeMap<Reverse<u64>, Vec<SccpIndexedOutboundRecord>> = BTreeMap::new();
+    for indexed in records {
+        groups
+            .entry(Reverse(indexed.record.recorded_at_height))
+            .or_default()
+            .push(indexed);
+    }
+    groups.into_values().collect()
 }
 
 fn collect_recent_sccp_messages(
@@ -7238,39 +7919,44 @@ fn collect_recent_sccp_messages(
 ) -> Result<SccpRecentMessagesDto> {
     const RECENT_SCCP_MESSAGES_CAP: usize = 50;
 
+    if window.from == Some(0) {
+        return Err(sccp_bad_request(
+            "recent SCCP query field `from` must be a positive block height",
+        ));
+    }
+    if window
+        .limit
+        .is_some_and(|limit| !(1..=RECENT_SCCP_MESSAGES_CAP as u64).contains(&limit))
+    {
+        return Err(sccp_bad_request(format!(
+            "recent SCCP query field `limit` must be between 1 and {RECENT_SCCP_MESSAGES_CAP}"
+        )));
+    }
     let limit = window
         .limit
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(RECENT_SCCP_MESSAGES_CAP)
-        .min(RECENT_SCCP_MESSAGES_CAP);
+        .map(|value| usize::try_from(value).expect("bounded SCCP limit fits usize"))
+        .unwrap_or(RECENT_SCCP_MESSAGES_CAP);
     let through_height = window.from.unwrap_or(u64::MAX);
-    if limit == 0 || through_height == 0 {
-        return Ok(SccpRecentMessagesDto { items: Vec::new() });
-    }
 
-    // `StorageReadOnly::iter` is forward-only, so retain only the largest `limit`
-    // keys while scanning the height-ordered consensus index. Block history is
-    // never scanned; at most `limit` explicitly indexed block bodies are read.
-    let mut newest = BinaryHeap::with_capacity(limit.saturating_add(1));
-    {
+    // Reverse-height index ordering makes the range seek logarithmic and the
+    // forward scan strictly bounded by `limit`, even when `from` is deep in a
+    // large history.
+    let selected = {
         let world = state.world_view();
-        for (index_key, _) in world.sccp_outbound_message_index().iter() {
-            if index_key.recorded_at_height <= through_height {
-                newest.push(Reverse(*index_key));
-                if newest.len() > limit {
-                    newest.pop();
-                }
-            }
-        }
-    }
+        let start =
+            iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::range_start_at_or_before(
+                through_height,
+            );
+        take_bounded_recent_sccp_index_keys(
+            world
+                .sccp_outbound_message_index()
+                .range(start..)
+                .map(|(index_key, _)| *index_key),
+            limit,
+        )
+    };
 
-    let mut selected = newest
-        .into_iter()
-        .map(|Reverse(index_key)| index_key)
-        .collect::<Vec<_>>();
-    selected.sort_unstable_by(|left, right| right.cmp(left));
-
-    let mut items = Vec::with_capacity(selected.len());
+    let mut indexed_records = Vec::with_capacity(selected.len());
     for index_key in selected {
         let indexed =
             sccp_indexed_outbound_record(state, index_key.message_id)?.ok_or_else(|| {
@@ -7287,11 +7973,23 @@ fn collect_recent_sccp_messages(
                 hex::encode(index_key.message_id)
             )));
         }
-        let bundle = reconstruct_sccp_message_bundle_from_indexed_record(state, indexed)?;
-        items.push(recent_message_entry_from_bundle(
-            indexed.record.recorded_at_height,
-            &bundle,
-        )?);
+        indexed_records.push(indexed);
+    }
+
+    let mut items = Vec::with_capacity(indexed_records.len());
+    for group in group_sccp_indexed_records_by_height(indexed_records) {
+        let bundles = reconstruct_sccp_message_bundles_from_indexed_records(state, &group)?;
+        if bundles.len() != group.len() {
+            return Err(sccp_internal_error(
+                "SCCP recent-message block reconstruction returned an incomplete group",
+            ));
+        }
+        for (indexed, bundle) in group.into_iter().zip(bundles) {
+            items.push(recent_message_entry_from_bundle(
+                indexed.record.recorded_at_height,
+                &bundle,
+            )?);
+        }
     }
 
     Ok(SccpRecentMessagesDto { items })
@@ -8243,7 +8941,7 @@ fn normalize_contract_call_gas_asset_id(
 ) -> Result<Option<String>> {
     match gas_asset_id {
         Some(asset_id) => canonical_gas_asset_definition_id(state, asset_id).map(Some),
-        None => Ok(default_pipeline_gas_asset_id(state)),
+        None => strict_default_pipeline_gas_asset_id(state),
     }
 }
 
@@ -8934,7 +9632,7 @@ mod zk_roots_selector_tests {
     }
 
     #[test]
-    fn normalize_contract_call_gas_asset_id_preserves_trimmed_invalid_pipeline_default() {
+    fn normalize_contract_call_gas_asset_id_rejects_invalid_pipeline_default() {
         let (mut state, _) = selector_state();
         let mut pipeline = state.pipeline_snapshot();
         pipeline.gas.accepted_assets = vec!["  usd#missing  ".to_owned()];
@@ -8942,10 +9640,8 @@ mod zk_roots_selector_tests {
             .expect("state should have no other refs")
             .set_pipeline(pipeline);
 
-        let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), None)
-            .expect("default gas asset fallback should not error");
-
-        assert_eq!(normalized, Some("usd#missing".to_owned()));
+        normalize_contract_call_gas_asset_id(state.as_ref(), None)
+            .expect_err("invalid default gas assets must fail closed");
     }
 
     #[test]
@@ -9044,13 +9740,13 @@ mod zk_roots_selector_tests {
     }
 
     #[test]
-    fn default_pipeline_gas_asset_id_preserves_trimmed_invalid_custom_entry() {
+    fn default_pipeline_gas_asset_id_rejects_invalid_custom_entry() {
         let (state, _) = selector_state();
         set_gas_accepted_assets_parameter(&state, Json::new(vec!["  usd#missing  ".to_owned()]));
 
         let selected = default_pipeline_gas_asset_id(state.as_ref());
 
-        assert_eq!(selected, Some("usd#missing".to_owned()));
+        assert_eq!(selected, None);
     }
 
     #[test]
@@ -12121,6 +12817,24 @@ mod nts_tests {
     }
 }
 
+fn contract_manifest_response_body(
+    manifest: &manifest::ContractManifest,
+) -> core::result::Result<String, norito::json::Error> {
+    let response = ContractCodeRecordDto {
+        code_hash: manifest
+            .code_hash
+            .as_ref()
+            .map(|hash| hex::encode(hash.as_ref())),
+        abi_hash: manifest
+            .abi_hash
+            .as_ref()
+            .map(|hash| hex::encode(hash.as_ref())),
+        manifest: manifest.clone(),
+        code_bytes: None,
+    };
+    norito::json::to_json_pretty(&response)
+}
+
 /// Fetch on-chain contract manifest by code_hash.
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_code(
@@ -12152,29 +12866,173 @@ pub async fn handle_get_contract_code(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         ))
     })?;
-    let code_hash_hex = manifest.code_hash.as_ref().map(|h| hex::encode(h.as_ref()));
-    let abi_hash_hex = manifest.abi_hash.as_ref().map(|h| hex::encode(h.as_ref()));
-    let mut manifest_obj = norito::json::Map::new();
-    if let Some(ref ch) = code_hash_hex {
-        manifest_obj.insert("code_hash".into(), norito::json::Value::String(ch.clone()));
-    } else {
-        manifest_obj.insert("code_hash".into(), norito::json::Value::Null);
-    }
-    if let Some(ref ah) = abi_hash_hex {
-        manifest_obj.insert("abi_hash".into(), norito::json::Value::String(ah.clone()));
-    } else {
-        manifest_obj.insert("abi_hash".into(), norito::json::Value::Null);
-    }
-    // For now, omit other manifest fields to keep response stable for tests
-    let mut top = norito::json::Map::new();
-    top.insert("manifest".into(), norito::json::Value::Object(manifest_obj));
-    let body = norito::json::to_json_pretty(&top).unwrap_or_else(|_| "{}".into());
+    let body = contract_manifest_response_body(&manifest).map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to serialize the complete contract manifest: {error}"
+        )))
+    })?;
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+#[cfg(test)]
+mod contract_manifest_response_tests {
+    use iroha_data_model::smart_contract::entrypoint::{
+        EntrypointArgumentFieldV1, EntrypointArgumentSchemaV1, EntrypointValueKindV1,
+        EntrypointValueTypeNodeV1, EntrypointValueTypeV1,
+    };
+    use iroha_data_model::smart_contract::manifest::{
+        AccessSetHints, ContractErrorCodeDescriptor, ContractManifest, DynamicAccessHint,
+        EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor, KotobaTranslation,
+        KotobaTranslationEntry, StateDescriptor,
+    };
+
+    use super::*;
+
+    #[test]
+    fn response_serializes_the_complete_canonical_manifest() {
+        let expected_manifest = ContractManifest {
+            seiyaku_name: Some("Treasury".to_owned()),
+            code_hash: Some(Hash::new(b"complete-code")),
+            abi_hash: Some(Hash::new(b"complete-abi")),
+            compiler_fingerprint: Some("kotodama-rust-v1".to_owned()),
+            features_bitmap: Some(0),
+            access_set_hints: Some(AccessSetHints {
+                read_keys: vec!["state:Balances".to_owned()],
+                write_keys: vec!["state:Balances".to_owned()],
+                dynamic_reads: vec![DynamicAccessHint {
+                    base_key: "state:Balances".to_owned(),
+                    key_type: "AccountId".to_owned(),
+                    bound_kind: "List".to_owned(),
+                    max_keys: 64,
+                }],
+                dynamic_writes: Vec::new(),
+            }),
+            entrypoints: Some(vec![EntrypointDescriptor {
+                name: "transfer".to_owned(),
+                kind: EntryPointKind::Kotoage,
+                params: vec![EntrypointParamDescriptor {
+                    name: "amount".to_owned(),
+                    type_name: "Amount".to_owned(),
+                }],
+                argument_schema: Some(EntrypointArgumentSchemaV1 {
+                    fields: vec![EntrypointArgumentFieldV1 {
+                        name: "amount".to_owned(),
+                        ty: EntrypointValueTypeV1 {
+                            nodes: vec![EntrypointValueTypeNodeV1::Leaf(
+                                EntrypointValueKindV1::Amount,
+                            )],
+                        },
+                    }],
+                }),
+                return_type: Some("i64".to_owned()),
+                return_schema: Some(EntrypointValueTypeV1 {
+                    nodes: vec![EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int)],
+                }),
+                permission: Some("TreasuryTransfer".to_owned()),
+                read_keys: vec!["state:Balances".to_owned()],
+                write_keys: vec!["state:Balances".to_owned()],
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+            }]),
+            states: Some(vec![StateDescriptor {
+                name: "Balances".to_owned(),
+                type_name: "StateMap<AccountId,Amount>".to_owned(),
+            }]),
+            error_codes: Some(vec![ContractErrorCodeDescriptor {
+                namespace: "TreasuryError".to_owned(),
+                name: "InsufficientFunds".to_owned(),
+                code: 7,
+            }]),
+            kotoba: Some(vec![KotobaTranslationEntry {
+                msg_id: "insufficient_funds".to_owned(),
+                translations: vec![KotobaTranslation {
+                    lang: "ja".to_owned(),
+                    text: "残高不足".to_owned(),
+                }],
+            }]),
+            provenance: None,
+        };
+
+        let body = contract_manifest_response_body(&expected_manifest)
+            .expect("serialize manifest response");
+        let value = norito::json::parse_value(&body).expect("parse manifest response");
+        assert_eq!(
+            value.get("code_hash").and_then(Value::as_str),
+            expected_manifest
+                .code_hash
+                .as_ref()
+                .map(|hash| hex::encode(hash.as_ref()))
+                .as_deref()
+        );
+        assert_eq!(
+            value.get("abi_hash").and_then(Value::as_str),
+            expected_manifest
+                .abi_hash
+                .as_ref()
+                .map(|hash| hex::encode(hash.as_ref()))
+                .as_deref()
+        );
+        assert!(value.get("code_bytes").is_none());
+        let manifest_value = value.get("manifest").cloned().expect("manifest value");
+        let decoded: ContractManifest =
+            norito::json::from_value(manifest_value).expect("decode complete manifest");
+        assert_eq!(decoded, expected_manifest);
+        let manifest = value
+            .get("manifest")
+            .and_then(norito::json::Value::as_object)
+            .expect("manifest object");
+
+        assert_eq!(
+            manifest.get("seiyaku_name").and_then(Value::as_str),
+            Some("Treasury")
+        );
+        assert!(manifest.get("contract_name").is_none());
+        for field in [
+            "code_hash",
+            "abi_hash",
+            "compiler_fingerprint",
+            "features_bitmap",
+            "access_set_hints",
+            "entrypoints",
+            "states",
+            "error_codes",
+            "kotoba",
+            "provenance",
+        ] {
+            assert!(manifest.contains_key(field), "missing `{field}`");
+        }
+        let entrypoint = manifest
+            .get("entrypoints")
+            .and_then(Value::as_array)
+            .and_then(|entrypoints| entrypoints.first())
+            .and_then(Value::as_object)
+            .expect("entrypoint descriptor");
+        for field in [
+            "name",
+            "kind",
+            "params",
+            "argument_schema",
+            "return_type",
+            "return_schema",
+            "permission",
+            "read_keys",
+            "write_keys",
+            "access_hints_complete",
+            "access_hints_skipped",
+            "triggers",
+        ] {
+            assert!(
+                entrypoint.contains_key(field),
+                "missing entrypoint `{field}`"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -12573,6 +13431,7 @@ fn decode_contract_state_scalar_json(
         ivm::EmbeddedStateType::Tuple(_)
         | ivm::EmbeddedStateType::Struct { .. }
         | ivm::EmbeddedStateType::StateMap { .. }
+        | ivm::EmbeddedStateType::List { .. }
         | ivm::EmbeddedStateType::Option(_)
         | ivm::EmbeddedStateType::Result { .. } => {
             Err("composite state values must be decoded through the composite helpers".into())
@@ -13545,6 +14404,30 @@ fn encode_contract_argument_record(
 }
 
 #[cfg(feature = "app_api")]
+fn prepare_contract_argument_record(
+    prepared: &ivm::PreparedContract,
+    entrypoint: &str,
+    payload: Option<&IrohaJson>,
+    gas_limit: u64,
+) -> core::result::Result<Option<ivm::PreparedArgumentRecord>, String> {
+    let canonical = encode_contract_argument_record(prepared, entrypoint, payload)?;
+    let schema = prepared
+        .entrypoint_descriptor(entrypoint)
+        .ok_or_else(|| format!("deployed contract is missing embedded entrypoint `{entrypoint}`"))?
+        .argument_schema
+        .as_ref();
+    match (schema, canonical) {
+        (None, None) => Ok(None),
+        (Some(schema), Some(canonical)) => {
+            ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), gas_limit)
+                .map(Some)
+                .map_err(|error| format!("failed to prepare canonical contract arguments: {error}"))
+        }
+        _ => Err("contract argument schema and canonical record diverged".to_owned()),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn bound_signed_contract_arguments(
     arguments: Option<Vec<u8>>,
 ) -> core::result::Result<
@@ -13609,6 +14492,16 @@ async fn submit_contract_call_request(
     let resolved_entrypoint = explicit_contract_entrypoint(&entrypoint)?;
     let entrypoint_descriptor =
         ensure_contract_call_entrypoint(&manifest, resolved_entrypoint, expected_kind)?;
+    {
+        let world = state.world_view();
+        iroha_core::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
+            &world,
+            &contract_address,
+            code_hash,
+            entrypoint_descriptor.kind,
+        )
+        .map_err(|error| conversion_error(error.to_string()))?;
+    }
     let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
     let arguments = encode_contract_argument_record(
         program.prepared_contract(),
@@ -13857,6 +14750,295 @@ fn validate_sccp_creation_time(creation_time_ms: Option<u64>) -> Result<()> {
 }
 
 #[cfg(feature = "app_api")]
+fn validate_sccp_taira_chain_id(chain_id: &ChainId) -> Result<()> {
+    if chain_id.to_string() != iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1 {
+        return Err(conversion_error(format!(
+            "SCCP submit endpoints require the exact public Taira chain id `{}`",
+            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn validate_sccp_submit_signing_state(
+    authority: &AccountId,
+    signature_b64: Option<&str>,
+    transaction_payload_b64: Option<&str>,
+    creation_time_ms: Option<u64>,
+) -> Result<bool> {
+    validate_sccp_creation_time(creation_time_ms)?;
+    match (signature_b64, transaction_payload_b64) {
+        (None, None) => Ok(false),
+        (Some(_), Some(_)) => {
+            if creation_time_ms.is_none() {
+                return Err(conversion_error(
+                    "signed SCCP submission requires an explicit positive creation_time_ms"
+                        .to_owned(),
+                ));
+            }
+            if authority.try_signatory().is_none() {
+                return Err(conversion_error(
+                    "multisig authorities cannot use the direct SCCP signature path; submit the prepared payload through the multisig propose/approve flow"
+                        .to_owned(),
+                ));
+            }
+            Ok(true)
+        }
+        _ => Err(conversion_error(
+            "SCCP signing state is invalid: preparation requires neither signature_b64 nor transaction_payload_b64, while direct submission requires both"
+                .to_owned(),
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_sccp_taira_transfer_recipient(payload: &SccpPayloadV1) -> Result<()> {
+    let SccpPayloadV1::Transfer(transfer) = payload;
+    if transfer.recipient_codec != iroha_sccp::SCCP_CODEC_CANONICAL_TEXT {
+        return Err(conversion_error(
+            "native SCCP transfer recipient must use canonical-text I105 encoding".to_owned(),
+        ));
+    }
+    let literal = std::str::from_utf8(&transfer.recipient).map_err(|_| {
+        conversion_error("native SCCP transfer recipient must be valid UTF-8 I105 text".to_owned())
+    })?;
+    let address = iroha_data_model::account::AccountAddress::parse_encoded(
+        literal,
+        Some(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1),
+    )
+    .map_err(|error| {
+        conversion_error(format!(
+            "native SCCP transfer recipient must be a canonical Taira/test I105 account: {error}"
+        ))
+    })?;
+    let canonical = address
+        .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
+        .map_err(|error| {
+            conversion_error(format!(
+                "native SCCP transfer recipient cannot be rendered canonically: {error}"
+            ))
+        })?;
+    if canonical != literal {
+        return Err(conversion_error(
+            "native SCCP transfer recipient must use its exact canonical Taira I105 spelling"
+                .to_owned(),
+        ));
+    }
+    let account = address.to_account_id().map_err(|error| {
+        conversion_error(format!(
+            "native SCCP transfer recipient cannot be decoded as an account: {error}"
+        ))
+    })?;
+    let signatory = account.try_signatory().ok_or_else(|| {
+        conversion_error(
+            "native SCCP transfer recipient must be a single-key Ed25519 account".to_owned(),
+        )
+    })?;
+    if !matches!(signatory.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        return Err(conversion_error(
+            "native SCCP transfer recipient must be a single-key Ed25519 account".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn decode_sccp_transaction_payload_b64(
+    encoded: &str,
+) -> Result<(
+    iroha_data_model::transaction::signed::TransactionPayload,
+    Vec<u8>,
+)> {
+    use base64::Engine as _;
+
+    const MAX_TRANSACTION_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+    let maximum_base64 = 4 * MAX_TRANSACTION_PAYLOAD_BYTES.div_ceil(3);
+    if encoded.is_empty() || encoded.len() > maximum_base64 {
+        return Err(conversion_error(format!(
+            "transaction_payload_b64 must contain between 1 and {MAX_TRANSACTION_PAYLOAD_BYTES} decoded bytes"
+        )));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| conversion_error(format!("invalid transaction_payload_b64: {error}")))?;
+    if bytes.is_empty()
+        || bytes.len() > MAX_TRANSACTION_PAYLOAD_BYTES
+        || base64::engine::general_purpose::STANDARD.encode(&bytes) != encoded
+    {
+        return Err(conversion_error(
+            "transaction_payload_b64 must use canonical padded base64 within the protocol bound"
+                .to_owned(),
+        ));
+    }
+    let _guard = norito::core::PayloadCtxGuard::enter(&bytes);
+    let mut cursor = std::io::Cursor::new(bytes.as_slice());
+    let payload =
+        <iroha_data_model::transaction::signed::TransactionPayload as Decode>::decode(&mut cursor)
+            .map_err(|error| {
+                conversion_error(format!(
+                    "transaction_payload_b64 must contain one canonical TransactionPayload: {error}"
+                ))
+            })?;
+    if usize::try_from(cursor.position()).ok() != Some(bytes.len())
+        || norito::codec::encode_adaptive(&payload) != bytes
+    {
+        return Err(conversion_error(
+            "transaction_payload_b64 must contain exactly one canonical TransactionPayload"
+                .to_owned(),
+        ));
+    }
+    Ok((payload, bytes))
+}
+
+#[cfg(feature = "app_api")]
+fn validate_sccp_transaction_metadata(state: &CoreState, metadata: &Metadata) -> Result<()> {
+    if metadata.is_empty() {
+        return Ok(());
+    }
+    let mut entries = metadata.iter();
+    let Some((key, value)) = entries.next() else {
+        return Ok(());
+    };
+    let gas_asset_key = Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
+    if entries.next().is_some() || key != &gas_asset_key {
+        return Err(conversion_error(
+            "SCCP transaction metadata must be empty or contain only gas_asset_id".to_owned(),
+        ));
+    }
+    let gas_asset_id = value
+        .clone()
+        .try_into_any_norito::<String>()
+        .map_err(|_| conversion_error("SCCP gas_asset_id metadata must be a string".to_owned()))?;
+    if gas_asset_id.is_empty() || gas_asset_id.trim() != gas_asset_id {
+        return Err(conversion_error(
+            "SCCP gas_asset_id metadata must be a nonblank canonical asset definition id"
+                .to_owned(),
+        ));
+    }
+    let canonical = canonical_gas_asset_definition_id(state, &gas_asset_id)?;
+    if canonical != gas_asset_id {
+        return Err(conversion_error(
+            "SCCP gas_asset_id metadata must use the canonical Base58 asset definition id"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn exact_sccp_transaction_builder(
+    state: &CoreState,
+    chain_id: &ChainId,
+    authority: &AccountId,
+    creation_time_ms: u64,
+    expected_bridge_proof: &iroha_data_model::bridge::BridgeProof,
+    payload: &iroha_data_model::transaction::signed::TransactionPayload,
+    canonical_payload_bytes: &[u8],
+) -> Result<TransactionBuilder> {
+    if &payload.chain != chain_id {
+        return Err(conversion_error(
+            "prepared SCCP transaction payload targets the wrong chain".to_owned(),
+        ));
+    }
+    if payload.authority != *authority {
+        return Err(conversion_error(
+            "prepared SCCP transaction payload authority does not match the request".to_owned(),
+        ));
+    }
+    if payload.creation_time_ms == 0 || payload.creation_time_ms != creation_time_ms {
+        return Err(conversion_error(
+            "prepared SCCP transaction payload creation time does not match the explicit request"
+                .to_owned(),
+        ));
+    }
+    if payload.time_to_live_ms.is_some() || payload.nonce.is_some() {
+        return Err(conversion_error(
+            "prepared SCCP transaction payload must not contain a TTL or nonce".to_owned(),
+        ));
+    }
+    validate_sccp_transaction_metadata(state, &payload.metadata)?;
+    let Executable::Instructions(instructions) = &payload.instructions else {
+        return Err(conversion_error(
+            "prepared SCCP transaction payload must contain instructions".to_owned(),
+        ));
+    };
+    let [instruction] = instructions.as_ref() else {
+        return Err(conversion_error(
+            "prepared SCCP transaction payload must contain exactly one instruction".to_owned(),
+        ));
+    };
+    let submit = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::bridge::SubmitBridgeProof>()
+        .ok_or_else(|| {
+            conversion_error(
+                "prepared SCCP transaction payload must contain only SubmitBridgeProof".to_owned(),
+            )
+        })?;
+    if submit.proof != *expected_bridge_proof {
+        return Err(conversion_error(
+            "prepared SCCP transaction payload contains a different bridge proof".to_owned(),
+        ));
+    }
+
+    // TransactionBuilder currently owns the public construction boundary. Rehydrate every field
+    // from the decoded payload, never from live defaults, and require byte identity before signing.
+    let mut builder = TransactionBuilder::new(payload.chain.clone(), payload.authority.clone());
+    builder.set_creation_time(Duration::from_millis(payload.creation_time_ms));
+    let builder = builder
+        .with_executable(payload.instructions.clone())
+        .with_metadata(payload.metadata.clone());
+    if builder.encode_payload() != canonical_payload_bytes {
+        return Err(sccp_internal_error(
+            "decoded SCCP TransactionPayload could not be reconstructed byte-identically"
+                .to_owned(),
+        ));
+    }
+    Ok(builder)
+}
+
+#[cfg(feature = "app_api")]
+fn build_exact_sccp_signed_transaction(
+    state: &CoreState,
+    chain_id: &ChainId,
+    authority: &AccountId,
+    creation_time_ms: u64,
+    expected_bridge_proof: &iroha_data_model::bridge::BridgeProof,
+    transaction_payload_b64: &str,
+    signature_b64: &str,
+    context: &str,
+) -> Result<SignedTransaction> {
+    let (payload, payload_bytes) = decode_sccp_transaction_payload_b64(transaction_payload_b64)?;
+    let builder = exact_sccp_transaction_builder(
+        state,
+        chain_id,
+        authority,
+        creation_time_ms,
+        expected_bridge_proof,
+        &payload,
+        &payload_bytes,
+    )?;
+    let signature = decode_app_api_authority_signature(authority, Some(signature_b64))?
+        .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+    let transaction = builder.build_with_signature(signature);
+    transaction.verify_signature().map_err(|error| {
+        conversion_error(format!(
+            "{context} detached signature verification failed: {error}"
+        ))
+    })?;
+    if transaction.multisig_signatures().is_some()
+        || norito::codec::encode_adaptive(transaction.payload()) != payload_bytes
+    {
+        return Err(sccp_internal_error(
+            "direct SCCP transaction construction changed the prepared payload or added multisig data"
+                .to_owned(),
+        ));
+    }
+    Ok(transaction)
+}
+
+#[cfg(feature = "app_api")]
 fn decode_sccp_destination_proof_b64(
     encoded: &str,
 ) -> Result<iroha_sccp::SccpGroth16Bn254ProofArtifactV1> {
@@ -13881,6 +15063,83 @@ fn decode_sccp_destination_proof_b64(
             "destination_proof_b64 must contain one canonical, bounded, pairing-verified SCCP Groth16 artifact"
                 .to_owned(),
         )
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn governed_sccp_native_route_configuration_hash(
+    registry: &iroha_core::state::ValidatedSccpRegistryV1,
+    native_proof: &iroha_sccp::SccpNativeInboundMessageProofV1,
+) -> Result<[u8; 32]> {
+    let lane = native_proof.source.lane;
+    let native_backend = native_proof.source.proof.backend();
+    registry.lane(lane).ok_or_else(|| {
+        conversion_error(format!(
+            "native SCCP lane {}->{} is not governed by the authoritative registry",
+            lane.source.profile_key(),
+            lane.target.profile_key()
+        ))
+    })?;
+    let submitted_anchor = native_proof.source.trust_anchor;
+    let (trust_anchor, inclusive_successor_boundary) = registry
+        .native_trust_anchor_interval(lane, submitted_anchor.anchor_hash)
+        .ok_or_else(|| {
+            conversion_error("native SCCP proof names no retained governed trust anchor".to_owned())
+        })?;
+    if *trust_anchor != submitted_anchor {
+        return Err(conversion_error(
+            "native SCCP proof forges retained governed trust-anchor material".to_owned(),
+        ));
+    }
+    if trust_anchor.backend != native_backend {
+        return Err(conversion_error(
+            "native SCCP proof backend does not match the governed lane trust anchor".to_owned(),
+        ));
+    }
+    let SccpPayloadV1::Transfer(transfer) = &native_proof.payload;
+    let route = registry
+        .historical_route_for_source_identity(
+            lane,
+            &transfer.route_id,
+            &transfer.asset_id,
+            transfer.route_revision,
+            native_proof.source.source_identity_hash,
+        )
+        .ok_or_else(|| {
+            conversion_error(
+                "native SCCP payload and source identity select no retained governed route"
+                    .to_owned(),
+            )
+        })?;
+    let validated = iroha_sccp::verify_sccp_native_inbound_message_proof_v1(
+        native_proof,
+        &route.source_identity,
+        *trust_anchor,
+    )
+    .map_err(|error| {
+        conversion_error(format!(
+            "native SCCP proof failed governed verification: {error}"
+        ))
+    })?;
+    if !trust_anchor.admits_anchor_interval_height(
+        validated.anchor_interval_height,
+        inclusive_successor_boundary,
+    ) {
+        return Err(conversion_error(
+            "native SCCP proof consensus progress is outside its governed trust-anchor interval"
+                .to_owned(),
+        ));
+    }
+    if !route.allows_inbound_at(validated.anchor_interval_height) {
+        return Err(conversion_error(
+            "native SCCP proof is above the retired route's authenticated anchor-interval cutoff"
+                .to_owned(),
+        ));
+    }
+    route.route_configuration_hash().map_err(|error| {
+        sccp_internal_error(format!(
+            "validated native SCCP route has no exact configuration hash: {error}"
+        ))
     })
 }
 
@@ -13932,7 +15191,6 @@ fn evaluate_contract_view_request(
     } = prepared;
     let resolved_entrypoint = explicit_contract_entrypoint(&entrypoint)?;
     let entrypoint_descriptor = ensure_view_contract_entrypoint(&manifest, resolved_entrypoint)?;
-    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
     let result = match execute_contract_view(
         &state,
         &authority,
@@ -13941,7 +15199,7 @@ fn evaluate_contract_view_request(
         &program,
         resolved_entrypoint,
         entrypoint_descriptor,
-        normalized_payload.clone(),
+        payload,
         gas_limit,
     ) {
         Ok(result) => result,
@@ -14038,42 +15296,44 @@ pub async fn handle_post_contract_call_simulate(
     let resolved_entrypoint = explicit_contract_entrypoint(&entrypoint)?;
     let entrypoint_descriptor =
         ensure_callable_contract_entrypoint(&manifest, resolved_entrypoint)?;
-    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
-    let _metadata = build_contract_call_metadata(
-        &manifest,
-        &contract_address,
-        contract_alias.as_ref(),
-        Some(resolved_entrypoint),
-        normalized_payload.as_ref(),
-        gas_asset_id.as_deref(),
-        fee_sponsor_literal.as_deref(),
-        gas_limit,
-    );
-
     let response = match execute_contract_call_simulation(
         &state,
         &authority,
+        &contract_address,
+        contract_alias.as_ref(),
         &program,
         resolved_entrypoint,
         entrypoint_descriptor,
-        normalized_payload.clone(),
+        payload,
         gas_limit,
     ) {
-        Ok(result) => ContractCallSimulateResponseDto {
-            ok: true,
-            dataspace: dataspace.clone(),
-            contract_address: Some(contract_address.clone()),
-            code_hash_hex: hex::encode(code_hash.as_ref()),
-            abi_hash_hex: hex::encode(abi_hash.as_ref()),
-            entrypoint: resolved_entrypoint.to_owned(),
-            normalized_payload,
-            gas_limit,
-            gas_used: result.gas_used,
-            queued_instructions: result.queued_instructions,
-            result: result.result,
-            error: None,
-            vm_diagnostic: None,
-        },
+        Ok(result) => {
+            let _metadata = build_contract_call_metadata(
+                &manifest,
+                &contract_address,
+                contract_alias.as_ref(),
+                Some(resolved_entrypoint),
+                result.normalized_payload.as_ref(),
+                gas_asset_id.as_deref(),
+                fee_sponsor_literal.as_deref(),
+                gas_limit,
+            );
+            ContractCallSimulateResponseDto {
+                ok: true,
+                dataspace: dataspace.clone(),
+                contract_address: Some(contract_address.clone()),
+                code_hash_hex: hex::encode(code_hash.as_ref()),
+                abi_hash_hex: hex::encode(abi_hash.as_ref()),
+                entrypoint: resolved_entrypoint.to_owned(),
+                normalized_payload: result.normalized_payload,
+                gas_limit,
+                gas_used: result.gas_used,
+                queued_instructions: result.queued_instructions,
+                result: result.result,
+                error: None,
+                vm_diagnostic: None,
+            }
+        }
         Err(err) => ContractCallSimulateResponseDto {
             ok: false,
             dataspace,
@@ -14081,7 +15341,7 @@ pub async fn handle_post_contract_call_simulate(
             code_hash_hex: hex::encode(code_hash.as_ref()),
             abi_hash_hex: hex::encode(abi_hash.as_ref()),
             entrypoint: resolved_entrypoint.to_owned(),
-            normalized_payload,
+            normalized_payload: err.normalized_payload,
             gas_limit,
             gas_used: err.gas_used,
             queued_instructions: err.queued_instructions,
@@ -14117,10 +15377,17 @@ pub async fn handle_post_bridge_proof_submit(
     let BridgeProofSubmitDto {
         authority,
         signature_b64,
+        transaction_payload_b64,
         destination_proof_b64,
         creation_time_ms,
     } = req;
-    validate_sccp_creation_time(creation_time_ms)?;
+    validate_sccp_taira_chain_id(chain_id.as_ref())?;
+    let direct_submit = validate_sccp_submit_signing_state(
+        &authority,
+        signature_b64.as_deref(),
+        transaction_payload_b64.as_deref(),
+        creation_time_ms,
+    )?;
 
     let artifact = decode_sccp_destination_proof_b64(&destination_proof_b64)?;
     let message_id = artifact.request.public_inputs.message_id;
@@ -14154,9 +15421,7 @@ pub async fn handle_post_bridge_proof_submit(
             start_height: proof_height,
             end_height: proof_height,
         },
-        manifest_hash: material.indexed.record.route_configuration_hash,
         payload: iroha_data_model::bridge::BridgeProofPayload::SccpDestination(destination_proof),
-        pinned: true,
     };
     let counterparty_domain = material.indexed.key.lane.target.domain_id();
     let counterparty_chain = material.indexed.key.lane.target.profile_key().to_owned();
@@ -14165,28 +15430,26 @@ pub async fn handle_post_bridge_proof_submit(
 
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;
-    let manifest_hash_hex = hex::encode(bridge_proof.manifest_hash);
+    let route_configuration_hash_hex =
+        hex::encode(material.indexed.record.route_configuration_hash);
     let backend = bridge_proof.backend_label();
 
-    let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-    let instruction: dm::InstructionBox = dm::SubmitBridgeProof::new(bridge_proof).into();
-    let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
-    builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder = builder
-        .with_metadata(metadata_with_default_gas_asset(state.as_ref()))
-        .with_executable(dm::Executable::Instructions(ConstVec::from(vec![
-            instruction,
-        ])));
-
-    let response = if let Some(signature) =
-        decode_app_api_authority_signature(&authority, signature_b64.as_deref())?
-    {
-        let tx = builder.build_with_signature(signature);
-        tx.verify_signature().map_err(|err| {
-            conversion_error(format!(
-                "bridge proof detached signature verification failed: {err}"
-            ))
-        })?;
+    let response = if direct_submit {
+        let creation_time_ms = creation_time_ms.expect("validated direct SCCP creation time");
+        let tx = build_exact_sccp_signed_transaction(
+            state.as_ref(),
+            chain_id.as_ref(),
+            &authority,
+            creation_time_ms,
+            &bridge_proof,
+            transaction_payload_b64
+                .as_deref()
+                .expect("validated direct SCCP transaction payload"),
+            signature_b64
+                .as_deref()
+                .expect("validated direct SCCP signature"),
+            "bridge proof",
+        )?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
         handle_transaction_with_metrics(
             chain_id,
@@ -14204,7 +15467,7 @@ pub async fn handle_post_bridge_proof_submit(
             backend,
             counterparty_domain,
             counterparty_chain: counterparty_chain.clone(),
-            manifest_hash_hex,
+            route_configuration_hash_hex,
             range_start_height,
             range_end_height,
             creation_time_ms,
@@ -14213,6 +15476,17 @@ pub async fn handle_post_bridge_proof_submit(
             signing_message_b64: None,
         }
     } else {
+        let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
+        let instruction: dm::InstructionBox =
+            dm::SubmitBridgeProof::new(bridge_proof.clone()).into();
+        let mut builder =
+            dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
+        builder.set_creation_time(Duration::from_millis(creation_time_ms));
+        let builder = builder
+            .with_metadata(strict_metadata_with_default_gas_asset(state.as_ref())?)
+            .with_executable(dm::Executable::Instructions(ConstVec::from(vec![
+                instruction,
+            ])));
         let transaction_payload_b64 =
             base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
         let signing_message_b64 =
@@ -14224,7 +15498,7 @@ pub async fn handle_post_bridge_proof_submit(
             backend,
             counterparty_domain,
             counterparty_chain,
-            manifest_hash_hex,
+            route_configuration_hash_hex,
             range_start_height,
             range_end_height,
             creation_time_ms,
@@ -14264,24 +15538,35 @@ pub async fn handle_post_bridge_message_submit(
     let BridgeMessageSubmitDto {
         authority,
         signature_b64,
+        transaction_payload_b64,
         native_proof_b64,
         creation_time_ms,
     } = req;
-    validate_sccp_creation_time(creation_time_ms)?;
+    validate_sccp_taira_chain_id(chain_id.as_ref())?;
+    let direct_submit = validate_sccp_submit_signing_state(
+        &authority,
+        signature_b64.as_deref(),
+        transaction_payload_b64.as_deref(),
+        creation_time_ms,
+    )?;
 
     let (native_proof, native_proof_bytes) = decode_sccp_native_proof_b64(&native_proof_b64)?;
+    validate_sccp_taira_transfer_recipient(&native_proof.payload)?;
     let source_height = native_proof.source.source_finality.height;
     let lane = native_proof.source.lane;
-    let source_identity_hash = native_proof.source.source_identity_hash;
     let native_backend = native_proof.source.proof.backend();
-    if !lane.is_well_formed() || !lane.source.is_external() || !lane.target.is_sora() {
+    if !lane.is_well_formed()
+        || !lane.source.is_external()
+        || lane.target != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+    {
         return Err(conversion_error(
-            "native SCCP proof must select an exact external-source to SORA-target lane".to_owned(),
+            "native SCCP proof must select an exact external-source to Taira-target lane"
+                .to_owned(),
         ));
     }
-    let payload = native_proof.payload;
-    let target_domain = sccp_message_target_domain(&payload);
-    let source_domain = iroha_sccp::sccp_message_source_domain(&payload);
+    let payload = &native_proof.payload;
+    let target_domain = sccp_message_target_domain(payload);
+    let source_domain = iroha_sccp::sccp_message_source_domain(payload);
     if target_domain != lane.target.domain_id() || source_domain != lane.source.domain_id() {
         return Err(conversion_error(format!(
             "native SCCP payload domains {source_domain}->{target_domain} do not match exact lane {}->{}",
@@ -14301,97 +15586,58 @@ pub async fn handle_post_bridge_message_submit(
         ));
     }
 
-    let payload_kind = sccp_message_payload_kind_key(&payload).to_owned();
+    let payload_kind = sccp_message_payload_kind_key(payload).to_owned();
     let counterparty_domain = lane.source.domain_id();
     let counterparty_chain = lane.source.profile_key().to_owned();
     let message_id_hex = hex::encode(message_id);
     let route_configuration_hash = {
         let registry = state.sccp_registry_snapshot();
-        let governed_lane = registry.lane(lane).ok_or_else(|| {
-            conversion_error(format!(
-                "native SCCP lane {}->{} is not governed by the authoritative registry",
-                lane.source.profile_key(),
-                lane.target.profile_key()
-            ))
-        })?;
-        let trust_anchor = governed_lane.native_trust_anchor.ok_or_else(|| {
-            conversion_error("native SCCP lane has no governed trust anchor".to_owned())
-        })?;
-        if trust_anchor.backend != native_backend {
-            return Err(conversion_error(
-                "native SCCP proof backend does not match the governed lane trust anchor"
-                    .to_owned(),
-            ));
-        }
-        let SccpPayloadV1::Transfer(transfer) = &payload;
-        let route = registry
-            .inbound_route_for_source_identity(
-                lane,
-                &transfer.route_id,
-                &transfer.asset_id,
-                transfer.route_revision,
-                source_identity_hash,
-            )
-            .ok_or_else(|| {
-                conversion_error(
-                    "native SCCP payload and source identity select no inbound-active governed route"
-                        .to_owned(),
-                )
-            })?;
-        route.route_configuration_hash().map_err(|error| {
-            sccp_internal_error(format!(
-                "validated native SCCP route has no exact configuration hash: {error}"
-            ))
-        })?
+        governed_sccp_native_route_configuration_hash(registry.as_ref(), &native_proof)?
     };
     let bridge_proof = iroha_data_model::bridge::BridgeProof {
         range: iroha_data_model::bridge::BridgeProofRange {
             start_height: source_height,
             end_height: source_height,
         },
-        manifest_hash: route_configuration_hash,
         payload: iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(
             iroha_data_model::bridge::BridgeNativeProtocolProofV1 {
                 backend: native_backend,
+                route_configuration_hash,
                 encoded_envelope: native_proof_bytes,
             },
         ),
-        pinned: true,
     };
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;
-    let manifest_hash_hex = hex::encode(bridge_proof.manifest_hash);
+    let route_configuration_hash_hex = hex::encode(route_configuration_hash);
     let backend = bridge_proof.backend_label();
 
-    let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-    let tx_metadata = metadata_with_default_gas_asset(state.as_ref());
-    let instructions: Vec<dm::InstructionBox> =
-        vec![dm::SubmitBridgeProof::new(bridge_proof).into()];
-    let routing_plan = scaffold_transaction_routing_plan(
-        chain_id.as_ref(),
-        queue.as_ref(),
-        state.as_ref(),
-        &authority,
-        creation_time_ms,
-        tx_metadata.clone(),
-        dm::Executable::Instructions(ConstVec::from(instructions.clone())),
-        "/v1/bridge/messages",
-    )?;
-    let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
-    builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder = builder
-        .with_metadata(tx_metadata)
-        .with_executable(dm::Executable::Instructions(ConstVec::from(instructions)));
-
-    let response = if let Some(signature) =
-        decode_app_api_authority_signature(&authority, signature_b64.as_deref())?
-    {
-        let tx = builder.build_with_signature(signature);
-        tx.verify_signature().map_err(|err| {
-            conversion_error(format!(
-                "bridge message detached signature verification failed: {err}"
-            ))
-        })?;
+    let response = if direct_submit {
+        let creation_time_ms = creation_time_ms.expect("validated direct SCCP creation time");
+        let tx = build_exact_sccp_signed_transaction(
+            state.as_ref(),
+            chain_id.as_ref(),
+            &authority,
+            creation_time_ms,
+            &bridge_proof,
+            transaction_payload_b64
+                .as_deref()
+                .expect("validated direct SCCP transaction payload"),
+            signature_b64
+                .as_deref()
+                .expect("validated direct SCCP signature"),
+            "bridge message",
+        )?;
+        let routing_plan = scaffold_transaction_routing_plan(
+            chain_id.as_ref(),
+            queue.as_ref(),
+            state.as_ref(),
+            &authority,
+            creation_time_ms,
+            tx.metadata().clone(),
+            tx.instructions().clone(),
+            "/v1/bridge/messages",
+        )?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
         handle_transaction_with_metrics_and_routing_plan(
             chain_id.clone(),
@@ -14410,7 +15656,7 @@ pub async fn handle_post_bridge_message_submit(
             backend,
             counterparty_domain,
             counterparty_chain: counterparty_chain.to_owned(),
-            manifest_hash_hex,
+            route_configuration_hash_hex,
             range_start_height,
             range_end_height,
             creation_time_ms,
@@ -14419,6 +15665,17 @@ pub async fn handle_post_bridge_message_submit(
             signing_message_b64: None,
         }
     } else {
+        let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
+        let instruction: dm::InstructionBox =
+            dm::SubmitBridgeProof::new(bridge_proof.clone()).into();
+        let mut builder =
+            dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
+        builder.set_creation_time(Duration::from_millis(creation_time_ms));
+        let builder = builder
+            .with_metadata(strict_metadata_with_default_gas_asset(state.as_ref())?)
+            .with_executable(dm::Executable::Instructions(ConstVec::from(vec![
+                instruction,
+            ])));
         let transaction_payload_b64 =
             base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
         let signing_message_b64 =
@@ -14430,7 +15687,7 @@ pub async fn handle_post_bridge_message_submit(
             backend,
             counterparty_domain,
             counterparty_chain: counterparty_chain.to_owned(),
-            manifest_hash_hex,
+            route_configuration_hash_hex,
             range_start_height,
             range_end_height,
             creation_time_ms,
@@ -14497,7 +15754,7 @@ pub async fn handle_post_contract_view_batch(
         ));
     }
 
-    let default_gas_limit = gas_limit.unwrap_or(100_000);
+    let default_gas_limit = gas_limit.unwrap_or(DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT);
     if default_gas_limit == 0 {
         return Err(conversion_error(
             "contract view batch gas_limit must be positive".to_owned(),
@@ -14580,7 +15837,9 @@ pub async fn handle_post_contract_view_batch(
 }
 
 #[cfg(feature = "app_api")]
-const DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT: u64 = 5_000;
+// Canonical argument preparation reserves the bounded 1 MiB HEAP before
+// decoding; keep implicit contract-call/view budgets above that floor.
+const DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT: u64 = 1_500_000;
 
 #[cfg(feature = "app_api")]
 fn current_time_millis() -> u64 {
@@ -14645,10 +15904,10 @@ fn ensure_contract_entrypoint_kind<'a>(
     let descriptor = advertised_contract_entrypoint(manifest, selector)?;
     if descriptor.kind != expected {
         let expected_kind = match expected {
-            manifest::EntryPointKind::Public => "kotoage by-call",
+            manifest::EntryPointKind::Kotoage => "kotoage by-call",
             manifest::EntryPointKind::View => "read-only view",
-            manifest::EntryPointKind::Init => "hajimari",
-            manifest::EntryPointKind::Upgrade => "kaizen",
+            manifest::EntryPointKind::Hajimari => "hajimari",
+            manifest::EntryPointKind::Kaizen => "kaizen",
         };
         return Err(conversion_error(format!(
             "contract entrypoint `{selector}` is not a {expected_kind} entrypoint"
@@ -14662,7 +15921,7 @@ fn ensure_public_contract_entrypoint<'a>(
     manifest: &'a manifest::ContractManifest,
     selector: &str,
 ) -> Result<&'a manifest::EntrypointDescriptor> {
-    ensure_contract_entrypoint_kind(manifest, selector, manifest::EntryPointKind::Public)
+    ensure_contract_entrypoint_kind(manifest, selector, manifest::EntryPointKind::Kotoage)
 }
 
 #[cfg(feature = "app_api")]
@@ -14972,53 +16231,35 @@ fn normalize_contract_payload(
     descriptor: &manifest::EntrypointDescriptor,
     payload: Option<&IrohaJson>,
 ) -> Result<Option<IrohaJson>> {
-    if descriptor.params.is_empty() {
-        if payload.is_some() {
-            return Err(conversion_error(
-                "contract payload must be omitted for zero-parameter entrypoints".to_owned(),
-            ));
-        }
-        return Ok(None);
-    }
-
-    let payload = payload.ok_or_else(|| {
-        conversion_error("contract payload is required for parameterized entrypoints".to_owned())
-    })?;
-    let parsed = json::parse_value(payload.get())
-        .map_err(|err| conversion_error(format!("invalid contract payload JSON: {err}")))?;
-
-    let object = match parsed {
-        Value::Object(map) => map,
-        _ => {
-            return Err(conversion_error(
-                "contract payload must be a JSON object keyed by parameter name".to_owned(),
-            ));
-        }
-    };
-
-    let mut normalized = Map::new();
-    for param in &descriptor.params {
-        let value = object.get(&param.name).ok_or_else(|| {
-            conversion_error(format!(
-                "missing contract payload field `{}` for entrypoint `{}`",
-                param.name, descriptor.name
-            ))
-        })?;
-        let schema = parse_contract_schema_type(&param.type_name)?;
-        let normalized_value = normalize_contract_value(&schema, value, &param.name)?;
-        normalized.insert(param.name.clone(), normalized_value);
-    }
-
-    for key in object.keys() {
-        if !descriptor.params.iter().any(|param| param.name == *key) {
-            return Err(conversion_error(format!(
-                "unexpected contract payload field `{key}` for entrypoint `{}`",
-                descriptor.name
-            )));
+    match (descriptor.argument_schema.as_ref(), payload) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(conversion_error(
+            "contract payload must be omitted for zero-parameter entrypoints".to_owned(),
+        )),
+        (Some(_), None) => Err(conversion_error(
+            "contract payload is required for parameterized entrypoints".to_owned(),
+        )),
+        (Some(schema), Some(payload)) => {
+            ivm::encode_argument_record_from_json(schema, payload).map_err(|error| {
+                conversion_error(format!(
+                    "contract payload for entrypoint `{}` does not match its exact argument schema: {error}",
+                    descriptor.name
+                ))
+            })?;
+            Ok(Some(payload.clone()))
         }
     }
+}
 
-    Ok(Some(IrohaJson::from(Value::Object(normalized))))
+#[cfg(feature = "app_api")]
+fn normalize_contract_payload_after_authorization<E>(
+    authorize: impl FnOnce() -> core::result::Result<(), E>,
+    descriptor: &manifest::EntrypointDescriptor,
+    payload: Option<&IrohaJson>,
+    map_normalization_error: impl FnOnce(Error) -> E,
+) -> core::result::Result<Option<IrohaJson>, E> {
+    authorize()?;
+    normalize_contract_payload(descriptor, payload).map_err(map_normalization_error)
 }
 
 #[cfg(feature = "app_api")]
@@ -15066,10 +16307,18 @@ pub(crate) fn normalize_contract_call_metadata_for_bytecode(
         .iter()
         .find(|candidate| candidate.name == entrypoint)
         .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{entrypoint}`")))?;
-    if matches!(descriptor.kind, manifest::EntryPointKind::View) {
-        return Err(conversion_error(format!(
-            "contract entrypoint `{entrypoint}` is read-only and cannot be invoked as a transaction"
-        )));
+    match descriptor.kind {
+        manifest::EntryPointKind::View => {
+            return Err(conversion_error(format!(
+                "contract entrypoint `{entrypoint}` is read-only and cannot be invoked as a transaction"
+            )));
+        }
+        manifest::EntryPointKind::Hajimari | manifest::EntryPointKind::Kaizen => {
+            return Err(conversion_error(format!(
+                "`{entrypoint}` is a hajimari/始まり or kaizen/改善 entrypoint and requires a top-level deployed ContractCall"
+            )));
+        }
+        manifest::EntryPointKind::Kotoage => {}
     }
 
     let manifest_descriptor = descriptor.to_manifest_descriptor();
@@ -15108,214 +16357,14 @@ fn resolve_contract_entrypoint_pc(
 }
 
 #[cfg(feature = "app_api")]
-fn decode_contract_view_result_value(
-    vm: &ivm::IVM,
-    start_register: usize,
-    schema: &ContractSchemaType,
-) -> Result<(Value, usize)> {
-    use iroha_core::smartcontracts::ivm::host::CoreHost;
-    use ivm::PointerType;
-
-    let pointer_string = |ptr: u64| -> Result<String> {
-        if ptr == 0 {
-            return Err(conversion_error(
-                "contract view returned a null pointer for a non-nullable type".to_owned(),
-            ));
-        }
-        Ok(ptr.to_string())
-    };
-
-    match schema {
-        ContractSchemaType::Unit | ContractSchemaType::Tuple(_) => {}
-        ContractSchemaType::Int | ContractSchemaType::Bool => {
-            vm.ensure_public_register(start_register).map_err(|err| {
-                conversion_error(format!(
-                    "contract return violates the ZK privacy boundary: {err}"
-                ))
-            })?
-        }
-        ContractSchemaType::Numeric
-        | ContractSchemaType::String
-        | ContractSchemaType::Json
-        | ContractSchemaType::Name
-        | ContractSchemaType::AccountId
-        | ContractSchemaType::AssetDefinitionId
-        | ContractSchemaType::AssetId
-        | ContractSchemaType::DomainId
-        | ContractSchemaType::NftId
-        | ContractSchemaType::Bytes
-        | ContractSchemaType::DataSpaceId
-        | ContractSchemaType::AxtDescriptor
-        | ContractSchemaType::AssetHandle
-        | ContractSchemaType::ProofBlob => {
-            vm.ensure_public_tlv_register(start_register)
-                .map_err(|err| {
-                    conversion_error(format!(
-                        "contract return violates the ZK privacy boundary: {err}"
-                    ))
-                })?
-        }
-    }
-
-    match schema {
-        ContractSchemaType::Unit => Ok((Value::Null, 0)),
-        ContractSchemaType::Int => {
-            let raw = vm.register(start_register);
-            let value = decode_contract_view_signed_i64(raw);
-            Ok((Value::from(value), 1))
-        }
-        ContractSchemaType::Bool => Ok((Value::Bool(vm.register(start_register) != 0), 1)),
-        ContractSchemaType::Numeric => {
-            let ptr = vm.register(start_register);
-            let value: iroha_primitives::numeric::Numeric =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes).map_err(|err| {
-                    conversion_error(format!("failed to decode numeric return: {err}"))
-                })?;
-            Ok((Value::from(value.to_string()), 1))
-        }
-        ContractSchemaType::String => Err(conversion_error(
-            "string contract view returns are not supported yet".to_owned(),
-        )),
-        ContractSchemaType::Json => {
-            let ptr = vm.register(start_register);
-            let value = CoreHost::decode_tlv_json(vm, ptr)
-                .map_err(|err| conversion_error(format!("failed to decode JSON return: {err}")))?;
-            let parsed = json::parse_value(value.get())
-                .map_err(|err| conversion_error(format!("invalid JSON return payload: {err}")))?;
-            Ok((parsed, 1))
-        }
-        ContractSchemaType::Name => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::name::Name =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::Name).map_err(|err| {
-                    conversion_error(format!("failed to decode Name return: {err}"))
-                })?;
-            Ok((Value::from(value.to_string()), 1))
-        }
-        ContractSchemaType::AccountId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::account::AccountId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AccountId).map_err(|err| {
-                    conversion_error(format!("failed to decode AccountId return: {err}"))
-                })?;
-            Ok((Value::from(value.to_string()), 1))
-        }
-        ContractSchemaType::AssetDefinitionId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::asset::AssetDefinitionId = CoreHost::decode_tlv_typed(
-                vm,
-                ptr,
-                PointerType::AssetDefinitionId,
-            )
-            .map_err(|err| {
-                conversion_error(format!("failed to decode AssetDefinitionId return: {err}"))
-            })?;
-            Ok((Value::from(value.to_string()), 1))
-        }
-        ContractSchemaType::AssetId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::asset::AssetId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetId).map_err(|err| {
-                    conversion_error(format!("failed to decode AssetId return: {err}"))
-                })?;
-            Ok((Value::from(value.to_string()), 1))
-        }
-        ContractSchemaType::DomainId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::domain::DomainId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::DomainId).map_err(|err| {
-                    conversion_error(format!("failed to decode DomainId return: {err}"))
-                })?;
-            Ok((Value::from(value.to_string()), 1))
-        }
-        ContractSchemaType::NftId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nft::NftId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::NftId).map_err(|err| {
-                    conversion_error(format!("failed to decode NftId return: {err}"))
-                })?;
-            Ok((Value::from(value.to_string()), 1))
-        }
-        ContractSchemaType::Bytes => {
-            let ptr = vm.register(start_register);
-            let value = CoreHost::decode_tlv_blob(vm, ptr)
-                .map_err(|err| conversion_error(format!("failed to decode blob return: {err}")))?;
-            Ok((Value::from(format!("0x{}", hex::encode(value))), 1))
-        }
-        ContractSchemaType::DataSpaceId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nexus::DataSpaceId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::DataSpaceId).map_err(|err| {
-                    conversion_error(format!("failed to decode DataSpaceId return: {err}"))
-                })?;
-            Ok((Value::from(value.as_u64()), 1))
-        }
-        ContractSchemaType::AxtDescriptor => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nexus::AxtDescriptor =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AxtDescriptor).map_err(|err| {
-                    conversion_error(format!("failed to decode AxtDescriptor return: {err}"))
-                })?;
-            let json_value = norito::json::to_value(&value).map_err(|err| {
-                conversion_error(format!("failed to serialize AxtDescriptor return: {err}"))
-            })?;
-            Ok((json_value, 1))
-        }
-        ContractSchemaType::AssetHandle => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nexus::AssetHandle =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetHandle).map_err(|err| {
-                    conversion_error(format!("failed to decode AssetHandle return: {err}"))
-                })?;
-            let json_value = norito::json::to_value(&value).map_err(|err| {
-                conversion_error(format!("failed to serialize AssetHandle return: {err}"))
-            })?;
-            Ok((json_value, 1))
-        }
-        ContractSchemaType::ProofBlob => {
-            let ptr = vm.register(start_register);
-            let value = pointer_string(ptr)?;
-            Ok((Value::from(value), 1))
-        }
-        ContractSchemaType::Tuple(items) => {
-            let mut values = Vec::with_capacity(items.len());
-            let mut consumed = 0_usize;
-            for item in items {
-                let (value, used) =
-                    decode_contract_view_result_value(vm, start_register + consumed, item)?;
-                values.push(value);
-                consumed += used;
-            }
-            Ok((Value::Array(values), consumed))
-        }
-    }
-}
-
-fn decode_contract_view_signed_i64(raw: u64) -> i64 {
-    // IVM exposes signed integer returns in the register file as raw
-    // two's-complement bits inside a u64 register value.
-    raw as i64
-}
-
-#[cfg(feature = "app_api")]
 struct ContractViewExecutionError {
     message: String,
     vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
 
 #[cfg(feature = "app_api")]
-fn contract_view_error_message(err: &Error) -> String {
-    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
-
-    match err {
-        Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(message)))
-        | Error::Query(ValidationFail::InternalError(message)) => message.clone(),
-        _ => err.to_string(),
-    }
-}
-
-#[cfg(feature = "app_api")]
 struct ContractCallSimulationExecution {
+    normalized_payload: Option<IrohaJson>,
     gas_used: u64,
     queued_instructions: Vec<norito::json::Value>,
     result: Option<IrohaJson>,
@@ -15325,6 +16374,7 @@ struct ContractCallSimulationExecution {
 struct ContractCallSimulationError {
     message: String,
     vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
+    normalized_payload: Option<IrohaJson>,
     gas_used: u64,
     queued_instructions: Vec<norito::json::Value>,
 }
@@ -15369,6 +16419,7 @@ fn render_contract_queued_instructions(
         .map_err(|err| ContractCallSimulationError {
             message: format!("failed to serialize queued instructions: {err}"),
             vm_diagnostic: None,
+            normalized_payload: None,
             gas_used: 0,
             queued_instructions: Vec::new(),
         })
@@ -15394,12 +16445,76 @@ fn authority_has_named_contract_permission(
 }
 
 #[cfg(feature = "app_api")]
+fn resolve_exact_contract_runtime_alias(
+    world: &impl WorldReadOnly,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    requested_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+    code_hash: iroha_crypto::Hash,
+) -> core::result::Result<Option<iroha_data_model::smart_contract::ContractAlias>, String> {
+    let live_code_hash = world
+        .contract_instances()
+        .get(contract_address)
+        .copied()
+        .ok_or_else(|| format!("contract instance `{contract_address}` is no longer active"))?;
+    if live_code_hash != code_hash {
+        return Err(format!(
+            "contract instance `{contract_address}` changed code binding before local execution"
+        ));
+    }
+
+    let live_alias = world
+        .contract_alias_bindings()
+        .get(contract_address)
+        .map(|binding| binding.alias.clone());
+    if let Some(alias) = live_alias.as_ref()
+        && world.contract_aliases().get(alias) != Some(contract_address)
+    {
+        return Err(format!(
+            "contract instance `{contract_address}` has an inconsistent live alias binding"
+        ));
+    }
+    if world
+        .contract_aliases()
+        .iter()
+        .any(|(alias, address)| address == contract_address && Some(alias) != live_alias.as_ref())
+    {
+        return Err(format!(
+            "contract instance `{contract_address}` has a non-canonical forward alias binding"
+        ));
+    }
+    if requested_alias.is_some_and(|alias| live_alias.as_ref() != Some(alias)) {
+        return Err(format!(
+            "contract instance `{contract_address}` changed its requested alias binding before local execution"
+        ));
+    }
+    Ok(live_alias)
+}
+
+#[cfg(feature = "app_api")]
+fn exact_prepared_entrypoint<'a>(
+    prepared: &'a ivm::PreparedContract,
+    selector: &str,
+    manifest_descriptor: &manifest::EntrypointDescriptor,
+) -> core::result::Result<&'a ivm::EmbeddedEntrypointDescriptor, String> {
+    let embedded = prepared
+        .entrypoint_descriptor(selector)
+        .ok_or_else(|| format!("deployed contract is missing embedded entrypoint `{selector}`"))?;
+    if &embedded.to_manifest_descriptor() != manifest_descriptor {
+        return Err(format!(
+            "stored manifest entrypoint `{selector}` no longer matches the verified contract artifact"
+        ));
+    }
+    Ok(embedded)
+}
+
+#[cfg(feature = "app_api")]
 fn ensure_contract_view_authorized(
     world: &impl WorldReadOnly,
     authority: &iroha_data_model::account::AccountId,
-    descriptor: &manifest::EntrypointDescriptor,
+    entrypoint: &str,
+    required: Option<&str>,
 ) -> std::result::Result<(), ContractViewExecutionError> {
-    let Some(required) = descriptor.permission.as_deref() else {
+    let Some(required) = required else {
         return Ok(());
     };
     let required = required.trim();
@@ -15418,8 +16533,7 @@ fn ensure_contract_view_authorized(
     } else {
         Err(ContractViewExecutionError {
             message: format!(
-                "contract view entrypoint `{}` requires permission `{required}`",
-                descriptor.name
+                "contract view entrypoint `{entrypoint}` requires permission `{required}`"
             ),
             vm_diagnostic: None,
         })
@@ -15427,14 +16541,17 @@ fn ensure_contract_view_authorized(
 }
 
 #[cfg(feature = "app_api")]
-fn contract_call_runtime_permission(descriptor: &manifest::EntrypointDescriptor) -> Option<&str> {
-    match descriptor.kind {
-        manifest::EntryPointKind::Public => descriptor.permission.as_deref(),
-        manifest::EntryPointKind::Init => {
-            Some(iroha_data_model::smart_contract::CONTRACT_INIT_PERMISSION_NAME)
+fn contract_call_runtime_permission(
+    kind: manifest::EntryPointKind,
+    declared_permission: Option<&str>,
+) -> Option<&str> {
+    match kind {
+        manifest::EntryPointKind::Kotoage => declared_permission,
+        manifest::EntryPointKind::Hajimari => {
+            Some(iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME)
         }
-        manifest::EntryPointKind::Upgrade => {
-            Some(iroha_data_model::smart_contract::CONTRACT_UPGRADE_PERMISSION_NAME)
+        manifest::EntryPointKind::Kaizen => {
+            Some(iroha_data_model::smart_contract::CONTRACT_KAIZEN_PERMISSION_NAME)
         }
         manifest::EntryPointKind::View => None,
     }
@@ -15444,9 +16561,10 @@ fn contract_call_runtime_permission(descriptor: &manifest::EntrypointDescriptor)
 fn ensure_contract_call_authorized(
     world: &impl WorldReadOnly,
     authority: &iroha_data_model::account::AccountId,
-    descriptor: &manifest::EntrypointDescriptor,
+    entrypoint: &str,
+    required: Option<&str>,
 ) -> std::result::Result<(), ContractCallSimulationError> {
-    let Some(required) = contract_call_runtime_permission(descriptor) else {
+    let Some(required) = required else {
         return Ok(());
     };
     let required = required.trim();
@@ -15454,6 +16572,7 @@ fn ensure_contract_call_authorized(
         return Err(ContractCallSimulationError {
             message: "contract entrypoint authorization must not be empty".to_owned(),
             vm_diagnostic: None,
+            normalized_payload: None,
             gas_used: 0,
             queued_instructions: Vec::new(),
         });
@@ -15462,6 +16581,7 @@ fn ensure_contract_call_authorized(
         ContractCallSimulationError {
             message,
             vm_diagnostic: None,
+            normalized_payload: None,
             gas_used: 0,
             queued_instructions: Vec::new(),
         }
@@ -15469,11 +16589,9 @@ fn ensure_contract_call_authorized(
         Ok(())
     } else {
         Err(ContractCallSimulationError {
-            message: format!(
-                "contract entrypoint `{}` requires permission `{required}`",
-                descriptor.name
-            ),
+            message: format!("contract entrypoint `{entrypoint}` requires permission `{required}`"),
             vm_diagnostic: None,
+            normalized_payload: None,
             gas_used: 0,
             queued_instructions: Vec::new(),
         })
@@ -15502,31 +16620,78 @@ fn execute_contract_view(
         vm_diagnostic: None,
     })?;
     let query_view = state.query_view();
-    ensure_contract_view_authorized(&query_view.world, authority, descriptor)?;
-    let arguments =
-        encode_contract_argument_record(program.prepared_contract(), selector, payload.as_ref())
-            .map_err(|message| ContractViewExecutionError {
+    iroha_core::smartcontracts::code::ensure_contract_ready_for_view(
+        &query_view.world,
+        contract_address,
+        program.code_hash,
+    )
+    .map_err(|error| ContractViewExecutionError {
+        message: error.to_string(),
+        vm_diagnostic: None,
+    })?;
+    let live_alias = resolve_exact_contract_runtime_alias(
+        &query_view.world,
+        contract_address,
+        contract_alias,
+        program.code_hash,
+    )
+    .map_err(|message| ContractViewExecutionError {
+        message,
+        vm_diagnostic: None,
+    })?;
+    let embedded_descriptor =
+        exact_prepared_entrypoint(program.prepared_contract(), selector, descriptor).map_err(
+            |message| ContractViewExecutionError {
                 message,
                 vm_diagnostic: None,
-            })?;
+            },
+        )?;
+    let runtime_permission = embedded_descriptor.permission.clone();
+    let normalized_payload = normalize_contract_payload_after_authorization(
+        || {
+            ensure_contract_view_authorized(
+                &query_view.world,
+                authority,
+                selector,
+                runtime_permission.as_deref(),
+            )
+        },
+        descriptor,
+        payload.as_ref(),
+        |error| ContractViewExecutionError {
+            message: error.to_string(),
+            vm_diagnostic: None,
+        },
+    )?;
+    let mut host = iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
+        authority.clone(),
+        query_view.accounts_snapshot(),
+    );
+    host.bind_contract_runtime_context(
+        contract_address.clone(),
+        live_alias,
+        program.code_hash,
+        selector.to_owned(),
+        runtime_permission,
+    );
+    let arguments = prepare_contract_argument_record(
+        program.prepared_contract(),
+        selector,
+        normalized_payload.as_ref(),
+        gas_limit,
+    )
+    .map_err(|message| ContractViewExecutionError {
+        message,
+        vm_diagnostic: None,
+    })?;
+    let prepared_arguments = arguments.clone();
+    host.set_entrypoint_argument_record(arguments);
     let mut vm = program
         .checkout_runtime(gas_limit)
         .map_err(|err| ContractViewExecutionError {
             message: format!("failed to prepare contract view runtime: {err}"),
             vm_diagnostic: None,
         })?;
-    let mut host = if let Some(arguments) = arguments {
-        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
-            authority.clone(),
-            query_view.accounts_snapshot(),
-            arguments,
-        )
-    } else {
-        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
-            authority.clone(),
-            query_view.accounts_snapshot(),
-        )
-    };
     host.set_crypto_config(Arc::clone(&query_view.crypto));
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
@@ -15535,14 +16700,18 @@ fn execute_contract_view(
     host.set_vrf_epoch_seeds_from_world(&query_view.world);
     host.set_query_state(&query_view);
     host.set_prepared_contract_cache(program.prepared_contract_cache());
-    host.bind_contract_runtime_context(
-        contract_address.clone(),
-        contract_alias.cloned(),
-        selector.to_owned(),
-    );
 
     vm.set_gas_limit(gas_limit);
-    vm.set_register(1, vm.memory.code_len());
+    if let Some(arguments) = prepared_arguments.as_ref() {
+        arguments
+            .precharge_vm(&mut vm)
+            .map_err(|error| ContractViewExecutionError {
+                message: format!("failed to precharge contract view arguments: {error}"),
+                vm_diagnostic: None,
+            })?;
+    }
+    let return_pc = vm.memory.code_len();
+    vm.set_register(1, return_pc);
     vm.set_program_counter(entry_pc)
         .map_err(|err| ContractViewExecutionError {
             message: format!("failed to seek to contract view entrypoint: {err}"),
@@ -15569,22 +16738,16 @@ fn execute_contract_view(
         });
     }
 
-    let schema = descriptor
-        .return_type
-        .as_deref()
-        .map(parse_contract_schema_type)
-        .transpose()
-        .map_err(|err| ContractViewExecutionError {
-            message: err.to_string(),
-            vm_diagnostic: None,
-        })?
-        .unwrap_or(ContractSchemaType::Unit);
-    let (value, _) = decode_contract_view_result_value(&vm, 10, &schema).map_err(|err| {
-        ContractViewExecutionError {
-            message: contract_view_error_message(&err),
-            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
-        }
-    })?;
+    let value = descriptor.return_schema.as_ref().map_or_else(
+        || Ok(Value::Null),
+        |schema| {
+            iroha_core::smartcontracts::ivm::return_value::decode_entrypoint_return(&vm, schema)
+                .map_err(|err| ContractViewExecutionError {
+                    message: err.to_string(),
+                    vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+                })
+        },
+    )?;
     Ok(IrohaJson::from(value))
 }
 
@@ -15592,6 +16755,8 @@ fn execute_contract_view(
 fn execute_contract_call_simulation(
     state: &CoreState,
     authority: &iroha_data_model::account::AccountId,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
     program: &iroha_core::smartcontracts::ivm::cache::ProgramSummary,
     selector: &str,
     descriptor: &manifest::EntrypointDescriptor,
@@ -15603,40 +16768,107 @@ fn execute_contract_call_simulation(
             .map_err(|err| ContractCallSimulationError {
                 message: err.to_string(),
                 vm_diagnostic: None,
+                normalized_payload: None,
                 gas_used: 0,
                 queued_instructions: Vec::new(),
             })?;
     let query_view = state.query_view();
-    ensure_contract_call_authorized(&query_view.world, authority, descriptor)?;
-    let arguments =
-        encode_contract_argument_record(program.prepared_contract(), selector, payload.as_ref())
-            .map_err(|message| ContractCallSimulationError {
+    iroha_core::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
+        &query_view.world,
+        contract_address,
+        program.code_hash,
+        descriptor.kind,
+    )
+    .map_err(|error| ContractCallSimulationError {
+        message: error.to_string(),
+        vm_diagnostic: None,
+        normalized_payload: None,
+        gas_used: 0,
+        queued_instructions: Vec::new(),
+    })?;
+    let live_alias = resolve_exact_contract_runtime_alias(
+        &query_view.world,
+        contract_address,
+        contract_alias,
+        program.code_hash,
+    )
+    .map_err(|message| ContractCallSimulationError {
+        message,
+        vm_diagnostic: None,
+        normalized_payload: None,
+        gas_used: 0,
+        queued_instructions: Vec::new(),
+    })?;
+    let embedded_descriptor =
+        exact_prepared_entrypoint(program.prepared_contract(), selector, descriptor).map_err(
+            |message| ContractCallSimulationError {
                 message,
                 vm_diagnostic: None,
+                normalized_payload: None,
                 gas_used: 0,
                 queued_instructions: Vec::new(),
-            })?;
+            },
+        )?;
+    let runtime_permission = contract_call_runtime_permission(
+        embedded_descriptor.kind,
+        embedded_descriptor.permission.as_deref(),
+    )
+    .map(str::to_owned);
+    let normalized_payload = normalize_contract_payload_after_authorization(
+        || {
+            ensure_contract_call_authorized(
+                &query_view.world,
+                authority,
+                selector,
+                runtime_permission.as_deref(),
+            )
+        },
+        descriptor,
+        payload.as_ref(),
+        |error| ContractCallSimulationError {
+            message: error.to_string(),
+            vm_diagnostic: None,
+            normalized_payload: None,
+            gas_used: 0,
+            queued_instructions: Vec::new(),
+        },
+    )?;
+    let mut host = iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
+        authority.clone(),
+        query_view.accounts_snapshot(),
+    );
+    host.bind_contract_runtime_context(
+        contract_address.clone(),
+        live_alias,
+        program.code_hash,
+        selector.to_owned(),
+        runtime_permission,
+    );
+    let arguments = prepare_contract_argument_record(
+        program.prepared_contract(),
+        selector,
+        normalized_payload.as_ref(),
+        gas_limit,
+    )
+    .map_err(|message| ContractCallSimulationError {
+        message,
+        vm_diagnostic: None,
+        normalized_payload: normalized_payload.clone(),
+        gas_used: 0,
+        queued_instructions: Vec::new(),
+    })?;
+    let prepared_arguments = arguments.clone();
+    host.set_entrypoint_argument_record(arguments);
     let mut vm =
         program
             .checkout_runtime(gas_limit)
             .map_err(|err| ContractCallSimulationError {
                 message: format!("failed to prepare contract call runtime: {err}"),
                 vm_diagnostic: None,
+                normalized_payload: normalized_payload.clone(),
                 gas_used: 0,
                 queued_instructions: Vec::new(),
             })?;
-    let mut host = if let Some(arguments) = arguments {
-        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
-            authority.clone(),
-            query_view.accounts_snapshot(),
-            arguments,
-        )
-    } else {
-        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
-            authority.clone(),
-            query_view.accounts_snapshot(),
-        )
-    };
     host.set_crypto_config(Arc::clone(&query_view.crypto));
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
@@ -15647,11 +16879,24 @@ fn execute_contract_call_simulation(
     host.set_prepared_contract_cache(program.prepared_contract_cache());
 
     vm.set_gas_limit(gas_limit);
-    vm.set_register(1, vm.memory.code_len());
+    if let Some(arguments) = prepared_arguments.as_ref() {
+        arguments
+            .precharge_vm(&mut vm)
+            .map_err(|error| ContractCallSimulationError {
+                message: format!("failed to precharge contract call arguments: {error}"),
+                vm_diagnostic: None,
+                normalized_payload: normalized_payload.clone(),
+                gas_used: 0,
+                queued_instructions: Vec::new(),
+            })?;
+    }
+    let return_pc = vm.memory.code_len();
+    vm.set_register(1, return_pc);
     vm.set_program_counter(entry_pc)
         .map_err(|err| ContractCallSimulationError {
             message: format!("failed to seek to contract call entrypoint: {err}"),
             vm_diagnostic: None,
+            normalized_payload: normalized_payload.clone(),
             gas_used: 0,
             queued_instructions: Vec::new(),
         })?;
@@ -15662,6 +16907,7 @@ fn execute_contract_call_simulation(
     let gas_used = gas_limit.saturating_sub(vm.gas_remaining);
     let queued_instructions = render_contract_queued_instructions(&queued).map_err(|mut err| {
         err.gas_used = gas_used;
+        err.normalized_payload = normalized_payload.clone();
         err
     })?;
 
@@ -15669,38 +16915,30 @@ fn execute_contract_call_simulation(
         return Err(ContractCallSimulationError {
             message: format!("contract call simulation failed: {err}"),
             vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+            normalized_payload,
             gas_used,
             queued_instructions,
         });
     }
 
-    let schema = descriptor
-        .return_type
-        .as_deref()
-        .map(parse_contract_schema_type)
-        .transpose()
-        .map_err(|err| ContractCallSimulationError {
-            message: err.to_string(),
-            vm_diagnostic: None,
-            gas_used,
-            queued_instructions: queued_instructions.clone(),
-        })?
-        .unwrap_or(ContractSchemaType::Unit);
-    let result = if schema == ContractSchemaType::Unit {
-        None
-    } else {
-        let (value, _) = decode_contract_view_result_value(&vm, 10, &schema).map_err(|err| {
-            ContractCallSimulationError {
-                message: err.to_string(),
-                vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
-                gas_used,
-                queued_instructions: queued_instructions.clone(),
-            }
-        })?;
-        Some(IrohaJson::from(value))
-    };
+    let result = descriptor
+        .return_schema
+        .as_ref()
+        .map(|schema| {
+            iroha_core::smartcontracts::ivm::return_value::decode_entrypoint_return(&vm, schema)
+                .map(IrohaJson::from)
+                .map_err(|err| ContractCallSimulationError {
+                    message: err.to_string(),
+                    vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+                    normalized_payload: normalized_payload.clone(),
+                    gas_used,
+                    queued_instructions: queued_instructions.clone(),
+                })
+        })
+        .transpose()?;
 
     Ok(ContractCallSimulationExecution {
+        normalized_payload,
         gas_used,
         queued_instructions,
         result,
@@ -16051,6 +17289,15 @@ fn build_multisig_contract_call_instructions(
     Vec<iroha_data_model::isi::InstructionBox>,
     HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
 )> {
+    let descriptor = advertised_contract_entrypoint(manifest, entrypoint)?;
+    if matches!(
+        descriptor.kind,
+        manifest::EntryPointKind::Hajimari | manifest::EntryPointKind::Kaizen
+    ) {
+        return Err(conversion_error(format!(
+            "`{entrypoint}` is a hajimari/始まり or kaizen/改善 entrypoint and cannot be invoked through a multisig trigger"
+        )));
+    }
     let arguments =
         bound_signed_contract_arguments(arguments.map(<[u8]>::to_vec)).map_err(conversion_error)?;
     let trigger_id = derive_multisig_contract_call_trigger_id(
@@ -17256,6 +18503,11 @@ fn multisig_approval_entry(
 mod multisig_contract_call_tests {
     use super::*;
 
+    #[test]
+    fn implicit_contract_gas_limit_covers_strict_argument_admission_floor() {
+        assert!(DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT > 1_048_752);
+    }
+
     fn sample_account_id() -> iroha_data_model::account::AccountId {
         checked_multisig_contract_account_id(
             0xea,
@@ -17294,7 +18546,6 @@ mod multisig_contract_call_tests {
             &contract_address,
             "main",
             Some(&payload),
-            None,
             Some(asset_definition.as_str()),
             None,
             5_000,
@@ -17339,7 +18590,7 @@ mod multisig_contract_call_tests {
         )
         .expect("contract address");
         let manifest = manifest::ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: None,
             abi_hash: None,
             compiler_fingerprint: None,
@@ -17363,6 +18614,7 @@ mod multisig_contract_call_tests {
             None,
             "main",
             Some(&payload),
+            None,
             Some(asset_definition.as_str()),
             Some(sponsor.as_str()),
             5_000,
@@ -17386,7 +18638,7 @@ mod multisig_contract_call_tests {
     #[test]
     fn contract_call_metadata_keeps_only_fee_fields() {
         let manifest = manifest::ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: None,
             abi_hash: None,
             compiler_fingerprint: None,
@@ -17464,7 +18716,7 @@ mod contract_entrypoint_validation_tests {
         entrypoints: Option<Vec<EntrypointDescriptor>>,
     ) -> ContractManifest {
         ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: None,
             abi_hash: None,
             compiler_fingerprint: Some("torii-tests".to_owned()),
@@ -17530,10 +18782,11 @@ mod contract_entrypoint_validation_tests {
     fn ensure_public_contract_entrypoint_rejects_non_public_targets() {
         let manifest = manifest_with_entrypoints(Some(vec![EntrypointDescriptor {
             name: "boot".to_owned(),
-            kind: manifest::EntryPointKind::Init,
+            kind: manifest::EntryPointKind::Hajimari,
             params: Vec::new(),
             argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -17552,10 +18805,11 @@ mod contract_entrypoint_validation_tests {
         let descriptors = vec![
             EntrypointDescriptor {
                 name: "hajimari".to_owned(),
-                kind: manifest::EntryPointKind::Init,
+                kind: manifest::EntryPointKind::Hajimari,
                 params: Vec::new(),
                 argument_schema: None,
                 return_type: None,
+                return_schema: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -17565,10 +18819,11 @@ mod contract_entrypoint_validation_tests {
             },
             EntrypointDescriptor {
                 name: "kaizen".to_owned(),
-                kind: manifest::EntryPointKind::Upgrade,
+                kind: manifest::EntryPointKind::Kaizen,
                 params: Vec::new(),
                 argument_schema: None,
                 return_type: None,
+                return_schema: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -17582,6 +18837,7 @@ mod contract_entrypoint_validation_tests {
                 params: Vec::new(),
                 argument_schema: None,
                 return_type: None,
+                return_schema: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -17596,28 +18852,28 @@ mod contract_entrypoint_validation_tests {
             ensure_callable_contract_entrypoint(&manifest, "hajimari")
                 .expect("hajimari must be transaction-callable")
                 .kind,
-            manifest::EntryPointKind::Init
+            manifest::EntryPointKind::Hajimari
         );
         assert_eq!(
             ensure_callable_contract_entrypoint(&manifest, "kaizen")
                 .expect("kaizen must be transaction-callable")
                 .kind,
-            manifest::EntryPointKind::Upgrade
+            manifest::EntryPointKind::Kaizen
         );
         assert_eq!(
             ensure_contract_call_entrypoint(
                 &manifest,
                 "hajimari",
-                Some(manifest::EntryPointKind::Init),
+                Some(manifest::EntryPointKind::Hajimari),
             )
-            .expect("a hajimari bundle call must select the lifecycle initializer")
+            .expect("a hajimari bundle call must select the hajimari declaration")
             .kind,
-            manifest::EntryPointKind::Init,
+            manifest::EntryPointKind::Hajimari,
         );
         let wrong_lifecycle_kind = ensure_contract_call_entrypoint(
             &manifest,
             "kaizen",
-            Some(manifest::EntryPointKind::Init),
+            Some(manifest::EntryPointKind::Hajimari),
         )
         .expect_err("hajimari bundle calls must reject kaizen entrypoints");
         assert!(expect_conversion(wrong_lifecycle_kind).contains("not a hajimari entrypoint"));
@@ -17630,10 +18886,11 @@ mod contract_entrypoint_validation_tests {
     fn lifecycle_permissions_are_defined_by_the_runtime() {
         let mut descriptor = EntrypointDescriptor {
             name: "hajimari".to_owned(),
-            kind: manifest::EntryPointKind::Init,
+            kind: manifest::EntryPointKind::Hajimari,
             params: Vec::new(),
             argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: Some("SourceCannotOverrideLifecycle".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -17642,14 +18899,14 @@ mod contract_entrypoint_validation_tests {
             triggers: Vec::new(),
         };
         assert_eq!(
-            contract_call_runtime_permission(&descriptor),
-            Some(iroha_data_model::smart_contract::CONTRACT_INIT_PERMISSION_NAME)
+            contract_call_runtime_permission(descriptor.kind, descriptor.permission.as_deref()),
+            Some(iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME)
         );
 
-        descriptor.kind = manifest::EntryPointKind::Upgrade;
+        descriptor.kind = manifest::EntryPointKind::Kaizen;
         assert_eq!(
-            contract_call_runtime_permission(&descriptor),
-            Some(iroha_data_model::smart_contract::CONTRACT_UPGRADE_PERMISSION_NAME)
+            contract_call_runtime_permission(descriptor.kind, descriptor.permission.as_deref()),
+            Some(iroha_data_model::smart_contract::CONTRACT_KAIZEN_PERMISSION_NAME)
         );
     }
 }
@@ -17660,8 +18917,16 @@ mod contract_payload_normalization_tests {
         EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor,
     };
     use iroha_data_model::{
-        ValidationFail, nexus::DataSpaceId, query::error::QueryExecutionFail,
-        smart_contract::ContractAddress,
+        ValidationFail,
+        nexus::DataSpaceId,
+        query::error::QueryExecutionFail,
+        smart_contract::{
+            ContractAddress,
+            entrypoint::{
+                EntrypointArgumentFieldV1, EntrypointArgumentSchemaV1, EntrypointValueKindV1,
+                EntrypointValueTypeNodeV1, EntrypointValueTypeV1,
+            },
+        },
     };
 
     use super::*;
@@ -17674,16 +18939,32 @@ mod contract_payload_normalization_tests {
         )
     }
 
+    fn scalar_argument_schema(
+        name: &str,
+        kind: EntrypointValueKindV1,
+    ) -> EntrypointArgumentSchemaV1 {
+        EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: name.to_owned(),
+                ty: EntrypointValueTypeV1 {
+                    nodes: vec![EntrypointValueTypeNodeV1::Leaf(kind)],
+                },
+            }],
+        }
+    }
+
     fn i64_descriptor() -> EntrypointDescriptor {
         EntrypointDescriptor {
             name: "create".to_owned(),
-            kind: EntryPointKind::Public,
+            kind: EntryPointKind::Kotoage,
             params: vec![EntrypointParamDescriptor {
                 name: "amount".to_owned(),
                 type_name: "i64".to_owned(),
             }],
+            argument_schema: Some(scalar_argument_schema("amount", EntrypointValueKindV1::Int)),
             return_type: None,
-            permission: None,
+            return_schema: None,
+            permission: Some("ExecuteContract".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),
@@ -17695,13 +18976,18 @@ mod contract_payload_normalization_tests {
     fn bytes_descriptor() -> EntrypointDescriptor {
         EntrypointDescriptor {
             name: "create".to_owned(),
-            kind: EntryPointKind::Public,
+            kind: EntryPointKind::Kotoage,
             params: vec![EntrypointParamDescriptor {
                 name: "alias_literal".to_owned(),
                 type_name: "bytes".to_owned(),
             }],
+            argument_schema: Some(scalar_argument_schema(
+                "alias_literal",
+                EntrypointValueKindV1::Blob,
+            )),
             return_type: None,
-            permission: None,
+            return_schema: None,
+            permission: Some("ExecuteContract".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),
@@ -17713,13 +18999,18 @@ mod contract_payload_normalization_tests {
     fn account_id_descriptor() -> EntrypointDescriptor {
         EntrypointDescriptor {
             name: "bind".to_owned(),
-            kind: EntryPointKind::Public,
+            kind: EntryPointKind::Kotoage,
             params: vec![EntrypointParamDescriptor {
                 name: "controller".to_owned(),
                 type_name: "AccountId".to_owned(),
             }],
+            argument_schema: Some(scalar_argument_schema(
+                "controller",
+                EntrypointValueKindV1::AccountId,
+            )),
             return_type: None,
-            permission: None,
+            return_schema: None,
+            permission: Some("ExecuteContract".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),
@@ -17731,13 +19022,15 @@ mod contract_payload_normalization_tests {
     fn json_descriptor() -> EntrypointDescriptor {
         EntrypointDescriptor {
             name: "run".to_owned(),
-            kind: EntryPointKind::Public,
+            kind: EntryPointKind::Kotoage,
             params: vec![EntrypointParamDescriptor {
                 name: "ev".to_owned(),
                 type_name: "Json".to_owned(),
             }],
+            argument_schema: Some(scalar_argument_schema("ev", EntrypointValueKindV1::Json)),
             return_type: None,
-            permission: None,
+            return_schema: None,
+            permission: Some("ExecuteContract".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),
@@ -17753,6 +19046,31 @@ mod contract_payload_normalization_tests {
             }
             other => panic!("expected conversion error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn denied_contract_requests_skip_payload_normalization_and_record_decoding() {
+        let descriptor = i64_descriptor();
+        let malformed_payload = IrohaJson::new(norito::json!({
+            "amount": "9223372036854775808"
+        }));
+        let normalization_attempted = std::cell::Cell::new(false);
+        ivm::reset_argument_record_decode_count();
+
+        let error = normalize_contract_payload_after_authorization(
+            || Err("permission denied"),
+            &descriptor,
+            Some(&malformed_payload),
+            |_| {
+                normalization_attempted.set(true);
+                "payload normalization failed"
+            },
+        )
+        .expect_err("authorization must reject the request before payload processing");
+
+        assert_eq!(error, "permission denied");
+        assert!(!normalization_attempted.get());
+        assert_eq!(ivm::argument_record_decode_count(), 0);
     }
 
     #[test]
@@ -18423,17 +19741,18 @@ mod multisig_selector_tests {
         };
         let mut out = meta.encode();
         let interface = ivm::EmbeddedContractInterfaceV1 {
-            contract_name: "TestContract".to_owned(),
+            seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "torii-tests".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
                 name: "main".to_owned(),
-                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
                 params: Vec::new(),
                 argument_schema: None,
                 return_type: None,
+                return_schema: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -19833,7 +21152,7 @@ mod multisig_selector_tests {
             None,
         );
         let contract_manifest = manifest::ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: None,
             abi_hash: None,
             compiler_fingerprint: None,
@@ -21660,7 +22979,7 @@ pub async fn handle_post_contract_call_multisig_propose(
     if gas_limit.is_some_and(|value| value == 0) {
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
-    let gas_limit = gas_limit.unwrap_or(DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT);
+    let gas_limit = gas_limit.unwrap_or(DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT);
     let gas_asset_id =
         normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
@@ -24131,11 +25450,11 @@ pub struct DeployContractBundleContractReceiptDto {
     pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
     /// Contract address that was deployed or resolved.
     pub contract_address: iroha_data_model::smart_contract::ContractAddress,
-    /// Previous contract address replaced by an upgrade, when any.
+    /// Previous contract address replaced by a `kaizen`/`改善`, when any.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub previous_contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
-    /// Whether this deployment replaced a previous alias target.
-    pub upgraded: bool,
+    /// Whether this deployment performed a `kaizen`/`改善` by replacing an alias target.
+    pub kaizen: bool,
     /// Dataspace alias used for the deployed contract.
     pub dataspace: String,
     /// Nonce used for deployment.
@@ -24488,12 +25807,12 @@ fn register_authority_if_missing(
 }
 
 #[cfg(feature = "app_api")]
-fn default_pipeline_gas_asset_id(state: &CoreState) -> Option<String> {
+fn configured_pipeline_gas_asset_id(state: &CoreState) -> Option<String> {
     let world = state.world_view();
     let key =
         Name::from_str("ivm_gas_accepted_assets").expect("static gas-accepted-assets parameter");
     let parameter_id = iroha_data_model::parameter::CustomParameterId(key);
-    let configured_asset = world
+    world
         .parameters()
         .custom()
         .get(&parameter_id)
@@ -24512,19 +25831,38 @@ fn default_pipeline_gas_asset_id(state: &CoreState) -> Option<String> {
                 .into_iter()
                 .map(|asset| asset.trim().to_owned())
                 .find(|asset| !asset.is_empty())
-        })?;
+        })
+}
 
-    match canonical_gas_asset_definition_id(state, &configured_asset) {
-        Ok(asset_id) => Some(asset_id),
+#[cfg(feature = "app_api")]
+fn strict_default_pipeline_gas_asset_id(state: &CoreState) -> Result<Option<String>> {
+    configured_pipeline_gas_asset_id(state)
+        .map(|configured_asset| {
+            canonical_gas_asset_definition_id(state, &configured_asset).map(Some)
+        })
+        .unwrap_or(Ok(None))
+}
+
+#[cfg(feature = "app_api")]
+fn default_pipeline_gas_asset_id(state: &CoreState) -> Option<String> {
+    match strict_default_pipeline_gas_asset_id(state) {
+        Ok(asset_id) => asset_id,
         Err(err) => {
-            iroha_logger::warn!(
-                ?err,
-                asset = %configured_asset,
-                "failed to canonicalize default gas asset id"
-            );
-            Some(configured_asset)
+            iroha_logger::warn!(?err, "rejecting a noncanonical default gas asset id");
+            None
         }
     }
+}
+
+#[cfg(feature = "app_api")]
+fn strict_metadata_with_default_gas_asset(state: &CoreState) -> Result<Metadata> {
+    let mut metadata = Metadata::default();
+    if let Some(asset_id) = strict_default_pipeline_gas_asset_id(state)? {
+        let gas_asset_key =
+            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
+        metadata.insert(gas_asset_key, IrohaJson::new(asset_id));
+    }
+    Ok(metadata)
 }
 
 #[cfg(feature = "app_api")]
@@ -24840,7 +26178,7 @@ fn plan_contract_bundle(
             contract_alias: contract.contract_alias.clone(),
             contract_address,
             previous_contract_address: previous_contract_address.clone(),
-            upgraded: previous_contract_address.is_some(),
+            kaizen: previous_contract_address.is_some(),
             dataspace: dataspace_alias,
             deploy_nonce,
             code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
@@ -25233,6 +26571,7 @@ fn strict_json_object_from_parser(
         if !allowed_fields.contains(&key.as_str()) {
             return Err(norito::json::MapVisitor::unknown_field(key.as_str()));
         }
+        let key = key.as_str().to_owned();
         if values.contains_key(&key) {
             return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
         }
@@ -25259,6 +26598,7 @@ fn reject_unknown_json_object_fields(
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request payload for submitting a bridge proof derived from a live SCCP bundle.
 ///
 /// Torii never accepts signing keys or caller-selected route material. Callers either request
@@ -25270,6 +26610,12 @@ pub struct BridgeProofSubmitDto {
     /// Optional detached signature (canonical padded base64) over `signing_message_b64`.
     #[norito(default)]
     pub signature_b64: Option<String>,
+    /// Exact canonical Norito transaction payload returned by preparation.
+    ///
+    /// Direct submission requires this field together with `signature_b64`; preparation requires
+    /// both fields to be absent. Torii never reconstructs a signed payload from current defaults.
+    #[norito(default)]
+    pub transaction_payload_b64: Option<String>,
     /// Canonical padded-base64 Norito `SccpGroth16Bn254ProofArtifactV1`.
     pub destination_proof_b64: String,
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
@@ -25279,10 +26625,13 @@ pub struct BridgeProofSubmitDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct BridgeProofSubmitDtoWire {
     authority: iroha_data_model::account::AccountId,
     #[norito(default)]
     signature_b64: Option<String>,
+    #[norito(default)]
+    transaction_payload_b64: Option<String>,
     destination_proof_b64: String,
     #[norito(default)]
     creation_time_ms: Option<u64>,
@@ -25294,12 +26643,14 @@ impl From<BridgeProofSubmitDtoWire> for BridgeProofSubmitDto {
         let BridgeProofSubmitDtoWire {
             authority,
             signature_b64,
+            transaction_payload_b64,
             destination_proof_b64,
             creation_time_ms,
         } = wire;
         Self {
             authority,
             signature_b64,
+            transaction_payload_b64,
             destination_proof_b64,
             creation_time_ms,
         }
@@ -25316,6 +26667,7 @@ impl norito::json::JsonDeserialize for BridgeProofSubmitDto {
             &[
                 "authority",
                 "signature_b64",
+                "transaction_payload_b64",
                 "destination_proof_b64",
                 "creation_time_ms",
             ],
@@ -25329,6 +26681,7 @@ impl norito::json::JsonDeserialize for BridgeProofSubmitDto {
             &[
                 "authority",
                 "signature_b64",
+                "transaction_payload_b64",
                 "destination_proof_b64",
                 "creation_time_ms",
             ],
@@ -25340,6 +26693,7 @@ impl norito::json::JsonDeserialize for BridgeProofSubmitDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 /// Exact response returned by both SCCP bridge submit endpoints.
 ///
 /// A submitted response contains only `tx_hash_hex`; a preparation response contains only the
@@ -25357,8 +26711,8 @@ pub struct BridgeSubmitResponseDto {
     pub counterparty_domain: u32,
     /// Canonical SCCP counterparty chain key derived from the submitted bundle.
     pub counterparty_chain: String,
-    /// Hex-encoded manifest hash bound into the bridge proof artifact.
-    pub manifest_hash_hex: String,
+    /// Hex-encoded exact historical SCCP route-configuration commitment.
+    pub route_configuration_hash_hex: String,
     /// Inclusive start height covered by the bridge proof.
     pub range_start_height: u64,
     /// Inclusive end height covered by the bridge proof.
@@ -25378,6 +26732,7 @@ pub struct BridgeSubmitResponseDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request payload for preparing one proof-driven native SCCP admission transaction.
 ///
 /// Torii never accepts raw signing keys; the direct-sign public key is derived from `authority`.
@@ -25387,6 +26742,12 @@ pub struct BridgeMessageSubmitDto {
     /// Optional detached signature (canonical padded base64) over `signing_message_b64`.
     #[norito(default)]
     pub signature_b64: Option<String>,
+    /// Exact canonical Norito transaction payload returned by preparation.
+    ///
+    /// Direct submission requires this field together with `signature_b64`; preparation requires
+    /// both fields to be absent. Torii never reconstructs a signed payload from current defaults.
+    #[norito(default)]
+    pub transaction_payload_b64: Option<String>,
     /// Base64-encoded canonical Norito native inbound SCCP proof.
     pub native_proof_b64: String,
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
@@ -25396,10 +26757,13 @@ pub struct BridgeMessageSubmitDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct BridgeMessageSubmitDtoWire {
     authority: iroha_data_model::account::AccountId,
     #[norito(default)]
     signature_b64: Option<String>,
+    #[norito(default)]
+    transaction_payload_b64: Option<String>,
     native_proof_b64: String,
     #[norito(default)]
     creation_time_ms: Option<u64>,
@@ -25411,12 +26775,14 @@ impl From<BridgeMessageSubmitDtoWire> for BridgeMessageSubmitDto {
         let BridgeMessageSubmitDtoWire {
             authority,
             signature_b64,
+            transaction_payload_b64,
             native_proof_b64,
             creation_time_ms,
         } = wire;
         Self {
             authority,
             signature_b64,
+            transaction_payload_b64,
             native_proof_b64,
             creation_time_ms,
         }
@@ -25433,6 +26799,7 @@ impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
             &[
                 "authority",
                 "signature_b64",
+                "transaction_payload_b64",
                 "native_proof_b64",
                 "creation_time_ms",
             ],
@@ -25446,6 +26813,7 @@ impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
             &[
                 "authority",
                 "signature_b64",
+                "transaction_payload_b64",
                 "native_proof_b64",
                 "creation_time_ms",
             ],
@@ -27496,7 +28864,7 @@ async fn submit_contract_deploy_request(
         if previous_contract_is_active {
             instructions.push(dm::InstructionBox::from(DeactivateContractInstance {
                 contract_address: previous_contract_address,
-                reason: Some("superseded by alias upgrade".to_owned()),
+                reason: Some("superseded by alias kaizen".to_owned()),
             }));
         }
     }
@@ -27539,7 +28907,7 @@ async fn submit_contract_deploy_request(
         contract_alias,
         contract_address,
         previous_contract_address: previous_contract_address.clone(),
-        upgraded: previous_contract_address.is_some(),
+        kaizen: previous_contract_address.is_some(),
         dataspace: dataspace_alias,
         deploy_nonce,
         tx_hash_hex: Some(tx_hash_hex.clone()),
@@ -27731,7 +29099,7 @@ async fn execute_contract_bundle_request(
 
     if !bundle_stage_completed(&receipt, "deploy") {
         for index in 0..receipt.contracts.len() {
-            let contract_name = receipt.contracts[index].name.clone();
+            let seiyaku_name = receipt.contracts[index].name.clone();
             let contract_alias = receipt.contracts[index].contract_alias.clone();
             let contract_address = receipt.contracts[index].contract_address.clone();
             let deploy_nonce = receipt.contracts[index].deploy_nonce;
@@ -27744,10 +29112,10 @@ async fn execute_contract_bundle_request(
                 continue;
             }
 
-            let Some(contract) = contracts_by_name.get(&contract_name) else {
+            let Some(contract) = contracts_by_name.get(&seiyaku_name) else {
                 mark_bundle_failure(
                     &mut receipt,
-                    format!("missing contract input `{contract_name}` during resume"),
+                    format!("missing contract input `{seiyaku_name}` during resume"),
                 );
                 persist_contract_bundle_receipt(&receipt)?;
                 return Err(conversion_error(
@@ -27781,7 +29149,7 @@ async fn execute_contract_bundle_request(
                 Err(err) => {
                     mark_bundle_failure(
                         &mut receipt,
-                        format!("deploy contract `{contract_name}`: {err}"),
+                        format!("deploy contract `{seiyaku_name}`: {err}"),
                     );
                     persist_contract_bundle_receipt(&receipt)?;
                     return Err(err);
@@ -27790,7 +29158,7 @@ async fn execute_contract_bundle_request(
             let response_contract_alias = response.contract_alias.clone();
             let response_contract_address = response.contract_address.clone();
             let mut response = response;
-            response.name = contract_name.clone();
+            response.name = seiyaku_name.clone();
             receipt.contracts[index] = response;
             persist_contract_bundle_receipt(&receipt)?;
 
@@ -27811,7 +29179,7 @@ async fn execute_contract_bundle_request(
             {
                 mark_bundle_failure(
                     &mut receipt,
-                    format!("activate contract `{contract_name}`: {err}"),
+                    format!("activate contract `{seiyaku_name}`: {err}"),
                 );
                 persist_contract_bundle_receipt(&receipt)?;
                 return Err(err);
@@ -27855,7 +29223,7 @@ async fn execute_contract_bundle_request(
                     gas_limit: call.gas_limit,
                 },
                 "/v1/contracts/deploy-bundle",
-                Some(manifest::EntryPointKind::Init),
+                Some(manifest::EntryPointKind::Hajimari),
             )
             .await
             {
@@ -28304,7 +29672,7 @@ mod contract_bundle_tests {
                 contract_alias: sample_alias("greeter::universal"),
                 contract_address: sample_address(0),
                 previous_contract_address: None,
-                upgraded: false,
+                kaizen: false,
                 dataspace: "universal".to_owned(),
                 deploy_nonce: 0,
                 code_hash_hex: "code".to_owned(),
@@ -28363,7 +29731,7 @@ mod contract_bundle_tests {
                 contract_alias: sample_alias("greeter::universal"),
                 contract_address: address.clone(),
                 previous_contract_address: None,
-                upgraded: false,
+                kaizen: false,
                 dataspace: "universal".to_owned(),
                 deploy_nonce: 0,
                 code_hash_hex: "code".to_owned(),
@@ -28539,7 +29907,7 @@ mod contract_bundle_tests {
                 contract_alias: sample_alias("greeter::universal"),
                 contract_address: sample_address(0),
                 previous_contract_address: Some(sample_address(1)),
-                upgraded: true,
+                kaizen: true,
                 dataspace: "universal".to_owned(),
                 deploy_nonce: 7,
                 code_hash_hex: "code".to_owned(),
@@ -31614,17 +32982,18 @@ mod deploy_tests {
         };
         let mut out = meta.encode();
         let interface = ivm::EmbeddedContractInterfaceV1 {
-            contract_name: "TestContract".to_owned(),
+            seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "torii-tests".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
                 name: "main".to_owned(),
-                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
                 params: Vec::new(),
                 argument_schema: None,
                 return_type: None,
+                return_schema: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -60983,7 +62352,7 @@ fn load_swap_fill_rollup(
     )?;
     let contract_address = prepared.contract_address.clone();
     let contract_alias = prepared.contract_alias.clone();
-    let gas_limit = 100_000;
+    let gas_limit = DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT;
     let assets_value = call_contract_view_value(
         Arc::clone(&state),
         &authority_id,
@@ -84301,51 +85670,6 @@ mod tests {
 
     use super::{sorafs_capacity_tests::build_por_challenge, *};
     use crate::mk_app_state_for_tests;
-
-    #[test]
-    fn contract_view_signed_int_decodes_twos_complement_register_bits() {
-        assert_eq!(decode_contract_view_signed_i64(u64::MAX), -1);
-        assert_eq!(decode_contract_view_signed_i64(i64::MAX as u64), i64::MAX);
-        assert_eq!(decode_contract_view_signed_i64(i64::MIN as u64), i64::MIN);
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn contract_view_decoder_rejects_private_scalar_pointer_and_tuple_returns() {
-        let mut vm = ivm::IVM::new(1_000);
-        vm.set_zk_mode(true);
-        vm.set_register(10, 7);
-        vm.registers.set_tag(10, true);
-        let scalar = decode_contract_view_result_value(&vm, 10, &ContractSchemaType::Int)
-            .expect_err("private scalar return must fail");
-        assert!(
-            scalar.to_string().contains("privacy"),
-            "unexpected scalar privacy error: {scalar}"
-        );
-
-        vm.registers.set_tag(10, false);
-        vm.set_register(10, ivm::Memory::STACK_START);
-        vm.registers.set_tag(10, true);
-        let pointer = decode_contract_view_result_value(&vm, 10, &ContractSchemaType::Bytes)
-            .expect_err("private pointer return must fail");
-        assert!(
-            pointer.to_string().contains("privacy"),
-            "unexpected pointer privacy error: {pointer}"
-        );
-
-        vm.set_register(10, 1);
-        vm.registers.set_tag(10, false);
-        vm.set_register(11, 2);
-        vm.registers.set_tag(11, true);
-        let tuple =
-            ContractSchemaType::Tuple(vec![ContractSchemaType::Int, ContractSchemaType::Bool]);
-        let tuple_error = decode_contract_view_result_value(&vm, 10, &tuple)
-            .expect_err("private tuple component must fail");
-        assert!(
-            tuple_error.to_string().contains("privacy"),
-            "unexpected tuple privacy error: {tuple_error}"
-        );
-    }
 
     #[test]
     fn openapi_handler_emits_alias_spec() {

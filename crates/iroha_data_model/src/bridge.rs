@@ -16,27 +16,35 @@ use crate::{
 pub mod sccp;
 mod sccp_registry;
 pub use sccp::{
-    SccpEvmSourceEmitterV1, SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1,
-    SccpNetworkV1, SccpOutboundMessageContextV1, SccpOutboundMessageIndexKeyV1,
-    SccpOutboundMessageKeyV1, SccpOutboundMessageRecordV1, SccpSourceEmitterV1,
+    SCCP_V1_JSON_SAFE_INTEGER_MAX, SccpEvmSourceEmitterV1, SccpInboundAnchorHighWaterKeyV1,
+    SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
+    SccpOutboundMessageContextV1, SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
+    SccpOutboundMessageRecordV1, SccpOutboundProofRecordV1, SccpSourceEmitterV1,
     SccpSourceIdentityV1, SccpTronSourceEmitterV1,
 };
 pub use sccp_registry::{
-    SCCP_V1_MAX_GOVERNED_LANES, SCCP_V1_MAX_GOVERNED_ROUTES, SCCP_V1_MAX_KEY_BYTES,
-    SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE, SCCP_V1_MAX_ROUTES_PER_LANE,
+    SCCP_V1_MAX_GOVERNED_LANES, SCCP_V1_MAX_KEY_BYTES, SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
+    SCCP_V1_MAX_LIVE_ROUTES_PER_LANE, SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE,
+    SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE, SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE,
     SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID,
     SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
     SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpGovernedLaneV1,
-    SccpGovernedRouteV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254VerifyingKeyV1, SccpRegistryV1,
-    SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteValidationError, SccpSoraSettlementV1,
-    SccpTronDestinationDeploymentV1, canonical_sccp_groth16_bn254_verifying_key_bytes_v1,
-    canonical_sccp_lane_id_bytes_v1, canonical_sccp_network_bytes_v1,
-    canonical_sccp_source_emitter_bytes_v1, canonical_sccp_source_identity_bytes_v1,
-    sccp_evm_destination_binding_hash_v1, sccp_exact_evm_xor_route_config_hash_v1,
-    sccp_exact_tron_xor_route_config_hash_v1, sccp_groth16_bn254_verifying_key_hash_v1,
+    SccpGovernedRouteV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254SemanticCircuitV1,
+    SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1, SccpOutboundProofPolicyV1,
+    SccpRegistryV1, SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteValidationError,
+    SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSoraSettlementV1,
+    SccpTronDestinationDeploymentV1, canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1,
+    canonical_sccp_groth16_bn254_verifying_key_bytes_v1, canonical_sccp_lane_id_bytes_v1,
+    canonical_sccp_network_bytes_v1, canonical_sccp_semantic_proof_profile_bytes_v1,
+    canonical_sccp_sora_finality_anchor_bytes_v1, canonical_sccp_source_emitter_bytes_v1,
+    canonical_sccp_source_identity_bytes_v1, sccp_evm_destination_binding_hash_v1,
+    sccp_exact_evm_xor_route_config_hash_v1, sccp_exact_tron_xor_route_config_hash_v1,
+    sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_groth16_bn254_verifying_key_hash_v1,
     sccp_lane_id_hash_v1, sccp_network_identity_hash_v1, sccp_network_tag_v1,
-    sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
-    sccp_tron_destination_binding_hash_v1, sccp_v1_taira_xor_asset_definition_id,
+    sccp_semantic_proof_profile_hash_v1, sccp_sora_finality_anchor_hash_v1,
+    sccp_sora_taira_chain_id_hash_v1, sccp_source_emitter_identity_hash_v1,
+    sccp_source_identity_hash_v1, sccp_tron_destination_binding_hash_v1,
+    sccp_v1_taira_xor_asset_definition_id,
 };
 
 /// Definition metadata for a wrapped asset originating from another chain.
@@ -90,6 +98,7 @@ pub struct BridgeReceipt {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "hash_function", content = "value")]
 pub enum BridgeHashFunction {
     /// SHA-256 (ICS-style hash-only light clients).
@@ -105,6 +114,7 @@ pub enum BridgeHashFunction {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct BridgeProofRange {
     /// Inclusive start height of the batch.
     pub start_height: u64,
@@ -141,7 +151,10 @@ impl BridgeProofRange {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct BridgeIcsProof {
+    /// Exact verifier manifest commitment selected for this proof.
+    pub verifier_manifest_hash: [u8; 32],
     /// State root advertised by the counterparty chain.
     pub state_root: [u8; 32],
     /// Leaf hash being proven.
@@ -159,7 +172,10 @@ pub struct BridgeIcsProof {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct BridgeTransparentProof {
+    /// Exact verifier manifest commitment selected for this proof.
+    pub verifier_manifest_hash: [u8; 32],
     /// Opaque proof bytes tagged with backend identifier.
     pub proof: ProofBox,
     /// Optional recursion depth claimed by the prover.
@@ -179,6 +195,7 @@ pub struct BridgeTransparentProof {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "backend", content = "protocol")]
 pub enum BridgeNativeProofBackendV1 {
     /// Ethereum proof using the beacon light client and execution MPTs.
@@ -239,12 +256,17 @@ impl BridgeNativeProofBackendV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct SccpNativeTrustAnchorV1 {
     /// Concrete native verifier that defines the anchor preimage and hash.
     pub backend: BridgeNativeProofBackendV1,
     /// Nonzero, role-separated hash of the governed native checkpoint.
     pub anchor_hash: [u8; 32],
-    /// Canonical finalized source-chain height committed by `anchor_hash`.
+    /// Backend-specific consensus-progress coordinate committed by `anchor_hash`.
+    ///
+    /// Ethereum lanes use a finalized beacon slot. BSC and TRON lanes use a
+    /// finalized block height. This is intentionally distinct from an
+    /// Ethereum execution-block height carried by an admitted event proof.
     pub checkpoint_height: u64,
 }
 
@@ -253,6 +275,23 @@ impl SccpNativeTrustAnchorV1 {
     #[must_use]
     pub fn is_well_formed(self) -> bool {
         self.anchor_hash.iter().any(|byte| *byte != 0) && self.checkpoint_height != 0
+    }
+
+    /// Return whether an authenticated consensus-progress coordinate belongs
+    /// to this anchor's governance interval.
+    ///
+    /// The next retained checkpoint is an inclusive upper boundary. The
+    /// one-height overlap lets BSC/TRON prove the boundary block while the
+    /// successor checkpoint itself becomes usable. Without a successor the
+    /// current checkpoint remains open-ended.
+    #[must_use]
+    pub fn admits_anchor_interval_height(
+        self,
+        anchor_interval_height: u64,
+        inclusive_successor_boundary: Option<u64>,
+    ) -> bool {
+        anchor_interval_height >= self.checkpoint_height
+            && inclusive_successor_boundary.is_none_or(|upper| anchor_interval_height <= upper)
     }
 }
 
@@ -269,11 +308,24 @@ impl SccpNativeTrustAnchorV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct BridgeNativeProtocolProofV1 {
     /// Concrete native verifier selected for the encoded envelope.
     pub backend: BridgeNativeProofBackendV1,
+    /// Immutable governed route configuration authenticated by the envelope.
+    pub route_configuration_hash: [u8; 32],
     /// Canonical Norito bytes of the typed SCCP native inbound proof.
     pub encoded_envelope: Vec<u8>,
+}
+
+impl BridgeNativeProtocolProofV1 {
+    /// Return whether the container carries a nonzero route commitment and a
+    /// nonempty canonical-envelope candidate.
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        self.route_configuration_hash.iter().any(|byte| *byte != 0)
+            && !self.encoded_envelope.is_empty()
+    }
 }
 
 /// Closed production destination verifier selected for an SCCP artifact.
@@ -288,6 +340,7 @@ pub struct BridgeNativeProtocolProofV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "backend", content = "family")]
 pub enum BridgeSccpDestinationProofBackendV1 {
     /// EVM Groth16 verifier over BN254 for Ethereum and BSC destinations.
@@ -322,13 +375,14 @@ impl BridgeSccpDestinationProofBackendV1 {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
 pub struct BridgeSccpDestinationProofV1 {
     /// Closed production verifier selected for the encoded artifact.
     pub backend: BridgeSccpDestinationProofBackendV1,
     /// Immutable governed route configuration authenticated by the artifact.
     ///
-    /// This is explicit rather than inferred from [`BridgeProof::manifest_hash`]
-    /// so historical route rotation cannot reinterpret a proof envelope.
+    /// Keeping this commitment in the typed payload means historical route
+    /// rotation cannot reinterpret a proof envelope.
     pub route_configuration_hash: [u8; 32],
     /// Canonical Norito bytes of the typed SCCP destination artifact.
     pub encoded_artifact: Vec<u8>,
@@ -360,37 +414,93 @@ impl BridgeSccpDestinationProofV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "kind", content = "payload")]
 pub enum BridgeProofPayload {
     /// ICS-23-style inclusion proof against a state root.
+    #[codec(index = 0)]
     Ics(BridgeIcsProof),
     /// Transparent recursive ZK proof.
+    #[codec(index = 1)]
     TransparentZk(BridgeTransparentProof),
     /// Protocol-native SCCP consensus and message-inclusion proof.
+    #[codec(index = 2)]
     NativeProtocol(BridgeNativeProtocolProofV1),
     /// Closed production proof for delivering an SORA-origin SCCP message.
+    #[codec(index = 3)]
     SccpDestination(BridgeSccpDestinationProofV1),
 }
 
-/// Bridge proof artifact with manifest binding and retention hints.
+/// Typed verifier binding computed from a bridge proof payload.
+///
+/// This value is not stored independently in [`BridgeProof`]. Keeping the
+/// commitment beside the payload that defines its meaning makes it impossible
+/// to reinterpret a route-configuration hash as a generic verifier manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BridgeProofBinding {
+    /// Commitment to the verifier manifest used by a generic proof backend.
+    VerifierManifest([u8; 32]),
+    /// Commitment to the exact historical SCCP route configuration.
+    SccpRouteConfigurationV1([u8; 32]),
+}
+
+impl BridgeProofBinding {
+    /// Return the bound commitment bytes.
+    #[must_use]
+    pub const fn hash(self) -> [u8; 32] {
+        match self {
+            Self::VerifierManifest(hash) | Self::SccpRouteConfigurationV1(hash) => hash,
+        }
+    }
+
+    /// Return whether the binding carries a nonzero commitment.
+    #[must_use]
+    pub fn is_well_formed(self) -> bool {
+        self.hash().iter().any(|byte| *byte != 0)
+    }
+}
+
+impl BridgeProofPayload {
+    /// Return the role-preserving verifier binding carried by this payload.
+    #[must_use]
+    pub const fn binding(&self) -> BridgeProofBinding {
+        match self {
+            Self::Ics(proof) => BridgeProofBinding::VerifierManifest(proof.verifier_manifest_hash),
+            Self::TransparentZk(proof) => {
+                BridgeProofBinding::VerifierManifest(proof.verifier_manifest_hash)
+            }
+            Self::NativeProtocol(proof) => {
+                BridgeProofBinding::SccpRouteConfigurationV1(proof.route_configuration_hash)
+            }
+            Self::SccpDestination(proof) => {
+                BridgeProofBinding::SccpRouteConfigurationV1(proof.route_configuration_hash)
+            }
+        }
+    }
+}
+
+/// Bridge proof artifact with a payload-owned verifier binding.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct BridgeProof {
     /// Height range covered by this proof.
     pub range: BridgeProofRange,
-    /// Manifest integrity hash (32-byte commitment to verifier manifest).
-    pub manifest_hash: [u8; 32],
-    /// Proof payload (ICS, transparent ZK, or protocol-native SCCP).
+    /// Proof payload (generic ICS/ZK or one of the two closed SCCP proof roles).
     pub payload: BridgeProofPayload,
-    /// When set, retention will avoid pruning this artifact.
-    pub pinned: bool,
 }
 
 impl BridgeProof {
+    /// Return the role-preserving verifier binding carried by the payload.
+    #[must_use]
+    pub const fn binding(&self) -> BridgeProofBinding {
+        self.payload.binding()
+    }
+
     /// Return a backend label suitable for hashing/id construction.
     #[must_use]
     pub fn backend_label(&self) -> String {
@@ -412,6 +522,7 @@ impl BridgeProof {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct BridgeProofRecord {
     /// Recorded proof artifact.
     pub proof: BridgeProof,
@@ -1241,14 +1352,13 @@ mod tests {
                 start_height: 1,
                 end_height: 1,
             },
-            manifest_hash: [0x11; 32],
             payload: BridgeProofPayload::Ics(BridgeIcsProof {
+                verifier_manifest_hash: [0x11; 32],
                 state_root: root_bytes,
                 leaf_hash: leaves[0],
                 proof: tree.get_proof(0).expect("proof"),
                 hash_function: BridgeHashFunction::Sha256,
             }),
-            pinned: false,
         };
         assert_eq!(ics.backend_label(), "bridge/ics23");
 
@@ -1257,12 +1367,11 @@ mod tests {
                 start_height: 2,
                 end_height: 3,
             },
-            manifest_hash: [0x22; 32],
             payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+                verifier_manifest_hash: [0x22; 32],
                 proof: ProofBox::new("halo2/mock".into(), vec![0xDE, 0xAD, 0xBE, 0xEF]),
                 recursion_depth: Some(2),
             }),
-            pinned: true,
         };
         assert_eq!(transparent.backend_label(), "bridge/halo2/mock");
 
@@ -1271,14 +1380,91 @@ mod tests {
                 start_height: 4,
                 end_height: 4,
             },
-            manifest_hash: [0x33; 32],
             payload: BridgeProofPayload::NativeProtocol(BridgeNativeProtocolProofV1 {
                 backend: BridgeNativeProofBackendV1::TronDpos,
+                route_configuration_hash: [0x33; 32],
                 encoded_envelope: vec![0x01, 0x02, 0x03],
             }),
-            pinned: false,
         };
         assert_eq!(native.backend_label(), "bridge/sccp/native/tron-dpos-v1");
+
+        let destination = BridgeProof {
+            range: BridgeProofRange {
+                start_height: 5,
+                end_height: 5,
+            },
+            payload: BridgeProofPayload::SccpDestination(BridgeSccpDestinationProofV1 {
+                backend: BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
+                route_configuration_hash: [0x44; 32],
+                encoded_artifact: vec![0x04, 0x05],
+            }),
+        };
+        assert_eq!(destination.backend_label(), "evm-groth16-bn254-v1");
+
+        for (payload, expected_index) in [
+            (&ics.payload, 0_u32),
+            (&transparent.payload, 1),
+            (&native.payload, 2),
+            (&destination.payload, 3),
+        ] {
+            let encoded = payload.encode();
+            let decoded_index =
+                u32::decode(&mut encoded.as_slice()).expect("bridge payload variant index decodes");
+            assert_eq!(decoded_index, expected_index);
+        }
+    }
+
+    #[test]
+    fn bridge_proof_binding_preserves_commitment_role() {
+        let manifest_hash = [0x31; 32];
+        let route_hash = [0x41; 32];
+        let transparent = BridgeProof {
+            range: BridgeProofRange {
+                start_height: 1,
+                end_height: 1,
+            },
+            payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+                verifier_manifest_hash: manifest_hash,
+                proof: ProofBox::new("halo2/mock".into(), vec![1]),
+                recursion_depth: None,
+            }),
+        };
+        let native = BridgeProof {
+            range: BridgeProofRange {
+                start_height: 2,
+                end_height: 2,
+            },
+            payload: BridgeProofPayload::NativeProtocol(BridgeNativeProtocolProofV1 {
+                backend: BridgeNativeProofBackendV1::EthereumBeacon,
+                route_configuration_hash: route_hash,
+                encoded_envelope: vec![2],
+            }),
+        };
+
+        assert_eq!(
+            transparent.binding(),
+            BridgeProofBinding::VerifierManifest(manifest_hash)
+        );
+        assert_eq!(
+            native.binding(),
+            BridgeProofBinding::SccpRouteConfigurationV1(route_hash)
+        );
+        assert!(transparent.binding().is_well_formed());
+        assert!(native.binding().is_well_formed());
+        assert_ne!(
+            BridgeProofBinding::VerifierManifest(route_hash),
+            BridgeProofBinding::SccpRouteConfigurationV1(route_hash),
+            "equal bytes in different commitment roles must remain distinguishable"
+        );
+
+        let mut bit_flipped = route_hash;
+        bit_flipped[17] ^= 0x80;
+        assert_ne!(
+            native.binding(),
+            BridgeProofBinding::SccpRouteConfigurationV1(bit_flipped)
+        );
+        assert!(!BridgeProofBinding::VerifierManifest([0; 32]).is_well_formed());
+        assert!(!BridgeProofBinding::SccpRouteConfigurationV1([0; 32]).is_well_formed());
     }
 
     #[test]
@@ -1333,7 +1519,6 @@ mod tests {
                 assert_eq!(backend.supports_source_network(source), expected);
             }
             assert!(!backend.supports_source_network(SccpNetworkV1::SoraTaira));
-            assert!(!backend.supports_source_network(SccpNetworkV1::SoraNexus));
         }
         assert!(BridgeNativeProofBackendV1::decode_all(&mut &[0xff][..]).is_err());
 
@@ -1342,17 +1527,34 @@ mod tests {
                 start_height: 7,
                 end_height: 7,
             },
-            manifest_hash: [0x44; 32],
             payload: BridgeProofPayload::NativeProtocol(BridgeNativeProtocolProofV1 {
                 backend: BridgeNativeProofBackendV1::TronDpos,
+                route_configuration_hash: [0x44; 32],
                 encoded_envelope: vec![0xaa, 0xbb, 0xcc],
             }),
-            pinned: true,
         };
         let encoded = proof.encode();
         let decoded = BridgeProof::decode_all(&mut &encoded[..]).expect("native proof decodes");
         assert_eq!(decoded, proof);
         assert_eq!(decoded.backend_label(), "bridge/sccp/native/tron-dpos-v1");
+        let BridgeProofPayload::NativeProtocol(native) = &decoded.payload else {
+            panic!("decoded native payload changed variant")
+        };
+        assert!(native.is_well_formed());
+        assert!(
+            !BridgeNativeProtocolProofV1 {
+                route_configuration_hash: [0; 32],
+                ..native.clone()
+            }
+            .is_well_formed()
+        );
+        assert!(
+            !BridgeNativeProtocolProofV1 {
+                encoded_envelope: Vec::new(),
+                ..native.clone()
+            }
+            .is_well_formed()
+        );
 
         let zero_anchor = SccpNativeTrustAnchorV1 {
             backend: BridgeNativeProofBackendV1::EthereumBeacon,
@@ -1517,18 +1719,155 @@ mod tests {
                 start_height: 1,
                 end_height: 2,
             },
-            manifest_hash: [0x55; 32],
             payload: BridgeProofPayload::Ics(BridgeIcsProof {
+                verifier_manifest_hash: [0x55; 32],
                 state_root: root_bytes,
                 leaf_hash: leaves[0],
                 proof,
                 hash_function: BridgeHashFunction::Sha256,
             }),
-            pinned: true,
         };
         let buf = proof.encode();
         let dec = BridgeProof::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(proof, dec);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn bridge_proof_json_rejects_unknown_fields_at_every_typed_boundary() {
+        let leaves = vec![[0xAA; 32], [0xBB; 32]];
+        let tree = iroha_crypto::MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaves.clone());
+        let proof = BridgeProof {
+            range: BridgeProofRange {
+                start_height: 1,
+                end_height: 1,
+            },
+            payload: BridgeProofPayload::Ics(BridgeIcsProof {
+                verifier_manifest_hash: [0x55; 32],
+                state_root: *tree.root().expect("root").as_ref(),
+                leaf_hash: leaves[0],
+                proof: tree.get_proof(0).expect("proof"),
+                hash_function: BridgeHashFunction::Sha256,
+            }),
+        };
+        let canonical = norito::json::to_json(&proof).expect("serialize bridge proof JSON");
+        assert_eq!(
+            norito::json::from_json::<BridgeProof>(&canonical).expect("canonical JSON decodes"),
+            proof
+        );
+
+        let mut retired_pin_value =
+            norito::json::to_value(&proof).expect("serialize bridge proof value");
+        let norito::json::Value::Object(retired_pin_object) = &mut retired_pin_value else {
+            panic!("bridge proof JSON must be an object")
+        };
+        retired_pin_object.insert("pinned".into(), norito::json::Value::Bool(true));
+        let retired_pin =
+            norito::json::to_json(&retired_pin_value).expect("serialize retired pin field");
+        assert!(
+            norito::json::from_json::<BridgeProof>(&retired_pin).is_err(),
+            "retired caller-controlled retention hint must fail closed"
+        );
+
+        for path in [
+            Vec::<&str>::new(),
+            vec!["range"],
+            vec!["payload"],
+            vec!["payload", "payload"],
+            vec!["payload", "payload", "hash_function"],
+        ] {
+            let mut hostile = norito::json::to_value(&proof).expect("serialize bridge proof value");
+            let mut current = &mut hostile;
+            for field in &path {
+                let norito::json::Value::Object(object) = current else {
+                    panic!("bridge proof JSON path component `{field}` is not an object")
+                };
+                current = object
+                    .get_mut(*field)
+                    .unwrap_or_else(|| panic!("bridge proof JSON path component `{field}` absent"));
+            }
+            let norito::json::Value::Object(object) = current else {
+                panic!("bridge proof JSON target at {path:?} is not an object")
+            };
+            object.insert("adversarial_extension".into(), norito::json::Value::Null);
+            let hostile_json =
+                norito::json::to_json(&hostile).expect("serialize hostile bridge proof JSON");
+            assert!(
+                norito::json::from_json::<BridgeProof>(&hostile_json).is_err(),
+                "unknown field at {path:?} must reject"
+            );
+        }
+
+        let duplicate = canonical.replacen("\"range\":", "\"range\":null,\"range\":", 1);
+        assert_ne!(duplicate, canonical);
+        assert!(norito::json::from_json::<BridgeProof>(&duplicate).is_err());
+    }
+
+    #[test]
+    fn bridge_proof_decoder_rejects_legacy_truncated_and_trailing_encodings() {
+        #[derive(Encode)]
+        struct LegacyBridgeProof {
+            range: BridgeProofRange,
+            manifest_hash: [u8; 32],
+            payload: BridgeProofPayload,
+            pinned: bool,
+        }
+
+        #[derive(Encode)]
+        struct CallerPinnedBridgeProof {
+            range: BridgeProofRange,
+            payload: BridgeProofPayload,
+            pinned: bool,
+        }
+
+        let proof = BridgeProof {
+            range: BridgeProofRange {
+                start_height: 5,
+                end_height: 6,
+            },
+            payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+                verifier_manifest_hash: [0x51; 32],
+                proof: ProofBox::new("stark/mock".into(), vec![7, 8, 9]),
+                recursion_depth: Some(3),
+            }),
+        };
+        let canonical = proof.encode();
+        assert_eq!(
+            BridgeProof::decode_all(&mut canonical.as_slice())
+                .expect("canonical bridge proof decodes"),
+            proof.clone()
+        );
+
+        for end in 0..canonical.len() {
+            let mut truncated: &[u8] = &canonical[..end];
+            assert!(
+                BridgeProof::decode_all(&mut truncated).is_err(),
+                "truncated bridge proof unexpectedly decoded at byte {end}"
+            );
+        }
+        let mut trailing = canonical;
+        trailing.push(0);
+        assert!(BridgeProof::decode_all(&mut trailing.as_slice()).is_err());
+
+        let legacy = LegacyBridgeProof {
+            range: proof.range,
+            manifest_hash: [0xff; 32],
+            payload: proof.payload.clone(),
+            pinned: true,
+        }
+        .encode();
+        assert!(BridgeProof::decode_all(&mut legacy.as_slice()).is_err());
+
+        let caller_pinned = CallerPinnedBridgeProof {
+            range: proof.range,
+            payload: proof.payload,
+            pinned: true,
+        }
+        .encode();
+        assert!(
+            BridgeProof::decode_all(&mut caller_pinned.as_slice()).is_err(),
+            "retired caller-controlled retention field must fail binary decoding"
+        );
     }
 
     #[test]
@@ -1538,12 +1877,11 @@ mod tests {
                 start_height: 8,
                 end_height: 8,
             },
-            manifest_hash: [0x61; 32],
             payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+                verifier_manifest_hash: [0x61; 32],
                 proof: ProofBox::new("stark/mock".into(), vec![9, 8, 7, 6]),
                 recursion_depth: Some(1),
             }),
-            pinned: false,
         };
         let buf = proof.encode();
         let dec = BridgeProof::decode_all(&mut &buf[..]).expect("decode");
@@ -1557,12 +1895,11 @@ mod tests {
                 start_height: 3,
                 end_height: 4,
             },
-            manifest_hash: [0x71; 32],
             payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+                verifier_manifest_hash: [0x71; 32],
                 proof: ProofBox::new("groth16/mock".into(), vec![1, 2, 3, 4]),
                 recursion_depth: None,
             }),
-            pinned: true,
         };
         let record = BridgeProofRecord {
             proof,

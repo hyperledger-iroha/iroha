@@ -30,41 +30,22 @@ public interface IrohaClient {
     return future;
   }
 
-  /**
-   * Posts a JSON bridge-proof submission DTO to Torii's `/v1/bridge/proofs/submit` route.
-   *
-   * <p>This helper is for UI/mobile clients that already hold the SCCP proof package assembled by
-   * the app-side prover flow.
-   */
-  default CompletableFuture<ClientResponse> postBridgeProofSubmitJson(
-      final byte[] encodedBridgeProofSubmitJson) {
+  /** Submits one canonical SCCP destination-proof artifact. */
+  default CompletableFuture<ClientResponse> submitSccpDestinationProof(
+      final SccpDestinationProofSubmitRequest request) {
     final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
     future.completeExceptionally(
-        new UnsupportedOperationException("postBridgeProofSubmitJson not supported"));
+        new UnsupportedOperationException("submitSccpDestinationProof not supported"));
     return future;
   }
 
-  /** Encodes and posts a bridge-proof submission DTO to Torii's `/v1/bridge/proofs/submit` route. */
-  default CompletableFuture<ClientResponse> submitBridgeProof(
-      final BridgeProofSubmitRequest request) {
-    return postBridgeProofSubmitJson(
-        java.util.Objects.requireNonNull(request, "request").toJsonBytes());
-  }
-
-  /** Posts a JSON bridge-message submission DTO to Torii's `/v1/bridge/messages` route. */
-  default CompletableFuture<ClientResponse> postBridgeMessageSubmitJson(
-      final byte[] encodedBridgeMessageSubmitJson) {
+  /** Submits one canonical protocol-native external-to-SORA SCCP proof. */
+  default CompletableFuture<ClientResponse> submitSccpNativeMessage(
+      final SccpNativeMessageSubmitRequest request) {
     final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
     future.completeExceptionally(
-        new UnsupportedOperationException("postBridgeMessageSubmitJson not supported"));
+        new UnsupportedOperationException("submitSccpNativeMessage not supported"));
     return future;
-  }
-
-  /** Encodes and posts a native-proof-only bridge message settlement request. */
-  default CompletableFuture<ClientResponse> submitBridgeMessage(
-      final BridgeMessageSubmitRequest request) {
-    return postBridgeMessageSubmitJson(
-        java.util.Objects.requireNonNull(request, "request").toJsonBytes());
   }
 
   /**
@@ -143,6 +124,15 @@ public interface IrohaClient {
     future.completeExceptionally(
         new IllegalStateException(
             "resolveAccountAlias requires a concrete IrohaClient implementation"));
+    return future;
+  }
+
+  /** Fetches the complete Kotodama manifest registered for one code hash. */
+  default CompletableFuture<ContractManifestRecord> getContractManifest(final String codeHash) {
+    final CompletableFuture<ContractManifestRecord> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new IllegalStateException(
+            "getContractManifest requires a concrete IrohaClient implementation"));
     return future;
   }
 

@@ -9,11 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from sccp_release_common import (
-    MAX_ARTIFACT_BYTES,
     MAX_EVIDENCE_BYTES,
     MAX_INDEX_BYTES,
-    MAX_TRANSCRIPT_BYTES,
     SccpReleaseError,
+    artifact_limit,
     canonical_json_file_bytes,
     enumerate_direct_files,
     load_trust_policy,
@@ -26,17 +25,17 @@ from sccp_release_common import (
     sha256_hex,
     validate_bundle_index,
     validate_evidence,
+    verify_production_semantic_artifacts,
     verify_rust_lane_evidence,
     verify_rust_release_signatures,
+    verify_rust_semantic_proofs,
 )
 
 
 def _entry_limit(kind: str) -> int:
     if kind == "release-evidence":
         return MAX_EVIDENCE_BYTES
-    if kind == "phase-transcript":
-        return MAX_TRANSCRIPT_BYTES
-    return MAX_ARTIFACT_BYTES
+    return artifact_limit(kind)
 
 
 def verify_bundle(
@@ -92,6 +91,13 @@ def verify_bundle(
         raise SccpReleaseError("bundle release_id does not match signed release evidence")
     if evidence["validator"] != index["validator"]:
         raise SccpReleaseError("bundle validator identity does not match signed release evidence")
+    if (
+        index["validator_executable_sha256_hex"]
+        != evidence["validator"]["executable_sha256_hex"]
+    ):
+        raise SccpReleaseError(
+            "bundle executable commitment does not match signed release evidence"
+        )
 
     indexed_artifacts = {
         entry["path"]: entry for entry in index["entries"] if entry["kind"] != "release-evidence"
@@ -99,7 +105,10 @@ def verify_bundle(
     signed_artifacts = {entry["path"]: entry for entry in evidence["artifacts"]}
     if indexed_artifacts != signed_artifacts:
         raise SccpReleaseError("bundle artifact inventory does not equal the signed evidence inventory")
-    verify_rust_release_signatures(
+    semantic_records = verify_production_semantic_artifacts(
+        evidence, entry_bytes, trust_policy
+    )
+    _, executable_hash = verify_rust_release_signatures(
         trust_policy_path=trust_policy_path,
         trust_policy=trust_policy,
         trust_policy_bytes=trust_policy_bytes,
@@ -112,6 +121,18 @@ def verify_bundle(
             if trust_policy["environment"] == "test-fixture"
             else "production"
         ),
+    )
+    verify_rust_semantic_proofs(
+        evidence=evidence,
+        evidence_bytes=evidence_bytes,
+        artifact_root=bundle_dir,
+        semantic_records=semantic_records,
+        trust_policy=trust_policy,
+        trust_policy_bytes=trust_policy_bytes,
+        trust_policy_path=trust_policy_path,
+        evidence_path=bundle_dir / "evidence.json",
+        validator_path=rust_validator,
+        expected_executable_hash=executable_hash,
     )
     _, executable_hash = verify_rust_lane_evidence(
         evidence,

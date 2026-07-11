@@ -28,6 +28,10 @@ pub const MAX_STATE_VALUE_WORDS: usize = 256;
 pub const MAX_STATE_VALUE_SCHEMA_BYTES: usize = 64 * 1024;
 /// Maximum encoded durable aggregate value accepted by the V1 codec.
 pub const MAX_STATE_VALUE_RECORD_BYTES: usize = 1024 * 1024;
+/// Minimum capacity accepted for a durable `List<T, N>`.
+pub const MIN_STATE_VALUE_LIST_CAPACITY_V1: u8 = 1;
+/// Maximum capacity accepted for a durable `List<T, N>`.
+pub const MAX_STATE_VALUE_LIST_CAPACITY_V1: u8 = 64;
 /// Byte offset of the first aligned word in a decoded state-value table.
 pub const DECODED_STATE_VALUE_TABLE_OFFSET: i16 = 8;
 /// Width of one decoded state-value word.
@@ -82,6 +86,12 @@ impl StateValueKindV1 {
     pub const fn is_pointer(self) -> bool {
         !matches!(self, Self::Int | Self::Bool)
     }
+
+    /// Return whether this leaf is a non-copyable resource handle.
+    #[must_use]
+    pub const fn is_resource_handle(self) -> bool {
+        matches!(self, Self::AssetHandle)
+    }
 }
 
 /// One preorder node in a compiler-emitted durable-value schema.
@@ -99,24 +109,19 @@ pub enum StateValueNodeV1 {
         /// Number of tuple children.
         arity: u16,
     },
-    /// Optional value. One tag word precedes the child's flattened words.
+    /// Optional value carried by one active-only compiler-owned sum handle.
     Option,
-    /// Result value. One tag word precedes the ok and error child words.
+    /// Result value carried by one active-only compiler-owned sum handle.
     Result,
+    /// Bounded contiguous list represented by one schema-bound sequence pointer.
+    List {
+        /// Exact recursive element schema.
+        element: Box<StateValueSchemaV1>,
+        /// Compile-time capacity in the inclusive range 1 through 64.
+        capacity: u8,
+    },
     /// Scalar or pointer leaf consuming one VM word.
     Leaf(StateValueKindV1),
-}
-
-impl StateValueNodeV1 {
-    fn child_count(&self) -> usize {
-        match self {
-            Self::Struct { fields, .. } => fields.len(),
-            Self::Tuple { arity } => usize::from(*arity),
-            Self::Option => 1,
-            Self::Result => 2,
-            Self::Leaf(_) => 0,
-        }
-    }
 }
 
 /// Compiler-owned schema for one aggregate durable-state type.
@@ -127,25 +132,34 @@ pub struct StateValueSchemaV1 {
 }
 
 impl StateValueSchemaV1 {
-    /// Validate tree shape and V1 node/word/depth limits.
-    #[must_use]
-    pub fn validate(&self) -> bool {
-        if self.nodes.is_empty() || self.nodes.len() > MAX_STATE_VALUE_NODES {
-            return false;
-        }
-        let mut pending = vec![1_usize];
-        let mut words = 0_usize;
-        for node in &self.nodes {
-            while pending.last() == Some(&0) {
-                pending.pop();
+    fn analyze(&self) -> Option<StateValueAnalysisV1> {
+        fn analyze_node(
+            nodes: &[StateValueNodeV1],
+            index: &mut usize,
+            depth: usize,
+        ) -> Option<StateValueAnalysisV1> {
+            if depth > MAX_STATE_VALUE_NODES {
+                return None;
             }
-            let Some(remaining) = pending.last_mut() else {
-                return false;
+            let node = nodes.get(*index)?;
+            *index = index.checked_add(1)?;
+            let mut analysis = StateValueAnalysisV1 {
+                node_count: 1,
+                max_words: 0,
+                depth,
+                contains_resource_handle: false,
             };
-            *remaining -= 1;
+            let mut merge_child = |child: StateValueAnalysisV1| -> Option<()> {
+                analysis.node_count = analysis.node_count.checked_add(child.node_count)?;
+                analysis.max_words = analysis.max_words.checked_add(child.max_words)?;
+                analysis.depth = analysis.depth.max(child.depth);
+                analysis.contains_resource_handle |= child.contains_resource_handle;
+                Some(())
+            };
             match node {
                 StateValueNodeV1::Struct { name, fields } => {
                     if name.is_empty()
+                        || fields.is_empty()
                         || fields.iter().any(|field| field.is_empty())
                         || fields
                             .iter()
@@ -153,30 +167,91 @@ impl StateValueSchemaV1 {
                             .len()
                             != fields.len()
                     {
-                        return false;
+                        return None;
+                    }
+                    for _ in fields {
+                        let child = analyze_node(nodes, index, depth.checked_add(1)?)?;
+                        merge_child(child)?;
                     }
                 }
-                StateValueNodeV1::Option | StateValueNodeV1::Result => {
-                    words = words.saturating_add(1);
+                StateValueNodeV1::Tuple { arity } => {
+                    if *arity < 2 {
+                        return None;
+                    }
+                    for _ in 0..*arity {
+                        let child = analyze_node(nodes, index, depth.checked_add(1)?)?;
+                        merge_child(child)?;
+                    }
                 }
-                StateValueNodeV1::Leaf(_) => words = words.saturating_add(1),
-                StateValueNodeV1::Tuple { .. } => {}
-            }
-            if words > MAX_STATE_VALUE_WORDS {
-                return false;
-            }
-            let children = node.child_count();
-            if children != 0 {
-                if pending.len() >= MAX_STATE_VALUE_NODES {
-                    return false;
+                StateValueNodeV1::Option => {
+                    let child = analyze_node(nodes, index, depth.checked_add(1)?)?;
+                    analysis.node_count = analysis.node_count.checked_add(child.node_count)?;
+                    analysis.max_words = 1;
+                    analysis.depth = analysis.depth.max(child.depth);
+                    analysis.contains_resource_handle = child.contains_resource_handle;
                 }
-                pending.push(children);
+                StateValueNodeV1::Result => {
+                    let ok = analyze_node(nodes, index, depth.checked_add(1)?)?;
+                    let err = analyze_node(nodes, index, depth.checked_add(1)?)?;
+                    analysis.node_count = analysis
+                        .node_count
+                        .checked_add(ok.node_count)?
+                        .checked_add(err.node_count)?;
+                    analysis.max_words = 1;
+                    analysis.depth = analysis.depth.max(ok.depth).max(err.depth);
+                    analysis.contains_resource_handle =
+                        ok.contains_resource_handle || err.contains_resource_handle;
+                }
+                StateValueNodeV1::List { element, capacity } => {
+                    if !(MIN_STATE_VALUE_LIST_CAPACITY_V1..=MAX_STATE_VALUE_LIST_CAPACITY_V1)
+                        .contains(capacity)
+                    {
+                        return None;
+                    }
+                    let nested = element.analyze_at_depth(depth.checked_add(1)?)?;
+                    if nested.contains_resource_handle {
+                        return None;
+                    }
+                    analysis.node_count = analysis.node_count.checked_add(nested.node_count)?;
+                    analysis.max_words = 1;
+                    analysis.depth = analysis.depth.max(nested.depth);
+                }
+                StateValueNodeV1::Leaf(kind) => {
+                    analysis.max_words = 1;
+                    analysis.contains_resource_handle = kind.is_resource_handle();
+                }
             }
+            (analysis.node_count <= MAX_STATE_VALUE_NODES
+                && analysis.max_words <= MAX_STATE_VALUE_WORDS)
+                .then_some(analysis)
         }
-        while pending.last() == Some(&0) {
-            pending.pop();
-        }
-        pending.is_empty()
+
+        let mut index = 0;
+        let analysis = analyze_node(&self.nodes, &mut index, 1)?;
+        (index == self.nodes.len()).then_some(analysis)
+    }
+
+    fn analyze_at_depth(&self, depth: usize) -> Option<StateValueAnalysisV1> {
+        let analysis = self.analyze()?;
+        let adjusted_depth = depth.checked_add(analysis.depth.checked_sub(1)?)?;
+        (adjusted_depth <= MAX_STATE_VALUE_NODES).then_some(StateValueAnalysisV1 {
+            depth: adjusted_depth,
+            ..analysis
+        })
+    }
+
+    /// Validate tree shape, active-width bounds, and recursive list constraints.
+    #[must_use]
+    pub fn validate(&self) -> bool {
+        self.analyze().is_some()
+    }
+
+    /// Return the fixed VM words needed by a value of this type.
+    ///
+    /// Every `Option`, `Result`, and `List` consumes one compiler-owned handle.
+    #[must_use]
+    pub fn word_count(&self) -> Option<usize> {
+        self.analyze().map(|analysis| analysis.max_words)
     }
 
     /// Return the flattened VM word kinds in deterministic preorder.
@@ -184,216 +259,200 @@ impl StateValueSchemaV1 {
         if !self.validate() {
             return None;
         }
-        let mut words = Vec::new();
-        for node in &self.nodes {
-            match node {
-                StateValueNodeV1::Option | StateValueNodeV1::Result => {
-                    words.push(StateValueWordKindV1::Tag)
-                }
-                StateValueNodeV1::Leaf(kind) => words.push(StateValueWordKindV1::Leaf(*kind)),
-                StateValueNodeV1::Struct { .. } | StateValueNodeV1::Tuple { .. } => {}
-            }
-        }
-        Some(words)
+        let mut node_index = 0;
+        let words = max_state_value_word_kinds(&self.nodes, &mut node_index)?;
+        (node_index == self.nodes.len()).then_some(words)
     }
 
-    /// Validate the atom variants and the canonical active/inactive shape of a record.
-    ///
-    /// `Option` and `Result` reserve words for every payload so the compiler can use a
-    /// fixed-width table.  Inactive payloads must therefore be the unique all-zero/null
-    /// representation; otherwise the record could smuggle data through a value which is
-    /// semantically absent.  Conversely, pointer leaves in an active payload may never be
-    /// null.  The VM performs pointer-type and payload validation after this structural
-    /// check.
+    /// Validate an active-only atom stream against this exact schema.
     #[must_use]
     pub fn validate_atoms(&self, atoms: &[StateValueAtomV1]) -> bool {
         if !self.validate() {
             return false;
         }
-
-        fn visit(
-            nodes: &[StateValueNodeV1],
-            atoms: &[StateValueAtomV1],
-            node_index: &mut usize,
-            atom_index: &mut usize,
-            active: bool,
-        ) -> bool {
-            let Some(node) = nodes.get(*node_index) else {
-                return false;
-            };
-            *node_index = node_index.saturating_add(1);
-
-            match node {
-                StateValueNodeV1::Struct { fields, .. } => {
-                    for _ in fields {
-                        if !visit(nodes, atoms, node_index, atom_index, active) {
-                            return false;
-                        }
-                    }
-                    true
-                }
-                StateValueNodeV1::Tuple { arity } => {
-                    for _ in 0..*arity {
-                        if !visit(nodes, atoms, node_index, atom_index, active) {
-                            return false;
-                        }
-                    }
-                    true
-                }
-                StateValueNodeV1::Option => {
-                    let Some(StateValueAtomV1::Tag(tag)) = atoms.get(*atom_index) else {
-                        return false;
-                    };
-                    *atom_index = atom_index.saturating_add(1);
-                    if !active && *tag {
-                        return false;
-                    }
-                    visit(nodes, atoms, node_index, atom_index, active && *tag)
-                }
-                StateValueNodeV1::Result => {
-                    let Some(StateValueAtomV1::Tag(tag)) = atoms.get(*atom_index) else {
-                        return false;
-                    };
-                    *atom_index = atom_index.saturating_add(1);
-                    if !active && *tag {
-                        return false;
-                    }
-                    visit(nodes, atoms, node_index, atom_index, active && *tag)
-                        && visit(nodes, atoms, node_index, atom_index, active && !*tag)
-                }
-                StateValueNodeV1::Leaf(kind) => {
-                    let Some(atom) = atoms.get(*atom_index) else {
-                        return false;
-                    };
-                    *atom_index = atom_index.saturating_add(1);
-                    match (kind, atom, active) {
-                        (StateValueKindV1::Int, StateValueAtomV1::Int(_), true)
-                        | (StateValueKindV1::Int, StateValueAtomV1::Int(0), false)
-                        | (StateValueKindV1::Bool, StateValueAtomV1::Bool(_), true)
-                        | (StateValueKindV1::Bool, StateValueAtomV1::Bool(false), false) => true,
-                        (kind, StateValueAtomV1::Pointer(_), true) if kind.is_pointer() => true,
-                        (kind, StateValueAtomV1::Null, false) if kind.is_pointer() => true,
-                        _ => false,
-                    }
-                }
-            }
-        }
-
         let mut node_index = 0;
         let mut atom_index = 0;
-        visit(&self.nodes, atoms, &mut node_index, &mut atom_index, true)
+        walk_state_value_atoms(&self.nodes, atoms, &mut node_index, &mut atom_index, None)
             && node_index == self.nodes.len()
             && atom_index == atoms.len()
     }
 
-    /// Canonicalize inactive sum payloads while validating active atom variants.
-    ///
-    /// Source constructors carry a typed placeholder for V1 inference. That
-    /// placeholder is not part of the semantic value and must not affect its
-    /// durable bytes. The encoder uses this method to replace every inactive
-    /// scalar/pointer/tag with its unique zero/null form. Active null pointers
-    /// and atom-kind mismatches remain errors.
-    pub fn canonicalize_atoms(&self, atoms: &mut [StateValueAtomV1]) -> bool {
+    /// Return actual flattened VM word roles selected by this value.
+    pub fn word_kinds_for_atoms(
+        &self,
+        atoms: &[StateValueAtomV1],
+    ) -> Option<Vec<StateValueWordKindV1>> {
         if !self.validate() {
-            return false;
+            return None;
         }
-
-        fn visit(
-            nodes: &[StateValueNodeV1],
-            atoms: &mut [StateValueAtomV1],
-            node_index: &mut usize,
-            atom_index: &mut usize,
-            active: bool,
-        ) -> bool {
-            let Some(node) = nodes.get(*node_index) else {
-                return false;
-            };
-            *node_index = node_index.saturating_add(1);
-            match node {
-                StateValueNodeV1::Struct { fields, .. } => {
-                    for _ in fields {
-                        if !visit(nodes, atoms, node_index, atom_index, active) {
-                            return false;
-                        }
-                    }
-                    true
-                }
-                StateValueNodeV1::Tuple { arity } => {
-                    for _ in 0..*arity {
-                        if !visit(nodes, atoms, node_index, atom_index, active) {
-                            return false;
-                        }
-                    }
-                    true
-                }
-                StateValueNodeV1::Option => {
-                    let Some(StateValueAtomV1::Tag(tag)) = atoms.get_mut(*atom_index) else {
-                        return false;
-                    };
-                    let child_active = active && *tag;
-                    if !active {
-                        *tag = false;
-                    }
-                    *atom_index = atom_index.saturating_add(1);
-                    visit(nodes, atoms, node_index, atom_index, child_active)
-                }
-                StateValueNodeV1::Result => {
-                    let Some(StateValueAtomV1::Tag(tag)) = atoms.get_mut(*atom_index) else {
-                        return false;
-                    };
-                    let ok_active = active && *tag;
-                    let err_active = active && !*tag;
-                    if !active {
-                        *tag = false;
-                    }
-                    *atom_index = atom_index.saturating_add(1);
-                    visit(nodes, atoms, node_index, atom_index, ok_active)
-                        && visit(nodes, atoms, node_index, atom_index, err_active)
-                }
-                StateValueNodeV1::Leaf(kind) => {
-                    let Some(atom) = atoms.get_mut(*atom_index) else {
-                        return false;
-                    };
-                    *atom_index = atom_index.saturating_add(1);
-                    match (kind, atom, active) {
-                        (StateValueKindV1::Int, StateValueAtomV1::Int(_), true)
-                        | (StateValueKindV1::Bool, StateValueAtomV1::Bool(_), true) => true,
-                        (StateValueKindV1::Int, atom @ StateValueAtomV1::Int(_), false) => {
-                            *atom = StateValueAtomV1::Int(0);
-                            true
-                        }
-                        (StateValueKindV1::Bool, atom @ StateValueAtomV1::Bool(_), false) => {
-                            *atom = StateValueAtomV1::Bool(false);
-                            true
-                        }
-                        (kind, StateValueAtomV1::Pointer(_), true) if kind.is_pointer() => true,
-                        (
-                            kind,
-                            atom @ (StateValueAtomV1::Pointer(_) | StateValueAtomV1::Null),
-                            false,
-                        ) if kind.is_pointer() => {
-                            *atom = StateValueAtomV1::Null;
-                            true
-                        }
-                        _ => false,
-                    }
-                }
-            }
-        }
-
         let mut node_index = 0;
         let mut atom_index = 0;
-        visit(&self.nodes, atoms, &mut node_index, &mut atom_index, true)
-            && node_index == self.nodes.len()
-            && atom_index == atoms.len()
+        let mut kinds = Vec::new();
+        if !walk_state_value_atoms(
+            &self.nodes,
+            atoms,
+            &mut node_index,
+            &mut atom_index,
+            Some(&mut kinds),
+        ) || node_index != self.nodes.len()
+            || atom_index != atoms.len()
+            || kinds.len() > MAX_STATE_VALUE_WORDS
+        {
+            return None;
+        }
+        Some(kinds)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct StateValueAnalysisV1 {
+    node_count: usize,
+    max_words: usize,
+    depth: usize,
+    contains_resource_handle: bool,
+}
+
+fn skip_state_value_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> bool {
+    let Some(node) = nodes.get(*node_index) else {
+        return false;
+    };
+    *node_index = node_index.saturating_add(1);
+    match node {
+        StateValueNodeV1::Struct { fields, .. } => fields
+            .iter()
+            .all(|_| skip_state_value_node(nodes, node_index)),
+        StateValueNodeV1::Tuple { arity } => {
+            (0..*arity).all(|_| skip_state_value_node(nodes, node_index))
+        }
+        StateValueNodeV1::Option => skip_state_value_node(nodes, node_index),
+        StateValueNodeV1::Result => {
+            skip_state_value_node(nodes, node_index) && skip_state_value_node(nodes, node_index)
+        }
+        StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => true,
+    }
+}
+
+fn max_state_value_word_kinds(
+    nodes: &[StateValueNodeV1],
+    node_index: &mut usize,
+) -> Option<Vec<StateValueWordKindV1>> {
+    let node = nodes.get(*node_index)?;
+    *node_index = node_index.checked_add(1)?;
+    let mut words = Vec::new();
+    match node {
+        StateValueNodeV1::Struct { fields, .. } => {
+            for _ in fields {
+                words.extend(max_state_value_word_kinds(nodes, node_index)?);
+            }
+        }
+        StateValueNodeV1::Tuple { arity } => {
+            for _ in 0..*arity {
+                words.extend(max_state_value_word_kinds(nodes, node_index)?);
+            }
+        }
+        StateValueNodeV1::Option => {
+            words.push(StateValueWordKindV1::Sum);
+            max_state_value_word_kinds(nodes, node_index)?;
+        }
+        StateValueNodeV1::Result => {
+            words.push(StateValueWordKindV1::Sum);
+            max_state_value_word_kinds(nodes, node_index)?;
+            max_state_value_word_kinds(nodes, node_index)?;
+        }
+        StateValueNodeV1::List { .. } => words.push(StateValueWordKindV1::List),
+        StateValueNodeV1::Leaf(kind) => words.push(StateValueWordKindV1::Leaf(*kind)),
+    }
+    Some(words)
+}
+
+fn walk_state_value_atoms(
+    nodes: &[StateValueNodeV1],
+    atoms: &[StateValueAtomV1],
+    node_index: &mut usize,
+    atom_index: &mut usize,
+    mut kinds: Option<&mut Vec<StateValueWordKindV1>>,
+) -> bool {
+    let Some(node) = nodes.get(*node_index) else {
+        return false;
+    };
+    *node_index = node_index.saturating_add(1);
+    match node {
+        StateValueNodeV1::Struct { fields, .. } => fields.iter().all(|_| {
+            walk_state_value_atoms(nodes, atoms, node_index, atom_index, kinds.as_deref_mut())
+        }),
+        StateValueNodeV1::Tuple { arity } => (0..*arity).all(|_| {
+            walk_state_value_atoms(nodes, atoms, node_index, atom_index, kinds.as_deref_mut())
+        }),
+        StateValueNodeV1::Option => {
+            let Some(StateValueAtomV1::Tag(tag)) = atoms.get(*atom_index) else {
+                return false;
+            };
+            *atom_index = atom_index.saturating_add(1);
+            if let Some(kinds) = kinds.as_deref_mut() {
+                kinds.push(StateValueWordKindV1::Sum);
+            }
+            if *tag {
+                walk_state_value_atoms(nodes, atoms, node_index, atom_index, None)
+            } else {
+                skip_state_value_node(nodes, node_index)
+            }
+        }
+        StateValueNodeV1::Result => {
+            let Some(StateValueAtomV1::Tag(tag)) = atoms.get(*atom_index) else {
+                return false;
+            };
+            *atom_index = atom_index.saturating_add(1);
+            if let Some(kinds) = kinds.as_deref_mut() {
+                kinds.push(StateValueWordKindV1::Sum);
+            }
+            if *tag {
+                walk_state_value_atoms(nodes, atoms, node_index, atom_index, None)
+                    && skip_state_value_node(nodes, node_index)
+            } else {
+                skip_state_value_node(nodes, node_index)
+                    && walk_state_value_atoms(nodes, atoms, node_index, atom_index, None)
+            }
+        }
+        StateValueNodeV1::List { element, capacity } => {
+            let Some(StateValueAtomV1::List(items)) = atoms.get(*atom_index) else {
+                return false;
+            };
+            *atom_index = atom_index.saturating_add(1);
+            if items.len() > usize::from(*capacity)
+                || items.iter().any(|item| !element.validate_atoms(item))
+            {
+                return false;
+            }
+            if let Some(kinds) = kinds {
+                kinds.push(StateValueWordKindV1::List);
+            }
+            true
+        }
+        StateValueNodeV1::Leaf(kind) => {
+            let Some(atom) = atoms.get(*atom_index) else {
+                return false;
+            };
+            *atom_index = atom_index.saturating_add(1);
+            let valid = matches!(
+                (kind, atom),
+                (StateValueKindV1::Int, StateValueAtomV1::Int(_))
+                    | (StateValueKindV1::Bool, StateValueAtomV1::Bool(_))
+            ) || (kind.is_pointer() && matches!(atom, StateValueAtomV1::Pointer(_)));
+            if valid && let Some(kinds) = kinds {
+                kinds.push(StateValueWordKindV1::Leaf(*kind));
+            }
+            valid
+        }
     }
 }
 
 /// Flattened word role derived from a validated schema.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StateValueWordKindV1 {
-    /// Option/Result discriminant restricted to zero or one.
-    Tag,
+    /// One active-only compiler-owned Option/Result handle.
+    Sum,
+    /// One schema-bound canonical list-sequence pointer.
+    List,
     /// Scalar or pointer leaf.
     Leaf(StateValueKindV1),
 }
@@ -409,8 +468,8 @@ pub enum StateValueAtomV1 {
     Bool(bool),
     /// Complete validated pointer-ABI TLV envelope.
     Pointer(Vec<u8>),
-    /// Null pointer placeholder, used by inactive sum branches.
-    Null,
+    /// Canonical bounded sequence; each item is one active-only element atom stream.
+    List(Vec<Vec<StateValueAtomV1>>),
 }
 
 /// Canonical Norito value stored under one aggregate durable-state key.
@@ -418,7 +477,7 @@ pub enum StateValueAtomV1 {
 pub struct StateValueRecordV1 {
     /// Domain-separated hash of the exact encoded schema.
     pub schema_hash: [u8; 32],
-    /// Flattened atoms matching the schema's word order.
+    /// Active-only atoms in schema preorder; sum tags select exactly one payload.
     pub atoms: Vec<StateValueAtomV1>,
 }
 
@@ -487,14 +546,20 @@ mod tests {
     }
 
     #[test]
-    fn sum_records_require_canonical_inactive_branches() {
+    fn sum_records_carry_only_the_active_payload() {
         let option = StateValueSchemaV1 {
             nodes: vec![
                 StateValueNodeV1::Option,
                 StateValueNodeV1::Leaf(StateValueKindV1::Int),
             ],
         };
-        assert!(option.validate_atoms(&[StateValueAtomV1::Tag(false), StateValueAtomV1::Int(0),]));
+        assert_eq!(option.word_count(), Some(1));
+        assert_eq!(option.word_kinds(), Some(vec![StateValueWordKindV1::Sum]));
+        assert!(option.validate_atoms(&[StateValueAtomV1::Tag(false)]));
+        assert_eq!(
+            option.word_kinds_for_atoms(&[StateValueAtomV1::Tag(false)]),
+            Some(vec![StateValueWordKindV1::Sum])
+        );
         assert!(option.validate_atoms(&[StateValueAtomV1::Tag(true), StateValueAtomV1::Int(9),]));
         assert!(!option.validate_atoms(&[StateValueAtomV1::Tag(false), StateValueAtomV1::Int(9),]));
 
@@ -505,36 +570,94 @@ mod tests {
                 StateValueNodeV1::Leaf(StateValueKindV1::Bool),
             ],
         };
-        assert!(result.validate_atoms(&[
-            StateValueAtomV1::Tag(false),
-            StateValueAtomV1::Null,
-            StateValueAtomV1::Bool(true),
-        ]));
-        assert!(!result.validate_atoms(&[
-            StateValueAtomV1::Tag(false),
-            StateValueAtomV1::Pointer(vec![1]),
-            StateValueAtomV1::Bool(true),
-        ]));
-        assert!(!result.validate_atoms(&[
-            StateValueAtomV1::Tag(true),
-            StateValueAtomV1::Null,
-            StateValueAtomV1::Bool(false),
-        ]));
-
-        let mut noncanonical = vec![
-            StateValueAtomV1::Tag(false),
-            StateValueAtomV1::Pointer(vec![1]),
-            StateValueAtomV1::Bool(true),
-        ];
-        assert!(result.canonicalize_atoms(&mut noncanonical));
-        assert_eq!(
-            noncanonical,
-            vec![
-                StateValueAtomV1::Tag(false),
-                StateValueAtomV1::Null,
-                StateValueAtomV1::Bool(true),
-            ]
+        assert!(
+            result.validate_atoms(&[StateValueAtomV1::Tag(false), StateValueAtomV1::Bool(true),])
         );
-        assert!(result.validate_atoms(&noncanonical));
+        assert!(!result.validate_atoms(&[
+            StateValueAtomV1::Tag(false),
+            StateValueAtomV1::Pointer(vec![1]),
+            StateValueAtomV1::Bool(true),
+        ]));
+        assert!(result.validate_atoms(&[
+            StateValueAtomV1::Tag(true),
+            StateValueAtomV1::Pointer(vec![1]),
+        ]));
+    }
+
+    #[test]
+    fn nested_amount_lists_roundtrip_and_reject_invalid_shapes() {
+        let amount = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Amount)],
+        };
+        let inner = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::List {
+                element: Box::new(amount),
+                capacity: 2,
+            }],
+        };
+        let nested = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::List {
+                element: Box::new(inner),
+                capacity: 3,
+            }],
+        };
+        assert!(nested.validate());
+        assert_eq!(nested.word_count(), Some(1));
+        let atoms = vec![StateValueAtomV1::List(vec![vec![StateValueAtomV1::List(
+            vec![vec![StateValueAtomV1::Pointer(vec![1])]],
+        )]])];
+        assert!(nested.validate_atoms(&atoms));
+
+        let record = StateValueRecordV1 {
+            schema_hash: [9; 32],
+            atoms,
+        };
+        let encoded = norito::to_bytes(&record).expect("encode nested list record");
+        assert_eq!(
+            norito::decode_from_bytes::<StateValueRecordV1>(&encoded)
+                .expect("decode nested list record"),
+            record
+        );
+
+        let overflow = vec![StateValueAtomV1::List(vec![
+            vec![StateValueAtomV1::List(Vec::new())],
+            vec![StateValueAtomV1::List(Vec::new())],
+            vec![StateValueAtomV1::List(Vec::new())],
+            vec![StateValueAtomV1::List(Vec::new())],
+        ])];
+        assert!(!nested.validate_atoms(&overflow));
+
+        for capacity in [0, 65] {
+            let invalid = StateValueSchemaV1 {
+                nodes: vec![StateValueNodeV1::List {
+                    element: Box::new(StateValueSchemaV1 {
+                        nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
+                    }),
+                    capacity,
+                }],
+            };
+            assert!(!invalid.validate());
+        }
+    }
+
+    #[test]
+    fn lists_reject_resource_handles_recursively() {
+        let resource = StateValueSchemaV1 {
+            nodes: vec![
+                StateValueNodeV1::Option,
+                StateValueNodeV1::Leaf(StateValueKindV1::AssetHandle),
+            ],
+        };
+        assert!(
+            resource.validate(),
+            "resource values remain valid outside lists"
+        );
+        let list = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::List {
+                element: Box::new(resource),
+                capacity: 1,
+            }],
+        };
+        assert!(!list.validate());
     }
 }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import test from "node:test";
 
@@ -40,6 +41,12 @@ const PUBLIC_KEY = Uint8Array.from([
 ]);
 const AUTHORITY = AccountAddress.fromAccount({ publicKey: PUBLIC_KEY }).toI105(753);
 const MESSAGE_ID = HASH(0x11);
+const MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1";
+const PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
+const PUBLIC_SIGNAL_SCHEMA_HASH =
+  "7567439F41173D6745A3D51923CB70371ACC7D66F23CEFB4100D6D5D7A432CBB";
+const SORA_TAIRA_CHAIN_ID_HASH =
+  "3F139C4B2A31457994D17BE5CE922D87FC702939116359F0E47314AB36A7F588";
 
 function b64(bytes) {
   return Buffer.from(bytes).toString("base64");
@@ -68,7 +75,7 @@ function g2(seed = 3) {
 
 function verifyingKey() {
   const ic = { constant: g1() };
-  for (let index = 0; index < 10; index += 1) ic[`signal_${index}`] = g1();
+  for (let index = 0; index < 11; index += 1) ic[`signal_${index}`] = g1();
   return { version: 1, alpha1: g1(), beta2: g2(), gamma2: g2(), delta2: g2(), ic };
 }
 
@@ -81,12 +88,262 @@ function verifyingKeyBytes(key) {
   addG2(key.gamma2);
   addG2(key.delta2);
   addG1(key.ic.constant);
-  for (let index = 0; index < 10; index += 1) addG1(key.ic[`signal_${index}`]);
+  for (let index = 0; index < 11; index += 1) addG1(key.ic[`signal_${index}`]);
   return Uint8Array.from(Buffer.from(words.join(""), "hex"));
 }
 
 function keyHash(key) {
   return Buffer.from(keccak_256(verifyingKeyBytes(key))).toString("hex");
+}
+
+function semanticProfile() {
+  return {
+    profile: "sora_taira_finality_inclusion_groth16_bn254",
+    commitments: {
+      version: 1,
+      circuit_commitment: UPPER(0xc1, 32),
+      witness_generator_commitment: UPPER(0xc2, 32),
+      public_signal_schema_hash: PUBLIC_SIGNAL_SCHEMA_HASH,
+    },
+  };
+}
+
+function finalityAnchor() {
+  return {
+    version: 1,
+    source_network: network("sora-taira"),
+    chain_id_hash: SORA_TAIRA_CHAIN_ID_HASH,
+    checkpoint_height: 7,
+    checkpoint_block_hash: UPPER(0xa1, 32),
+    validator_set_epoch: 2,
+    validator_set_hash: UPPER(0xa2, 32),
+    validator_set_hash_version: 1,
+  };
+}
+
+function outboundPolicy() {
+  return {
+    version: 1,
+    semantic_profile: semanticProfile(),
+    sora_finality_anchor: finalityAnchor(),
+  };
+}
+
+function policyHashes(policy = outboundPolicy()) {
+  const semanticPolicy = policy.semantic_profile;
+  const anchorPolicy = policy.sora_finality_anchor;
+  const semantic = Buffer.from(
+    keccak_256(
+      Buffer.concat([
+        Buffer.from("sccp:semantic-proof-profile:v1"),
+        Buffer.from([1, 0, 1]),
+        Buffer.from(semanticPolicy.commitments.circuit_commitment, "hex"),
+        Buffer.from(semanticPolicy.commitments.witness_generator_commitment, "hex"),
+        Buffer.from(semanticPolicy.commitments.public_signal_schema_hash, "hex"),
+      ]),
+    ),
+  );
+  const height = Buffer.alloc(8);
+  height.writeBigUInt64LE(BigInt(anchorPolicy.checkpoint_height));
+  const epoch = Buffer.alloc(8);
+  epoch.writeBigUInt64LE(BigInt(anchorPolicy.validator_set_epoch));
+  const hashVersion = Buffer.alloc(2);
+  hashVersion.writeUInt16LE(anchorPolicy.validator_set_hash_version);
+  const anchor = Buffer.from(
+    keccak_256(
+      Buffer.concat([
+        Buffer.from("sccp:sora-finality-anchor:v1"),
+        Buffer.from([1, 1]),
+        Buffer.from(anchorPolicy.chain_id_hash, "hex"),
+        height,
+        Buffer.from(anchorPolicy.checkpoint_block_hash, "hex"),
+        epoch,
+        Buffer.from(anchorPolicy.validator_set_hash, "hex"),
+        hashVersion,
+      ]),
+    ),
+  );
+  return { semantic: semantic.toString("hex"), anchor: anchor.toString("hex") };
+}
+
+function concatenate(...values) {
+  return Buffer.concat(values.map((value) => Buffer.from(value)));
+}
+
+function littleEndian(value, width) {
+  let remaining = BigInt(value);
+  const result = Buffer.alloc(width);
+  for (let index = 0; index < width; index += 1) {
+    result[index] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  assert.equal(remaining, 0n);
+  return result;
+}
+
+const NORITO_CRC64_TABLE = (() => {
+  const table = [];
+  for (let value = 0; value < 256; value += 1) {
+    let crc = BigInt(value);
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc & 1n) !== 0n
+        ? (crc >> 1n) ^ 0xc96c5795d7870f42n
+        : crc >> 1n;
+    }
+    table.push(crc);
+  }
+  return table;
+})();
+
+function noritoCrc64Xz(payload) {
+  let crc = 0xffffffffffffffffn;
+  for (const byte of payload) {
+    crc = NORITO_CRC64_TABLE[Number((crc ^ BigInt(byte)) & 0xffn)] ^ (crc >> 8n);
+  }
+  return BigInt.asUintN(64, crc ^ 0xffffffffffffffffn);
+}
+
+function sccpNoritoFrame(typeName, { payload = Buffer.from([1, 2, 3, 4]), padding = 0 } = {}) {
+  const schemaHash = createHash("sha256")
+    .update(Buffer.from("norito:v1:type-name\0", "utf8"))
+    .update(Buffer.from(typeName, "utf8"))
+    .digest()
+    .subarray(0, 16);
+  return Buffer.concat([
+    Buffer.from("NRT0", "ascii"),
+    Buffer.from([0, 0]),
+    schemaHash,
+    Buffer.from([0]),
+    littleEndian(payload.length, 8),
+    littleEndian(noritoCrc64Xz(payload), 8),
+    Buffer.from([0x02]),
+    Buffer.alloc(padding),
+    payload,
+  ]);
+}
+
+function abiWord(value) {
+  let remaining = BigInt(value);
+  const result = Buffer.alloc(32);
+  for (let index = 31; index >= 0 && remaining !== 0n; index -= 1) {
+    result[index] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  assert.equal(remaining, 0n);
+  return result;
+}
+
+function addressWord(value, tron = false) {
+  const result = Buffer.alloc(32);
+  if (tron) result[11] = 0x41;
+  result.set(Buffer.from(value, "hex"), 12);
+  return result;
+}
+
+const TEST_NETWORK_IDENTITIES = Object.freeze({
+  "sora-taira": Object.freeze({ tag: 1, domain: 0, bytes: Buffer.from("809574f5fee75e69bfcf52451e42d50f", "hex") }),
+  "ethereum-mainnet": Object.freeze({ tag: 2, domain: 1, bytes: littleEndian(1, 8), routeId: "taira_eth_xor", id: 1 }),
+  "ethereum-sepolia": Object.freeze({ tag: 3, domain: 1, bytes: littleEndian(11_155_111, 8), routeId: "taira_eth_xor", id: 11_155_111 }),
+  "bsc-mainnet": Object.freeze({ tag: 4, domain: 2, bytes: littleEndian(56, 8), routeId: "taira_bsc_xor", id: 56 }),
+  "bsc-testnet": Object.freeze({ tag: 5, domain: 2, bytes: littleEndian(97, 8), routeId: "taira_bsc_xor", id: 97 }),
+  "tron-mainnet": Object.freeze({ tag: 10, domain: 5, bytes: littleEndian(0x2b66_53dc, 4), routeId: "taira_tron_xor", id: 0x2b66_53dc }),
+  "tron-nile": Object.freeze({ tag: 11, domain: 5, bytes: littleEndian(0xcd86_90dc, 4), routeId: "taira_tron_xor", id: 0xcd86_90dc }),
+  "tron-shasta": Object.freeze({ tag: 12, domain: 5, bytes: littleEndian(0x94a9_059e, 4), routeId: "taira_tron_xor", id: 0x94a9_059e }),
+});
+
+function canonicalNetwork(profile) {
+  const descriptor = TEST_NETWORK_IDENTITIES[profile];
+  return concatenate(
+    Buffer.from([1, descriptor.tag]),
+    littleEndian(descriptor.domain, 4),
+    descriptor.bytes,
+  );
+}
+
+function testLaneHash(source, target) {
+  const sourceBytes = canonicalNetwork(source);
+  const targetBytes = canonicalNetwork(target);
+  return Buffer.from(
+    blake2b256(
+      concatenate(
+        Buffer.from("sccp:lane-id:v1"),
+        Buffer.from([1]),
+        littleEndian(sourceBytes.length, 4),
+        sourceBytes,
+        littleEndian(targetBytes.length, 4),
+        targetBytes,
+      ),
+    ),
+  );
+}
+
+function testDestinationHashes(route) {
+  const profile = route.lane_id.source.network.replaceAll("_", "-");
+  const descriptor = TEST_NETWORK_IDENTITIES[profile];
+  const deployment = route.destination.deployment;
+  const tron = route.destination.family === "tron";
+  const policy = policyHashes(deployment.outbound_proof_policy);
+  const semanticHash = Buffer.from(policy.semantic, "hex");
+  const anchorHash = Buffer.from(policy.anchor, "hex");
+  const destinationBindingHash = Buffer.from(
+    keccak_256(
+      concatenate(
+        keccak_256(Buffer.from(tron ? "iroha:sccp:tron-destination-binding:v1" : "iroha:sccp:evm-destination-binding:v1")),
+        keccak_256(Buffer.from(tron ? "tron-groth16-bn254-v1" : "evm-groth16-bn254-v1")),
+        abiWord(descriptor.id),
+        abiWord(0),
+        abiWord(descriptor.domain),
+        addressWord(deployment.verifier_address, tron),
+        addressWord(deployment.route_address, tron),
+        Buffer.from(deployment.verifier_code_hash, "hex"),
+        Buffer.from(deployment.verifier_key_hash, "hex"),
+        semanticHash,
+        anchorHash,
+      ),
+    ),
+  );
+  const deploymentWords = [
+    addressWord(deployment.token_address),
+    Buffer.from(deployment.token_code_hash, "hex"),
+    addressWord(deployment.verifier_address),
+    Buffer.from(deployment.verifier_code_hash, "hex"),
+    Buffer.from(deployment.verifier_key_hash, "hex"),
+    semanticHash,
+    anchorHash,
+  ];
+  if (tron) deploymentWords.push(destinationBindingHash);
+  const deploymentConfigHash = Buffer.from(keccak_256(concatenate(...deploymentWords)));
+  const assetRouteConfigHash = Buffer.from(
+    keccak_256(
+      concatenate(
+        keccak_256(Buffer.from("xor")),
+        keccak_256(Buffer.from(descriptor.routeId)),
+        abiWord(route.revision),
+        abiWord(deployment.taira_to_token_multiplier),
+      ),
+    ),
+  );
+  const sourceLaneHash = testLaneHash(profile, "sora-taira");
+  const destinationLaneHash = testLaneHash("sora-taira", profile);
+  const routeConfigurationHash = Buffer.from(
+    keccak_256(
+      concatenate(
+        keccak_256(Buffer.from("sccp:concrete-route-config:v1")),
+        abiWord(descriptor.domain),
+        abiWord(descriptor.tag),
+        abiWord(descriptor.id),
+        sourceLaneHash,
+        destinationLaneHash,
+        deploymentConfigHash,
+        assetRouteConfigHash,
+      ),
+    ),
+  );
+  return Object.freeze({
+    destinationBindingHash: destinationBindingHash.toString("hex").toUpperCase(),
+    deploymentConfigHash: deploymentConfigHash.toString("hex").toUpperCase(),
+    routeConfigurationHash: routeConfigurationHash.toString("hex").toUpperCase(),
+  });
 }
 
 function capabilities() {
@@ -97,25 +354,60 @@ function capabilities() {
     message_bundle_path: "/v1/sccp/proofs/message/{message_id}",
     proof_request_path: "/v1/sccp/proof-requests/{message_id}",
     recent_messages_path: "/v1/sccp/messages/recent",
+    registry_limits: {
+      max_governed_lanes: 16,
+      max_live_governed_routes: 64,
+      max_live_routes_per_lane: 8,
+      max_retained_routes_per_lane: 64,
+      max_retained_native_trust_anchors_per_lane: 4096,
+    },
+    resource_limits: {
+      max_proofs_per_transaction: 1,
+      max_proofs_per_block: 4,
+      max_proof_bytes_per_proof: 8 * 1024 * 1024,
+      max_proof_bytes_per_transaction: 8 * 1024 * 1024,
+      max_proof_bytes_per_block: 32 * 1024 * 1024,
+      max_native_headers_per_transaction: 1004,
+      max_native_headers_per_block: 4016,
+      max_ethereum_light_client_updates_per_transaction: 128,
+      max_ethereum_light_client_updates_per_block: 512,
+      max_native_header_bytes_per_transaction: 8 * 1024 * 1024,
+      max_native_header_bytes_per_block: 32 * 1024 * 1024,
+      max_secp256k1_recoveries_per_transaction: 1005,
+      max_secp256k1_recoveries_per_block: 4020,
+      max_bls_aggregate_checks_per_transaction: 1004,
+      max_bls_aggregate_checks_per_block: 4016,
+      max_bls_signer_contributions_per_transaction: 131713,
+      max_bls_signer_contributions_per_block: 526852,
+      max_bn254_pairing_checks_per_transaction: 1,
+      max_bn254_pairing_checks_per_block: 4,
+    },
     proof_submit_path: "/v1/bridge/proofs/submit",
     native_message_submit_path: "/v1/bridge/messages",
   };
 }
 
-function governedRoute({ revision = 1, activation = "staged" } = {}) {
+function governedRoute({
+  revision = 1,
+  activation = "staged",
+  source = "bsc-mainnet",
+  inboundFinalityCutoff = null,
+} = {}) {
   const key = verifyingKey();
   const routeAddress = UPPER(0x31, 20);
   const routeCodeHash = UPPER(0x41, 32);
-  return {
-    lane_id: lane(),
-    route_id: "taira_bsc_xor",
+  const family = source.startsWith("tron-") ? "tron" : "evm";
+  const route = {
+    lane_id: lane(source),
+    route_id: TEST_NETWORK_IDENTITIES[source].routeId,
     asset_key: "xor",
     revision,
     activation: { activation, direction: null },
+    inbound_finality_cutoff: inboundFinalityCutoff,
     source_identity: {
-      lane: lane(),
+      lane: lane(source),
       emitter: {
-        emitter: "evm",
+        emitter: family,
         identity: {
           address: routeAddress,
           runtime_code_hash: routeCodeHash,
@@ -124,7 +416,7 @@ function governedRoute({ revision = 1, activation = "staged" } = {}) {
       },
     },
     destination: {
-      family: "evm",
+      family,
       deployment: {
         token_address: UPPER(0x11, 20),
         token_code_hash: UPPER(0x21, 32),
@@ -132,6 +424,7 @@ function governedRoute({ revision = 1, activation = "staged" } = {}) {
         verifier_code_hash: UPPER(0x22, 32),
         verifying_key: key,
         verifier_key_hash: keyHash(key).toUpperCase(),
+        outbound_proof_policy: outboundPolicy(),
         route_address: routeAddress,
         route_code_hash: routeCodeHash,
         taira_to_token_multiplier: 1_000_000_000,
@@ -143,12 +436,36 @@ function governedRoute({ revision = 1, activation = "staged" } = {}) {
       payload_amount_scale: 9,
     },
   };
+  route.source_identity.emitter.identity.route_config_hash =
+    testDestinationHashes(route).routeConfigurationHash;
+  return route;
 }
 
-function registry(routes = [governedRoute()]) {
+function nativeTrustAnchor(source = "bsc-mainnet") {
+  const backend = source.startsWith("tron-")
+    ? "tron_dpos_v1"
+    : source.startsWith("bsc-")
+      ? "bsc_parlia_v1"
+      : "ethereum_beacon_v1";
+  return {
+    backend: { backend, protocol: null },
+    anchor_hash: UPPER(0x91, 32),
+    checkpoint_height: 1,
+  };
+}
+
+function registry(routes = [governedRoute()], anchor = null) {
+  const anchors = anchor === null ? [] : [anchor];
   return {
     version: 1,
-    lanes: [{ lane_id: lane(), native_trust_anchor: null, routes }],
+    lanes: [
+      {
+        lane_id: structuredClone(routes[0].lane_id),
+        native_trust_anchors: anchors,
+        current_native_trust_anchor_hash: anchors.at(-1)?.anchor_hash ?? null,
+        routes,
+      },
+    ],
   };
 }
 
@@ -156,15 +473,48 @@ function messageBundle() {
   return {
     version: 1,
     commitment_root: PREFIX_HASH(0x51),
-    commitment: { version: 1 },
+    commitment: {
+      version: 1,
+      kind: "Transfer",
+      context: {
+        lane: {
+          source: network("sora-taira"),
+          target: network("bsc-mainnet"),
+        },
+        destination_binding_hash: PREFIX_HASH(0x52),
+        route_configuration_hash: PREFIX_HASH(0x53),
+      },
+      message_id: PREFIX_HASH(0x54),
+      payload_hash: PREFIX_HASH(0x55),
+    },
     merkle_proof: { steps: [] },
-    payload: { Transfer: { amount: "1" } },
+    payload: {
+      Transfer: {
+        version: 1,
+        source_domain: 0,
+        dest_domain: 2,
+        nonce: "7",
+        route_revision: 1,
+        asset_home_domain: 0,
+        asset_id_codec: 1,
+        asset_id: "0x786f72",
+        amount: "1",
+        sender_codec: 1,
+        sender: "0x616c696365",
+        recipient_codec: 2,
+        recipient: `0x${HASH(0x21).slice(0, 40)}`,
+        route_id_codec: 1,
+        route_id: "0x74616972615f6273635f786f72",
+      },
+    },
     finality_proof: "0x0102",
   };
 }
 
 function proofRequest() {
   const key = verifyingKey();
+  const policy = outboundPolicy();
+  const hashes = policyHashes();
   return {
     version: 1,
     backend: { backend: "evm_groth16_bn254_v1", family: null },
@@ -181,6 +531,10 @@ function proofRequest() {
     },
     verifying_key: key,
     verifier_key_hash: `0x${keyHash(key)}`,
+    semantic_proof_profile: policy.semantic_profile,
+    semantic_proof_profile_hash: `0x${hashes.semantic}`,
+    sora_finality_anchor: policy.sora_finality_anchor,
+    sora_finality_anchor_hash: `0x${hashes.anchor}`,
     bundle_bytes: "0x0102",
     statement_hash: PREFIX_HASH(0x61),
     destination_binding_hash: PREFIX_HASH(0x62),
@@ -203,7 +557,21 @@ function recentItem(height = 9, id = MESSAGE_ID) {
     route_id: "taira_bsc_xor",
     recipient: null,
     amount: "1000",
-    payload_projection: null,
+    payload_projection: {
+      Transfer: {
+        version: 1,
+        source_domain: 0,
+        dest_domain: 2,
+        nonce: 7,
+        route_revision: 1,
+        asset_home_domain: 0,
+        asset_id: { CanonicalText: { value: "xor" } },
+        amount: 1000,
+        sender: { CanonicalText: { value: "alice@taira" } },
+        recipient: { EvmAddress20: { bytes: `0x${"11".repeat(20)}` } },
+        route_id: { CanonicalText: { value: "taira_bsc_xor" } },
+      },
+    },
     links: {
       bundle_path: `/v1/sccp/proofs/message/${id}`,
       proof_request_path: `/v1/sccp/proof-requests/${id}`,
@@ -222,7 +590,7 @@ function preparedResponse(overrides = {}) {
     backend: "bridge/sccp/native/bsc-parlia-v1",
     counterparty_domain: 2,
     counterparty_chain: "bsc-mainnet",
-    manifest_hash_hex: HASH(0x31),
+    route_configuration_hash_hex: HASH(0x31),
     range_start_height: 7,
     range_end_height: 9,
     creation_time_ms: 10,
@@ -235,7 +603,6 @@ function preparedResponse(overrides = {}) {
 
 test("closed SCCP inventory exposes only ETH, BSC, TRON and three exact codecs", async () => {
   assert.deepEqual(Object.keys(SCCP_NETWORK_PROFILES), [
-    "sora-nexus",
     "sora-taira",
     "ethereum-mainnet",
     "ethereum-sepolia",
@@ -245,6 +612,7 @@ test("closed SCCP inventory exposes only ETH, BSC, TRON and three exact codecs",
     "tron-nile",
     "tron-shasta",
   ]);
+  assert.equal(Object.values(SCCP_NETWORK_PROFILES).some(({ tag }) => tag === 0), false);
   assert.deepEqual(Object.keys(SCCP_CODEC_KEYS), ["1", "2", "5"]);
   assert.deepEqual(SCCP_PAYLOAD_KINDS, ["transfer"]);
   const exports = await import("../src/sccp.js");
@@ -263,6 +631,8 @@ test("closed SCCP inventory exposes only ETH, BSC, TRON and three exact codecs",
 
 test("closed codecs accept exact layouts and reject retired tags and textual aliases", () => {
   assert.deepEqual(normalizeSccpCodecValue(1, "merchant@taira"), new TextEncoder().encode("merchant@taira"));
+  assert.match(AUTHORITY, /[^\x00-\x7f]/u, "fixture must exercise non-ASCII I105 digits");
+  assert.deepEqual(normalizeSccpCodecValue(1, AUTHORITY), new TextEncoder().encode(AUTHORITY));
   assert.equal(normalizeSccpCodecValue(2, new Uint8Array(20).fill(1)).length, 20);
   assert.equal(
     normalizeSccpCodecValue(5, Uint8Array.from([0x41, ...new Uint8Array(20).fill(2)])).length,
@@ -276,6 +646,12 @@ test("closed codecs accept exact layouts and reject retired tags and textual ali
     [2, new Uint8Array(20)],
     [5, Uint8Array.from([0x42, ...new Uint8Array(20).fill(1)])],
     [1, " padded"],
+    [1, "contains space"],
+    [1, "line\nbreak"],
+    [1, "merchant\ud83d\ude42"],
+    [1, `${AUTHORITY.slice(0, -1)}${AUTHORITY.endsWith("1") ? "2" : "1"}`],
+    [1, `n753${AUTHORITY.slice("sora".length)}`],
+    [1, `${AUTHORITY}${"\uff72".repeat(100)}`],
   ]) assert.throws(() => normalizeSccpCodecValue(tag, value));
 });
 
@@ -298,7 +674,15 @@ test("source-event digest matches all shared ETH/BSC/TRON vectors", () => {
 });
 
 test("capabilities require exact immutable paths and reject all retired discovery fields", () => {
-  assert.equal(normalizeSccpCapabilities(capabilities()).proof_request_path, capabilities().proof_request_path);
+  const parsed = normalizeSccpCapabilities(capabilities());
+  assert.equal(parsed.proof_request_path, capabilities().proof_request_path);
+  assert.equal(parsed.registry_limits.max_retained_routes_per_lane, 64);
+  assert.equal(parsed.registry_limits.max_retained_native_trust_anchors_per_lane, 4096);
+  assert.equal(parsed.resource_limits.max_bls_signer_contributions_per_transaction, 131713);
+  const readOnly = capabilities();
+  delete readOnly.proof_submit_path;
+  delete readOnly.native_message_submit_path;
+  assert.equal(normalizeSccpCapabilities(readOnly).proof_submit_path, null);
   const mutations = [
     (value) => { value.registry_path = "/v1/sccp/manifests"; },
     (value) => { value.proof_request_path += "?network=bsc"; },
@@ -308,18 +692,100 @@ test("capabilities require exact immutable paths and reject all retired discover
     (value) => { value.outbound = {}; },
     (value) => { value.allow_unready = true; },
     (value) => { value.registry_revision = PREFIX_HASH(0); },
+    (value) => { delete value.proof_submit_path; },
+    (value) => { delete value.native_message_submit_path; },
   ];
   for (const mutate of mutations) {
     const value = structuredClone(capabilities());
     mutate(value);
     assert.throws(() => normalizeSccpCapabilities(value));
   }
+  for (const field of Object.keys(capabilities().resource_limits)) {
+    const value = structuredClone(capabilities());
+    value.resource_limits[field] = 0;
+    assert.throws(() => normalizeSccpCapabilities(value), new RegExp(field, "u"));
+  }
+  const driftedRegistryLimits = structuredClone(capabilities());
+  driftedRegistryLimits.registry_limits.max_retained_routes_per_lane = 65;
+  assert.throws(() => normalizeSccpCapabilities(driftedRegistryLimits), /fixed V1 capacities/u);
+});
+
+test("capabilities reject every reversed per-proof, transaction, and block limit relation", () => {
+  const orderedRelations = [
+    ["max_proof_bytes_per_proof", "max_proof_bytes_per_transaction", /per-proof byte limit/u],
+    ["max_proofs_per_transaction", "max_proofs_per_block", /transaction resource limits/u],
+    ["max_proof_bytes_per_transaction", "max_proof_bytes_per_block", /transaction resource limits/u],
+    ["max_native_headers_per_transaction", "max_native_headers_per_block", /transaction resource limits/u],
+    ["max_ethereum_light_client_updates_per_transaction", "max_ethereum_light_client_updates_per_block", /transaction resource limits/u],
+    ["max_native_header_bytes_per_transaction", "max_native_header_bytes_per_block", /transaction resource limits/u],
+    ["max_secp256k1_recoveries_per_transaction", "max_secp256k1_recoveries_per_block", /transaction resource limits/u],
+    ["max_bls_aggregate_checks_per_transaction", "max_bls_aggregate_checks_per_block", /transaction resource limits/u],
+    ["max_bls_signer_contributions_per_transaction", "max_bls_signer_contributions_per_block", /transaction resource limits/u],
+    ["max_bn254_pairing_checks_per_transaction", "max_bn254_pairing_checks_per_block", /transaction resource limits/u],
+  ];
+  for (const [lowerField, upperField, expected] of orderedRelations) {
+    const reversed = structuredClone(capabilities());
+    reversed.resource_limits[lowerField] = reversed.resource_limits[upperField] + 1;
+    assert.throws(
+      () => normalizeSccpCapabilities(reversed),
+      expected,
+      `${lowerField} must not exceed ${upperField}`,
+    );
+  }
+});
+
+test("capability integers preserve canonical JSON tokens and the shared exact range", () => {
+  const canonical = JSON.stringify(capabilities());
+  const needle = '"max_proofs_per_transaction":1';
+  assert.ok(canonical.includes(needle));
+  for (const token of ["1.0", "1e0", "-0", "9007199254740992.5", "1e999"]) {
+    const hostile = canonical.replace(needle, `"max_proofs_per_transaction":${token}`);
+    assert.throws(() => parseSccpJsonObject(hostile, "SCCP capabilities"), token);
+  }
+
+  const boundary = structuredClone(capabilities());
+  for (const field of [
+    "max_proof_bytes_per_proof",
+    "max_proof_bytes_per_transaction",
+    "max_proof_bytes_per_block",
+    "max_native_header_bytes_per_transaction",
+    "max_native_header_bytes_per_block",
+  ]) boundary.resource_limits[field] = Number.MAX_SAFE_INTEGER;
+  assert.equal(
+    normalizeSccpCapabilities(boundary).resource_limits.max_proof_bytes_per_block,
+    Number.MAX_SAFE_INTEGER,
+  );
+  boundary.resource_limits.max_proof_bytes_per_block = Number.MAX_SAFE_INTEGER + 1;
+  assert.throws(() => normalizeSccpCapabilities(boundary), /safe integer/u);
+});
+
+test("registry checks retained-history caps before traversing attacker-controlled entries", () => {
+  const exactAnchors = registry();
+  exactAnchors.lanes[0].native_trust_anchors = Array(4096).fill(null);
+  assert.throws(
+    () => normalizeSccpRegistry(exactAnchors),
+    (error) => !/more than 4,096/u.test(error.message),
+  );
+  const overAnchors = registry();
+  overAnchors.lanes[0].native_trust_anchors = Array(4097).fill(null);
+  assert.throws(() => normalizeSccpRegistry(overAnchors), /more than 4,096/u);
+
+  const exactRoutes = registry();
+  exactRoutes.lanes[0].routes = Array(64).fill({});
+  assert.throws(
+    () => normalizeSccpRegistry(exactRoutes),
+    (error) => !/more than 64 retained/u.test(error.message),
+  );
+  const overRoutes = registry();
+  overRoutes.lanes[0].routes = Array(65).fill({});
+  assert.throws(() => normalizeSccpRegistry(overRoutes), /more than 64 retained/u);
 });
 
 test("registry validates complete typed route identity and immutable key hash", () => {
   const parsed = normalizeSccpRegistry(registry());
   assert.equal(parsed.lanes.length, 1);
   assert.equal(Object.isFrozen(parsed.lanes[0]), true);
+  assert.equal(normalizeSccpRegistry(registry([governedRoute({ source: "tron-mainnet" })])).lanes.length, 1);
   const badHash = registry();
   badHash.lanes[0].routes[0].destination.deployment.verifier_key_hash = UPPER(0x99, 32);
   assert.throws(() => normalizeSccpRegistry(badHash), /verifier_key_hash/u);
@@ -327,9 +793,285 @@ test("registry validates complete typed route identity and immutable key hash", 
   alias.lanes[0].routes[0].destination.deployment.verifier_address =
     alias.lanes[0].routes[0].destination.deployment.token_address;
   assert.throws(() => normalizeSccpRegistry(alias), /reuses/u);
+  const tenSignal = registry();
+  delete tenSignal.lanes[0].routes[0].destination.deployment.verifying_key.ic.signal_10;
+  assert.throws(() => normalizeSccpRegistry(tenSignal), /signal_10/u);
+  const policyless = registry();
+  delete policyless.lanes[0].routes[0].destination.deployment.outbound_proof_policy;
+  assert.throws(() => normalizeSccpRegistry(policyless), /outbound_proof_policy/u);
+  const wrongSettlementAsset = registry();
+  wrongSettlementAsset.lanes[0].routes[0].settlement.asset_definition_id =
+    "another-canonical-looking-asset";
+  assert.throws(
+    () => normalizeSccpRegistry(wrongSettlementAsset),
+    /first-release Taira XOR asset/u,
+  );
+});
+
+test("registry destination hashes match the canonical Rust EVM and TRON layouts", () => {
+  const vectors = [
+    {
+      source: "bsc-mainnet",
+      destinationBindingHash: "738B46DB08128CAA0EAF9057D954C7A12BE2187F8BBBF66594BAF6752A4B0718",
+      deploymentConfigHash: "6F561E66F6F74E00F86C9FD54070FD5FF2D36ABA9DFDE80A741E4E7E2A8C8402",
+      routeConfigurationHash: "88BC0064A81E6C936A0F27D99B21DA445629EED8BB324C9EFF2DDEC9741D9F01",
+    },
+    {
+      source: "tron-mainnet",
+      destinationBindingHash: "C1231B2F1906E185D484C71BA3ADDCAC7FBCEEE54BF768A395C9220C0179CD7B",
+      deploymentConfigHash: "6ED649232195B47E8389B036933BD445BA4EC53AFCFB66700D5DD60D39DE955E",
+      routeConfigurationHash: "6CE0FEB0CBF58A75F50CEE5814055B44CAB37B6CA5ED28ABA47CF0C84ACF0DAA",
+    },
+  ];
+  for (const vector of vectors) {
+    const route = governedRoute({ source: vector.source });
+    assert.deepEqual(testDestinationHashes(route), {
+      destinationBindingHash: vector.destinationBindingHash,
+      deploymentConfigHash: vector.deploymentConfigHash,
+      routeConfigurationHash: vector.routeConfigurationHash,
+    });
+    assert.equal(
+      route.source_identity.emitter.identity.route_config_hash,
+      vector.routeConfigurationHash,
+    );
+    assert.equal(normalizeSccpRegistry(registry([route])).lanes.length, 1);
+  }
+});
+
+test("registry rejects stale emitter hashes after either typed proof policy changes", () => {
+  const mutations = [
+    {
+      label: "semantic profile",
+      mutate(policy) {
+        policy.semantic_profile.commitments.circuit_commitment = UPPER(0xc3, 32);
+      },
+      changed(before, after) {
+        return before.semantic !== after.semantic && before.anchor === after.anchor;
+      },
+    },
+    {
+      label: "Taira finality anchor",
+      mutate(policy) {
+        policy.sora_finality_anchor.checkpoint_height += 1;
+      },
+      changed(before, after) {
+        return before.semantic === after.semantic && before.anchor !== after.anchor;
+      },
+    },
+  ];
+  for (const source of ["bsc-mainnet", "tron-mainnet"]) {
+    for (const mutation of mutations) {
+      const route = governedRoute({ source });
+      const policy = route.destination.deployment.outbound_proof_policy;
+      const before = policyHashes(policy);
+      mutation.mutate(policy);
+      const after = policyHashes(policy);
+      assert.equal(mutation.changed(before, after), true, mutation.label);
+      assert.throws(
+        () => normalizeSccpRegistry(registry([route])),
+        /route_config_hash does not match/u,
+        `${source} must reject a stale emitter after changing its ${mutation.label}`,
+      );
+    }
+  }
+});
+
+test("registry rejects every stale route-configuration intermediary", () => {
+  const mutations = [
+    ["token address", (route) => { route.destination.deployment.token_address = UPPER(0x13, 20); }],
+    ["token code", (route) => { route.destination.deployment.token_code_hash = UPPER(0x23, 32); }],
+    ["verifier address", (route) => { route.destination.deployment.verifier_address = UPPER(0x14, 20); }],
+    ["verifier code", (route) => { route.destination.deployment.verifier_code_hash = UPPER(0x24, 32); }],
+    ["verifying key", (route) => {
+      route.destination.deployment.verifying_key.alpha1 = g1(7, 8);
+      route.destination.deployment.verifier_key_hash =
+        keyHash(route.destination.deployment.verifying_key).toUpperCase();
+    }],
+    ["route revision", (route) => { route.revision += 1; }],
+  ];
+  for (const source of ["bsc-mainnet", "tron-mainnet"]) {
+    for (const [label, mutate] of mutations) {
+      const route = governedRoute({ source });
+      const stale = route.source_identity.emitter.identity.route_config_hash;
+      mutate(route);
+      assert.notEqual(testDestinationHashes(route).routeConfigurationHash, stale, label);
+      assert.throws(
+        () => normalizeSccpRegistry(registry([route])),
+        /route_config_hash does not match/u,
+        `${source} must reject a stale ${label} intermediary`,
+      );
+    }
+  }
+  for (const source of ["bsc-mainnet", "tron-mainnet"]) {
+    const route = governedRoute({ source });
+    route.source_identity.emitter.identity.route_config_hash = UPPER(0xfe, 32);
+    assert.throws(
+      () => normalizeSccpRegistry(registry([route])),
+      /route_config_hash does not match/u,
+    );
+  }
+  const tronRoute = governedRoute({ source: "tron-mainnet" });
+  const before = testDestinationHashes(tronRoute);
+  tronRoute.destination.deployment.route_address = UPPER(0x32, 20);
+  tronRoute.source_identity.emitter.identity.address = UPPER(0x32, 20);
+  const after = testDestinationHashes(tronRoute);
+  assert.notEqual(after.destinationBindingHash, before.destinationBindingHash);
+  assert.notEqual(after.deploymentConfigHash, before.deploymentConfigHash);
+  assert.notEqual(after.routeConfigurationHash, before.routeConfigurationHash);
+  assert.throws(
+    () => normalizeSccpRegistry(registry([tronRoute])),
+    /route_config_hash does not match/u,
+  );
+});
+
+test("registry requires a native trust anchor for every inbound-enabled route", () => {
+  for (const activation of ["bidirectional", "inbound_only"]) {
+    for (const source of ["bsc-mainnet", "tron-mainnet"]) {
+      const route = governedRoute({ activation, source });
+      assert.throws(
+        () => normalizeSccpRegistry(registry([route])),
+        /without a trust anchor/u,
+      );
+      assert.equal(
+        normalizeSccpRegistry(registry([route], nativeTrustAnchor(source))).lanes.length,
+        1,
+      );
+    }
+  }
+});
+
+test("registry requires one append-only native trust-anchor history and exact current pointer", () => {
+  const route = governedRoute({ activation: "inbound_only" });
+  const first = nativeTrustAnchor();
+  const second = {
+    ...structuredClone(first),
+    anchor_hash: UPPER(0x92, 32),
+    checkpoint_height: 2,
+  };
+  const canonical = registry([route], first);
+  canonical.lanes[0].native_trust_anchors.push(second);
+  canonical.lanes[0].current_native_trust_anchor_hash = second.anchor_hash;
+  assert.equal(normalizeSccpRegistry(canonical).lanes.length, 1);
+
+  const stalePointer = structuredClone(canonical);
+  stalePointer.lanes[0].current_native_trust_anchor_hash = first.anchor_hash;
+  assert.throws(() => normalizeSccpRegistry(stalePointer), /last retained anchor/u);
+
+  const duplicate = structuredClone(canonical);
+  duplicate.lanes[0].native_trust_anchors[1].anchor_hash = first.anchor_hash;
+  duplicate.lanes[0].current_native_trust_anchor_hash = first.anchor_hash;
+  assert.throws(() => normalizeSccpRegistry(duplicate), /duplicate native trust-anchor/u);
+
+  const rollback = structuredClone(canonical);
+  rollback.lanes[0].native_trust_anchors[1].checkpoint_height = 1;
+  assert.throws(() => normalizeSccpRegistry(rollback), /advance monotonically/u);
+
+  const legacy = structuredClone(canonical);
+  legacy.lanes[0].native_trust_anchor = first;
+  delete legacy.lanes[0].native_trust_anchors;
+  delete legacy.lanes[0].current_native_trust_anchor_hash;
+  assert.throws(() => normalizeSccpRegistry(legacy), /unknown or retired|field set/u);
+});
+
+test("retired routes require one complete retained-anchor finality interval", () => {
+  const first = nativeTrustAnchor();
+  const second = {
+    ...structuredClone(first),
+    anchor_hash: UPPER(0x92, 32),
+    checkpoint_height: 2,
+  };
+  const cutoff = {
+    trust_anchor_hash: first.anchor_hash,
+    max_anchor_interval_height: second.checkpoint_height,
+  };
+  const canonical = registry(
+    [governedRoute({ activation: "retired", inboundFinalityCutoff: cutoff })],
+    first,
+  );
+  canonical.lanes[0].native_trust_anchors.push(second);
+  canonical.lanes[0].current_native_trust_anchor_hash = second.anchor_hash;
+  assert.equal(normalizeSccpRegistry(canonical).lanes.length, 1);
+
+  const missing = structuredClone(canonical);
+  missing.lanes[0].routes[0].inbound_finality_cutoff = null;
+  assert.throws(() => normalizeSccpRegistry(missing), /required for a retired/u);
+
+  const nonterminal = structuredClone(canonical);
+  nonterminal.lanes[0].routes[0].activation.activation = "paused";
+  assert.throws(() => normalizeSccpRegistry(nonterminal), /allowed only for a retired/u);
+
+  for (const mutate of [
+    (value) => {
+      value.trust_anchor_hash = UPPER(0xff, 32);
+    },
+    (value) => {
+      value.max_anchor_interval_height = second.checkpoint_height - 1;
+    },
+    (value) => {
+      value.trust_anchor_hash = second.anchor_hash;
+    },
+  ]) {
+    const incomplete = structuredClone(canonical);
+    mutate(incomplete.lanes[0].routes[0].inbound_finality_cutoff);
+    assert.throws(() => normalizeSccpRegistry(incomplete), /complete retained anchor interval/u);
+  }
+
+  const omitted = registry();
+  delete omitted.lanes[0].routes[0].inbound_finality_cutoff;
+  assert.throws(() => normalizeSccpRegistry(omitted), /field set|missing required/u);
+});
+
+test("registry accepts zero BN254 limbs but rejects an all-zero point", () => {
+  const route = governedRoute();
+  route.destination.deployment.verifying_key.alpha1.x = UPPER(0, 32);
+  route.destination.deployment.verifier_key_hash = keyHash(
+    route.destination.deployment.verifying_key,
+  ).toUpperCase();
+  route.source_identity.emitter.identity.route_config_hash =
+    testDestinationHashes(route).routeConfigurationHash;
+  assert.equal(normalizeSccpRegistry(registry([route])).lanes.length, 1);
+
+  route.destination.deployment.verifying_key.alpha1.y = UPPER(0, 32);
+  assert.throws(() => normalizeSccpRegistry(registry([route])), /point at infinity/u);
+});
+
+test("regenerated SCCP distribution enforces the canonical route commitments", async () => {
+  const { normalizeSccpRegistry: normalizeDistributionRegistry } =
+    await import("../dist/sccp.js");
+  for (const source of ["bsc-mainnet", "tron-mainnet"]) {
+    assert.equal(
+      normalizeDistributionRegistry(registry([governedRoute({ source })])).lanes.length,
+      1,
+    );
+    for (const mutate of [
+      (route) => {
+        route.destination.deployment.outbound_proof_policy.semantic_profile.commitments
+          .circuit_commitment = UPPER(0xc3, 32);
+      },
+      (route) => {
+        route.destination.deployment.outbound_proof_policy.sora_finality_anchor
+          .checkpoint_height += 1;
+      },
+      (route) => {
+        route.destination.deployment.token_code_hash = UPPER(0x23, 32);
+      },
+    ]) {
+      const route = governedRoute({ source });
+      mutate(route);
+      assert.throws(
+        () => normalizeDistributionRegistry(registry([route])),
+        /route_config_hash does not match/u,
+      );
+    }
+  }
 });
 
 test("registry rejects retired families, browser metadata, duplicate lanes, and revision gaps", () => {
+  for (const removed of ["sora_nexus", "sora-nexus"]) {
+    const retiredSora = registry();
+    retiredSora.lanes[0].lane_id.target = { network: removed, profile: null };
+    assert.throws(() => normalizeSccpRegistry(retiredSora), /retired/u);
+  }
   const retired = registry();
   retired.lanes[0].lane_id.source = { network: "solana_mainnet_beta", profile: null };
   assert.throws(() => normalizeSccpRegistry(retired), /retired/u);
@@ -344,7 +1086,7 @@ test("registry rejects retired families, browser metadata, duplicate lanes, and 
   const doubleLive = registry([
     governedRoute({ revision: 1, activation: "bidirectional" }),
     governedRoute({ revision: 2, activation: "bidirectional" }),
-  ]);
+  ], nativeTrustAnchor());
   assert.throws(() => normalizeSccpRegistry(doubleLive), /multiple revisions/u);
 });
 
@@ -359,6 +1101,48 @@ test("route governance accepts only closed atomic actions and exact field names"
     },
   };
   assert.equal(normalizeSccpRouteGovernanceAction(remove).action, "Remove");
+  assert.equal(
+    normalizeSccpRouteGovernanceAction({
+      action: "SetActivation",
+      route: {
+        key: remove.route,
+        expected_current: { activation: "staged", direction: null },
+        next: { activation: "inbound_only", direction: null },
+        inbound_finality_cutoff: null,
+      },
+    }).action,
+    "SetActivation",
+  );
+  const cutoff = {
+    trust_anchor_hash: UPPER(0x91, 32),
+    max_anchor_interval_height: 2,
+  };
+  assert.equal(
+    normalizeSccpRouteGovernanceAction({
+      action: "SetActivation",
+      route: {
+        key: remove.route,
+        expected_current: { activation: "staged", direction: null },
+        next: { activation: "retired", direction: null },
+        inbound_finality_cutoff: cutoff,
+      },
+    }).action,
+    "SetActivation",
+  );
+  assert.equal(
+    normalizeSccpRouteGovernanceAction({
+      action: "SwitchRevision",
+      route: {
+        previous_key: remove.route,
+        expected_previous: { activation: "bidirectional", direction: null },
+        previous_next: { activation: "retired", direction: null },
+        previous_inbound_finality_cutoff: cutoff,
+        successor_key: { ...remove.route, revision: 2 },
+        successor_next: { activation: "bidirectional", direction: null },
+      },
+    }).action,
+    "SwitchRevision",
+  );
   for (const value of [
     { ...remove, manifest: {} },
     { action: "UpsertManifest", route: {} },
@@ -369,6 +1153,25 @@ test("route governance accepts only closed atomic actions and exact field names"
         key: remove.route,
         expected_current: { activation: "staged", direction: null },
         next: { activation: "paused", direction: null },
+        inbound_finality_cutoff: null,
+      },
+    },
+    {
+      action: "SetActivation",
+      route: {
+        key: remove.route,
+        expected_current: { activation: "staged", direction: null },
+        next: { activation: "retired", direction: null },
+        inbound_finality_cutoff: null,
+      },
+    },
+    {
+      action: "SetActivation",
+      route: {
+        key: remove.route,
+        expected_current: { activation: "staged", direction: null },
+        next: { activation: "inbound_only", direction: null },
+        inbound_finality_cutoff: cutoff,
       },
     },
   ]) assert.throws(() => normalizeSccpRouteGovernanceAction(value));
@@ -387,6 +1190,43 @@ test("recent discovery contains only exact bundle and proof-request links", () =
   injection.links.bundle_path += "?allow_unready=true";
   assert.throws(() => normalizeSccpRecentMessages({ items: [injection] }));
   assert.throws(() => normalizeSccpRecentMessages({ items: [recentItem(8), recentItem(9)] }));
+  assert.throws(() => normalizeSccpRecentMessages({ items: [recentItem(), recentItem()] }), /duplicate/u);
+  const oversized = recentItem();
+  oversized.amount = (1n << 128n).toString();
+  assert.throws(() => normalizeSccpRecentMessages({ items: [oversized] }), /u128/u);
+  assert.throws(
+    () => normalizeSccpRecentMessages({ items: Array.from({ length: 51 }, (_, index) => recentItem(51 - index, HASH(index + 1))) }),
+    /50/u,
+  );
+  for (const mutate of [
+    (value) => {
+      delete value.payload_projection;
+    },
+    (value) => {
+      value.payload_projection = null;
+    },
+    (value) => {
+      value.payload_projection.Transfer.dest_domain = 5;
+    },
+    (value) => {
+      value.payload_projection.Transfer.recipient = {
+        CanonicalText: { value: "not-an-address" },
+      };
+    },
+    (value) => {
+      value.payload_projection.Transfer.route_id.CanonicalText.value = "taira_tron_xor";
+    },
+    (value) => {
+      value.payload_projection.Transfer.amount = 0;
+    },
+    (value) => {
+      value.amount = "1001";
+    },
+  ]) {
+    const invalidProjection = recentItem();
+    mutate(invalidProjection);
+    assert.throws(() => normalizeSccpRecentMessages({ items: [invalidProjection] }));
+  }
 });
 
 test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema", () => {
@@ -395,6 +1235,25 @@ test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema",
   const retiredPayload = messageBundle();
   retiredPayload.payload = { Burn: {} };
   assert.throws(() => normalizeSccpMessageBundle(retiredPayload), /retired/u);
+  const aliasedCommitment = messageBundle();
+  aliasedCommitment.commitment.context.route_configuration_hash =
+    aliasedCommitment.commitment.context.destination_binding_hash;
+  assert.throws(() => normalizeSccpMessageBundle(aliasedCommitment), /role-separated/u);
+  const reservedDomain = messageBundle();
+  reservedDomain.payload.Transfer.dest_domain = 3;
+  assert.throws(() => normalizeSccpMessageBundle(reservedDomain), /reserved/u);
+  const oversizedNonce = messageBundle();
+  oversizedNonce.payload.Transfer.nonce = (1n << 64n).toString();
+  assert.throws(() => normalizeSccpMessageBundle(oversizedNonce), /u64/u);
+  const wrongRecipientCodec = messageBundle();
+  wrongRecipientCodec.payload.Transfer.recipient_codec = 5;
+  assert.throws(() => normalizeSccpMessageBundle(wrongRecipientCodec), /protocol domain/u);
+  const longMerklePath = messageBundle();
+  longMerklePath.merkle_proof.steps = Array.from({ length: 65 }, () => ({
+    sibling_hash: PREFIX_HASH(0x70),
+    sibling_is_left: false,
+  }));
+  assert.throws(() => normalizeSccpMessageBundle(longMerklePath), /64/u);
   const retiredBackend = proofRequest();
   retiredBackend.backend.backend = "solana_recursive_v1";
   assert.throws(() => normalizeSccpProofRequest(retiredBackend), /retired/u);
@@ -411,28 +1270,46 @@ test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema",
   const selector = proofRequest();
   selector.allow_unready = true;
   assert.throws(() => normalizeSccpProofRequest(selector), /retired/u);
+  const wrongSemantic = proofRequest();
+  wrongSemantic.semantic_proof_profile_hash = PREFIX_HASH(0x99);
+  assert.throws(() => normalizeSccpProofRequest(wrongSemantic), /semantic_proof_profile_hash/u);
+  const wrongAnchor = proofRequest();
+  wrongAnchor.sora_finality_anchor_hash = PREFIX_HASH(0x99);
+  assert.throws(() => normalizeSccpProofRequest(wrongAnchor), /sora_finality_anchor_hash/u);
 });
 
-test("submit DTOs expose only authority, optional signature, artifact, and positive timestamp", () => {
+test("submit DTOs preserve the exact prepared transaction for detached signing", () => {
+  const transactionPayload = b64(Uint8Array.of(1, 2, 3, 4));
   const proof = normalizeBridgeProofSubmitPayload({
     authority: AUTHORITY,
-    signature_b64: "AQ==",
+    signature_b64: b64(new Uint8Array(64).fill(1)),
+    transaction_payload_b64: transactionPayload,
     destination_proof_b64: "Ag==",
     creation_time_ms: 10,
   });
   assert.deepEqual(Object.keys(proof), [
     "authority",
     "signature_b64",
+    "transaction_payload_b64",
     "destination_proof_b64",
     "creation_time_ms",
   ]);
+  assert.equal(proof.transaction_payload_b64, transactionPayload);
   assert.deepEqual(Object.keys(normalizeBridgeMessageSubmitPayload({
     authority: AUTHORITY,
     native_proof_b64: "Aw==",
   })), ["authority", "native_proof_b64"]);
+  const native = normalizeBridgeMessageSubmitPayload({
+    authority: AUTHORITY,
+    signature_b64: "AQ==",
+    transaction_payload_b64: transactionPayload,
+    native_proof_b64: "Aw==",
+    creation_time_ms: 10,
+  });
+  assert.equal(native.transaction_payload_b64, transactionPayload);
 });
 
-test("submit DTOs reject redundant signers, caller-selected routes, bad base64, and bad time", () => {
+test("submit DTOs reject mixed signing state, malformed encodings, and retired fields", () => {
   const proof = { authority: AUTHORITY, destination_proof_b64: "AQ==" };
   for (const [field, value] of [
     ["public_key_hex", HASH(1)],
@@ -443,9 +1320,19 @@ test("submit DTOs reject redundant signers, caller-selected routes, bad base64, 
     ["deployment", {}],
     ["allow_unready", true],
     ["signature", "AQ=="],
+    ["client_signature_b64", "AQ=="],
   ]) assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, [field]: value }));
   for (const artifact of ["AQ", " AQ==", "AQ==\n", "", "====", "A==="]) {
     assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, destination_proof_b64: artifact }));
+  }
+  for (const signingState of [
+    { signature_b64: "AQ==", creation_time_ms: 1 },
+    { transaction_payload_b64: "AQ==", creation_time_ms: 1 },
+    { signature_b64: "AQ==", transaction_payload_b64: "Ag==" },
+    { signature_b64: "AQ", transaction_payload_b64: "Ag==", creation_time_ms: 1 },
+    { signature_b64: "AQ==", transaction_payload_b64: "Ag", creation_time_ms: 1 },
+  ]) {
+    assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, ...signingState }));
   }
   for (const creation_time_ms of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "1"]) {
     assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, creation_time_ms }));
@@ -465,27 +1352,102 @@ test("bridge response and JSON parser reject contradictions, aliases, and duplic
     { ...preparedResponse(), payload_kind: "burn" },
     { ...preparedResponse(), counterparty_chain: "solana-mainnet-beta" },
     { ...preparedResponse(), proof_artifact_hash: HASH(3) },
+    { ...preparedResponse(), manifest_hash_hex: HASH(3) },
+    { ...preparedResponse(), route_configuration_hash_hex: HASH(0xab).toUpperCase() },
     { ...preparedResponse(), creation_time_ms: 0 },
     { ...preparedResponse(), tx_hash_hex: HASH(4) },
+    { ...preparedResponse(), transaction_payload_b64: b64(Uint8Array.of(1, 2, 3, 5)) },
     { ...preparedResponse(), signing_message_b64: b64(new Uint8Array(32).fill(9)) },
   ]) assert.throws(() => normalizeSccpBridgeSubmitResponse(value));
+  const missingRouteHash = preparedResponse();
+  delete missingRouteHash.route_configuration_hash_hex;
+  assert.throws(() => normalizeSccpBridgeSubmitResponse(missingRouteHash), /missing required/u);
+  assert.throws(
+    () => normalizeSccpBridgeSubmitResponse(preparedResponse(), { submitted: true }),
+    /signing state/u,
+  );
   const json = JSON.stringify(preparedResponse());
   assert.equal(parseSccpBridgeSubmitResponseJson(json).submitted, false);
   assert.throws(() => parseSccpBridgeSubmitResponseJson(json.replace("{", '{"submitted":false,')), /duplicate/u);
+  assert.throws(
+    () => parseSccpBridgeSubmitResponseJson(
+      json.replace(
+        `"route_configuration_hash_hex":"${HASH(0x31)}"`,
+        `"route_configuration_hash_hex":"${HASH(0x31)}","route_configuration_hash_hex":"${HASH(0x32)}"`,
+      ),
+    ),
+    /duplicate/u,
+  );
   assert.throws(() => parseSccpJsonObject(`${json}{}`), /trailing/u);
 });
 
-function response(value, { contentType = "application/json", bytes } = {}) {
-  const body = bytes ?? Buffer.from(JSON.stringify(value), "utf8");
+function response(
+  value,
+  {
+    contentType = "application/json",
+    contentLength,
+    bytes,
+    chunks: providedChunks,
+    status = 200,
+  } = {},
+) {
+  const bodyBytes = Buffer.from(bytes ?? Buffer.from(JSON.stringify(value), "utf8"));
+  const chunks = (providedChunks ?? [bodyBytes]).map((chunk) => Uint8Array.from(chunk));
+  const headers = new Headers({ "content-type": contentType });
+  const streamState = { cancelled: false, released: false };
+  let locked = false;
+  let nextChunk = 0;
+  const body = {
+    get locked() { return locked; },
+    getReader() {
+      if (locked) throw new TypeError("test response body is already locked");
+      locked = true;
+      return {
+        async read() {
+          if (streamState.cancelled || nextChunk >= chunks.length) {
+            return { done: true, value: undefined };
+          }
+          const value = chunks[nextChunk];
+          nextChunk += 1;
+          return { done: false, value };
+        },
+        async cancel() { streamState.cancelled = true; },
+        releaseLock() { locked = false; streamState.released = true; },
+      };
+    },
+    async cancel() { streamState.cancelled = true; },
+  };
   return {
-    status: 200,
-    headers: new Headers({ "content-type": contentType }),
-    async text() { return Buffer.from(body).toString("utf8"); },
-    async arrayBuffer() { return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength); },
+    status,
+    statusText: status === 200 ? "OK" : "Test Error",
+    headers: {
+      get(name) {
+        if (String(name).toLowerCase() === "content-length") {
+          return contentLength ?? null;
+        }
+        return headers.get(name);
+      },
+    },
+    body,
+    streamState,
+    async text() { return bodyBytes.toString("utf8"); },
+    async arrayBuffer() {
+      return bodyBytes.buffer.slice(
+        bodyBytes.byteOffset,
+        bodyBytes.byteOffset + bodyBytes.byteLength,
+      );
+    },
   };
 }
 
+function paddedJsonBytes(value, byteLength) {
+  const canonical = Buffer.from(JSON.stringify(value), "utf8");
+  assert.ok(canonical.length <= byteLength, "fixture must fit the requested byte length");
+  return Buffer.concat([canonical, Buffer.alloc(byteLength - canonical.length, 0x20)]);
+}
+
 test("Torii exact client constructs fixed query-free endpoints and content negotiation", async () => {
+  const proofRequestFrame = sccpNoritoFrame(PROOF_REQUEST_NORITO_TYPE);
   const observed = [];
   const client = new ToriiClient("https://example.invalid", {
     fetchImpl: async (url, init) => {
@@ -495,7 +1457,7 @@ test("Torii exact client constructs fixed query-free endpoints and content negot
       if (path === "/v1/sccp/registry") return response({ version: 1, lanes: [] });
       if (path.includes("proof-requests")) {
         return init.headers.Accept === "application/x-norito"
-          ? response(null, { contentType: "application/x-norito", bytes: Buffer.from([7, 8]) })
+          ? response(null, { contentType: "application/x-norito", bytes: proofRequestFrame })
           : response(proofRequest());
       }
       if (path.includes("proofs/message")) return response(messageBundle());
@@ -505,15 +1467,213 @@ test("Torii exact client constructs fixed query-free endpoints and content negot
   assert.equal((await client.getSccpCapabilities()).version, 1);
   assert.equal((await client.getSccpRegistry()).version, 1);
   assert.equal((await client.getSccpMessageBundle(MESSAGE_ID)).version, 1);
-  assert.deepEqual(await client.getSccpProofRequest(MESSAGE_ID, { format: "norito" }), Uint8Array.of(7, 8));
-  assert.deepEqual((await client.getSccpRecentMessages({ from: 9, limit: 0 })).items, []);
+  assert.deepEqual(
+    Buffer.from(await client.getSccpProofRequest(MESSAGE_ID, { format: "norito" })),
+    proofRequestFrame,
+  );
+  assert.deepEqual((await client.getSccpRecentMessages({ from: 9, limit: 1 })).items, []);
   assert.deepEqual(observed.map(({ url }) => url), [
     "https://example.invalid/v1/sccp/capabilities",
     "https://example.invalid/v1/sccp/registry",
     `https://example.invalid/v1/sccp/proofs/message/${MESSAGE_ID}`,
     `https://example.invalid/v1/sccp/proof-requests/${MESSAGE_ID}`,
-    "https://example.invalid/v1/sccp/messages/recent?from=9&limit=0",
+    "https://example.invalid/v1/sccp/messages/recent?from=9&limit=1",
   ]);
+});
+
+test("Torii SCCP Norito preflight accepts canonical frames with zero or 64-byte padding", async () => {
+  for (const padding of [0, 64]) {
+    const frame = sccpNoritoFrame(PROOF_REQUEST_NORITO_TYPE, { padding });
+    const streamed = response(null, {
+      contentType: "application/x-norito",
+      bytes: frame,
+    });
+    const client = new ToriiClient("https://example.invalid", {
+      fetchImpl: async () => streamed,
+    });
+    assert.deepEqual(
+      Buffer.from(await client.getSccpProofRequest(MESSAGE_ID, { format: "norito" })),
+      frame,
+    );
+    assert.equal(streamed.streamState.released, true);
+  }
+});
+
+test("Torii SCCP Norito preflight rejects malformed and cross-type frames", async () => {
+  const canonical = sccpNoritoFrame(PROOF_REQUEST_NORITO_TYPE);
+  const mutate = (offset, value) => {
+    const frame = Buffer.from(canonical);
+    frame[offset] = value;
+    return frame;
+  };
+  const declaredLong = Buffer.from(canonical);
+  declaredLong.writeBigUInt64LE(5n, 23);
+  const declaredShort = Buffer.from(canonical);
+  declaredShort.writeBigUInt64LE(3n, 23);
+  const trailing = Buffer.concat([canonical, Buffer.from([0])]);
+  const cases = [
+    ["empty body", Buffer.alloc(0)],
+    ["short header", canonical.subarray(0, 39)],
+    ["magic", mutate(0, 0)],
+    ["major version", mutate(4, 1)],
+    ["minor version", mutate(5, 1)],
+    ["zero schema", Buffer.concat([canonical.subarray(0, 6), Buffer.alloc(16), canonical.subarray(22)])],
+    ["wrong response type", sccpNoritoFrame(MESSAGE_BUNDLE_NORITO_TYPE)],
+    ["compressed payload", mutate(22, 1)],
+    ["reserved flag", mutate(39, 0x08)],
+    ["invalid bitset flags", mutate(39, 0x20)],
+    ["declared payload too long", declaredLong],
+    ["declared payload too short", declaredShort],
+    ["checksum", mutate(31, canonical[31] ^ 0x01)],
+    ["65-byte padding", sccpNoritoFrame(PROOF_REQUEST_NORITO_TYPE, { padding: 65 })],
+    ["trailing byte", trailing],
+  ];
+  for (const [label, bytes] of cases) {
+    const malformed = response(null, {
+      contentType: "application/x-norito",
+      bytes,
+    });
+    const client = new ToriiClient("https://example.invalid", {
+      fetchImpl: async () => malformed,
+    });
+    await assert.rejects(
+      () => client.getSccpProofRequest(MESSAGE_ID, { format: "norito" }),
+      undefined,
+      label,
+    );
+    assert.equal(malformed.streamState.released, true, label);
+  }
+});
+
+test("Torii SCCP streaming accepts an exact capability-size response", async () => {
+  const maximumBytes = 64 * 1024;
+  const exact = paddedJsonBytes(capabilities(), maximumBytes);
+  const streamed = response(null, {
+    bytes: exact,
+    chunks: [exact.subarray(0, 7), exact.subarray(7, maximumBytes - 1), exact.subarray(maximumBytes - 1)],
+    contentLength: String(maximumBytes),
+  });
+  const client = new ToriiClient("https://example.invalid", {
+    fetchImpl: async () => streamed,
+  });
+  assert.equal((await client.getSccpCapabilities()).version, 1);
+  assert.equal(streamed.streamState.cancelled, false);
+  assert.equal(streamed.streamState.released, true);
+});
+
+test("Torii SCCP streaming rejects declared, missing-length, and understated overflows", async () => {
+  const maximumBytes = 64 * 1024;
+  const cases = [
+    {
+      name: "declared overflow",
+      response: response(capabilities(), { contentLength: String(maximumBytes + 1) }),
+    },
+    {
+      name: "actual overflow without Content-Length",
+      response: response(null, { bytes: Buffer.alloc(maximumBytes + 1, 0x20) }),
+    },
+    {
+      name: "actual overflow with understated Content-Length",
+      response: response(null, {
+        bytes: Buffer.alloc(maximumBytes + 1, 0x20),
+        contentLength: "1",
+      }),
+    },
+  ];
+  for (const entry of cases) {
+    const client = new ToriiClient("https://example.invalid", {
+      fetchImpl: async () => entry.response,
+    });
+    await assert.rejects(
+      () => client.getSccpCapabilities(),
+      /65536-byte size bound/u,
+      entry.name,
+    );
+    assert.equal(entry.response.streamState.cancelled, true, entry.name);
+  }
+});
+
+test("Torii SCCP streaming rejects malformed and noncanonical Content-Length values", async () => {
+  for (const contentLength of ["", "-1", "+1", "01", "1.0", "1, 1", "1 ", " 1"]) {
+    const malformed = response(capabilities(), { contentLength });
+    const client = new ToriiClient("https://example.invalid", {
+      fetchImpl: async () => malformed,
+    });
+    await assert.rejects(
+      () => client.getSccpCapabilities(),
+      /Content-Length must be a canonical unsigned decimal integer/u,
+      contentLength,
+    );
+    assert.equal(malformed.streamState.cancelled, true, contentLength);
+  }
+});
+
+test("Torii SCCP streaming enforces strict UTF-8 before exact JSON parsing", async () => {
+  const malformed = response(null, { bytes: Buffer.from([0x7b, 0x22, 0xff, 0x22, 0x7d]) });
+  const client = new ToriiClient("https://example.invalid", {
+    fetchImpl: async () => malformed,
+  });
+  await assert.rejects(() => client.getSccpCapabilities(), /strict UTF-8/u);
+  assert.equal(malformed.streamState.released, true);
+});
+
+test("Torii SCCP error bodies are streamed through the same response bound", async () => {
+  const oversizedError = response(null, {
+    bytes: Buffer.alloc(64 * 1024 + 1, 0x20),
+    status: 400,
+  });
+  const client = new ToriiClient("https://example.invalid", {
+    fetchImpl: async () => oversizedError,
+  });
+  await assert.rejects(() => client.getSccpCapabilities(), /65536-byte size bound/u);
+  assert.equal(oversizedError.streamState.cancelled, true);
+});
+
+test("Torii SCCP routes apply their endpoint-specific declared response limits", async () => {
+  const cases = [
+    {
+      name: "recent JSON",
+      maximumBytes: 8 * 1024 * 1024,
+      invoke: (client) => client.getSccpRecentMessages(),
+      contentType: "application/json",
+    },
+    {
+      name: "native-bundle Norito",
+      maximumBytes: 16 * 1024 * 1024,
+      invoke: (client) => client.getSccpMessageBundle(MESSAGE_ID, { format: "norito" }),
+      contentType: "application/x-norito",
+    },
+    {
+      name: "destination-proof Norito",
+      maximumBytes: 16 * 1024 * 1024 + 64 * 1024,
+      invoke: (client) => client.getSccpProofRequest(MESSAGE_ID, { format: "norito" }),
+      contentType: "application/x-norito",
+    },
+    {
+      name: "submit JSON",
+      maximumBytes: 64 * 1024 * 1024,
+      invoke: (client) => client.submitBridgeProof({
+        authority: AUTHORITY,
+        destination_proof_b64: "AQ==",
+      }),
+      contentType: "application/json",
+    },
+  ];
+  for (const entry of cases) {
+    const declaredOverflow = response({}, {
+      contentLength: String(entry.maximumBytes + 1),
+      contentType: entry.contentType,
+    });
+    const client = new ToriiClient("https://example.invalid", {
+      fetchImpl: async () => declaredOverflow,
+    });
+    await assert.rejects(
+      () => entry.invoke(client),
+      new RegExp(`${entry.maximumBytes}-byte size bound`, "u"),
+      entry.name,
+    );
+    assert.equal(declaredOverflow.streamState.cancelled, true, entry.name);
+  }
 });
 
 test("Torii exact client rejects path/query injection and retired option aliases before fetch", async () => {
@@ -537,8 +1697,11 @@ test("Torii exact client rejects path/query injection and retired option aliases
   ]) await assert.rejects(() => client.getSccpProofRequest(MESSAGE_ID, options));
   for (const options of [
     { cursor: 1 },
+    { from: 0 },
     { from: -1 },
     { from: "1" },
+    { from: Number.MAX_SAFE_INTEGER + 1 },
+    { limit: 0 },
     { limit: -1 },
     { limit: 51 },
   ]) await assert.rejects(() => client.getSccpRecentMessages(options));
@@ -563,4 +1726,71 @@ test("Torii proof submit sends only the closed destination artifact DTO", async 
     url: "https://example.invalid/v1/bridge/proofs/submit",
     body: { authority: AUTHORITY, destination_proof_b64: "AQ==", creation_time_ms: 42 },
   });
+});
+
+test("Torii prepare then submit resends the byte-identical transaction payload", async () => {
+  const calls = [];
+  const prepared = preparedResponse({ creation_time_ms: 42 });
+  const client = new ToriiClient("https://example.invalid", {
+    fetchImpl: async (url, init) => {
+      const body = JSON.parse(init.body);
+      calls.push({ url: String(url), body });
+      if (calls.length === 1) return response(prepared);
+      return response({
+        ...prepared,
+        submitted: true,
+        tx_hash_hex: HASH(0x55),
+        transaction_payload_b64: null,
+        signing_message_b64: null,
+      });
+    },
+  });
+  const preparation = await client.submitBridgeProof({
+    authority: AUTHORITY,
+    destination_proof_b64: "AQ==",
+    creation_time_ms: 42,
+  });
+  const submission = await client.submitBridgeProof({
+    authority: AUTHORITY,
+    signature_b64: b64(new Uint8Array(64).fill(7)),
+    transaction_payload_b64: preparation.transaction_payload_b64,
+    destination_proof_b64: "AQ==",
+    creation_time_ms: preparation.creation_time_ms,
+  });
+  assert.equal(submission.submitted, true);
+  assert.equal(calls[1].body.transaction_payload_b64, prepared.transaction_payload_b64);
+  assert.deepEqual(
+    [...Buffer.from(calls[1].body.transaction_payload_b64, "base64")],
+    [1, 2, 3, 4],
+  );
+});
+
+test("Torii rejects response state that contradicts prepare or signed submit", async () => {
+  const submitted = {
+    ...preparedResponse(),
+    submitted: true,
+    tx_hash_hex: HASH(0x55),
+    transaction_payload_b64: null,
+    signing_message_b64: null,
+  };
+  const prepareClient = new ToriiClient("https://example.invalid", {
+    fetchImpl: async () => response(submitted),
+  });
+  await assert.rejects(
+    () => prepareClient.submitBridgeProof({ authority: AUTHORITY, destination_proof_b64: "AQ==" }),
+    /signing state/u,
+  );
+  const submitClient = new ToriiClient("https://example.invalid", {
+    fetchImpl: async () => response(preparedResponse({ creation_time_ms: 42 })),
+  });
+  await assert.rejects(
+    () => submitClient.submitBridgeProof({
+      authority: AUTHORITY,
+      signature_b64: "AQ==",
+      transaction_payload_b64: "Ag==",
+      destination_proof_b64: "Aw==",
+      creation_time_ms: 42,
+    }),
+    /signing state/u,
+  );
 });

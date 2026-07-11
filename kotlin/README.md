@@ -512,6 +512,19 @@ if (resolved.isPresent) {
 }
 ```
 
+## Reading Kotodama Manifests
+
+`HttpClientTransport.getContractManifest(codeHash)` reads
+`/v1/contracts/code/{code_hash}` into the complete Kotodama V1 manifest model.
+The decoder preserves `seiyaku_name`, branded `kotoage`/`hajimari`/`kaizen`
+kinds, exact flat-preorder argument and return schemas, access completeness,
+triggers, state, error-code, `kotoba`, and provenance metadata. A `List` node
+contains only `capacity` and its element subtree immediately follows it. The
+decoder rejects unknown fields, legacy nested `element` metadata, incomplete or
+trailing tapes, over-depth schemas, noncanonical Norito hash literals,
+inconsistent convenience hashes, and drifted interface schemas before returning
+the record.
+
 ## Motivation
 
 `core-jvm` now ships typed builders for the first dedicated RWA instruction

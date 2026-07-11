@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
+    sync::Arc,
 };
 
 use indexmap::{IndexMap, IndexSet};
@@ -33,52 +34,115 @@ use iroha_data_model::{
     rwa::RwaId,
     trigger::{TriggerId, action::Repeats},
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{
+    bigint::BigInt,
+    json::Json,
+    numeric::{AmountRoundingMode, Numeric, NumericError},
+};
 use norito::json::{self, native::Number as JsonNumber};
 
 use super::ast::*;
-use crate::builtins::{Builtin, BuiltinMode, BuiltinSurface, PointerConstructor};
+use crate::builtins::{
+    Builtin, BuiltinCallPolicy, BuiltinMode, BuiltinSurface, PointerConstructor,
+};
 
 /// First-release collection-iteration limit.
 ///
 /// V1 accepts only compiler-proven literal bounds. This cap is part of the
 /// language definition and therefore identical in every build.
 pub const COLLECTION_ITERATION_LIMIT: i64 = 64;
+/// Canonical nominal name for the structurally-specialized V1 query page.
+const QUERY_PAGE_TYPE_NAME: &str = "QueryPage";
+/// Canonical source-level type spellings offered by language tooling.
+pub const V1_SOURCE_TYPE_NAMES: &[&str] = &[
+    "i64",
+    "u128",
+    "bool",
+    "string",
+    "bytes",
+    "Amount",
+    "Json",
+    "AccountId",
+    "AssetDefinitionId",
+    "AssetId",
+    "DomainId",
+    "Name",
+    "NftId",
+    "DataSpaceId",
+    "Option",
+    "Result",
+    "List",
+    "StateMap",
+    "Secret",
+    "AccountView",
+    "AssetView",
+    "AssetDefinitionView",
+    "DomainView",
+    "NftView",
+    "QueryPage",
+];
+/// Canonical active-only sum constructor and pattern paths.
+pub const V1_SUM_PATHS: &[&str] = &["Option::some", "Option::none", "Result::ok", "Result::err"];
+/// Canonical explicit Amount rounding modes.
+pub const V1_ROUNDING_PATHS: &[&str] = &[
+    "Rounding::floor",
+    "Rounding::ceil",
+    "Rounding::nearest_even",
+];
+/// Canonical bounded-list member API.
+pub const V1_LIST_MEMBER_NAMES: &[&str] = &[
+    "len",
+    "get",
+    "try_set",
+    "try_push",
+    "pop",
+    "contains",
+    "take",
+    "enumerate",
+];
 const LINKED_SYMBOL_PREFIX: &str = "__kotodama_link_";
+pub(crate) const LIST_LEN_INTRINSIC: &str = "__kotodama_list_len";
+pub(crate) const LIST_GET_INTRINSIC: &str = "__kotodama_list_get";
+pub(crate) const LIST_TRY_SET_INTRINSIC: &str = "__kotodama_list_try_set";
+pub(crate) const LIST_TRY_PUSH_INTRINSIC: &str = "__kotodama_list_try_push";
+pub(crate) const LIST_POP_INTRINSIC: &str = "__kotodama_list_pop";
+pub(crate) const LIST_CONTAINS_INTRINSIC: &str = "__kotodama_list_contains";
+pub(crate) const LIST_TAKE_INTRINSIC: &str = "__kotodama_list_take";
+pub(crate) const LIST_ENUMERATE_INTRINSIC: &str = "__kotodama_list_enumerate";
+pub(crate) const AMOUNT_DIV_ROUND_INTRINSIC: &str = "__kotodama_amount_div_round";
 
-fn is_canonical_type_spelling(name: &str) -> bool {
+fn is_list_intrinsic(name: &str) -> bool {
     matches!(
         name,
-        "i64"
-            | "u128"
-            | "bool"
-            | "string"
-            | "bytes"
-            | "Amount"
-            | "Json"
-            | "AccountId"
-            | "AssetDefinitionId"
-            | "AssetId"
-            | "DomainId"
-            | "Name"
-            | "NftId"
-            | "DataSpaceId"
-            | "AxtDescriptor"
-            | "AssetHandle"
-            | "ProofBlob"
-            | "SoracloudRequest"
-            | "SoracloudResponse"
-            | "Option"
-            | "Result"
-            | "StateMap"
-            | "Secret"
+        LIST_LEN_INTRINSIC
+            | LIST_GET_INTRINSIC
+            | LIST_TRY_SET_INTRINSIC
+            | LIST_TRY_PUSH_INTRINSIC
+            | LIST_POP_INTRINSIC
+            | LIST_CONTAINS_INTRINSIC
+            | LIST_TAKE_INTRINSIC
+            | LIST_ENUMERATE_INTRINSIC
     )
 }
 
+fn is_canonical_type_spelling(name: &str) -> bool {
+    V1_SOURCE_TYPE_NAMES.contains(&name)
+        || matches!(
+            name,
+            "AxtDescriptor"
+                | "AssetHandle"
+                | "ProofBlob"
+                | "SoracloudRequest"
+                | "SoracloudResponse"
+        )
+}
+
 /// Return whether a source declaration collides with compiler-owned names.
-pub(crate) fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
+pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
         || name == STATE_MAP_GET_INTRINSIC
+        || is_list_intrinsic(name)
+        || name == AMOUNT_DIV_ROUND_INTRINSIC
         || is_canonical_type_spelling(name)
         || (is_function
             && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
@@ -88,9 +152,8 @@ fn enforce_static_iteration_limit(form: &str, span: u128) -> Result<(), Semantic
     let limit = u128::try_from(COLLECTION_ITERATION_LIMIT).expect("positive V1 iteration limit");
     if span > limit {
         return Err(SemanticError {
-            message: format!(
-                "E_ITERATION_LIMIT: `{form}` span {span} exceeds the Kotodama V1 limit {limit}"
-            ),
+            code: "E_ITERATION_LIMIT",
+            message: format!("`{form}` span {span} exceeds the Kotodama V1 limit {limit}"),
         });
     }
     Ok(())
@@ -130,6 +193,199 @@ struct FunctionSummary {
     calls: IndexSet<String>,
 }
 
+fn collect_source_expr_summary(expr: &Expr, summary: &mut FunctionSummary) {
+    match expr {
+        Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
+            collect_source_expr_summary(expression, summary);
+        }
+        Expr::Call { name, args, .. } => {
+            let normalized = normalize_namespaced(name);
+            if let Some(builtin) = Builtin::from_name(&normalized) {
+                let effects = builtin.effects();
+                summary.direct_effects.merge_from(FunctionEffects {
+                    host_side_effects: effects.host_side_effects,
+                    emits_instructions: effects.emits_instructions,
+                    mutates_durable_state: effects.mutates_durable_state,
+                });
+            } else {
+                summary.calls.insert(normalized);
+            }
+            for argument in args {
+                collect_source_expr_summary(argument, summary);
+            }
+        }
+        Expr::StructLiteral { fields, .. } => {
+            for field in fields {
+                collect_source_expr_summary(&field.value, summary);
+            }
+        }
+        Expr::JsonObject(entries) => {
+            for entry in entries {
+                collect_source_expr_summary(&entry.value, summary);
+            }
+        }
+        Expr::JsonArray(items) => {
+            for item in items {
+                collect_source_expr_summary(item, summary);
+            }
+        }
+        Expr::Binary { left, right, .. }
+        | Expr::Index {
+            target: left,
+            index: right,
+        } => {
+            collect_source_expr_summary(left, summary);
+            collect_source_expr_summary(right, summary);
+        }
+        Expr::Unary { expr, .. }
+        | Expr::Member { object: expr, .. }
+        | Expr::OptionSome(expr)
+        | Expr::ResultOk(expr)
+        | Expr::ResultErr(expr)
+        | Expr::Propagate(expr) => {
+            collect_source_expr_summary(expr, summary);
+        }
+        Expr::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            collect_source_expr_summary(cond, summary);
+            collect_source_expr_summary(then_expr, summary);
+            collect_source_expr_summary(else_expr, summary);
+        }
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_source_expr_summary(condition, summary);
+            collect_source_block_summary(then_branch, summary);
+            if let Some(branch) = else_branch {
+                collect_source_block_summary(branch, summary);
+            }
+        }
+        Expr::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_source_expr_summary(value, summary);
+            collect_source_block_summary(then_branch, summary);
+            if let Some(branch) = else_branch {
+                collect_source_block_summary(branch, summary);
+            }
+        }
+        Expr::Match { value, arms } => {
+            collect_source_expr_summary(value, summary);
+            for arm in arms {
+                collect_source_block_summary(&arm.body, summary);
+            }
+        }
+        Expr::Tuple(items) | Expr::List(items) => {
+            for item in items {
+                collect_source_expr_summary(item, summary);
+            }
+        }
+        Expr::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            collect_source_expr_summary(source, summary);
+            collect_source_expr_summary(expression, summary);
+            if let Some(condition) = condition {
+                collect_source_expr_summary(condition, summary);
+            }
+        }
+        Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Decimal(_)
+        | Expr::AmountLiteral(_)
+        | Expr::OptionNone
+        | Expr::String(_)
+        | Expr::Bytes(_)
+        | Expr::Ident(_) => {}
+    }
+}
+
+fn collect_source_statement_summary(statement: &Statement, summary: &mut FunctionSummary) {
+    match statement.kind() {
+        Statement::Source { .. } | Statement::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
+        Statement::Let { value, .. }
+        | Statement::Assign { value, .. }
+        | Statement::Expr(value)
+        | Statement::Return(Some(value)) => collect_source_expr_summary(value, summary),
+        Statement::AssignExpr { target, value, .. } => {
+            collect_source_expr_summary(target, summary);
+            collect_source_expr_summary(value, summary);
+        }
+        Statement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            collect_source_expr_summary(cond, summary);
+            collect_source_block_summary(then_branch, summary);
+            if let Some(branch) = else_branch {
+                collect_source_block_summary(branch, summary);
+            }
+        }
+        Statement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_source_expr_summary(value, summary);
+            collect_source_block_summary(then_branch, summary);
+            if let Some(branch) = else_branch {
+                collect_source_block_summary(branch, summary);
+            }
+        }
+        Statement::While { cond, body } => {
+            collect_source_expr_summary(cond, summary);
+            collect_source_block_summary(body, summary);
+        }
+        Statement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(init) = init {
+                collect_source_statement_summary(init, summary);
+            }
+            if let Some(cond) = cond {
+                collect_source_expr_summary(cond, summary);
+            }
+            if let Some(step) = step {
+                collect_source_statement_summary(step, summary);
+            }
+            collect_source_block_summary(body, summary);
+        }
+        Statement::ForEachMap { map, body, .. } => {
+            collect_source_expr_summary(map, summary);
+            collect_source_block_summary(body, summary);
+        }
+        Statement::Return(None) | Statement::Break | Statement::Continue => {}
+    }
+}
+
+fn collect_source_block_summary(block: &Block, summary: &mut FunctionSummary) {
+    for statement in &block.statements {
+        collect_source_statement_summary(statement, summary);
+    }
+    if let Some(tail) = &block.tail {
+        collect_source_expr_summary(tail, summary);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedParam {
     pub name: String,
@@ -148,6 +404,11 @@ pub struct FunctionSignature {
     pub params: Vec<TypedParam>,
     /// Resolved return type (`()` for a function without a return value).
     pub return_type: Type,
+    /// Whether every source call must name its supplied arguments.
+    ///
+    /// This is part of the exported module interface because an importing
+    /// source unit cannot inspect the callee body to recover its effects.
+    pub requires_named_arguments: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,10 +444,12 @@ pub enum Type {
     Secret(Box<Type>),
     /// Durable key/value state addressed through the canonical StateMap API.
     StateMap(Box<Type>, Box<Type>),
-    /// Presence-aware value represented as `(is_some, value)` in V1 IR.
+    /// Presence-aware value represented by one active-only compiler-owned sum handle.
     Option(Box<Type>),
-    /// Success/error value represented as `(is_ok, ok_value, err_value)` in V1 IR.
+    /// Success/error value represented by one active-only compiler-owned sum handle.
     Result(Box<Type>, Box<Type>),
+    /// Contiguous compiler-owned list with a compile-time capacity in `1..=64`.
+    List(Box<Type>, u8),
     Tuple(Vec<Type>),
     /// User-defined product type with named fields.
     Struct {
@@ -227,11 +490,76 @@ pub enum ExprKind {
         then_expr: Box<TypedExpr>,
         else_expr: Box<TypedExpr>,
     },
+    /// Expression-valued conditional blocks.
+    If {
+        condition: Box<TypedExpr>,
+        then_branch: TypedBlock,
+        else_branch: TypedBlock,
+    },
+    /// Expression-valued sum pattern test.
+    IfLet {
+        pattern: TypedSumPattern,
+        value: Box<TypedExpr>,
+        then_branch: TypedBlock,
+        else_branch: TypedBlock,
+    },
+    /// Exhaustive sum match.
+    Match {
+        value: Box<TypedExpr>,
+        arms: Vec<TypedMatchArm>,
+    },
+    /// Active `Option` payload with no inactive placeholder.
+    OptionSome {
+        value: Box<TypedExpr>,
+    },
+    /// Inactive `Option` value with its payload type carried only by `TypedExpr::ty`.
+    OptionNone,
+    /// Active `Result` success payload with no inactive error placeholder.
+    ResultOk {
+        value: Box<TypedExpr>,
+    },
+    /// Active `Result` error payload with no inactive success placeholder.
+    ResultErr {
+        error: Box<TypedExpr>,
+    },
+    /// Postfix same-family propagation.
+    Propagate {
+        value: Box<TypedExpr>,
+    },
     Call {
         name: String,
         args: Vec<TypedExpr>,
     },
+    /// A named call whose arguments remain stored in declaration order while
+    /// `evaluation_order` records parameter slots in source evaluation order.
+    ///
+    /// Lowering evaluates the recorded slots first and only permutes the
+    /// resulting temporary references into ABI order. No runtime permutation
+    /// instructions are required.
+    NamedCall {
+        name: String,
+        args: Vec<TypedExpr>,
+        evaluation_order: Vec<usize>,
+    },
+    /// Named struct fields in source evaluation order after validation.
+    StructLiteral {
+        name: String,
+        fields: Vec<(String, TypedExpr)>,
+    },
     Tuple(Vec<TypedExpr>),
+    /// Bounded list literal stored in one compiler-owned allocation.
+    List(Vec<TypedExpr>),
+    /// Capacity-proven bounded list comprehension.
+    ListComprehension {
+        expression: Box<TypedExpr>,
+        item: String,
+        source: Box<TypedExpr>,
+        condition: Option<Box<TypedExpr>>,
+    },
+    /// Native canonical JSON object with decoded keys in source order.
+    JsonObject(Vec<(String, TypedExpr)>),
+    /// Native canonical JSON array.
+    JsonArray(Vec<TypedExpr>),
     Member {
         object: Box<TypedExpr>,
         field: String,
@@ -242,21 +570,65 @@ pub enum ExprKind {
     },
     Number(i64),
     Decimal(String),
+    /// Canonical Amount payload paired with its exact source spelling.
+    AmountLiteral {
+        value: Numeric,
+        spelling: String,
+    },
     Bool(bool),
     String(String),
     Bytes(Vec<u8>),
     Ident(String),
 }
 
-#[derive(Debug, PartialEq)]
-pub struct SemanticError {
-    pub message: String,
+/// Semantically checked sum pattern and its active payload type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedSumPattern {
+    pub pattern: SumPattern,
+    pub payload_type: Option<Type>,
 }
+
+/// One typed exhaustive match arm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedMatchArm {
+    pub pattern: TypedSumPattern,
+    pub body: TypedBlock,
+}
+
+/// One typed/effect-analysis failure with an explicit stable identity.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SemanticError {
+    /// Stable machine-readable diagnostic code, independent of message text.
+    pub(crate) code: &'static str,
+    /// Human-readable diagnostic message without an embedded code prefix.
+    pub(crate) message: String,
+}
+
+impl SemanticError {
+    /// Return the stable machine-readable code.
+    pub const fn code(&self) -> &'static str {
+        self.code
+    }
+
+    /// Return the human-readable, prefix-free message.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for SemanticError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "[{}] {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for SemanticError {}
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct SemanticFailure {
     pub(crate) error: SemanticError,
     pub(crate) location: Option<SourceLocation>,
+    pub(crate) diagnostic: Option<crate::semantic_diagnostics::SemanticDiagnostic>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -270,6 +642,7 @@ impl From<SemanticError> for SemanticFailures {
             failures: vec![SemanticFailure {
                 error,
                 location: None,
+                diagnostic: None,
             }],
         }
     }
@@ -297,7 +670,23 @@ fn record_semantic_failure(
     }
 }
 
-#[derive(Debug, PartialEq)]
+fn attach_pending_diagnostic(
+    failures: &mut SemanticFailures,
+    pending: Option<crate::semantic_diagnostics::SemanticDiagnostic>,
+) {
+    let Some(pending) = pending else {
+        return;
+    };
+    if let Some(failure) = failures
+        .failures
+        .iter_mut()
+        .find(|failure| failure.error.code != "K0004" && failure.diagnostic.is_none())
+    {
+        failure.diagnostic = Some(pending);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct TypedProgram {
     pub unit: SourceUnit,
     pub items: Vec<TypedItem>,
@@ -305,16 +694,43 @@ pub struct TypedProgram {
     pub error_codes: Vec<TypedErrorCode>,
     pub triggers: Vec<TypedTrigger>,
     pub message_entries: Vec<MessageEntry>,
+    /// Stable typed/effect-HIR metadata keyed independently of Rust addresses.
+    pub hir_nodes: BTreeMap<TypedHirNodeId, TypedHirNode>,
+    /// Stable immutable source files retained by the typed-HIR graph for exact
+    /// diagnostics and hash-keyed debug sidecars.
+    pub source_files: BTreeMap<crate::source::SourceId, crate::source::SourceFile>,
     /// Whether this HIR was analyzed with local test capabilities enabled.
     ///
     /// Production artifact builders reject test-capable HIR even when a
     /// caller removes the source-level test declarations after analysis. This
     /// provenance bit keeps the mode boundary fail-closed across typed-module
-    /// linking and direct `build_typed_program` calls.
+    /// linking and compiler-internal typed-HIR builds.
     pub test_support_enabled: bool,
 }
 
-/// Stable source-declared application error emitted in the contract interface.
+/// Graph-stable identity of one typed HIR node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypedHirNodeId {
+    /// Source unit that owns the local HIR identity.
+    pub source: crate::source::SourceId,
+    /// Stable source-unit-local identity.
+    pub local: HirId,
+}
+
+/// Type and resolver target retained for one successfully typed expression.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypedHirNode {
+    /// Graph-stable identity.
+    pub id: TypedHirNodeId,
+    /// Exact source range when source-backed.
+    pub source: Option<crate::source::SourceRange>,
+    /// Authoritative resolver target for named nodes.
+    pub target: Option<crate::resolved::ResolvedTarget>,
+    /// Final semantic type.
+    pub ty: Type,
+}
+
+/// Stable source-declared application error emitted in the seiyaku interface.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct TypedErrorCode {
     pub namespace: String,
@@ -326,6 +742,8 @@ pub struct TypedErrorCode {
 pub struct TypedStateDecl {
     pub name: String,
     pub ty: Type,
+    /// Exact source range of the state declaration, when source-backed.
+    pub source: Option<crate::source::SourceRange>,
 }
 
 /// Mutable semantic state for exactly one compilation.
@@ -341,16 +759,24 @@ pub struct SemanticContext {
     function_returns: RefCell<HashMap<String, Type>>,
     function_modifiers: RefCell<HashMap<String, FunctionModifiers>>,
     function_params: RefCell<HashMap<String, Vec<TypedParam>>>,
+    function_named_only_reasons: RefCell<HashMap<String, &'static str>>,
     function_summaries: RefCell<HashMap<String, FunctionSummary>>,
     global_declarations: RefCell<HashSet<String>>,
     current_function_modifiers: RefCell<Option<FunctionModifiers>>,
     current_function_name: RefCell<Option<String>>,
+    current_mutable_bindings: RefCell<HashSet<String>>,
     trigger_callback_functions: RefCell<HashSet<String>>,
     current_state_param_names: RefCell<HashSet<String>>,
     zk_enabled: bool,
     test_builtins_enabled: bool,
     error_codes: RefCell<HashMap<String, u32>>,
     external_functions: RefCell<BTreeMap<String, FunctionSignature>>,
+    external_states: RefCell<IndexMap<String, Type>>,
+    resolved_arena: RefCell<Option<Arc<crate::resolved::ResolvedArena>>>,
+    resolved_binding_types: RefCell<BTreeMap<crate::resolved::BindingId, Type>>,
+    typed_hir_nodes: RefCell<BTreeMap<HirId, Type>>,
+    pending_diagnostic: RefCell<Option<crate::semantic_diagnostics::SemanticDiagnostic>>,
+    required_list_capacity: RefCell<Option<u8>>,
 }
 
 impl SemanticContext {
@@ -406,8 +832,18 @@ impl SemanticContext {
         program: &Program,
         external_functions: &BTreeMap<String, FunctionSignature>,
     ) -> Result<TypedProgram, SemanticFailures> {
+        self.analyze_all_with_external_environment(program, external_functions, &IndexMap::new())
+    }
+
+    fn analyze_all_with_external_environment(
+        &self,
+        program: &Program,
+        external_functions: &BTreeMap<String, FunctionSignature>,
+        external_states: &IndexMap<String, Type>,
+    ) -> Result<TypedProgram, SemanticFailures> {
         self.reset();
         self.external_functions.replace(external_functions.clone());
+        self.external_states.replace(external_states.clone());
         analyze_with_context(self, program)
     }
 
@@ -462,7 +898,21 @@ impl SemanticContext {
             })
             .collect();
         self.structs.replace(resolved_structs);
+        validate_declared_struct_list_schemas(self)?;
 
+        let source_summaries = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Function(function) = item else {
+                    return None;
+                };
+                let mut summary = FunctionSummary::default();
+                collect_source_block_summary(&function.body, &mut summary);
+                Some((function.name.clone(), summary))
+            })
+            .collect::<HashMap<_, _>>();
+        let transitive_effects = compute_transitive_effects(&source_summaries);
         let mut signatures = BTreeMap::new();
         for item in &program.items {
             let Item::Function(function) = item else {
@@ -473,20 +923,617 @@ impl SemanticContext {
                 params.push(parse_declared_param_type(self, param, &function.modifiers)?);
             }
             let return_type = parse_declared_type(self, &function.ret_ty)?.unwrap_or(Type::Unit);
+            let privileged = function.modifiers.permission.is_some()
+                || matches!(
+                    function.modifiers.kind,
+                    FunctionKind::Kotoage | FunctionKind::Hajimari | FunctionKind::Kaizen
+                );
+            let effectful = transitive_effects
+                .get(&function.name)
+                .copied()
+                .is_some_and(FunctionEffects::requires_permission);
             signatures.insert(
                 function.name.clone(),
                 FunctionSignature {
                     params,
                     return_type,
+                    requires_named_arguments: function.params.len() >= 3
+                        && (privileged || effectful),
                 },
             );
         }
         Ok(signatures)
     }
 
+    pub(crate) fn resolve_resolved_function_signatures(
+        &self,
+        program: &crate::resolved::ResolvedProgram,
+    ) -> Result<BTreeMap<String, FunctionSignature>, SemanticError> {
+        self.reset();
+        self.resolved_arena.replace(Some(program.arena()));
+        let result = self.resolve_function_signatures(program.program());
+        self.resolved_arena.borrow_mut().take();
+        result
+    }
+
+    pub(crate) fn analyze_resolved_with_external_functions(
+        &self,
+        program: &crate::resolved::ResolvedProgram,
+        external_functions: &BTreeMap<String, FunctionSignature>,
+    ) -> Result<TypedProgram, SemanticError> {
+        self.analyze_resolved_environment(program, external_functions, &IndexMap::new())
+            .map_err(SemanticFailures::into_first)
+    }
+
+    pub(crate) fn analyze_resolved_with_test_target(
+        &self,
+        program: &crate::resolved::ResolvedProgram,
+        external_functions: &BTreeMap<String, FunctionSignature>,
+        external_states: &IndexMap<String, Type>,
+    ) -> Result<TypedProgram, SemanticFailures> {
+        self.analyze_resolved_environment(program, external_functions, external_states)
+    }
+
     pub(crate) fn analyze_all(&self, program: &Program) -> Result<TypedProgram, SemanticFailures> {
         self.reset();
         analyze_with_context(self, program)
+    }
+
+    /// Type and effect-check a program only after fail-closed named-HIR resolution.
+    pub(crate) fn analyze_resolved(
+        &self,
+        program: &crate::resolved::ResolvedProgram,
+    ) -> Result<TypedProgram, SemanticFailures> {
+        self.analyze_resolved_environment(program, &BTreeMap::new(), &IndexMap::new())
+    }
+
+    fn analyze_resolved_environment(
+        &self,
+        program: &crate::resolved::ResolvedProgram,
+        external_functions: &BTreeMap<String, FunctionSignature>,
+        external_states: &IndexMap<String, Type>,
+    ) -> Result<TypedProgram, SemanticFailures> {
+        self.reset();
+        self.resolved_arena.replace(Some(program.arena()));
+        self.external_functions.replace(external_functions.clone());
+        self.external_states.replace(external_states.clone());
+        let mut result = analyze_with_context(self, program.program());
+        let pending = self.take_diagnostic();
+        if let Err(failures) = &mut result {
+            attach_pending_diagnostic(failures, pending);
+        }
+        self.resolved_arena.borrow_mut().take();
+        self.resolved_binding_types.borrow_mut().clear();
+        self.typed_hir_nodes.borrow_mut().clear();
+        self.required_list_capacity.borrow_mut().take();
+        result.map(|mut typed| {
+            program.attach_sources(&mut typed);
+            typed
+        })
+    }
+
+    fn expression_source(&self, expression: &Expr) -> Option<crate::source::SourceRange> {
+        self.resolved_source(expression.hir_id(), expression.source())
+    }
+
+    fn statement_source(&self, statement: &Statement) -> Option<crate::source::SourceRange> {
+        self.resolved_source(statement.hir_id(), statement.source())
+    }
+
+    fn type_source(&self, ty: &TypeExpr) -> Option<crate::source::SourceRange> {
+        self.resolved_source(ty.hir_id(), ty.source())
+    }
+
+    fn resolved_source(
+        &self,
+        id: Option<HirId>,
+        raw: Option<crate::source::SourceRange>,
+    ) -> Option<crate::source::SourceRange> {
+        let arena = self.resolved_arena.borrow();
+        let Some(arena) = arena.as_ref() else {
+            return raw;
+        };
+        id.and_then(|id| arena.node(id))
+            .and_then(|node| node.source)
+    }
+
+    fn resolved_node(
+        &self,
+        id: Option<HirId>,
+        kind: crate::resolved::ResolvedNodeKind,
+        source: Option<crate::source::SourceRange>,
+    ) -> Result<Option<crate::resolved::ResolvedNode>, SemanticError> {
+        let arena = self.resolved_arena.borrow();
+        let Some(arena) = arena.as_ref() else {
+            return Ok(None);
+        };
+        let id = id.ok_or_else(|| SemanticError {
+            code: "E_INTERNAL_RESOLUTION",
+            message: "production semantic input contains an unwrapped AST node".into(),
+        })?;
+        let node = arena.node(id).cloned().ok_or_else(|| SemanticError {
+            code: "E_INTERNAL_RESOLUTION",
+            message: format!(
+                "resolved-HIR node {} is absent from its authority arena",
+                id.0
+            ),
+        })?;
+        if node.kind != kind || node.source != source {
+            return Err(SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: format!(
+                    "resolved-HIR node {} metadata diverged from its authority arena",
+                    id.0
+                ),
+            });
+        }
+        Ok(Some(node))
+    }
+
+    fn expression_target(
+        &self,
+        expression: &Expr,
+    ) -> Result<Option<crate::resolved::ResolvedTarget>, SemanticError> {
+        Ok(self
+            .resolved_node(
+                expression.hir_id(),
+                crate::resolved::ResolvedNodeKind::Expression,
+                expression.source(),
+            )?
+            .and_then(|node| node.target))
+    }
+
+    fn validate_statement_node(
+        &self,
+        statement: &Statement,
+    ) -> Result<Option<crate::resolved::ResolvedNode>, SemanticError> {
+        self.resolved_node(
+            statement.hir_id(),
+            crate::resolved::ResolvedNodeKind::Statement,
+            statement.source(),
+        )
+    }
+
+    fn validate_type_node(
+        &self,
+        ty: &TypeExpr,
+    ) -> Result<Option<crate::resolved::ResolvedNode>, SemanticError> {
+        self.resolved_node(
+            ty.hir_id(),
+            crate::resolved::ResolvedNodeKind::Type,
+            ty.source(),
+        )
+    }
+
+    fn validate_value_target(
+        &self,
+        expression: &Expr,
+        name: &str,
+        vars: &HashMap<String, Type>,
+    ) -> Result<Option<(crate::resolved::ResolvedValueTarget, Option<Type>)>, SemanticError> {
+        use crate::resolved::{ResolvedTarget, ResolvedValueTarget};
+        let Some(target) = self.expression_target(expression)? else {
+            if self.resolved_arena.borrow().is_some() {
+                return Err(SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: format!("value `{name}` has no resolver-produced target"),
+                });
+            }
+            return Ok(None);
+        };
+        let ResolvedTarget::Value(target) = target else {
+            return Err(SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: format!("value `{name}` carries a non-value resolver target"),
+            });
+        };
+        let arena = self.resolved_arena.borrow();
+        let arena = arena.as_ref().expect("resolved target requires arena");
+        let ty = match target {
+            ResolvedValueTarget::Binding(binding) => {
+                let binding = arena.binding(binding).ok_or_else(|| SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: "value target references an unknown binding".into(),
+                })?;
+                if binding.name != name {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "value spelling `{name}` diverges from binding `{}`",
+                            binding.name
+                        ),
+                    });
+                }
+                let node = expression.hir_id().ok_or_else(|| SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: "resolved value use lost its stable HIR identity".into(),
+                })?;
+                if !arena.binding_visible_at(binding.id, node) {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!("binding `{name}` is outside the resolved lexical scope"),
+                    });
+                }
+                let ty = vars
+                    .get(&binding.name)
+                    .cloned()
+                    .ok_or_else(|| SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "binding `{name}` is not visible in its resolved lexical scope"
+                        ),
+                    })?;
+                let mut binding_types = self.resolved_binding_types.borrow_mut();
+                if let Some(previous) = binding_types.insert(binding.id, ty.clone())
+                    && previous != ty
+                {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!("binding `{name}` acquired inconsistent semantic types"),
+                    });
+                }
+                Some(ty)
+            }
+            ResolvedValueTarget::State(symbol) | ResolvedValueTarget::Const(symbol) => {
+                let symbol = arena.symbol(symbol).ok_or_else(|| SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: "value target references an unknown symbol".into(),
+                })?;
+                if symbol.name != name {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "value spelling `{name}` diverges from symbol `{}`",
+                            symbol.name
+                        ),
+                    });
+                }
+                None
+            }
+            ResolvedValueTarget::ErrorCode(_)
+            | ResolvedValueTarget::Intrinsic
+            | ResolvedValueTarget::ExternalState => None,
+        };
+        Ok(Some((target, ty)))
+    }
+
+    fn validate_call_target(
+        &self,
+        expression: &Expr,
+        source_name: &str,
+        normalized_name: &str,
+        implicit_receiver: bool,
+    ) -> Result<(), SemanticError> {
+        use crate::resolved::{ResolvedCallTarget, ResolvedSymbolKind, ResolvedTarget};
+        let Some(target) = self.expression_target(expression)? else {
+            if self.resolved_arena.borrow().is_some() {
+                return Err(SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: format!("call `{source_name}` has no resolver-produced target"),
+                });
+            }
+            return Ok(());
+        };
+        let ResolvedTarget::Call(target) = target else {
+            return Err(SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: format!("call `{source_name}` carries a non-call resolver target"),
+            });
+        };
+        let arena = self.resolved_arena.borrow();
+        let arena = arena.as_ref().expect("resolved target requires arena");
+        match target {
+            ResolvedCallTarget::Function(symbol) => {
+                let symbol = arena.symbol(symbol).ok_or_else(|| SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: "call references an unknown function symbol".into(),
+                })?;
+                if symbol.kind != ResolvedSymbolKind::Function || symbol.name != source_name {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "function call `{source_name}` diverges from resolver symbol `{}`",
+                            symbol.name
+                        ),
+                    });
+                }
+            }
+            ResolvedCallTarget::Builtin(builtin) => {
+                if Builtin::from_name(normalized_name) != Some(builtin) {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "builtin call `{source_name}` diverges from its registry target"
+                        ),
+                    });
+                }
+            }
+            ResolvedCallTarget::Method if !implicit_receiver => {
+                return Err(SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: format!("method target `{source_name}` lost its receiver"),
+                });
+            }
+            ResolvedCallTarget::Method
+            | ResolvedCallTarget::Intrinsic
+            | ResolvedCallTarget::External => {}
+            ResolvedCallTarget::Struct(symbol) => {
+                let symbol = arena.symbol(symbol).ok_or_else(|| SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: "positional struct call references an unknown symbol".into(),
+                })?;
+                if symbol.kind != ResolvedSymbolKind::Struct || symbol.name != source_name {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "positional struct call `{source_name}` diverges from resolver symbol `{}`",
+                            symbol.name
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_assignment_target(
+        &self,
+        node: Option<&crate::resolved::ResolvedNode>,
+        name: &str,
+    ) -> Result<(), SemanticError> {
+        use crate::resolved::{ResolvedTarget, ResolvedValueTarget};
+        let Some(node) = node else {
+            return Ok(());
+        };
+        let Some(target) = node.target.as_ref() else {
+            return Err(SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: format!("assignment `{name}` has no resolver-produced target"),
+            });
+        };
+        let ResolvedTarget::Assignment(target) = target else {
+            return Err(SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: format!("assignment `{name}` carries a non-assignment resolver target"),
+            });
+        };
+        let arena = self.resolved_arena.borrow();
+        let arena = arena.as_ref().expect("resolved target requires arena");
+        match target {
+            ResolvedValueTarget::Binding(binding) => {
+                let binding = arena.binding(*binding).ok_or_else(|| SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: "assignment references an unknown binding".into(),
+                })?;
+                if binding.name != name || !arena.binding_visible_at(binding.id, node.id) {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "assignment `{name}` diverges from its lexical binding target"
+                        ),
+                    });
+                }
+            }
+            ResolvedValueTarget::State(symbol) | ResolvedValueTarget::Const(symbol) => {
+                let symbol = arena.symbol(*symbol).ok_or_else(|| SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: "assignment references an unknown symbol".into(),
+                })?;
+                if symbol.name != name {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "assignment `{name}` diverges from resolver symbol `{}`",
+                            symbol.name
+                        ),
+                    });
+                }
+            }
+            ResolvedValueTarget::ExternalState => {}
+            ResolvedValueTarget::ErrorCode(_) | ResolvedValueTarget::Intrinsic => {
+                return Err(SemanticError {
+                    code: "E_TYPE_ANNOTATION_MISMATCH",
+                    message: format!("resolved value `{name}` is not assignable"),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_struct_literal_target(
+        &self,
+        expression: &Expr,
+        name: &str,
+    ) -> Result<(), SemanticError> {
+        use crate::resolved::{ResolvedSymbolKind, ResolvedTarget};
+        let Some(target) = self.expression_target(expression)? else {
+            if self.resolved_arena.borrow().is_some() {
+                return Err(SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: format!("struct literal `{name}` has no resolver-produced target"),
+                });
+            }
+            return Ok(());
+        };
+        let ResolvedTarget::StructLiteral(symbol) = target else {
+            return Err(SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: format!("struct literal `{name}` carries a non-struct resolver target"),
+            });
+        };
+        let arena = self.resolved_arena.borrow();
+        let symbol = arena
+            .as_ref()
+            .and_then(|arena| arena.symbol(symbol))
+            .ok_or_else(|| SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: "struct literal references an unknown symbol".into(),
+            })?;
+        if symbol.kind != ResolvedSymbolKind::Struct || symbol.name != name {
+            return Err(SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: format!(
+                    "struct literal `{name}` diverges from resolver symbol `{}`",
+                    symbol.name
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_named_type_target(
+        &self,
+        node: Option<&crate::resolved::ResolvedNode>,
+        name: &str,
+    ) -> Result<(), SemanticError> {
+        use crate::resolved::{ResolvedSymbolKind, ResolvedTarget, ResolvedTypeTarget};
+        let Some(node) = node else {
+            return Ok(());
+        };
+        let Some(target) = node.target.as_ref() else {
+            return Err(SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: format!("type `{name}` has no resolver-produced target"),
+            });
+        };
+        let ResolvedTarget::Type(target) = target else {
+            return Err(SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: format!("named type `{name}` carries a non-type resolver target"),
+            });
+        };
+        match target {
+            ResolvedTypeTarget::Builtin if !V1_SOURCE_TYPE_NAMES.contains(&name) => {
+                return Err(SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: format!("type `{name}` is not in the canonical V1 builtin type table"),
+                });
+            }
+            ResolvedTypeTarget::Struct(symbol) => {
+                let arena = self.resolved_arena.borrow();
+                let symbol = arena
+                    .as_ref()
+                    .and_then(|arena| arena.symbol(*symbol))
+                    .ok_or_else(|| SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: "type target references an unknown struct".into(),
+                    })?;
+                if symbol.kind != ResolvedSymbolKind::Struct || symbol.name != name {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: format!(
+                            "type `{name}` diverges from resolver symbol `{}`",
+                            symbol.name
+                        ),
+                    });
+                }
+            }
+            ResolvedTypeTarget::Builtin => {}
+        }
+        Ok(())
+    }
+
+    fn record_typed_hir_node(&self, expression: &Expr, ty: &Type) -> Result<(), SemanticError> {
+        let Some(node) = self.resolved_node(
+            expression.hir_id(),
+            crate::resolved::ResolvedNodeKind::Expression,
+            expression.source(),
+        )?
+        else {
+            return Ok(());
+        };
+        let mut typed = self.typed_hir_nodes.borrow_mut();
+        if let Some(previous) = typed.insert(node.id, ty.clone())
+            && resolve_struct_type(&previous) != resolve_struct_type(ty)
+        {
+            return Err(SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: format!(
+                    "HIR node {} acquired inconsistent semantic types",
+                    node.id.0
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn capture_diagnostic(
+        &self,
+        primary: Option<crate::source::SourceRange>,
+        fix: Option<crate::semantic_diagnostics::SemanticFix>,
+    ) {
+        let Some(primary) = primary else {
+            return;
+        };
+        let mut pending = self.pending_diagnostic.borrow_mut();
+        if pending.is_none() {
+            *pending = Some(crate::semantic_diagnostics::SemanticDiagnostic {
+                primary,
+                labels: Vec::new(),
+                fix,
+            });
+        }
+    }
+
+    fn replace_diagnostic(
+        &self,
+        primary: Option<crate::source::SourceRange>,
+        fix: Option<crate::semantic_diagnostics::SemanticFix>,
+    ) {
+        let Some(primary) = primary else {
+            return;
+        };
+        self.pending_diagnostic
+            .replace(Some(crate::semantic_diagnostics::SemanticDiagnostic {
+                primary,
+                labels: Vec::new(),
+                fix,
+            }));
+    }
+
+    fn capture_expression_diagnostic(
+        &self,
+        expression: &Expr,
+        fix: Option<crate::semantic_diagnostics::SemanticFix>,
+    ) {
+        self.capture_diagnostic(self.expression_source(expression), fix);
+    }
+
+    fn capture_statement_diagnostic(
+        &self,
+        statement: &Statement,
+        fix: Option<crate::semantic_diagnostics::SemanticFix>,
+    ) {
+        self.capture_diagnostic(self.statement_source(statement), fix);
+    }
+
+    fn take_diagnostic(&self) -> Option<crate::semantic_diagnostics::SemanticDiagnostic> {
+        self.pending_diagnostic.borrow_mut().take()
+    }
+
+    fn discard_diagnostic(&self) {
+        self.pending_diagnostic.borrow_mut().take();
+    }
+
+    /// Check whether one expression can initialize `expected` without letting
+    /// a speculative error replace the diagnostic for the enclosing invalid
+    /// construct. Typed expression analysis is otherwise side-effect free; a
+    /// cloned local environment plus restored diagnostic/capacity scratch state
+    /// makes this suitable for deciding whether a fix recipe will type-check.
+    fn expression_is_assignable(
+        &self,
+        expression: &Expr,
+        vars: &HashMap<String, Type>,
+        expected: &Type,
+    ) -> bool {
+        let pending = self.pending_diagnostic.borrow_mut().take();
+        let required_capacity = self.required_list_capacity.borrow_mut().take();
+        let mut probe_vars = vars.clone();
+        let result = analyze_expr_expected(self, expression, &mut probe_vars, Some(expected))
+            .and_then(|mut value| ensure_assignable_and_coerce(expected, &mut value));
+        self.pending_diagnostic.replace(pending);
+        self.required_list_capacity.replace(required_capacity);
+        result.is_ok()
     }
 
     fn reset(&self) {
@@ -496,14 +1543,22 @@ impl SemanticContext {
         self.function_returns.borrow_mut().clear();
         self.function_modifiers.borrow_mut().clear();
         self.function_params.borrow_mut().clear();
+        self.function_named_only_reasons.borrow_mut().clear();
         self.function_summaries.borrow_mut().clear();
         self.global_declarations.borrow_mut().clear();
         self.current_function_modifiers.borrow_mut().take();
         self.current_function_name.borrow_mut().take();
+        self.current_mutable_bindings.borrow_mut().clear();
         self.trigger_callback_functions.borrow_mut().clear();
         self.current_state_param_names.borrow_mut().clear();
         self.error_codes.borrow_mut().clear();
         self.external_functions.borrow_mut().clear();
+        self.external_states.borrow_mut().clear();
+        self.resolved_arena.borrow_mut().take();
+        self.resolved_binding_types.borrow_mut().clear();
+        self.typed_hir_nodes.borrow_mut().clear();
+        self.pending_diagnostic.borrow_mut().take();
+        self.required_list_capacity.borrow_mut().take();
     }
 }
 
@@ -515,8 +1570,9 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
     let mut triggers = HashSet::new();
     if is_reserved_source_declaration(&program.unit.name, false) {
         return Err(SemanticError {
+            code: "E_RESERVED_DECLARATION",
             message: format!(
-                "E_RESERVED_DECLARATION: source unit `{}` uses a compiler-reserved name",
+                "source unit `{}` uses a compiler-reserved name",
                 program.unit.name
             ),
         });
@@ -531,16 +1587,14 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
      -> Result<(), SemanticError> {
         if is_reserved_source_declaration(name, is_function) {
             return Err(SemanticError {
-                message: format!(
-                    "E_RESERVED_DECLARATION: {kind} `{name}` uses a compiler-reserved name"
-                ),
+                code: "E_RESERVED_DECLARATION",
+                message: format!("{kind} `{name}` uses a compiler-reserved name"),
             });
         }
         if let Some(previous_kind) = declarations.insert(name.to_owned(), kind) {
             return Err(SemanticError {
-                message: format!(
-                    "E_DUPLICATE_DECLARATION: declaration name `{name}` is already used by a {previous_kind}"
-                ),
+                code: "E_DUPLICATE_DECLARATION",
+                message: format!("declaration name `{name}` is already used by a {previous_kind}"),
             });
         }
         Ok(())
@@ -551,6 +1605,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
             Item::Function(function) => {
                 if !functions.insert(function.name.as_str()) {
                     return Err(SemanticError {
+                        code: "K2001",
                         message: format!("duplicate function `{}`", function.name),
                     });
                 }
@@ -559,6 +1614,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                 for param in &function.params {
                     if !params.insert(param.name.as_str()) {
                         return Err(SemanticError {
+                            code: "K2001",
                             message: format!(
                                 "duplicate parameter `{}` in function `{}`",
                                 param.name, function.name
@@ -570,6 +1626,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
             Item::Struct(definition) => {
                 if !types.insert(definition.name.as_str()) {
                     return Err(SemanticError {
+                        code: "K2001",
                         message: format!("duplicate type `{}`", definition.name),
                     });
                 }
@@ -578,6 +1635,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                 for (field, _) in &definition.fields {
                     if !fields.insert(field.as_str()) {
                         return Err(SemanticError {
+                            code: "K2001",
                             message: format!(
                                 "duplicate field `{field}` in type `{}`",
                                 definition.name
@@ -590,6 +1648,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
             Item::ErrorEnum(definition) => {
                 if !types.insert(definition.name.as_str()) {
                     return Err(SemanticError {
+                        code: "K2001",
                         message: format!("duplicate type `{}`", definition.name),
                     });
                 }
@@ -599,6 +1658,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                 for variant in &definition.variants {
                     if !variants.insert(variant.name.as_str()) {
                         return Err(SemanticError {
+                            code: "K2001",
                             message: format!(
                                 "duplicate error variant `{}::{}`",
                                 definition.name, variant.name
@@ -607,6 +1667,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                     }
                     if !codes.insert(variant.code) {
                         return Err(SemanticError {
+                            code: "K2001",
                             message: format!(
                                 "duplicate error code {} in `{}`",
                                 variant.code, definition.name
@@ -618,6 +1679,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                         format!("{}::{}", definition.name, variant.name),
                     ) {
                         return Err(SemanticError {
+                            code: "E_DUPLICATE_ERROR_CODE",
                             message: format!(
                                 "error code {} is assigned to both `{previous}` and `{}::{}`",
                                 variant.code, definition.name, variant.name
@@ -629,6 +1691,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
             Item::State(state) => {
                 if !states.insert(state.name.as_str()) {
                     return Err(SemanticError {
+                        code: "K2001",
                         message: format!("duplicate state `{}`", state.name),
                     });
                 }
@@ -637,6 +1700,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
             Item::Const(constant) => {
                 if !consts.insert(constant.name.as_str()) {
                     return Err(SemanticError {
+                        code: "K2001",
                         message: format!("duplicate const `{}`", constant.name),
                     });
                 }
@@ -645,6 +1709,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
             Item::Trigger(trigger) => {
                 if !triggers.insert(trigger.name.as_str()) {
                     return Err(SemanticError {
+                        code: "K2001",
                         message: format!("duplicate trigger `{}`", trigger.name),
                     });
                 }
@@ -676,6 +1741,7 @@ fn collect_struct_dependencies(
             }
             Type::Secret(inner) => pending.push(inner),
             Type::Option(inner) => pending.push(inner),
+            Type::List(element, _) => pending.push(element),
             Type::Result(ok, err) => {
                 pending.push(err);
                 pending.push(ok);
@@ -705,10 +1771,7 @@ fn collect_struct_dependencies(
     }
 }
 
-fn validate_acyclic_value_structs(
-    context: &SemanticContext,
-    struct_names: &[String],
-) -> Result<(), SemanticError> {
+fn value_struct_cycle(context: &SemanticContext, struct_names: &[String]) -> Option<Vec<String>> {
     let definitions = context.structs.borrow().clone();
     let known_structs = struct_names.iter().cloned().collect::<HashSet<_>>();
     let mut graph = HashMap::new();
@@ -765,12 +1828,7 @@ fn validate_acyclic_value_structs(
                             .expect("visiting structs are present in the active path");
                         let mut cycle = path[cycle_start..].to_vec();
                         cycle.push(dependency);
-                        return Err(SemanticError {
-                            message: format!(
-                                "cyclic value struct definition: {}",
-                                cycle.join(" -> ")
-                            ),
-                        });
+                        return Some(cycle);
                     }
                     _ => {}
                 }
@@ -784,10 +1842,42 @@ fn validate_acyclic_value_structs(
         }
     }
 
-    Ok(())
+    None
 }
 
-fn validate_acyclic_function_calls(context: &SemanticContext) -> Result<(), SemanticError> {
+fn value_struct_cycle_error(cycle: &[String]) -> SemanticError {
+    SemanticError {
+        code: "K2006",
+        message: format!("cyclic value struct definition: {}", cycle.join(" -> ")),
+    }
+}
+
+fn validate_acyclic_value_structs(
+    context: &SemanticContext,
+    struct_names: &[String],
+) -> Result<(), SemanticError> {
+    value_struct_cycle(context, struct_names)
+        .map_or(Ok(()), |cycle| Err(value_struct_cycle_error(&cycle)))
+}
+
+fn type_expr_mentions_name(ty: &TypeExpr, expected: &str) -> bool {
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        match ty.kind() {
+            TypeExpr::Path(name) if name == expected => return true,
+            TypeExpr::Generic { args, .. } | TypeExpr::Tuple(args) => {
+                pending.extend(args.iter().rev());
+            }
+            TypeExpr::Path(_) | TypeExpr::Const(_) => {}
+            TypeExpr::Source { .. } | TypeExpr::Resolved { .. } => {
+                unreachable!("kind() strips AST and resolved-HIR provenance wrappers")
+            }
+        }
+    }
+    false
+}
+
+fn recursive_function_call_cycle(context: &SemanticContext) -> Option<Vec<String>> {
     let summaries = context.function_summaries.borrow().clone();
     let mut function_names = summaries.keys().cloned().collect::<Vec<_>>();
     function_names.sort();
@@ -833,12 +1923,7 @@ fn validate_acyclic_function_calls(context: &SemanticContext) -> Result<(), Sema
                             .expect("active callee is present in DFS path");
                         let mut cycle = path[start..].to_vec();
                         cycle.push(callee);
-                        return Err(SemanticError {
-                            message: format!(
-                                "recursive function calls are not supported in Kotodama V1: {}",
-                                cycle.join(" -> ")
-                            ),
-                        });
+                        return Some(cycle);
                     }
                     _ => {}
                 }
@@ -850,7 +1935,22 @@ fn validate_acyclic_function_calls(context: &SemanticContext) -> Result<(), Sema
             visit_state.insert(finished, 2);
         }
     }
-    Ok(())
+    None
+}
+
+fn recursive_function_call_error(cycle: &[String]) -> SemanticError {
+    SemanticError {
+        code: "K2006",
+        message: format!(
+            "recursive function calls are not supported in Kotodama V1: {}",
+            cycle.join(" -> ")
+        ),
+    }
+}
+
+fn validate_acyclic_function_calls(context: &SemanticContext) -> Result<(), SemanticError> {
+    recursive_function_call_cycle(context)
+        .map_or(Ok(()), |cycle| Err(recursive_function_call_error(&cycle)))
 }
 
 /// Analyze a parsed program in a fresh per-compilation semantic context.
@@ -874,10 +1974,11 @@ fn reject_test_surface_without_test_mode(
             &mut omitted,
             SemanticFailure {
                 error: SemanticError {
-                    message: "E_TEST_ONLY_PRODUCTION: `koto_test` declarations require explicit compiler test mode"
-                        .into(),
+                    code: "E_TEST_ONLY_PRODUCTION",
+                    message: "`koto_test` declarations require explicit compiler test mode".into(),
                 },
                 location: None,
+                diagnostic: None,
             },
         );
     }
@@ -887,12 +1988,14 @@ fn reject_test_surface_without_test_mode(
             &mut omitted,
             SemanticFailure {
                 error: SemanticError {
+                    code: "E_TEST_ONLY_PRODUCTION",
                     message: format!(
-                        "E_TEST_ONLY_PRODUCTION: fixture `{}` requires explicit compiler test mode",
+                        "fixture `{}` requires explicit compiler test mode",
                         fixture.name
                     ),
                 },
                 location: None,
+                diagnostic: None,
             },
         );
     }
@@ -906,12 +2009,14 @@ fn reject_test_surface_without_test_mode(
                 &mut omitted,
                 SemanticFailure {
                     error: SemanticError {
+                        code: "E_TEST_ONLY_PRODUCTION",
                         message: format!(
-                            "E_TEST_ONLY_PRODUCTION: test function `{}` requires explicit compiler test mode",
+                            "test function `{}` requires explicit compiler test mode",
                             function.name
                         ),
                     },
                     location: Some(function.location),
+                    diagnostic: None,
                 },
             );
         }
@@ -919,9 +2024,11 @@ fn reject_test_surface_without_test_mode(
     if omitted != 0 {
         failures.push(SemanticFailure {
             error: SemanticError {
-                message: format!("K0004: {omitted} additional semantic error(s) were omitted"),
+                code: "K0004",
+                message: format!("{omitted} additional semantic error(s) were omitted"),
             },
             location: None,
+            diagnostic: None,
         });
     }
     if failures.is_empty() {
@@ -942,6 +2049,17 @@ pub fn validate_linked_program(
     program: &TypedProgram,
     zk_enabled: bool,
 ) -> Result<(), SemanticError> {
+    for state in &program.states {
+        validate_list_schemas(&state.ty)?;
+    }
+    for item in &program.items {
+        let TypedItem::Function(function) = item;
+        validate_list_schemas(function.ret_ty.as_ref().unwrap_or(&Type::Unit))?;
+        for parameter in &function.param_types {
+            validate_list_schemas(&parameter.ty)?;
+        }
+    }
+
     let context = SemanticContext::with_zk_enabled(zk_enabled);
     context.states.replace(
         program
@@ -962,6 +2080,7 @@ pub fn validate_linked_program(
             .is_some()
         {
             return Err(SemanticError {
+                code: "K2001",
                 message: format!("duplicate linked function `{}`", function.name),
             });
         }
@@ -999,6 +2118,328 @@ pub fn validate_linked_program(
     enforce_permission_requirements(&context, &program.items)
 }
 
+/// Derive the production HIR from a test-capable target without returning to AST.
+///
+/// Only declarations originating in the deployable target are supplied here;
+/// standalone test-module HIR is linked into the suite separately. The
+/// projection removes inline `#[test]` functions, proves that every retained
+/// call still resolves, rejects retained test-only builtins, and only then
+/// clears test provenance.
+pub(crate) fn project_test_target_to_production(
+    mut target: TypedProgram,
+    zk_enabled: bool,
+) -> Result<TypedProgram, SemanticError> {
+    let removed = target
+        .items
+        .iter()
+        .filter_map(|item| {
+            let TypedItem::Function(function) = item;
+            function.modifiers.is_test.then(|| function.name.clone())
+        })
+        .collect::<HashSet<_>>();
+    target.items.retain(|item| {
+        let TypedItem::Function(function) = item;
+        !function.modifiers.is_test
+    });
+    let retained = target
+        .items
+        .iter()
+        .map(|item| {
+            let TypedItem::Function(function) = item;
+            function.name.clone()
+        })
+        .collect::<HashSet<_>>();
+    for item in &target.items {
+        let TypedItem::Function(function) = item;
+        validate_production_projection_block(
+            &function.body,
+            &function.name,
+            &retained,
+            &removed,
+            zk_enabled,
+        )?;
+    }
+    target.test_support_enabled = false;
+    validate_linked_program(&target, zk_enabled)?;
+    Ok(target)
+}
+
+fn validate_production_projection_block(
+    block: &TypedBlock,
+    owner: &str,
+    retained: &HashSet<String>,
+    removed: &HashSet<String>,
+    zk_enabled: bool,
+) -> Result<(), SemanticError> {
+    for statement in &block.statements {
+        validate_production_projection_statement(statement, owner, retained, removed, zk_enabled)?;
+    }
+    if let Some(tail) = &block.tail {
+        validate_production_projection_expr(tail, owner, retained, removed, zk_enabled)?;
+    }
+    Ok(())
+}
+
+fn validate_production_projection_statement(
+    statement: &TypedStatement,
+    owner: &str,
+    retained: &HashSet<String>,
+    removed: &HashSet<String>,
+    zk_enabled: bool,
+) -> Result<(), SemanticError> {
+    match statement.kind() {
+        TypedStatement::Let { value, .. } | TypedStatement::Expr(value) => {
+            validate_production_projection_expr(value, owner, retained, removed, zk_enabled)
+        }
+        TypedStatement::Return(value) => {
+            if let Some(value) = value {
+                validate_production_projection_expr(value, owner, retained, removed, zk_enabled)?;
+            }
+            Ok(())
+        }
+        TypedStatement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            validate_production_projection_expr(cond, owner, retained, removed, zk_enabled)?;
+            validate_production_projection_block(
+                then_branch,
+                owner,
+                retained,
+                removed,
+                zk_enabled,
+            )?;
+            if let Some(else_branch) = else_branch {
+                validate_production_projection_block(
+                    else_branch,
+                    owner,
+                    retained,
+                    removed,
+                    zk_enabled,
+                )?;
+            }
+            Ok(())
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            validate_production_projection_expr(value, owner, retained, removed, zk_enabled)?;
+            validate_production_projection_block(
+                then_branch,
+                owner,
+                retained,
+                removed,
+                zk_enabled,
+            )?;
+            if let Some(else_branch) = else_branch {
+                validate_production_projection_block(
+                    else_branch,
+                    owner,
+                    retained,
+                    removed,
+                    zk_enabled,
+                )?;
+            }
+            Ok(())
+        }
+        TypedStatement::While { cond, body } => {
+            validate_production_projection_expr(cond, owner, retained, removed, zk_enabled)?;
+            validate_production_projection_block(body, owner, retained, removed, zk_enabled)
+        }
+        TypedStatement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(init) = init {
+                validate_production_projection_statement(
+                    init, owner, retained, removed, zk_enabled,
+                )?;
+            }
+            if let Some(cond) = cond {
+                validate_production_projection_expr(cond, owner, retained, removed, zk_enabled)?;
+            }
+            if let Some(step) = step {
+                validate_production_projection_statement(
+                    step, owner, retained, removed, zk_enabled,
+                )?;
+            }
+            validate_production_projection_block(body, owner, retained, removed, zk_enabled)
+        }
+        TypedStatement::ForEachMap { map, body, .. } => {
+            validate_production_projection_expr(map, owner, retained, removed, zk_enabled)?;
+            validate_production_projection_block(body, owner, retained, removed, zk_enabled)
+        }
+        TypedStatement::MapSet { map, key, value } => {
+            validate_production_projection_expr(map, owner, retained, removed, zk_enabled)?;
+            validate_production_projection_expr(key, owner, retained, removed, zk_enabled)?;
+            validate_production_projection_expr(value, owner, retained, removed, zk_enabled)
+        }
+        TypedStatement::Break | TypedStatement::Continue => Ok(()),
+    }
+}
+
+fn validate_production_projection_expr(
+    expression: &TypedExpr,
+    owner: &str,
+    retained: &HashSet<String>,
+    removed: &HashSet<String>,
+    zk_enabled: bool,
+) -> Result<(), SemanticError> {
+    let recurse = |expression: &TypedExpr| {
+        validate_production_projection_expr(expression, owner, retained, removed, zk_enabled)
+    };
+    match expression.kind() {
+        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
+            if let Some(builtin) = Builtin::from_name(name) {
+                match builtin.mode() {
+                    crate::builtins::BuiltinMode::TestOnly
+                    | crate::builtins::BuiltinMode::TestFunctionOnly => {
+                        return Err(SemanticError {
+                            code: "E_TEST_ONLY_PRODUCTION",
+                            message: format!(
+                                "retained function `{owner}` calls test-only builtin `{}`",
+                                builtin.source_name()
+                            ),
+                        });
+                    }
+                    crate::builtins::BuiltinMode::ZkOnly if !zk_enabled => {
+                        return Err(SemanticError {
+                            code: "E_ZK_MODE_REQUIRED",
+                            message: format!(
+                                "retained function `{owner}` calls ZK-only builtin `{}` without ZK build policy",
+                                builtin.source_name()
+                            ),
+                        });
+                    }
+                    _ => {}
+                }
+            } else if removed.contains(name) {
+                return Err(SemanticError {
+                    code: "E_TEST_ONLY_PRODUCTION",
+                    message: format!(
+                        "retained function `{owner}` calls removed test function `{name}`"
+                    ),
+                });
+            } else if !retained.contains(name) {
+                return Err(SemanticError {
+                    code: "K2002",
+                    message: format!(
+                        "linked function `{owner}` calls unknown function `{name}` after test projection"
+                    ),
+                });
+            }
+            for argument in args {
+                recurse(argument)?;
+            }
+            Ok(())
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Index {
+            target: left,
+            index: right,
+        } => {
+            recurse(left)?;
+            recurse(right)
+        }
+        ExprKind::Unary { expr, .. }
+        | ExprKind::NumericCast { expr }
+        | ExprKind::Member { object: expr, .. }
+        | ExprKind::OptionSome { value: expr }
+        | ExprKind::ResultOk { value: expr }
+        | ExprKind::ResultErr { error: expr }
+        | ExprKind::Propagate { value: expr } => recurse(expr),
+        ExprKind::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            recurse(cond)?;
+            recurse(then_expr)?;
+            recurse(else_expr)
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            recurse(condition)?;
+            validate_production_projection_block(
+                then_branch,
+                owner,
+                retained,
+                removed,
+                zk_enabled,
+            )?;
+            validate_production_projection_block(else_branch, owner, retained, removed, zk_enabled)
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            recurse(value)?;
+            validate_production_projection_block(
+                then_branch,
+                owner,
+                retained,
+                removed,
+                zk_enabled,
+            )?;
+            validate_production_projection_block(else_branch, owner, retained, removed, zk_enabled)
+        }
+        ExprKind::Match { value, arms } => {
+            recurse(value)?;
+            for arm in arms {
+                validate_production_projection_block(
+                    &arm.body, owner, retained, removed, zk_enabled,
+                )?;
+            }
+            Ok(())
+        }
+        ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::JsonArray(items) => {
+            for item in items {
+                recurse(item)?;
+            }
+            Ok(())
+        }
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            recurse(source)?;
+            recurse(expression)?;
+            if let Some(condition) = condition {
+                recurse(condition)?;
+            }
+            Ok(())
+        }
+        ExprKind::StructLiteral { fields, .. } | ExprKind::JsonObject(fields) => {
+            for (_, value) in fields {
+                recurse(value)?;
+            }
+            Ok(())
+        }
+        ExprKind::Number(_)
+        | ExprKind::Decimal(_)
+        | ExprKind::AmountLiteral { .. }
+        | ExprKind::OptionNone
+        | ExprKind::Bool(_)
+        | ExprKind::String(_)
+        | ExprKind::Bytes(_)
+        | ExprKind::Ident(_) => Ok(()),
+    }
+}
+
 fn analyze_with_context(
     context: &SemanticContext,
     program: &Program,
@@ -1014,18 +2455,19 @@ fn analyze_with_context(
     let mut error_codes = HashMap::new();
     let mut typed_error_codes = Vec::new();
     let struct_names = validate_declaration_uniqueness(program)?;
-    context.global_declarations.replace(
-        std::iter::once(program.unit.name.clone())
-            .chain(program.items.iter().map(|item| match item {
-                Item::Function(function) => function.name.clone(),
-                Item::Struct(definition) => definition.name.clone(),
-                Item::ErrorEnum(definition) => definition.name.clone(),
-                Item::Const(constant) => constant.name.clone(),
-                Item::State(state) => state.name.clone(),
-                Item::Trigger(trigger) => trigger.name.clone(),
-            }))
-            .collect(),
-    );
+    let mut global_declarations = std::iter::once(program.unit.name.clone())
+        .chain(program.items.iter().map(|item| match item {
+            Item::Function(function) => function.name.clone(),
+            Item::Struct(definition) => definition.name.clone(),
+            Item::ErrorEnum(definition) => definition.name.clone(),
+            Item::Const(constant) => constant.name.clone(),
+            Item::State(state) => state.name.clone(),
+            Item::Trigger(trigger) => trigger.name.clone(),
+        }))
+        .collect::<HashSet<_>>();
+    global_declarations.extend(context.external_functions.borrow().keys().cloned());
+    global_declarations.extend(context.external_states.borrow().keys().cloned());
+    context.global_declarations.replace(global_declarations);
     context.structs.replace(
         struct_names
             .iter()
@@ -1078,7 +2520,25 @@ fn analyze_with_context(
     }
     context.structs.replace(structs);
     context.error_codes.replace(error_codes);
-    validate_acyclic_value_structs(context, &struct_names)?;
+    if let Some(cycle) = value_struct_cycle(context, &struct_names) {
+        if let [owner, dependency, ..] = cycle.as_slice()
+            && let Some(ty) = program.items.iter().find_map(|item| {
+                let Item::Struct(definition) = item else {
+                    return None;
+                };
+                (definition.name == *owner).then(|| {
+                    definition
+                        .fields
+                        .iter()
+                        .map(|(_, ty)| ty)
+                        .find(|ty| type_expr_mentions_name(ty, dependency))
+                })?
+            })
+        {
+            context.capture_diagnostic(context.type_source(ty), None);
+        }
+        return Err(value_struct_cycle_error(&cycle).into());
+    }
     let resolved_structs = context
         .structs
         .borrow()
@@ -1098,16 +2558,31 @@ fn analyze_with_context(
         })
         .collect();
     context.structs.replace(resolved_structs);
+    validate_declared_struct_list_schemas(context)?;
     let mut fn_returns = fn_returns
         .into_iter()
         .map(|(name, ty)| (name, resolve_struct_type_with_context(context, &ty)))
         .collect::<HashMap<_, _>>();
+    let mut return_names = fn_returns.keys().collect::<Vec<_>>();
+    return_names.sort();
+    for name in return_names {
+        validate_list_schemas(
+            fn_returns
+                .get(name)
+                .expect("collected function name remains in the return table"),
+        )?;
+    }
     for (name, signature) in context.external_functions.borrow().iter() {
+        validate_list_schemas(&signature.return_type)?;
+        for parameter in &signature.params {
+            validate_list_schemas(&parameter.ty)?;
+        }
         if fn_returns
             .insert(name.clone(), signature.return_type.clone())
             .is_some()
         {
             return Err(SemanticError {
+                code: "E_DUPLICATE_DECLARATION",
                 message: format!("imported function `{name}` collides with a local function"),
             }
             .into());
@@ -1115,12 +2590,26 @@ fn analyze_with_context(
     }
     let mut resolved_consts: IndexMap<String, TypedExpr> = IndexMap::new();
     for decl in const_decls {
-        let mut value = analyze_const_expr(&decl.value, &resolved_consts)?;
+        context.discard_diagnostic();
+        let mut value = match analyze_const_expr(context, &decl.value, &resolved_consts) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(SemanticFailures {
+                    failures: vec![SemanticFailure {
+                        error,
+                        location: None,
+                        diagnostic: context.take_diagnostic(),
+                    }],
+                });
+            }
+        };
         let declared = decl.ty.as_ref().ok_or_else(|| SemanticError {
+            code: "K2003",
             message: format!("const `{}` requires an explicit type", decl.name),
         })?;
         let expected =
             resolve_struct_type_with_context(context, &convert_type_expr(context, declared)?);
+        validate_list_schemas(&expected)?;
         ensure_assignable_and_coerce(&expected, &mut value)?;
         resolved_consts.insert(decl.name, value);
     }
@@ -1128,14 +2617,28 @@ fn analyze_with_context(
     let mut state: IndexMap<String, Type> = IndexMap::new();
     for (name, ty_expr) in state_decls {
         let ty = resolve_struct_type_with_context(context, &convert_type_expr(context, &ty_expr)?);
-        validate_state_type(&ty)?;
+        validate_list_schemas(&ty)?;
+        if let Err(error) = validate_state_type(&ty) {
+            context.capture_diagnostic(context.type_source(&ty_expr), None);
+            return Err(error.into());
+        }
         state.insert(name, ty);
     }
     let resolved_state: IndexMap<String, Type> = state
         .into_iter()
         .map(|(name, ty)| (name, resolve_struct_type_with_context(context, &ty)))
         .collect();
-    context.states.replace(resolved_state);
+    let mut all_states = context.external_states.borrow().clone();
+    for (name, ty) in &resolved_state {
+        if all_states.insert(name.clone(), ty.clone()).is_some() {
+            return Err(SemanticError {
+                code: "K2005",
+                message: format!("target state `{name}` collides with a local state declaration"),
+            }
+            .into());
+        }
+    }
+    context.states.replace(all_states);
     context.function_returns.replace(fn_returns);
     context.function_modifiers.replace(fn_modifiers.clone());
     context
@@ -1156,15 +2659,62 @@ fn analyze_with_context(
         fn_params.insert(f.name.clone(), params);
     }
     context.function_params.replace(fn_params);
+    let source_summaries = program
+        .items
+        .iter()
+        .filter_map(|item| {
+            let Item::Function(function) = item else {
+                return None;
+            };
+            let mut summary = FunctionSummary::default();
+            collect_source_block_summary(&function.body, &mut summary);
+            Some((function.name.clone(), summary))
+        })
+        .collect::<HashMap<_, _>>();
+    let transitive_effects = compute_transitive_effects(&source_summaries);
+    let mut named_only_reasons = context
+        .external_functions
+        .borrow()
+        .iter()
+        .filter_map(|(name, signature)| {
+            signature.requires_named_arguments.then_some((
+                name.clone(),
+                "imported privileged or effectful calls with at least three parameters require names",
+            ))
+        })
+        .collect::<HashMap<_, _>>();
+    named_only_reasons.extend(program.items.iter().filter_map(|item| {
+        let Item::Function(function) = item else {
+            return None;
+        };
+        if function.params.len() < 3 {
+            return None;
+        }
+        let privileged = function.modifiers.permission.is_some()
+            || matches!(
+                function.modifiers.kind,
+                FunctionKind::Kotoage | FunctionKind::Hajimari | FunctionKind::Kaizen
+            );
+        let effectful = transitive_effects
+            .get(&function.name)
+            .copied()
+            .is_some_and(FunctionEffects::requires_permission);
+        (privileged || effectful).then_some((
+            function.name.clone(),
+            "privileged or effectful calls with at least three parameters require names",
+        ))
+    }));
+    context
+        .function_named_only_reasons
+        .replace(named_only_reasons);
 
     let mut items = Vec::new();
-    let states = context
-        .states
-        .borrow()
+    let states = resolved_state
         .iter()
         .map(|(name, ty)| TypedStateDecl {
             name: name.clone(),
             ty: ty.clone(),
+            source: None,
         })
         .collect::<Vec<_>>();
     let mut triggers = Vec::new();
@@ -1174,13 +2724,18 @@ fn analyze_with_context(
     for item in &program.items {
         match item {
             Item::Function(f) => match analyze_function(context, f) {
-                Ok(function) => items.push(TypedItem::Function(function)),
+                Ok(function) => {
+                    context.discard_diagnostic();
+                    context.required_list_capacity.borrow_mut().take();
+                    items.push(TypedItem::Function(function));
+                }
                 Err(error) => record_semantic_failure(
                     &mut failures,
                     &mut omitted_failures,
                     SemanticFailure {
                         error,
                         location: Some(f.location),
+                        diagnostic: context.take_diagnostic(),
                     },
                 ),
             },
@@ -1191,9 +2746,11 @@ fn analyze_with_context(
                         &mut omitted_failures,
                         SemanticFailure {
                             error: SemanticError {
+                                code: "K2001",
                                 message: format!("duplicate trigger `{}`", trigger.name),
                             },
                             location: None,
+                            diagnostic: None,
                         },
                     );
                     continue;
@@ -1206,6 +2763,7 @@ fn analyze_with_context(
                         SemanticFailure {
                             error,
                             location: None,
+                            diagnostic: None,
                         },
                     ),
                 }
@@ -1216,18 +2774,62 @@ fn analyze_with_context(
     if omitted_failures != 0 {
         failures.push(SemanticFailure {
             error: SemanticError {
-                message: format!(
-                    "K0004: {omitted_failures} additional semantic error(s) were omitted"
-                ),
+                code: "K0004",
+                message: format!("{omitted_failures} additional semantic error(s) were omitted"),
             },
             location: None,
+            diagnostic: None,
         });
     }
     if !failures.is_empty() {
         return Err(SemanticFailures { failures });
     }
-    validate_acyclic_function_calls(context)?;
+    if let Some(cycle) = recursive_function_call_cycle(context) {
+        let location = cycle.first().and_then(|name| {
+            program.items.iter().find_map(|item| {
+                let Item::Function(function) = item else {
+                    return None;
+                };
+                (&function.name == name).then_some(function.location)
+            })
+        });
+        return Err(SemanticFailures {
+            failures: vec![SemanticFailure {
+                error: recursive_function_call_error(&cycle),
+                location,
+                diagnostic: None,
+            }],
+        });
+    }
     validate_scalar_state_initialization(context, &items, &states)?;
+    let hir_nodes = context
+        .resolved_arena
+        .borrow()
+        .as_ref()
+        .map(|arena| {
+            context
+                .typed_hir_nodes
+                .borrow()
+                .iter()
+                .filter_map(|(local, ty)| {
+                    let node = arena.node(*local)?;
+                    let id = TypedHirNodeId {
+                        source: arena.source(),
+                        local: *local,
+                    };
+                    Some((
+                        id,
+                        TypedHirNode {
+                            id,
+                            source: node.source,
+                            target: node.target,
+                            ty: ty.clone(),
+                        },
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let typed_program = TypedProgram {
         unit: program.unit.clone(),
         items,
@@ -1235,11 +2837,28 @@ fn analyze_with_context(
         error_codes: typed_error_codes,
         triggers,
         message_entries: Vec::new(),
+        hir_nodes,
+        source_files: BTreeMap::new(),
         test_support_enabled: context.test_builtins_enabled,
     };
     crate::secret::validate_program(&typed_program, context.zk_enabled)?;
     enforce_permission_requirements(context, &typed_program.items)?;
     Ok(typed_program)
+}
+
+fn core_query_view_name(ty: &Type) -> Option<&str> {
+    let Type::Struct { name, .. } = ty else {
+        return None;
+    };
+    let builtin = match name.as_str() {
+        "AccountView" => Builtin::QueryGetAccount,
+        "AssetView" => Builtin::QueryGetAsset,
+        "AssetDefinitionView" => Builtin::QueryGetAssetDefinition,
+        "DomainView" => Builtin::QueryGetDomain,
+        "NftView" => Builtin::QueryGetNft,
+        _ => return None,
+    };
+    (core_query_view_type(builtin).as_ref() == Some(ty)).then_some(name.as_str())
 }
 
 fn type_name(ty: &Type) -> String {
@@ -1268,17 +2887,63 @@ fn type_name(ty: &Type) -> String {
         Type::StateMap(k, v) => format!("StateMap<{}, {}>", type_name(k), type_name(v)),
         Type::Option(inner) => format!("Option<{}>", type_name(inner)),
         Type::Result(ok, err) => format!("Result<{}, {}>", type_name(ok), type_name(err)),
+        Type::List(element, capacity) => {
+            format!("List<{}, {capacity}>", type_name(element))
+        }
         Type::Tuple(ts) => {
             let parts: Vec<String> = ts.iter().map(type_name).collect();
             format!("({})", parts.join(", "))
         }
-        Type::Struct { name, .. } => format!("struct {name}"),
+        Type::Struct { name, .. } => query_page_view_type(ty)
+            .and_then(core_query_view_name)
+            .map_or_else(
+                || core_query_view_name(ty).map_or_else(|| format!("struct {name}"), str::to_owned),
+                |view_name| format!("{QUERY_PAGE_TYPE_NAME}<{view_name}>"),
+            ),
         Type::NamedStruct(s) => s.clone(),
     }
 }
 
+/// Render `ty` as a valid source annotation.
+///
+/// ABI descriptors derive their canonical names from their exact recursive
+/// schemas at the compiler boundary; this helper deliberately renders ordinary
+/// structs without the schema-only `struct ` prefix.
 pub fn render_type_name(ty: &Type) -> String {
-    type_name(ty)
+    render_source_type_name(ty)
+}
+
+fn render_source_type_name(ty: &Type) -> String {
+    match ty {
+        Type::Secret(inner) => format!("Secret<{}>", render_source_type_name(inner)),
+        Type::StateMap(key, value) => format!(
+            "StateMap<{}, {}>",
+            render_source_type_name(key),
+            render_source_type_name(value)
+        ),
+        Type::Option(inner) => format!("Option<{}>", render_source_type_name(inner)),
+        Type::Result(ok, error) => format!(
+            "Result<{}, {}>",
+            render_source_type_name(ok),
+            render_source_type_name(error)
+        ),
+        Type::List(element, capacity) => {
+            format!("List<{}, {capacity}>", render_source_type_name(element))
+        }
+        Type::Tuple(items) => format!(
+            "({})",
+            items
+                .iter()
+                .map(render_source_type_name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Type::Struct { name, .. } => query_page_view_type(ty)
+            .and_then(core_query_view_name)
+            .map_or_else(|| name.clone(), |view| format!("QueryPage<{view}>")),
+        Type::NamedStruct(name) => name.clone(),
+        scalar => type_name(scalar),
+    }
 }
 
 fn trigger_data_family_name(family: TriggerDataFamily) -> &'static str {
@@ -1310,6 +2975,7 @@ fn duplicate_data_matcher_error(
     key: &str,
 ) -> SemanticError {
     SemanticError {
+        code: "E_TRIGGER_FILTER_DUPLICATE_MATCHER",
         message: format!(
             "trigger `{trigger_name}` has duplicate `{key}` matcher in `{}` data filter",
             trigger_data_family_name(family)
@@ -1328,6 +2994,7 @@ where
     E: std::fmt::Display,
 {
     SemanticError {
+        code: "E_TRIGGER_FILTER_INVALID_LITERAL",
         message: format!(
             "trigger `{trigger_name}` has invalid `{key}` matcher literal `{raw}` in `{}` data filter: {err}",
             trigger_data_family_name(family)
@@ -1341,6 +3008,7 @@ fn unsupported_data_matcher_error(
     key: &str,
 ) -> SemanticError {
     SemanticError {
+        code: "E_TRIGGER_FILTER_UNSUPPORTED_MATCHER",
         message: format!(
             "trigger `{trigger_name}` does not support `{key}` matcher in `{}` data filter",
             trigger_data_family_name(family)
@@ -1354,6 +3022,7 @@ fn unsupported_data_event_kind_error(
     kind: &str,
 ) -> SemanticError {
     SemanticError {
+        code: "E_TRIGGER_FILTER_UNSUPPORTED_EVENT",
         message: format!(
             "trigger `{trigger_name}` does not support `{kind}` event kind for `{}` data filter",
             trigger_data_family_name(family)
@@ -1965,6 +3634,7 @@ fn analyze_trigger(
 ) -> Result<TypedTrigger, SemanticError> {
     let name =
         <Name as std::str::FromStr>::from_str(&trigger.name).map_err(|err| SemanticError {
+            code: "E_TRIGGER_INVALID_NAME",
             message: format!("invalid trigger name `{}`: {}", trigger.name, err),
         })?;
     let id = TriggerId::new(name);
@@ -1972,6 +3642,7 @@ fn analyze_trigger(
     if trigger.call.namespace.is_none() {
         let entry = &trigger.call.entrypoint;
         let modifiers = fn_modifiers.get(entry).ok_or_else(|| SemanticError {
+            code: "K2002",
             message: format!(
                 "trigger `{}` targets unknown entrypoint `{entry}`",
                 trigger.name
@@ -1979,16 +3650,16 @@ fn analyze_trigger(
         })?;
         if modifiers.kind == FunctionKind::View {
             return Err(SemanticError {
+                code: "E_TRIGGER_VIEW_TARGET",
                 message: format!(
                     "trigger `{}` cannot target read-only view entrypoint `{entry}`",
                     trigger.name
                 ),
             });
         }
-        if modifiers.visibility != FunctionVisibility::Public
-            || modifiers.kind != FunctionKind::Contract
-        {
+        if modifiers.kind != FunctionKind::Kotoage {
             return Err(SemanticError {
+                code: "E_TRIGGER_TARGET_KIND",
                 message: format!(
                     "trigger `{}` must call kotoage entrypoint `{entry}`",
                     trigger.name
@@ -2009,6 +3680,7 @@ fn analyze_trigger(
                         && *period == 0
                     {
                         return Err(SemanticError {
+                            code: "E_TRIGGER_SCHEDULE_PERIOD",
                             message: format!(
                                 "trigger `{}` schedule period_ms must be non-zero",
                                 trigger.name
@@ -2026,6 +3698,7 @@ fn analyze_trigger(
         TriggerFilter::Execute { trigger_id } => {
             let target =
                 <Name as std::str::FromStr>::from_str(trigger_id).map_err(|err| SemanticError {
+                    code: "E_TRIGGER_INVALID_ID",
                     message: format!("invalid execute trigger id `{trigger_id}`: {err}"),
                 })?;
             let id = TriggerId::new(target);
@@ -2067,6 +3740,7 @@ fn analyze_trigger(
             AccountId::parse_encoded(raw)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .map_err(|err| SemanticError {
+                    code: "E_TRIGGER_INVALID_AUTHORITY",
                     message: format!("invalid trigger authority `{raw}`: {err}"),
                 })?,
         ),
@@ -2092,11 +3766,13 @@ fn trigger_metadata_from_entries(
     for entry in entries {
         let key =
             <Name as std::str::FromStr>::from_str(&entry.key).map_err(|err| SemanticError {
+                code: "E_TRIGGER_INVALID_METADATA_KEY",
                 message: format!("invalid trigger metadata key `{}`: {err}", entry.key),
             })?;
         let json = json_from_expr(&entry.value)?;
         if metadata.insert(key, json).is_some() {
             return Err(SemanticError {
+                code: "K2001",
                 message: format!("duplicate trigger metadata key `{}`", entry.key),
             });
         }
@@ -2106,39 +3782,59 @@ fn trigger_metadata_from_entries(
 
 fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
     let value = match expr {
+        Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
+            return json_from_expr(expression);
+        }
         Expr::String(s) => json::Value::String(s.clone()),
         Expr::Number(n) => json::Value::Number(JsonNumber::I64(*n)),
         Expr::Decimal(raw) => {
             let value = raw.parse::<f64>().map_err(|err| SemanticError {
+                code: "E_TRIGGER_METADATA_VALUE",
                 message: format!("invalid decimal metadata literal `{raw}`: {err}"),
             })?;
             let number = JsonNumber::from_f64(value).ok_or_else(|| SemanticError {
+                code: "E_TRIGGER_METADATA_VALUE",
                 message: format!("invalid decimal metadata literal `{raw}`: not finite"),
             })?;
             json::Value::Number(number)
         }
+        Expr::AmountLiteral(_) => {
+            return Err(SemanticError {
+                code: "E_TRIGGER_METADATA_VALUE",
+                message: "Amount trigger metadata requires explicit native JSON construction"
+                    .into(),
+            });
+        }
         Expr::Bool(b) => json::Value::Bool(*b),
         Expr::Ident(ident) if ident == "null" => json::Value::Null,
-        Expr::Call { name, args } if name == "json" => {
-            let raw = match args.as_slice() {
-                [Expr::String(raw)] => raw,
-                _ => {
-                    return Err(SemanticError {
-                        message: "Json::parse(...) metadata values must be a string literal".into(),
-                    });
-                }
-            };
+        Expr::Call { name, args, .. } if name == "json" => {
+            let raw = args
+                .first()
+                .and_then(|argument| match argument.kind() {
+                    Expr::String(raw) if args.len() == 1 => Some(raw),
+                    Expr::Source { .. } | Expr::Resolved { .. } => {
+                        unreachable!("kind() strips provenance wrappers")
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| SemanticError {
+                    code: "E_TRIGGER_METADATA_VALUE",
+                    message: "Json::parse(...) metadata values must be a string literal".into(),
+                })?;
             json::parse_value(raw).map_err(|err| SemanticError {
+                code: "E_TRIGGER_METADATA_VALUE",
                 message: format!("invalid json metadata literal: {err}"),
             })?
         }
         _ => {
             return Err(SemanticError {
+                code: "E_TRIGGER_METADATA_VALUE",
                 message: "trigger metadata values must be JSON literals".into(),
             });
         }
     };
     Json::from_norito_value_ref(&value).map_err(|err| SemanticError {
+        code: "E_TRIGGER_METADATA_VALUE",
         message: format!("invalid trigger metadata value: {err}"),
     })
 }
@@ -2167,6 +3863,286 @@ fn numeric_kind_to_type(kind: NumericKind) -> Type {
     }
 }
 
+fn parse_amount_literal(spelling: &str) -> Result<Numeric, SemanticError> {
+    let body = spelling.strip_suffix("amt").ok_or_else(|| SemanticError {
+        code: "E_AMOUNT_SUFFIX",
+        message: "Amount literals must end with lowercase `amt`".into(),
+    })?;
+    let mut parts = body.split('.');
+    let whole = parts.next().unwrap_or_default();
+    let fractional = parts.next();
+    if parts.next().is_some() {
+        return Err(SemanticError {
+            code: "E_AMOUNT_MALFORMED",
+            message: "Amount literals contain at most one decimal point".into(),
+        });
+    }
+
+    let valid_component = |component: &str| {
+        !component.is_empty()
+            && !component.starts_with('_')
+            && !component.ends_with('_')
+            && !component.contains("__")
+            && component
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || byte == b'_')
+    };
+    if !valid_component(whole) || fractional.is_some_and(|part| !valid_component(part)) {
+        return Err(SemanticError {
+            code: "E_AMOUNT_MALFORMED",
+            message:
+                "underscores must separate decimal digits and both sides of `.` require digits"
+                    .into(),
+        });
+    }
+
+    let raw_fractional = fractional
+        .map(|part| {
+            part.bytes()
+                .filter(u8::is_ascii_digit)
+                .map(char::from)
+                .collect::<String>()
+        })
+        .unwrap_or_default();
+    let scale = raw_fractional.trim_end_matches('0').len();
+    if scale > 28 {
+        return Err(SemanticError {
+            code: "E_AMOUNT_SCALE_OVERFLOW",
+            message: format!("Amount literal has canonical scale {scale}; the V1 maximum is 28"),
+        });
+    }
+
+    let mut mantissa_spelling = body
+        .bytes()
+        .filter(|byte| byte.is_ascii_digit())
+        .map(char::from)
+        .collect::<String>();
+    let canonicalized_digits = raw_fractional.len().saturating_sub(scale);
+    mantissa_spelling.truncate(mantissa_spelling.len().saturating_sub(canonicalized_digits));
+    let mantissa = mantissa_spelling
+        .parse::<BigInt>()
+        .map_err(|_| SemanticError {
+            code: "E_AMOUNT_MANTISSA_OVERFLOW",
+            message: "Amount literal exceeds the 512-bit mantissa limit".into(),
+        })?;
+    Numeric::try_new(mantissa, scale as u32)
+        .map_err(|error| match error {
+            NumericError::MantissaTooLarge => SemanticError {
+                code: "E_AMOUNT_MANTISSA_OVERFLOW",
+                message: "Amount literal exceeds the 512-bit mantissa limit".into(),
+            },
+            NumericError::ScaleTooLarge => SemanticError {
+                code: "E_AMOUNT_SCALE_OVERFLOW",
+                message: "Amount literal scale exceeds the V1 maximum of 28".into(),
+            },
+            NumericError::Malformed => SemanticError {
+                code: "E_AMOUNT_MALFORMED",
+                message: "invalid Amount literal".into(),
+            },
+        })?
+        .canonicalize_amount()
+        .map_err(|error| SemanticError {
+            code: "E_AMOUNT_MALFORMED",
+            message: format!("invalid Amount literal: {error}"),
+        })
+}
+
+fn descriptors_have_confusable_repeats(parameters: &[&str]) -> bool {
+    for (index, parameter) in parameters.iter().enumerate() {
+        let parameter = parameter.trim_end_matches(['?', '.']);
+        for (other_index, other) in parameters.iter().enumerate().skip(index + 1) {
+            let other = other.trim_end_matches(['?', '.']);
+            if parameter == other
+                || (other == "same-as-arg0" && index == 0)
+                || (parameter == "same-as-arg0" && other_index == 0)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn user_parameters_have_confusable_repeats(parameters: &[TypedParam]) -> bool {
+    parameters.iter().enumerate().any(|(index, parameter)| {
+        parameters
+            .iter()
+            .skip(index + 1)
+            .any(|other| resolve_struct_type(&parameter.ty) == resolve_struct_type(&other.ty))
+    })
+}
+
+fn builtin_named_only_reason(builtin: Builtin, implicit_receiver: bool) -> Option<&'static str> {
+    let spec = builtin.spec();
+    if spec.call_policy == BuiltinCallPolicy::Pagination {
+        return Some("pagination calls require explicit `offset` and `limit` names");
+    }
+    let receiver_count = usize::from(implicit_receiver);
+    let user_parameters = spec
+        .signature
+        .parameters
+        .get(receiver_count..)
+        .unwrap_or_default();
+    let effects = spec.effects;
+    if user_parameters.len() >= 3
+        && (effects.host_side_effects
+            || effects.emits_instructions
+            || effects.mutates_durable_state)
+    {
+        return Some("privileged or effectful calls with at least three parameters require names");
+    }
+    descriptors_have_confusable_repeats(user_parameters)
+        .then_some("repeated parameter types require names to prevent argument transposition")
+}
+
+#[derive(Debug)]
+struct CallArgumentPlan {
+    /// Arguments in declaration/ABI order.
+    ordered: Vec<Expr>,
+    /// Indices into `ordered` in source evaluation order.
+    evaluation_order: Vec<usize>,
+    /// Whether the source call used named arguments.
+    is_named: bool,
+}
+
+fn reorder_call_arguments(
+    call_name: &str,
+    args: &[Expr],
+    argument_names: Option<&[String]>,
+    implicit_receiver: bool,
+    parameter_names: &[String],
+    required: &[bool],
+    named_only_reason: Option<&str>,
+) -> Result<CallArgumentPlan, SemanticError> {
+    let receiver_count = usize::from(implicit_receiver);
+    if args.len() < receiver_count {
+        return Err(SemanticError {
+            code: "E_MALFORMED_CALL",
+            message: format!("call `{call_name}` is missing its compiler-inserted receiver"),
+        });
+    }
+    let user_args = &args[receiver_count..];
+    let Some(argument_names) = argument_names else {
+        if named_only_reason.is_some() && !user_args.is_empty() {
+            return Err(SemanticError {
+                code: "E_NAMED_ARGUMENTS_REQUIRED",
+                message: format!(
+                    "call `{call_name}` requires named arguments because {}",
+                    named_only_reason.unwrap_or_default()
+                ),
+            });
+        }
+        return Ok(CallArgumentPlan {
+            ordered: args.to_vec(),
+            evaluation_order: (0..args.len()).collect(),
+            is_named: false,
+        });
+    };
+    if argument_names.len() != user_args.len() {
+        return Err(SemanticError {
+            code: "E_MALFORMED_CALL",
+            message: format!("call `{call_name}` has inconsistent named-argument metadata"),
+        });
+    }
+
+    for name in argument_names {
+        if !parameter_names.iter().any(|parameter| parameter == name) {
+            return Err(SemanticError {
+                code: "E_UNKNOWN_NAMED_ARGUMENT",
+                message: format!("call `{call_name}` has no parameter named `{name}`"),
+            });
+        }
+    }
+    let mut ordered = Vec::with_capacity(args.len());
+    let mut ordered_slots = HashMap::with_capacity(parameter_names.len());
+    if implicit_receiver {
+        ordered.push(args[0].clone());
+    }
+    for (index, parameter_name) in parameter_names.iter().enumerate() {
+        let positions = argument_names
+            .iter()
+            .enumerate()
+            .filter_map(|(position, name)| (name == parameter_name).then_some(position))
+            .collect::<Vec<_>>();
+        if positions.len() > 1 {
+            return Err(SemanticError {
+                code: "E_DUPLICATE_NAMED_ARGUMENT",
+                message: format!("named argument `{parameter_name}` is supplied more than once"),
+            });
+        }
+        if let Some(position) = positions.first() {
+            ordered_slots.insert(parameter_name.as_str(), ordered.len());
+            ordered.push(user_args[*position].clone());
+        } else if required.get(index).copied().unwrap_or(true) {
+            return Err(SemanticError {
+                code: "E_MISSING_NAMED_ARGUMENT",
+                message: format!(
+                    "call `{call_name}` is missing required argument `{parameter_name}`"
+                ),
+            });
+        }
+    }
+    let mut evaluation_order = Vec::with_capacity(ordered.len());
+    if implicit_receiver {
+        evaluation_order.push(0);
+    }
+    for name in argument_names {
+        evaluation_order.push(*ordered_slots.get(name.as_str()).ok_or_else(|| SemanticError {
+            code: "E_MALFORMED_CALL",
+            message: format!(
+                "call `{call_name}` lost named argument `{name}` while resolving its parameter slot"
+            ),
+        })?);
+    }
+    Ok(CallArgumentPlan {
+        ordered,
+        evaluation_order,
+        is_named: true,
+    })
+}
+
+fn builtin_instantiation_has_confusable_repeats(
+    builtin: Builtin,
+    arguments: &[TypedExpr],
+    implicit_receiver: bool,
+) -> bool {
+    if !implicit_receiver
+        || !matches!(
+            builtin,
+            Builtin::GetOrDefault | Builtin::GetOr | Builtin::Ensure
+        )
+    {
+        return false;
+    }
+    let Some(receiver) = arguments.first() else {
+        return false;
+    };
+    let Type::StateMap(key, value) = resolve_struct_type(&receiver.ty) else {
+        return false;
+    };
+    resolve_struct_type(&key) == resolve_struct_type(&value)
+}
+
+fn retain_named_call_evaluation_order(typed: TypedExpr, plan: &CallArgumentPlan) -> TypedExpr {
+    if !plan.is_named {
+        return typed;
+    }
+    let TypedExpr { expr, ty } = typed;
+    let expr = match expr {
+        ExprKind::Call { name, args } if args.len() == plan.ordered.len() => ExprKind::NamedCall {
+            name,
+            args,
+            evaluation_order: plan.evaluation_order.clone(),
+        },
+        // Some compiler-owned test intrinsics consume literal selector
+        // arguments into the canonical callee name. Those total literals no
+        // longer have runtime slots, so the source permutation cannot be
+        // transferred to the smaller internal call and is unnecessary.
+        other => other,
+    };
+    TypedExpr { expr, ty }
+}
+
 pub(crate) fn is_numeric_type(ty: &Type) -> bool {
     numeric_kind(ty).is_some()
 }
@@ -2189,7 +4165,7 @@ fn numeric_result_type(lhs: &Type, rhs: &Type) -> Option<Type> {
 }
 
 fn literal_i64(expr: &TypedExpr) -> Option<i64> {
-    match &expr.expr {
+    match expr.kind() {
         ExprKind::Number(n) => Some(*n),
         ExprKind::NumericCast { expr } => literal_i64(expr),
         ExprKind::Unary {
@@ -2207,6 +4183,7 @@ fn require_same_numeric_type(expr: &TypedExpr, expected: &Type) -> Result<(), Se
         return Ok(());
     }
     Err(SemanticError {
+        code: "K2003",
         message: format!(
             "numeric type mismatch: expected {}, got {}; implicit conversions are not part of Kotodama V1",
             type_name(&expected),
@@ -2228,11 +4205,13 @@ fn explicit_numeric_conversion(
     Some((|| {
         if args.len() != 1 || resolve_struct_type(&args[0].ty) != source {
             return Err(SemanticError {
+                code: "K2003",
                 message: format!("{name} expects exactly one {} argument", type_name(&source)),
             });
         }
         if matches!(source, Type::Int) && literal_i64(&args[0]).is_some_and(|value| value < 0) {
             return Err(SemanticError {
+                code: "E_NEGATIVE_CONVERSION",
                 message: format!("{name} cannot convert a negative i64"),
             });
         }
@@ -2258,7 +4237,131 @@ fn is_supported_durable_value_type(ty: &Type) -> bool {
         Type::Result(ok, err) => {
             is_supported_durable_value_type(&ok) && is_supported_durable_value_type(&err)
         }
+        Type::List(element, _) => is_supported_durable_value_type(&element),
         _ => false,
+    }
+}
+
+fn list_element_contains_resource_handle(ty: &Type) -> bool {
+    match resolve_struct_type(ty) {
+        Type::Secret(_) | Type::StateMap(_, _) | Type::AssetHandle => true,
+        Type::List(element, _) | Type::Option(element) => {
+            list_element_contains_resource_handle(&element)
+        }
+        Type::Result(ok, err) => {
+            list_element_contains_resource_handle(&ok)
+                || list_element_contains_resource_handle(&err)
+        }
+        Type::Tuple(items) => items.iter().any(list_element_contains_resource_handle),
+        Type::Struct { fields, .. } => fields
+            .iter()
+            .any(|(_, field)| list_element_contains_resource_handle(field)),
+        _ => false,
+    }
+}
+
+/// Return the recursively flattened V1 function-ABI word count for one value type.
+pub(crate) fn runtime_value_word_count(ty: &Type) -> Option<usize> {
+    match resolve_struct_type(ty) {
+        Type::Struct { fields, .. } => fields.into_iter().try_fold(0_usize, |total, (_, ty)| {
+            total.checked_add(runtime_value_word_count(&ty)?)
+        }),
+        Type::Tuple(items) => items.into_iter().try_fold(0_usize, |total, ty| {
+            total.checked_add(runtime_value_word_count(&ty)?)
+        }),
+        Type::NamedStruct(_) => None,
+        // Every scalar and every compiler-owned Option, Result, or List handle
+        // occupies exactly one function-ABI word. Product types are the only
+        // shapes that can flatten to zero words in V1.
+        _ => Some(1),
+    }
+}
+
+fn zero_sized_list_element(ty: &Type) -> Option<Type> {
+    match resolve_struct_type(ty) {
+        Type::List(element, _) => {
+            let element = *element;
+            if runtime_value_word_count(&element) == Some(0) {
+                Some(element)
+            } else {
+                zero_sized_list_element(&element)
+            }
+        }
+        Type::Struct { fields, .. } => fields
+            .into_iter()
+            .find_map(|(_, field)| zero_sized_list_element(&field)),
+        Type::Tuple(items) => items
+            .into_iter()
+            .find_map(|item| zero_sized_list_element(&item)),
+        Type::Option(inner) | Type::Secret(inner) => zero_sized_list_element(&inner),
+        Type::Result(ok, err) | Type::StateMap(ok, err) => {
+            zero_sized_list_element(&ok).or_else(|| zero_sized_list_element(&err))
+        }
+        _ => None,
+    }
+}
+
+fn validate_list_schemas(ty: &Type) -> Result<(), SemanticError> {
+    let Some(element) = zero_sized_list_element(ty) else {
+        return Ok(());
+    };
+    Err(SemanticError {
+        code: "E_LIST_ZERO_SIZED_ELEMENT",
+        message: format!(
+            "List element type `{}` encodes to zero runtime words; add at least one runtime-valued field because List elements must encode at least one word",
+            type_name(&element)
+        ),
+    })
+}
+
+fn validate_declared_struct_list_schemas(context: &SemanticContext) -> Result<(), SemanticError> {
+    let structs = context.structs.borrow();
+    let mut names = structs.keys().collect::<Vec<_>>();
+    names.sort();
+    for name in names {
+        let fields = structs
+            .get(name)
+            .expect("collected struct name remains in the declaration table");
+        for (_, field) in fields {
+            validate_list_schemas(field)?;
+        }
+    }
+    Ok(())
+}
+
+fn list_element_is_comparable(ty: &Type) -> bool {
+    match resolve_struct_type(ty) {
+        Type::Struct { fields, .. } => fields
+            .iter()
+            .all(|(_, field)| list_element_is_comparable(field)),
+        Type::Tuple(items) => items.iter().all(list_element_is_comparable),
+        Type::Option(inner) | Type::List(inner, _) => list_element_is_comparable(&inner),
+        Type::Result(ok, err) => {
+            list_element_is_comparable(&ok) && list_element_is_comparable(&err)
+        }
+        Type::Unit
+        | Type::Secret(_)
+        | Type::StateMap(_, _)
+        | Type::AssetHandle
+        | Type::NamedStruct(_) => false,
+        Type::Int
+        | Type::FixedU128
+        | Type::Amount
+        | Type::Bool
+        | Type::String
+        | Type::Bytes
+        | Type::DataSpaceId
+        | Type::AxtDescriptor
+        | Type::ProofBlob
+        | Type::SoracloudRequest
+        | Type::SoracloudResponse
+        | Type::AccountId
+        | Type::AssetDefinitionId
+        | Type::AssetId
+        | Type::NftId
+        | Type::DomainId
+        | Type::Name
+        | Type::Json => true,
     }
 }
 
@@ -2286,6 +4389,7 @@ fn is_supported_public_argument_type(ty: &Type) -> bool {
         Type::Result(ok, err) => {
             is_supported_public_argument_type(&ok) && is_supported_public_argument_type(&err)
         }
+        Type::List(element, _) => is_supported_public_argument_type(&element),
         Type::Unit
         | Type::Secret(_)
         | Type::StateMap(_, _)
@@ -2326,6 +4430,7 @@ fn ensure_in_memory_map_word_types(
     if let Type::StateMap(k, v) = resolve_struct_type(&map_expr.ty) {
         if !is_in_memory_map_word_type(&k) {
             return Err(SemanticError {
+                code: "K2003",
                 message: format!(
                     "ephemeral map key type `{}` is not supported; use i64, bool, string, bytes, Json, or typed Iroha IDs",
                     type_name(&k)
@@ -2334,6 +4439,7 @@ fn ensure_in_memory_map_word_types(
         }
         if !is_in_memory_map_word_type(&v) {
             return Err(SemanticError {
+                code: "K2003",
                 message: format!(
                     "ephemeral map value type `{}` is not supported; use i64, bool, string, bytes, Json, or typed Iroha IDs",
                     type_name(&v)
@@ -2351,15 +4457,16 @@ fn validate_state_type(ty: &Type) -> Result<(), SemanticError> {
 fn validate_state_type_inner(ty: &Type, allow_map: bool) -> Result<(), SemanticError> {
     if crate::secret::type_contains_secret(ty) {
         return Err(SemanticError {
-            message:
-                "E_SECRET_STATE_TYPE: durable state cannot contain Secret<T>; private inputs are execution-local"
-                    .into(),
+            code: "E_SECRET_STATE_TYPE",
+            message: "durable state cannot contain Secret<T>; private inputs are execution-local"
+                .into(),
         });
     }
     match resolve_struct_type(ty) {
         Type::StateMap(k, v) => {
             if !allow_map {
                 return Err(SemanticError {
+                    code: "K2005",
                     message:
                         "nested StateMap is not supported in Kotodama V1; declare each StateMap as top-level state"
                             .into(),
@@ -2367,6 +4474,7 @@ fn validate_state_type_inner(ty: &Type, allow_map: bool) -> Result<(), SemanticE
             }
             if !is_supported_durable_key_type(&k) {
                 return Err(SemanticError {
+                    code: "E_STATE_MAP_KEY_TYPE",
                     message: format!(
                         "StateMap key type `{}` is not supported for durable storage; use a scalar canonical-Norito type",
                         type_name(&k)
@@ -2375,6 +4483,7 @@ fn validate_state_type_inner(ty: &Type, allow_map: bool) -> Result<(), SemanticE
             }
             if !is_supported_durable_value_type(&v) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "StateMap value type `{}` is not supported for durable storage; use a canonical V1 value type",
                         type_name(&v)
@@ -2400,6 +4509,7 @@ fn validate_state_type_inner(ty: &Type, allow_map: bool) -> Result<(), SemanticE
                 Ok(())
             } else {
                 Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "state type `{}` is not supported for durable storage; use i64, u128, Amount, bool, Json, bytes, typed Iroha IDs, or aggregate V1 types",
                         type_name(&other)
@@ -2478,6 +4588,7 @@ fn is_transfer_batch_entry_tuple(ty: &Type) -> bool {
 fn ensure_transfer_batch_args(args: &[TypedExpr]) -> Result<(), SemanticError> {
     if args.is_empty() {
         return Err(SemanticError {
+            code: "K2003",
             message: "transfer_batch expects at least one entry".into(),
         });
     }
@@ -2488,6 +4599,7 @@ fn ensure_transfer_batch_args(args: &[TypedExpr]) -> Result<(), SemanticError> {
         return Ok(());
     }
     Err(SemanticError {
+        code: "K2003",
         message: format!("transfer_batch expects {}", TRANSFER_BATCH_SIGNATURE),
     })
 }
@@ -2535,7 +4647,7 @@ fn bind_tuple_fields_rec(
     if let Type::Tuple(elements) = resolve_struct_type(ty) {
         for (idx, elem_ty) in elements.iter().enumerate() {
             let resolved_elem_ty = resolve_struct_type(elem_ty);
-            let element_expr = if let ExprKind::Tuple(items) = &base_expr.expr {
+            let element_expr = if let ExprKind::Tuple(items) = base_expr.kind() {
                 if let Some(item) = items.get(idx) {
                     item.clone()
                 } else {
@@ -2572,12 +4684,15 @@ fn analyze_function(
     context: &SemanticContext,
     func: &Function,
 ) -> Result<TypedFunction, SemanticError> {
+    context.discard_diagnostic();
+    context.required_list_capacity.borrow_mut().take();
     if matches!(
         func.modifiers.kind,
-        FunctionKind::Init | FunctionKind::Upgrade
+        FunctionKind::Hajimari | FunctionKind::Kaizen
     ) && func.modifiers.permission.is_some()
     {
         return Err(SemanticError {
+            code: "E_LIFECYCLE_AUTHORIZATION",
             message: format!(
                 "lifecycle function `{}` cannot declare caller authorization; lifecycle authorization is runtime-defined",
                 func.name
@@ -2587,24 +4702,22 @@ fn analyze_function(
     if func.modifiers.is_test {
         if !func.params.is_empty() {
             return Err(SemanticError {
+                code: "E_TEST_FUNCTION_SIGNATURE",
                 message: format!("test function `{}` must not declare parameters", func.name),
             });
         }
         if func.ret_ty.is_some() {
             return Err(SemanticError {
+                code: "K2003",
                 message: format!(
                     "test function `{}` must not declare a return type",
                     func.name
                 ),
             });
         }
-        if func.modifiers.visibility != FunctionVisibility::Internal
-            || !matches!(
-                func.modifiers.kind,
-                FunctionKind::Free | FunctionKind::Contract
-            )
-        {
+        if func.modifiers.kind != FunctionKind::Private {
             return Err(SemanticError {
+                code: "E_TEST_FUNCTION_SIGNATURE",
                 message: format!(
                     "test function `{}` must be declared as a local `fn`",
                     func.name
@@ -2613,6 +4726,7 @@ fn analyze_function(
         }
         if func.modifiers.permission.is_some() {
             return Err(SemanticError {
+                code: "K2004",
                 message: format!(
                     "test function `{}` cannot declare a permission modifier",
                     func.name
@@ -2624,7 +4738,7 @@ fn analyze_function(
     let mut mutable_bindings = HashSet::new();
     let mut param_names = Vec::new();
     let mut param_types = Vec::new();
-    // Seed variable environment with contract-level state declarations so
+    // Seed variable environment with seiyaku-level state declarations so
     // functions can reference `state` names directly.
     {
         let states = context.states.borrow();
@@ -2644,6 +4758,23 @@ fn analyze_function(
         param_types.push(typed_param);
     }
     let expected_ret = parse_declared_type(context, &func.ret_ty)?;
+    if func.modifiers.kind != FunctionKind::Private
+        && expected_ret
+            .as_ref()
+            .is_some_and(crate::secret::type_contains_secret)
+    {
+        context.capture_diagnostic(
+            func.ret_ty.as_ref().and_then(|ty| context.type_source(ty)),
+            None,
+        );
+        return Err(SemanticError {
+            code: "E_SECRET_PUBLIC_RETURN",
+            message: format!(
+                "externally callable `{}` cannot return Secret<T>; return an approved commitment or proof result",
+                func.name
+            ),
+        });
+    }
     let previous_modifiers = context
         .current_function_modifiers
         .borrow_mut()
@@ -2652,26 +4783,33 @@ fn analyze_function(
         .current_function_name
         .borrow_mut()
         .replace(func.name.clone());
+    let previous_mutable_bindings =
+        std::mem::take(&mut *context.current_mutable_bindings.borrow_mut());
     let previous_state_params = std::mem::replace(
         &mut *context.current_state_param_names.borrow_mut(),
         state_param_names.clone(),
     );
+    let unit_return = Type::Unit;
+    let expected_tail = expected_ret.as_ref().unwrap_or(&unit_return);
     let body_result = analyze_block(
         context,
         &func.body,
         &mut vars,
         &mut mutable_bindings,
         expected_ret.as_ref(),
+        Some(expected_tail),
         0,
     );
     *context.current_function_modifiers.borrow_mut() = previous_modifiers;
     *context.current_function_name.borrow_mut() = previous_name;
+    *context.current_mutable_bindings.borrow_mut() = previous_mutable_bindings;
     *context.current_state_param_names.borrow_mut() = previous_state_params;
     let body = body_result?;
     // Enforce declared return coverage and shape
     if let Some(t) = &expected_ret {
         if *t != Type::Unit && !block_returns_all_paths(&func.body) {
             return Err(SemanticError {
+                code: "E_MISSING_RETURN",
                 message: "not all paths return a value".into(),
             });
         }
@@ -2679,6 +4817,7 @@ fn analyze_function(
         // No declared return type: disallow returning a value to avoid ambiguity
         if block_has_return_value(&func.body) {
             return Err(SemanticError {
+                code: "K2003",
                 message: "function returns a value but has no declared return type".into(),
             });
         }
@@ -2703,6 +4842,8 @@ fn analyze_function(
         ret_ty: expected_ret,
         modifiers: func.modifiers.clone(),
         location: func.location,
+        source: None,
+        name_source: None,
     })
 }
 
@@ -2711,15 +4852,16 @@ fn reject_public_trigger_event(context: &SemanticContext, name: &str) -> Result<
         .current_function_modifiers
         .borrow()
         .as_ref()
-        .is_some_and(|modifiers| {
-            if modifiers.kind == FunctionKind::View {
-                return true;
+        .is_some_and(|modifiers| match modifiers.kind {
+            FunctionKind::View => true,
+            FunctionKind::Kotoage | FunctionKind::Hajimari | FunctionKind::Kaizen => {
+                !current_public_trigger_callback_allows_payload_helper(context)
             }
-            modifiers.visibility == FunctionVisibility::Public
-                && !current_public_trigger_callback_allows_payload_helper(context)
+            FunctionKind::Private => false,
         });
     if forbidden {
         return Err(SemanticError {
+            code: "K2003",
             message: format!(
                 "public and view entrypoints cannot use `{name}` here; declare typed parameters instead"
             ),
@@ -2748,19 +4890,23 @@ fn current_function_is_test(context: &SemanticContext) -> bool {
 }
 
 fn function_is_runtime_entrypoint(modifiers: &FunctionModifiers) -> bool {
-    modifiers.visibility == FunctionVisibility::Public
-        || matches!(
-            modifiers.kind,
-            FunctionKind::View | FunctionKind::Init | FunctionKind::Upgrade
-        )
+    modifiers.kind != FunctionKind::Private
 }
 
 fn invoke_entrypoint_literal(expr: &Expr) -> Option<String> {
     match expr {
+        Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
+            invoke_entrypoint_literal(expression)
+        }
         Expr::String(raw) => Some(raw.clone()),
-        Expr::Call { name, args } if normalize_namespaced(name) == "name" && args.len() == 1 => {
-            match &args[0] {
+        Expr::Call { name, args, .. }
+            if normalize_namespaced(name) == "name" && args.len() == 1 =>
+        {
+            match args[0].kind() {
                 Expr::String(raw) => Some(raw.clone()),
+                Expr::Source { .. } | Expr::Resolved { .. } => {
+                    unreachable!("kind() strips provenance wrappers")
+                }
                 _ => None,
             }
         }
@@ -2781,16 +4927,19 @@ fn validate_require_error_variant(
 ) -> Result<(), SemanticError> {
     if args.len() != 2 {
         return Err(SemanticError {
+            code: "K2003",
             message: "require expects (bool, ErrorEnum::Variant)".into(),
         });
     }
-    let Expr::Ident(error_variant) = &args[1] else {
+    let Expr::Ident(error_variant) = args[1].kind() else {
         return Err(SemanticError {
+            code: "K2003",
             message: "require expects a declared error variant as its second argument".into(),
         });
     };
     if !context.error_codes.borrow().contains_key(error_variant) {
         return Err(SemanticError {
+            code: "K2002",
             message: format!("unknown error variant `{error_variant}`"),
         });
     }
@@ -2804,17 +4953,20 @@ fn analyze_invoke_entrypoint_call(
 ) -> Result<TypedExpr, SemanticError> {
     if !current_function_is_test(context) {
         return Err(SemanticError {
+            code: "E_TEST_BUILTIN_CONTEXT",
             message: "`invoke_entrypoint` is only available inside #[test] Kotodama functions"
                 .into(),
         });
     }
     if args.len() != 2 {
         return Err(SemanticError {
+            code: "K2003",
             message: "invoke_entrypoint expects (string|Name literal, Json)".into(),
         });
     }
 
     let target_name = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        code: "E_TEST_ENTRYPOINT_LITERAL",
         message:
             "invoke_entrypoint requires a literal entrypoint name such as \"run\" or Name::parse(\"run\")"
                 .into(),
@@ -2822,6 +4974,7 @@ fn analyze_invoke_entrypoint_call(
     let payload = analyze_expr(context, &args[1], vars)?;
     if payload.ty != Type::Json {
         return Err(SemanticError {
+            code: "K2003",
             message: "invoke_entrypoint expects a Json payload as its second argument".into(),
         });
     }
@@ -2833,11 +4986,13 @@ fn analyze_invoke_entrypoint_call(
         .cloned()
     else {
         return Err(SemanticError {
+            code: "K2002",
             message: format!("invoke_entrypoint targets unknown function `{target_name}`"),
         });
     };
     if !function_is_runtime_entrypoint(&modifiers) {
         return Err(SemanticError {
+            code: "E_TEST_ENTRYPOINT_KIND",
             message: format!(
                 "invoke_entrypoint may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
             ),
@@ -2871,11 +5026,13 @@ fn runtime_entrypoint_return_type(
         .cloned()
     else {
         return Err(SemanticError {
+            code: "K2002",
             message: format!("unknown runtime entrypoint `{target_name}`"),
         });
     };
     if !function_is_runtime_entrypoint(&modifiers) {
         return Err(SemanticError {
+            code: "E_TEST_ENTRYPOINT_KIND",
             message: format!(
                 "runtime test helpers may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
             ),
@@ -2896,24 +5053,29 @@ fn analyze_invoke_entrypoint_as_call(
 ) -> Result<TypedExpr, SemanticError> {
     if !current_function_is_test(context) {
         return Err(SemanticError {
+            code: "E_TEST_BUILTIN_CONTEXT",
             message: "`invoke_entrypoint_as` is only available inside #[test] Kotodama functions"
                 .into(),
         });
     }
     if args.len() != 3 {
         return Err(SemanticError {
+            code: "K2003",
             message: "invoke_entrypoint_as expects (string|Name literal actor, string|Name literal entrypoint, Json)".into(),
         });
     }
     let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        code: "E_TEST_ACTOR_LITERAL",
         message: "invoke_entrypoint_as requires a literal actor alias such as \"issuer\" or Name::parse(\"issuer\")".into(),
     })?;
     let target_name = invoke_entrypoint_literal(&args[1]).ok_or_else(|| SemanticError {
+        code: "E_TEST_ENTRYPOINT_LITERAL",
         message: "invoke_entrypoint_as requires a literal entrypoint name such as \"run\" or Name::parse(\"run\")".into(),
     })?;
     let payload = analyze_expr(context, &args[2], vars)?;
     if payload.ty != Type::Json {
         return Err(SemanticError {
+            code: "K2003",
             message: "invoke_entrypoint_as expects a Json payload as its third argument".into(),
         });
     }
@@ -2939,21 +5101,25 @@ fn analyze_expect_reject_as_call(
 ) -> Result<TypedExpr, SemanticError> {
     if !current_function_is_test(context) {
         return Err(SemanticError {
+            code: "E_TEST_BUILTIN_CONTEXT",
             message: "`expect_reject_as` is only available inside #[test] Kotodama functions"
                 .into(),
         });
     }
     if args.len() != 3 {
         return Err(SemanticError {
+            code: "K2003",
             message: "expect_reject_as expects (string|Name literal actor, string|Name literal entrypoint, Json)".into(),
         });
     }
     let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        code: "E_TEST_ACTOR_LITERAL",
         message:
             "expect_reject_as requires a literal actor alias such as \"issuer\" or Name::parse(\"issuer\")"
                 .into(),
     })?;
     let target_name = invoke_entrypoint_literal(&args[1]).ok_or_else(|| SemanticError {
+        code: "E_TEST_ENTRYPOINT_LITERAL",
         message:
             "expect_reject_as requires a literal entrypoint name such as \"run\" or Name::parse(\"run\")"
                 .into(),
@@ -2961,6 +5127,7 @@ fn analyze_expect_reject_as_call(
     let payload = analyze_expr(context, &args[2], vars)?;
     if payload.ty != Type::Json {
         return Err(SemanticError {
+            code: "K2003",
             message: "expect_reject_as expects a Json payload as its third argument".into(),
         });
     }
@@ -2985,15 +5152,18 @@ fn analyze_actor_account_call(
 ) -> Result<TypedExpr, SemanticError> {
     if !current_function_is_test(context) {
         return Err(SemanticError {
+            code: "E_TEST_BUILTIN_CONTEXT",
             message: "`actor_account` is only available inside #[test] Kotodama functions".into(),
         });
     }
     if args.len() != 1 {
         return Err(SemanticError {
+            code: "K2003",
             message: "actor_account expects (string|Name literal actor)".into(),
         });
     }
     let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        code: "E_TEST_ACTOR_LITERAL",
         message:
             "actor_account requires a literal actor alias such as \"issuer\" or Name::parse(\"issuer\")"
                 .into(),
@@ -3013,16 +5183,19 @@ fn analyze_actor_public_key_call(
 ) -> Result<TypedExpr, SemanticError> {
     if !current_function_is_test(context) {
         return Err(SemanticError {
+            code: "E_TEST_BUILTIN_CONTEXT",
             message: "`actor_public_key` is only available inside #[test] Kotodama functions"
                 .into(),
         });
     }
     if args.len() != 1 {
         return Err(SemanticError {
+            code: "K2003",
             message: "actor_public_key expects (string|Name literal actor)".into(),
         });
     }
     let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        code: "E_TEST_ACTOR_LITERAL",
         message:
             "actor_public_key requires a literal actor alias such as \"issuer\" or Name::parse(\"issuer\")"
                 .into(),
@@ -3043,21 +5216,25 @@ fn analyze_actor_sign_call(
 ) -> Result<TypedExpr, SemanticError> {
     if !current_function_is_test(context) {
         return Err(SemanticError {
+            code: "E_TEST_BUILTIN_CONTEXT",
             message: "`actor_sign` is only available inside #[test] Kotodama functions".into(),
         });
     }
     if args.len() != 2 {
         return Err(SemanticError {
+            code: "K2003",
             message: "actor_sign expects (string|Name literal actor, bytes)".into(),
         });
     }
     let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        code: "E_TEST_ACTOR_LITERAL",
         message: "actor_sign requires a literal actor alias such as \"issuer\" or Name::parse(\"issuer\")"
             .into(),
     })?;
     let message = analyze_expr(context, &args[1], vars)?;
     if !is_blob_like(&message.ty) {
         return Err(SemanticError {
+            code: "K2003",
             message: "actor_sign expects the message as bytes".into(),
         });
     }
@@ -3076,6 +5253,7 @@ fn analyze_block(
     vars: &mut HashMap<String, Type>,
     mutable_bindings: &mut HashSet<String>,
     expected_ret: Option<&Type>,
+    expected_tail: Option<&Type>,
     loop_depth: usize,
 ) -> Result<TypedBlock, SemanticError> {
     let _ = loop_depth;
@@ -3091,7 +5269,20 @@ fn analyze_block(
         )?;
         statements.append(&mut v);
     }
-    Ok(TypedBlock { statements })
+    let tail = if let Some(expression) = &block.tail {
+        let mut typed = analyze_expr_expected(context, expression, vars, expected_tail)?;
+        if let Some(expected) = expected_tail
+            && let Err(mut error) = ensure_assignable_and_coerce(expected, &mut typed)
+        {
+            error.code = "E_TAIL_TYPE_MISMATCH";
+            error.message = format!("block tail type mismatch: {}", error.message);
+            return Err(error);
+        }
+        Some(Box::new(typed))
+    } else {
+        None
+    };
+    Ok(TypedBlock { statements, tail })
 }
 
 fn validate_v1_bounded_for_shape(
@@ -3099,57 +5290,91 @@ fn validate_v1_bounded_for_shape(
     cond: &Option<Expr>,
     step: &Option<Box<Statement>>,
 ) -> Result<(), SemanticError> {
-    let Some(Statement::Let {
-        mutable: true,
-        pat: Pattern::Name(variable),
-        ty: None,
-        value: Expr::Number(0),
-    }) = init.as_deref()
-    else {
+    let Some(init) = init.as_deref() else {
         return Err(SemanticError {
-            message: "E_UNBOUNDED_LOOP: only `for item in range(non_negative_literal)` is supported in Kotodama V1"
+            code: "E_UNBOUNDED_LOOP",
+            message: "only `for item in range(non_negative_literal)` is supported in Kotodama V1"
                 .into(),
         });
     };
-    let Some(Expr::Binary {
+    let Statement::Let {
+        mutable: true,
+        pat: Pattern::Name(variable),
+        ty: None,
+        value,
+    } = init.kind()
+    else {
+        return Err(SemanticError {
+            code: "E_UNBOUNDED_LOOP",
+            message: "only `for item in range(non_negative_literal)` is supported in Kotodama V1"
+                .into(),
+        });
+    };
+    if !matches!(value.kind(), Expr::Number(0)) {
+        return Err(SemanticError {
+            code: "E_UNBOUNDED_LOOP",
+            message: "range loops must start from zero".into(),
+        });
+    }
+    let Some(cond) = cond.as_ref() else {
+        return Err(SemanticError {
+            code: "E_UNBOUNDED_LOOP",
+            message: "bounded range loop is missing its compiler-proven condition".into(),
+        });
+    };
+    let Expr::Binary {
         op: BinaryOp::Lt,
         left,
         right,
-    }) = cond
+    } = cond.kind()
     else {
         return Err(SemanticError {
-            message:
-                "E_UNBOUNDED_LOOP: bounded range loop is missing its compiler-proven condition"
-                    .into(),
+            code: "E_UNBOUNDED_LOOP",
+            message: "bounded range loop is missing its compiler-proven condition".into(),
         });
     };
-    if !matches!(left.as_ref(), Expr::Ident(name) if name == variable)
-        || !matches!(right.as_ref(), Expr::Number(value) if *value >= 0)
+    if !matches!(left.kind(), Expr::Ident(name) if name == variable)
+        || !matches!(right.kind(), Expr::Number(value) if *value >= 0)
     {
         return Err(SemanticError {
-            message: "E_UNBOUNDED_LOOP: range bounds must be non-negative integer literals".into(),
+            code: "E_UNBOUNDED_LOOP",
+            message: "range bounds must be non-negative integer literals".into(),
         });
     }
-    let Some(Statement::Assign {
+    let Some(step) = step.as_deref() else {
+        return Err(SemanticError {
+            code: "E_UNBOUNDED_LOOP",
+            message: "bounded range loop is missing its canonical step".into(),
+        });
+    };
+    let Statement::Assign {
         name,
-        value:
-            Expr::Binary {
-                op: BinaryOp::Add,
-                left: step_left,
-                right: step_right,
-            },
-    }) = step.as_deref()
+        value: step_value,
+    } = step.kind()
     else {
         return Err(SemanticError {
-            message: "E_UNBOUNDED_LOOP: bounded range loop is missing its canonical step".into(),
+            code: "E_UNBOUNDED_LOOP",
+            message: "bounded range loop is missing its canonical step".into(),
+        });
+    };
+    let Expr::Binary {
+        op: BinaryOp::Add,
+        left: step_left,
+        right: step_right,
+    } = step_value.kind()
+    else {
+        return Err(SemanticError {
+            code: "E_UNBOUNDED_LOOP",
+            message: "bounded range loop is missing its canonical increment".into(),
         });
     };
     if name != variable
-        || !matches!(step_left.as_ref(), Expr::Ident(name) if name == variable)
-        || !matches!(step_right.as_ref(), Expr::Number(1))
+        || !matches!(step_left.kind(), Expr::Ident(name) if name == variable)
+        || !matches!(step_right.kind(), Expr::Number(1))
     {
         return Err(SemanticError {
-            message: "E_UNBOUNDED_LOOP: range loop control variables cannot be rewritten".into(),
+            code: "E_UNBOUNDED_LOOP",
+            message: "range loop control variables cannot be rewritten".into(),
         });
     }
     Ok(())
@@ -3163,23 +5388,101 @@ fn analyze_statement(
     expected_ret: Option<&Type>,
     loop_depth: usize,
 ) -> Result<Vec<TypedStatement>, SemanticError> {
+    let result = analyze_statement_inner(
+        context,
+        stmt,
+        vars,
+        mutable_bindings,
+        expected_ret,
+        loop_depth,
+    );
+    if result.is_err() {
+        context.capture_statement_diagnostic(stmt, None);
+    }
+    result
+}
+
+fn analyze_statement_inner(
+    context: &SemanticContext,
+    stmt: &Statement,
+    vars: &mut HashMap<String, Type>,
+    mutable_bindings: &mut HashSet<String>,
+    expected_ret: Option<&Type>,
+    loop_depth: usize,
+) -> Result<Vec<TypedStatement>, SemanticError> {
     let _ = loop_depth;
-    match stmt {
+    let kind = stmt.kind();
+    let statement_node = context.validate_statement_node(stmt)?;
+    if !matches!(kind, Statement::Assign { .. })
+        && statement_node
+            .as_ref()
+            .is_some_and(|node| node.target.is_some())
+    {
+        return Err(SemanticError {
+            code: "E_INTERNAL_RESOLUTION",
+            message: "non-assignment statement carries a resolver assignment target".into(),
+        });
+    }
+    match kind {
+        Statement::Source { .. } | Statement::Resolved { .. } => {
+            unreachable!("kind() strips AST and resolved-HIR provenance wrappers")
+        }
         Statement::Let {
             mutable,
             pat,
             ty,
             value,
         } => {
-            let mut expr = analyze_expr(context, value, vars)?;
-            if let Some(tann) = ty {
-                let dt = convert_type_expr(context, tann)?;
-                apply_map_new_type_hint(&mut expr, &dt);
-                ensure_assignable_and_coerce(&dt, &mut expr)?;
+            let declared = ty
+                .as_ref()
+                .map(|annotation| convert_type_expr(context, annotation))
+                .transpose()?
+                .map(|ty| resolve_struct_type_with_context(context, &ty));
+            if let Some(declared) = &declared {
+                validate_list_schemas(declared)?;
+            }
+            let mut expr = match analyze_expr_expected(context, value, vars, declared.as_ref()) {
+                Ok(expression) => expression,
+                Err(error) => {
+                    if error.code == "E_LIST_COMPREHENSION_CAPACITY"
+                        && matches!(value.kind(), Expr::ListComprehension { .. })
+                        && let (Some(annotation), Some(Type::List(element, _)), Some(capacity)) = (
+                            ty.as_ref(),
+                            declared.as_ref(),
+                            context.required_list_capacity.borrow_mut().take(),
+                        )
+                    {
+                        let replacement =
+                            render_source_type_name(&Type::List(element.clone(), capacity));
+                        context.replace_diagnostic(
+                            context.type_source(annotation),
+                            Some(crate::semantic_diagnostics::SemanticFix::Replace { replacement }),
+                        );
+                    }
+                    return Err(error);
+                }
+            };
+            if let Some(dt) = &declared {
+                apply_map_new_type_hint(&mut expr, dt);
+                if let Err(error) = ensure_assignable_and_coerce(dt, &mut expr) {
+                    if error.code == "E_QUERY_RESULT_TYPE"
+                        && let Some(annotation) = ty.as_ref()
+                    {
+                        context.replace_diagnostic(
+                            context.type_source(annotation),
+                            Some(crate::semantic_diagnostics::SemanticFix::Replace {
+                                replacement: render_source_type_name(&expr.ty),
+                            }),
+                        );
+                    }
+                    return Err(error);
+                }
             }
             if is_state_map_expr(context, &expr) {
                 return Err(SemanticError {
-                    message: "E_STATE_MAP_ALIAS: state maps are not first-class; use the state identifier directly.".into(),
+                    code: "E_STATE_MAP_ALIAS",
+                    message: "state maps are not first-class; use the state identifier directly."
+                        .into(),
                 });
             }
             match pat {
@@ -3196,6 +5499,10 @@ fn analyze_statement(
                     vars.insert(name.clone(), expr.ty.clone());
                     if *mutable {
                         mutable_bindings.insert(name.clone());
+                        context
+                            .current_mutable_bindings
+                            .borrow_mut()
+                            .insert(name.clone());
                     }
                     out.push(TypedStatement::Let {
                         name: name.clone(),
@@ -3207,21 +5514,20 @@ fn analyze_statement(
                         }
                         Type::Struct { fields, .. } => {
                             for (i, (_fname, fty)) in fields.iter().enumerate() {
-                                // If the RHS is a struct constructor (tuple of field exprs), bind directly.
-                                let val_expr = if let ExprKind::Tuple(ts) = &expr.expr {
-                                    ts.get(i).cloned().unwrap_or(TypedExpr {
-                                        expr: ExprKind::Number(0),
-                                        ty: fty.clone(),
-                                    })
-                                } else {
-                                    TypedExpr {
-                                        expr: ExprKind::Member {
-                                            object: Box::new(expr.clone()),
-                                            field: i.to_string(),
-                                        },
-                                        ty: fty.clone(),
+                                let direct = match expr.kind() {
+                                    ExprKind::Tuple(values) => values.get(i),
+                                    ExprKind::StructLiteral { fields, .. } => {
+                                        fields.get(i).map(|(_, value)| value)
                                     }
+                                    _ => None,
                                 };
+                                let val_expr = direct.cloned().unwrap_or_else(|| TypedExpr {
+                                    expr: ExprKind::Member {
+                                        object: Box::new(expr.clone()),
+                                        field: i.to_string(),
+                                    },
+                                    ty: fty.clone(),
+                                });
                                 let sname = format!("{name}#{i}");
                                 let field_ty = resolve_struct_type(fty);
                                 vars.insert(sname.clone(), field_ty.clone());
@@ -3249,6 +5555,7 @@ fn analyze_statement(
                     for name in names {
                         if name != "_" && !unique_names.insert(name) {
                             return Err(SemanticError {
+                                code: "K2001",
                                 message: format!(
                                     "duplicate binding `{name}` in destructuring declaration"
                                 ),
@@ -3259,6 +5566,7 @@ fn analyze_statement(
                         Type::Tuple(ts) => {
                             if names.len() != ts.len() {
                                 return Err(SemanticError {
+                                    code: "K2003",
                                     message: format!(
                                         "tuple destructuring expects {} bindings, got {}",
                                         ts.len(),
@@ -3280,6 +5588,10 @@ fn analyze_statement(
                                     vars.insert(name.clone(), ti.clone());
                                     if *mutable {
                                         mutable_bindings.insert(name.clone());
+                                        context
+                                            .current_mutable_bindings
+                                            .borrow_mut()
+                                            .insert(name.clone());
                                     }
                                 }
                                 out.push(TypedStatement::Let {
@@ -3291,6 +5603,7 @@ fn analyze_statement(
                         Type::Struct { fields, .. } => {
                             if names.len() != fields.len() {
                                 return Err(SemanticError {
+                                    code: "K2003",
                                     message: format!(
                                         "struct destructuring expects {} bindings, got {}",
                                         fields.len(),
@@ -3303,25 +5616,29 @@ fn analyze_statement(
                                     .get(i)
                                     .cloned()
                                     .expect("struct arity already validated");
-                                let val_expr = if let ExprKind::Tuple(ts) = &expr.expr {
-                                    ts.get(i).cloned().unwrap_or(TypedExpr {
-                                        expr: ExprKind::Number(0),
-                                        ty: resolve_struct_type(&ti),
-                                    })
-                                } else {
-                                    TypedExpr {
-                                        expr: ExprKind::Member {
-                                            object: Box::new(expr.clone()),
-                                            field: i.to_string(),
-                                        },
-                                        ty: resolve_struct_type(&ti),
+                                let direct = match expr.kind() {
+                                    ExprKind::Tuple(values) => values.get(i),
+                                    ExprKind::StructLiteral { fields, .. } => {
+                                        fields.get(i).map(|(_, value)| value)
                                     }
+                                    _ => None,
                                 };
+                                let val_expr = direct.cloned().unwrap_or_else(|| TypedExpr {
+                                    expr: ExprKind::Member {
+                                        object: Box::new(expr.clone()),
+                                        field: i.to_string(),
+                                    },
+                                    ty: resolve_struct_type(&ti),
+                                });
                                 let field_ty = resolve_struct_type(&ti);
                                 if name != "_" {
                                     vars.insert(name.clone(), field_ty.clone());
                                     if *mutable {
                                         mutable_bindings.insert(name.clone());
+                                        context
+                                            .current_mutable_bindings
+                                            .borrow_mut()
+                                            .insert(name.clone());
                                     }
                                 }
                                 out.push(TypedStatement::Let {
@@ -3333,6 +5650,7 @@ fn analyze_statement(
                         }
                         _ => {
                             return Err(SemanticError {
+                                code: "K2003",
                                 message: "tuple destructuring expects a tuple or struct".into(),
                             });
                         }
@@ -3342,27 +5660,30 @@ fn analyze_statement(
             }
         }
         Statement::Assign { name, value } => {
+            context.validate_assignment_target(statement_node.as_ref(), name)?;
             // Must exist
             let expected = vars.get(name).cloned().ok_or_else(|| SemanticError {
+                code: "K2002",
                 message: format!("undefined variable {name}"),
             })?;
             if is_state_binding(context, name)
                 && matches!(resolve_struct_type(&expected), Type::StateMap(_, _))
             {
                 return Err(SemanticError {
-                    message:
-                        "E_STATE_MAP_ALIAS: state maps cannot be reassigned; use map indexing."
-                            .into(),
+                    code: "E_STATE_MAP_ALIAS",
+                    message: "state maps cannot be reassigned; use map indexing.".into(),
                 });
             }
             ensure_mutable_assignment_target(context, name, mutable_bindings)?;
-            let mut expr = analyze_expr(context, value, vars)?;
+            let mut expr = analyze_expr_expected(context, value, vars, Some(&expected))?;
             if is_state_binding(context, name) {
                 crate::secret::reject_secret_state_value(&expr)?;
             }
             if is_state_map_expr(context, &expr) {
                 return Err(SemanticError {
-                    message: "E_STATE_MAP_ALIAS: state maps are not first-class; use the state identifier directly.".into(),
+                    code: "E_STATE_MAP_ALIAS",
+                    message: "state maps are not first-class; use the state identifier directly."
+                        .into(),
                 });
             }
             apply_map_new_type_hint(&mut expr, &expected);
@@ -3379,7 +5700,7 @@ fn analyze_statement(
         }
         Statement::AssignExpr { target, op, value } => {
             // support map indexing and simple variable rebinding
-            match target {
+            match target.kind() {
                 Expr::Index { target: map, index } => {
                     let map_t = analyze_expr(context, map, vars)?;
                     let mut key_t = analyze_expr(context, index, vars)?;
@@ -3389,21 +5710,55 @@ fn analyze_statement(
                             ensure_assignable_and_coerce(&k, &mut key_t)?;
                             ensure_in_memory_map_word_types(context, &map_t)?;
                             if *op == AssignOp::Set {
-                                let mut val_t = analyze_expr(context, value, vars)?;
+                                let mut val_t =
+                                    analyze_expr_expected(context, value, vars, Some(&v))?;
                                 crate::secret::reject_secret_state_value(&val_t)?;
                                 ensure_assignable_and_coerce(&v, &mut val_t)?;
                                 return Ok(vec![TypedStatement::MapSet {
                                     map: map_t,
                                     key: key_t,
-                                    value: val_t,
+                                    value: Box::new(val_t),
                                 }]);
                             }
                             Err(SemanticError {
-                                message: "E_STATE_MAP_OPTIONAL_READ: compound StateMap assignment reads a possibly absent key; use `map.get(key)` and handle Option<V> before assigning with `map[key] = value`"
+                                code: "E_STATE_MAP_OPTIONAL_READ",
+                                message: "compound StateMap assignment reads a possibly absent key; use `map.get(key)` and handle Option<V> before assigning with `map[key] = value`"
+                                .into(),
+                            })
+                        }
+                        Type::List(element, _) => {
+                            let receiver_is_mutable = matches!(map.kind(), Expr::Ident(name) if mutable_bindings.contains(name));
+                            let fix = if *op == AssignOp::Set
+                                && receiver_is_mutable
+                                && resolve_struct_type(&key_t.ty) == Type::Int
+                                && context.expression_is_assignable(value, vars, &element)
+                            {
+                                match (
+                                    context.expression_source(map),
+                                    context.expression_source(index),
+                                    context.expression_source(value),
+                                ) {
+                                    (Some(target), Some(index), Some(value)) => {
+                                        Some(crate::semantic_diagnostics::SemanticFix::ListTrySet {
+                                            target,
+                                            index,
+                                            value,
+                                        })
+                                    }
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            };
+                            context.capture_statement_diagnostic(stmt, fix);
+                            Err(SemanticError {
+                                code: "E_LIST_UNSAFE_INDEX",
+                                message: "unchecked List writes are not part of Kotodama V1; use `list.try_set(index: index, value: value)`; its bool result reports whether the mutation occurred"
                                     .into(),
                             })
                         }
                         other => Err(SemanticError {
+                            code: "K2003",
                             message: format!(
                                 "map assignment expects StateMap<K,V> target, got {}",
                                 type_name(&other)
@@ -3412,27 +5767,35 @@ fn analyze_statement(
                     }
                 }
                 Expr::Ident(name) => {
+                    context.validate_value_target(target, name, vars)?;
                     // Simple compound assignment lowering: rebind SSA name
                     let expected = vars.get(name).cloned().ok_or_else(|| SemanticError {
+                        code: "K2002",
                         message: format!("undefined variable {name}"),
                     })?;
                     if is_state_binding(context, name)
                         && matches!(resolve_struct_type(&expected), Type::StateMap(_, _))
                     {
                         return Err(SemanticError {
-                            message:
-                                "E_STATE_MAP_ALIAS: state maps cannot be reassigned; use map indexing."
-                                    .into(),
+                            code: "E_STATE_MAP_ALIAS",
+                            message: "state maps cannot be reassigned; use map indexing.".into(),
                         });
                     }
                     ensure_mutable_assignment_target(context, name, mutable_bindings)?;
-                    let mut expr = analyze_expr(context, value, vars)?;
+                    let mut expr = if *op == AssignOp::Set {
+                        analyze_expr_expected(context, value, vars, Some(&expected))?
+                    } else {
+                        analyze_expr(context, value, vars)?
+                    };
                     if is_state_binding(context, name) {
                         crate::secret::reject_secret_state_value(&expr)?;
                     }
                     if is_state_map_expr(context, &expr) {
                         return Err(SemanticError {
-                            message: "E_STATE_MAP_ALIAS: state maps are not first-class; use the state identifier directly.".into(),
+                            code: "E_STATE_MAP_ALIAS",
+                            message:
+                                "state maps are not first-class; use the state identifier directly."
+                                    .into(),
                         });
                     }
                     apply_map_new_type_hint(&mut expr, &expected);
@@ -3449,6 +5812,7 @@ fn analyze_statement(
                     }
                     if numeric_result_type(&expected, &expr.ty).is_none() {
                         return Err(SemanticError {
+                            code: "K2003",
                             message: format!(
                                 "{op:?} requires identical numeric operand types; implicit conversions are not part of Kotodama V1"
                             ),
@@ -3479,6 +5843,7 @@ fn analyze_statement(
                     Ok(out)
                 }
                 _ => Err(SemanticError {
+                    code: "E_INVALID_ASSIGNMENT_TARGET",
                     message: "assignment target must be a variable or map index".into(),
                 }),
             }
@@ -3486,13 +5851,14 @@ fn analyze_statement(
         Statement::Expr(e) => Ok(vec![TypedStatement::Expr(analyze_expr(context, e, vars)?)]),
         Statement::Return(opt) => {
             let mut tv = if let Some(e) = opt {
-                Some(analyze_expr(context, e, vars)?)
+                Some(analyze_expr_expected(context, e, vars, expected_ret)?)
             } else {
                 None
             };
             if expected_ret.is_none() {
                 if tv.is_some() {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: "returning a value requires a declared return type".into(),
                     });
                 }
@@ -3501,6 +5867,7 @@ fn analyze_statement(
                     None => {
                         if !matches!(exp, Type::Unit) {
                             return Err(SemanticError {
+                                code: "K2003",
                                 message: "return type mismatch: expected value".into(),
                             });
                         }
@@ -3509,10 +5876,12 @@ fn analyze_statement(
                         apply_map_new_type_hint(expr, exp);
                         if matches!(exp, Type::Unit) {
                             return Err(SemanticError {
+                                code: "K2003",
                                 message: "return type mismatch: unexpected value".into(),
                             });
                         }
                         if let Err(mut err) = ensure_assignable_and_coerce(exp, expr) {
+                            err.code = "E_RETURN_TYPE_MISMATCH";
                             err.message = format!("return type mismatch: {}", err.message);
                             return Err(err);
                         }
@@ -3524,7 +5893,8 @@ fn analyze_statement(
         Statement::Break => {
             if loop_depth == 0 {
                 return Err(SemanticError {
-                    message: "E_BREAK_OUTSIDE_LOOP: `break` must appear inside a loop".into(),
+                    code: "E_BREAK_OUTSIDE_LOOP",
+                    message: "`break` must appear inside a loop".into(),
                 });
             }
             Ok(vec![TypedStatement::Break])
@@ -3532,7 +5902,8 @@ fn analyze_statement(
         Statement::Continue => {
             if loop_depth == 0 {
                 return Err(SemanticError {
-                    message: "E_CONTINUE_OUTSIDE_LOOP: `continue` must appear inside a loop".into(),
+                    code: "E_CONTINUE_OUTSIDE_LOOP",
+                    message: "`continue` must appear inside a loop".into(),
                 });
             }
             Ok(vec![TypedStatement::Continue])
@@ -3546,6 +5917,7 @@ fn analyze_statement(
             crate::secret::reject_secret_control_flow(&cond_t)?;
             if cond_t.ty != Type::Bool {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "if condition must be bool".into(),
                 });
             }
@@ -3555,6 +5927,7 @@ fn analyze_statement(
                 &mut vars.clone(),
                 &mut mutable_bindings.clone(),
                 expected_ret,
+                None,
                 loop_depth,
             )?;
             let else_block = if let Some(b) = else_branch {
@@ -3564,6 +5937,7 @@ fn analyze_statement(
                     &mut vars.clone(),
                     &mut mutable_bindings.clone(),
                     expected_ret,
+                    None,
                     loop_depth,
                 )?)
             } else {
@@ -3575,8 +5949,51 @@ fn analyze_statement(
                 else_branch: else_block,
             }])
         }
+        Statement::IfLet {
+            pattern,
+            value,
+            then_branch,
+            else_branch,
+        } => {
+            let value = analyze_expr(context, value, vars)?;
+            let (pattern, binding) = analyze_sum_pattern(pattern, &value.ty)?;
+            let mut then_vars = vars.clone();
+            if let Some((name, ty)) = binding {
+                ensure_new_local_binding(context, &name, &then_vars)?;
+                then_vars.insert(name, ty);
+            }
+            let then_branch = analyze_block(
+                context,
+                then_branch,
+                &mut then_vars,
+                &mut mutable_bindings.clone(),
+                expected_ret,
+                None,
+                loop_depth,
+            )?;
+            let else_branch = if let Some(block) = else_branch {
+                Some(analyze_block(
+                    context,
+                    block,
+                    &mut vars.clone(),
+                    &mut mutable_bindings.clone(),
+                    expected_ret,
+                    None,
+                    loop_depth,
+                )?)
+            } else {
+                None
+            };
+            Ok(vec![TypedStatement::IfLet {
+                pattern,
+                value,
+                then_branch,
+                else_branch,
+            }])
+        }
         Statement::While { .. } => Err(SemanticError {
-            message: "E_UNBOUNDED_LOOP: `while` is not part of Kotodama V1; use a compiler-proven bounded `for` loop"
+            code: "E_UNBOUNDED_LOOP",
+            message: "`while` is not part of Kotodama V1; use a compiler-proven bounded `for` loop"
                 .into(),
         }),
         Statement::For {
@@ -3600,8 +6017,8 @@ fn analyze_statement(
                 )?;
                 if v.len() != 1 {
                     return Err(SemanticError {
-                        message: "E0005: for-loop initializer must be a simple let or expression"
-                            .into(),
+                        code: "E_FOR_INITIALIZER",
+                        message: "for-loop initializer must be a simple let or expression".into(),
                     });
                 }
                 Some(Box::new(v.remove(0)))
@@ -3615,6 +6032,7 @@ fn analyze_statement(
                 crate::secret::reject_secret_control_flow(&t)?;
                 if t.ty != Type::Bool {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: "for condition must be bool".into(),
                     });
                 }
@@ -3634,7 +6052,8 @@ fn analyze_statement(
                 )?;
                 if v.len() != 1 {
                     return Err(SemanticError {
-                        message: "E0006: for-loop step must be a simple let or expression".into(),
+                        code: "E_FOR_STEP",
+                        message: "for-loop step must be a simple let or expression".into(),
                     });
                 }
                 Some(Box::new(v.remove(0)))
@@ -3647,6 +6066,7 @@ fn analyze_statement(
                 &mut loop_env.clone(),
                 &mut local_mutable_bindings.clone(),
                 expected_ret,
+                None,
                 loop_depth + 1,
             )?;
             *vars = loop_env;
@@ -3667,7 +6087,7 @@ fn analyze_statement(
             // Accept canonical bounded forms: `.take(end)` and `.range(start, end)`.
             // Desugar to a typed for-each with the base map expression and rely on
             // IR lowering to enforce the exact compiler-proven literal bound.
-            if let Expr::Call { name, args } = map {
+            if let Expr::Call { name, args, .. } = map.kind() {
                 if name == "take" && args.len() == 2 {
                     // Analyze base map expression and infer key/value types
                     let base_map = analyze_expr(context, &args[0], &mut vars.clone())?;
@@ -3691,9 +6111,13 @@ fn analyze_statement(
                         &mut local_vars,
                         &mut mutable_bindings.clone(),
                         expected_ret,
+                        None,
                         loop_depth + 1,
                     )?;
-                    let literal_bound = match &args[1] {
+                    let literal_bound = match args[1].kind() {
+                        Expr::Source { .. } | Expr::Resolved { .. } => {
+                            unreachable!("kind() strips provenance wrappers")
+                        }
                         Expr::Number(n) if *n >= 0 => {
                             enforce_static_iteration_limit("StateMap.take(N)", *n as u128)?;
                             Some(usize::try_from(*n).expect("V1 iteration bound is at most 64"))
@@ -3703,14 +6127,15 @@ fn analyze_statement(
                     if let Some(bound) = literal_bound {
                         if bound > 1 && !map_expr_is_state(context, &args[0]) {
                             return Err(SemanticError {
-                                message: "E_MAP_BOUNDS: ephemeral map iteration supports at most 1 element; reduce the bound or move the map into `state`.".into(),
+                                code: "E_MAP_BOUNDS",
+                                message: "ephemeral map iteration supports at most 1 element; reduce the bound or move the map into `state`.".into(),
                             });
                         }
                         // E_ITER_MUTATION: forbid structural modifications to the iterated map inside the loop body
-                        if let Expr::Ident(map_name) = &args[0]
+                        if let Expr::Ident(map_name) = args[0].kind()
                             && block_mutates_map(&body_t, map_name)
                         {
-                            return Err(SemanticError { message: "E_ITER_MUTATION: structural modifications to the iterated map are forbidden during iteration".into() });
+                            return Err(SemanticError { code: "E_ITER_MUTATION", message: "structural modifications to the iterated map are forbidden during iteration".into() });
                         }
                         return Ok(vec![TypedStatement::ForEachMap {
                             key: key.clone(),
@@ -3722,7 +6147,10 @@ fn analyze_statement(
                         }]);
                     }
                     return Err(SemanticError {
-                        message: "E_UNBOUNDED_ITERATION: `.take(n)` requires a non-negative i64 literal no greater than 64".into(),
+                        code: "E_UNBOUNDED_ITERATION",
+                        message:
+                            "`.take(n)` requires a non-negative i64 literal no greater than 64"
+                                .into(),
                     });
                 }
                 if name == "range" && args.len() == 3 {
@@ -3747,38 +6175,45 @@ fn analyze_statement(
                         &mut local_vars,
                         &mut mutable_bindings.clone(),
                         expected_ret,
+                        None,
                         loop_depth + 1,
                     )?;
-                    let start = match &args[1] {
+                    let start = match args[1].kind() {
+                        Expr::Source { .. } | Expr::Resolved { .. } => {
+                            unreachable!("kind() strips provenance wrappers")
+                        }
                         Expr::Number(n) if *n >= 0 => Some(*n as usize),
                         _ => None,
                     };
                     // Interpret second numeric as end; compute n = end - start
-                    let end = match &args[2] {
+                    let end = match args[2].kind() {
+                        Expr::Source { .. } | Expr::Resolved { .. } => {
+                            unreachable!("kind() strips provenance wrappers")
+                        }
                         Expr::Number(n) if *n >= 0 => Some(*n as usize),
                         _ => None,
                     };
                     if let (Some(start), Some(end)) = (start, end) {
                         if end < start {
                             return Err(SemanticError {
-                                message:
-                                    "E_UNBOUNDED_ITERATION: `.range(start, end)` requires end >= start"
-                                        .into(),
+                                code: "E_UNBOUNDED_ITERATION",
+                                message: "`.range(start, end)` requires end >= start".into(),
                             });
                         }
                         let span = end - start;
                         enforce_static_iteration_limit("StateMap.range(start, end)", span as u128)?;
                         if !map_expr_is_state(context, &args[0]) && (start != 0 || span > 1) {
                             return Err(SemanticError {
-                                message: "E_MAP_BOUNDS: ephemeral map iteration supports at most 1 element starting at index 0; reduce the range or move the map into `state`."
+                                code: "E_MAP_BOUNDS",
+                                message: "ephemeral map iteration supports at most 1 element starting at index 0; reduce the range or move the map into `state`."
                                     .into(),
                             });
                         }
                         let static_bound = Some(span);
-                        if let Expr::Ident(map_name) = &args[0]
+                        if let Expr::Ident(map_name) = args[0].kind()
                             && block_mutates_map(&body_t, map_name)
                         {
-                            return Err(SemanticError { message: "E_ITER_MUTATION: structural modifications to the iterated map are forbidden during iteration".into() });
+                            return Err(SemanticError { code: "E_ITER_MUTATION", message: "structural modifications to the iterated map are forbidden during iteration".into() });
                         }
                         return Ok(vec![TypedStatement::ForEachMap {
                             key: key.clone(),
@@ -3790,12 +6225,14 @@ fn analyze_statement(
                         }]);
                     }
                     return Err(SemanticError {
-                        message: "E_UNBOUNDED_ITERATION: `.range(start, end)` requires non-negative i64 literals with a span no greater than 64".into(),
+                        code: "E_UNBOUNDED_ITERATION",
+                        message: "`.range(start, end)` requires non-negative i64 literals with a span no greater than 64".into(),
                     });
                 }
             }
             Err(SemanticError {
-                message: "E_UNBOUNDED_ITERATION: `for (k, v) in map` requires a literal bound; call `.take(N)` or `.range(start, end)` on the StateMap expression.".into(),
+                code: "E_UNBOUNDED_ITERATION",
+                message: "`for (k, v) in map` requires a literal bound; call `.take(N)` or `.range(start, end)` on the StateMap expression.".into(),
             })
         }
     }
@@ -3808,21 +6245,127 @@ fn query_helper_accepts_arg(builtin: Builtin, ty: &Type) -> bool {
         | Builtin::ZkRootsGet
         | Builtin::ZkVoteGetTally
         | Builtin::VrfEpochSeed => is_blob_like(ty),
-        Builtin::QueryGetAccount => matches!(ty, Type::AccountId) || is_blob_like(ty),
-        Builtin::QueryGetAsset => matches!(ty, Type::AssetId) || is_blob_like(ty),
-        Builtin::QueryGetAssetDefinition => {
-            matches!(ty, Type::AssetDefinitionId) || is_blob_like(ty)
-        }
-        Builtin::QueryGetDomain => matches!(ty, Type::DomainId) || is_blob_like(ty),
-        Builtin::QueryGetNft => matches!(ty, Type::NftId) || is_blob_like(ty),
+        Builtin::QueryGetAccount => matches!(ty, Type::AccountId),
+        Builtin::QueryGetAsset => matches!(ty, Type::AssetId),
+        Builtin::QueryGetAssetDefinition => matches!(ty, Type::AssetDefinitionId),
+        Builtin::QueryGetDomain => matches!(ty, Type::DomainId),
+        Builtin::QueryGetNft => matches!(ty, Type::NftId),
         Builtin::QueryGetParameter => matches!(ty, Type::Name) || is_blob_like(ty),
         Builtin::QueryGetContractInstance => matches!(ty, Type::Name) || is_blob_like(ty),
         _ => false,
     }
 }
 
+fn core_query_view_type(builtin: Builtin) -> Option<Type> {
+    let (name, fields) = match builtin {
+        Builtin::QueryGetAccount | Builtin::QueryPageAccounts => (
+            "AccountView",
+            vec![("id", Type::AccountId), ("metadata", Type::Json)],
+        ),
+        Builtin::QueryGetAsset | Builtin::QueryPageAssets => (
+            "AssetView",
+            vec![("id", Type::AssetId), ("amount", Type::Amount)],
+        ),
+        Builtin::QueryGetAssetDefinition | Builtin::QueryPageAssetDefinitions => (
+            "AssetDefinitionView",
+            vec![
+                ("id", Type::AssetDefinitionId),
+                ("name", Type::String),
+                ("description", Type::Option(Box::new(Type::String))),
+                ("owned_by", Type::AccountId),
+                ("total_quantity", Type::Amount),
+                ("metadata", Type::Json),
+            ],
+        ),
+        Builtin::QueryGetDomain | Builtin::QueryPageDomains => (
+            "DomainView",
+            vec![
+                ("id", Type::DomainId),
+                ("owned_by", Type::AccountId),
+                ("metadata", Type::Json),
+            ],
+        ),
+        Builtin::QueryGetNft | Builtin::QueryPageNfts => (
+            "NftView",
+            vec![
+                ("id", Type::NftId),
+                ("owned_by", Type::AccountId),
+                ("content", Type::Json),
+            ],
+        ),
+        _ => return None,
+    };
+    Some(Type::Struct {
+        name: name.to_owned(),
+        fields: fields
+            .into_iter()
+            .map(|(field, ty)| (field.to_owned(), ty))
+            .collect(),
+    })
+}
+
+fn query_page_type(view: Type) -> Result<Type, SemanticError> {
+    let Type::Struct {
+        name: view_name, ..
+    } = &view
+    else {
+        return Err(SemanticError {
+            code: "K2003",
+            message: "QueryPage<T> requires one of the five declared core query view types".into(),
+        });
+    };
+    if !matches!(
+        view_name.as_str(),
+        "AccountView" | "AssetView" | "AssetDefinitionView" | "DomainView" | "NftView"
+    ) {
+        return Err(SemanticError {
+            code: "E_QUERY_PAGE_VIEW",
+            message: format!(
+                "QueryPage<{view_name}> is unsupported; pages are available only for declared core query views"
+            ),
+        });
+    }
+    Ok(Type::Struct {
+        // The projection specialization is encoded by the recursive List
+        // child. Keeping the nominal name canonical avoids smuggling generic
+        // syntax into an ABI identifier while preserving exact schema identity.
+        name: QUERY_PAGE_TYPE_NAME.to_owned(),
+        fields: vec![
+            ("items".to_owned(), Type::List(Box::new(view), 64)),
+            ("next_offset".to_owned(), Type::Option(Box::new(Type::Int))),
+        ],
+    })
+}
+
+fn query_page_view_type(ty: &Type) -> Option<&Type> {
+    let Type::Struct { name, fields } = ty else {
+        return None;
+    };
+    let [
+        (items_name, Type::List(view, capacity)),
+        (next_name, Type::Option(next_offset)),
+    ] = fields.as_slice()
+    else {
+        return None;
+    };
+    (name == QUERY_PAGE_TYPE_NAME
+        && items_name == "items"
+        && *capacity == 64
+        && next_name == "next_offset"
+        && next_offset.as_ref() == &Type::Int)
+        .then_some(view.as_ref())
+}
+
+fn core_query_page_type(builtin: Builtin) -> Type {
+    query_page_type(
+        core_query_view_type(builtin)
+            .expect("only projected plural core-query builtins request QueryPage types"),
+    )
+    .expect("projected plural core-query builtins use supported view types")
+}
+
 fn direct_json_getter_type(builtin: Builtin) -> Option<Type> {
-    Some(match builtin {
+    let payload = match builtin {
         Builtin::JsonGetIntDirect => Type::Int,
         Builtin::JsonGetNumericDirect => Type::Amount,
         Builtin::JsonGetJsonDirect => Type::Json,
@@ -3832,7 +6375,8 @@ fn direct_json_getter_type(builtin: Builtin) -> Option<Type> {
         Builtin::JsonGetNftIdDirect => Type::NftId,
         Builtin::JsonGetBlobHexDirect => Type::Bytes,
         _ => return None,
-    })
+    };
+    Some(Type::Option(Box::new(payload)))
 }
 
 fn canonicalize_builtin_result<T>(
@@ -3884,14 +6428,16 @@ fn analyze_surface_builtin_call(
     match builtin.spec().mode {
         BuiltinMode::CompilerInternal => {
             return Err(SemanticError {
+                code: "E_INTERNAL_BUILTIN",
                 message: format!(
-                    "E_INTERNAL_BUILTIN: builtin `{}` is compiler-internal and is not available in Kotodama V1 source",
+                    "builtin `{}` is compiler-internal and is not available in Kotodama V1 source",
                     builtin.name()
                 ),
             });
         }
         BuiltinMode::ZkOnly if !context.zk_enabled => {
             return Err(SemanticError {
+                code: "E_ZK_MODE_REQUIRED",
                 message: format!(
                     "builtin `{}` requires ZK mode in compiler build configuration",
                     builtin.name()
@@ -3900,14 +6446,16 @@ fn analyze_surface_builtin_call(
         }
         BuiltinMode::TestOnly | BuiltinMode::TestFunctionOnly if !context.test_builtins_enabled => {
             return Err(SemanticError {
+                code: "E_TEST_ONLY_PRODUCTION",
                 message: format!(
-                    "E_TEST_ONLY_PRODUCTION: builtin `{}` requires explicit compiler test mode",
+                    "builtin `{}` requires explicit compiler test mode",
                     builtin.source_name()
                 ),
             });
         }
         BuiltinMode::TestFunctionOnly if !current_function_is_test(context) => {
             return Err(SemanticError {
+                code: "E_TEST_BUILTIN_CONTEXT",
                 message: format!(
                     "builtin `{}` is available only inside a #[test] function",
                     builtin.source_name()
@@ -3925,6 +6473,7 @@ fn analyze_surface_builtin_call(
             let name = constructor.name();
             if arg_typed.len() != 1 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects one argument"),
                 });
             }
@@ -3932,6 +6481,7 @@ fn analyze_surface_builtin_call(
             let ty = pointer_constructor_type(constructor);
             if arg_ty != Type::String {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects string"),
                 });
             }
@@ -3946,6 +6496,7 @@ fn analyze_surface_builtin_call(
         Builtin::GetOrDefault => {
             if arg_typed.len() != 3 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "get_or_default expects (StateMap<K,V>, K, V)".into(),
                 });
             }
@@ -3953,6 +6504,7 @@ fn analyze_surface_builtin_call(
                 Type::StateMap(k, v) => (k.as_ref().clone(), v.as_ref().clone()),
                 other => {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: format!(
                             "get_or_default expects StateMap<K,V> as first arg, got {}",
                             type_name(other)
@@ -3978,6 +6530,7 @@ fn analyze_surface_builtin_call(
         Builtin::Contains => {
             if arg_typed.len() != 2 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "contains expects (StateMap<K,V>, K)".into(),
                 });
             }
@@ -3994,6 +6547,7 @@ fn analyze_surface_builtin_call(
                     })
                 }
                 other => Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "contains expects StateMap<K,V> as first arg, got {}",
                         type_name(other)
@@ -4005,6 +6559,7 @@ fn analyze_surface_builtin_call(
             let original_len = arg_typed.len();
             if original_len != 2 && original_len != 3 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "get_or expects (StateMap<K,V>, K[, V])".into(),
                 });
             }
@@ -4014,6 +6569,7 @@ fn analyze_surface_builtin_call(
                 Type::StateMap(k, v) => (*k, *v),
                 other => {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: format!(
                             "get_or expects StateMap<K,V> as first arg, got {}",
                             type_name(&other)
@@ -4037,6 +6593,7 @@ fn analyze_surface_builtin_call(
                     other => {
                         if is_pointer_type(&other) {
                             return Err(SemanticError {
+                                code: "K2003",
                                 message: format!(
                                     "get_or requires an explicit default for pointer-valued maps (value type {})",
                                     type_name(&other)
@@ -4044,6 +6601,7 @@ fn analyze_surface_builtin_call(
                             });
                         }
                         return Err(SemanticError {
+                            code: "K2003",
                             message: format!(
                                 "get_or auto-default is only available for StateMap<*,i64>; provide an explicit default for value type {}",
                                 type_name(&other)
@@ -4070,12 +6628,14 @@ fn analyze_surface_builtin_call(
                 .is_some_and(|modifiers| modifiers.kind == FunctionKind::View);
             if in_view {
                 return Err(SemanticError {
+                    code: "K2004",
                     message: "view entrypoints cannot use mutating map helper `ensure`; use `get_or` instead".into(),
                 });
             }
             let original_len = arg_typed.len();
             if original_len != 2 && original_len != 3 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "ensure expects (StateMap<K,V>, K[, V])".into(),
                 });
             }
@@ -4085,6 +6645,7 @@ fn analyze_surface_builtin_call(
                 Type::StateMap(k, v) => (*k, *v),
                 other => {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: format!(
                             "ensure expects StateMap<K,V> as first arg, got {}",
                             type_name(&other)
@@ -4108,6 +6669,7 @@ fn analyze_surface_builtin_call(
                     other => {
                         if is_pointer_type(&other) {
                             return Err(SemanticError {
+                                code: "K2003",
                                 message: format!(
                                     "ensure requires an explicit default for pointer-valued maps (value type {})",
                                     type_name(&other)
@@ -4115,6 +6677,7 @@ fn analyze_surface_builtin_call(
                             });
                         }
                         return Err(SemanticError {
+                            code: "K2003",
                             message: format!(
                                 "ensure auto-default is only available for StateMap<*,i64>; provide an explicit default for value type {}",
                                 type_name(&other)
@@ -4136,17 +6699,20 @@ fn analyze_surface_builtin_call(
         Builtin::StateMapRemove => {
             if arg_typed.len() != 2 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "StateMap.remove expects exactly one key argument".into(),
                 });
             }
             if !typed_map_expr_is_state(context, &arg_typed[0]) {
                 return Err(SemanticError {
+                    code: "K2005",
                     message: "StateMap.remove is available only on declared durable state maps"
                         .into(),
                 });
             }
             let Type::StateMap(key, value) = resolve_struct_type(&arg_typed[0].ty) else {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "StateMap.remove receiver must be StateMap<K, V>".into(),
                 });
             };
@@ -4164,6 +6730,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if arg_typed.len() != 3 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects (StateMap<i64,i64>, i64 start, i64 which)"),
                 });
             }
@@ -4173,6 +6740,7 @@ fn analyze_surface_builtin_call(
                         && matches!(resolve_struct_type(v), Type::Int) => {}
                 other => {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: format!(
                             "{name} expects StateMap<i64,i64> as first arg, got {}",
                             type_name(other)
@@ -4184,6 +6752,7 @@ fn analyze_surface_builtin_call(
                 || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects (StateMap<i64,i64>, i64, i64)"),
                 });
             }
@@ -4198,6 +6767,7 @@ fn analyze_surface_builtin_call(
         Builtin::KeysValuesTake2 => {
             if arg_typed.len() != 3 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "keys_values_take2 expects (StateMap<i64,i64>, i64, i64)".into(),
                 });
             }
@@ -4207,6 +6777,7 @@ fn analyze_surface_builtin_call(
                         && matches!(resolve_struct_type(v), Type::Int) => {}
                 other => {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: format!(
                             "keys_values_take2 expects StateMap<i64,i64> as first arg, got {}",
                             type_name(other)
@@ -4218,6 +6789,7 @@ fn analyze_surface_builtin_call(
                 || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "keys_values_take2 expects (StateMap<i64,i64>, i64, i64)".into(),
                 });
             }
@@ -4232,6 +6804,7 @@ fn analyze_surface_builtin_call(
         Builtin::StateGet => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "state_get expects (Name)".into(),
                 });
             }
@@ -4248,6 +6821,7 @@ fn analyze_surface_builtin_call(
                 || !(arg_typed[0].ty == Type::Name && is_blob_like(&arg_typed[1].ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "state_set expects (Name, bytes)".into(),
                 });
             }
@@ -4262,6 +6836,7 @@ fn analyze_surface_builtin_call(
         Builtin::StateDel => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "state_del expects (Name)".into(),
                 });
             }
@@ -4280,6 +6855,7 @@ fn analyze_surface_builtin_call(
                 || !is_int_like(&arg_typed[2].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "state_keys expects (Name, i64 offset, i64 limit)".into(),
                 });
             }
@@ -4294,6 +6870,7 @@ fn analyze_surface_builtin_call(
         Builtin::StateHas => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "state_has expects (Name)".into(),
                 });
             }
@@ -4308,6 +6885,7 @@ fn analyze_surface_builtin_call(
         Builtin::StateLen => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "state_len expects (Name)".into(),
                 });
             }
@@ -4322,6 +6900,7 @@ fn analyze_surface_builtin_call(
         Builtin::StateCount => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "state_count expects (Name)".into(),
                 });
             }
@@ -4333,12 +6912,75 @@ fn analyze_surface_builtin_call(
                 ty: Type::Int,
             })
         }
-        Builtin::QueryExecuteNorito
-        | Builtin::QueryGetAccount
+        Builtin::QueryGetAccount
         | Builtin::QueryGetAsset
         | Builtin::QueryGetAssetDefinition
         | Builtin::QueryGetDomain
-        | Builtin::QueryGetNft
+        | Builtin::QueryGetNft => {
+            if arg_typed.len() != 1 || !query_helper_accepts_arg(builtin, &arg_typed[0].ty) {
+                let expected = match builtin {
+                    Builtin::QueryGetAccount => "AccountId",
+                    Builtin::QueryGetAsset => "AssetId",
+                    Builtin::QueryGetAssetDefinition => "AssetDefinitionId",
+                    Builtin::QueryGetDomain => "DomainId",
+                    Builtin::QueryGetNft => "NftId",
+                    _ => unreachable!(),
+                };
+                return Err(SemanticError {
+                    code: "E_QUERY_KEY_TYPE",
+                    message: format!(
+                        "`{}` expects one `{expected}` argument; byte-returning core-query compatibility is not part of Kotodama V1",
+                        builtin.source_name()
+                    ),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Option(Box::new(
+                    core_query_view_type(builtin)
+                        .expect("singular projected core-query builtin has a view type"),
+                )),
+            })
+        }
+        Builtin::QueryPageAccounts
+        | Builtin::QueryPageAssets
+        | Builtin::QueryPageAssetDefinitions
+        | Builtin::QueryPageDomains
+        | Builtin::QueryPageNfts => {
+            if arg_typed.len() != 2 || arg_typed[0].ty != Type::Int || arg_typed[1].ty != Type::Int
+            {
+                return Err(SemanticError {
+                    code: "E_QUERY_PAGE_ARGUMENTS",
+                    message: format!(
+                        "`{}` expects named `offset: i64` and `limit: i64` arguments",
+                        builtin.source_name()
+                    ),
+                });
+            }
+            if literal_i64(&arg_typed[0]).is_some_and(|offset| offset < 0) {
+                return Err(SemanticError {
+                    code: "E_QUERY_OFFSET",
+                    message: "query page offset must be non-negative".into(),
+                });
+            }
+            if literal_i64(&arg_typed[1]).is_some_and(|limit| !(1..=64).contains(&limit)) {
+                return Err(SemanticError {
+                    code: "E_QUERY_LIMIT",
+                    message: "query page limit must be in 1..=64".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: core_query_page_type(builtin),
+            })
+        }
+        Builtin::QueryExecuteNorito
         | Builtin::QueryGetParameter
         | Builtin::QueryGetContractManifest
         | Builtin::QueryGetContractInstance
@@ -4350,13 +6992,6 @@ fn analyze_surface_builtin_call(
                     Builtin::QueryExecuteNorito => {
                         "query_execute_norito expects (bytes) pointer to NoritoBytes QueryRequest"
                     }
-                    Builtin::QueryGetAccount => "query_get_account expects (AccountId|bytes)",
-                    Builtin::QueryGetAsset => "query_get_asset expects (AssetId|bytes)",
-                    Builtin::QueryGetAssetDefinition => {
-                        "query_get_asset_definition expects (AssetDefinitionId|bytes)"
-                    }
-                    Builtin::QueryGetDomain => "query_get_domain expects (DomainId|bytes)",
-                    Builtin::QueryGetNft => "query_get_nft expects (NftId|bytes)",
                     Builtin::QueryGetParameter => "query_get_parameter expects (Name|bytes)",
                     Builtin::QueryGetContractManifest => {
                         "query_get_contract_manifest expects (bytes) Norito Hash"
@@ -4376,6 +7011,7 @@ fn analyze_surface_builtin_call(
                     _ => unreachable!(),
                 };
                 return Err(SemanticError {
+                    code: "K2003",
                     message: expected.into(),
                 });
             }
@@ -4397,6 +7033,7 @@ fn analyze_surface_builtin_call(
                     && is_blob_like(&arg_typed[5].ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "build_submit_ballot_inline expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)".into(),
                 });
             }
@@ -4428,6 +7065,7 @@ fn analyze_surface_builtin_call(
                 && is_blob_like(&arg_typed[7].ty);
             if !(valid_without_outputs || valid_with_outputs) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "build_unshield_inline expects (AssetDefinitionId, AccountId, i64 amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)".into(),
                 });
             }
@@ -4445,6 +7083,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "{name} expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
                     ),
@@ -4462,6 +7101,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "{name} expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
                     ),
@@ -4475,29 +7115,12 @@ fn analyze_surface_builtin_call(
                 ty: Type::Bytes,
             })
         }
-        Builtin::CallContract => {
-            if arg_typed.len() != 3
-                || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))
-                || !(arg_typed[1].ty == Type::String || is_blob_like(&arg_typed[1].ty))
-                || arg_typed[2].ty != Type::Json
-            {
-                return Err(SemanticError {
-                    message: "call_contract expects (string|bytes, string|bytes, Json)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
         Builtin::ResolveAccountAlias => {
             if arg_typed.len() != 1
                 || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "resolve_account_alias expects (string|bytes)".into(),
                 });
             }
@@ -4513,6 +7136,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects no arguments"),
                 });
             }
@@ -4532,6 +7156,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "{name} expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT"
                     ),
@@ -4548,12 +7173,14 @@ fn analyze_surface_builtin_call(
         Builtin::VrfVerify => {
             if arg_typed.len() != 4 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "vrf_verify expects (bytes, bytes, bytes, i64 variant)".into(),
                 });
             }
             if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) || !is_int_like(&arg_typed[3].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "vrf_verify expects (bytes, bytes, bytes, i64 variant)".into(),
                 });
             }
@@ -4568,6 +7195,7 @@ fn analyze_surface_builtin_call(
         Builtin::VrfVerifyBatch => {
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "vrf_verify_batch expects (bytes)".into(),
                 });
             }
@@ -4587,6 +7215,7 @@ fn analyze_surface_builtin_call(
         | Builtin::IrohaHash => {
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "{} expects (bytes) argument pointing to INPUT TLV",
                         builtin.name()
@@ -4604,11 +7233,13 @@ fn analyze_surface_builtin_call(
         Builtin::Sm2Verify => {
             if arg_typed.len() != 3 && arg_typed.len() != 4 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "sm2_verify expects (bytes, bytes, bytes) or (bytes, bytes, bytes, bytes) where arguments reference INPUT TLVs".into(),
                 });
             }
             if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message:
                         "sm2_verify expects message, signature, and public key as bytes pointers"
                             .into(),
@@ -4616,6 +7247,7 @@ fn analyze_surface_builtin_call(
             }
             if arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "sm2_verify optional distid must be provided as bytes pointer".into(),
                 });
             }
@@ -4630,17 +7262,20 @@ fn analyze_surface_builtin_call(
         Builtin::VerifySignature => {
             if arg_typed.len() != 4 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "verify_signature expects (bytes, bytes, bytes, i64) arguments".into(),
                 });
             }
             if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "verify_signature expects message, signature, and public key as bytes pointers"
                         .into(),
                 });
             }
             if !is_int_like(&arg_typed[3].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "verify_signature expects scheme code as i64".into(),
                 });
             }
@@ -4655,6 +7290,7 @@ fn analyze_surface_builtin_call(
         Builtin::Sm4GcmSeal | Builtin::Sm4GcmOpen => {
             if arg_typed.len() != 4 || arg_typed.iter().any(|t| !is_blob_like(&t.ty)) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects (bytes, bytes, bytes, bytes)", builtin.name()),
                 });
             }
@@ -4669,6 +7305,7 @@ fn analyze_surface_builtin_call(
         Builtin::Sm4CcmSeal | Builtin::Sm4CcmOpen => {
             if arg_typed.len() != 4 && arg_typed.len() != 5 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "{} expects (bytes, bytes, bytes, bytes[, i64])",
                         builtin.name()
@@ -4682,6 +7319,7 @@ fn analyze_surface_builtin_call(
                     _ => unreachable!(),
                 };
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "{} expects key, nonce, aad, {data_label} as bytes pointers",
                         builtin.name()
@@ -4690,6 +7328,7 @@ fn analyze_surface_builtin_call(
             }
             if arg_typed.len() == 5 && !is_int_like(&arg_typed[4].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} optional tag length must be i64", builtin.name()),
                 });
             }
@@ -4707,6 +7346,7 @@ fn analyze_surface_builtin_call(
                     && arg_typed[1].ty == Type::AssetDefinitionId)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "get_account_balance expects (AccountId, AssetDefinitionId)".into(),
                 });
             }
@@ -4721,6 +7361,7 @@ fn analyze_surface_builtin_call(
         Builtin::GetPublicInput => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "get_public_input expects (Name)".into(),
                 });
             }
@@ -4735,6 +7376,7 @@ fn analyze_surface_builtin_call(
         Builtin::DebugPrint => {
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "debug_print expects (i64 value)".into(),
                 });
             }
@@ -4751,6 +7393,7 @@ fn analyze_surface_builtin_call(
                 || !(arg_typed[0].ty == Type::Json || is_blob_like(&arg_typed[0].ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "debug_log expects (Json|bytes payload)".into(),
                 });
             }
@@ -4773,6 +7416,7 @@ fn analyze_surface_builtin_call(
             };
             if !ok {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "assert expects (bool) or (bool, string|i64)".into(),
                 });
             }
@@ -4788,6 +7432,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 2 || arg_typed[0].ty != Type::Bool || arg_typed[1].ty != Type::Int
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "require expects (bool, ErrorEnum::Variant)".into(),
                 });
             }
@@ -4804,6 +7449,7 @@ fn analyze_surface_builtin_call(
                 || !(arg_typed[0].ty == Type::String || is_int_like(&arg_typed[0].ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "info expects (string|i64)".into(),
                 });
             }
@@ -4818,6 +7464,7 @@ fn analyze_surface_builtin_call(
         Builtin::AssertEq => {
             if arg_typed.len() != 2 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "assert_eq expects two i64 args".into(),
                 });
             }
@@ -4836,6 +7483,7 @@ fn analyze_surface_builtin_call(
                     && arg_typed[2].ty == Type::Json)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "set_account_detail expects (AccountId, Name, Json)".into(),
                 });
             }
@@ -4854,6 +7502,7 @@ fn analyze_surface_builtin_call(
                     && arg_typed[2].ty == Type::Amount)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "{} expects (AccountId, AssetDefinitionId, Amount)",
                         builtin.name()
@@ -4877,6 +7526,7 @@ fn analyze_surface_builtin_call(
                     && arg_typed[4].ty == Type::DataSpaceId)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message:
                         "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, Amount, DataSpaceId)"
                             .into(),
@@ -4895,6 +7545,7 @@ fn analyze_surface_builtin_call(
                 || !(arg_typed[0].ty == Type::NftId && arg_typed[1].ty == Type::AccountId)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "nft_mint_asset expects (NftId, AccountId)".into(),
                 });
             }
@@ -4913,6 +7564,7 @@ fn analyze_surface_builtin_call(
                     && arg_typed[2].ty == Type::Json)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "nft_set_metadata expects (NftId, Name, Json)".into(),
                 });
             }
@@ -4927,6 +7579,7 @@ fn analyze_surface_builtin_call(
         Builtin::NftBurnAsset => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::NftId {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "nft_burn_asset expects (NftId)".into(),
                 });
             }
@@ -4945,6 +7598,7 @@ fn analyze_surface_builtin_call(
                     && arg_typed[2].ty == Type::AccountId)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "nft_transfer_asset expects (AccountId, NftId, AccountId)".into(),
                 });
             }
@@ -4959,6 +7613,7 @@ fn analyze_surface_builtin_call(
         Builtin::RegisterDomain | Builtin::UnregisterDomain => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::DomainId {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects (DomainId)", builtin.name()),
                 });
             }
@@ -4977,6 +7632,7 @@ fn analyze_surface_builtin_call(
                 || arg_typed[2].ty != Type::AccountId
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "transfer_domain expects (AccountId, DomainId, AccountId)".into(),
                 });
             }
@@ -4991,6 +7647,7 @@ fn analyze_surface_builtin_call(
         Builtin::RegisterAccount | Builtin::UnregisterAccount => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::AccountId {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects (AccountId)", builtin.name()),
                 });
             }
@@ -5010,6 +7667,7 @@ fn analyze_surface_builtin_call(
                 || !is_int_like(&arg_typed[3].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "register_asset expects (AssetDefinitionId, string, i64, i64)".into(),
                 });
             }
@@ -5030,6 +7688,7 @@ fn analyze_surface_builtin_call(
                 || !is_int_like(&arg_typed[4].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message:
                         "create_new_asset expects (AssetDefinitionId, string, i64, AccountId, i64)"
                             .into(),
@@ -5046,6 +7705,7 @@ fn analyze_surface_builtin_call(
         Builtin::UnregisterAsset => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::AssetDefinitionId {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "unregister_asset expects (AssetDefinitionId)".into(),
                 });
             }
@@ -5061,6 +7721,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects (Json)"),
                 });
             }
@@ -5076,6 +7737,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects (Json)"),
                 });
             }
@@ -5091,6 +7753,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects (Name)"),
                 });
             }
@@ -5108,6 +7771,7 @@ fn analyze_surface_builtin_call(
                 || !is_int_like(&arg_typed[1].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "set_trigger_enabled expects (Name, i64)".into(),
                 });
             }
@@ -5125,6 +7789,7 @@ fn analyze_surface_builtin_call(
                 || arg_typed[1].ty != Type::Json
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "create_role expects (Name, Json)".into(),
                 });
             }
@@ -5139,6 +7804,7 @@ fn analyze_surface_builtin_call(
         Builtin::DeleteRole => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "delete_role expects (Name)".into(),
                 });
             }
@@ -5156,6 +7822,7 @@ fn analyze_surface_builtin_call(
                 || arg_typed[1].ty != Type::Name
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects (AccountId, Name)", builtin.name()),
                 });
             }
@@ -5173,6 +7840,7 @@ fn analyze_surface_builtin_call(
                 || !(arg_typed[1].ty == Type::Name || arg_typed[1].ty == Type::Json)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects (AccountId, Name|Json)", builtin.name()),
                 });
             }
@@ -5192,6 +7860,7 @@ fn analyze_surface_builtin_call(
                 || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message:
                         "escrow_open_offer expects (Name, AssetDefinitionId, Amount[, bytes evidence_hashes])"
                             .into(),
@@ -5212,6 +7881,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects (Name)"),
                 });
             }
@@ -5229,6 +7899,7 @@ fn analyze_surface_builtin_call(
                 || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "escrow_open_dispute expects (Name[, bytes evidence_hashes])".into(),
                 });
             }
@@ -5248,6 +7919,7 @@ fn analyze_surface_builtin_call(
                 || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "escrow_resolve_dispute expects (Name, Amount, Amount[, bytes evidence_hashes])"
                         .into(),
                 });
@@ -5267,6 +7939,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects (bytes) Norito request payload"),
                 });
             }
@@ -5282,6 +7955,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects (Name)"),
                 });
             }
@@ -5299,6 +7973,7 @@ fn analyze_surface_builtin_call(
                 || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message:
                         "anonymous_escrow_open_dispute expects (Name[, bytes evidence_hashes])"
                             .into(),
@@ -5315,6 +7990,7 @@ fn analyze_surface_builtin_call(
         Builtin::Alloc => {
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "alloc expects (i64 bytes)".into(),
                 });
             }
@@ -5329,6 +8005,7 @@ fn analyze_surface_builtin_call(
         Builtin::ProveExecution => {
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "prove_execution expects no arguments".into(),
                 });
             }
@@ -5343,6 +8020,7 @@ fn analyze_surface_builtin_call(
         Builtin::GrowHeap => {
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "grow_heap expects (i64 bytes)".into(),
                 });
             }
@@ -5357,6 +8035,7 @@ fn analyze_surface_builtin_call(
         Builtin::VerifyProof => {
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message:
                         "verify_proof expects (bytes) pointer to NoritoBytes OpenVerifyEnvelope"
                             .into(),
@@ -5374,6 +8053,7 @@ fn analyze_surface_builtin_call(
             let valid_arity = (2..=3).contains(&arg_typed.len());
             if !valid_arity || arg_typed.iter().any(|arg| !is_int_like(&arg.ty)) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message:
                         "get_merkle_path expects (i64 address, i64 output_ptr[, i64 root_output_ptr])"
                             .into(),
@@ -5391,6 +8071,7 @@ fn analyze_surface_builtin_call(
             let valid_arity = (2..=4).contains(&arg_typed.len());
             if !valid_arity || arg_typed.iter().any(|arg| !is_int_like(&arg.ty)) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "{} expects (i64 address_or_register, i64 output_ptr[, i64 max_depth[, i64 root_output_ptr]])",
                         builtin.name()
@@ -5408,11 +8089,13 @@ fn analyze_surface_builtin_call(
         Builtin::GetPrivateInput => {
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "get_private_input expects (i64 index)".into(),
                 });
             }
             if !context.zk_enabled {
                 return Err(SemanticError {
+                    code: "E_ZK_MODE_REQUIRED",
                     message: "get_private_input requires ZK mode in compiler build configuration"
                         .into(),
                 });
@@ -5428,6 +8111,7 @@ fn analyze_surface_builtin_call(
         Builtin::UseNullifier => {
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "use_nullifier expects (i64 nullifier)".into(),
                 });
             }
@@ -5442,6 +8126,7 @@ fn analyze_surface_builtin_call(
         Builtin::CommitOutput => {
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "commit_output expects no arguments".into(),
                 });
             }
@@ -5456,6 +8141,7 @@ fn analyze_surface_builtin_call(
         Builtin::CreateNftsForAllUsers => {
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "create_nfts_for_all_users expects no arguments".into(),
                 });
             }
@@ -5470,6 +8156,7 @@ fn analyze_surface_builtin_call(
         Builtin::SetExecutionDepth => {
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "set_execution_depth expects one i64 arg".into(),
                 });
             }
@@ -5484,6 +8171,7 @@ fn analyze_surface_builtin_call(
         Builtin::TransferV1BatchBegin | Builtin::TransferV1BatchEnd => {
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects ()", builtin.name()),
                 });
             }
@@ -5498,6 +8186,7 @@ fn analyze_surface_builtin_call(
         Builtin::TransferV1BatchApply => {
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "transfer_v1_batch_apply expects (bytes) Norito TransferAssetBatch"
                         .into(),
                 });
@@ -5523,6 +8212,7 @@ fn analyze_surface_builtin_call(
         Builtin::AxtBegin => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::AxtDescriptor {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "axt_begin expects (AxtDescriptor)".into(),
                 });
             }
@@ -5541,6 +8231,7 @@ fn analyze_surface_builtin_call(
                 || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "axt_touch expects (DataSpaceId[, bytes manifest])".into(),
                 });
             }
@@ -5559,6 +8250,7 @@ fn analyze_surface_builtin_call(
                 || (arg_typed.len() == 2 && arg_typed[1].ty != Type::ProofBlob)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "verify_ds_proof expects (DataSpaceId[, ProofBlob])".into(),
                 });
             }
@@ -5573,18 +8265,21 @@ fn analyze_surface_builtin_call(
         Builtin::UseAssetHandle => {
             if arg_typed.len() != 2 && arg_typed.len() != 3 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "use_asset_handle expects (AssetHandle, bytes intent[, ProofBlob])"
                         .into(),
                 });
             }
             if arg_typed[0].ty != Type::AssetHandle || !is_blob_like(&arg_typed[1].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "use_asset_handle expects (AssetHandle, bytes intent[, ProofBlob])"
                         .into(),
                 });
             }
             if arg_typed.len() == 3 && arg_typed[2].ty != Type::ProofBlob {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "use_asset_handle expects (AssetHandle, bytes intent[, ProofBlob])"
                         .into(),
                 });
@@ -5600,6 +8295,7 @@ fn analyze_surface_builtin_call(
         Builtin::AxtCommit => {
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "axt_commit expects no arguments".into(),
                 });
             }
@@ -5618,6 +8314,7 @@ fn analyze_surface_builtin_call(
         | Builtin::ActivateContractInstance => {
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "{} expects (bytes) pointer to NoritoBytes lifecycle request",
                         builtin.name()
@@ -5646,6 +8343,7 @@ fn analyze_surface_builtin_call(
                 || resolve_struct_type(&arg_typed[0].ty) != Type::SoracloudRequest
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects (SoracloudRequest)", builtin.name()),
                 });
             }
@@ -5662,6 +8360,7 @@ fn analyze_surface_builtin_call(
                 || !(arg_typed[0].ty == Type::AccountId && arg_typed[1].ty == Type::Json)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects (AccountId, Json)", builtin.name()),
                 });
             }
@@ -5678,6 +8377,7 @@ fn analyze_surface_builtin_call(
                 || !(arg_typed[0].ty == Type::AccountId && arg_typed[1].ty == Type::Amount)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "set_account_quorum expects (AccountId, Amount)".into(),
                 });
             }
@@ -5692,11 +8392,13 @@ fn analyze_surface_builtin_call(
         Builtin::Path => {
             if arg_typed.len() != 2 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "path expects (Name, i64|bytes)".into(),
                 });
             }
             if !(is_int_like(&arg_typed[1].ty) || is_blob_like(&arg_typed[1].ty)) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "path expects (Name, i64|bytes)".into(),
                 });
             }
@@ -5711,6 +8413,7 @@ fn analyze_surface_builtin_call(
         Builtin::NameDecode => {
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "name_decode expects (bytes)".into(),
                 });
             }
@@ -5725,6 +8428,7 @@ fn analyze_surface_builtin_call(
         Builtin::TlvEq => {
             if arg_typed.len() != 2 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "tlv_eq expects (pointer-ABI, pointer-ABI)".into(),
                 });
             }
@@ -5732,6 +8436,7 @@ fn analyze_surface_builtin_call(
                 let ty = resolve_struct_type(&arg.ty);
                 if !(is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json) {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: "tlv_eq expects (pointer-ABI, pointer-ABI)".into(),
                     });
                 }
@@ -5747,12 +8452,14 @@ fn analyze_surface_builtin_call(
         Builtin::TlvLen => {
             if arg_typed.len() != 1 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "tlv_len expects one argument".into(),
                 });
             }
             let ty = resolve_struct_type(&arg_typed[0].ty);
             if !(is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "tlv_len expects a pointer-ABI type, Json, or bytes argument".into(),
                 });
             }
@@ -5767,12 +8474,14 @@ fn analyze_surface_builtin_call(
         Builtin::PointerToNorito => {
             if arg_typed.len() != 1 {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "pointer_to_norito expects one argument".into(),
                 });
             }
             let ty = resolve_struct_type(&arg_typed[0].ty);
             if !(is_pointer_type(&ty) || is_blob_like(&ty)) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "pointer_to_norito expects a pointer-ABI type or bytes argument"
                         .into(),
                 });
@@ -5788,6 +8497,7 @@ fn analyze_surface_builtin_call(
         Builtin::JsonObject => {
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "json_object expects no arguments".into(),
                 });
             }
@@ -5806,6 +8516,7 @@ fn analyze_surface_builtin_call(
                 || !is_int_like(&arg_typed[2].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "json_set_int expects (Json, Name, i64)".into(),
                 });
             }
@@ -5824,6 +8535,7 @@ fn analyze_surface_builtin_call(
                 || arg_typed[2].ty != Type::AccountId
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "json_set_account_id expects (Json, Name, AccountId)".into(),
                 });
             }
@@ -5838,6 +8550,7 @@ fn analyze_surface_builtin_call(
         Builtin::EncodeInt => {
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "encode_int expects (i64)".into(),
                 });
             }
@@ -5852,6 +8565,7 @@ fn analyze_surface_builtin_call(
         Builtin::DecodeInt => {
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "decode_int expects (bytes)".into(),
                 });
             }
@@ -5866,6 +8580,7 @@ fn analyze_surface_builtin_call(
         Builtin::EncodeJson => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "encode_json expects (Json)".into(),
                 });
             }
@@ -5880,6 +8595,7 @@ fn analyze_surface_builtin_call(
         Builtin::DecodeJson => {
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "decode_json expects (bytes)".into(),
                 });
             }
@@ -5898,6 +8614,7 @@ fn analyze_surface_builtin_call(
                 || !is_int_like(&arg_typed[2].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "json_set_int_direct expects (Json, Name, i64)".into(),
                 });
             }
@@ -5916,6 +8633,7 @@ fn analyze_surface_builtin_call(
                 || arg_typed[2].ty != Type::AccountId
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "json_set_account_id_direct expects (Json, Name, AccountId)".into(),
                 });
             }
@@ -5940,6 +8658,7 @@ fn analyze_surface_builtin_call(
                 || arg_typed[1].ty != Type::Name
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects (Json, Name)", builtin.name()),
                 });
             }
@@ -5958,6 +8677,7 @@ fn analyze_surface_builtin_call(
                 || !is_blob_like(&arg_typed[1].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "build_path_key_norito_direct expects (Name, bytes)".into(),
                 });
             }
@@ -5975,6 +8695,7 @@ fn analyze_surface_builtin_call(
                 || arg_typed[1].ty != Type::Json
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "encode_schema expects (Name, Json)".into(),
                 });
             }
@@ -5992,6 +8713,7 @@ fn analyze_surface_builtin_call(
                 || !is_blob_like(&arg_typed[1].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "decode_schema expects (Name, bytes)".into(),
                 });
             }
@@ -6006,6 +8728,7 @@ fn analyze_surface_builtin_call(
         Builtin::SchemaInfo => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "schema_info expects (Name)".into(),
                 });
             }
@@ -6023,6 +8746,7 @@ fn analyze_surface_builtin_call(
                 || arg_typed[1].ty != Type::Json
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "encode_schema_direct expects (Name, Json)".into(),
                 });
             }
@@ -6040,6 +8764,7 @@ fn analyze_surface_builtin_call(
                 || !is_blob_like(&arg_typed[1].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "decode_schema_direct expects (Name, bytes)".into(),
                 });
             }
@@ -6054,6 +8779,7 @@ fn analyze_surface_builtin_call(
         Builtin::SchemaInfoDirect => {
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "schema_info_direct expects (Name)".into(),
                 });
             }
@@ -6068,6 +8794,7 @@ fn analyze_surface_builtin_call(
         Builtin::NumericToInt => {
             if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "numeric_to_int expects (Amount|u128)".into(),
                 });
             }
@@ -6082,26 +8809,24 @@ fn analyze_surface_builtin_call(
         Builtin::NumericNeg => {
             if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "numeric_neg expects (Amount|u128)".into(),
                 });
             }
-            if matches!(resolve_struct_type(&arg_typed[0].ty), Type::FixedU128) {
-                return Err(SemanticError {
-                    message: "numeric::neg is not defined for unsigned u128 values".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed.clone(),
-                },
-                ty: resolve_struct_type(&arg_typed[0].ty),
+            Err(SemanticError {
+                code: "E_UNSIGNED_NEGATION",
+                message: "numeric::neg is not defined for u128 or Amount values".into(),
             })
         }
         Builtin::NumericToIntDirect => {
-            if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
+            if arg_typed.len() != 1
+                || !matches!(resolve_struct_type(&arg_typed[0].ty), Type::FixedU128)
+            {
                 return Err(SemanticError {
-                    message: "numeric_to_int_direct expects (Amount|u128)".into(),
+                    code: "K2003",
+                    message:
+                        "numeric_to_int_direct expects (u128); Amount uses its nominal V1 syscall"
+                            .into(),
                 });
             }
             Ok(TypedExpr {
@@ -6115,20 +8840,13 @@ fn analyze_surface_builtin_call(
         Builtin::NumericNegDirect => {
             if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "numeric_neg_direct expects (Amount|u128)".into(),
                 });
             }
-            if matches!(resolve_struct_type(&arg_typed[0].ty), Type::FixedU128) {
-                return Err(SemanticError {
-                    message: "numeric negation is not defined for unsigned u128 values".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed.clone(),
-                },
-                ty: resolve_struct_type(&arg_typed[0].ty),
+            Err(SemanticError {
+                code: "E_UNSIGNED_NEGATION",
+                message: "numeric negation is not defined for u128 or Amount values".into(),
             })
         }
         Builtin::NumericAdd
@@ -6146,11 +8864,13 @@ fn analyze_surface_builtin_call(
                 || !is_wide_numeric_type(&arg_typed[1].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects (Amount|u128, Amount|u128)", builtin.name()),
                 });
             }
             let Some(result_ty) = numeric_result_type(&arg_typed[0].ty, &arg_typed[1].ty) else {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "{} expects compatible wide numeric operands",
                         builtin.name()
@@ -6159,7 +8879,33 @@ fn analyze_surface_builtin_call(
             };
             if !is_wide_numeric_type(&result_ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects wide numeric operands", builtin.name()),
+                });
+            }
+            if matches!(resolve_struct_type(&result_ty), Type::Amount)
+                && matches!(builtin, Builtin::NumericRem | Builtin::NumericRemDirect)
+            {
+                return Err(SemanticError {
+                    code: "E_AMOUNT_REMAINDER",
+                    message: "Amount does not support `%`; use exact `/` or amount.div_round"
+                        .into(),
+                });
+            }
+            if matches!(resolve_struct_type(&result_ty), Type::Amount)
+                && matches!(
+                    builtin,
+                    Builtin::NumericAddDirect
+                        | Builtin::NumericSubDirect
+                        | Builtin::NumericMulDirect
+                        | Builtin::NumericDivDirect
+                        | Builtin::NumericRemDirect
+                )
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "direct Numeric helpers only accept u128; Amount uses its nominal V1 syscalls"
+                        .into(),
                 });
             }
             Ok(TypedExpr {
@@ -6188,10 +8934,28 @@ fn analyze_surface_builtin_call(
                 || numeric_result_type(&arg_typed[0].ty, &arg_typed[1].ty).is_none()
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!(
                         "{} expects compatible wide numeric operands",
                         builtin.name()
                     ),
+                });
+            }
+            if matches!(resolve_struct_type(&arg_typed[0].ty), Type::Amount)
+                && matches!(
+                    builtin,
+                    Builtin::NumericEqDirect
+                        | Builtin::NumericNeDirect
+                        | Builtin::NumericLtDirect
+                        | Builtin::NumericLeDirect
+                        | Builtin::NumericGtDirect
+                        | Builtin::NumericGeDirect
+                )
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "direct Numeric comparisons only accept u128; Amount uses its nominal V1 syscalls"
+                        .into(),
                 });
             }
             Ok(TypedExpr {
@@ -6205,6 +8969,7 @@ fn analyze_surface_builtin_call(
         Builtin::WrappingNeg => {
             if arg_typed.len() != 1 || !matches!(resolve_struct_type(&arg_typed[0].ty), Type::Int) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "wrapping_neg expects (i64)".into(),
                 });
             }
@@ -6223,6 +8988,7 @@ fn analyze_surface_builtin_call(
                     .any(|argument| !matches!(resolve_struct_type(&argument.ty), Type::Int))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects (i64, i64)", builtin.name()),
                 });
             }
@@ -6238,6 +9004,7 @@ fn analyze_surface_builtin_call(
             let name = builtin.name();
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects (i64)"),
                 });
             }
@@ -6256,6 +9023,7 @@ fn analyze_surface_builtin_call(
                 || !is_int_like(&arg_typed[1].ty)
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{name} expects (i64, i64)"),
                 });
             }
@@ -6280,6 +9048,7 @@ fn analyze_surface_builtin_call(
                     .all(|arg| is_int_like(&arg.ty) || crate::secret::is_secret_int(&arg.ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: message.into(),
                 });
             }
@@ -6298,6 +9067,7 @@ fn analyze_surface_builtin_call(
                     .all(|arg| is_int_like(&arg.ty) || crate::secret::is_secret_int(&arg.ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "poseidon6 expects six i64 args".into(),
                 });
             }
@@ -6315,6 +9085,7 @@ fn analyze_surface_builtin_call(
                     || crate::secret::is_secret_int(&arg_typed[0].ty))
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "pubkgen expects one i64 arg".into(),
                 });
             }
@@ -6329,6 +9100,7 @@ fn analyze_surface_builtin_call(
         Builtin::SetVl => {
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "setvl expects one i64 arg".into(),
                 });
             }
@@ -6353,10 +9125,11 @@ fn analyze_surface_builtin_call(
                 || arg_typed[1].ty != Type::Name
             {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects (Json, Name)", builtin.name()),
                 });
             }
-            let ty = match builtin {
+            let payload = match builtin {
                 Builtin::GetInt => Type::Int,
                 Builtin::GetNumeric => Type::Amount,
                 Builtin::GetJson => Type::Json,
@@ -6367,6 +9140,7 @@ fn analyze_surface_builtin_call(
                 Builtin::GetBlobHex => Type::Bytes,
                 _ => unreachable!(),
             };
+            let ty = Type::Option(Box::new(payload));
             Ok(TypedExpr {
                 expr: ExprKind::Call {
                     name: builtin.name().to_string(),
@@ -6379,6 +9153,7 @@ fn analyze_surface_builtin_call(
             reject_public_trigger_event(context, builtin.name())?;
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "trigger_event expects no arguments".into(),
                 });
             }
@@ -6393,6 +9168,7 @@ fn analyze_surface_builtin_call(
         Builtin::Authority | Builtin::SysvarAuthority => {
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects no arguments", builtin.name()),
                 });
             }
@@ -6407,6 +9183,7 @@ fn analyze_surface_builtin_call(
         Builtin::CurrentTimeMs | Builtin::BlockHeight | Builtin::BlockTimeMs => {
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects no arguments", builtin.name()),
                 });
             }
@@ -6421,6 +9198,7 @@ fn analyze_surface_builtin_call(
         Builtin::ChainId | Builtin::ContractAddress | Builtin::Entrypoint => {
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: format!("{} expects no arguments", builtin.name()),
                 });
             }
@@ -6443,12 +9221,1305 @@ fn analyze_surface_builtin_call(
     }
 }
 
+fn enclosing_return_type(context: &SemanticContext) -> Option<Type> {
+    context
+        .current_function_name
+        .borrow()
+        .as_ref()
+        .and_then(|name| context.function_returns.borrow().get(name).cloned())
+}
+
+fn typed_block_value_type(block: &TypedBlock) -> Type {
+    block
+        .tail
+        .as_ref()
+        .map_or(Type::Unit, |expression| expression.ty.clone())
+}
+
+/// Return whether evaluating `block` can never reach its enclosing expression
+/// continuation.
+///
+/// Divergent expression branches behave like a bottom type: they do not need
+/// to synthesize a placeholder value merely to agree with a sibling branch.
+/// Keeping divergence as a control-flow property instead of a public V1 type
+/// also prevents it from leaking into entrypoint schemas or the pointer ABI.
+fn typed_block_diverges(block: &TypedBlock) -> bool {
+    block.statements.iter().any(typed_statement_diverges)
+        || block.tail.as_deref().is_some_and(typed_expression_diverges)
+}
+
+fn typed_statement_diverges(statement: &TypedStatement) -> bool {
+    match statement {
+        TypedStatement::Return(_) | TypedStatement::Break | TypedStatement::Continue => true,
+        TypedStatement::If {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        }
+        | TypedStatement::IfLet {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } => typed_block_diverges(then_branch) && typed_block_diverges(else_branch),
+        TypedStatement::Let { value, .. } | TypedStatement::Expr(value) => {
+            typed_expression_diverges(value)
+        }
+        TypedStatement::If {
+            else_branch: None, ..
+        }
+        | TypedStatement::IfLet {
+            else_branch: None, ..
+        }
+        | TypedStatement::While { .. }
+        | TypedStatement::For { .. }
+        | TypedStatement::ForEachMap { .. }
+        | TypedStatement::MapSet { .. } => false,
+    }
+}
+
+fn typed_expression_diverges(expression: &TypedExpr) -> bool {
+    match expression.kind() {
+        ExprKind::If {
+            then_branch,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_branch,
+            else_branch,
+            ..
+        } => typed_block_diverges(then_branch) && typed_block_diverges(else_branch),
+        ExprKind::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|arm| typed_block_diverges(&arm.body))
+        }
+        _ => false,
+    }
+}
+
+fn analyze_expression_block(
+    context: &SemanticContext,
+    block: &Block,
+    vars: &mut HashMap<String, Type>,
+    expected: Option<&Type>,
+) -> Result<TypedBlock, SemanticError> {
+    let return_type = enclosing_return_type(context);
+    let mut mutable_bindings = HashSet::new();
+    analyze_block(
+        context,
+        block,
+        vars,
+        &mut mutable_bindings,
+        return_type.as_ref(),
+        expected,
+        0,
+    )
+}
+
+fn require_exact_branch_type(expected: &Type, actual: &Type) -> Result<(), SemanticError> {
+    if resolve_struct_type(expected) == resolve_struct_type(actual) {
+        Ok(())
+    } else {
+        Err(SemanticError {
+            code: "E_BRANCH_TYPE_MISMATCH",
+            message: format!(
+                "expression branches must have exactly the same type; expected `{}`, found `{}`",
+                type_name(expected),
+                type_name(actual)
+            ),
+        })
+    }
+}
+
+fn normalize_branch_error(error: SemanticError, expected: &Type) -> SemanticError {
+    if matches!(
+        error.code,
+        "E_TAIL_TYPE_MISMATCH" | "E_TYPE_ANNOTATION_MISMATCH"
+    ) {
+        SemanticError {
+            code: "E_BRANCH_TYPE_MISMATCH",
+            message: format!(
+                "expression branch must have type `{}`: {}",
+                type_name(expected),
+                error.message
+            ),
+        }
+    } else {
+        error
+    }
+}
+
+fn analyze_expression_branches(
+    context: &SemanticContext,
+    then_branch: &Block,
+    else_branch: &Block,
+    vars: &HashMap<String, Type>,
+    expected: Option<&Type>,
+) -> Result<(TypedBlock, TypedBlock, Type), SemanticError> {
+    analyze_expression_branches_with_envs(
+        context,
+        then_branch,
+        else_branch,
+        &mut vars.clone(),
+        &mut vars.clone(),
+        expected,
+    )
+}
+
+fn analyze_expression_branches_with_envs(
+    context: &SemanticContext,
+    then_branch: &Block,
+    else_branch: &Block,
+    then_vars: &mut HashMap<String, Type>,
+    else_vars: &mut HashMap<String, Type>,
+    expected: Option<&Type>,
+) -> Result<(TypedBlock, TypedBlock, Type), SemanticError> {
+    if let Some(expected) = expected {
+        let then_typed = analyze_expression_block(context, then_branch, then_vars, Some(expected))
+            .map_err(|error| normalize_branch_error(error, expected))?;
+        let else_typed = analyze_expression_block(context, else_branch, else_vars, Some(expected))
+            .map_err(|error| normalize_branch_error(error, expected))?;
+        if !typed_block_diverges(&then_typed) {
+            require_exact_branch_type(expected, &typed_block_value_type(&then_typed))?;
+        }
+        if !typed_block_diverges(&else_typed) {
+            require_exact_branch_type(expected, &typed_block_value_type(&else_typed))?;
+        }
+        return Ok((then_typed, else_typed, expected.clone()));
+    }
+
+    match analyze_expression_block(context, then_branch, &mut then_vars.clone(), None) {
+        Ok(then_typed) => {
+            if typed_block_diverges(&then_typed) {
+                let else_typed = analyze_expression_block(context, else_branch, else_vars, None)?;
+                if typed_block_diverges(&else_typed) {
+                    return Err(SemanticError {
+                        code: "E_DIVERGING_EXPRESSION_CONTEXT",
+                        message:
+                            "an expression whose branches all return requires an exact type context"
+                                .into(),
+                    });
+                }
+                let ty = typed_block_value_type(&else_typed);
+                return Ok((then_typed, else_typed, ty));
+            }
+            let ty = typed_block_value_type(&then_typed);
+            let else_typed = analyze_expression_block(context, else_branch, else_vars, Some(&ty))?;
+            if !typed_block_diverges(&else_typed) {
+                require_exact_branch_type(&ty, &typed_block_value_type(&else_typed))?;
+            }
+            Ok((then_typed, else_typed, ty))
+        }
+        Err(error) if error.code == "E_SUM_MISSING_CONTEXT" => {
+            context.discard_diagnostic();
+            let else_typed = analyze_expression_block(context, else_branch, else_vars, None)?;
+            if typed_block_diverges(&else_typed) {
+                return Err(error);
+            }
+            let ty = typed_block_value_type(&else_typed);
+            let then_typed = analyze_expression_block(context, then_branch, then_vars, Some(&ty))?;
+            if !typed_block_diverges(&then_typed) {
+                require_exact_branch_type(&ty, &typed_block_value_type(&then_typed))?;
+            }
+            Ok((then_typed, else_typed, ty))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn analyze_sum_pattern(
+    pattern: &SumPattern,
+    value_type: &Type,
+) -> Result<(TypedSumPattern, Option<(String, Type)>), SemanticError> {
+    let value_type = resolve_struct_type(value_type);
+    let payload = match (&value_type, pattern.variant) {
+        (Type::Option(payload), SumVariant::OptionSome) => Some(payload.as_ref().clone()),
+        (Type::Option(_), SumVariant::OptionNone) => None,
+        (Type::Result(payload, _), SumVariant::ResultOk) => Some(payload.as_ref().clone()),
+        (Type::Result(_, error), SumVariant::ResultErr) => Some(error.as_ref().clone()),
+        (Type::Option(_), _) => {
+            return Err(SemanticError {
+                code: "E_PATTERN_FAMILY",
+                message: "Option values require `Option::some`/`Option::none` patterns".into(),
+            });
+        }
+        (Type::Result(_, _), _) => {
+            return Err(SemanticError {
+                code: "E_PATTERN_FAMILY",
+                message: "Result values require `Result::ok`/`Result::err` patterns".into(),
+            });
+        }
+        (other, _) => {
+            return Err(SemanticError {
+                code: "E_PATTERN_TYPE",
+                message: format!(
+                    "sum patterns require Option or Result, found `{}`",
+                    type_name(other)
+                ),
+            });
+        }
+    };
+    let binding = match (&pattern.binding, &payload) {
+        (Some(PatternBinding::Name(name)), Some(payload)) => Some((name.clone(), payload.clone())),
+        (Some(PatternBinding::Wildcard), Some(_)) | (None, None) => None,
+        (None, Some(_)) => {
+            return Err(SemanticError {
+                code: "E_PATTERN_PAYLOAD",
+                message: "active sum patterns require a payload binding or `_`".into(),
+            });
+        }
+        (Some(_), None) => {
+            return Err(SemanticError {
+                code: "E_PATTERN_PAYLOAD",
+                message: "`Option::none` has no payload to bind".into(),
+            });
+        }
+    };
+    Ok((
+        TypedSumPattern {
+            pattern: pattern.clone(),
+            payload_type: payload,
+        },
+        binding,
+    ))
+}
+
+fn analyze_match_expression(
+    context: &SemanticContext,
+    value: TypedExpr,
+    arms: &[MatchArm],
+    vars: &HashMap<String, Type>,
+    expected: Option<&Type>,
+) -> Result<TypedExpr, SemanticError> {
+    if arms.is_empty() {
+        return Err(SemanticError {
+            code: "E_MATCH_EMPTY",
+            message: "match requires exhaustive arms".into(),
+        });
+    }
+    let mut seen = HashSet::new();
+    let mut checked = Vec::with_capacity(arms.len());
+    for arm in arms {
+        if !seen.insert(arm.pattern.variant) {
+            return Err(SemanticError {
+                code: "E_MATCH_DUPLICATE_PATTERN",
+                message: format!(
+                    "duplicate or unreachable `{:?}` match arm",
+                    arm.pattern.variant
+                ),
+            });
+        }
+        let (pattern, binding) = analyze_sum_pattern(&arm.pattern, &value.ty)?;
+        checked.push((arm, pattern, binding));
+    }
+    let exhaustive = match resolve_struct_type(&value.ty) {
+        Type::Option(_) => {
+            seen.contains(&SumVariant::OptionSome) && seen.contains(&SumVariant::OptionNone)
+        }
+        Type::Result(_, _) => {
+            seen.contains(&SumVariant::ResultOk) && seen.contains(&SumVariant::ResultErr)
+        }
+        _ => false,
+    };
+    if !exhaustive {
+        return Err(SemanticError {
+            code: "E_MATCH_NON_EXHAUSTIVE",
+            message: "match must cover both namespaced variants of its Option or Result value"
+                .into(),
+        });
+    }
+
+    let inferred = if let Some(expected) = expected {
+        expected.clone()
+    } else {
+        let mut inferred = None;
+        let mut missing_context = None;
+        for (arm, _, binding) in &checked {
+            let mut arm_vars = vars.clone();
+            if let Some((name, ty)) = binding {
+                arm_vars.insert(name.clone(), ty.clone());
+            }
+            match analyze_expression_block(context, &arm.body, &mut arm_vars, None) {
+                Ok(block) => {
+                    if !typed_block_diverges(&block) {
+                        inferred = Some(typed_block_value_type(&block));
+                        break;
+                    }
+                }
+                Err(error) if error.code == "E_SUM_MISSING_CONTEXT" => {
+                    context.discard_diagnostic();
+                    missing_context.get_or_insert(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        inferred.ok_or_else(|| {
+            missing_context.unwrap_or_else(|| SemanticError {
+                code: "E_DIVERGING_EXPRESSION_CONTEXT",
+                message: "a match whose arms all return requires an exact type context".into(),
+            })
+        })?
+    };
+
+    let mut typed_arms = Vec::with_capacity(checked.len());
+    for (arm, pattern, binding) in checked {
+        let mut arm_vars = vars.clone();
+        if let Some((name, ty)) = binding {
+            ensure_new_local_binding(context, &name, &arm_vars)?;
+            arm_vars.insert(name, ty);
+        }
+        let body = analyze_expression_block(context, &arm.body, &mut arm_vars, Some(&inferred))?;
+        if !typed_block_diverges(&body) {
+            require_exact_branch_type(&inferred, &typed_block_value_type(&body))?;
+        }
+        typed_arms.push(TypedMatchArm { pattern, body });
+    }
+    Ok(TypedExpr {
+        expr: ExprKind::Match {
+            value: Box::new(value),
+            arms: typed_arms,
+        },
+        ty: inferred,
+    })
+}
+
 fn analyze_expr(
     context: &SemanticContext,
     expr: &Expr,
     vars: &mut HashMap<String, Type>,
 ) -> Result<TypedExpr, SemanticError> {
-    match expr {
+    analyze_expr_expected(context, expr, vars, None)
+}
+
+fn analyze_list_literal(
+    context: &SemanticContext,
+    elements: &[Expr],
+    vars: &mut HashMap<String, Type>,
+    expected: Option<&Type>,
+) -> Result<TypedExpr, SemanticError> {
+    let expected = expected.map(resolve_struct_type);
+    let (expected_element, capacity) = match expected {
+        Some(Type::List(element, capacity)) => (Some(*element), capacity),
+        Some(other) => {
+            return Err(SemanticError {
+                code: "E_LIST_CONTEXT_TYPE",
+                message: format!("a list literal cannot initialize `{}`", type_name(&other)),
+            });
+        }
+        None if elements.is_empty() => {
+            return Err(SemanticError {
+                code: "E_LIST_EMPTY_CONTEXT",
+                message: "an empty list requires an exact `List<T, N>` type context".into(),
+            });
+        }
+        None => {
+            let capacity = u8::try_from(elements.len())
+                .ok()
+                .filter(|capacity| *capacity <= 64)
+                .ok_or_else(|| SemanticError {
+                    code: "E_LIST_CAPACITY",
+                    message: format!(
+                        "a list literal with {} elements exceeds the V1 capacity limit of 64",
+                        elements.len()
+                    ),
+                })?;
+            (None, capacity)
+        }
+    };
+    if elements.len() > usize::from(capacity) {
+        return Err(SemanticError {
+            code: "E_LIST_LITERAL_CAPACITY",
+            message: format!(
+                "list literal has {} elements but its contextual capacity is {capacity}",
+                elements.len()
+            ),
+        });
+    }
+
+    let mut typed = Vec::with_capacity(elements.len());
+    let mut element_type = expected_element;
+    for element in elements {
+        let mut value = analyze_expr_expected(context, element, vars, element_type.as_ref())?;
+        if let Some(expected_element) = &element_type {
+            ensure_assignable_and_coerce(expected_element, &mut value)?;
+        } else {
+            element_type = Some(resolve_struct_type(&value.ty));
+        }
+        typed.push(value);
+    }
+    let element_type = element_type.expect("non-empty uncontextualized list inferred an element");
+    if list_element_contains_resource_handle(&element_type) {
+        return Err(SemanticError {
+            code: "E_LIST_RESOURCE_ELEMENT",
+            message: format!(
+                "List elements cannot contain resource handle type `{}`",
+                type_name(&element_type)
+            ),
+        });
+    }
+    let list_type = Type::List(Box::new(element_type), capacity);
+    validate_list_schemas(&list_type)?;
+    Ok(TypedExpr {
+        expr: ExprKind::List(typed),
+        ty: list_type,
+    })
+}
+
+fn analyze_list_comprehension(
+    context: &SemanticContext,
+    expression: &Expr,
+    item: &str,
+    source: &Expr,
+    condition: Option<&Expr>,
+    vars: &mut HashMap<String, Type>,
+    expected: Option<&Type>,
+) -> Result<TypedExpr, SemanticError> {
+    let source = analyze_expr(context, source, vars)?;
+    let Type::List(source_element, source_capacity) = resolve_struct_type(&source.ty) else {
+        return Err(SemanticError {
+            code: "E_LIST_COMPREHENSION_SOURCE",
+            message: format!(
+                "list comprehension source must be `List<T, N>`, found `{}`",
+                type_name(&source.ty)
+            ),
+        });
+    };
+    ensure_new_local_binding(context, item, vars)?;
+
+    let (expected_element, result_capacity) = match expected.map(resolve_struct_type) {
+        Some(Type::List(element, capacity)) => {
+            if source_capacity > capacity {
+                context
+                    .required_list_capacity
+                    .replace(Some(source_capacity));
+                return Err(SemanticError {
+                    code: "E_LIST_COMPREHENSION_CAPACITY",
+                    message: format!(
+                        "source capacity {source_capacity} may exceed contextual capacity {capacity}; filters do not reduce the proven maximum"
+                    ),
+                });
+            }
+            (Some(*element), capacity)
+        }
+        Some(other) => {
+            return Err(SemanticError {
+                code: "E_LIST_CONTEXT_TYPE",
+                message: format!(
+                    "a list comprehension cannot initialize `{}`",
+                    type_name(&other)
+                ),
+            });
+        }
+        None => (None, source_capacity),
+    };
+
+    let mut comprehension_vars = vars.clone();
+    comprehension_vars.insert(item.to_owned(), (*source_element).clone());
+    let mut expression = analyze_expr_expected(
+        context,
+        expression,
+        &mut comprehension_vars,
+        expected_element.as_ref(),
+    )?;
+    if let Some(expected_element) = &expected_element {
+        ensure_assignable_and_coerce(expected_element, &mut expression)?;
+    }
+    let element_type = expected_element.unwrap_or_else(|| resolve_struct_type(&expression.ty));
+    if list_element_contains_resource_handle(&element_type) {
+        return Err(SemanticError {
+            code: "E_LIST_RESOURCE_ELEMENT",
+            message: format!(
+                "List elements cannot contain resource handle type `{}`",
+                type_name(&element_type)
+            ),
+        });
+    }
+    let list_type = Type::List(Box::new(element_type), result_capacity);
+    validate_list_schemas(&list_type)?;
+    let condition = condition
+        .map(|condition| analyze_expr(context, condition, &mut comprehension_vars))
+        .transpose()?;
+    if let Some(condition) = &condition {
+        crate::secret::reject_secret_control_flow(condition)?;
+        if resolve_struct_type(&condition.ty) != Type::Bool {
+            return Err(SemanticError {
+                code: "E_LIST_COMPREHENSION_FILTER",
+                message: "comprehension filter must be bool".into(),
+            });
+        }
+    }
+    Ok(TypedExpr {
+        expr: ExprKind::ListComprehension {
+            expression: Box::new(expression),
+            item: item.to_owned(),
+            source: Box::new(source),
+            condition: condition.map(Box::new),
+        },
+        ty: list_type,
+    })
+}
+
+fn is_native_json_value_type(ty: &Type) -> bool {
+    match resolve_struct_type(ty) {
+        Type::Int
+        | Type::FixedU128
+        | Type::Amount
+        | Type::Bool
+        | Type::String
+        | Type::Bytes
+        | Type::DataSpaceId
+        | Type::AccountId
+        | Type::AssetDefinitionId
+        | Type::AssetId
+        | Type::NftId
+        | Type::DomainId
+        | Type::Name
+        | Type::Json => true,
+        Type::Option(inner) | Type::List(inner, _) => is_native_json_value_type(&inner),
+        Type::Unit
+        | Type::AxtDescriptor
+        | Type::AssetHandle
+        | Type::ProofBlob
+        | Type::SoracloudRequest
+        | Type::SoracloudResponse
+        | Type::Secret(_)
+        | Type::StateMap(_, _)
+        | Type::Result(_, _)
+        | Type::Tuple(_)
+        | Type::Struct { .. }
+        | Type::NamedStruct(_) => false,
+    }
+}
+
+fn analyze_native_json_value(
+    context: &SemanticContext,
+    expression: &Expr,
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    let typed = analyze_expr(context, expression, vars)?;
+    if !is_native_json_value_type(&typed.ty) {
+        return Err(SemanticError {
+            code: "E_JSON_VALUE_TYPE",
+            message: format!(
+                "native JSON construction cannot convert `{}` implicitly; handle Result and arbitrary structs/tuples explicitly, and keep resource handles outside JSON",
+                type_name(&typed.ty)
+            ),
+        });
+    }
+    Ok(typed)
+}
+
+fn analyze_list_method_call(
+    context: &SemanticContext,
+    source_name: &str,
+    args: &[Expr],
+    argument_names: Option<&[String]>,
+    implicit_receiver: bool,
+    vars: &mut HashMap<String, Type>,
+) -> Option<Result<TypedExpr, SemanticError>> {
+    if !implicit_receiver || args.is_empty() {
+        return None;
+    }
+    let method = match source_name {
+        "len" => (LIST_LEN_INTRINSIC, &[][..]),
+        STATE_MAP_GET_INTRINSIC | "get" => (LIST_GET_INTRINSIC, &["index"][..]),
+        "try_set" => (LIST_TRY_SET_INTRINSIC, &["index", "value"][..]),
+        "try_push" => (LIST_TRY_PUSH_INTRINSIC, &["value"][..]),
+        "pop" => (LIST_POP_INTRINSIC, &[][..]),
+        "contains" => (LIST_CONTAINS_INTRINSIC, &["value"][..]),
+        "take" => (LIST_TAKE_INTRINSIC, &["limit"][..]),
+        "enumerate" => (LIST_ENUMERATE_INTRINSIC, &[][..]),
+        _ => return None,
+    };
+
+    let receiver = match analyze_expr(context, &args[0], vars) {
+        Ok(receiver) => receiver,
+        Err(error) => return Some(Err(error)),
+    };
+    let Type::List(element, capacity) = resolve_struct_type(&receiver.ty) else {
+        return None;
+    };
+    if matches!(
+        method.0,
+        LIST_TRY_SET_INTRINSIC | LIST_TRY_PUSH_INTRINSIC | LIST_POP_INTRINSIC
+    ) {
+        let Some(Expr::Ident(receiver_name)) = args.first().map(Expr::kind) else {
+            return Some(Err(SemanticError {
+                code: "E_LIST_MUTABLE_RECEIVER",
+                message: format!(
+                    "List.{source_name} mutates its receiver; call it on a `var` list binding"
+                ),
+            }));
+        };
+        if !context
+            .current_mutable_bindings
+            .borrow()
+            .contains(receiver_name)
+        {
+            return Some(Err(SemanticError {
+                code: "E_LIST_MUTABLE_RECEIVER",
+                message: format!(
+                    "List.{source_name} requires mutable receiver `{receiver_name}`; declare it with `var`"
+                ),
+            }));
+        }
+    }
+    let parameter_names = method
+        .1
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    let named_only_reason = (method.0 == LIST_TRY_SET_INTRINSIC
+        && resolve_struct_type(&element) == Type::Int)
+        .then_some(
+            "the i64 index and i64 element value can be transposed, so their names are required",
+        );
+    let plan = match reorder_call_arguments(
+        source_name,
+        args,
+        argument_names,
+        true,
+        &parameter_names,
+        &vec![true; parameter_names.len()],
+        named_only_reason,
+    ) {
+        Ok(plan) => plan,
+        Err(error) => return Some(Err(error)),
+    };
+    let expected_arity = parameter_names.len() + 1;
+    if plan.ordered.len() != expected_arity {
+        return Some(Err(SemanticError {
+            code: "E_LIST_METHOD_ARITY",
+            message: format!(
+                "List.{} expects {} argument{}, got {}",
+                source_name,
+                parameter_names.len(),
+                if parameter_names.len() == 1 { "" } else { "s" },
+                plan.ordered.len().saturating_sub(1)
+            ),
+        }));
+    }
+
+    let mut typed_slots = (0..plan.ordered.len()).map(|_| None).collect::<Vec<_>>();
+    typed_slots[0] = Some(receiver);
+    for index in plan
+        .evaluation_order
+        .iter()
+        .copied()
+        .filter(|index| *index != 0)
+    {
+        let argument = &plan.ordered[index];
+        let typed = match method.0 {
+            LIST_GET_INTRINSIC | LIST_TAKE_INTRINSIC => {
+                let argument = match analyze_expr(context, argument, vars) {
+                    Ok(argument) => argument,
+                    Err(error) => return Some(Err(error)),
+                };
+                if resolve_struct_type(&argument.ty) != Type::Int {
+                    return Some(Err(SemanticError {
+                        code: "E_LIST_INDEX_TYPE",
+                        message: format!("List.{} expects an i64 index or limit", source_name),
+                    }));
+                }
+                argument
+            }
+            LIST_TRY_SET_INTRINSIC if index == 1 => {
+                let argument = match analyze_expr(context, argument, vars) {
+                    Ok(argument) => argument,
+                    Err(error) => return Some(Err(error)),
+                };
+                if resolve_struct_type(&argument.ty) != Type::Int {
+                    return Some(Err(SemanticError {
+                        code: "E_LIST_INDEX_TYPE",
+                        message: "List.try_set expects an i64 index".into(),
+                    }));
+                }
+                argument
+            }
+            LIST_TRY_SET_INTRINSIC | LIST_TRY_PUSH_INTRINSIC | LIST_CONTAINS_INTRINSIC => {
+                let mut argument =
+                    match analyze_expr_expected(context, argument, vars, Some(&element)) {
+                        Ok(argument) => argument,
+                        Err(error) => return Some(Err(error)),
+                    };
+                if let Err(error) = ensure_assignable_and_coerce(&element, &mut argument) {
+                    return Some(Err(error));
+                }
+                argument
+            }
+            _ => unreachable!("zero-argument methods have no arguments to analyze"),
+        };
+        typed_slots[index] = Some(typed);
+    }
+    let typed = match typed_slots
+        .into_iter()
+        .enumerate()
+        .map(|(index, argument)| {
+            argument.ok_or_else(|| SemanticError {
+                code: "E_MALFORMED_CALL",
+                message: format!("List.{source_name} did not analyze argument slot {index}"),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(typed) => typed,
+        Err(error) => return Some(Err(error)),
+    };
+
+    let result_type = match method.0 {
+        LIST_LEN_INTRINSIC => Type::Int,
+        LIST_GET_INTRINSIC | LIST_POP_INTRINSIC => Type::Option(element.clone()),
+        LIST_TRY_SET_INTRINSIC | LIST_TRY_PUSH_INTRINSIC => Type::Bool,
+        LIST_CONTAINS_INTRINSIC => {
+            if !list_element_is_comparable(&element) {
+                return Some(Err(SemanticError {
+                    code: "E_LIST_CONTAINS_COMPARABILITY",
+                    message: format!(
+                        "List.contains requires a canonically comparable element type, found `{}`",
+                        type_name(&element)
+                    ),
+                }));
+            }
+            Type::Bool
+        }
+        LIST_TAKE_INTRINSIC => {
+            let Some(limit) = typed.get(1).and_then(|argument| match argument.kind() {
+                ExprKind::Number(limit) => Some(limit),
+                _ => None,
+            }) else {
+                return Some(Err(SemanticError {
+                    code: "E_LIST_TAKE_CONST",
+                    message: "List.take limit must be a compile-time integer constant".into(),
+                }));
+            };
+            let limit = match u8::try_from(*limit).ok().filter(|limit| *limit <= capacity) {
+                Some(limit) => limit,
+                None => {
+                    return Some(Err(SemanticError {
+                        code: "E_LIST_TAKE_LIMIT",
+                        message: format!(
+                            "List.take limit {limit} is outside 0..={capacity} for this source List"
+                        ),
+                    }));
+                }
+            };
+            // V1 List schemas have capacities in 1..=64. `take(0)` is still
+            // useful and deterministically produces an empty value, represented
+            // by the smallest valid static result capacity.
+            Type::List(element.clone(), limit.max(1))
+        }
+        LIST_ENUMERATE_INTRINSIC => Type::List(
+            Box::new(Type::Tuple(vec![Type::Int, (*element).clone()])),
+            capacity,
+        ),
+        _ => unreachable!("known List intrinsic"),
+    };
+    Some(Ok(retain_named_call_evaluation_order(
+        TypedExpr {
+            expr: ExprKind::Call {
+                name: method.0.to_owned(),
+                args: typed,
+            },
+            ty: result_type,
+        },
+        &plan,
+    )))
+}
+
+fn amount_rounding_mode(expression: &Expr) -> Option<(AmountRoundingMode, i64)> {
+    let (mode, tag) = match expression {
+        Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
+            return amount_rounding_mode(expression);
+        }
+        Expr::Ident(name) if name == "Rounding::floor" => (
+            AmountRoundingMode::Floor,
+            ivm_abi::syscalls::AMOUNT_ROUND_FLOOR,
+        ),
+        Expr::Ident(name) if name == "Rounding::ceil" => (
+            AmountRoundingMode::Ceil,
+            ivm_abi::syscalls::AMOUNT_ROUND_CEIL,
+        ),
+        Expr::Ident(name) if name == "Rounding::nearest_even" => (
+            AmountRoundingMode::NearestEven,
+            ivm_abi::syscalls::AMOUNT_ROUND_NEAREST_EVEN,
+        ),
+        _ => return None,
+    };
+    i64::try_from(tag).ok().map(|tag| (mode, tag))
+}
+
+fn analyze_amount_method_call(
+    context: &SemanticContext,
+    source_name: &str,
+    args: &[Expr],
+    argument_names: Option<&[String]>,
+    implicit_receiver: bool,
+    vars: &mut HashMap<String, Type>,
+) -> Option<Result<TypedExpr, SemanticError>> {
+    if source_name != "div_round" || !implicit_receiver || args.is_empty() {
+        return None;
+    }
+    let receiver = match analyze_expr(context, &args[0], vars) {
+        Ok(receiver) => receiver,
+        Err(error) => return Some(Err(error)),
+    };
+    if resolve_struct_type(&receiver.ty) != Type::Amount {
+        return Some(Err(SemanticError {
+            code: "E_AMOUNT_DIV_ROUND_RECEIVER",
+            message: format!(
+                "Amount.div_round requires an Amount receiver, found `{}`",
+                type_name(&receiver.ty)
+            ),
+        }));
+    }
+
+    let parameter_names = ["divisor", "scale", "mode"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let plan = match reorder_call_arguments(
+        "Amount.div_round",
+        args,
+        argument_names,
+        true,
+        &parameter_names,
+        &[true, true, true],
+        Some("rounded Amount division requires explicit `divisor`, `scale`, and `mode` names"),
+    ) {
+        Ok(plan) => plan,
+        Err(error) => return Some(Err(error)),
+    };
+    if plan.ordered.len() != 4 {
+        return Some(Err(SemanticError {
+            code: "E_AMOUNT_DIV_ROUND_ARITY",
+            message: format!(
+                "Amount.div_round expects divisor, scale, and mode, got {} argument(s)",
+                plan.ordered.len().saturating_sub(1)
+            ),
+        }));
+    }
+
+    let mut typed_slots = (0..4).map(|_| None).collect::<Vec<_>>();
+    typed_slots[0] = Some(receiver);
+    let mut rounding_mode = None;
+    for index in plan
+        .evaluation_order
+        .iter()
+        .copied()
+        .filter(|index| *index != 0)
+    {
+        let typed = match index {
+            1 => {
+                let mut divisor = match analyze_expr_expected(
+                    context,
+                    &plan.ordered[index],
+                    vars,
+                    Some(&Type::Amount),
+                ) {
+                    Ok(divisor) => divisor,
+                    Err(error) => return Some(Err(error)),
+                };
+                if let Err(error) = ensure_assignable_and_coerce(&Type::Amount, &mut divisor) {
+                    return Some(Err(error));
+                }
+                divisor
+            }
+            2 => match analyze_expr_expected(context, &plan.ordered[index], vars, Some(&Type::Int))
+            {
+                Ok(scale) => scale,
+                Err(error) => return Some(Err(error)),
+            },
+            3 => {
+                let Some((mode, mode_tag)) = amount_rounding_mode(&plan.ordered[index]) else {
+                    return Some(Err(SemanticError {
+                        code: "E_AMOUNT_ROUNDING_MODE",
+                        message: "Amount.div_round mode must be exactly `Rounding::floor`, `Rounding::ceil`, or `Rounding::nearest_even`".into(),
+                    }));
+                };
+                rounding_mode = Some(mode);
+                TypedExpr {
+                    expr: ExprKind::Number(mode_tag),
+                    ty: Type::Int,
+                }
+            }
+            _ => unreachable!("Amount.div_round has exactly four ABI slots"),
+        };
+        typed_slots[index] = Some(typed);
+    }
+    let mut typed = match typed_slots
+        .into_iter()
+        .enumerate()
+        .map(|(index, argument)| {
+            argument.ok_or_else(|| SemanticError {
+                code: "E_MALFORMED_CALL",
+                message: format!("Amount.div_round did not analyze argument slot {index}"),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(typed) => typed,
+        Err(error) => return Some(Err(error)),
+    };
+    let receiver = typed.remove(0);
+    let divisor = typed.remove(0);
+    let scale = typed.remove(0);
+    let mode = typed.remove(0);
+    if resolve_struct_type(&scale.ty) != Type::Int {
+        return Some(Err(SemanticError {
+            code: "E_AMOUNT_DIV_ROUND_SCALE_TYPE",
+            message: "Amount.div_round scale must be i64".into(),
+        }));
+    }
+    if let ExprKind::Number(scale) = scale.kind()
+        && !(0..=28).contains(scale)
+    {
+        return Some(Err(SemanticError {
+            code: "E_AMOUNT_DIV_ROUND_SCALE",
+            message: format!("Amount.div_round scale {scale} is outside 0..=28"),
+        }));
+    }
+    let rounding_mode = rounding_mode.expect("validated rounding mode slot");
+    if matches!(divisor.kind(), ExprKind::AmountLiteral { value, .. } if value.is_zero()) {
+        return Some(Err(SemanticError {
+            code: "E_AMOUNT_CONSTANT_ARITHMETIC",
+            message: "Amount division by literal zero is invalid".into(),
+        }));
+    }
+
+    if let (
+        ExprKind::AmountLiteral {
+            value: dividend, ..
+        },
+        ExprKind::AmountLiteral { value: divisor, .. },
+        ExprKind::Number(scale),
+    ) = (receiver.kind(), divisor.kind(), scale.kind())
+    {
+        let scale = u32::try_from(*scale).expect("literal scale was checked in 0..=28");
+        let value = match dividend.checked_amount_div_round(divisor, scale, rounding_mode) {
+            Ok(value) => value,
+            Err(error) => {
+                return Some(Err(SemanticError {
+                    code: "E_AMOUNT_CONSTANT_ARITHMETIC",
+                    message: format!("invalid rounded Amount division: {error}"),
+                }));
+            }
+        };
+        return Some(Ok(TypedExpr {
+            expr: ExprKind::AmountLiteral {
+                spelling: format!("{value}amt"),
+                value,
+            },
+            ty: Type::Amount,
+        }));
+    }
+
+    Some(Ok(retain_named_call_evaluation_order(
+        TypedExpr {
+            expr: ExprKind::Call {
+                name: AMOUNT_DIV_ROUND_INTRINSIC.to_owned(),
+                args: vec![receiver, divisor, scale, mode],
+            },
+            ty: Type::Amount,
+        },
+        &plan,
+    )))
+}
+
+fn analyze_expr_expected(
+    context: &SemanticContext,
+    expr: &Expr,
+    vars: &mut HashMap<String, Type>,
+    expected: Option<&Type>,
+) -> Result<TypedExpr, SemanticError> {
+    let result = analyze_expr_expected_inner(context, expr, vars, expected).and_then(|typed| {
+        if matches!(
+            typed.kind(),
+            ExprKind::JsonObject(_) | ExprKind::JsonArray(_)
+        ) && let Err(error) = crate::abi_schema::json_construction_schema(&typed)
+        {
+            return Err(SemanticError {
+                code: "E_JSON_SCHEMA_LIMIT",
+                message: error.to_string(),
+            });
+        }
+        context.record_typed_hir_node(expr, &typed.ty)?;
+        Ok(typed)
+    });
+    if result.is_err() {
+        context.capture_expression_diagnostic(expr, None);
+    }
+    result
+}
+
+fn analyze_expr_expected_inner(
+    context: &SemanticContext,
+    expr: &Expr,
+    vars: &mut HashMap<String, Type>,
+    expected: Option<&Type>,
+) -> Result<TypedExpr, SemanticError> {
+    match expr.kind() {
+        Expr::Source { .. } | Expr::Resolved { .. } => {
+            unreachable!("kind() strips AST and resolved-HIR provenance wrappers")
+        }
+        Expr::OptionSome(value) => {
+            let expected_payload =
+                match expected.map(|ty| resolve_struct_type_with_context(context, ty)) {
+                    Some(Type::Option(payload)) => Some(*payload),
+                    Some(other) => {
+                        return Err(SemanticError {
+                            code: "E_SUM_CONTEXT_TYPE",
+                            message: format!(
+                                "`Option::some` cannot initialize `{}`",
+                                type_name(&other)
+                            ),
+                        });
+                    }
+                    None => None,
+                };
+            let mut value = analyze_expr_expected(context, value, vars, expected_payload.as_ref())?;
+            if let Some(payload) = &expected_payload {
+                ensure_assignable_and_coerce(payload, &mut value)?;
+            }
+            let payload = resolve_struct_type(&value.ty);
+            if !is_supported_sum_payload(&payload) {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "Option<T> V1 payloads must be durable-value types".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::OptionSome {
+                    value: Box::new(value),
+                },
+                ty: Type::Option(Box::new(payload)),
+            })
+        }
+        Expr::OptionNone => {
+            let payload = match expected.map(|ty| resolve_struct_type_with_context(context, ty)) {
+                Some(Type::Option(payload)) => payload,
+                Some(other) => {
+                    return Err(SemanticError {
+                        code: "E_SUM_CONTEXT_TYPE",
+                        message: format!(
+                            "`Option::none` cannot initialize `{}`",
+                            type_name(&other)
+                        ),
+                    });
+                }
+                None => {
+                    return Err(SemanticError {
+                        code: "E_SUM_MISSING_CONTEXT",
+                        message: "`Option::none` requires an exact `Option<T>` context from an annotation, return type, field, or parameter".into(),
+                    });
+                }
+            };
+            if !is_supported_sum_payload(&payload) {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "Option<T> V1 payloads must be durable-value types".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::OptionNone,
+                ty: Type::Option(payload),
+            })
+        }
+        Expr::ResultOk(value) => {
+            let (ok, error) = match expected.map(|ty| resolve_struct_type_with_context(context, ty))
+            {
+                Some(Type::Result(ok, error)) => (ok, error),
+                Some(other) => {
+                    return Err(SemanticError {
+                        code: "E_SUM_CONTEXT_TYPE",
+                        message: format!("`Result::ok` cannot initialize `{}`", type_name(&other)),
+                    });
+                }
+                None => {
+                    return Err(SemanticError {
+                        code: "E_SUM_MISSING_CONTEXT",
+                        message: "`Result::ok` requires an exact `Result<T, E>` context so the inactive error type is known".into(),
+                    });
+                }
+            };
+            let mut value = analyze_expr_expected(context, value, vars, Some(&ok))?;
+            ensure_assignable_and_coerce(&ok, &mut value)?;
+            if !is_supported_sum_payload(&ok) || !is_supported_sum_payload(&error) {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "Result<T, E> V1 payloads must be durable-value types".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::ResultOk {
+                    value: Box::new(value),
+                },
+                ty: Type::Result(ok, error),
+            })
+        }
+        Expr::ResultErr(error) => {
+            let (ok, error_ty) = match expected
+                .map(|ty| resolve_struct_type_with_context(context, ty))
+            {
+                Some(Type::Result(ok, error_ty)) => (ok, error_ty),
+                Some(other) => {
+                    return Err(SemanticError {
+                        code: "E_SUM_CONTEXT_TYPE",
+                        message: format!("`Result::err` cannot initialize `{}`", type_name(&other)),
+                    });
+                }
+                None => {
+                    return Err(SemanticError {
+                        code: "E_SUM_MISSING_CONTEXT",
+                        message: "`Result::err` requires an exact `Result<T, E>` context so the inactive success type is known".into(),
+                    });
+                }
+            };
+            let mut error = analyze_expr_expected(context, error, vars, Some(&error_ty))?;
+            ensure_assignable_and_coerce(&error_ty, &mut error)?;
+            if !is_supported_sum_payload(&ok) || !is_supported_sum_payload(&error_ty) {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "Result<T, E> V1 payloads must be durable-value types".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::ResultErr {
+                    error: Box::new(error),
+                },
+                ty: Type::Result(ok, error_ty),
+            })
+        }
+        Expr::Propagate(value) => {
+            let value = analyze_expr(context, value, vars)?;
+            let function_return = context
+                .current_function_name
+                .borrow()
+                .as_ref()
+                .and_then(|name| context.function_returns.borrow().get(name).cloned())
+                .unwrap_or(Type::Unit);
+            let output = match (
+                resolve_struct_type(&value.ty),
+                resolve_struct_type(&function_return),
+            ) {
+                (Type::Option(payload), Type::Option(_)) => *payload,
+                (Type::Result(payload, error), Type::Result(_, return_error)) => {
+                    if resolve_struct_type(&error) != resolve_struct_type(&return_error) {
+                        return Err(SemanticError {
+                            code: "E_PROPAGATE_ERROR_TYPE",
+                            message: format!(
+                                "postfix `?` has error type `{}` but the enclosing function returns `{}`; implicit error conversion is not allowed",
+                                type_name(&error),
+                                type_name(&return_error)
+                            ),
+                        });
+                    }
+                    *payload
+                }
+                (Type::Option(_), other) => {
+                    return Err(SemanticError {
+                        code: "E_PROPAGATE_CONTEXT",
+                        message: format!(
+                            "postfix `?` on Option requires an Option-returning function, found `{}`",
+                            type_name(&other)
+                        ),
+                    });
+                }
+                (Type::Result(_, _), other) => {
+                    return Err(SemanticError {
+                        code: "E_PROPAGATE_CONTEXT",
+                        message: format!(
+                            "postfix `?` on Result requires a Result-returning function, found `{}`",
+                            type_name(&other)
+                        ),
+                    });
+                }
+                (other, _) => {
+                    return Err(SemanticError {
+                        code: "E_PROPAGATE_TYPE",
+                        message: format!(
+                            "postfix `?` expects Option or Result, found `{}`",
+                            type_name(&other)
+                        ),
+                    });
+                }
+            };
+            Ok(TypedExpr {
+                expr: ExprKind::Propagate {
+                    value: Box::new(value),
+                },
+                ty: output,
+            })
+        }
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            let condition = analyze_expr(context, condition, vars)?;
+            crate::secret::reject_secret_control_flow(&condition)?;
+            if condition.ty != Type::Bool {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "if condition must be bool".into(),
+                });
+            }
+            let Some(else_branch) = else_branch else {
+                return Err(SemanticError {
+                    code: "E_IF_EXPRESSION_ELSE",
+                    message: "expression-valued `if` requires an `else` block".into(),
+                });
+            };
+            let (then_branch, else_branch, ty) =
+                analyze_expression_branches(context, then_branch, else_branch, vars, expected)?;
+            Ok(TypedExpr {
+                expr: ExprKind::If {
+                    condition: Box::new(condition),
+                    then_branch,
+                    else_branch,
+                },
+                ty,
+            })
+        }
+        Expr::IfLet {
+            pattern,
+            value,
+            then_branch,
+            else_branch,
+        } => {
+            let value = analyze_expr(context, value, vars)?;
+            let (pattern, binding) = analyze_sum_pattern(pattern, &value.ty)?;
+            let Some(else_branch) = else_branch else {
+                return Err(SemanticError {
+                    code: "E_IF_LET_EXPRESSION_ELSE",
+                    message: "expression-valued `if let` requires an `else` block".into(),
+                });
+            };
+            let mut then_vars = vars.clone();
+            if let Some((name, ty)) = binding {
+                ensure_new_local_binding(context, &name, &then_vars)?;
+                then_vars.insert(name, ty);
+            }
+            let (then_branch, else_branch, ty) = analyze_expression_branches_with_envs(
+                context,
+                then_branch,
+                else_branch,
+                &mut then_vars,
+                &mut vars.clone(),
+                expected,
+            )?;
+            Ok(TypedExpr {
+                expr: ExprKind::IfLet {
+                    pattern,
+                    value: Box::new(value),
+                    then_branch,
+                    else_branch,
+                },
+                ty,
+            })
+        }
+        Expr::Match { value, arms } => {
+            let value = analyze_expr(context, value, vars)?;
+            analyze_match_expression(context, value, arms, vars, expected)
+        }
         Expr::Conditional {
             cond,
             then_expr,
@@ -6458,13 +10529,15 @@ fn analyze_expr(
             crate::secret::reject_secret_control_flow(&c)?;
             if c.ty != Type::Bool {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "conditional expects a bool condition".into(),
                 });
             }
-            let t1 = analyze_expr(context, then_expr, vars)?;
-            let t2 = analyze_expr(context, else_expr, vars)?;
+            let t1 = analyze_expr_expected(context, then_expr, vars, expected)?;
+            let t2 = analyze_expr_expected(context, else_expr, vars, Some(&t1.ty))?;
             if t1.ty != t2.ty {
                 return Err(SemanticError {
+                    code: "K2003",
                     message: "conditional branches must have the same type".into(),
                 });
             }
@@ -6488,17 +10561,94 @@ fn analyze_expr(
                 ty: Type::Tuple(tys),
             })
         }
+        Expr::List(elements) => analyze_list_literal(context, elements, vars, expected),
+        Expr::ListComprehension {
+            expression,
+            item,
+            source,
+            condition,
+        } => analyze_list_comprehension(
+            context,
+            expression,
+            item,
+            source,
+            condition.as_deref(),
+            vars,
+            expected,
+        ),
+        Expr::JsonObject(entries) => {
+            if entries.len() > 64 {
+                return Err(SemanticError {
+                    code: "E_JSON_CAPACITY",
+                    message: format!(
+                        "native JSON objects contain at most 64 entries per node; this object has {}",
+                        entries.len()
+                    ),
+                });
+            }
+            let mut keys = HashSet::with_capacity(entries.len());
+            let mut typed_entries = Vec::with_capacity(entries.len());
+            for entry in entries {
+                if !keys.insert(entry.key.clone()) {
+                    return Err(SemanticError {
+                        code: "E_JSON_DUPLICATE_KEY",
+                        message: format!(
+                            "native JSON object key `{}` is supplied more than once after string decoding",
+                            entry.key
+                        ),
+                    });
+                }
+                typed_entries.push((
+                    entry.key.clone(),
+                    analyze_native_json_value(context, &entry.value, vars)?,
+                ));
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::JsonObject(typed_entries),
+                ty: Type::Json,
+            })
+        }
+        Expr::JsonArray(elements) => {
+            if elements.len() > 64 {
+                return Err(SemanticError {
+                    code: "E_JSON_CAPACITY",
+                    message: format!(
+                        "native JSON arrays contain at most 64 elements per node; this array has {}",
+                        elements.len()
+                    ),
+                });
+            }
+            let elements = elements
+                .iter()
+                .map(|element| analyze_native_json_value(context, element, vars))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(TypedExpr {
+                expr: ExprKind::JsonArray(elements),
+                ty: Type::Json,
+            })
+        }
         Expr::Number(n) => Ok(TypedExpr {
             expr: ExprKind::Number(*n),
             ty: Type::Int,
         }),
         Expr::Decimal(raw) => {
             raw.parse::<u128>().map_err(|_| SemanticError {
+                code: "E_UINT_OVERFLOW",
                 message: format!("u128 literal `{raw}` is outside 0..={}", u128::MAX),
             })?;
             Ok(TypedExpr {
                 expr: ExprKind::Decimal(raw.clone()),
                 ty: Type::FixedU128,
+            })
+        }
+        Expr::AmountLiteral(spelling) => {
+            let value = parse_amount_literal(spelling)?;
+            Ok(TypedExpr {
+                expr: ExprKind::AmountLiteral {
+                    value,
+                    spelling: spelling.clone(),
+                },
+                ty: Type::Amount,
             })
         }
         Expr::Bool(b) => Ok(TypedExpr {
@@ -6514,6 +10664,65 @@ fn analyze_expr(
             ty: Type::Bytes,
         }),
         Expr::Ident(name) => {
+            if let Some((target, binding_ty)) = context.validate_value_target(expr, name, vars)? {
+                use crate::resolved::ResolvedValueTarget;
+                return match target {
+                    ResolvedValueTarget::Binding(_) => Ok(TypedExpr {
+                        expr: ExprKind::Ident(name.clone()),
+                        ty: binding_ty.expect("binding target supplies its semantic type"),
+                    }),
+                    ResolvedValueTarget::State(_) | ResolvedValueTarget::ExternalState => vars
+                        .get(name)
+                        .cloned()
+                        .map(|ty| TypedExpr {
+                            expr: ExprKind::Ident(name.clone()),
+                            ty,
+                        })
+                        .ok_or_else(|| SemanticError {
+                            code: "E_INTERNAL_RESOLUTION",
+                            message: format!(
+                                "resolved state `{name}` is absent from the typed environment"
+                            ),
+                        }),
+                    ResolvedValueTarget::Const(_) => context
+                        .consts
+                        .borrow()
+                        .get(name)
+                        .cloned()
+                        .ok_or_else(|| SemanticError {
+                            code: "E_INTERNAL_RESOLUTION",
+                            message: format!(
+                                "resolved const `{name}` is absent from the typed environment"
+                            ),
+                        }),
+                    ResolvedValueTarget::ErrorCode(resolved_code) => {
+                        let code = context.error_codes.borrow().get(name).copied().ok_or_else(|| {
+                            SemanticError {
+                                code: "E_INTERNAL_RESOLUTION",
+                                message: format!(
+                                    "resolved error code `{name}` is absent from the typed environment"
+                                ),
+                            }
+                        })?;
+                        if code != resolved_code {
+                            return Err(SemanticError {
+                                code: "E_INTERNAL_RESOLUTION",
+                                message: format!("error code `{name}` changed after resolution"),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Number(i64::from(code)),
+                            ty: Type::Int,
+                        })
+                    }
+                    ResolvedValueTarget::Intrinsic => Err(SemanticError {
+                        code: "E_INTRINSIC_CONTEXT",
+                        message: format!(
+                            "intrinsic value `{name}` is only valid in its declared operation context"
+                        ),
+                    }),
+                };
+            }
             if let Some(ty) = vars.get(name).cloned() {
                 return Ok(TypedExpr {
                     expr: ExprKind::Ident(name.clone()),
@@ -6530,6 +10739,7 @@ fn analyze_expr(
                 });
             }
             Err(SemanticError {
+                code: "K2002",
                 message: format!("undefined variable {name}"),
             })
         }
@@ -6540,11 +10750,13 @@ fn analyze_expr(
                 UnaryOp::Neg => {
                     let Some(kind) = numeric_kind(&inner_t.ty) else {
                         return Err(SemanticError {
+                            code: "K2003",
                             message: "unary '-' expects numeric".into(),
                         });
                     };
                     if kind != NumericKind::Int {
                         return Err(SemanticError {
+                            code: "E_UNSIGNED_NEGATION",
                             message:
                                 "unary '-' is only supported for i64; numeric aliases are unsigned"
                                     .into(),
@@ -6561,6 +10773,7 @@ fn analyze_expr(
                 UnaryOp::Not => {
                     if inner_t.ty != Type::Bool {
                         return Err(SemanticError {
+                            code: "K2003",
                             message: "unary '!' expects bool".into(),
                         });
                     }
@@ -6592,6 +10805,7 @@ fn analyze_expr(
                             });
                         } else {
                             return Err(SemanticError {
+                                code: "E_TUPLE_INDEX",
                                 message: format!(
                                     "tuple index {} out of bounds (len={})",
                                     idx,
@@ -6602,6 +10816,7 @@ fn analyze_expr(
                     }
                     Type::Struct { name, .. } => {
                         return Err(SemanticError {
+                            code: "K2002",
                             message: format!(
                                 "tuple index on non-tuple type struct {name}; unknown field '{field}' on struct {name}"
                             ),
@@ -6609,6 +10824,7 @@ fn analyze_expr(
                     }
                     other => {
                         return Err(SemanticError {
+                            code: "K2003",
                             message: format!("tuple index on non-tuple type {}", type_name(other)),
                         });
                     }
@@ -6617,6 +10833,7 @@ fn analyze_expr(
             // Named access on a tuple is invalid
             if matches!(&resolved_obj_ty, Type::Tuple(_)) {
                 return Err(SemanticError {
+                    code: "K2002",
                     message: format!("unknown field '{field}' on tuple"),
                 });
             }
@@ -6637,6 +10854,7 @@ fn analyze_expr(
                 } else {
                     let avail: Vec<&str> = fields.iter().map(|(f, _)| f.as_str()).collect();
                     return Err(SemanticError {
+                        code: "K2002",
                         message: format!(
                             "unknown field '{field}' on struct {name} (available: {})",
                             avail.join(", ")
@@ -6647,7 +10865,7 @@ fn analyze_expr(
             // Attempt to resolve to a flattened bound variable like `base#i#j` for nested structs.
             let try_flatten = || -> Option<(String, Type)> {
                 fn collect_path(e: &TypedExpr, out: &mut Vec<usize>) -> Option<String> {
-                    match &e.expr {
+                    match e.kind() {
                         ExprKind::Member { object, field } => {
                             let base = collect_path(object, out)?;
                             let i = field.parse::<usize>().ok()?;
@@ -6690,6 +10908,7 @@ fn analyze_expr(
                 });
             }
             Err(SemanticError {
+                code: "K2002",
                 message: format!("unknown field '{field}' on type {}", type_name(&obj.ty)),
             })
         }
@@ -6698,15 +10917,46 @@ fn analyze_expr(
             let mut idx = analyze_expr(context, index, vars)?;
             crate::secret::reject_secret_key(&idx)?;
             match tgt.ty.clone() {
+                Type::List(element, _) => {
+                    let expected_option = expected
+                        .map(|ty| resolve_struct_type_with_context(context, ty))
+                        .is_some_and(|expected| {
+                            matches!(expected, Type::Option(expected) if *expected == *element)
+                        });
+                    let fix = if expected_option && resolve_struct_type(&idx.ty) == Type::Int {
+                        match (
+                            context.expression_source(target),
+                            context.expression_source(index),
+                        ) {
+                            (Some(target), Some(index)) => {
+                                Some(crate::semantic_diagnostics::SemanticFix::ListGet {
+                                    target,
+                                    index,
+                                })
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    context.capture_expression_diagnostic(expr, fix);
+                    Err(SemanticError {
+                        code: "E_LIST_UNSAFE_INDEX",
+                        message: "unchecked List indexing is not part of Kotodama V1; use `list.get(index)` and handle `Option<T>`"
+                            .into(),
+                    })
+                }
                 Type::StateMap(k, _) => {
                     ensure_assignable_and_coerce(&k, &mut idx)?;
                     ensure_in_memory_map_word_types(context, &tgt)?;
                     Err(SemanticError {
-                        message: "E_STATE_MAP_OPTIONAL_READ: StateMap rvalue indexing cannot represent an absent key; use `map.get(key)` and handle Option<V>"
+                        code: "E_STATE_MAP_OPTIONAL_READ",
+                        message: "StateMap rvalue indexing cannot represent an absent key; use `map.get(key)` and handle Option<V>"
                             .into(),
                     })
                 }
                 _ => Err(SemanticError {
+                    code: "K2003",
                     message: "indexing not supported on this type".into(),
                 }),
             }
@@ -6720,6 +10970,7 @@ fn analyze_expr(
                 Add | Sub | Mul | Div | Mod => {
                     let Some(result_ty) = numeric_result_type(&left_t.ty, &right_t.ty) else {
                         return Err(SemanticError {
+                            code: "K2003",
                             message: format!(
                                 "{op:?} requires identical numeric operand types; implicit conversions are not part of Kotodama V1"
                             ),
@@ -6727,18 +10978,48 @@ fn analyze_expr(
                     };
                     require_same_numeric_type(&left_t, &result_ty)?;
                     require_same_numeric_type(&right_t, &result_ty)?;
-                    Ok(TypedExpr {
+                    if *op == Mod && matches!(resolve_struct_type(&result_ty), Type::Amount) {
+                        return Err(SemanticError {
+                            code: "E_AMOUNT_REMAINDER",
+                            message:
+                                "Amount does not support `%`; use exact `/` or amount.div_round"
+                                    .into(),
+                        });
+                    }
+                    let typed = TypedExpr {
                         expr: ExprKind::Binary {
                             op: *op,
                             left: Box::new(left_t),
                             right: Box::new(right_t),
                         },
                         ty: result_ty,
-                    })
+                    };
+                    if matches!(resolve_struct_type(&typed.ty), Type::Amount) {
+                        match crate::checked_arithmetic::evaluate_checked_amount(&typed) {
+                            Ok(Some(value)) => {
+                                return Ok(TypedExpr {
+                                    expr: ExprKind::AmountLiteral {
+                                        spelling: format!("{value}amt"),
+                                        value,
+                                    },
+                                    ty: Type::Amount,
+                                });
+                            }
+                            Err(error) => {
+                                return Err(SemanticError {
+                                    code: "E_AMOUNT_CONSTANT_ARITHMETIC",
+                                    message: error.message(),
+                                });
+                            }
+                            Ok(None) => {}
+                        }
+                    }
+                    Ok(typed)
                 }
                 And | Or => {
                     if left_t.ty != Type::Bool || right_t.ty != Type::Bool {
                         return Err(SemanticError {
+                            code: "K2003",
                             message: format!("{op:?} expects bool operands"),
                         });
                     }
@@ -6759,11 +11040,13 @@ fn analyze_expr(
                         && !numeric_ok
                     {
                         return Err(SemanticError {
+                            code: "K2003",
                             message: "type mismatch in equality".into(),
                         });
                     }
                     if !is_eq_comparable_type(&left_t.ty) {
                         return Err(SemanticError {
+                            code: "K2003",
                             message: format!(
                                 "equality is not supported for type {}",
                                 type_name(&left_t.ty)
@@ -6786,6 +11069,7 @@ fn analyze_expr(
                 Lt | Le | Gt | Ge => {
                     let Some(result_ty) = numeric_result_type(&left_t.ty, &right_t.ty) else {
                         return Err(SemanticError {
+                            code: "K2003",
                             message: format!(
                                 "{op:?} requires identical numeric operand types; implicit conversions are not part of Kotodama V1"
                             ),
@@ -6804,9 +11088,215 @@ fn analyze_expr(
                 }
             }
         }
-        Expr::Call { name, args } => {
+        Expr::StructLiteral { name, fields } => {
+            context.validate_struct_literal_target(expr, name)?;
+            let Some(declared_fields) = context.structs.borrow().get(name).cloned() else {
+                return Err(SemanticError {
+                    code: "E_UNKNOWN_STRUCT",
+                    message: format!("unknown struct type `{name}`"),
+                });
+            };
+            for (index, field) in fields.iter().enumerate() {
+                if fields[..index]
+                    .iter()
+                    .any(|previous| previous.name == field.name)
+                {
+                    return Err(SemanticError {
+                        code: "E_DUPLICATE_STRUCT_FIELD",
+                        message: format!(
+                            "struct field `{}` is supplied more than once",
+                            field.name
+                        ),
+                    });
+                }
+                if !declared_fields
+                    .iter()
+                    .any(|(declared, _)| declared == &field.name)
+                {
+                    return Err(SemanticError {
+                        code: "E_UNKNOWN_STRUCT_FIELD",
+                        message: format!("struct `{name}` has no field named `{}`", field.name),
+                    });
+                }
+            }
+            for (declared_name, _) in &declared_fields {
+                if !fields.iter().any(|field| &field.name == declared_name) {
+                    return Err(SemanticError {
+                        code: "E_MISSING_STRUCT_FIELD",
+                        message: format!(
+                            "struct `{name}` literal is missing field `{declared_name}`"
+                        ),
+                    });
+                }
+            }
+            let mut typed_fields = Vec::with_capacity(declared_fields.len());
+            for field in fields {
+                let (declared_name, declared_ty) = declared_fields
+                    .iter()
+                    .find(|(declared, _)| declared == &field.name)
+                    .expect("unknown struct fields were rejected above");
+                let mut value =
+                    analyze_expr_expected(context, &field.value, vars, Some(declared_ty))?;
+                ensure_assignable_and_coerce(declared_ty, &mut value)?;
+                typed_fields.push((declared_name.clone(), value));
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::StructLiteral {
+                    name: name.clone(),
+                    fields: typed_fields,
+                },
+                ty: Type::Struct {
+                    name: name.clone(),
+                    fields: declared_fields,
+                },
+            })
+        }
+        Expr::Call {
+            name,
+            args,
+            argument_names,
+            implicit_receiver,
+        } => {
             let source_name = name.clone();
             let name = normalize_namespaced(name);
+            context.validate_call_target(expr, &source_name, &name, *implicit_receiver)?;
+            if let Some(result) = analyze_list_method_call(
+                context,
+                &name,
+                args,
+                argument_names.as_deref(),
+                *implicit_receiver,
+                vars,
+            ) {
+                return result;
+            }
+            if let Some(result) = analyze_amount_method_call(
+                context,
+                &name,
+                args,
+                argument_names.as_deref(),
+                *implicit_receiver,
+                vars,
+            ) {
+                return result;
+            }
+            if context.structs.borrow().contains_key(&name) {
+                let fields = context
+                    .structs
+                    .borrow()
+                    .get(&name)
+                    .map(|fields| {
+                        fields
+                            .iter()
+                            .map(|(field, _)| field.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let field_names = fields.join(", ");
+                let arguments = args
+                    .iter()
+                    .map(|argument| context.expression_source(argument))
+                    .collect::<Option<Vec<_>>>();
+                let fix = arguments.map(|arguments| {
+                    crate::semantic_diagnostics::SemanticFix::PositionalStruct {
+                        name: source_name.clone(),
+                        fields,
+                        arguments,
+                    }
+                });
+                context.capture_expression_diagnostic(expr, fix);
+                return Err(SemanticError {
+                    code: "E_POSITIONAL_STRUCT",
+                    message: format!(
+                        "positional construction `{source_name}(...)` is retired; use `{source_name} {{ {field_names} }}` with named fields"
+                    ),
+                });
+            }
+
+            let mut argument_plan = CallArgumentPlan {
+                ordered: args.clone(),
+                evaluation_order: (0..args.len()).collect(),
+                is_named: false,
+            };
+            if let Some(builtin) = Builtin::from_name(&name) {
+                let signature = builtin.signature();
+                let receiver_count = usize::from(*implicit_receiver);
+                let parameter_names = signature
+                    .parameter_names
+                    .get(receiver_count..)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect::<Vec<_>>();
+                let required = signature
+                    .parameters
+                    .get(receiver_count..)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|parameter| !parameter.ends_with('?'))
+                    .collect::<Vec<_>>();
+                argument_plan = reorder_call_arguments(
+                    &source_name,
+                    args,
+                    argument_names.as_deref(),
+                    *implicit_receiver,
+                    &parameter_names,
+                    &required,
+                    builtin_named_only_reason(builtin, *implicit_receiver),
+                )?;
+            } else if let Some(signature) = context.function_params.borrow().get(&name).cloned() {
+                let receiver_count = usize::from(*implicit_receiver);
+                let user_signature = signature.get(receiver_count..).unwrap_or_default();
+                let parameter_names = user_signature
+                    .iter()
+                    .map(|parameter| parameter.name.clone())
+                    .collect::<Vec<_>>();
+                let required = vec![true; parameter_names.len()];
+                let named_only_reason = context
+                    .function_named_only_reasons
+                    .borrow()
+                    .get(&name)
+                    .copied()
+                    .filter(|_| user_signature.len() >= 3)
+                    .or_else(|| {
+                        user_parameters_have_confusable_repeats(user_signature).then_some(
+                            "repeated parameter types require names to prevent argument transposition",
+                        )
+                    });
+                argument_plan = reorder_call_arguments(
+                    &source_name,
+                    args,
+                    argument_names.as_deref(),
+                    *implicit_receiver,
+                    &parameter_names,
+                    &required,
+                    named_only_reason,
+                )?;
+            } else if argument_names.is_some() {
+                let intrinsic_names: &[&str] = match name.as_str() {
+                    "option::some" | "result::ok" | "u128::from_i64" | "Amount::from_i64"
+                    | "Amount::from_u128" => &["value"],
+                    "result::err" => &["error"],
+                    "unwrap_or" | "unwrap_err_or" => &["default"],
+                    _ => &[],
+                };
+                if !intrinsic_names.is_empty() {
+                    let parameter_names = intrinsic_names
+                        .iter()
+                        .map(|name| (*name).to_owned())
+                        .collect::<Vec<_>>();
+                    argument_plan = reorder_call_arguments(
+                        &source_name,
+                        args,
+                        argument_names.as_deref(),
+                        *implicit_receiver,
+                        &parameter_names,
+                        &vec![true; parameter_names.len()],
+                        None,
+                    )?;
+                }
+            }
+            let args = argument_plan.ordered.as_slice();
             if let Some(builtin) = Builtin::from_name(&name)
                 && matches!(
                     builtin,
@@ -6820,6 +11310,7 @@ fn analyze_expr(
                 && source_name != builtin.source_name()
             {
                 return Err(SemanticError {
+                    code: "E_NON_CANONICAL_BUILTIN",
                     message: format!(
                         "legacy or non-canonical builtin spelling `{source_name}` is not supported; use `{}`",
                         builtin.source_name()
@@ -6835,8 +11326,9 @@ fn analyze_expr(
                 })
             {
                 return Err(SemanticError {
+                    code: "E_TEST_ONLY_PRODUCTION",
                     message: format!(
-                        "E_TEST_ONLY_PRODUCTION: builtin `{source_name}` requires explicit compiler test mode"
+                        "builtin `{source_name}` requires explicit compiler test mode"
                     ),
                 });
             }
@@ -6847,77 +11339,92 @@ fn analyze_expr(
                 return canonicalize_builtin_result(
                     Builtin::TestInvokeEntrypoint,
                     analyze_invoke_entrypoint_call(context, args, vars),
-                );
+                )
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
             if name == "invoke_entrypoint_as" {
                 return canonicalize_builtin_result(
                     Builtin::TestInvokeEntrypointAs,
                     analyze_invoke_entrypoint_as_call(context, args, vars),
-                );
+                )
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
             if name == "expect_reject_as" {
                 return canonicalize_builtin_result(
                     Builtin::TestExpectRejectAs,
                     analyze_expect_reject_as_call(context, args, vars),
-                );
+                )
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
             if name == "actor_account" {
                 return canonicalize_builtin_result(
                     Builtin::TestActorAccount,
                     analyze_actor_account_call(context, args),
-                );
+                )
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
             if name == "actor_public_key" {
                 return canonicalize_builtin_result(
                     Builtin::TestActorPublicKey,
                     analyze_actor_public_key_call(context, args),
-                );
+                )
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
             if name == "actor_sign" {
                 return canonicalize_builtin_result(
                     Builtin::TestActorSign,
                     analyze_actor_sign_call(context, args, vars),
-                );
-            }
-
-            // Struct constructor call: `StructName(arg1, arg2, ...)`
-            if let Some(fields) = context.structs.borrow().get(&name).cloned() {
-                let mut arg_typed = Vec::new();
-                for a in args {
-                    arg_typed.push(analyze_expr(context, a, vars)?);
-                }
-                if arg_typed.len() != fields.len() {
-                    return Err(SemanticError {
-                        message: format!(
-                            "{} expects {} fields, got {}",
-                            name,
-                            fields.len(),
-                            arg_typed.len()
-                        ),
-                    });
-                }
-                for (i, (_fname, fty)) in fields.iter().enumerate() {
-                    ensure_assignable_and_coerce(fty, &mut arg_typed[i])?;
-                }
-                return Ok(TypedExpr {
-                    expr: ExprKind::Tuple(arg_typed),
-                    ty: Type::Struct {
-                        name: name.clone(),
-                        fields,
-                    },
-                });
+                )
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
 
             // analyze builtin calls
-            let mut arg_typed = Vec::new();
-            for a in args {
-                arg_typed.push(analyze_expr(context, a, vars)?);
+            let mut typed_slots = (0..args.len()).map(|_| None).collect::<Vec<_>>();
+            let expected_parameters = context.function_params.borrow().get(&name).cloned();
+            for index in argument_plan.evaluation_order.iter().copied() {
+                let argument = &args[index];
+                let expected = expected_parameters
+                    .as_ref()
+                    .and_then(|parameters| parameters.get(index))
+                    .map(|parameter| &parameter.ty);
+                typed_slots[index] =
+                    Some(analyze_expr_expected(context, argument, vars, expected)?);
+            }
+            let mut arg_typed = typed_slots
+                .into_iter()
+                .enumerate()
+                .map(|(index, argument)| {
+                    argument.ok_or_else(|| SemanticError {
+                        code: "E_MALFORMED_CALL",
+                        message: format!(
+                            "call `{source_name}` did not analyze argument slot {index}"
+                        ),
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if !argument_plan.is_named {
+                if Builtin::from_name(&name).is_some_and(|builtin| {
+                    builtin_instantiation_has_confusable_repeats(
+                        builtin,
+                        &arg_typed,
+                        *implicit_receiver,
+                    )
+                }) {
+                    return Err(SemanticError {
+                        code: "E_NAMED_ARGUMENTS_REQUIRED",
+                        message: format!(
+                            "call `{source_name}` requires named arguments because instantiated parameter types repeat and could be transposed"
+                        ),
+                    });
+                }
             }
             if let Some(result) = explicit_numeric_conversion(&name, arg_typed.clone()) {
-                return result;
+                return result
+                    .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
             if let Some(result) = analyze_sum_type_call(context, &name, arg_typed.clone()) {
-                return result;
+                return result
+                    .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
             if let Some(builtin) = Builtin::from_name(&name) {
                 let canonical_function_call = source_name == builtin.source_name()
@@ -6935,6 +11442,7 @@ fn analyze_expr(
                     && !canonical_method_call
                 {
                     return Err(SemanticError {
+                        code: "E_NON_CANONICAL_BUILTIN",
                         message: format!(
                             "legacy or non-canonical builtin spelling `{source_name}` is not supported; use `{}`",
                             builtin.source_name()
@@ -6944,24 +11452,38 @@ fn analyze_expr(
                 return canonicalize_builtin_result(
                     builtin,
                     analyze_surface_builtin_call(context, builtin, arg_typed),
-                );
+                )
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
             match name.as_str() {
                 "Map::new" => {
                     Err(SemanticError {
+                        code: "K2005",
                         message: "ephemeral maps are not part of Kotodama V1; declare durable `StateMap<K, V>` state instead".into(),
                     })
                 }
                 _ => {
+                    if let Some(modifiers) = context.function_modifiers.borrow().get(&name)
+                        && modifiers.kind != FunctionKind::Private
+                    {
+                        return Err(SemanticError {
+                            code: "K2004",
+                            message: format!(
+                                "runtime entrypoint `{name}` cannot be called directly; move shared logic into a private `fn` or use the authorized contract-call boundary"
+                            ),
+                        });
+                    }
                     let Some(signature) =
                         context.function_params.borrow().get(&name).cloned()
                     else {
                         return Err(SemanticError {
+                            code: "K2002",
                             message: format!("unknown function or builtin `{source_name}`"),
                         });
                     };
                     if signature.len() != arg_typed.len() {
                         return Err(SemanticError {
+                            code: "K2003",
                             message: format!(
                                 "function `{name}` expects {} arguments, got {}",
                                 signature.len(),
@@ -6973,6 +11495,7 @@ fn analyze_expr(
                         if param.is_state {
                             if !is_state_handle_expr(context, arg) {
                                 return Err(SemanticError {
+                                    code: "K2005",
                                     message: format!(
                                         "state parameter `{}` requires a durable state handle argument",
                                         param.name
@@ -6981,8 +11504,9 @@ fn analyze_expr(
                             }
                         } else if is_state_map_expr(context, arg) {
                             return Err(SemanticError {
+                                code: "E_STATE_MAP_ALIAS",
                                 message:
-                                    "E_STATE_MAP_ALIAS: state maps cannot be passed to user-defined functions; access declared state directly."
+                                    "state maps cannot be passed to user-defined functions; access declared state directly."
                                         .into(),
                             });
                         }
@@ -6994,13 +11518,13 @@ fn analyze_expr(
                         .get(&name)
                         .cloned()
                         .expect("declared function parameters and returns are collected together");
-                    Ok(TypedExpr {
+                    Ok(retain_named_call_evaluation_order(TypedExpr {
                         expr: ExprKind::Call {
                             name: name.clone(),
                             args: arg_typed,
                         },
                         ty: ret_ty,
-                    })
+                    }, &argument_plan))
                 }
             }
         }
@@ -7023,6 +11547,7 @@ fn analyze_sum_type_call(
     };
     let error = |message: &str| {
         Err(SemanticError {
+            code: "K2003",
             message: message.to_owned(),
         })
     };
@@ -7046,56 +11571,10 @@ fn analyze_sum_type_call(
             }
             call(STATE_MAP_GET_INTRINSIC, args, Type::Option(value))
         }
-        "option::some" => {
-            if args.len() != 1 {
-                return Some(error("option::some expects one value"));
-            }
-            let payload = resolve_struct_type(&args[0].ty);
-            if !is_supported_sum_payload(&payload) {
-                return Some(error("Option<T> V1 payloads must be durable-value types"));
-            }
-            let ty = Type::Option(Box::new(payload));
-            call("option_some", args, ty)
-        }
-        "option::none" => {
-            if args.len() != 1 {
-                return Some(error("option::none expects one typed fallback placeholder"));
-            }
-            let payload = resolve_struct_type(&args[0].ty);
-            if !is_supported_sum_payload(&payload) {
-                return Some(error("Option<T> V1 payloads must be durable-value types"));
-            }
-            let ty = Type::Option(Box::new(payload));
-            call("option_none", args, ty)
-        }
-        "result::ok" => {
-            if args.len() != 2 {
-                return Some(error("result::ok expects (value, error_placeholder)"));
-            }
-            let ok = resolve_struct_type(&args[0].ty);
-            let err = resolve_struct_type(&args[1].ty);
-            if !is_supported_sum_payload(&ok) || !is_supported_sum_payload(&err) {
-                return Some(error(
-                    "Result<T, E> V1 payloads must be durable-value types",
-                ));
-            }
-            let ty = Type::Result(Box::new(ok), Box::new(err));
-            call("result_ok", args, ty)
-        }
-        "result::err" => {
-            if args.len() != 2 {
-                return Some(error("result::err expects (value_placeholder, error)"));
-            }
-            let ok = resolve_struct_type(&args[0].ty);
-            let err = resolve_struct_type(&args[1].ty);
-            if !is_supported_sum_payload(&ok) || !is_supported_sum_payload(&err) {
-                return Some(error(
-                    "Result<T, E> V1 payloads must be durable-value types",
-                ));
-            }
-            let ty = Type::Result(Box::new(ok), Box::new(err));
-            call("result_err", args, ty)
-        }
+        "option::some" | "option::none" | "result::ok" | "result::err" => Err(SemanticError {
+            code: "E_LEGACY_SUM_CONSTRUCTOR",
+            message: "lowercase placeholder-based sum constructors are retired; use active-only `Option::some`, contextual `Option::none`, `Result::ok`, or `Result::err`".to_owned(),
+        }),
         "is_some" | "is_none" => {
             if args.len() != 1 || !matches!(resolve_struct_type(&args[0].ty), Type::Option(_)) {
                 return Some(error(&format!("{name} expects Option<T>")));
@@ -7150,25 +11629,54 @@ fn parse_declared_type(
     ty: &Option<TypeExpr>,
 ) -> Result<Option<Type>, SemanticError> {
     let Some(t) = ty else { return Ok(None) };
-    convert_type_expr(context, t).map(|ty| Some(resolve_struct_type_with_context(context, &ty)))
+    let ty = resolve_struct_type_with_context(context, &convert_type_expr(context, t)?);
+    validate_list_schemas(&ty)?;
+    Ok(Some(ty))
 }
 
 fn analyze_const_expr(
+    context: &SemanticContext,
     expr: &Expr,
     consts: &IndexMap<String, TypedExpr>,
 ) -> Result<TypedExpr, SemanticError> {
-    match expr {
+    let result = analyze_const_expr_inner(context, expr, consts);
+    if result.is_err() {
+        context.capture_expression_diagnostic(expr, None);
+    }
+    result
+}
+
+fn analyze_const_expr_inner(
+    context: &SemanticContext,
+    expr: &Expr,
+    consts: &IndexMap<String, TypedExpr>,
+) -> Result<TypedExpr, SemanticError> {
+    match expr.kind() {
+        Expr::Source { .. } | Expr::Resolved { .. } => {
+            unreachable!("kind() strips AST and resolved-HIR provenance wrappers")
+        }
         Expr::Number(n) => Ok(TypedExpr {
             expr: ExprKind::Number(*n),
             ty: Type::Int,
         }),
         Expr::Decimal(raw) => {
             raw.parse::<u128>().map_err(|_| SemanticError {
+                code: "E_UINT_OVERFLOW",
                 message: format!("u128 literal `{raw}` is outside 0..={}", u128::MAX),
             })?;
             Ok(TypedExpr {
                 expr: ExprKind::Decimal(raw.clone()),
                 ty: Type::FixedU128,
+            })
+        }
+        Expr::AmountLiteral(spelling) => {
+            let value = parse_amount_literal(spelling)?;
+            Ok(TypedExpr {
+                expr: ExprKind::AmountLiteral {
+                    value,
+                    spelling: spelling.clone(),
+                },
+                ty: Type::Amount,
             })
         }
         Expr::Bool(value) => Ok(TypedExpr {
@@ -7183,17 +11691,28 @@ fn analyze_const_expr(
             expr: ExprKind::Bytes(value.clone()),
             ty: Type::Bytes,
         }),
-        Expr::Ident(name) => consts.get(name).cloned().ok_or_else(|| SemanticError {
-            message: format!(
-                "const `{name}` is undefined or declared after use; constants must be declared before use"
-            ),
-        }),
+        Expr::Ident(name) => {
+            if let Some((target, _)) = context.validate_value_target(expr, name, &HashMap::new())?
+                && !matches!(target, crate::resolved::ResolvedValueTarget::Const(_))
+            {
+                return Err(SemanticError {
+                    code: "E_INTERNAL_RESOLUTION",
+                    message: format!("const initializer `{name}` carries a non-const target"),
+                });
+            }
+            consts.get(name).cloned().ok_or_else(|| SemanticError {
+                code: "K2002",
+                message: format!(
+                    "const `{name}` is undefined or declared after use; constants must be declared before use"
+                ),
+            })
+        }
         Expr::Unary {
             op: UnaryOp::Neg,
             expr: inner,
         } => {
-            let inner = analyze_const_expr(inner, consts)?;
-            match inner.expr {
+            let inner = analyze_const_expr(context, inner, consts)?;
+            match inner.into_kind() {
                 ExprKind::Number(value) => value
                     .checked_neg()
                     .map(|value| TypedExpr {
@@ -7201,18 +11720,19 @@ fn analyze_const_expr(
                         ty: Type::Int,
                     })
                     .ok_or_else(|| SemanticError {
-                        message: format!(
-                            "E_INT_OVERFLOW: negating {value} is outside the i64 range"
-                        ),
+                        code: "E_INT_OVERFLOW",
+                        message: format!("negating {value} is outside the i64 range"),
                     }),
                 _ => Err(SemanticError {
+                    code: "K2003",
                     message: "const unary '-' expects an integer literal or integer const".into(),
                 }),
             }
         }
         _ => Err(SemanticError {
-            message:
-                "const initializers must be literal values or previously declared constants".into(),
+            code: "E_CONST_INITIALIZER",
+            message: "const initializers must be literal values or previously declared constants"
+                .into(),
         }),
     }
 }
@@ -7225,13 +11745,28 @@ fn parse_declared_param_type(
     let ty = convert_type_expr(
         context,
         param.ty.as_ref().ok_or_else(|| SemanticError {
+            code: "K2003",
             message: format!("parameter `{}` requires an explicit type", param.name),
         })?,
     )?;
     let ty = resolve_struct_type_with_context(context, &ty);
-    if modifiers.visibility == FunctionVisibility::Public && !is_supported_public_argument_type(&ty)
-    {
+    validate_list_schemas(&ty)?;
+    if modifiers.kind != FunctionKind::Private && crate::secret::type_contains_secret(&ty) {
+        context.capture_diagnostic(
+            param.ty.as_ref().and_then(|ty| context.type_source(ty)),
+            None,
+        );
         return Err(SemanticError {
+            code: "E_SECRET_PUBLIC_PARAMETER",
+            message: format!(
+                "externally callable function cannot accept secret parameter `{}`; obtain private inputs with `get_private_input`",
+                param.name
+            ),
+        });
+    }
+    if modifiers.kind != FunctionKind::Private && !is_supported_public_argument_type(&ty) {
+        return Err(SemanticError {
+            code: "K2003",
             message: format!(
                 "public parameter `{}` uses unsupported V1 boundary type `{}`",
                 param.name,
@@ -7240,13 +11775,9 @@ fn parse_declared_param_type(
         });
     }
     if param.is_state {
-        if modifiers.visibility != FunctionVisibility::Internal
-            || matches!(
-                modifiers.kind,
-                FunctionKind::View | FunctionKind::Init | FunctionKind::Upgrade
-            )
-        {
+        if modifiers.kind != FunctionKind::Private {
             return Err(SemanticError {
+                code: "K2005",
                 message: format!(
                     "state parameter `{}` is only supported on internal helper functions",
                     param.name
@@ -7263,37 +11794,77 @@ fn parse_declared_param_type(
 }
 
 fn convert_type_expr(context: &SemanticContext, ty: &TypeExpr) -> Result<Type, SemanticError> {
-    Ok(match ty {
-        TypeExpr::Path(s) => match s.as_str() {
-            "i64" => Type::Int,
-            "u128" => Type::FixedU128,
-            "Amount" => Type::Amount,
-            "bool" => Type::Bool,
-            "string" => Type::String,
-            "bytes" => Type::Bytes,
-            "DataSpaceId" => Type::DataSpaceId,
-            // Recognize common Iroha types by name
-            "AccountId" => Type::AccountId,
-            "AssetDefinitionId" => Type::AssetDefinitionId,
-            "AssetId" => Type::AssetId,
-            "DomainId" => Type::DomainId,
-            "Name" => Type::Name,
-            "Json" => Type::Json,
-            "NftId" => Type::NftId,
-            other => {
-                let is_declared_struct = context.structs.borrow().contains_key(other);
-                if !is_declared_struct {
-                    return Err(SemanticError {
-                        message: format!("unknown type `{other}`"),
-                    });
+    let result = convert_type_expr_inner(context, ty);
+    if result.is_err() {
+        context.capture_diagnostic(context.type_source(ty), None);
+    }
+    result
+}
+
+fn convert_type_expr_inner(
+    context: &SemanticContext,
+    ty: &TypeExpr,
+) -> Result<Type, SemanticError> {
+    let kind = ty.kind();
+    let type_node = context.validate_type_node(ty)?;
+    if matches!(kind, TypeExpr::Tuple(_) | TypeExpr::Const(_))
+        && type_node.as_ref().is_some_and(|node| node.target.is_some())
+    {
+        return Err(SemanticError {
+            code: "E_INTERNAL_RESOLUTION",
+            message: "unnamed type expression carries a resolver name target".into(),
+        });
+    }
+    Ok(match kind {
+        TypeExpr::Source { .. } | TypeExpr::Resolved { .. } => {
+            unreachable!("kind() strips AST and resolved-HIR provenance wrappers")
+        }
+        TypeExpr::Path(s) => {
+            context.validate_named_type_target(type_node.as_ref(), s)?;
+            match s.as_str() {
+                "i64" => Type::Int,
+                "u128" => Type::FixedU128,
+                "Amount" => Type::Amount,
+                "bool" => Type::Bool,
+                "string" => Type::String,
+                "bytes" => Type::Bytes,
+                "DataSpaceId" => Type::DataSpaceId,
+                // Recognize common Iroha types by name
+                "AccountId" => Type::AccountId,
+                "AssetDefinitionId" => Type::AssetDefinitionId,
+                "AssetId" => Type::AssetId,
+                "DomainId" => Type::DomainId,
+                "Name" => Type::Name,
+                "Json" => Type::Json,
+                "NftId" => Type::NftId,
+                "AccountView" => core_query_view_type(Builtin::QueryGetAccount)
+                    .expect("account core query has a declared view"),
+                "AssetView" => core_query_view_type(Builtin::QueryGetAsset)
+                    .expect("asset core query has a declared view"),
+                "AssetDefinitionView" => core_query_view_type(Builtin::QueryGetAssetDefinition)
+                    .expect("asset definition core query has a declared view"),
+                "DomainView" => core_query_view_type(Builtin::QueryGetDomain)
+                    .expect("domain core query has a declared view"),
+                "NftView" => core_query_view_type(Builtin::QueryGetNft)
+                    .expect("NFT core query has a declared view"),
+                other => {
+                    let is_declared_struct = context.structs.borrow().contains_key(other);
+                    if !is_declared_struct {
+                        return Err(SemanticError {
+                            code: "K2002",
+                            message: format!("unknown type `{other}`"),
+                        });
+                    }
+                    Type::NamedStruct(other.to_string())
                 }
-                Type::NamedStruct(other.to_string())
             }
-        },
+        }
         TypeExpr::Generic { base, args } => {
+            context.validate_named_type_target(type_node.as_ref(), base)?;
             if base == "StateMap" {
                 if args.len() != 2 {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: "StateMap expects two type parameters".into(),
                     });
                 }
@@ -7301,16 +11872,26 @@ fn convert_type_expr(context: &SemanticContext, ty: &TypeExpr) -> Result<Type, S
                 let v = convert_type_expr(context, &args[1])?;
                 Type::StateMap(Box::new(k), Box::new(v))
             } else if base == "Secret" {
+                if !context.zk_enabled {
+                    return Err(SemanticError {
+                        code: "E_SECRET_REQUIRES_ZK",
+                        message:
+                            "Secret<T> is available only when compiler build configuration enables ZK mode"
+                                .into(),
+                    });
+                }
                 if args.len() != 1 {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: "Secret expects one type parameter".into(),
                     });
                 }
                 let inner = convert_type_expr(context, &args[0])?;
                 if inner != Type::Int {
                     return Err(SemanticError {
+                        code: "E_SECRET_PAYLOAD_TYPE",
                         message: format!(
-                            "E_SECRET_PAYLOAD_TYPE: Secret<{}> is unsupported; the V1 private-input ABI supplies Secret<i64>",
+                            "Secret<{}> is unsupported; the V1 private-input ABI supplies Secret<i64>",
                             type_name(&inner)
                         ),
                     });
@@ -7319,6 +11900,7 @@ fn convert_type_expr(context: &SemanticContext, ty: &TypeExpr) -> Result<Type, S
             } else if base == "Option" {
                 if args.len() != 1 {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: "Option expects one type parameter".into(),
                     });
                 }
@@ -7326,6 +11908,7 @@ fn convert_type_expr(context: &SemanticContext, ty: &TypeExpr) -> Result<Type, S
             } else if base == "Result" {
                 if args.len() != 2 {
                     return Err(SemanticError {
+                        code: "K2003",
                         message: "Result expects two type parameters".into(),
                     });
                 }
@@ -7333,8 +11916,60 @@ fn convert_type_expr(context: &SemanticContext, ty: &TypeExpr) -> Result<Type, S
                     Box::new(convert_type_expr(context, &args[0])?),
                     Box::new(convert_type_expr(context, &args[1])?),
                 )
+            } else if base == "List" {
+                if args.len() != 2 {
+                    return Err(SemanticError {
+                        code: "E_LIST_TYPE_ARITY",
+                        message: "List expects an element type and capacity".into(),
+                    });
+                }
+                let element = convert_type_expr(context, &args[0])?;
+                let capacity_node = context.validate_type_node(&args[1])?;
+                if capacity_node
+                    .as_ref()
+                    .is_some_and(|node| node.target.is_some())
+                {
+                    return Err(SemanticError {
+                        code: "E_INTERNAL_RESOLUTION",
+                        message: "List capacity carries a resolver name target".into(),
+                    });
+                }
+                let TypeExpr::Const(capacity) = args[1].kind() else {
+                    return Err(SemanticError {
+                        code: "E_LIST_CAPACITY_CONST",
+                        message: "List capacity must be an integer constant in 1..=64".into(),
+                    });
+                };
+                let capacity = u8::try_from(*capacity)
+                    .ok()
+                    .filter(|capacity| (1..=64).contains(capacity))
+                    .ok_or_else(|| SemanticError {
+                        code: "E_LIST_CAPACITY",
+                        message: format!("List capacity {capacity} is outside 1..=64"),
+                    })?;
+                if list_element_contains_resource_handle(&element) {
+                    return Err(SemanticError {
+                        code: "E_LIST_RESOURCE_ELEMENT",
+                        message: format!(
+                            "List elements cannot contain resource handle type `{}`",
+                            type_name(&element)
+                        ),
+                    });
+                }
+                let list = Type::List(Box::new(element), capacity);
+                validate_list_schemas(&list)?;
+                list
+            } else if base == "QueryPage" {
+                if args.len() != 1 {
+                    return Err(SemanticError {
+                        code: "K2003",
+                        message: "QueryPage expects one core query view type parameter".into(),
+                    });
+                }
+                query_page_type(convert_type_expr(context, &args[0])?)?
             } else {
                 return Err(SemanticError {
+                    code: "K2002",
                     message: format!("unknown generic type `{base}`"),
                 });
             }
@@ -7350,6 +11985,14 @@ fn convert_type_expr(context: &SemanticContext, ty: &TypeExpr) -> Result<Type, S
                 Type::Tuple(out)
             }
         }
+        TypeExpr::Const(value) => {
+            return Err(SemanticError {
+                code: "E_CONST_CAPACITY_CONTEXT",
+                message: format!(
+                    "compile-time integer `{value}` is only valid as the capacity in List<T, N>"
+                ),
+            });
+        }
     })
 }
 
@@ -7358,7 +12001,7 @@ fn apply_map_new_type_hint(expr: &mut TypedExpr, hint: &Type) {
     if !matches!(hint, Type::StateMap(_, _)) {
         return;
     }
-    if let ExprKind::Call { name, .. } = &expr.expr
+    if let ExprKind::Call { name, .. } | ExprKind::NamedCall { name, .. } = expr.kind()
         && name == "Map::new"
     {
         expr.ty = hint;
@@ -7381,9 +12024,16 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
             ensure_assignable(expected_ok, actual_ok)?;
             ensure_assignable(expected_err, actual_err)
         }
+        (
+            Type::List(expected_element, expected_capacity),
+            Type::List(actual_element, actual_capacity),
+        ) if expected_capacity == actual_capacity => {
+            ensure_assignable(expected_element, actual_element)
+        }
         (Type::Tuple(exp_elems), Type::Tuple(act_elems)) => {
             if exp_elems.len() != act_elems.len() {
                 return Err(SemanticError {
+                    code: "E_TYPE_ANNOTATION_MISMATCH",
                     message: format!(
                         "type annotation mismatch: expected tuple of length {}, got {}",
                         exp_elems.len(),
@@ -7404,6 +12054,7 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
             Ok(())
         }
         _ => Err(SemanticError {
+            code: "E_TYPE_ANNOTATION_MISMATCH",
             message: format!(
                 "type annotation mismatch: expected {}, got {}",
                 type_name(&expected),
@@ -7417,7 +12068,33 @@ fn ensure_assignable_and_coerce(
     expected: &Type,
     expr: &mut TypedExpr,
 ) -> Result<(), SemanticError> {
-    ensure_assignable(expected, &expr.ty)?;
+    if let Err(error) = ensure_assignable(expected, &expr.ty) {
+        if let ExprKind::Call { name, .. } | ExprKind::NamedCall { name, .. } = expr.kind()
+            && let Some(builtin) = Builtin::from_name(name)
+            && core_query_view_type(builtin).is_some()
+        {
+            let query_result = match &expr.ty {
+                Type::Option(inner) => match inner.as_ref() {
+                    Type::Struct { name, .. } | Type::NamedStruct(name) => {
+                        format!("Option<{name}>")
+                    }
+                    other => format!("Option<{}>", type_name(other)),
+                },
+                Type::Struct { name, .. } | Type::NamedStruct(name) => name.clone(),
+                other => type_name(other),
+            };
+            return Err(SemanticError {
+                code: "E_QUERY_RESULT_TYPE",
+                message: format!(
+                    "typed core query `{}` returns `{}`, not `{}`; byte-returning compatibility is not part of Kotodama V1",
+                    builtin.source_name(),
+                    query_result,
+                    type_name(expected)
+                ),
+            });
+        }
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -7444,6 +12121,9 @@ pub(crate) fn resolve_struct_type(ty: &Type) -> Type {
             Box::new(resolve_struct_type(ok)),
             Box::new(resolve_struct_type(err)),
         ),
+        Type::List(element, capacity) => {
+            Type::List(Box::new(resolve_struct_type(element)), *capacity)
+        }
         Type::Secret(inner) => Type::Secret(Box::new(resolve_struct_type(inner))),
         Type::Tuple(items) => Type::Tuple(items.iter().map(resolve_struct_type).collect()),
         Type::Struct { name, fields } => Type::Struct {
@@ -7487,6 +12167,10 @@ fn resolve_struct_type_with_context(context: &SemanticContext, ty: &Type) -> Typ
             Box::new(resolve_struct_type_with_context(context, ok)),
             Box::new(resolve_struct_type_with_context(context, err)),
         ),
+        Type::List(element, capacity) => Type::List(
+            Box::new(resolve_struct_type_with_context(context, element)),
+            *capacity,
+        ),
         Type::Secret(inner) => {
             Type::Secret(Box::new(resolve_struct_type_with_context(context, inner)))
         }
@@ -7521,6 +12205,9 @@ fn normalize_namespaced(name: &str) -> String {
 
 // Return coverage and shape analysis on the AST (conservative)
 fn block_returns_all_paths(block: &super::ast::Block) -> bool {
+    if block.tail.is_some() {
+        return true;
+    }
     let mut always = false;
     for stmt in &block.statements {
         if stmt_returns_all_paths(stmt) {
@@ -7533,7 +12220,7 @@ fn block_returns_all_paths(block: &super::ast::Block) -> bool {
 
 fn stmt_returns_all_paths(stmt: &super::ast::Statement) -> bool {
     use super::ast::Statement as S;
-    match stmt {
+    match stmt.kind() {
         S::Return(_) => true,
         S::If {
             then_branch,
@@ -7554,7 +12241,7 @@ fn block_has_return_value(block: &super::ast::Block) -> bool {
 
 fn stmt_has_return_value(stmt: &super::ast::Statement) -> bool {
     use super::ast::Statement as S;
-    match stmt {
+    match stmt.kind() {
         S::Return(Some(_)) => true,
         S::If {
             then_branch,
@@ -7574,9 +12261,9 @@ fn stmt_has_return_value(stmt: &super::ast::Statement) -> bool {
     }
 }
 
-// NOTE: `TypedProgram` is defined earlier in this file with contract metadata.
+// NOTE: `TypedProgram` is defined earlier in this file with seiyaku metadata.
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TypedItem {
     Function(TypedFunction),
 }
@@ -7591,7 +12278,7 @@ pub struct TypedTrigger {
     pub metadata: Metadata,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TypedFunction {
     pub name: String,
     pub params: Vec<String>,
@@ -7600,14 +12287,20 @@ pub struct TypedFunction {
     pub ret_ty: Option<Type>,
     pub modifiers: FunctionModifiers,
     pub location: super::ast::SourceLocation,
+    /// Exact complete function declaration range, when source-backed.
+    pub source: Option<crate::source::SourceRange>,
+    /// Exact declared function/lifecycle name range, when source-backed.
+    pub name_source: Option<crate::source::SourceRange>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypedBlock {
     pub statements: Vec<TypedStatement>,
+    /// Final expression without a semicolon.
+    pub tail: Option<Box<TypedExpr>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypedStatement {
     Let {
         name: String,
@@ -7619,6 +12312,13 @@ pub enum TypedStatement {
     Continue,
     If {
         cond: TypedExpr,
+        then_branch: TypedBlock,
+        else_branch: Option<TypedBlock>,
+    },
+    /// Statement `if let`; unlike the expression form, `else` may be absent.
+    IfLet {
+        pattern: TypedSumPattern,
+        value: TypedExpr,
         then_branch: TypedBlock,
         else_branch: Option<TypedBlock>,
     },
@@ -7648,27 +12348,72 @@ pub enum TypedStatement {
     MapSet {
         map: TypedExpr,
         key: TypedExpr,
-        value: TypedExpr,
+        value: Box<TypedExpr>,
     },
 }
 
+impl TypedExpr {
+    /// View the typed expression kind.
+    #[must_use]
+    pub const fn kind(&self) -> &ExprKind {
+        &self.expr
+    }
+
+    /// Mutably view the typed expression kind.
+    #[must_use]
+    pub const fn kind_mut(&mut self) -> &mut ExprKind {
+        &mut self.expr
+    }
+
+    fn into_kind(self) -> ExprKind {
+        self.expr
+    }
+}
+
+impl TypedStatement {
+    /// View the typed statement.
+    #[must_use]
+    pub const fn kind(&self) -> &Self {
+        self
+    }
+
+    /// Mutably view the typed statement.
+    #[must_use]
+    pub const fn kind_mut(&mut self) -> &mut Self {
+        self
+    }
+}
+
+/// Return call operands with runtime evaluation semantics.
+///
+/// Active-only sums use dedicated expression nodes, so ordinary calls always
+/// evaluate every argument in source order.
+fn evaluated_call_args<'a>(_name: &str, args: &'a [TypedExpr]) -> &'a [TypedExpr] {
+    args
+}
+
 fn expr_mutates_map(expr: &TypedExpr, map_name: &str) -> bool {
-    match &expr.expr {
-        ExprKind::Call { name, args } => {
+    match expr.kind() {
+        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
             (matches!(
                 Builtin::from_name(name),
                 Some(Builtin::Ensure | Builtin::StateMapRemove)
             ) && args
                 .first()
-                .is_some_and(|map| matches!(&map.expr, ExprKind::Ident(name) if name == map_name)))
-                || args.iter().any(|arg| expr_mutates_map(arg, map_name))
+                .is_some_and(|map| matches!(map.kind(), ExprKind::Ident(name) if name == map_name)))
+                || evaluated_call_args(name, args)
+                    .iter()
+                    .any(|arg| expr_mutates_map(arg, map_name))
         }
         ExprKind::Binary { left, right, .. } => {
             expr_mutates_map(left, map_name) || expr_mutates_map(right, map_name)
         }
-        ExprKind::Unary { expr, .. } | ExprKind::NumericCast { expr } => {
-            expr_mutates_map(expr, map_name)
-        }
+        ExprKind::Unary { expr, .. }
+        | ExprKind::NumericCast { expr }
+        | ExprKind::OptionSome { value: expr }
+        | ExprKind::ResultOk { value: expr }
+        | ExprKind::ResultErr { error: expr }
+        | ExprKind::Propagate { value: expr } => expr_mutates_map(expr, map_name),
         ExprKind::Conditional {
             cond,
             then_expr,
@@ -7678,13 +12423,61 @@ fn expr_mutates_map(expr: &TypedExpr, map_name: &str) -> bool {
                 || expr_mutates_map(then_expr, map_name)
                 || expr_mutates_map(else_expr, map_name)
         }
-        ExprKind::Tuple(items) => items.iter().any(|item| expr_mutates_map(item, map_name)),
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_mutates_map(condition, map_name)
+                || block_mutates_map(then_branch, map_name)
+                || block_mutates_map(else_branch, map_name)
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            expr_mutates_map(value, map_name)
+                || block_mutates_map(then_branch, map_name)
+                || block_mutates_map(else_branch, map_name)
+        }
+        ExprKind::Match { value, arms } => {
+            expr_mutates_map(value, map_name)
+                || arms
+                    .iter()
+                    .any(|arm| block_mutates_map(&arm.body, map_name))
+        }
+        ExprKind::Tuple(items) | ExprKind::List(items) => {
+            items.iter().any(|item| expr_mutates_map(item, map_name))
+        }
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            expr_mutates_map(source, map_name)
+                || expr_mutates_map(expression, map_name)
+                || condition
+                    .as_deref()
+                    .is_some_and(|condition| expr_mutates_map(condition, map_name))
+        }
+        ExprKind::StructLiteral { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| expr_mutates_map(value, map_name)),
+        ExprKind::JsonObject(entries) => entries
+            .iter()
+            .any(|(_, value)| expr_mutates_map(value, map_name)),
+        ExprKind::JsonArray(items) => items.iter().any(|item| expr_mutates_map(item, map_name)),
         ExprKind::Member { object, .. } => expr_mutates_map(object, map_name),
         ExprKind::Index { target, index } => {
             expr_mutates_map(target, map_name) || expr_mutates_map(index, map_name)
         }
         ExprKind::Number(_)
         | ExprKind::Decimal(_)
+        | ExprKind::AmountLiteral { .. }
+        | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
@@ -7694,9 +12487,9 @@ fn expr_mutates_map(expr: &TypedExpr, map_name: &str) -> bool {
 
 fn block_mutates_map(block: &TypedBlock, map_name: &str) -> bool {
     fn stmt_mutates(stmt: &TypedStatement, map_name: &str) -> bool {
-        match stmt {
+        match stmt.kind() {
             TypedStatement::MapSet { map, .. } => {
-                matches!(&map.expr, ExprKind::Ident(n) if n == map_name)
+                matches!(map.kind(), ExprKind::Ident(n) if n == map_name)
             }
             TypedStatement::Expr(expr)
             | TypedStatement::Return(Some(expr))
@@ -7712,6 +12505,18 @@ fn block_mutates_map(block: &TypedBlock, map_name: &str) -> bool {
                         .map(|b| block_mutates_map(b, map_name))
                         .unwrap_or(false)
             }
+            TypedStatement::IfLet {
+                value,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                expr_mutates_map(value, map_name)
+                    || block_mutates_map(then_branch, map_name)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|block| block_mutates_map(block, map_name))
+            }
             TypedStatement::While { body, .. } => block_mutates_map(body, map_name),
             TypedStatement::For { body, .. } => block_mutates_map(body, map_name),
             TypedStatement::ForEachMap { body, .. } => block_mutates_map(body, map_name),
@@ -7719,6 +12524,10 @@ fn block_mutates_map(block: &TypedBlock, map_name: &str) -> bool {
         }
     }
     block.statements.iter().any(|s| stmt_mutates(s, map_name))
+        || block
+            .tail
+            .as_ref()
+            .is_some_and(|tail| expr_mutates_map(tail, map_name))
 }
 
 fn block_contains_host_side_effects(block: &TypedBlock) -> bool {
@@ -7726,6 +12535,10 @@ fn block_contains_host_side_effects(block: &TypedBlock) -> bool {
         .statements
         .iter()
         .any(statement_contains_host_side_effects)
+        || block
+            .tail
+            .as_ref()
+            .is_some_and(|tail| expr_contains_host_side_effects(tail))
 }
 
 fn block_contains_instruction_emission(block: &TypedBlock) -> bool {
@@ -7733,6 +12546,10 @@ fn block_contains_instruction_emission(block: &TypedBlock) -> bool {
         .statements
         .iter()
         .any(statement_contains_instruction_emission)
+        || block
+            .tail
+            .as_ref()
+            .is_some_and(|tail| expr_contains_instruction_emission(tail))
 }
 
 fn block_mutates_durable_state(context: &SemanticContext, block: &TypedBlock) -> bool {
@@ -7740,6 +12557,10 @@ fn block_mutates_durable_state(context: &SemanticContext, block: &TypedBlock) ->
         .statements
         .iter()
         .any(|statement| statement_mutates_durable_state(context, statement))
+        || block
+            .tail
+            .as_ref()
+            .is_some_and(|tail| expr_mutates_durable_state(context, tail))
 }
 
 fn is_state_identifier(context: &SemanticContext, name: &str) -> bool {
@@ -7780,6 +12601,9 @@ fn collect_state_accesses_block(
     for stmt in &block.statements {
         collect_state_accesses_statement(state_names, stmt, reads, writes);
     }
+    if let Some(tail) = &block.tail {
+        collect_state_accesses_expr(state_names, tail, reads, writes);
+    }
 }
 
 fn collect_state_accesses_statement(
@@ -7788,7 +12612,7 @@ fn collect_state_accesses_statement(
     reads: &mut IndexSet<String>,
     writes: &mut IndexSet<String>,
 ) {
-    match stmt {
+    match stmt.kind() {
         TypedStatement::Let { name, value } => {
             collect_state_accesses_expr(state_names, value, reads, writes);
             mark_state_write(state_names, name, writes);
@@ -7807,6 +12631,18 @@ fn collect_state_accesses_statement(
             collect_state_accesses_block(state_names, then_branch, reads, writes);
             if let Some(b) = else_branch {
                 collect_state_accesses_block(state_names, b, reads, writes);
+            }
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_state_accesses_expr(state_names, value, reads, writes);
+            collect_state_accesses_block(state_names, then_branch, reads, writes);
+            if let Some(block) = else_branch {
+                collect_state_accesses_block(state_names, block, reads, writes);
             }
         }
         TypedStatement::While { cond, body } => {
@@ -7839,7 +12675,7 @@ fn collect_state_accesses_statement(
             collect_state_accesses_expr(state_names, map, reads, writes);
             collect_state_accesses_expr(state_names, key, reads, writes);
             collect_state_accesses_expr(state_names, value, reads, writes);
-            if let ExprKind::Ident(name) = &map.expr {
+            if let ExprKind::Ident(name) = map.kind() {
                 mark_state_write(state_names, name, writes);
             }
         }
@@ -7852,13 +12688,18 @@ fn collect_state_accesses_expr(
     reads: &mut IndexSet<String>,
     writes: &mut IndexSet<String>,
 ) {
-    match &expr.expr {
+    match expr.kind() {
         ExprKind::Ident(name) => mark_state_read(state_names, name, reads),
         ExprKind::Binary { left, right, .. } => {
             collect_state_accesses_expr(state_names, left, reads, writes);
             collect_state_accesses_expr(state_names, right, reads, writes);
         }
-        ExprKind::Unary { expr: inner, .. } | ExprKind::NumericCast { expr: inner } => {
+        ExprKind::Unary { expr: inner, .. }
+        | ExprKind::NumericCast { expr: inner }
+        | ExprKind::OptionSome { value: inner }
+        | ExprKind::ResultOk { value: inner }
+        | ExprKind::ResultErr { error: inner }
+        | ExprKind::Propagate { value: inner } => {
             collect_state_accesses_expr(state_names, inner, reads, writes)
         }
         ExprKind::Conditional {
@@ -7870,7 +12711,59 @@ fn collect_state_accesses_expr(
             collect_state_accesses_expr(state_names, then_expr, reads, writes);
             collect_state_accesses_expr(state_names, else_expr, reads, writes);
         }
-        ExprKind::Tuple(items) => {
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_state_accesses_expr(state_names, condition, reads, writes);
+            collect_state_accesses_block(state_names, then_branch, reads, writes);
+            collect_state_accesses_block(state_names, else_branch, reads, writes);
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_state_accesses_expr(state_names, value, reads, writes);
+            collect_state_accesses_block(state_names, then_branch, reads, writes);
+            collect_state_accesses_block(state_names, else_branch, reads, writes);
+        }
+        ExprKind::Match { value, arms } => {
+            collect_state_accesses_expr(state_names, value, reads, writes);
+            for arm in arms {
+                collect_state_accesses_block(state_names, &arm.body, reads, writes);
+            }
+        }
+        ExprKind::Tuple(items) | ExprKind::List(items) => {
+            for item in items {
+                collect_state_accesses_expr(state_names, item, reads, writes);
+            }
+        }
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            collect_state_accesses_expr(state_names, source, reads, writes);
+            collect_state_accesses_expr(state_names, expression, reads, writes);
+            if let Some(condition) = condition {
+                collect_state_accesses_expr(state_names, condition, reads, writes);
+            }
+        }
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, value) in fields {
+                collect_state_accesses_expr(state_names, value, reads, writes);
+            }
+        }
+        ExprKind::JsonObject(entries) => {
+            for (_, value) in entries {
+                collect_state_accesses_expr(state_names, value, reads, writes);
+            }
+        }
+        ExprKind::JsonArray(items) => {
             for item in items {
                 collect_state_accesses_expr(state_names, item, reads, writes);
             }
@@ -7882,24 +12775,25 @@ fn collect_state_accesses_expr(
             collect_state_accesses_expr(state_names, target, reads, writes);
             collect_state_accesses_expr(state_names, index, reads, writes);
         }
-        ExprKind::Call { name, args } => {
+        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
             if matches!(
                 Builtin::from_name(name),
                 Some(Builtin::Ensure | Builtin::StateMapRemove)
-            ) && let Some(TypedExpr {
-                expr: ExprKind::Ident(map_name),
-                ..
-            }) = args.first()
-            {
+            ) && let Some(map_name) = args.first().and_then(|argument| match argument.kind() {
+                ExprKind::Ident(map_name) => Some(map_name),
+                _ => None,
+            }) {
                 mark_state_write(state_names, map_name, writes);
             }
-            for arg in args {
+            for arg in evaluated_call_args(name, args) {
                 collect_state_accesses_expr(state_names, arg, reads, writes);
             }
         }
         ExprKind::Bool(_)
         | ExprKind::Number(_)
         | ExprKind::Decimal(_)
+        | ExprKind::AmountLiteral { .. }
+        | ExprKind::OptionNone
         | ExprKind::String(_)
         | ExprKind::Bytes(_) => {}
     }
@@ -7933,6 +12827,9 @@ fn collect_called_functions_into(
     for stmt in &block.statements {
         collect_calls_in_statement(context, stmt, calls);
     }
+    if let Some(tail) = &block.tail {
+        collect_calls_in_expr(context, tail, calls);
+    }
 }
 
 fn collect_calls_in_statement(
@@ -7940,7 +12837,7 @@ fn collect_calls_in_statement(
     stmt: &TypedStatement,
     calls: &mut IndexSet<String>,
 ) {
-    match stmt {
+    match stmt.kind() {
         TypedStatement::Let { value, .. } => collect_calls_in_expr(context, value, calls),
         TypedStatement::Expr(expr) => collect_calls_in_expr(context, expr, calls),
         TypedStatement::Return(Some(expr)) => collect_calls_in_expr(context, expr, calls),
@@ -7953,6 +12850,18 @@ fn collect_calls_in_statement(
             collect_called_functions_into(context, then_branch, calls);
             if let Some(b) = else_branch {
                 collect_called_functions_into(context, b, calls);
+            }
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_calls_in_expr(context, value, calls);
+            collect_called_functions_into(context, then_branch, calls);
+            if let Some(block) = else_branch {
+                collect_called_functions_into(context, block, calls);
             }
         }
         TypedStatement::While { cond, body } => {
@@ -7995,12 +12904,12 @@ fn collect_calls_in_expr(
     expr: &TypedExpr,
     calls: &mut IndexSet<String>,
 ) {
-    match &expr.expr {
-        ExprKind::Call { name, args } => {
+    match expr.kind() {
+        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
             if is_user_defined_function(context, name) {
                 calls.insert(name.clone());
             }
-            for arg in args {
+            for arg in evaluated_call_args(name, args) {
                 collect_calls_in_expr(context, arg, calls);
             }
         }
@@ -8008,8 +12917,12 @@ fn collect_calls_in_expr(
             collect_calls_in_expr(context, left, calls);
             collect_calls_in_expr(context, right, calls);
         }
-        ExprKind::Unary { expr: inner, .. } => collect_calls_in_expr(context, inner, calls),
-        ExprKind::NumericCast { expr } => collect_calls_in_expr(context, expr, calls),
+        ExprKind::Unary { expr: inner, .. }
+        | ExprKind::NumericCast { expr: inner }
+        | ExprKind::OptionSome { value: inner }
+        | ExprKind::ResultOk { value: inner }
+        | ExprKind::ResultErr { error: inner }
+        | ExprKind::Propagate { value: inner } => collect_calls_in_expr(context, inner, calls),
         ExprKind::Conditional {
             cond,
             then_expr,
@@ -8019,7 +12932,59 @@ fn collect_calls_in_expr(
             collect_calls_in_expr(context, then_expr, calls);
             collect_calls_in_expr(context, else_expr, calls);
         }
-        ExprKind::Tuple(items) => {
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_calls_in_expr(context, condition, calls);
+            collect_called_functions_into(context, then_branch, calls);
+            collect_called_functions_into(context, else_branch, calls);
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_calls_in_expr(context, value, calls);
+            collect_called_functions_into(context, then_branch, calls);
+            collect_called_functions_into(context, else_branch, calls);
+        }
+        ExprKind::Match { value, arms } => {
+            collect_calls_in_expr(context, value, calls);
+            for arm in arms {
+                collect_called_functions_into(context, &arm.body, calls);
+            }
+        }
+        ExprKind::Tuple(items) | ExprKind::List(items) => {
+            for item in items {
+                collect_calls_in_expr(context, item, calls);
+            }
+        }
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            collect_calls_in_expr(context, source, calls);
+            collect_calls_in_expr(context, expression, calls);
+            if let Some(condition) = condition {
+                collect_calls_in_expr(context, condition, calls);
+            }
+        }
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, value) in fields {
+                collect_calls_in_expr(context, value, calls);
+            }
+        }
+        ExprKind::JsonObject(entries) => {
+            for (_, value) in entries {
+                collect_calls_in_expr(context, value, calls);
+            }
+        }
+        ExprKind::JsonArray(items) => {
             for item in items {
                 collect_calls_in_expr(context, item, calls);
             }
@@ -8032,6 +12997,8 @@ fn collect_calls_in_expr(
         ExprKind::Bool(_)
         | ExprKind::Number(_)
         | ExprKind::Decimal(_)
+        | ExprKind::AmountLiteral { .. }
+        | ExprKind::OptionNone
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
         | ExprKind::Ident(_) => {}
@@ -8048,7 +13015,8 @@ fn ensure_state_map_iter_supported(
 fn ensure_not_state_shadow(context: &SemanticContext, name: &str) -> Result<(), SemanticError> {
     if is_state_binding(context, name) {
         return Err(SemanticError {
-            message: format!("E_STATE_SHADOWED: `{name}` shadows a state declaration"),
+            code: "E_STATE_SHADOWED",
+            message: format!("`{name}` shadows a state declaration"),
         });
     }
     Ok(())
@@ -8062,16 +13030,19 @@ fn ensure_new_local_binding(
     ensure_not_state_shadow(context, name)?;
     if vars.contains_key(name) {
         return Err(SemanticError {
+            code: "K2001",
             message: format!("local binding `{name}` duplicates or shadows an existing binding"),
         });
     }
     if context.consts.borrow().contains_key(name) {
         return Err(SemanticError {
+            code: "K2001",
             message: format!("local binding `{name}` shadows a const declaration"),
         });
     }
     if context.global_declarations.borrow().contains(name) {
         return Err(SemanticError {
+            code: "K2001",
             message: format!("local binding `{name}` shadows a source declaration"),
         });
     }
@@ -8087,6 +13058,7 @@ fn ensure_mutable_assignment_target(
         return Ok(());
     }
     Err(SemanticError {
+        code: "E_IMMUTABLE_ASSIGNMENT",
         message: format!(
             "cannot assign to immutable binding `{name}`; declare a mutable local with `var`"
         ),
@@ -8103,7 +13075,7 @@ fn is_state_map_expr(context: &SemanticContext, expr: &TypedExpr) -> bool {
 /// Callers must validate that the returned root belongs to the current typed
 /// program; this helper deliberately carries no process-global environment.
 pub fn typed_state_handle_name(expr: &TypedExpr) -> Option<String> {
-    match &expr.expr {
+    match expr.kind() {
         ExprKind::Ident(name) => Some(name.clone()),
         ExprKind::Member { object, field } => {
             let base = typed_state_handle_name(object)?;
@@ -8126,6 +13098,9 @@ fn typed_map_expr_is_state(context: &SemanticContext, expr: &TypedExpr) -> bool 
 
 fn map_expr_is_state(context: &SemanticContext, expr: &Expr) -> bool {
     match expr {
+        Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
+            map_expr_is_state(context, expression)
+        }
         Expr::Ident(name) => is_state_binding(context, name),
         Expr::Member { object, .. } => map_expr_is_state(context, object),
         _ => false,
@@ -8230,21 +13205,17 @@ fn validate_scalar_state_initialization(
         })
         .collect::<Vec<_>>();
 
-    let initializer = functions
+    let hajimari = functions
         .iter()
-        .find(|function| function.modifiers.kind == FunctionKind::Init)
+        .find(|function| function.modifiers.kind == FunctionKind::Hajimari)
         .ok_or_else(|| SemanticError {
-            message:
-                "E_STATE_INIT_REQUIRED: contract scalar state requires an `hajimari()` initializer"
-                    .into(),
+            code: "E_STATE_HAJIMARI_REQUIRED",
+            message: "seiyaku scalar state requires a `hajimari()`/`始まり()` declaration".into(),
         })?;
 
     let required_set = required.iter().cloned().collect::<HashSet<_>>();
     let summaries = compute_definite_state_write_summaries(&functions, &required_set)?;
-    let initialized = summaries
-        .get(&initializer.name)
-        .cloned()
-        .unwrap_or_default();
+    let initialized = summaries.get(&hajimari.name).cloned().unwrap_or_default();
     let missing = required
         .iter()
         .filter(|state| !initialized.contains(*state))
@@ -8254,8 +13225,9 @@ fn validate_scalar_state_initialization(
         Ok(())
     } else {
         Err(SemanticError {
+            code: "E_STATE_HAJIMARI_INCOMPLETE",
             message: format!(
-                "E_STATE_INIT_INCOMPLETE: hajimari() must initialize every scalar state on every normal return or fallthrough path; missing: {}",
+                "hajimari() must initialize every scalar state on every normal return or fallthrough path; missing: {}",
                 missing.join(", ")
             ),
         })
@@ -8311,7 +13283,7 @@ fn evaluate_definite_init_expr(
     mut initialized: DefiniteStateSet,
     summaries: &HashMap<String, DefiniteStateSet>,
 ) -> DefiniteStateSet {
-    match &expr.expr {
+    match expr.kind() {
         ExprKind::Binary { op, left, right } => {
             initialized = evaluate_definite_init_expr(left, initialized, summaries);
             if matches!(op, BinaryOp::And | BinaryOp::Or) {
@@ -8336,6 +13308,59 @@ fn evaluate_definite_init_expr(
             intersect_states(&mut then_state, &else_state);
             then_state
         }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            let after_condition = evaluate_definite_init_expr(condition, initialized, summaries);
+            let then_flow = analyze_definite_init_block(
+                then_branch,
+                after_condition.clone(),
+                &HashSet::new(),
+                summaries,
+            );
+            let else_flow = analyze_definite_init_block(
+                else_branch,
+                after_condition,
+                &HashSet::new(),
+                summaries,
+            );
+            merge_alternative_continuations(then_flow.continuing, else_flow.continuing)
+                .unwrap_or_default()
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let after_value = evaluate_definite_init_expr(value, initialized, summaries);
+            let then_flow = analyze_definite_init_block(
+                then_branch,
+                after_value.clone(),
+                &HashSet::new(),
+                summaries,
+            );
+            let else_flow =
+                analyze_definite_init_block(else_branch, after_value, &HashSet::new(), summaries);
+            merge_alternative_continuations(then_flow.continuing, else_flow.continuing)
+                .unwrap_or_default()
+        }
+        ExprKind::Match { value, arms } => {
+            let after_value = evaluate_definite_init_expr(value, initialized, summaries);
+            let mut continuation = None;
+            for arm in arms {
+                let flow = analyze_definite_init_block(
+                    &arm.body,
+                    after_value.clone(),
+                    &HashSet::new(),
+                    summaries,
+                );
+                continuation = merge_alternative_continuations(continuation, flow.continuing);
+            }
+            continuation.unwrap_or_default()
+        }
         ExprKind::Call { name, args } => {
             // Arguments are evaluated eagerly in source order. The call itself
             // contributes exactly the callee's must-write summary; unknown or
@@ -8348,13 +13373,55 @@ fn evaluate_definite_init_expr(
             }
             initialized
         }
-        ExprKind::Tuple(items) => {
+        ExprKind::NamedCall {
+            name,
+            args,
+            evaluation_order,
+        } => {
+            for index in evaluation_order {
+                initialized = evaluate_definite_init_expr(&args[*index], initialized, summaries);
+            }
+            if let Some(callee_writes) = summaries.get(name) {
+                initialized.extend(callee_writes.iter().cloned());
+            }
+            initialized
+        }
+        ExprKind::Tuple(items) | ExprKind::List(items) => {
             for item in items {
                 initialized = evaluate_definite_init_expr(item, initialized, summaries);
             }
             initialized
         }
-        ExprKind::Unary { expr, .. } | ExprKind::NumericCast { expr } => {
+        ExprKind::ListComprehension { source, .. } => {
+            // The source is always evaluated. A bounded source may be empty,
+            // so neither the filter nor result expression contributes a
+            // definite write.
+            evaluate_definite_init_expr(source, initialized, summaries)
+        }
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, value) in fields {
+                initialized = evaluate_definite_init_expr(value, initialized, summaries);
+            }
+            initialized
+        }
+        ExprKind::JsonObject(entries) => {
+            for (_, value) in entries {
+                initialized = evaluate_definite_init_expr(value, initialized, summaries);
+            }
+            initialized
+        }
+        ExprKind::JsonArray(items) => {
+            for item in items {
+                initialized = evaluate_definite_init_expr(item, initialized, summaries);
+            }
+            initialized
+        }
+        ExprKind::Unary { expr, .. }
+        | ExprKind::NumericCast { expr }
+        | ExprKind::OptionSome { value: expr }
+        | ExprKind::ResultOk { value: expr }
+        | ExprKind::ResultErr { error: expr }
+        | ExprKind::Propagate { value: expr } => {
             evaluate_definite_init_expr(expr, initialized, summaries)
         }
         ExprKind::Member { object, .. } => {
@@ -8366,6 +13433,8 @@ fn evaluate_definite_init_expr(
         }
         ExprKind::Number(_)
         | ExprKind::Decimal(_)
+        | ExprKind::AmountLiteral { .. }
+        | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
@@ -8398,6 +13467,12 @@ fn analyze_definite_init_block(
         merge_exit(&mut flow.continues, statement_flow.continues);
     }
 
+    if let Some(tail) = &block.tail
+        && let Some(continuing) = flow.continuing.take()
+    {
+        flow.continuing = Some(evaluate_definite_init_expr(tail, continuing, summaries));
+    }
+
     flow
 }
 
@@ -8407,7 +13482,7 @@ fn analyze_definite_init_statement(
     required: &DefiniteStateSet,
     summaries: &HashMap<String, DefiniteStateSet>,
 ) -> DefiniteInitFlow {
-    match statement {
+    match statement.kind() {
         TypedStatement::Let { name, value } => {
             let mut continuing = evaluate_definite_init_expr(value, incoming, summaries);
             let state_name = name.split('#').next().unwrap_or(name);
@@ -8453,6 +13528,38 @@ fn analyze_definite_init_statement(
             } else {
                 DefiniteInitFlow {
                     continuing: Some(after_cond),
+                    ..DefiniteInitFlow::default()
+                }
+            };
+            let mut flow = DefiniteInitFlow {
+                continuing: merge_alternative_continuations(
+                    then_flow.continuing,
+                    else_flow.continuing,
+                ),
+                ..DefiniteInitFlow::default()
+            };
+            merge_exit(&mut flow.returns, then_flow.returns);
+            merge_exit(&mut flow.returns, else_flow.returns);
+            merge_exit(&mut flow.breaks, then_flow.breaks);
+            merge_exit(&mut flow.breaks, else_flow.breaks);
+            merge_exit(&mut flow.continues, then_flow.continues);
+            merge_exit(&mut flow.continues, else_flow.continues);
+            flow
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let after_value = evaluate_definite_init_expr(value, incoming, summaries);
+            let then_flow =
+                analyze_definite_init_block(then_branch, after_value.clone(), required, summaries);
+            let else_flow = if let Some(branch) = else_branch {
+                analyze_definite_init_block(branch, after_value, required, summaries)
+            } else {
+                DefiniteInitFlow {
+                    continuing: Some(after_value),
                     ..DefiniteInitFlow::default()
                 }
             };
@@ -8598,7 +13705,8 @@ fn compute_definite_state_write_summaries(
     }
 
     Err(SemanticError {
-        message: "E_STATE_INIT_INCOMPLETE: compiler could not prove scalar-state initialization through the complete helper call graph"
+        code: "E_STATE_HAJIMARI_INCOMPLETE",
+        message: "compiler could not prove scalar-state initialization through the complete helper call graph"
             .into(),
     })
 }
@@ -8624,25 +13732,15 @@ fn enforce_permission_requirements(
                     func.name
                 )
             };
-            return Err(SemanticError { message });
+            return Err(SemanticError {
+                code: "K2004",
+                message,
+            });
         }
 
-        let needs_permission = effects
-            .get(&func.name)
-            .copied()
-            .unwrap_or_default()
-            .requires_permission();
-        let is_transaction_entry = func.modifiers.visibility == FunctionVisibility::Public
-            && func.modifiers.kind == FunctionKind::Contract;
-        let lifecycle_entry = matches!(
-            func.modifiers.kind,
-            FunctionKind::Init | FunctionKind::Upgrade
-        );
-        if (is_transaction_entry || (needs_permission && !lifecycle_entry))
-            && func.modifiers.visibility == FunctionVisibility::Public
-            && func.modifiers.permission.is_none()
-        {
+        if func.modifiers.kind == FunctionKind::Kotoage && func.modifiers.permission.is_none() {
             return Err(SemanticError {
+                code: "K2004",
                 message: format!(
                     "kotoage function `{}` requires `authorize(\"Permission\")`",
                     func.name
@@ -8654,7 +13752,7 @@ fn enforce_permission_requirements(
 }
 
 fn statement_contains_host_side_effects(stmt: &TypedStatement) -> bool {
-    match stmt {
+    match stmt.kind() {
         TypedStatement::Expr(expr)
         | TypedStatement::Return(Some(expr))
         | TypedStatement::Let { value: expr, .. } => expr_contains_host_side_effects(expr),
@@ -8674,6 +13772,18 @@ fn statement_contains_host_side_effects(stmt: &TypedStatement) -> bool {
                     .as_ref()
                     .map(block_contains_host_side_effects)
                     .unwrap_or(false)
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            expr_contains_host_side_effects(value)
+                || block_contains_host_side_effects(then_branch)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(block_contains_host_side_effects)
         }
         TypedStatement::While { cond, body } => {
             expr_contains_host_side_effects(cond) || block_contains_host_side_effects(body)
@@ -8706,7 +13816,7 @@ fn statement_contains_host_side_effects(stmt: &TypedStatement) -> bool {
 }
 
 fn statement_contains_instruction_emission(stmt: &TypedStatement) -> bool {
-    match stmt {
+    match stmt.kind() {
         TypedStatement::Expr(expr)
         | TypedStatement::Return(Some(expr))
         | TypedStatement::Let { value: expr, .. } => expr_contains_instruction_emission(expr),
@@ -8726,6 +13836,18 @@ fn statement_contains_instruction_emission(stmt: &TypedStatement) -> bool {
                     .as_ref()
                     .map(block_contains_instruction_emission)
                     .unwrap_or(false)
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            expr_contains_instruction_emission(value)
+                || block_contains_instruction_emission(then_branch)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(block_contains_instruction_emission)
         }
         TypedStatement::While { cond, body } => {
             expr_contains_instruction_emission(cond) || block_contains_instruction_emission(body)
@@ -8758,7 +13880,7 @@ fn statement_contains_instruction_emission(stmt: &TypedStatement) -> bool {
 }
 
 fn statement_mutates_durable_state(context: &SemanticContext, stmt: &TypedStatement) -> bool {
-    match stmt {
+    match stmt.kind() {
         TypedStatement::Let { name, value } => {
             is_state_binding(context, name) || expr_mutates_durable_state(context, value)
         }
@@ -8777,6 +13899,18 @@ fn statement_mutates_durable_state(context: &SemanticContext, stmt: &TypedStatem
             else_branch,
         } => {
             expr_mutates_durable_state(context, cond)
+                || block_mutates_durable_state(context, then_branch)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|branch| block_mutates_durable_state(context, branch))
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            expr_mutates_durable_state(context, value)
                 || block_mutates_durable_state(context, then_branch)
                 || else_branch
                     .as_ref()
@@ -8810,16 +13944,22 @@ fn statement_mutates_durable_state(context: &SemanticContext, stmt: &TypedStatem
 }
 
 fn expr_contains_host_side_effects(expr: &TypedExpr) -> bool {
-    match &expr.expr {
-        ExprKind::Call { name, args } => {
+    match expr.kind() {
+        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
             Builtin::from_name(name).is_some_and(|builtin| builtin.spec().effects.host_side_effects)
-                || args.iter().any(expr_contains_host_side_effects)
+                || evaluated_call_args(name, args)
+                    .iter()
+                    .any(expr_contains_host_side_effects)
         }
         ExprKind::Binary { left, right, .. } => {
             expr_contains_host_side_effects(left) || expr_contains_host_side_effects(right)
         }
-        ExprKind::Unary { expr, .. } => expr_contains_host_side_effects(expr),
-        ExprKind::NumericCast { expr } => expr_contains_host_side_effects(expr),
+        ExprKind::Unary { expr, .. }
+        | ExprKind::NumericCast { expr }
+        | ExprKind::OptionSome { value: expr }
+        | ExprKind::ResultOk { value: expr }
+        | ExprKind::ResultErr { error: expr }
+        | ExprKind::Propagate { value: expr } => expr_contains_host_side_effects(expr),
         ExprKind::Conditional {
             cond,
             then_expr,
@@ -8829,13 +13969,61 @@ fn expr_contains_host_side_effects(expr: &TypedExpr) -> bool {
                 || expr_contains_host_side_effects(then_expr)
                 || expr_contains_host_side_effects(else_expr)
         }
-        ExprKind::Tuple(items) => items.iter().any(expr_contains_host_side_effects),
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_contains_host_side_effects(condition)
+                || block_contains_host_side_effects(then_branch)
+                || block_contains_host_side_effects(else_branch)
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            expr_contains_host_side_effects(value)
+                || block_contains_host_side_effects(then_branch)
+                || block_contains_host_side_effects(else_branch)
+        }
+        ExprKind::Match { value, arms } => {
+            expr_contains_host_side_effects(value)
+                || arms
+                    .iter()
+                    .any(|arm| block_contains_host_side_effects(&arm.body))
+        }
+        ExprKind::Tuple(items) | ExprKind::List(items) => {
+            items.iter().any(expr_contains_host_side_effects)
+        }
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            expr_contains_host_side_effects(source)
+                || expr_contains_host_side_effects(expression)
+                || condition
+                    .as_deref()
+                    .is_some_and(expr_contains_host_side_effects)
+        }
+        ExprKind::StructLiteral { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| expr_contains_host_side_effects(value)),
+        ExprKind::JsonObject(entries) => entries
+            .iter()
+            .any(|(_, value)| expr_contains_host_side_effects(value)),
+        ExprKind::JsonArray(items) => items.iter().any(expr_contains_host_side_effects),
         ExprKind::Member { object, .. } => expr_contains_host_side_effects(object),
         ExprKind::Index { target, index } => {
             expr_contains_host_side_effects(target) || expr_contains_host_side_effects(index)
         }
         ExprKind::Number(_)
         | ExprKind::Decimal(_)
+        | ExprKind::AmountLiteral { .. }
+        | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
@@ -8844,17 +14032,23 @@ fn expr_contains_host_side_effects(expr: &TypedExpr) -> bool {
 }
 
 fn expr_contains_instruction_emission(expr: &TypedExpr) -> bool {
-    match &expr.expr {
-        ExprKind::Call { name, args } => {
+    match expr.kind() {
+        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
             Builtin::from_name(name)
                 .is_some_and(|builtin| builtin.spec().effects.emits_instructions)
-                || args.iter().any(expr_contains_instruction_emission)
+                || evaluated_call_args(name, args)
+                    .iter()
+                    .any(expr_contains_instruction_emission)
         }
         ExprKind::Binary { left, right, .. } => {
             expr_contains_instruction_emission(left) || expr_contains_instruction_emission(right)
         }
-        ExprKind::Unary { expr, .. } => expr_contains_instruction_emission(expr),
-        ExprKind::NumericCast { expr } => expr_contains_instruction_emission(expr),
+        ExprKind::Unary { expr, .. }
+        | ExprKind::NumericCast { expr }
+        | ExprKind::OptionSome { value: expr }
+        | ExprKind::ResultOk { value: expr }
+        | ExprKind::ResultErr { error: expr }
+        | ExprKind::Propagate { value: expr } => expr_contains_instruction_emission(expr),
         ExprKind::Conditional {
             cond,
             then_expr,
@@ -8864,13 +14058,61 @@ fn expr_contains_instruction_emission(expr: &TypedExpr) -> bool {
                 || expr_contains_instruction_emission(then_expr)
                 || expr_contains_instruction_emission(else_expr)
         }
-        ExprKind::Tuple(items) => items.iter().any(expr_contains_instruction_emission),
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_contains_instruction_emission(condition)
+                || block_contains_instruction_emission(then_branch)
+                || block_contains_instruction_emission(else_branch)
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            expr_contains_instruction_emission(value)
+                || block_contains_instruction_emission(then_branch)
+                || block_contains_instruction_emission(else_branch)
+        }
+        ExprKind::Match { value, arms } => {
+            expr_contains_instruction_emission(value)
+                || arms
+                    .iter()
+                    .any(|arm| block_contains_instruction_emission(&arm.body))
+        }
+        ExprKind::Tuple(items) | ExprKind::List(items) => {
+            items.iter().any(expr_contains_instruction_emission)
+        }
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            expr_contains_instruction_emission(source)
+                || expr_contains_instruction_emission(expression)
+                || condition
+                    .as_deref()
+                    .is_some_and(expr_contains_instruction_emission)
+        }
+        ExprKind::StructLiteral { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| expr_contains_instruction_emission(value)),
+        ExprKind::JsonObject(entries) => entries
+            .iter()
+            .any(|(_, value)| expr_contains_instruction_emission(value)),
+        ExprKind::JsonArray(items) => items.iter().any(expr_contains_instruction_emission),
         ExprKind::Member { object, .. } => expr_contains_instruction_emission(object),
         ExprKind::Index { target, index } => {
             expr_contains_instruction_emission(target) || expr_contains_instruction_emission(index)
         }
         ExprKind::Number(_)
         | ExprKind::Decimal(_)
+        | ExprKind::AmountLiteral { .. }
+        | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
@@ -8879,23 +14121,27 @@ fn expr_contains_instruction_emission(expr: &TypedExpr) -> bool {
 }
 
 fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bool {
-    match &expr.expr {
-        ExprKind::Call { name, args } => {
+    match expr.kind() {
+        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
             Builtin::from_name(name)
                 .is_some_and(|builtin| builtin.spec().effects.mutates_durable_state)
                 || (matches!(Builtin::from_name(name), Some(Builtin::Ensure))
                     && args
                         .first()
                         .is_some_and(|arg| typed_map_expr_is_state(context, arg)))
-                || args
+                || evaluated_call_args(name, args)
                     .iter()
                     .any(|arg| expr_mutates_durable_state(context, arg))
         }
         ExprKind::Binary { left, right, .. } => {
             expr_mutates_durable_state(context, left) || expr_mutates_durable_state(context, right)
         }
-        ExprKind::Unary { expr, .. } => expr_mutates_durable_state(context, expr),
-        ExprKind::NumericCast { expr } => expr_mutates_durable_state(context, expr),
+        ExprKind::Unary { expr, .. }
+        | ExprKind::NumericCast { expr }
+        | ExprKind::OptionSome { value: expr }
+        | ExprKind::ResultOk { value: expr }
+        | ExprKind::ResultErr { error: expr }
+        | ExprKind::Propagate { value: expr } => expr_mutates_durable_state(context, expr),
         ExprKind::Conditional {
             cond,
             then_expr,
@@ -8905,7 +14151,53 @@ fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bo
                 || expr_mutates_durable_state(context, then_expr)
                 || expr_mutates_durable_state(context, else_expr)
         }
-        ExprKind::Tuple(items) => items
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_mutates_durable_state(context, condition)
+                || block_mutates_durable_state(context, then_branch)
+                || block_mutates_durable_state(context, else_branch)
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            expr_mutates_durable_state(context, value)
+                || block_mutates_durable_state(context, then_branch)
+                || block_mutates_durable_state(context, else_branch)
+        }
+        ExprKind::Match { value, arms } => {
+            expr_mutates_durable_state(context, value)
+                || arms
+                    .iter()
+                    .any(|arm| block_mutates_durable_state(context, &arm.body))
+        }
+        ExprKind::Tuple(items) | ExprKind::List(items) => items
+            .iter()
+            .any(|item| expr_mutates_durable_state(context, item)),
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            expr_mutates_durable_state(context, source)
+                || expr_mutates_durable_state(context, expression)
+                || condition
+                    .as_deref()
+                    .is_some_and(|condition| expr_mutates_durable_state(context, condition))
+        }
+        ExprKind::StructLiteral { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| expr_mutates_durable_state(context, value)),
+        ExprKind::JsonObject(entries) => entries
+            .iter()
+            .any(|(_, value)| expr_mutates_durable_state(context, value)),
+        ExprKind::JsonArray(items) => items
             .iter()
             .any(|item| expr_mutates_durable_state(context, item)),
         ExprKind::Member { object, .. } => expr_mutates_durable_state(context, object),
@@ -8915,6 +14207,8 @@ fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bo
         }
         ExprKind::Number(_)
         | ExprKind::Decimal(_)
+        | ExprKind::AmountLiteral { .. }
+        | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
@@ -8926,6 +14220,42 @@ fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bo
 mod tests {
     use super::*;
     use crate::parser::parse_test_fragment as parse;
+
+    #[test]
+    fn pending_diagnostic_fills_first_spanless_failure_without_masking_structured_failure() {
+        let source = crate::source::SourceId(9);
+        let structured = crate::semantic_diagnostics::SemanticDiagnostic {
+            primary: crate::source::SourceRange::new(source, crate::source::TextRange::new(1, 2)),
+            labels: Vec::new(),
+            fix: None,
+        };
+        let pending = crate::semantic_diagnostics::SemanticDiagnostic {
+            primary: crate::source::SourceRange::new(source, crate::source::TextRange::new(3, 4)),
+            labels: Vec::new(),
+            fix: None,
+        };
+        let failure = |code, diagnostic| SemanticFailure {
+            error: SemanticError {
+                code,
+                message: "localized text".to_owned(),
+            },
+            location: None,
+            diagnostic,
+        };
+        let mut failures = SemanticFailures {
+            failures: vec![
+                failure("E_FIRST", Some(structured.clone())),
+                failure("E_SECOND", None),
+                failure("E_THIRD", None),
+            ],
+        };
+
+        attach_pending_diagnostic(&mut failures, Some(pending.clone()));
+
+        assert_eq!(failures.failures[0].diagnostic, Some(structured));
+        assert_eq!(failures.failures[1].diagnostic, Some(pending));
+        assert!(failures.failures[2].diagnostic.is_none());
+    }
 
     fn sample_account_literal() -> String {
         iroha_data_model::account::AccountId::new(
@@ -8943,6 +14273,665 @@ mod tests {
     fn analyze_error(source: &str) -> SemanticError {
         let program = parse(source).expect("source should parse");
         analyze(&program).expect_err("semantic analysis should reject source")
+    }
+
+    fn returned_expr(source: &str) -> TypedExpr {
+        let program = parse(source).expect("source should parse");
+        let typed = analyze(&program).expect("source should analyze");
+        typed
+            .items
+            .into_iter()
+            .find_map(|item| {
+                let TypedItem::Function(function) = item;
+                function.body.statements.into_iter().find_map(|statement| {
+                    if let TypedStatement::Return(Some(expr)) = statement {
+                        Some(expr)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .expect("function return expression")
+    }
+
+    fn function_tail(source: &str) -> TypedExpr {
+        let program = parse(source).expect("source should parse");
+        let typed = analyze(&program).expect("source should analyze");
+        let TypedItem::Function(function) = typed.items.into_iter().next().expect("function item");
+        *function.body.tail.expect("function tail expression")
+    }
+
+    #[test]
+    fn list_literals_infer_exact_or_contextual_capacity() {
+        let exact = function_tail("fn exact() -> List<i64, 2> { [1, 2] }");
+        assert_eq!(exact.ty, Type::List(Box::new(Type::Int), 2));
+        assert!(matches!(exact.expr, ExprKind::List(ref items) if items.len() == 2));
+
+        let contextual = function_tail("fn wider() -> List<i64, 8> { [1, 2] }");
+        assert_eq!(contextual.ty, Type::List(Box::new(Type::Int), 8));
+
+        let inferred_program =
+            parse("fn inferred() { let values = [1, 2, 3]; }").expect("parse inferred List");
+        let inferred = analyze(&inferred_program).expect("analyze inferred List");
+        let TypedItem::Function(function) = &inferred.items[0];
+        let TypedStatement::Let { value, .. } = &function.body.statements[0] else {
+            panic!("expected List binding");
+        };
+        assert_eq!(value.ty, Type::List(Box::new(Type::Int), 3));
+    }
+
+    #[test]
+    fn empty_and_oversized_list_literals_fail_closed() {
+        let empty = function_tail("fn empty() -> List<i64, 4> { [] }");
+        assert_eq!(empty.ty, Type::List(Box::new(Type::Int), 4));
+
+        let error = analyze_error("fn missing_context() { let values = []; }");
+        assert_eq!(error.code, "E_LIST_EMPTY_CONTEXT");
+
+        let values = std::iter::repeat_n("1", 65).collect::<Vec<_>>().join(", ");
+        let error = analyze_error(&format!("fn oversized() {{ let values = [{values}]; }}"));
+        assert_eq!(error.code, "E_LIST_CAPACITY");
+    }
+
+    #[test]
+    fn zero_sized_list_elements_are_rejected_at_every_semantic_boundary() {
+        for source in [
+            "struct Empty {} fn typed() -> List<Empty, 1> { [Empty {}] }",
+            "struct Empty {} fn inferred() { let values = [Empty {}]; }",
+            "struct Empty {} fn contextual() { let values: List<Empty, 2> = []; }",
+            "struct Empty {} struct Pair { left: Empty, right: Empty } fn parameter(values: List<Pair, 1>) { let _values = values; }",
+            "struct Empty {} fn nested(value: Option<List<Empty, 1>>) { let _value = value; }",
+            "struct Empty {} struct Holder { invalid: List<Empty, 1> } fn unused() { return; }",
+            "struct Empty {} fn comprehension() { let source = [1]; let values = [Empty {} for item in source]; }",
+        ] {
+            let error = analyze_error(source);
+            assert_eq!(error.code, "E_LIST_ZERO_SIZED_ELEMENT", "{source}");
+            assert!(error.message.contains("at least one word"));
+        }
+    }
+
+    #[test]
+    fn contextual_empty_lists_and_one_word_sum_handles_remain_valid() {
+        let ordinary = function_tail("fn empty() -> List<i64, 4> { [] }");
+        assert_eq!(ordinary.ty, Type::List(Box::new(Type::Int), 4));
+
+        let sum_handle = function_tail(
+            "struct Empty {} fn values() -> List<Option<Empty>, 1> { [Option::none] }",
+        );
+        assert_eq!(
+            sum_handle.ty,
+            Type::List(
+                Box::new(Type::Option(Box::new(Type::Struct {
+                    name: "Empty".into(),
+                    fields: Vec::new(),
+                }))),
+                1,
+            )
+        );
+
+        let forward = function_tail(
+            "struct Holder { values: List<Value, 1> } struct Value { item: i64 } fn values() -> List<Value, 1> { [Value { item: 1 }] }",
+        );
+        assert!(matches!(forward.ty, Type::List(_, 1)));
+    }
+
+    #[test]
+    fn native_json_rejects_decoded_duplicate_keys_and_oversized_nodes() {
+        let error = analyze_error(
+            r#"fn duplicate(owner: AccountId) -> Json {
+                json { owner: owner, "owner": owner }
+            }"#,
+        );
+        assert_eq!(error.code, "E_JSON_DUPLICATE_KEY");
+
+        let object_entries = (0..65)
+            .map(|index| format!("key{index}: {index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let error = analyze_error(&format!(
+            "fn oversized_object() -> Json {{ json {{ {object_entries} }} }}"
+        ));
+        assert_eq!(error.code, "E_JSON_CAPACITY");
+
+        let array_elements = (0..65)
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let error = analyze_error(&format!(
+            "fn oversized_array() -> Json {{ json [{array_elements}] }}"
+        ));
+        assert_eq!(error.code, "E_JSON_CAPACITY");
+    }
+
+    #[test]
+    fn native_json_rejects_recursive_schema_limits_during_semantic_checking() {
+        let children = std::iter::repeat_n("json [1, 2, 3, 4]", 64)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let expression = format!("json [{children}]");
+        let error = analyze_error(&format!(
+            "fn recursively_oversized() -> Json {{ {expression} }}"
+        ));
+        assert_eq!(error.code, "E_JSON_SCHEMA_LIMIT", "{}", error.message);
+        assert!(error.message.contains("V1"));
+
+        let long_keys = (0..64)
+            .map(|index| format!("\"key{index}{}\": {index}", "x".repeat(1_100)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let error = analyze_error(&format!(
+            "fn byte_oversized() -> Json {{ json {{ {long_keys} }} }}"
+        ));
+        assert_eq!(error.code, "E_JSON_SCHEMA_LIMIT", "{}", error.message);
+        assert!(error.message.contains("byte limit"), "{}", error.message);
+    }
+
+    #[test]
+    fn list_comprehensions_preserve_the_proven_source_maximum() {
+        let expression = function_tail(
+            "fn doubled() -> List<i64, 8> { let source: List<i64, 8> = [1, 2]; [value * 2 for value in source if value > 0] }",
+        );
+        assert_eq!(expression.ty, Type::List(Box::new(Type::Int), 8));
+        assert!(matches!(
+            expression.expr,
+            ExprKind::ListComprehension { .. }
+        ));
+
+        let error = analyze_error(
+            "fn too_small() -> List<i64, 4> { let source: List<i64, 8> = [1, 2]; [value for value in source if false] }",
+        );
+        assert_eq!(error.code, "E_LIST_COMPREHENSION_CAPACITY");
+        assert!(error.message.contains("filters do not reduce"));
+    }
+
+    #[test]
+    fn lists_allow_nested_structures_but_reject_resource_handles() {
+        let nested = function_tail(
+            "struct Pair { left: i64, right: bool } fn nested() -> List<List<Pair, 2>, 2> { [[Pair { left: 1, right: true }]] }",
+        );
+        assert!(matches!(nested.ty, Type::List(_, 2)));
+
+        let error =
+            analyze_error("fn resources(value: List<Option<StateMap<i64, i64>>, 2>) { return; }");
+        assert_eq!(error.code, "E_LIST_RESOURCE_ELEMENT");
+    }
+
+    #[test]
+    fn every_list_method_has_a_typed_safe_surface() {
+        let program = parse(
+            "fn methods() -> List<(i64, i64), 4> {\
+                 var values: List<i64, 4> = [1, 2];\
+                 let length = values.len();\
+                 let first: Option<i64> = values.get(0);\
+                 let changed = values.try_set(index: 0, value: 3);\
+                 let pushed = values.try_push(4);\
+                 let has_three = values.contains(3);\
+                 let removed: Option<i64> = values.pop();\
+                 let head: List<i64, 2> = values.take(2);\
+                 values.enumerate()\
+             }",
+        )
+        .expect("parse List methods");
+        let typed = analyze(&program).expect("analyze List methods");
+        let TypedItem::Function(function) = &typed.items[0];
+        assert_eq!(
+            function.body.tail.as_ref().expect("enumerate tail").ty,
+            Type::List(Box::new(Type::Tuple(vec![Type::Int, Type::Int])), 4)
+        );
+
+        let error =
+            analyze_error("fn immutable() { let values: List<i64, 2> = [1]; values.try_push(2); }");
+        assert_eq!(error.code, "E_LIST_MUTABLE_RECEIVER");
+
+        let error = analyze_error("fn temporary() { let pushed = [1].try_push(2); }");
+        assert_eq!(error.code, "E_LIST_MUTABLE_RECEIVER");
+
+        let error = analyze_error(
+            "fn ambiguous() { var values: List<i64, 2> = [1]; values.try_set(0, 1); }",
+        );
+        assert_eq!(error.code, "E_NAMED_ARGUMENTS_REQUIRED");
+
+        analyze(&parse(
+            "fn distinct() { var values: List<string, 2> = [\"a\"]; values.try_set(0, \"b\"); }",
+        ).expect("parse distinct List.try_set types"))
+        .expect("distinct index/value types may remain positional");
+    }
+
+    #[test]
+    fn sourced_mutable_list_receiver_retains_its_binding_identity() {
+        let source = crate::source::SourceFile::new(
+            crate::source::SourceId(41),
+            "mutable-list.ko",
+            "seiyaku Lists { view fn main() { var values: List<i64, 2> = [1]; values.try_push(2); } }",
+        );
+        let (spanned, _) =
+            crate::parser::parse_source_spanned(&source, crate::source::FrontendBudget::v1())
+                .expect("parse sourced mutable List receiver");
+        analyze(&spanned.program).expect("source provenance must not hide the mutable binding");
+    }
+
+    #[test]
+    fn list_take_accepts_zero_and_rejects_limits_above_source_capacity() {
+        let zero = function_tail(
+            "fn zero() -> List<i64, 1> { let values: List<i64, 4> = [1, 2]; values.take(0) }",
+        );
+        assert_eq!(zero.ty, Type::List(Box::new(Type::Int), 1));
+
+        for (source, code) in [
+            (
+                "fn above_source() { let values: List<i64, 1> = [1]; let head = values.take(2); }",
+                "E_LIST_TAKE_LIMIT",
+            ),
+            (
+                "fn large() { let values = [1]; let head = values.take(65); }",
+                "E_LIST_TAKE_LIMIT",
+            ),
+            (
+                "fn dynamic() { let values = [1]; let limit = 1; let head = values.take(limit); }",
+                "E_LIST_TAKE_CONST",
+            ),
+        ] {
+            let error = analyze_error(source);
+            assert_eq!(error.code, code, "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn list_contains_accepts_recursive_durable_aggregates() {
+        let expression = function_tail(
+            r#"
+                struct Envelope {
+                    labels: List<Option<i64>, 2>,
+                    outcome: Result<(i64, bool), i64>,
+                }
+
+                fn contains_nested() -> bool {
+                    let values: List<Envelope, 2> = [
+                        Envelope {
+                            labels: [Option::none, Option::some(7)],
+                            outcome: Result::ok((9, true)),
+                        },
+                    ];
+                    values.contains(Envelope {
+                        labels: [Option::none, Option::some(7)],
+                        outcome: Result::ok((9, true)),
+                    })
+                }
+            "#,
+        );
+        assert_eq!(expression.ty, Type::Bool);
+        assert!(
+            matches!(expression.expr, ExprKind::Call { ref name, .. } if name == LIST_CONTAINS_INTRINSIC)
+        );
+    }
+
+    #[test]
+    fn unchecked_list_reads_and_writes_have_actionable_diagnostics() {
+        let error = analyze_error("fn read() { let values = [1]; let value = values[0]; }");
+        assert_eq!(error.code, "E_LIST_UNSAFE_INDEX");
+        assert!(
+            error.message.contains("values.get(index)")
+                || error.message.contains("list.get(index)")
+        );
+
+        let error = analyze_error("fn write() { var values = [1]; values[0] = 2; }");
+        assert_eq!(error.code, "E_LIST_UNSAFE_INDEX");
+        assert!(error.message.contains("try_set"));
+    }
+
+    #[test]
+    fn amount_literals_are_typed_and_canonicalized_without_losing_spelling() {
+        for (spelling, mantissa, scale) in [
+            ("10amt", "10", 0),
+            ("1.250_0amt", "125", 2),
+            ("0.000amt", "0", 0),
+            ("1_000.000_001amt", "1000000001", 6),
+        ] {
+            let expr = returned_expr(&format!("fn amount() -> Amount {{ return {spelling}; }}"));
+            assert_eq!(expr.ty, Type::Amount, "`{spelling}`");
+            let ExprKind::AmountLiteral {
+                value,
+                spelling: retained,
+            } = expr.expr
+            else {
+                panic!("expected typed Amount literal for `{spelling}`");
+            };
+            assert_eq!(retained, spelling);
+            assert_eq!(value.mantissa().to_string(), mantissa, "`{spelling}`");
+            assert_eq!(value.scale(), scale, "`{spelling}`");
+            value.validate_amount().expect("canonical Amount payload");
+        }
+    }
+
+    #[test]
+    fn amount_literal_accepts_scale_twenty_eight_and_rejects_twenty_nine() {
+        let scale_28 = format!("0.{}1amt", "0".repeat(27));
+        let expr = returned_expr(&format!("fn amount() -> Amount {{ return {scale_28}; }}"));
+        let ExprKind::AmountLiteral { value, .. } = expr.expr else {
+            panic!("expected Amount literal");
+        };
+        assert_eq!(value.scale(), 28);
+
+        let scale_29 = format!("0.{}1amt", "0".repeat(28));
+        let error = analyze_error(&format!("fn amount() -> Amount {{ return {scale_29}; }}"));
+        assert_eq!(error.code, "E_AMOUNT_SCALE_OVERFLOW");
+
+        let trailing_zeros = format!("1.{}amt", "0".repeat(40));
+        let expr = returned_expr(&format!(
+            "fn amount() -> Amount {{ return {trailing_zeros}; }}"
+        ));
+        let ExprKind::AmountLiteral { value, spelling } = expr.expr else {
+            panic!("expected canonicalized Amount literal");
+        };
+        assert_eq!(spelling, trailing_zeros, "source spelling remains stable");
+        assert_eq!(value.mantissa().to_string(), "1");
+        assert_eq!(value.scale(), 0);
+
+        let significant_29 = format!("0.{}amt", "1".repeat(29));
+        let error = analyze_error(&format!(
+            "fn amount() -> Amount {{ return {significant_29}; }}"
+        ));
+        assert_eq!(error.code, "E_AMOUNT_SCALE_OVERFLOW");
+        assert!(error.message.contains("canonical scale 29"));
+    }
+
+    #[test]
+    fn amount_literal_enforces_the_bounded_mantissa() {
+        let within_bound = format!("{}amt", "6".repeat(154));
+        returned_expr(&format!(
+            "fn amount() -> Amount {{ return {within_bound}; }}"
+        ));
+
+        let overflow = format!("{}amt", "9".repeat(155));
+        let error = analyze_error(&format!("fn amount() -> Amount {{ return {overflow}; }}"));
+        assert_eq!(error.code, "E_AMOUNT_MANTISSA_OVERFLOW");
+    }
+
+    #[test]
+    fn amount_literal_rejects_adversarial_underscore_placement() {
+        for spelling in ["1__0amt", "1_.0amt", "1._0amt", "1.0_amt"] {
+            let error = analyze_error(&format!("fn amount() -> Amount {{ return {spelling}; }}"));
+            assert_eq!(error.code, "E_AMOUNT_MALFORMED", "{spelling}");
+        }
+    }
+
+    #[test]
+    fn amount_literal_is_nominally_distinct_from_u128() {
+        let error = analyze_error(
+            "fn amount() -> Amount { return 10u128; } fn integer() -> u128 { return 10amt; }",
+        );
+        assert!(error.message.contains("type"), "{}", error.message);
+
+        let expr = returned_expr("fn integer() -> u128 { return 10u128; }");
+        assert_eq!(expr.ty, Type::FixedU128);
+        assert!(matches!(expr.expr, ExprKind::Decimal(ref raw) if raw == "10"));
+    }
+
+    #[test]
+    fn exact_constant_amount_arithmetic_folds_and_rejects_every_failure_class() {
+        for (source, expected) in [
+            ("1.20amt + 2.3amt", "3.5"),
+            ("5amt - 1.25amt", "3.75"),
+            ("1.5amt * 2amt", "3"),
+            ("1amt / 8amt", "0.125"),
+        ] {
+            let expression =
+                returned_expr(&format!("fn amount() -> Amount {{ return {source}; }}"));
+            let ExprKind::AmountLiteral { value, .. } = expression.expr else {
+                panic!("constant Amount expression `{source}` must fold");
+            };
+            assert_eq!(value.to_string(), expected, "{source}");
+        }
+
+        let mantissa_overflow = format!("{}amt * 2amt", "9".repeat(154));
+        for source in [
+            "1amt - 2amt".to_owned(),
+            "1amt / 0amt".to_owned(),
+            "1amt / 3amt".to_owned(),
+            "0.000000000000001amt * 0.000000000000001amt".to_owned(),
+            mantissa_overflow,
+        ] {
+            let error = analyze_error(&format!("fn amount() -> Amount {{ return {source}; }}"));
+            assert_eq!(
+                error.code, "E_AMOUNT_CONSTANT_ARITHMETIC",
+                "{source}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn amount_div_round_requires_named_exactly_typed_arguments() {
+        let expr = returned_expr(
+            "fn rounded(value: Amount, divisor: Amount, scale: i64) -> Amount { \
+                return value.div_round( \
+                    mode: Rounding::nearest_even, \
+                    divisor: divisor, \
+                    scale: scale, \
+                ); \
+            }",
+        );
+        let ExprKind::NamedCall {
+            name,
+            args,
+            evaluation_order,
+        } = expr.expr
+        else {
+            panic!("dynamic rounded division must remain a typed intrinsic");
+        };
+        assert_eq!(name, AMOUNT_DIV_ROUND_INTRINSIC);
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0].ty, Type::Amount);
+        assert_eq!(args[1].ty, Type::Amount);
+        assert_eq!(args[2].ty, Type::Int);
+        assert!(matches!(
+            args[3].expr,
+            ExprKind::Number(value)
+                if value == ivm_abi::syscalls::AMOUNT_ROUND_NEAREST_EVEN as i64
+        ));
+        assert_eq!(evaluation_order, [0, 3, 1, 2]);
+
+        for (source, code) in [
+            (
+                "fn bad(a: Amount, b: Amount) -> Amount { return a.div_round(b, 2, Rounding::floor); }",
+                "E_NAMED_ARGUMENTS_REQUIRED",
+            ),
+            (
+                "fn bad(a: Amount, b: Amount) -> Amount { return a.div_round(divisor: b, scale: 29, mode: Rounding::floor); }",
+                "E_AMOUNT_DIV_ROUND_SCALE",
+            ),
+            (
+                "fn bad(a: Amount, b: Amount) -> Amount { return a.div_round(divisor: b, scale: 2, mode: Rounding::nearest); }",
+                "E_AMOUNT_ROUNDING_MODE",
+            ),
+            (
+                "fn bad(a: Amount) -> Amount { return a.div_round(divisor: 1u128, scale: 2, mode: Rounding::floor); }",
+                "type",
+            ),
+            (
+                "fn bad(a: u128, b: Amount) -> Amount { return a.div_round(divisor: b, scale: 2, mode: Rounding::floor); }",
+                "E_AMOUNT_DIV_ROUND_RECEIVER",
+            ),
+            (
+                "fn bad(a: Amount) -> Amount { return a.div_round(divisor: 0amt, scale: 2, mode: Rounding::floor); }",
+                "E_AMOUNT_CONSTANT_ARITHMETIC",
+            ),
+        ] {
+            let error = analyze_error(source);
+            if code == "type" {
+                assert!(error.message.contains(code), "{}", error.message);
+            } else {
+                assert_eq!(error.code, code, "{source}: {}", error.message);
+            }
+        }
+    }
+
+    #[test]
+    fn constant_amount_div_round_folds_with_declared_rounding_policy() {
+        for (source, expected) in [
+            (
+                "fn rounded() -> Amount { return 1amt.div_round(divisor: 8amt, scale: 2, mode: Rounding::floor); }",
+                "0.12",
+            ),
+            (
+                "fn rounded() -> Amount { return 1amt.div_round(divisor: 8amt, scale: 2, mode: Rounding::ceil); }",
+                "0.13",
+            ),
+            (
+                "fn rounded() -> Amount { return 1amt.div_round(divisor: 8amt, scale: 2, mode: Rounding::nearest_even); }",
+                "0.12",
+            ),
+            (
+                "fn rounded() -> Amount { return 3amt.div_round(divisor: 8amt, scale: 2, mode: Rounding::nearest_even); }",
+                "0.38",
+            ),
+        ] {
+            let expression = returned_expr(source);
+            let ExprKind::AmountLiteral { value, .. } = expression.expr else {
+                panic!("constant rounded division must fold");
+            };
+            assert_eq!(value.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn named_struct_fields_retain_source_evaluation_order() {
+        let expr = returned_expr(
+            "struct Transfer { source: i64, destination: string, amount: Amount } fn build() -> Transfer { return Transfer { amount: 10amt, destination: \"sink\", source: 7 }; }",
+        );
+        assert!(matches!(expr.ty, Type::Struct { ref name, .. } if name == "Transfer"));
+        let ExprKind::StructLiteral { name, fields } = expr.expr else {
+            panic!("expected typed struct literal");
+        };
+        assert_eq!(name, "Transfer");
+        assert_eq!(
+            fields
+                .iter()
+                .map(|(field, _)| field.as_str())
+                .collect::<Vec<_>>(),
+            ["amount", "destination", "source"]
+        );
+        assert!(matches!(fields[0].1.expr, ExprKind::AmountLiteral { .. }));
+        assert!(matches!(fields[1].1.expr, ExprKind::String(ref value) if value == "sink"));
+        assert!(matches!(fields[2].1.expr, ExprKind::Number(7)));
+    }
+
+    #[test]
+    fn struct_literals_reject_unknown_missing_and_positional_fields() {
+        for (source, code) in [
+            (
+                "struct Pair { first: i64, second: string } fn build() -> Pair { return Pair { first: 1, second: \"two\", third: 3 }; }",
+                "E_UNKNOWN_STRUCT_FIELD",
+            ),
+            (
+                "struct Pair { first: i64, second: string } fn build() -> Pair { return Pair { first: 1 }; }",
+                "E_MISSING_STRUCT_FIELD",
+            ),
+            (
+                "struct Pair { first: i64, second: string } fn build() -> Pair { return Pair(1, \"two\"); }",
+                "E_POSITIONAL_STRUCT",
+            ),
+        ] {
+            let error = analyze_error(source);
+            assert_eq!(error.code, code, "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn named_user_call_arguments_are_reordered_to_parameter_order() {
+        let program = parse(
+            "fn target(first: i64, second: string) -> i64 { return first; } fn main() -> i64 { return target(second: \"two\", first: 1); }",
+        )
+        .expect("parse named user call");
+        let typed = analyze(&program).expect("analyze named user call");
+        let main = typed
+            .items
+            .into_iter()
+            .find_map(|item| {
+                let TypedItem::Function(function) = item;
+                (function.name == "main").then_some(function)
+            })
+            .expect("main function");
+        let TypedStatement::Return(Some(call)) = &main.body.statements[0] else {
+            panic!("expected returned call");
+        };
+        let ExprKind::NamedCall {
+            args,
+            evaluation_order,
+            ..
+        } = &call.expr
+        else {
+            panic!("expected typed call");
+        };
+        assert!(matches!(args[0].expr, ExprKind::Number(1)));
+        assert!(matches!(args[1].expr, ExprKind::String(ref value) if value == "two"));
+        assert_eq!(evaluation_order, &[1, 0]);
+    }
+
+    #[test]
+    fn named_user_calls_reject_unknown_missing_and_ambiguous_positional_arguments() {
+        for (source, code) in [
+            (
+                "fn target(first: i64, second: string) {} fn main() { target(first: 1, third: \"three\"); }",
+                "E_UNKNOWN_NAMED_ARGUMENT",
+            ),
+            (
+                "fn target(first: i64, second: string) {} fn main() { target(first: 1); }",
+                "E_MISSING_NAMED_ARGUMENT",
+            ),
+            (
+                "fn target(left: i64, right: i64) {} fn main() { target(1, 2); }",
+                "E_NAMED_ARGUMENTS_REQUIRED",
+            ),
+        ] {
+            let error = analyze_error(source);
+            assert_eq!(error.code, code, "{}", error.message);
+        }
+
+        let named =
+            parse("fn target(left: i64, right: i64) {} fn main() { target(right: 2, left: 1); }")
+                .expect("parse repeated-type named call");
+        analyze(&named).expect("named repeated-type call should type-check");
+    }
+
+    #[test]
+    fn privileged_and_effectful_calls_with_three_parameters_require_names() {
+        let privileged = analyze_error(
+            "kotoage fn publish(first: i64, second: string, third: bool) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }",
+        );
+        assert_eq!(privileged.code, "E_NAMED_ARGUMENTS_REQUIRED");
+
+        let effectful = analyze_error(
+            "fn main(account: AccountId, key: Name, value: Json) { ledger::account::set_detail(account, key, value); }",
+        );
+        assert_eq!(effectful.code, "E_NAMED_ARGUMENTS_REQUIRED");
+
+        let transitive = analyze_error(
+            "fn sink(account: AccountId, key: Name, value: Json) { ledger::account::set_detail(account: account, key: key, value: value); } fn wrapper(account: AccountId, key: Name, value: Json) { sink(account: account, key: key, value: value); } fn main(account: AccountId, key: Name, value: Json) { wrapper(account, key, value); }",
+        );
+        assert_eq!(transitive.code, "E_NAMED_ARGUMENTS_REQUIRED");
+    }
+
+    #[test]
+    fn named_method_arguments_do_not_mix_with_the_receiver() {
+        let program = parse(
+            "fn lookup(object: Json, key: Name) -> Option<i64> { return object.get_int(key: key); }",
+        )
+        .expect("parse named method call");
+        analyze(&program).expect("implicit receiver must not count as a positional argument");
+    }
+
+    #[test]
+    fn pagination_calls_require_offset_and_limit_names() {
+        let positional =
+            analyze_error("fn page(path: Name) -> bytes { return state::keys(path, 0, 10); }");
+        assert_eq!(positional.code, "E_NAMED_ARGUMENTS_REQUIRED");
+
+        let named = parse(
+            "fn page(path: Name) -> bytes { return state::keys(limit: 10, path: path, offset: 0); }",
+        )
+        .expect("parse named pagination call");
+        analyze(&named).expect("named pagination call should type-check");
     }
 
     #[test]
@@ -8975,9 +14964,10 @@ mod tests {
     #[test]
     fn cross_kind_declaration_collisions_are_rejected() {
         let err = analyze_error("struct Shared { value: i64; } fn Shared() {}");
+        assert_eq!(err.code, "E_DUPLICATE_DECLARATION");
         assert_eq!(
             err.message,
-            "E_DUPLICATE_DECLARATION: declaration name `Shared` is already used by a type"
+            "declaration name `Shared` is already used by a type"
         );
     }
 
@@ -8986,18 +14976,20 @@ mod tests {
         for (source, expected) in [
             (
                 "fn account_id(value: string) -> i64 { return 1; }",
-                "E_RESERVED_DECLARATION: function `account_id` uses a compiler-reserved name",
+                "function `account_id` uses a compiler-reserved name",
             ),
             (
                 "fn __kotodama_link_private() {}",
-                "E_RESERVED_DECLARATION: function `__kotodama_link_private` uses a compiler-reserved name",
+                "function `__kotodama_link_private` uses a compiler-reserved name",
             ),
             (
                 "struct Option { value: i64; }",
-                "E_RESERVED_DECLARATION: type `Option` uses a compiler-reserved name",
+                "type `Option` uses a compiler-reserved name",
             ),
         ] {
-            assert_eq!(analyze_error(source).message, expected);
+            let error = analyze_error(source);
+            assert_eq!(error.code, "E_RESERVED_DECLARATION");
+            assert_eq!(error.message, expected);
         }
     }
 
@@ -9349,11 +15341,10 @@ mod tests {
             ))
             .expect("over-limit iteration source parses");
             let error = analyze(&program).expect_err("bound above 64 must fail semantically");
+            assert_eq!(error.code, "E_ITERATION_LIMIT");
             assert_eq!(
                 error.message,
-                format!(
-                    "E_ITERATION_LIMIT: `{expected_form}` span 65 exceeds the Kotodama V1 limit 64"
-                )
+                format!("`{expected_form}` span 65 exceeds the Kotodama V1 limit 64")
             );
         }
     }
@@ -9402,7 +15393,7 @@ mod tests {
         )
         .expect("parse state map alias");
         let err = analyze(&program).expect_err("aliasing a state map should error");
-        assert!(err.message.contains("E_STATE_MAP_ALIAS"));
+        assert_eq!(err.code, "E_STATE_MAP_ALIAS");
     }
 
     #[test]
@@ -9415,7 +15406,7 @@ mod tests {
         )
         .expect("parse state map reassignment");
         let err = analyze(&program).expect_err("reassigning a state map should error");
-        assert!(err.message.contains("E_STATE_MAP_ALIAS"));
+        assert_eq!(err.code, "E_STATE_MAP_ALIAS");
     }
 
     #[test]
@@ -9427,24 +15418,26 @@ mod tests {
         )
         .expect("parse state map arg");
         let err = analyze(&program).expect_err("passing state map to user fn should error");
-        assert!(err.message.contains("E_STATE_MAP_ALIAS"));
+        assert_eq!(err.code, "E_STATE_MAP_ALIAS");
     }
 
     #[test]
-    fn scalar_state_requires_init() {
+    fn scalar_state_requires_hajimari() {
         let err = analyze_error("state counter: i64; fn read() -> i64 { return counter; }");
+        assert_eq!(err.code, "E_STATE_HAJIMARI_REQUIRED");
         assert_eq!(
             err.message,
-            "E_STATE_INIT_REQUIRED: contract scalar state requires an `hajimari()` initializer"
+            "seiyaku scalar state requires a `hajimari()`/`始まり()` declaration"
         );
     }
 
     #[test]
-    fn scalar_state_init_reports_every_missing_write() {
+    fn scalar_state_hajimari_reports_every_missing_write() {
         let err = analyze_error("state first: i64; state second: i64; hajimari() { first = 0; }");
+        assert_eq!(err.code, "E_STATE_HAJIMARI_INCOMPLETE");
         assert_eq!(
             err.message,
-            "E_STATE_INIT_INCOMPLETE: hajimari() must initialize every scalar state on every normal return or fallthrough path; missing: second"
+            "hajimari() must initialize every scalar state on every normal return or fallthrough path; missing: second"
         );
     }
 
@@ -9454,17 +15447,14 @@ mod tests {
             "state value: i64; \
              hajimari() { if true { value = 1; } else { value = 2; } }",
         )
-        .expect("parse complete conditional initializer");
+        .expect("parse complete conditional hajimari");
         analyze(&accepted).expect("both conditional paths initialize scalar state");
 
         let err = analyze_error(
             "state value: i64; \
              hajimari() { if true { value = 1; } }",
         );
-        assert!(
-            err.message.starts_with("E_STATE_INIT_INCOMPLETE:"),
-            "unexpected error: {err:?}"
-        );
+        assert_eq!(err.code, "E_STATE_HAJIMARI_INCOMPLETE");
     }
 
     #[test]
@@ -9473,10 +15463,7 @@ mod tests {
             "state value: i64; \
              hajimari() { if true { return; } value = 1; }",
         );
-        assert!(
-            err.message.starts_with("E_STATE_INIT_INCOMPLETE:"),
-            "an early return must not bypass initialization: {err:?}"
-        );
+        assert_eq!(err.code, "E_STATE_HAJIMARI_INCOMPLETE");
 
         let accepted = parse(
             "state value: i64; \
@@ -9492,35 +15479,27 @@ mod tests {
             "state value: i64; \
              hajimari() { for index in range(1) { value = index; } }",
         );
-        assert!(
-            loop_error.message.starts_with("E_STATE_INIT_INCOMPLETE:"),
-            "a loop body is not a definite write: {loop_error:?}"
-        );
+        assert_eq!(loop_error.code, "E_STATE_HAJIMARI_INCOMPLETE");
 
         let short_circuit_error = analyze_error(
             "state value: i64; \
              fn seed() -> bool { value = 1; return true; } \
              hajimari() { let ignored = false && seed(); }",
         );
-        assert!(
-            short_circuit_error
-                .message
-                .starts_with("E_STATE_INIT_INCOMPLETE:"),
-            "a short-circuited helper is not a definite write: {short_circuit_error:?}"
-        );
+        assert_eq!(short_circuit_error.code, "E_STATE_HAJIMARI_INCOMPLETE");
     }
 
     #[test]
-    fn scalar_state_init_accepts_transitive_complete_initialization() {
+    fn scalar_state_hajimari_accepts_transitive_complete_initialization() {
         let program = parse(
             "state counter: i64; \
              struct Ledger { total: i64; } \
              state ledger: Ledger; \
-             fn seed() { counter = 0; ledger = Ledger(0); } \
+             fn seed() { counter = 0; ledger = Ledger { total: 0 }; } \
              hajimari() { seed(); }",
         )
-        .expect("parse transitive scalar initializer");
-        analyze(&program).expect("transitive init writes should initialize every scalar state");
+        .expect("parse transitive scalar hajimari");
+        analyze(&program).expect("transitive hajimari writes should initialize every scalar state");
     }
 
     #[test]
@@ -9540,6 +15519,7 @@ mod tests {
     #[test]
     fn immutable_local_reassignment_is_rejected() {
         let err = analyze_error("fn f() { let value = 1; value = 2; }");
+        assert_eq!(err.code, "E_IMMUTABLE_ASSIGNMENT");
         assert_eq!(
             err.message,
             "cannot assign to immutable binding `value`; declare a mutable local with `var`"
@@ -9556,6 +15536,7 @@ mod tests {
     #[test]
     fn function_parameters_are_immutable() {
         let err = analyze_error("fn f(value: i64) { value = 2; }");
+        assert_eq!(err.code, "E_IMMUTABLE_ASSIGNMENT");
         assert_eq!(
             err.message,
             "cannot assign to immutable binding `value`; declare a mutable local with `var`"
@@ -9603,14 +15584,14 @@ mod tests {
     fn break_requires_loop_context() {
         let program = parse("fn f() { break; }").expect("parse break");
         let err = analyze(&program).expect_err("break outside loop should error");
-        assert!(err.message.contains("E_BREAK_OUTSIDE_LOOP"));
+        assert_eq!(err.code, "E_BREAK_OUTSIDE_LOOP");
     }
 
     #[test]
     fn continue_requires_loop_context() {
         let program = parse("fn f() { continue; }").expect("parse continue");
         let err = analyze(&program).expect_err("continue outside loop should error");
-        assert!(err.message.contains("E_CONTINUE_OUTSIDE_LOOP"));
+        assert_eq!(err.code, "E_CONTINUE_OUTSIDE_LOOP");
     }
 
     #[test]
@@ -9618,7 +15599,7 @@ mod tests {
         let program =
             parse("state counter: i64; fn f() { let counter = 1; }").expect("parse shadowing let");
         let err = analyze(&program).expect_err("state shadowing should error");
-        assert!(err.message.contains("E_STATE_SHADOWED"));
+        assert_eq!(err.code, "E_STATE_SHADOWED");
     }
 
     #[test]
@@ -9626,7 +15607,7 @@ mod tests {
         let program =
             parse("state counter: i64; fn f(counter: i64) {}").expect("parse shadowing param");
         let err = analyze(&program).expect_err("state shadowing should error");
-        assert!(err.message.contains("E_STATE_SHADOWED"));
+        assert_eq!(err.code, "E_STATE_SHADOWED");
     }
 
     #[test]
@@ -9637,7 +15618,7 @@ mod tests {
         )
         .expect("parse shadowing loop vars");
         let err = analyze(&program).expect_err("state shadowing should error");
-        assert!(err.message.contains("E_STATE_SHADOWED"));
+        assert_eq!(err.code, "E_STATE_SHADOWED");
     }
 
     #[test]
@@ -9661,10 +15642,11 @@ mod tests {
             cond: Expr::Bool(true),
             body: Block {
                 statements: Vec::new(),
+                tail: None,
             },
         });
         let error = analyze(&program).expect_err("while AST must fail closed");
-        assert!(error.message.contains("E_UNBOUNDED_LOOP"), "{error:?}");
+        assert_eq!(error.code, "E_UNBOUNDED_LOOP");
     }
 
     #[test]
@@ -9696,10 +15678,11 @@ mod tests {
             })),
             body: Block {
                 statements: Vec::new(),
+                tail: None,
             },
         });
         let error = analyze(&program).expect_err("dynamic for AST must fail closed");
-        assert!(error.message.contains("E_UNBOUNDED_LOOP"), "{error:?}");
+        assert_eq!(error.code, "E_UNBOUNDED_LOOP");
     }
 
     #[test]
@@ -9745,11 +15728,11 @@ mod tests {
     #[test]
     fn flat_builtin_spellings_are_rejected_in_favour_of_namespaces() {
         for (flat_call, canonical) in [
-            ("wrapping_add(1, 2)", "math::wrapping_add"),
+            ("wrapping_add(left: 1, right: 2)", "math::wrapping_add"),
             ("abs(-1)", "math::abs"),
             ("info(1)", "debug::info"),
             ("assert(true)", "test::assert"),
-            ("assert_eq(1, 1)", "test::assert_eq"),
+            ("assert_eq(actual: 1, expected: 1)", "test::assert_eq"),
             ("actor_account(\"issuer\")", "test::actor_account"),
             (
                 "invoke_entrypoint(\"run\", Json::parse(\"{}\"))",
@@ -9828,7 +15811,7 @@ mod tests {
     fn struct_pattern_requires_arity_match() {
         let program = parse(
             "struct Pair { a: i64, b: i64 } \
-             fn f() { let (a) = Pair(1, 2); }",
+             fn f() { let (a) = Pair { a: 1, b: 2 }; }",
         )
         .expect("parse struct pattern");
         let err = analyze(&program).expect_err("struct arity mismatch should error");
@@ -9858,7 +15841,7 @@ mod tests {
         assert!(
             err.message
                 .contains("StateMap values may only refer directly to top-level durable state")
-                || err.message.contains("E_STATE_MAP_ALIAS")
+                || err.code == "E_STATE_MAP_ALIAS"
                 || err
                     .message
                     .contains("unknown function or builtin `StateMap::new`"),
@@ -10039,7 +16022,7 @@ mod tests {
                 #[test]
                 fn drive_run() {
                     let next = test::invoke_entrypoint("run", Json::parse("{\"count\": 7}"));
-                    test::assert_eq(next, 8);
+                    test::assert_eq(actual: next, expected: 8);
                 }
             }
             "#,
@@ -10076,7 +16059,7 @@ mod tests {
                 #[test]
                 fn drive_run() {
                     let next = test::invoke_entrypoint(Name::parse("run"), Json::parse("{\"count\": 7}"));
-                    test::assert_eq(next, 8);
+                    test::assert_eq(actual: next, expected: 8);
                 }
             }
             "#,
@@ -10155,11 +16138,19 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let next = test::invoke_entrypoint_as("issuer", "run", Json::parse("{\"count\": 7}"));
+                    let next = test::invoke_entrypoint_as(
+                        actor: "issuer",
+                        entrypoint: "run",
+                        arguments: Json::parse("{\"count\": 7}"),
+                    );
                     let acct = test::actor_account("issuer");
                     let pk = test::actor_public_key("issuer");
                     let sig = test::actor_sign("issuer", b"demo");
-                    test::expect_reject_as("issuer", "run", Json::parse("{\"count\": -1}"));
+                    test::expect_reject_as(
+                        actor: "issuer",
+                        entrypoint: "run",
+                        arguments: Json::parse("{\"count\": -1}"),
+                    );
                     let _ = (next, acct, pk, sig);
                 }
             }
@@ -10178,7 +16169,11 @@ mod tests {
 
                 #[test]
                 fn drive_run() {
-                    let _pair = test::invoke_entrypoint_as("issuer", "run", Json::parse("{\"count\": 7}"));
+                    let _pair = test::invoke_entrypoint_as(
+                        actor: "issuer",
+                        entrypoint: "run",
+                        arguments: Json::parse("{\"count\": 7}"),
+                    );
                 }
             }
             "#,
@@ -10206,7 +16201,7 @@ mod tests {
     #[test]
     fn view_entrypoints_accept_explicit_json_getter_on_typed_json_parameter() {
         let program = parse(
-            "seiyaku Demo { view fn f(ev: Json) -> i64 { return ev.get_int(Name::parse(\"n\")); } }",
+            "seiyaku Demo { view fn f(ev: Json) -> Option<i64> { return ev.get_int(Name::parse(\"n\")); } }",
         )
         .expect("parse view get_int");
         analyze(&program).expect("typed Json parameters may use explicit JSON getters");
@@ -10215,7 +16210,7 @@ mod tests {
     #[test]
     fn view_entrypoints_reject_ensure() {
         let program = parse(
-            "seiyaku Demo { state balances: StateMap<i64, i64>; view fn f() -> i64 { return balances.ensure(7, 9); } }",
+            "seiyaku Demo { state balances: StateMap<i64, i64>; view fn f() -> i64 { return balances.ensure(key: 7, default: 9); } }",
         )
         .expect("parse ensure");
         let err = analyze(&program).expect_err("view ensure should fail");
@@ -10230,7 +16225,7 @@ mod tests {
     #[test]
     fn view_entrypoints_accept_get_or() {
         let program = parse(
-            "seiyaku Demo { state balances: StateMap<i64, i64>; view fn f() -> i64 { return balances.get_or(7, 9); } }",
+            "seiyaku Demo { state balances: StateMap<i64, i64>; view fn f() -> i64 { return balances.get_or(key: 7, default: 9); } }",
         )
         .expect("parse get_or");
         analyze(&program).expect("view get_or should type-check");
@@ -10281,10 +16276,17 @@ mod tests {
             let program =
                 parse(source).expect("invalid StateMap read should parse before resolution");
             let error = analyze(&program).expect_err("invalid StateMap read must fail closed");
-            assert!(
-                error.message.contains(expected),
-                "unexpected error for `{source}`: {error:?}"
-            );
+            if expected.starts_with("E_") {
+                assert_eq!(
+                    error.code, expected,
+                    "unexpected diagnostic code for `{source}`: {error:?}"
+                );
+            } else {
+                assert!(
+                    error.message.contains(expected),
+                    "unexpected error for `{source}`: {error:?}"
+                );
+            }
         }
 
         let write = parse(
@@ -10385,7 +16387,6 @@ mod tests {
             "soracloud_request",
             "soracloud_response",
             "grow_heap",
-            "call_contract",
             "debug_print",
             "debug_log",
             "setvl",
@@ -10450,6 +16451,7 @@ mod tests {
     fn raw_namespaced_host_bridges_are_not_builtins() {
         for source_name in [
             "contract::call",
+            "seiyaku::call",
             "runtime::set_vector_length",
             "debug::print_i64",
             "debug::log",
@@ -10459,7 +16461,7 @@ mod tests {
             "soracloud::read_secret",
         ] {
             let Ok(program) = parse(&format!("fn f() {{ {source_name}(); }}")) else {
-                assert_eq!(source_name, "contract::call");
+                assert!(matches!(source_name, "contract::call" | "seiyaku::call"));
                 continue;
             };
             let error = analyze(&program).expect_err("raw host bridge must fail closed");
@@ -10506,6 +16508,25 @@ mod tests {
     }
 
     #[test]
+    fn runtime_entrypoints_cannot_be_direct_call_targets() {
+        for (target_declaration, target_name) in [
+            ("kotoage fn admin() authorize(\"Admin\") {}", "admin"),
+            ("view fn inspect() {}", "inspect"),
+        ] {
+            let source = format!(
+                "seiyaku Demo {{ {target_declaration} kotoage fn run() authorize(\"Run\") {{ {target_name}(); }} }}"
+            );
+            let error = analyze_error(&source);
+            assert!(
+                error.message.contains(&format!(
+                    "runtime entrypoint `{target_name}` cannot be called directly"
+                )),
+                "unexpected direct-entrypoint diagnostic: {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn privileged_effect_table_covers_release_mutators() {
         for name in [
             "transfer_asset",
@@ -10537,7 +16558,13 @@ mod tests {
                     dataspace: DataSpaceId
                 ) authorize("TransferAsset") {
                     let sender = context::authority();
-                    ledger::asset::transfer(sender, recipient, asset, amount, dataspace);
+                    ledger::asset::transfer(
+                        source: sender,
+                        destination: recipient,
+                        asset_definition: asset,
+                        amount: amount,
+                        dataspace: dataspace,
+                    );
                 }
             }
             "#,
@@ -10557,8 +16584,17 @@ mod tests {
                     amount: Amount,
                     evidence: bytes
                 ) {
-                    ledger::escrow::open_offer(escrow, asset, amount);
-                    ledger::escrow::open_offer(escrow, asset, amount, evidence);
+                    ledger::escrow::open_offer(
+                        offer: escrow,
+                        asset_definition: asset,
+                        amount: amount,
+                    );
+                    ledger::escrow::open_offer(
+                        offer: escrow,
+                        asset_definition: asset,
+                        amount: amount,
+                        evidence: evidence,
+                    );
                 }
             }
             "#,
@@ -10575,17 +16611,22 @@ mod tests {
                     asset: AssetDefinitionId,
                     amount: Amount
                 ) {
-                    ledger::escrow::open_offer(escrow, account, account, asset, amount);
+                    ledger::escrow::open_offer(
+                        offer: escrow,
+                        asset_definition: account,
+                        amount: account,
+                        evidence: asset,
+                        unexpected: amount,
+                    );
                 }
             }
             "#,
         )
         .expect("parse invalid escrow call");
         let error = analyze(&invalid).expect_err("the retired five-argument shape must fail");
+        assert_eq!(error.code, "E_UNKNOWN_NAMED_ARGUMENT");
         assert!(
-            error
-                .message
-                .contains("expects (Name, AssetDefinitionId, Amount[, bytes evidence_hashes])"),
+            error.message.contains("unexpected"),
             "unexpected diagnostic: {}",
             error.message
         );
@@ -10674,12 +16715,12 @@ mod tests {
                                           alias_literal: bytes,
                                           requested_by_actor_id: bytes,
                                           requested_by_actor: Json) authorize("CreateRequest") {
-                    Requests[proposal_id] = Request(
-                        1,
-                        alias_literal,
+                    Requests[proposal_id] = Request {
+                        status: 1,
+                        alias_blob: alias_literal,
                         requested_by_actor_id,
-                        requested_by_actor
-                    );
+                        requested_by_actor,
+                    };
                 }
             }"#,
         )
@@ -10692,9 +16733,10 @@ mod tests {
         let program = parse(
             "fn f() { \
                 let ev = context::trigger_event(); \
-                let dst = ev.get_account_id(Name::parse(\"account_id\")); \
-                let sink = ledger::account::resolve_alias(\"banking@centralbank\"); \
-                let _same = dst == sink; \
+                if let Option::some(dst) = ev.get_account_id(Name::parse(\"account_id\")) { \
+                    let sink = ledger::account::resolve_alias(\"banking@centralbank\"); \
+                    let _same = dst == sink; \
+                } \
             }",
         )
         .expect("parse account equality");
@@ -10711,12 +16753,12 @@ mod tests {
     }
 
     #[test]
-    fn get_numeric_accepts_trigger_amounts() {
+    fn get_amount_returns_an_optional_trigger_amount() {
         let program = parse(
-            "fn f() { let ev = context::trigger_event(); let _amount: Amount = ev.get_numeric(Name::parse(\"amount\")); }",
+            "fn f() { let ev = context::trigger_event(); let _amount: Option<Amount> = ev.get_amount(Name::parse(\"amount\")); }",
         )
-        .expect("parse get_numeric");
-        analyze(&program).expect("get_numeric should type-check");
+        .expect("parse get_amount");
+        analyze(&program).expect("get_amount should type-check as Option<Amount>");
     }
 
     #[test]
@@ -10737,7 +16779,7 @@ mod tests {
             r#"seiyaku C {
                 struct S { label: string }
                 state s: S;
-                hajimari() { s = S("ready"); }
+                hajimari() { s = S { label: "ready" }; }
             }"#,
         )
         .expect("parse state struct");
@@ -10769,13 +16811,34 @@ mod tests {
                 state maybe: Option<Pair>;
                 state outcome: Result<Pair, Pair>;
                 hajimari() {
-                    maybe = option::none(Pair(0, false));
-                    outcome = result::ok(Pair(1, true), Pair(0, false));
+                    maybe = Option::none;
+                    outcome = Result::ok(Pair { count: 1, ready: true });
                 }
             }"#,
         )
         .expect("parse aggregate sum state");
         analyze(&program).expect("aggregate Option/Result state should type-check");
+    }
+
+    #[test]
+    fn local_sum_annotations_resolve_aggregate_payloads_contextually() {
+        let program = parse(
+            r#"seiyaku C {
+                struct Pair { count: i64, ready: bool }
+                fn values() {
+                    let some: Option<Pair> = Option::some(Pair { count: 1, ready: true });
+                    let none: Option<Pair> = Option::none;
+                    let ok: Result<Pair, Pair> = Result::ok(Pair { count: 2, ready: true });
+                    let err: Result<Pair, Pair> = Result::err(Pair { count: 3, ready: false });
+                    var changing_option: Option<Pair> = Option::some(Pair { count: 4, ready: true });
+                    changing_option = Option::none;
+                    var changing_result: Result<Pair, Pair> = Result::ok(Pair { count: 5, ready: true });
+                    changing_result = Result::err(Pair { count: 6, ready: false });
+                }
+            }"#,
+        )
+        .expect("parse aggregate local sums");
+        analyze(&program).expect("aggregate local sum annotations should resolve nominal payloads");
     }
 
     #[test]
@@ -10812,6 +16875,19 @@ mod tests {
     }
 
     #[test]
+    fn amount_rejects_remainder_and_negation_surfaces() {
+        let remainder = parse("seiyaku C { fn f(a: Amount, b: Amount) { let _x = a % b; } }")
+            .expect("parse Amount remainder");
+        let error = analyze(&remainder).expect_err("Amount remainder must fail");
+        assert_eq!(error.code, "E_AMOUNT_REMAINDER");
+
+        let negation = parse("seiyaku C { fn f(a: Amount) { let _x = numeric::neg(a); } }")
+            .expect("parse numeric negation");
+        let error = analyze(&negation).expect_err("Amount negation must fail");
+        assert_eq!(error.code, "E_UNSIGNED_NEGATION");
+    }
+
+    #[test]
     fn unsuffixed_integer_is_not_an_implicit_u128_literal() {
         let program = parse("seiyaku C { fn f() { let value: u128 = 1; } }")
             .expect("parse unsuffixed literal");
@@ -10842,11 +16918,7 @@ mod tests {
             parse("seiyaku C { fn f(value: u128) -> u128 { return numeric::neg(value); } }")
                 .expect("parse u128 negation");
         let error = analyze(&program).expect_err("numeric::neg(u128) must fail");
-        assert!(
-            error.message.contains("not defined for unsigned u128"),
-            "unexpected error: {}",
-            error.message
-        );
+        assert_eq!(error.code, "E_UNSIGNED_NEGATION");
     }
 
     #[test]
@@ -10877,7 +16949,7 @@ mod tests {
     fn ledger_amount_parameters_reject_implicit_i64_conversion() {
         let program = parse(
             "seiyaku C { fn f(account: AccountId, asset: AssetDefinitionId) { \
-                ledger::asset::mint(account, asset, 1); \
+                ledger::asset::mint(account: account, asset_definition: asset, amount: 1); \
             } }",
         )
         .expect("parse ledger amount call");
@@ -11419,11 +17491,11 @@ mod tests {
 
     #[test]
     fn semantic_analysis_defends_against_lifecycle_permission_hints() {
-        let mut program = parse("seiyaku Demo { hajimari() {} }").expect("parse initializer");
-        let Item::Function(initializer) = &mut program.items[0] else {
-            panic!("expected initializer")
+        let mut program = parse("seiyaku Demo { hajimari() {} }").expect("parse hajimari");
+        let Item::Function(hajimari) = &mut program.items[0] else {
+            panic!("expected hajimari")
         };
-        initializer.modifiers.permission = Some("SourceOwnedPermission".to_owned());
+        hajimari.modifiers.permission = Some("SourceOwnedPermission".to_owned());
 
         let error = analyze(&program).expect_err("lifecycle permission must be rejected");
         assert!(
@@ -11431,5 +17503,216 @@ mod tests {
                 .message
                 .contains("lifecycle authorization is runtime-defined")
         );
+    }
+
+    #[test]
+    fn typed_core_queries_expose_declared_projection_and_page_types() {
+        let program = parse(
+            r#"
+            seiyaku Queries {
+                fn account(id: AccountId) -> Option<AccountView> {
+                    ledger::query::account(id)
+                }
+
+                fn accounts(offset: i64, limit: i64) -> QueryPage<AccountView> {
+                    ledger::query::accounts(offset: offset, limit: limit)
+                }
+            }
+            "#,
+        )
+        .expect("parse typed core queries");
+        let typed = analyze(&program).expect("typed core query surface should type-check");
+        let functions = typed
+            .items
+            .iter()
+            .map(|item| match item {
+                TypedItem::Function(function) => function,
+            })
+            .collect::<Vec<_>>();
+
+        let account = functions
+            .iter()
+            .find(|function| function.name == "account")
+            .expect("singular query helper");
+        assert!(matches!(
+            account.ret_ty,
+            Some(Type::Option(ref view))
+                if matches!(view.as_ref(), Type::Struct { name, .. } if name == "AccountView")
+        ));
+
+        let accounts = functions
+            .iter()
+            .find(|function| function.name == "accounts")
+            .expect("plural query helper");
+        let Some(Type::Struct { name, fields }) = &accounts.ret_ty else {
+            panic!("plural query must return QueryPage<AccountView>")
+        };
+        assert_eq!(name, QUERY_PAGE_TYPE_NAME);
+        assert_eq!(
+            render_type_name(accounts.ret_ty.as_ref().unwrap()),
+            "QueryPage<AccountView>"
+        );
+        assert!(matches!(
+            fields.as_slice(),
+            [(items, Type::List(view, 64)), (next, Type::Option(offset))]
+                if items == "items"
+                    && next == "next_offset"
+                    && matches!(view.as_ref(), Type::Struct { name, .. } if name == "AccountView")
+                    && offset.as_ref() == &Type::Int
+        ));
+    }
+
+    #[test]
+    fn typed_core_query_pages_require_names_and_bounded_constants() {
+        let positional = analyze(
+            &parse("fn f() { let _page = ledger::query::accounts(0, 64); }")
+                .expect("parse positional page call"),
+        )
+        .expect_err("pagination calls are named-only");
+        assert_eq!(positional.code, "E_NAMED_ARGUMENTS_REQUIRED");
+
+        for (source, code) in [
+            (
+                "fn f() { let _page = ledger::query::accounts(offset: -1, limit: 64); }",
+                "E_QUERY_OFFSET",
+            ),
+            (
+                "fn f() { let _page = ledger::query::accounts(offset: 0, limit: 0); }",
+                "E_QUERY_LIMIT",
+            ),
+            (
+                "fn f() { let _page = ledger::query::accounts(offset: 0, limit: 65); }",
+                "E_QUERY_LIMIT",
+            ),
+        ] {
+            let error = analyze(&parse(source).expect("parse invalid page bound"))
+                .expect_err("invalid literal page bounds must fail during compilation");
+            assert_eq!(error.code, code, "{source}: {}", error.message);
+        }
+    }
+
+    #[test]
+    fn typed_core_singular_queries_reject_raw_bytes() {
+        let program = parse("fn account(raw: bytes) { let _view = ledger::query::account(raw); }")
+            .expect("parse raw-byte core query");
+        let error = analyze(&program).expect_err("core queries require their declared typed ID");
+        assert_eq!(error.code, "E_QUERY_KEY_TYPE");
+    }
+
+    #[test]
+    fn tail_sums_matches_if_let_and_propagation_type_check_together() {
+        let program = parse(
+            r#"
+            seiyaku Sums {
+                fn option(input: Option<i64>) -> Option<i64> {
+                    let value = input?;
+                    Option::some(value)
+                }
+
+                fn result(input: Result<i64, string>) -> Result<i64, string> {
+                    Result::ok(input?)
+                }
+
+                fn inspect(input: Option<i64>) -> i64 {
+                    match input {
+                        Option::some(value) => value,
+                        Option::none => 0,
+                    }
+                }
+
+                fn guarded(input: Option<i64>) -> i64 {
+                    if let Option::some(value) = input { value } else { 0 }
+                }
+
+                fn absent() -> Option<i64> { Option::none }
+            }
+            "#,
+        )
+        .expect("parse active-only sum program");
+        analyze(&program).expect("active-only sums and expression control flow must type-check");
+    }
+
+    #[test]
+    fn divergent_expression_arms_inhabit_the_sibling_value_type() {
+        let program = parse(
+            r#"
+            seiyaku DivergentArms {
+                fn result(input: Result<i64, bool>) -> Result<(i64, i64), bool> {
+                    let payload = match input {
+                        Result::ok(payload) => payload,
+                        Result::err(failure) => { return Result::err(failure); },
+                    };
+                    Result::ok((payload, payload))
+                }
+
+                fn option(input: Option<i64>) -> Option<(i64, i64)> {
+                    let payload = match input {
+                        Option::some(payload) => payload,
+                        Option::none => { return Option::none; },
+                    };
+                    Option::some((payload, payload))
+                }
+
+                fn choose(flag: bool) -> i64 {
+                    if flag { 7 } else { return 9; }
+                }
+            }
+            "#,
+        )
+        .expect("parse divergent expression arms");
+        analyze(&program).expect("a returning arm must not synthesize a unit placeholder value");
+    }
+
+    #[test]
+    fn wholly_divergent_expression_without_a_type_context_fails_closed() {
+        let program = parse(
+            r#"
+            fn ambiguous(flag: bool) {
+                let unreachable = if flag { return; } else { return; };
+            }
+            "#,
+        )
+        .expect("parse context-free divergent expression");
+        let error =
+            analyze(&program).expect_err("bottom-like expressions require a concrete context");
+        assert_eq!(error.code, "E_DIVERGING_EXPRESSION_CONTEXT");
+    }
+
+    #[test]
+    fn sum_and_expression_control_flow_fail_closed() {
+        for (source, code) in [
+            (
+                "fn f() { let _value = Option::none; }",
+                "E_SUM_MISSING_CONTEXT",
+            ),
+            (
+                "fn f(value: i64) -> Option<i64> { value?; Option::none }",
+                "E_PROPAGATE_TYPE",
+            ),
+            (
+                "fn f(value: Result<i64, string>) -> Result<i64, bytes> { Result::ok(value?) }",
+                "E_PROPAGATE_ERROR_TYPE",
+            ),
+            (
+                "fn f(value: Option<i64>) -> i64 { match value { Option::some(item) => item, } }",
+                "E_MATCH_NON_EXHAUSTIVE",
+            ),
+            (
+                "fn f(value: Option<i64>) -> i64 { match value { Option::some(item) => item, Option::some(other) => other, Option::none => 0, } }",
+                "E_MATCH_DUPLICATE_PATTERN",
+            ),
+            (
+                "fn f(value: Option<i64>) -> i64 { match value { Result::ok(item) => item, Result::err(_) => 0, } }",
+                "E_PATTERN_FAMILY",
+            ),
+            (
+                "fn f(flag: bool) -> i64 { if flag { 1 } else { false } }",
+                "E_BRANCH_TYPE_MISMATCH",
+            ),
+        ] {
+            let program = parse(source).expect("compile-fail sum fixture must parse");
+            let error = analyze(&program).expect_err("invalid sum/control-flow source must fail");
+            assert_eq!(error.code, code, "{source}: {}", error.message);
+        }
     }
 }

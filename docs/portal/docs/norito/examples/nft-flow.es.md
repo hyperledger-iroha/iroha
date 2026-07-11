@@ -36,12 +36,20 @@ Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propieta
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
     kotoage fn nft_issue_and_transfer() authorize("NftAuthority") {
-        let owner = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+        let owner = AccountId::parse(
+            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        );
         let nft = NftId::parse("n0$wonderland.universal");
         ledger::nft::mint(nft, owner);
-        let to = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
-        ledger::nft::transfer(owner, nft, to);
-        ledger::nft::set_metadata(nft, Name::parse("issued"), Json::parse("{\"issued\":\"demo\"}"));
+        let to = AccountId::parse(
+            "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+        );
+        ledger::nft::transfer(source: owner, nft: nft, destination: to);
+        ledger::nft::set_metadata(
+            nft: nft,
+            key: Name::parse("issued"),
+            value: Json::parse("{\"issued\":\"demo\"}"),
+        );
         ledger::nft::burn(nft);
     }
 }

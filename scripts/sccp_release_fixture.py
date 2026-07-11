@@ -33,12 +33,36 @@ FIXTURE_EVIDENCE = FIXTURE_ROOT / "evidence.json"
 FIXTURE_POLICY = FIXTURE_ROOT / "test-trust-policy.json"
 FIXTURE_RELEASE_ID = "sccp-v1-typed-fixture-20260710"
 FIXTURE_POLICY_ID = "sccp-v1-fixture-policy-20260710"
+FIXTURE_ROLE_IDS = ("fixture-release-engineering", "fixture-release-security")
+FIXTURE_ATTESTOR_IDS = (
+    "fixture-ethereum-mainnet-state-attestor",
+    "fixture-bsc-mainnet-state-attestor",
+    "fixture-tron-mainnet-state-attestor",
+)
+FIXTURE_AUDITOR_IDS = (
+    "fixture-semantic-security-audit",
+    "fixture-prover-reproducibility-audit",
+)
+
+
+def _fixture_identity_sets(policy: dict[str, object]) -> tuple[tuple[str, ...], ...]:
+    return (
+        tuple(entry["signer_id"] for entry in policy["roles"]),
+        tuple(entry["attestor_id"] for entry in policy["destination_attestors"]),
+        tuple(entry["auditor_id"] for entry in policy["circuit_auditors"]),
+    )
 
 
 def _load_fixture() -> tuple[dict[str, object], bytes, dict[str, object], bytes]:
     policy, policy_bytes = load_trust_policy(FIXTURE_POLICY, allow_test_policy=True)
     if policy["policy_id"] != FIXTURE_POLICY_ID:
         raise SccpReleaseError("pinned fixture trust policy has the wrong policy_id")
+    if _fixture_identity_sets(policy) != (
+        FIXTURE_ROLE_IDS,
+        FIXTURE_ATTESTOR_IDS,
+        FIXTURE_AUDITOR_IDS,
+    ):
+        raise SccpReleaseError("pinned fixture trust identities have drifted")
     evidence, evidence_bytes = load_evidence_file(FIXTURE_EVIDENCE, policy)
     if evidence["release_id"] != FIXTURE_RELEASE_ID:
         raise SccpReleaseError("pinned fixture evidence has the wrong release_id")

@@ -1,28 +1,49 @@
-//! Parser for the Kotodama language.
+//! Canonical grammar parser for the Kotodama compiler AST and lossless CST.
 //!
-//! This module implements a simple recursive descent parser producing an AST.
+//! One grammar pass consumes the significant view of the lossless lexer tape,
+//! constructs the spanned AST, and records the completed syntax-node outline.
+//! The CST sink later merges that outline with the original trivia-bearing
+//! tape; there is no second structural parser or CST-to-token reparse.
 
 use super::{
     ast::*,
     diagnostic::{
-        Diagnostic, DiagnosticBundle, DiagnosticPhase, MAX_DIAGNOSTICS, SourcePosition, SourceSpan,
+        Diagnostic, DiagnosticBundle, DiagnosticFix, DiagnosticPhase, MAX_DIAGNOSTICS,
+        SourcePosition, SourceSpan,
     },
     lexer::{Token, TokenKind},
-    source::{FrontendBudget, SourceFile, SourceId, TextRange},
+    source::{FrontendBudget, SourceFile, SourceId, SourceRange, TextRange},
+    spanned_ast::{
+        AstFacts, AstNodeKind, BindingFact, BindingFactKind, CallFact, DeclarationFact,
+        DeclarationKind, NodeId, SpannedProgram, TypeUseFact,
+    },
+    syntax::{
+        SyntaxKind,
+        cst::{MissingSyntax, SyntaxOutline, SyntaxOutlineBuilder, SyntaxOutlineCheckpoint},
+    },
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ParseError {
+    /// Stable machine-readable diagnostic code, independent of message text.
+    pub code: &'static str,
     pub message: String,
     pub line: usize,
     pub column: usize,
     pub snippet: String,
     /// Exact half-open UTF-8 range of the unexpected token.
     pub range: TextRange,
+    /// Optional machine-applicable replacement for the diagnosed source range.
+    pub fix: Option<String>,
+    /// Exact zero-width CST token expected at this failure, when recovery can
+    /// insert one without guessing from diagnostic prose.
+    pub expected: Option<SyntaxKind>,
+    /// Syntax-outline node that owned `expected` at the failure boundary.
+    pub(crate) expected_owner: Option<usize>,
 }
 
 type ParseResult<T> = Result<T, ParseError>;
-type ForEachMapBinding = (String, Option<String>, Expr);
+type ForEachMapBinding = (NodeId, String, Option<String>, Expr);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum IntegerSuffix {
@@ -32,13 +53,111 @@ enum IntegerSuffix {
     U128,
 }
 
+fn expected_syntax_kind(kind: &TokenKind) -> Option<SyntaxKind> {
+    Some(match kind {
+        TokenKind::Fn => SyntaxKind::KwFn,
+        TokenKind::Let => SyntaxKind::KwLet,
+        TokenKind::Var => SyntaxKind::KwVar,
+        TokenKind::Const => SyntaxKind::KwConst,
+        TokenKind::Return => SyntaxKind::KwReturn,
+        TokenKind::Break => SyntaxKind::KwBreak,
+        TokenKind::Continue => SyntaxKind::KwContinue,
+        TokenKind::State => SyntaxKind::KwState,
+        TokenKind::Struct => SyntaxKind::KwStruct,
+        TokenKind::Error => SyntaxKind::KwError,
+        TokenKind::Enum => SyntaxKind::KwEnum,
+        TokenKind::Authorize => SyntaxKind::KwAuthorize,
+        TokenKind::Trigger => SyntaxKind::KwTrigger,
+        TokenKind::If => SyntaxKind::KwIf,
+        TokenKind::Match => SyntaxKind::KwMatch,
+        TokenKind::Else => SyntaxKind::KwElse,
+        TokenKind::For => SyntaxKind::KwFor,
+        TokenKind::In => SyntaxKind::KwIn,
+        TokenKind::Seiyaku => SyntaxKind::KwSeiyaku,
+        TokenKind::Module => SyntaxKind::KwModule,
+        TokenKind::Kotoage => SyntaxKind::KwKotoage,
+        TokenKind::Hajimari => SyntaxKind::KwHajimari,
+        TokenKind::Kaizen => SyntaxKind::KwKaizen,
+        TokenKind::View => SyntaxKind::KwView,
+        TokenKind::True => SyntaxKind::KwTrue,
+        TokenKind::False => SyntaxKind::KwFalse,
+        TokenKind::Ident(_) => SyntaxKind::Ident,
+        TokenKind::Number(_) => SyntaxKind::Number,
+        TokenKind::AmountLiteral(_) => SyntaxKind::Amount,
+        TokenKind::String(_) => SyntaxKind::String,
+        TokenKind::Bytes(_) => SyntaxKind::Bytes,
+        TokenKind::Plus => SyntaxKind::Plus,
+        TokenKind::PlusEqual => SyntaxKind::PlusEqual,
+        TokenKind::Minus => SyntaxKind::Minus,
+        TokenKind::MinusEqual => SyntaxKind::MinusEqual,
+        TokenKind::Arrow => SyntaxKind::Arrow,
+        TokenKind::FatArrow => SyntaxKind::FatArrow,
+        TokenKind::Star => SyntaxKind::Star,
+        TokenKind::StarEqual => SyntaxKind::StarEqual,
+        TokenKind::Slash => SyntaxKind::Slash,
+        TokenKind::SlashEqual => SyntaxKind::SlashEqual,
+        TokenKind::Percent => SyntaxKind::Percent,
+        TokenKind::PercentEqual => SyntaxKind::PercentEqual,
+        TokenKind::Bang => SyntaxKind::Bang,
+        TokenKind::BangEqual => SyntaxKind::BangEqual,
+        TokenKind::Equal => SyntaxKind::Equal,
+        TokenKind::EqualEqual => SyntaxKind::EqualEqual,
+        TokenKind::Less => SyntaxKind::Less,
+        TokenKind::LessEqual => SyntaxKind::LessEqual,
+        TokenKind::Greater => SyntaxKind::Greater,
+        TokenKind::GreaterEqual => SyntaxKind::GreaterEqual,
+        TokenKind::AndAnd => SyntaxKind::AndAnd,
+        TokenKind::OrOr => SyntaxKind::OrOr,
+        TokenKind::LParen => SyntaxKind::LParen,
+        TokenKind::RParen => SyntaxKind::RParen,
+        TokenKind::LBrace => SyntaxKind::LBrace,
+        TokenKind::RBrace => SyntaxKind::RBrace,
+        TokenKind::LBracket => SyntaxKind::LBracket,
+        TokenKind::RBracket => SyntaxKind::RBracket,
+        TokenKind::Semicolon => SyntaxKind::Semicolon,
+        TokenKind::Comma => SyntaxKind::Comma,
+        TokenKind::Colon => SyntaxKind::Colon,
+        TokenKind::ColonColon => SyntaxKind::ColonColon,
+        TokenKind::Dot => SyntaxKind::Dot,
+        TokenKind::Question => SyntaxKind::Question,
+        TokenKind::Hash => SyntaxKind::Hash,
+        TokenKind::EOF => SyntaxKind::Eof,
+    })
+}
+
 fn map_iteration_has_explicit_bound(expr: &Expr) -> bool {
     matches!(
-        expr,
-        Expr::Call { name, args }
+        expr.kind(),
+        Expr::Call { name, args, .. }
             if (name == "take" && args.len() == 2)
                 || (name == "range" && args.len() == 3)
     )
+}
+
+struct ParsedCallArguments {
+    args: Vec<Expr>,
+    argument_names: Option<Vec<String>>,
+    ranges: Vec<TextRange>,
+}
+
+enum ParsedBlockElement {
+    Statement(Statement),
+    Tail(Expr),
+}
+
+fn block_element_syntax_kind(element: &ParsedBlockElement) -> SyntaxKind {
+    match element {
+        ParsedBlockElement::Tail(_) => SyntaxKind::TailExpr,
+        ParsedBlockElement::Statement(statement) => match statement.kind() {
+            Statement::Let { .. } => SyntaxKind::LetStmt,
+            Statement::Return(_) => SyntaxKind::ReturnStmt,
+            Statement::Break => SyntaxKind::BreakStmt,
+            Statement::Continue => SyntaxKind::ContinueStmt,
+            Statement::If { .. } | Statement::IfLet { .. } => SyntaxKind::IfStmt,
+            Statement::For { .. } | Statement::ForEachMap { .. } => SyntaxKind::ForStmt,
+            _ => SyntaxKind::ExprStmt,
+        },
+    }
 }
 
 #[derive(Default)]
@@ -89,29 +208,79 @@ pub fn parse_source(
 pub(crate) fn parse_source_spanned(
     source: &SourceFile,
     budget: FrontendBudget,
-) -> Result<(Program, Vec<Token>), DiagnosticBundle> {
-    let output = crate::syntax::parse_program(source, budget);
-    output
-        .program
-        .map(|program| (program, output.tokens))
-        .ok_or(output.diagnostics)
+) -> Result<(SpannedProgram, Vec<Token>), DiagnosticBundle> {
+    crate::syntax::parser::parse_spanned_program(source, budget)
 }
 
-pub(crate) fn parse_tokens(
-    source: &SourceFile,
-    tokens: &[Token],
-) -> Result<Program, DiagnosticBundle> {
-    let mut parser = Parser::new(tokens, source.text(), true);
+pub(crate) struct GrammarParseOutput {
+    pub(crate) spanned: Option<SpannedProgram>,
+    pub(crate) diagnostics: DiagnosticBundle,
+    pub(crate) outline: SyntaxOutline,
+    pub(crate) missing: Vec<MissingSyntax>,
+}
+
+/// Parse the canonical significant token view once while recording the CST
+/// structure chosen by those exact grammar decisions.
+pub(crate) fn parse_with_syntax(source: &SourceFile, tokens: &[Token]) -> GrammarParseOutput {
+    #[cfg(test)]
+    CANONICAL_GRAMMAR_PARSES.with(|count| count.set(count.get().saturating_add(1)));
+
+    let mut parser = CstAstLowerer::new(tokens, source, true);
     let parsed = parser.parse_program();
-    let mut errors = parser.errors;
-    match parsed {
-        Ok(program) if errors.is_empty() => Ok(program),
-        Ok(_) => Err(parse_diagnostic_bundle(source, errors)),
-        Err(error) => {
-            errors.push(error);
-            Err(parse_diagnostic_bundle(source, errors))
-        }
+    let mut errors = std::mem::take(&mut parser.errors);
+    if let Err(error) = parsed.as_ref() {
+        errors.push(error.clone());
     }
+    parser.syntax.finish_open_nodes(source.text().len() as u32);
+    let outline = std::mem::take(&mut parser.syntax).into_outline();
+
+    let mut missing = errors
+        .iter()
+        .filter_map(|error| {
+            error.expected.map(|expected| MissingSyntax {
+                offset: error.range.start,
+                expected,
+                owner: error.expected_owner,
+            })
+        })
+        .collect::<Vec<_>>();
+    missing.sort_unstable_by_key(|missing| {
+        (
+            missing.offset,
+            missing.expected as usize,
+            missing.owner.unwrap_or(usize::MAX),
+        )
+    });
+    missing.dedup_by(|right, left| right.offset == left.offset && right.expected == left.expected);
+    let diagnostics = parse_diagnostic_bundle(source, errors);
+    let spanned = match parsed {
+        Ok(program) if diagnostics.diagnostics.is_empty() => Some(SpannedProgram {
+            program,
+            facts: parser.facts,
+        }),
+        Ok(_) | Err(_) => None,
+    };
+    GrammarParseOutput {
+        spanned,
+        diagnostics,
+        outline,
+        missing,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static CANONICAL_GRAMMAR_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_direct_cst_lowering_count() {
+    CANONICAL_GRAMMAR_PARSES.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn direct_cst_lowering_count() -> usize {
+    CANONICAL_GRAMMAR_PARSES.with(std::cell::Cell::get)
 }
 
 pub(crate) fn validate_nesting(
@@ -206,7 +375,7 @@ fn parse_diagnostic_bundle(source: &SourceFile, mut errors: Vec<ParseError>) -> 
             let start = source.line_column(error.range.start);
             let end = source.line_column(error.range.end);
             let mut diagnostic = Diagnostic::error(
-                "K1001",
+                error.code,
                 DiagnosticPhase::Parse,
                 error.message,
                 Some(SourceSpan {
@@ -225,6 +394,12 @@ fn parse_diagnostic_bundle(source: &SourceFile, mut errors: Vec<ParseError>) -> 
             if !error.snippet.is_empty() {
                 diagnostic.notes.push(error.snippet);
             }
+            if let Some(replacement) = error.fix {
+                diagnostic.fix = diagnostic
+                    .primary_span
+                    .clone()
+                    .map(|span| DiagnosticFix { span, replacement });
+            }
             diagnostic
         })
         .collect::<Vec<_>>();
@@ -239,7 +414,7 @@ fn parse_diagnostic_bundle(source: &SourceFile, mut errors: Vec<ParseError>) -> 
     DiagnosticBundle::new(diagnostics)
 }
 
-/// Wrap a unit-test fragment in a canonical contract container before parsing.
+/// Wrap a unit-test fragment in a canonical `seiyaku`/`誓約` container before parsing.
 #[cfg(test)]
 pub(crate) fn parse_test_fragment(src: &str) -> Result<Program, String> {
     let trimmed = src.trim_start();
@@ -253,32 +428,346 @@ pub(crate) fn parse_test_fragment(src: &str) -> Result<Program, String> {
     }
 }
 
-struct Parser<'a> {
+struct CstAstLowerer<'a> {
     tokens: &'a [Token],
     pos: usize,
     source: &'a str,
+    facts: AstFacts,
+    current_function: Option<NodeId>,
     test_target: Option<TestTargetDecl>,
     fixtures: Vec<FixtureDecl>,
     recover: bool,
     errors: Vec<ParseError>,
+    allow_struct_literals: bool,
+    declared_function_parameters: std::collections::BTreeMap<String, Option<Vec<String>>>,
+    syntax: SyntaxOutlineBuilder,
 }
 
-impl<'a> Parser<'a> {
-    fn new(tokens: &'a [Token], source: &'a str, recover: bool) -> Self {
+impl<'a> CstAstLowerer<'a> {
+    fn new(tokens: &'a [Token], source: &'a SourceFile, recover: bool) -> Self {
+        let mut syntax = SyntaxOutlineBuilder::default();
+        syntax.start(SyntaxKind::Root, 0);
         Self {
             tokens,
             pos: 0,
-            source,
+            source: source.text(),
+            facts: AstFacts::new(source.id()),
+            current_function: None,
             test_target: None,
             fixtures: Vec::new(),
             recover,
             errors: Vec::new(),
+            allow_struct_literals: true,
+            declared_function_parameters: std::collections::BTreeMap::new(),
+            syntax,
         }
+    }
+
+    fn current_start(&self) -> u32 {
+        self.tokens
+            .get(self.pos)
+            .or_else(|| self.tokens.last())
+            .map_or(0, |token| token.range.start)
+    }
+
+    fn previous_end(&self, fallback: u32) -> u32 {
+        self.tokens
+            .get(self.pos.saturating_sub(1))
+            .map_or(fallback, |token| token.range.end)
+    }
+
+    fn begin_node(&mut self, kind: AstNodeKind, start: u32) -> NodeId {
+        self.facts
+            .source_map
+            .begin_owned(kind, start, self.current_function)
+    }
+
+    fn finish_node(&mut self, node: NodeId) {
+        let start = self
+            .facts
+            .source_map
+            .node(node)
+            .map_or(0, |entry| entry.range.start);
+        let end = self.previous_end(start);
+        self.facts.source_map.finish(node, end);
+    }
+
+    fn syntax_start(&mut self, kind: SyntaxKind, start: u32) -> usize {
+        self.syntax.start(kind, start)
+    }
+
+    fn syntax_finish(&mut self, node: usize, fallback: u32) {
+        self.syntax.finish(node, self.previous_end(fallback));
+    }
+
+    fn syntax_finish_at(&mut self, node: usize, end: u32) {
+        self.syntax.finish(node, end);
+    }
+
+    fn syntax_set_kind(&mut self, node: usize, kind: SyntaxKind) {
+        self.syntax.set_kind(node, kind);
+    }
+
+    fn syntax_checkpoint(&self) -> SyntaxOutlineCheckpoint {
+        self.syntax.checkpoint()
+    }
+
+    fn syntax_rollback(&mut self, checkpoint: SyntaxOutlineCheckpoint) {
+        self.syntax.rollback(checkpoint);
+    }
+
+    fn with_syntax<T>(
+        &mut self,
+        kind: SyntaxKind,
+        start: u32,
+        parse: impl FnOnce(&mut Self) -> ParseResult<T>,
+    ) -> ParseResult<T> {
+        let node = self.syntax_start(kind, start);
+        let result = parse(self);
+        self.syntax_finish(node, start);
+        result
+    }
+
+    fn syntax_item_kind(&self, start: usize) -> SyntaxKind {
+        let mut cursor = start;
+        while matches!(
+            self.tokens.get(cursor).map(|token| &token.kind),
+            Some(TokenKind::Hash)
+        ) {
+            let mut bracket_depth = 0_usize;
+            while let Some(token) = self.tokens.get(cursor) {
+                if bracket_depth != 0
+                    && matches!(
+                        token.kind,
+                        TokenKind::Fn
+                            | TokenKind::Kotoage
+                            | TokenKind::View
+                            | TokenKind::Hajimari
+                            | TokenKind::Kaizen
+                            | TokenKind::Struct
+                            | TokenKind::Error
+                            | TokenKind::Const
+                            | TokenKind::State
+                            | TokenKind::Trigger
+                    )
+                {
+                    break;
+                }
+                cursor = cursor.saturating_add(1);
+                match token.kind {
+                    TokenKind::LBracket => bracket_depth = bracket_depth.saturating_add(1),
+                    TokenKind::RBracket => {
+                        bracket_depth = bracket_depth.saturating_sub(1);
+                        if bracket_depth == 0 {
+                            break;
+                        }
+                    }
+                    TokenKind::EOF | TokenKind::RBrace => break,
+                    _ => {}
+                }
+            }
+        }
+        match self.tokens.get(cursor).map(|token| &token.kind) {
+            Some(
+                TokenKind::Fn
+                | TokenKind::Kotoage
+                | TokenKind::View
+                | TokenKind::Hajimari
+                | TokenKind::Kaizen,
+            ) => SyntaxKind::FunctionItem,
+            Some(TokenKind::Struct) => SyntaxKind::StructItem,
+            Some(TokenKind::Error) => SyntaxKind::ErrorEnumItem,
+            Some(TokenKind::Const) => SyntaxKind::ConstItem,
+            Some(TokenKind::State) => SyntaxKind::StateItem,
+            Some(TokenKind::Trigger) => SyntaxKind::TriggerItem,
+            Some(TokenKind::Ident(name)) if name == "fixture" => SyntaxKind::FixtureItem,
+            Some(TokenKind::Ident(name)) if name == "koto_test" => SyntaxKind::TestTargetItem,
+            _ => SyntaxKind::ErrorNode,
+        }
+    }
+
+    fn syntax_statement_kind(&self, start: usize) -> SyntaxKind {
+        match self.tokens.get(start).map(|token| &token.kind) {
+            Some(TokenKind::Let | TokenKind::Var) => SyntaxKind::LetStmt,
+            Some(TokenKind::Return) => SyntaxKind::ReturnStmt,
+            Some(TokenKind::Break) => SyntaxKind::BreakStmt,
+            Some(TokenKind::Continue) => SyntaxKind::ContinueStmt,
+            Some(TokenKind::If) => SyntaxKind::IfStmt,
+            Some(TokenKind::For) => SyntaxKind::ForStmt,
+            _ => SyntaxKind::ExprStmt,
+        }
+    }
+
+    fn record_declaration(
+        &mut self,
+        node: NodeId,
+        name: String,
+        name_range: TextRange,
+        kind: DeclarationKind,
+        owner: Option<NodeId>,
+    ) {
+        let name_node = self
+            .facts
+            .source_map
+            .allocate_owned(AstNodeKind::Name, name_range, owner);
+        self.facts.declarations.push(DeclarationFact {
+            node,
+            name_node,
+            owner,
+            name,
+            kind,
+        });
+    }
+
+    fn record_type_use(&mut self, name: String, range: TextRange) {
+        let node =
+            self.facts
+                .source_map
+                .allocate_owned(AstNodeKind::Type, range, self.current_function);
+        self.facts.type_uses.push(TypeUseFact {
+            node,
+            owner: self.current_function,
+            name,
+        });
+    }
+
+    fn source_expression(&mut self, kind: AstNodeKind, range: TextRange, expression: Expr) -> Expr {
+        let node = self
+            .facts
+            .source_map
+            .allocate_owned(kind, range, self.current_function);
+        Expr::Source {
+            node,
+            source: SourceRange::new(self.facts.source_map.source(), range),
+            expression: Box::new(expression),
+        }
+    }
+
+    fn source_expression_from(&mut self, start: u32, expression: Expr) -> Expr {
+        let range = TextRange::new(start, self.previous_end(start));
+        if expression
+            .source()
+            .is_some_and(|source| source.range == range)
+        {
+            expression
+        } else {
+            self.source_expression(AstNodeKind::Expression, range, expression)
+        }
+    }
+
+    fn source_statement(&mut self, range: TextRange, statement: Statement) -> Statement {
+        let node = self.facts.source_map.allocate_owned(
+            AstNodeKind::Statement,
+            range,
+            self.current_function,
+        );
+        Statement::Source {
+            node,
+            source: SourceRange::new(self.facts.source_map.source(), range),
+            statement: Box::new(statement),
+        }
+    }
+
+    fn finish_owned_expression(
+        &mut self,
+        owner: NodeId,
+        kind: AstNodeKind,
+        range: TextRange,
+        expression: Expr,
+    ) -> Expr {
+        self.facts.source_map.set_kind(owner, kind);
+        self.facts.source_map.finish(owner, range.end);
+        Expr::Source {
+            node: owner,
+            source: SourceRange::new(self.facts.source_map.source(), range),
+            expression: Box::new(expression),
+        }
+    }
+
+    fn finish_owned_statement(
+        &mut self,
+        owner: NodeId,
+        range: TextRange,
+        statement: Statement,
+    ) -> Statement {
+        self.facts
+            .source_map
+            .set_kind(owner, AstNodeKind::Statement);
+        self.facts.source_map.finish(owner, range.end);
+        Statement::Source {
+            node: owner,
+            source: SourceRange::new(self.facts.source_map.source(), range),
+            statement: Box::new(statement),
+        }
+    }
+
+    fn record_binding(
+        &mut self,
+        owner: NodeId,
+        ordinal: usize,
+        name: String,
+        range: TextRange,
+        kind: BindingFactKind,
+    ) {
+        let ordinal = u16::try_from(ordinal).expect("one node's binding budget fits u16");
+        let name_node =
+            self.facts
+                .source_map
+                .allocate_owned(AstNodeKind::Name, range, self.current_function);
+        self.facts.bindings.push(BindingFact {
+            owner,
+            ordinal,
+            name_node,
+            name,
+            kind,
+        });
+    }
+
+    fn source_type(&mut self, range: TextRange, ty: TypeExpr) -> TypeExpr {
+        let node =
+            self.facts
+                .source_map
+                .allocate_owned(AstNodeKind::Type, range, self.current_function);
+        TypeExpr::Source {
+            node,
+            source: SourceRange::new(self.facts.source_map.source(), range),
+            ty: Box::new(ty),
+        }
+    }
+
+    fn record_call(
+        &mut self,
+        name: String,
+        name_range: TextRange,
+        call_range: TextRange,
+        implicit_receiver: bool,
+    ) -> (NodeId, SourceRange) {
+        let node = self.facts.source_map.allocate_owned(
+            AstNodeKind::Call,
+            call_range,
+            self.current_function,
+        );
+        let name_node = self.facts.source_map.allocate_owned(
+            AstNodeKind::Name,
+            name_range,
+            self.current_function,
+        );
+        self.facts.calls.push(CallFact {
+            node,
+            name_node,
+            owner: self.current_function,
+            name,
+            implicit_receiver,
+        });
+        (
+            node,
+            SourceRange::new(self.facts.source_map.source(), call_range),
+        )
     }
 
     fn parse_program(&mut self) -> ParseResult<Program> {
         let kind = if self.peek(TokenKind::Seiyaku) {
-            SourceUnitKind::Contract
+            SourceUnitKind::Seiyaku
         } else if self.peek(TokenKind::Module) {
             SourceUnitKind::Module
         } else {
@@ -305,12 +794,26 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_unit(&mut self, kind: SourceUnitKind) -> ParseResult<(SourceUnit, Vec<Item>)> {
+        let start = self.current_start();
+        let syntax_unit = self.syntax_start(SyntaxKind::SourceUnit, start);
+        let node = self.begin_node(AstNodeKind::SourceUnit, start);
         self.bump(); // `seiyaku`/`誓約` or `module`
-        let name = self.expect_ident()?;
+        let (name, name_token) = self.expect_ident_token()?;
+        self.record_declaration(
+            node,
+            name.clone(),
+            name_token.range,
+            DeclarationKind::SourceUnit,
+            None,
+        );
         self.expect(TokenKind::LBrace)?;
+        let syntax_items = self.syntax_start(SyntaxKind::ItemList, self.previous_end(start));
         let mut items = Vec::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let item_start = self.pos;
+            let declaration_start = self.tokens[item_start].range.start;
+            let item_kind = self.syntax_item_kind(item_start);
+            let syntax_item = self.syntax_start(item_kind, declaration_start);
             let result = (|| -> ParseResult<()> {
                 let attrs = self.parse_function_attributes()?;
                 if self.peek(TokenKind::Struct) {
@@ -370,14 +873,14 @@ impl<'a> Parser<'a> {
                     items.push(self.parse_fn_loose(
                         None,
                         FunctionModifiers {
-                            visibility: FunctionVisibility::Internal,
-                            kind: FunctionKind::Contract,
+                            kind: FunctionKind::Private,
                             permission: None,
                             access_reads: attrs.reads,
                             access_writes: attrs.writes,
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
+                        declaration_start,
                     )?);
                 } else if self.peek(TokenKind::Kotoage) && self.peek_n(1, TokenKind::Fn) {
                     if kind == SourceUnitKind::Module {
@@ -391,14 +894,14 @@ impl<'a> Parser<'a> {
                     items.push(self.parse_fn_loose(
                         None,
                         FunctionModifiers {
-                            visibility: FunctionVisibility::Public,
-                            kind: FunctionKind::Contract,
+                            kind: FunctionKind::Kotoage,
                             permission: None,
                             access_reads: attrs.reads,
                             access_writes: attrs.writes,
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
+                        declaration_start,
                     )?);
                 } else if self.peek(TokenKind::View) && self.peek_n(1, TokenKind::Fn) {
                     if kind == SourceUnitKind::Module {
@@ -412,7 +915,6 @@ impl<'a> Parser<'a> {
                     items.push(self.parse_fn_loose(
                         None,
                         FunctionModifiers {
-                            visibility: FunctionVisibility::Public,
                             kind: FunctionKind::View,
                             permission: None,
                             access_reads: attrs.reads,
@@ -420,46 +922,47 @@ impl<'a> Parser<'a> {
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
+                        declaration_start,
                     )?);
                 } else if self.peek(TokenKind::Hajimari) {
                     if kind == SourceUnitKind::Module {
                         return Err(self.error(
                             self.tokens[self.pos].clone(),
-                            "module units cannot declare an initializer",
+                            "module units cannot declare `hajimari`/`始まり`",
                         ));
                     }
                     self.bump();
                     items.push(self.parse_fn_loose(
                         Some(String::from("hajimari")),
                         FunctionModifiers {
-                            visibility: FunctionVisibility::Public,
-                            kind: FunctionKind::Init,
+                            kind: FunctionKind::Hajimari,
                             permission: None,
                             access_reads: attrs.reads,
                             access_writes: attrs.writes,
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
+                        declaration_start,
                     )?);
                 } else if self.peek(TokenKind::Kaizen) {
                     if kind == SourceUnitKind::Module {
                         return Err(self.error(
                             self.tokens[self.pos].clone(),
-                            "module units cannot declare a kaizen hook",
+                            "module units cannot declare a `kaizen`/`改善` hook",
                         ));
                     }
                     self.bump();
                     items.push(self.parse_fn_loose(
                         Some(String::from("kaizen")),
                         FunctionModifiers {
-                            visibility: FunctionVisibility::Public,
-                            kind: FunctionKind::Upgrade,
+                            kind: FunctionKind::Kaizen,
                             permission: None,
                             access_reads: attrs.reads,
                             access_writes: attrs.writes,
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
+                        declaration_start,
                     )?);
                 } else if self.peek_ident_n(0, "meta") {
                     let token = self.bump();
@@ -501,20 +1004,39 @@ impl<'a> Parser<'a> {
             })();
             if let Err(error) = result {
                 if !self.recover {
+                    self.syntax_finish(syntax_item, declaration_start);
                     return Err(error);
                 }
+                let recovery_start = error.range.start.max(declaration_start);
                 self.errors.push(error);
+                let syntax_error = (item_kind != SyntaxKind::ErrorNode)
+                    .then(|| self.syntax_start(SyntaxKind::ErrorNode, recovery_start));
                 self.synchronize_source_item(item_start);
+                if let Some(syntax_error) = syntax_error {
+                    self.syntax_finish(syntax_error, recovery_start);
+                }
             }
+            self.syntax_finish(syntax_item, declaration_start);
         }
+        self.syntax_finish_at(syntax_items, self.current_start());
         self.expect(TokenKind::RBrace)?;
+        self.finish_node(node);
+        self.syntax_finish(syntax_unit, start);
         Ok((SourceUnit { kind, name }, items))
     }
 
     fn parse_error_enum_def(&mut self) -> ParseResult<Item> {
+        let node = self.begin_node(AstNodeKind::ErrorEnum, self.current_start());
         self.expect(TokenKind::Error)?;
         self.expect(TokenKind::Enum)?;
-        let name = self.expect_ident()?;
+        let (name, name_token) = self.expect_ident_token()?;
+        self.record_declaration(
+            node,
+            name.clone(),
+            name_token.range,
+            DeclarationKind::ErrorEnum,
+            None,
+        );
         self.expect(TokenKind::LBrace)?;
         let mut variants = Vec::new();
         let mut names = std::collections::HashSet::new();
@@ -557,13 +1079,22 @@ impl<'a> Parser<'a> {
             let token = self.tokens[self.pos.saturating_sub(1)].clone();
             return Err(self.error(token, "at least one explicitly numbered error variant"));
         }
+        self.finish_node(node);
         Ok(Item::ErrorEnum(ErrorEnumDef { name, variants }))
     }
 
     fn parse_trigger_decl(&mut self) -> ParseResult<Item> {
+        let node = self.begin_node(AstNodeKind::Trigger, self.current_start());
         let tok = self.bump();
         debug_assert!(matches!(tok.kind, TokenKind::Trigger));
-        let name = self.expect_ident()?;
+        let (name, name_token) = self.expect_ident_token()?;
+        self.record_declaration(
+            node,
+            name.clone(),
+            name_token.range,
+            DeclarationKind::Trigger,
+            None,
+        );
         self.expect(TokenKind::Arrow)?;
         let call = self.parse_trigger_call()?;
         self.expect(TokenKind::LBrace)?;
@@ -619,6 +1150,7 @@ impl<'a> Parser<'a> {
         }
         self.expect(TokenKind::RBrace)?;
         let filter = filter.ok_or_else(|| self.error(tok, "trigger `on` field"))?;
+        self.finish_node(node);
         Ok(Item::Trigger(TriggerDecl {
             name,
             call,
@@ -846,27 +1378,38 @@ impl<'a> Parser<'a> {
     fn parse_function_attributes(&mut self) -> ParseResult<FunctionAttributes> {
         let mut attrs = FunctionAttributes::default();
         while self.peek(TokenKind::Hash) {
-            self.bump(); // '#'
-            self.expect(TokenKind::LBracket)?;
-            let attr_tok = self.bump();
-            let attr_name = if let TokenKind::Ident(name) = attr_tok.kind.clone() {
-                name
-            } else {
-                return Err(self.error(attr_tok, "expected attribute identifier"));
-            };
-            match attr_name.as_str() {
-                "access" => {
-                    return Err(self.error(
-                        attr_tok,
-                        "manual `#[access(...)]` hints are not supported in first-release Kotodama; access metadata is generated by the compiler",
-                    ));
+            let attribute_start = self.current_start();
+            let syntax_attribute = self.syntax_start(SyntaxKind::Attribute, attribute_start);
+            let result = (|| -> ParseResult<()> {
+                self.bump(); // '#'
+                self.expect(TokenKind::LBracket)?;
+                let attr_tok = self.bump();
+                let attr_name = if let TokenKind::Ident(name) = attr_tok.kind.clone() {
+                    name
+                } else {
+                    return Err(self.error(attr_tok, "expected attribute identifier"));
+                };
+                match attr_name.as_str() {
+                    "access" => {
+                        return Err(self.error(
+                            attr_tok,
+                            "manual `#[access(...)]` hints are not supported in first-release Kotodama; access metadata is generated by the compiler",
+                        ));
+                    }
+                    "test" => self.parse_test_attribute_body(&mut attrs)?,
+                    _ => {
+                        return Err(self.error(attr_tok, "expected attribute `test`"));
+                    }
                 }
-                "test" => self.parse_test_attribute_body(&mut attrs)?,
-                _ => {
-                    return Err(self.error(attr_tok, "expected attribute `test`"));
-                }
-            }
-            self.expect(TokenKind::RBracket)?;
+                let next_item = self
+                    .tokens
+                    .get(self.pos)
+                    .is_some_and(Self::token_starts_source_item);
+                self.expect_or_insert(TokenKind::RBracket, next_item)?;
+                Ok(())
+            })();
+            self.syntax_finish(syntax_attribute, attribute_start);
+            result?;
         }
         Ok(attrs)
     }
@@ -910,11 +1453,15 @@ impl<'a> Parser<'a> {
                 "write" => attrs.writes.append(&mut values),
                 _ => {
                     return Err(ParseError {
+                        code: "K1001",
                         message: format!("unknown access list `{key}`"),
                         line: self.tokens[self.pos.saturating_sub(1)].line,
                         column: self.tokens[self.pos.saturating_sub(1)].column,
                         snippet: String::new(),
                         range: self.tokens[self.pos.saturating_sub(1)].range,
+                        fix: None,
+                        expected: None,
+                        expected_owner: None,
                     });
                 }
             }
@@ -925,11 +1472,15 @@ impl<'a> Parser<'a> {
         }
         if !parsed_any {
             return Err(ParseError {
+                code: "K1001",
                 message: "access attribute must include read/write entries".into(),
                 line: self.tokens[self.pos.saturating_sub(1)].line,
                 column: self.tokens[self.pos.saturating_sub(1)].column,
                 snippet: String::new(),
                 range: self.tokens[self.pos.saturating_sub(1)].range,
+                fix: None,
+                expected: None,
+                expected_owner: None,
             });
         }
         self.expect(TokenKind::RParen)?;
@@ -949,22 +1500,30 @@ impl<'a> Parser<'a> {
                 "fixture" => {
                     if attrs.test_fixture.is_some() {
                         return Err(ParseError {
+                            code: "K1001",
                             message: "duplicate fixture binding in test attribute".into(),
                             line: self.tokens[self.pos.saturating_sub(1)].line,
                             column: self.tokens[self.pos.saturating_sub(1)].column,
                             snippet: String::new(),
                             range: self.tokens[self.pos.saturating_sub(1)].range,
+                            fix: None,
+                            expected: None,
+                            expected_owner: None,
                         });
                     }
                     attrs.test_fixture = Some(self.expect_ident_or_string()?);
                 }
                 _ => {
                     return Err(ParseError {
+                        code: "K1001",
                         message: format!("unknown test attribute option `{key}`"),
                         line: self.tokens[self.pos.saturating_sub(1)].line,
                         column: self.tokens[self.pos.saturating_sub(1)].column,
                         snippet: String::new(),
                         range: self.tokens[self.pos.saturating_sub(1)].range,
+                        fix: None,
+                        expected: None,
+                        expected_owner: None,
                     });
                 }
             }
@@ -1002,11 +1561,15 @@ impl<'a> Parser<'a> {
         }
         self.expect(TokenKind::RBrace)?;
         let target = target.ok_or_else(|| ParseError {
+            code: "K1001",
             message: "koto_test block requires `target: \"...\"`".into(),
             line: tok.line,
             column: tok.column,
             snippet: String::new(),
             range: tok.range,
+            fix: None,
+            expected: None,
+            expected_owner: None,
         })?;
         self.test_target = Some(TestTargetDecl { target });
         Ok(())
@@ -1029,6 +1592,9 @@ impl<'a> Parser<'a> {
                     args.push(self.parse_expr()?);
                     if self.peek(TokenKind::Comma) {
                         self.bump();
+                        if self.peek(TokenKind::RParen) {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -1049,8 +1615,16 @@ impl<'a> Parser<'a> {
 
     fn parse_struct_def(&mut self) -> ParseResult<Item> {
         // struct Name { field: Type, ... }
+        let node = self.begin_node(AstNodeKind::Struct, self.current_start());
         self.expect(TokenKind::Struct)?;
-        let name = self.expect_ident()?;
+        let (name, name_token) = self.expect_ident_token()?;
+        self.record_declaration(
+            node,
+            name.clone(),
+            name_token.range,
+            DeclarationKind::Struct,
+            None,
+        );
         self.expect(TokenKind::LBrace)?;
         let mut fields = Vec::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
@@ -1069,27 +1643,46 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(TokenKind::RBrace)?;
+        self.finish_node(node);
         Ok(Item::Struct(super::ast::StructDef { name, fields }))
     }
 
     fn parse_state_decl(&mut self) -> ParseResult<Item> {
         // Canonical V1 form: `state name: Type;`.
+        let node = self.begin_node(AstNodeKind::State, self.current_start());
         self.expect(TokenKind::State)?;
-        let name = self.expect_ident()?;
+        let (name, name_token) = self.expect_ident_token()?;
+        self.record_declaration(
+            node,
+            name.clone(),
+            name_token.range,
+            DeclarationKind::State,
+            None,
+        );
         self.expect(TokenKind::Colon)?;
         let ty = self.parse_type_expr()?;
         self.expect(TokenKind::Semicolon)?;
+        self.finish_node(node);
         Ok(Item::State(super::ast::StateDecl { name, ty }))
     }
 
     fn parse_const_decl(&mut self) -> ParseResult<Item> {
+        let node = self.begin_node(AstNodeKind::Const, self.current_start());
         self.expect(TokenKind::Const)?;
-        let name = self.expect_ident()?;
+        let (name, name_token) = self.expect_ident_token()?;
+        self.record_declaration(
+            node,
+            name.clone(),
+            name_token.range,
+            DeclarationKind::Const,
+            None,
+        );
         self.expect(TokenKind::Colon)?;
         let ty = Some(self.parse_type_expr()?);
         self.expect(TokenKind::Equal)?;
         let value = self.parse_expr()?;
         self.expect(TokenKind::Semicolon)?;
+        self.finish_node(node);
         Ok(Item::Const(super::ast::ConstDecl { name, ty, value }))
     }
 
@@ -1097,120 +1690,214 @@ impl<'a> Parser<'a> {
         &mut self,
         name_override: Option<String>,
         mut modifiers: FunctionModifiers,
+        declaration_start: u32,
     ) -> ParseResult<Item> {
-        let location = if name_override.is_some() {
-            let tok = &self.tokens[self.pos.saturating_sub(1)];
-            SourceLocation {
-                line: tok.line,
-                column: tok.column,
-            }
+        let (location, name, name_range) = if let Some(name) = name_override {
+            let token = self.tokens[self.pos.saturating_sub(1)].clone();
+            (
+                SourceLocation {
+                    line: token.line,
+                    column: token.column,
+                },
+                name,
+                token.range,
+            )
         } else {
-            let tok = &self.tokens[self.pos];
-            SourceLocation {
-                line: tok.line,
-                column: tok.column,
-            }
+            let (name, token) = self.expect_ident_token()?;
+            (
+                SourceLocation {
+                    line: token.line,
+                    column: token.column,
+                },
+                name,
+                token.range,
+            )
         };
-        let name = match name_override {
-            Some(n) => n,
-            None => self.expect_ident()?,
-        };
-        self.expect(TokenKind::LParen)?;
-        let mut params = Vec::new();
-        if !self.peek(TokenKind::RParen) {
-            loop {
-                params.push(self.parse_param()?);
-                if self.peek(TokenKind::Comma) {
-                    self.bump();
-                } else {
-                    break;
-                }
-            }
-        }
-        self.expect(TokenKind::RParen)?;
-        let mut ret_ty = None;
-        if self.peek(TokenKind::Arrow) {
-            self.bump();
-            ret_ty = Some(self.parse_type_expr()?);
-        }
-        // Optional caller-authorization modifier.
-        while !self.peek(TokenKind::LBrace) && !self.peek(TokenKind::EOF) {
-            if self.peek(TokenKind::Authorize) {
-                if matches!(modifiers.kind, FunctionKind::Init | FunctionKind::Upgrade) {
-                    let token = self.bump();
-                    return Err(self.error(
-                        token,
-                        "lifecycle authorization is runtime-defined; `hajimari`/`始まり` and `kaizen`/`改善` cannot declare `authorize(...)`",
-                    ));
-                }
-                self.bump();
-                self.expect(TokenKind::LParen)?;
-                let permission_token = self.bump();
-                let perm = match permission_token.kind.clone() {
-                    TokenKind::String(permission) if !permission.trim().is_empty() => permission,
-                    TokenKind::String(_) => {
-                        return Err(
-                            self.error(permission_token, "non-empty permission string literal")
-                        );
+        let node = self.begin_node(AstNodeKind::Function, declaration_start);
+        self.record_declaration(
+            node,
+            name.clone(),
+            name_range,
+            DeclarationKind::Function,
+            None,
+        );
+        let previous_function = self.current_function.replace(node);
+        let result = (|| -> ParseResult<Item> {
+            let params_start = self.current_start();
+            let params = self.with_syntax(SyntaxKind::ParamList, params_start, |this| {
+                this.expect(TokenKind::LParen)?;
+                let mut params = Vec::new();
+                if !this.peek(TokenKind::RParen) {
+                    loop {
+                        params.push(this.parse_param()?);
+                        if this.peek(TokenKind::Comma) {
+                            this.bump();
+                            if this.peek(TokenKind::RParen) {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
                     }
-                    _ => return Err(self.error(permission_token, "permission string literal")),
-                };
-                self.expect(TokenKind::RParen)?;
-                if modifiers.visibility != FunctionVisibility::Public {
-                    return Err(ParseError {
-                        message: "`authorize(...)` is only valid on entrypoints".into(),
-                        line: self.tokens[self.pos.saturating_sub(1)].line,
-                        column: self.tokens[self.pos.saturating_sub(1)].column,
-                        snippet: String::new(),
-                        range: self.tokens[self.pos.saturating_sub(1)].range,
-                    });
                 }
-                if modifiers.permission.is_some() {
-                    return Err(ParseError {
-                        message: "duplicate authorize modifier".into(),
-                        line: self.tokens[self.pos.saturating_sub(1)].line,
-                        column: self.tokens[self.pos.saturating_sub(1)].column,
-                        snippet: String::new(),
-                        range: self.tokens[self.pos.saturating_sub(1)].range,
-                    });
-                }
-                modifiers.permission = Some(perm);
-            } else {
-                let tok = self.bump();
-                return Err(self.error(tok, "`authorize(\"Permission\")` or `{`"));
+                let function_body_or_modifier = this.peek(TokenKind::LBrace)
+                    || this.peek(TokenKind::Arrow)
+                    || this.peek(TokenKind::Authorize);
+                this.expect_or_insert(TokenKind::RParen, function_body_or_modifier)?;
+                Ok(params)
+            });
+            let params = params?;
+            let parameter_names = params
+                .iter()
+                .map(|parameter| parameter.name.clone())
+                .collect::<Vec<_>>();
+            self.declared_function_parameters
+                .entry(name.clone())
+                .and_modify(|known| *known = None)
+                .or_insert_with(|| Some(parameter_names));
+            let mut ret_ty = None;
+            if self.peek(TokenKind::Arrow) {
+                self.bump();
+                ret_ty = Some(self.parse_type_expr()?);
             }
+            // Optional caller-authorization modifier.
+            while !self.peek(TokenKind::LBrace) && !self.peek(TokenKind::EOF) {
+                if self.peek(TokenKind::Authorize) {
+                    if matches!(
+                        modifiers.kind,
+                        FunctionKind::Hajimari | FunctionKind::Kaizen
+                    ) {
+                        let token = self.bump();
+                        return Err(self.error(
+                            token,
+                            "lifecycle authorization is runtime-defined; `hajimari`/`始まり` and `kaizen`/`改善` cannot declare `authorize(...)`",
+                        ));
+                    }
+                    self.bump();
+                    self.expect(TokenKind::LParen)?;
+                    let permission_token = self.bump();
+                    let perm = match permission_token.kind.clone() {
+                        TokenKind::String(permission) if !permission.trim().is_empty() => {
+                            permission
+                        }
+                        TokenKind::String(_) => {
+                            return Err(
+                                self.error(permission_token, "non-empty permission string literal")
+                            );
+                        }
+                        _ => return Err(self.error(permission_token, "permission string literal")),
+                    };
+                    self.expect(TokenKind::RParen)?;
+                    if !matches!(modifiers.kind, FunctionKind::Kotoage | FunctionKind::View) {
+                        return Err(ParseError {
+                            code: "K1001",
+                            message: "`authorize(...)` is only valid on entrypoints".into(),
+                            line: self.tokens[self.pos.saturating_sub(1)].line,
+                            column: self.tokens[self.pos.saturating_sub(1)].column,
+                            snippet: String::new(),
+                            range: self.tokens[self.pos.saturating_sub(1)].range,
+                            fix: None,
+                            expected: None,
+                            expected_owner: None,
+                        });
+                    }
+                    if modifiers.permission.is_some() {
+                        return Err(ParseError {
+                            code: "K1001",
+                            message: "duplicate authorize modifier".into(),
+                            line: self.tokens[self.pos.saturating_sub(1)].line,
+                            column: self.tokens[self.pos.saturating_sub(1)].column,
+                            snippet: String::new(),
+                            range: self.tokens[self.pos.saturating_sub(1)].range,
+                            fix: None,
+                            expected: None,
+                            expected_owner: None,
+                        });
+                    }
+                    modifiers.permission = Some(perm);
+                } else {
+                    let tok = self.bump();
+                    return Err(self.error(tok, "`authorize(\"Permission\")` or `{`"));
+                }
+            }
+            let body = self.parse_block()?;
+            Ok(Item::Function(Function {
+                name,
+                params,
+                ret_ty,
+                body,
+                modifiers,
+                location,
+            }))
+        })();
+        self.current_function = previous_function;
+        if result.is_ok() {
+            self.finish_node(node);
         }
-        let body = self.parse_block()?;
-        Ok(Item::Function(Function {
-            name,
-            params,
-            ret_ty,
-            body,
-            modifiers,
-            location,
-        }))
+        result
     }
 
     fn parse_block(&mut self) -> ParseResult<Block> {
+        let block_start = self.current_start();
+        let syntax_block = self.syntax_start(SyntaxKind::Block, block_start);
         self.expect(TokenKind::LBrace)?;
+        let syntax_statements =
+            self.syntax_start(SyntaxKind::StatementList, self.previous_end(block_start));
         let mut statements = Vec::new();
+        let mut tail = None;
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let statement_start = self.pos;
-            match self.parse_statement() {
-                Ok(statement) => statements.push(statement),
-                Err(error) if self.recover => {
-                    self.errors.push(error);
-                    self.synchronize_statement(statement_start);
+            let start = self.tokens[statement_start].range.start;
+            let initial_kind = self.syntax_statement_kind(statement_start);
+            let syntax_statement = self.syntax_start(initial_kind, start);
+            match self.parse_block_element() {
+                Ok(element @ ParsedBlockElement::Statement(_)) => {
+                    self.syntax_set_kind(syntax_statement, block_element_syntax_kind(&element));
+                    let ParsedBlockElement::Statement(statement) = element else {
+                        unreachable!("matched statement block element")
+                    };
+                    let start = self.tokens[statement_start].range.start;
+                    let end = self.previous_end(start);
+                    statements.push(if statement.source_node().is_some() {
+                        statement
+                    } else {
+                        self.source_statement(TextRange::new(start, end), statement)
+                    });
+                    self.syntax_finish(syntax_statement, start);
                 }
-                Err(error) => return Err(error),
+                Ok(element @ ParsedBlockElement::Tail(_)) => {
+                    self.syntax_set_kind(syntax_statement, block_element_syntax_kind(&element));
+                    let ParsedBlockElement::Tail(expression) = element else {
+                        unreachable!("matched tail block element")
+                    };
+                    tail = Some(Box::new(expression));
+                    self.syntax_finish(syntax_statement, start);
+                    break;
+                }
+                Err(error) if self.recover => {
+                    let recovery_start = error.range.start.max(start);
+                    self.errors.push(error);
+                    let syntax_error = self.syntax_start(SyntaxKind::ErrorNode, recovery_start);
+                    self.synchronize_statement(statement_start);
+                    self.syntax_finish(syntax_error, recovery_start);
+                    self.syntax_finish(syntax_statement, start);
+                }
+                Err(error) => {
+                    self.syntax_finish(syntax_statement, start);
+                    return Err(error);
+                }
             }
         }
+        self.syntax_finish_at(syntax_statements, self.current_start());
         self.expect(TokenKind::RBrace)?;
-        Ok(Block { statements })
+        self.syntax_finish(syntax_block, block_start);
+        Ok(Block { statements, tail })
     }
 
-    fn parse_statement(&mut self) -> ParseResult<Statement> {
+    fn parse_block_element(&mut self) -> ParseResult<ParsedBlockElement> {
         if self.peek(TokenKind::Let) || self.peek(TokenKind::Var) {
+            let statement_start = self.current_start();
+            let owner = self.begin_node(AstNodeKind::Statement, statement_start);
             let mutable = self.peek(TokenKind::Var);
             self.bump();
             // pattern
@@ -1218,7 +1905,15 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let mut names = Vec::new();
                 loop {
-                    names.push(self.expect_ident()?);
+                    let (name, token) = self.expect_ident_token()?;
+                    self.record_binding(
+                        owner,
+                        names.len(),
+                        name.clone(),
+                        token.range,
+                        BindingFactKind::Local,
+                    );
+                    names.push(name);
                     if self.peek(TokenKind::Comma) {
                         self.bump();
                     } else {
@@ -1228,7 +1923,9 @@ impl<'a> Parser<'a> {
                 self.expect(TokenKind::RParen)?;
                 Pattern::Tuple(names)
             } else {
-                Pattern::Name(self.expect_ident()?)
+                let (name, token) = self.expect_ident_token()?;
+                self.record_binding(owner, 0, name.clone(), token.range, BindingFactKind::Local);
+                Pattern::Name(name)
             };
             // optional type
             let ty = if self.peek(TokenKind::Colon) {
@@ -1240,64 +1937,62 @@ impl<'a> Parser<'a> {
             self.expect(TokenKind::Equal)?;
             let expr = self.parse_expr()?;
             self.expect(TokenKind::Semicolon)?;
-            Ok(Statement::Let {
-                mutable,
-                pat,
-                ty,
-                value: expr,
-            })
+            let range = TextRange::new(statement_start, self.previous_end(statement_start));
+            Ok(ParsedBlockElement::Statement(self.finish_owned_statement(
+                owner,
+                range,
+                Statement::Let {
+                    mutable,
+                    pat,
+                    ty,
+                    value: expr,
+                },
+            )))
         } else if self.peek(TokenKind::Return) {
             self.bump();
             if self.peek(TokenKind::Semicolon) {
                 self.bump();
-                Ok(Statement::Return(None))
+                Ok(ParsedBlockElement::Statement(Statement::Return(None)))
+            } else if self.peek(TokenKind::RBrace) {
+                // `return` is a statement even when it has no value. At the
+                // block boundary the only possible continuation is its
+                // required semicolon, so recover that exact token instead of
+                // fabricating a missing expression.
+                self.expect(TokenKind::Semicolon)?;
+                unreachable!("a missing return semicolon always reports an error")
             } else {
                 let expr = self.parse_expr()?;
                 self.expect(TokenKind::Semicolon)?;
-                Ok(Statement::Return(Some(expr)))
+                Ok(ParsedBlockElement::Statement(Statement::Return(Some(expr))))
             }
         } else if self.peek(TokenKind::Break) {
             self.bump();
             self.expect(TokenKind::Semicolon)?;
-            Ok(Statement::Break)
+            Ok(ParsedBlockElement::Statement(Statement::Break))
         } else if self.peek(TokenKind::Continue) {
             self.bump();
             self.expect(TokenKind::Semicolon)?;
-            Ok(Statement::Continue)
+            Ok(ParsedBlockElement::Statement(Statement::Continue))
         } else if self.peek(TokenKind::If) {
-            self.bump();
-            let cond = self.parse_expr()?;
-            let then_branch = self.parse_block()?;
-            let else_branch = if self.peek(TokenKind::Else) {
-                self.bump();
-                if self.peek(TokenKind::If) {
-                    Some(Block {
-                        statements: vec![self.parse_statement()?],
-                    })
-                } else {
-                    Some(self.parse_block()?)
-                }
-            } else {
-                None
-            };
-            Ok(Statement::If {
-                cond,
-                then_branch,
-                else_branch,
-            })
+            let expression = self.parse_if_expression()?;
+            self.finish_block_expression(expression)
+        } else if self.peek(TokenKind::Match) {
+            let expression = self.parse_match_expression()?;
+            self.finish_block_expression(expression)
         } else if self.peek(TokenKind::For) {
             let for_line = self.tokens.get(self.pos).map(|t| t.line).unwrap_or(0);
+            let for_start = self.current_start();
             self.expect(TokenKind::For)?;
             if let Some((init, cond, step)) = self.parse_for_range()? {
                 let body = self.parse_block()?;
-                Ok(Statement::For {
+                Ok(ParsedBlockElement::Statement(Statement::For {
                     line: for_line,
                     init: Some(Box::new(init)),
                     cond: Some(cond),
                     step: Some(Box::new(step)),
                     body,
-                })
-            } else if let Some((k, v_opt, map)) = self.parse_for_each_map()? {
+                }))
+            } else if let Some((owner, k, v_opt, map)) = self.parse_for_each_map(for_start)? {
                 if !map_iteration_has_explicit_bound(&map) {
                     return Err(self.error(
                         self.tokens[self.pos.saturating_sub(1)].clone(),
@@ -1305,12 +2000,17 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 let body = self.parse_block()?;
-                Ok(Statement::ForEachMap {
-                    key: k,
-                    value: v_opt,
-                    map,
-                    body,
-                })
+                let range = TextRange::new(for_start, self.previous_end(for_start));
+                Ok(ParsedBlockElement::Statement(self.finish_owned_statement(
+                    owner,
+                    range,
+                    Statement::ForEachMap {
+                        key: k,
+                        value: v_opt,
+                        map,
+                        body,
+                    },
+                )))
             } else {
                 let token = self.tokens[self.pos.saturating_sub(1)].clone();
                 Err(self.error(
@@ -1327,6 +2027,7 @@ impl<'a> Parser<'a> {
         } else {
             // Try assignments including compound ops and field/indexed lvalues
             let save = self.pos;
+            let syntax_checkpoint = self.syntax_checkpoint();
             if let Ok(target) = self.try_parse_lvalue_expr() {
                 if self.peek(TokenKind::Equal)
                     || self.peek(TokenKind::PlusEqual)
@@ -1353,114 +2054,449 @@ impl<'a> Parser<'a> {
                     };
                     return Ok(match (target, op) {
                         (Expr::Ident(name), AssignOp::Set) => {
-                            Statement::Assign { name, value: rhs }
+                            ParsedBlockElement::Statement(Statement::Assign { name, value: rhs })
                         }
-                        (t, op) => Statement::AssignExpr {
+                        (t, op) => ParsedBlockElement::Statement(Statement::AssignExpr {
                             target: t,
                             op,
                             value: rhs,
-                        },
+                        }),
                     });
-                } else {
-                    // Not an assignment; rewind and continue parsing as expression
-                    self.pos = save;
                 }
             }
+            // Not an assignment (or not an lvalue); rewind both the token view
+            // and syntax events before parsing the expression authoritatively.
             self.pos = save;
+            self.syntax_rollback(syntax_checkpoint);
             let expr = self.parse_expr()?;
-            self.expect(TokenKind::Semicolon)?;
-            Ok(Statement::Expr(expr))
+            self.finish_block_expression(expr)
         }
     }
 
-    fn inc_statement(&self, name: String) -> Statement {
-        Statement::Assign {
-            name: name.clone(),
-            value: Expr::Binary {
-                op: BinaryOp::Add,
-                left: Box::new(Expr::Ident(name.clone())),
-                right: Box::new(Expr::Number(1)),
-            },
+    fn finish_block_expression(&mut self, expression: Expr) -> ParseResult<ParsedBlockElement> {
+        if self.peek(TokenKind::Semicolon) {
+            self.bump();
+            return Ok(ParsedBlockElement::Statement(Statement::Expr(expression)));
         }
+
+        let missing_else = matches!(
+            expression.kind(),
+            Expr::If {
+                else_branch: None,
+                ..
+            } | Expr::IfLet {
+                else_branch: None,
+                ..
+            }
+        );
+        if self.peek(TokenKind::RBrace) && !missing_else && block_expression_has_value(&expression)
+        {
+            return Ok(ParsedBlockElement::Tail(expression));
+        }
+
+        if matches!(expression.kind(), Expr::If { .. } | Expr::IfLet { .. }) {
+            return Ok(ParsedBlockElement::Statement(
+                self.if_expression_statement(expression),
+            ));
+        }
+        if matches!(expression.kind(), Expr::Match { .. }) {
+            return Ok(ParsedBlockElement::Statement(Statement::Expr(expression)));
+        }
+
+        let token = self
+            .tokens
+            .get(self.pos)
+            .cloned()
+            .unwrap_or_else(|| self.bump());
+        Err(self.error(token, "`;` or the end of the enclosing block"))
+    }
+
+    fn if_expression_statement(&mut self, expression: Expr) -> Statement {
+        let mut expression = expression;
+        let mut wrappers = Vec::new();
+        while let Expr::Source {
+            node,
+            source,
+            expression: inner,
+        } = expression
+        {
+            wrappers.push((node, source));
+            expression = *inner;
+        }
+        assert!(
+            !wrappers.is_empty(),
+            "direct if-expression parser always returns a source owner"
+        );
+        let mut statement = if_expression_statement_inner(expression);
+        for (node, source) in wrappers.into_iter().rev() {
+            self.facts.source_map.set_kind(node, AstNodeKind::Statement);
+            statement = Statement::Source {
+                node,
+                source,
+                statement: Box::new(statement),
+            };
+        }
+        statement
+    }
+
+    fn parse_if_expression(&mut self) -> ParseResult<Expr> {
+        let start = self.current_start();
+        let owner = self.begin_node(AstNodeKind::Expression, start);
+        let expression = self.with_syntax(SyntaxKind::IfExpr, start, |parser| {
+            parser.parse_if_expression_inner(owner)
+        })?;
+        let range = TextRange::new(start, self.previous_end(start));
+        Ok(self.finish_owned_expression(owner, AstNodeKind::Expression, range, expression))
+    }
+
+    fn parse_if_expression_inner(&mut self, owner: NodeId) -> ParseResult<Expr> {
+        self.expect(TokenKind::If)?;
+        let (pattern, value, condition) = if self.peek(TokenKind::Let) {
+            self.bump();
+            let pattern = self.parse_sum_pattern(owner, 0)?;
+            self.expect(TokenKind::Equal)?;
+            let value = self.parse_expr_before_block()?;
+            (Some(pattern), Some(value), None)
+        } else {
+            (None, None, Some(self.parse_expr_before_block()?))
+        };
+        let then_branch = self.parse_block()?;
+        let else_branch = if self.peek(TokenKind::Else) {
+            self.bump();
+            if self.peek(TokenKind::If) {
+                let nested = self.parse_if_expression()?;
+                if block_expression_has_value(&nested) {
+                    Some(Block {
+                        statements: Vec::new(),
+                        tail: Some(Box::new(nested)),
+                    })
+                } else {
+                    let statement = self.if_expression_statement(nested);
+                    Some(Block {
+                        statements: vec![statement],
+                        tail: None,
+                    })
+                }
+            } else {
+                Some(self.parse_block()?)
+            }
+        } else {
+            None
+        };
+        if let Some(pattern) = pattern {
+            Ok(Expr::IfLet {
+                pattern,
+                value: Box::new(value.expect("if let value")),
+                then_branch,
+                else_branch,
+            })
+        } else {
+            Ok(Expr::If {
+                condition: Box::new(condition.expect("if condition")),
+                then_branch,
+                else_branch,
+            })
+        }
+    }
+
+    fn parse_match_expression(&mut self) -> ParseResult<Expr> {
+        let start = self.current_start();
+        let owner = self.begin_node(AstNodeKind::Expression, start);
+        let expression = self.with_syntax(SyntaxKind::MatchExpr, start, |parser| {
+            parser.parse_match_expression_inner(owner)
+        })?;
+        let range = TextRange::new(start, self.previous_end(start));
+        Ok(self.finish_owned_expression(owner, AstNodeKind::Expression, range, expression))
+    }
+
+    fn parse_match_expression_inner(&mut self, owner: NodeId) -> ParseResult<Expr> {
+        self.expect(TokenKind::Match)?;
+        let value = self.parse_expr_before_block()?;
+        self.expect(TokenKind::LBrace)?;
+        let mut arms = Vec::new();
+        let mut binding_ordinal = 0_usize;
+        while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let arm_start = self.current_start();
+            let syntax_arm = self.syntax_start(SyntaxKind::MatchArm, arm_start);
+            let arm = (|| -> ParseResult<(SumPattern, Block)> {
+                let pattern = self.parse_sum_pattern(owner, binding_ordinal)?;
+                if matches!(&pattern.binding, Some(PatternBinding::Name(_))) {
+                    binding_ordinal = binding_ordinal.saturating_add(1);
+                }
+                self.expect(TokenKind::FatArrow)?;
+                let body = if self.peek(TokenKind::LBrace) {
+                    self.parse_block()?
+                } else {
+                    Block {
+                        statements: Vec::new(),
+                        tail: Some(Box::new(self.parse_expr()?)),
+                    }
+                };
+                Ok((pattern, body))
+            })();
+            self.syntax_finish(syntax_arm, arm_start);
+            let (pattern, body) = arm?;
+            arms.push(MatchArm { pattern, body });
+            if !self.peek(TokenKind::Comma) {
+                if !self.peek(TokenKind::RBrace) {
+                    let token = self
+                        .tokens
+                        .get(self.pos)
+                        .cloned()
+                        .unwrap_or_else(|| self.bump());
+                    return Err(self.error(token, "`,` or `}` after match arm"));
+                }
+                break;
+            }
+            self.bump();
+        }
+        self.expect(TokenKind::RBrace)?;
+        Ok(Expr::Match {
+            value: Box::new(value),
+            arms,
+        })
+    }
+
+    fn parse_sum_pattern(&mut self, owner: NodeId, ordinal: usize) -> ParseResult<SumPattern> {
+        let start = self.current_start();
+        self.with_syntax(SyntaxKind::SumPattern, start, |parser| {
+            parser.parse_sum_pattern_inner(owner, ordinal)
+        })
+    }
+
+    fn parse_sum_pattern_inner(
+        &mut self,
+        owner: NodeId,
+        ordinal: usize,
+    ) -> ParseResult<SumPattern> {
+        let namespace_token = self.bump();
+        let TokenKind::Ident(namespace) = namespace_token.kind.clone() else {
+            return Err(self.error(namespace_token, "`Option` or `Result` pattern namespace"));
+        };
+        self.expect(TokenKind::ColonColon)?;
+        let variant_token = self.bump();
+        let TokenKind::Ident(variant_name) = variant_token.kind.clone() else {
+            return Err(self.error(variant_token, "namespaced sum variant"));
+        };
+        if namespace == "option" || namespace == "result" {
+            let replacement = if namespace == "option" {
+                "Option"
+            } else {
+                "Result"
+            };
+            let mut error = self.coded_error(
+                namespace_token,
+                "E_LEGACY_SUM_CONSTRUCTOR",
+                format!(
+                    "lowercase `{namespace}` pattern namespace is retired; use `{replacement}`"
+                ),
+            );
+            error.fix = Some(replacement.to_owned());
+            return Err(error);
+        }
+        let variant = match (namespace.as_str(), variant_name.as_str()) {
+            ("Option", "some") => SumVariant::OptionSome,
+            ("Option", "none") => SumVariant::OptionNone,
+            ("Result", "ok") => SumVariant::ResultOk,
+            ("Result", "err") => SumVariant::ResultErr,
+            _ => {
+                return Err(self.error(
+                    variant_token,
+                    "one of `Option::some`, `Option::none`, `Result::ok`, or `Result::err`",
+                ));
+            }
+        };
+        let binding = if variant == SumVariant::OptionNone {
+            if self.peek(TokenKind::LParen) {
+                let token = self.bump();
+                return Err(self.error(token, "`Option::none` without a payload pattern"));
+            }
+            None
+        } else {
+            self.expect(TokenKind::LParen)?;
+            let token = self.bump();
+            let TokenKind::Ident(name) = token.kind.clone() else {
+                return Err(self.error(token, "payload binding or `_`"));
+            };
+            let binding = if name == "_" {
+                PatternBinding::Wildcard
+            } else {
+                self.record_binding(
+                    owner,
+                    ordinal,
+                    name.clone(),
+                    token.range,
+                    BindingFactKind::Pattern,
+                );
+                PatternBinding::Name(name)
+            };
+            self.expect(TokenKind::RParen)?;
+            Some(binding)
+        };
+        Ok(SumPattern { variant, binding })
+    }
+
+    fn inc_statement(&mut self, name: String, range: TextRange) -> Statement {
+        let left =
+            self.source_expression(AstNodeKind::Expression, range, Expr::Ident(name.clone()));
+        let right = self.source_expression(AstNodeKind::Expression, range, Expr::Number(1));
+        let value = self.source_expression(
+            AstNodeKind::Expression,
+            range,
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+        );
+        self.source_statement(range, Statement::Assign { name, value })
     }
 
     fn parse_for_range(&mut self) -> ParseResult<Option<(Statement, Expr, Statement)>> {
         let save = self.pos;
-        if let Some(Token {
-            kind: TokenKind::Ident(var),
-            ..
-        }) = self.tokens.get(self.pos).cloned()
+        let header_start = self.current_start();
+        let syntax_checkpoint = self.syntax_checkpoint();
+        if let Some(var_token) = self.tokens.get(self.pos).cloned()
+            && matches!(&var_token.kind, TokenKind::Ident(_))
             && self.peek_n(1, TokenKind::In)
             && self.peek_ident_n(2, "range")
         {
+            let Token {
+                kind: TokenKind::Ident(var),
+                range: var_range,
+                ..
+            } = var_token
+            else {
+                unreachable!("the let-chain established an identifier token")
+            };
+            let init_owner = self.begin_node(AstNodeKind::Statement, header_start);
             self.bump();
+            // The range syntax lowers to a direct `let` binding in the AST, so
+            // its parser fact must carry the same binding role consumed by HIR.
+            self.record_binding(
+                init_owner,
+                0,
+                var.clone(),
+                var_range,
+                BindingFactKind::Local,
+            );
             self.bump(); // in
             self.bump(); // range
             self.expect(TokenKind::LParen)?;
             let end = self.parse_expr()?;
             self.expect(TokenKind::RParen)?;
-            if !matches!(end, Expr::Number(value) if value >= 0) {
-                return Err(self.error(
+            if !matches!(end.kind(), Expr::Number(value) if *value >= 0) {
+                return Err(self.coded_error(
                     self.tokens[self.pos.saturating_sub(1)].clone(),
-                    "E_UNBOUNDED_LOOP: numeric range bounds must be non-negative integer literals",
+                    "E_UNBOUNDED_LOOP",
+                    "numeric range bounds must be non-negative integer literals",
                 ));
             }
-            let init = Statement::Let {
-                mutable: true,
-                pat: Pattern::Name(var.clone()),
-                ty: None,
-                value: Expr::Number(0),
-            };
-            let cond = Expr::Binary {
-                op: BinaryOp::Lt,
-                left: Box::new(Expr::Ident(var.clone())),
-                right: Box::new(end),
-            };
-            let step = self.inc_statement(var);
+            let range = TextRange::new(header_start, self.previous_end(header_start));
+            let zero = self.source_expression(AstNodeKind::Expression, range, Expr::Number(0));
+            let init = self.finish_owned_statement(
+                init_owner,
+                range,
+                Statement::Let {
+                    mutable: true,
+                    pat: Pattern::Name(var.clone()),
+                    ty: None,
+                    value: zero,
+                },
+            );
+            let left =
+                self.source_expression(AstNodeKind::Expression, range, Expr::Ident(var.clone()));
+            let cond = self.source_expression(
+                AstNodeKind::Expression,
+                range,
+                Expr::Binary {
+                    op: BinaryOp::Lt,
+                    left: Box::new(left),
+                    right: Box::new(end),
+                },
+            );
+            let step = self.inc_statement(var.clone(), range);
             return Ok(Some((init, cond, step)));
         }
         self.pos = save;
+        self.syntax_rollback(syntax_checkpoint);
         Ok(None)
     }
 
     fn parse_expr(&mut self) -> ParseResult<Expr> {
-        self.parse_conditional()
+        let start = self.current_start();
+        let expression = self.parse_conditional()?;
+        let end = self.previous_end(start);
+        let range = TextRange::new(start, end);
+        if expression
+            .source()
+            .is_some_and(|source| source.range == range)
+        {
+            Ok(expression)
+        } else {
+            Ok(self.source_expression(AstNodeKind::Expression, range, expression))
+        }
+    }
+
+    fn parse_expr_before_block(&mut self) -> ParseResult<Expr> {
+        let previous = std::mem::replace(&mut self.allow_struct_literals, false);
+        let result = self.parse_expr();
+        self.allow_struct_literals = previous;
+        result
     }
 
     fn parse_conditional(&mut self) -> ParseResult<Expr> {
         enum Frame {
-            Then { condition: Expr },
-            Else { condition: Expr, then_expr: Expr },
+            Then {
+                start: u32,
+                condition: Expr,
+            },
+            Else {
+                start: u32,
+                condition: Expr,
+                then_expr: Expr,
+            },
         }
 
         let mut frames = Vec::new();
         let mut current = self.parse_logical_or()?;
         loop {
-            if self.peek(TokenKind::Question) {
+            if self.peek(TokenKind::Question) && self.question_starts_ternary() {
                 self.bump();
-                frames.push(Frame::Then { condition: current });
+                let start = current
+                    .source()
+                    .map_or_else(|| self.current_start(), |source| source.range.start);
+                frames.push(Frame::Then {
+                    start,
+                    condition: current,
+                });
                 current = self.parse_logical_or()?;
                 continue;
             }
 
             match frames.pop() {
-                Some(Frame::Then { condition }) => {
+                Some(Frame::Then { start, condition }) => {
                     self.expect(TokenKind::Colon)?;
                     frames.push(Frame::Else {
+                        start,
                         condition,
                         then_expr: current,
                     });
                     current = self.parse_logical_or()?;
                 }
                 Some(Frame::Else {
+                    start,
                     condition,
                     then_expr,
                 }) => {
-                    current = Expr::Conditional {
-                        cond: Box::new(condition),
-                        then_expr: Box::new(then_expr),
-                        else_expr: Box::new(current),
-                    };
+                    current = self.source_expression_from(
+                        start,
+                        Expr::Conditional {
+                            cond: Box::new(condition),
+                            then_expr: Box::new(then_expr),
+                            else_expr: Box::new(current),
+                        },
+                    );
                 }
                 None => return Ok(current),
             }
@@ -1468,16 +2504,20 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_logical_or(&mut self) -> ParseResult<Expr> {
+        let start = self.current_start();
         let mut expr = self.parse_logical_and()?;
         loop {
             if self.peek(TokenKind::OrOr) {
                 self.bump();
                 let rhs = self.parse_logical_and()?;
-                expr = Expr::Binary {
-                    op: BinaryOp::Or,
-                    left: Box::new(expr),
-                    right: Box::new(rhs),
-                };
+                expr = self.source_expression_from(
+                    start,
+                    Expr::Binary {
+                        op: BinaryOp::Or,
+                        left: Box::new(expr),
+                        right: Box::new(rhs),
+                    },
+                );
             } else {
                 break;
             }
@@ -1486,16 +2526,20 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_logical_and(&mut self) -> ParseResult<Expr> {
+        let start = self.current_start();
         let mut expr = self.parse_comparison()?;
         loop {
             if self.peek(TokenKind::AndAnd) {
                 self.bump();
                 let rhs = self.parse_comparison()?;
-                expr = Expr::Binary {
-                    op: BinaryOp::And,
-                    left: Box::new(expr),
-                    right: Box::new(rhs),
-                };
+                expr = self.source_expression_from(
+                    start,
+                    Expr::Binary {
+                        op: BinaryOp::And,
+                        left: Box::new(expr),
+                        right: Box::new(rhs),
+                    },
+                );
             } else {
                 break;
             }
@@ -1504,6 +2548,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_comparison(&mut self) -> ParseResult<Expr> {
+        let start = self.current_start();
         let mut expr = self.parse_term()?;
         loop {
             let op = if self.peek(TokenKind::EqualEqual) {
@@ -1529,11 +2574,14 @@ impl<'a> Parser<'a> {
             };
             if let Some(op) = op {
                 let rhs = self.parse_term()?;
-                expr = Expr::Binary {
-                    op,
-                    left: Box::new(expr),
-                    right: Box::new(rhs),
-                };
+                expr = self.source_expression_from(
+                    start,
+                    Expr::Binary {
+                        op,
+                        left: Box::new(expr),
+                        right: Box::new(rhs),
+                    },
+                );
             } else {
                 break;
             }
@@ -1542,6 +2590,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_term(&mut self) -> ParseResult<Expr> {
+        let start = self.current_start();
         let mut expr = self.parse_factor()?;
         loop {
             let op = if self.peek(TokenKind::Plus) {
@@ -1555,11 +2604,14 @@ impl<'a> Parser<'a> {
             };
             if let Some(op) = op {
                 let rhs = self.parse_factor()?;
-                expr = Expr::Binary {
-                    op,
-                    left: Box::new(expr),
-                    right: Box::new(rhs),
-                };
+                expr = self.source_expression_from(
+                    start,
+                    Expr::Binary {
+                        op,
+                        left: Box::new(expr),
+                        right: Box::new(rhs),
+                    },
+                );
             } else {
                 break;
             }
@@ -1568,6 +2620,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_factor(&mut self) -> ParseResult<Expr> {
+        let start = self.current_start();
         let mut expr = self.parse_unary()?;
         loop {
             let op = if self.peek(TokenKind::Star) {
@@ -1584,11 +2637,14 @@ impl<'a> Parser<'a> {
             };
             if let Some(op) = op {
                 let rhs = self.parse_unary()?;
-                expr = Expr::Binary {
-                    op,
-                    left: Box::new(expr),
-                    right: Box::new(rhs),
-                };
+                expr = self.source_expression_from(
+                    start,
+                    Expr::Binary {
+                        op,
+                        left: Box::new(expr),
+                        right: Box::new(rhs),
+                    },
+                );
             } else {
                 break;
             }
@@ -1612,18 +2668,22 @@ impl<'a> Parser<'a> {
                         );
                     }
                     let value = self.number_to_i64_neg(&token, n)?;
-                    let mut expr = Expr::Number(value);
+                    let mut expr =
+                        self.source_expression_from(minus.range.start, Expr::Number(value));
                     for (op, token) in prefixes.into_iter().rev() {
-                        if op == UnaryOp::Neg && matches!(expr, Expr::Decimal(_)) {
+                        if op == UnaryOp::Neg && matches!(expr.kind(), Expr::Decimal(_)) {
                             return Err(self.error(
                                 token,
                                 "u128 literals cannot be negated; u128 is unsigned",
                             ));
                         }
-                        expr = Expr::Unary {
-                            op,
-                            expr: Box::new(expr),
-                        };
+                        expr = self.source_expression_from(
+                            token.range.start,
+                            Expr::Unary {
+                                op,
+                                expr: Box::new(expr),
+                            },
+                        );
                     }
                     return Ok(expr);
                 }
@@ -1635,21 +2695,38 @@ impl<'a> Parser<'a> {
             }
         }
 
+        let postfix_start = self.current_start();
         let primary = self.parse_primary()?;
-        let mut expr = self.parse_postfix(primary)?;
+        let mut expr = self.parse_postfix(primary, postfix_start)?;
         for (op, token) in prefixes.into_iter().rev() {
-            if op == UnaryOp::Neg && matches!(expr, Expr::Decimal(_)) {
-                return Err(self.error(token, "u128 literals cannot be negated; u128 is unsigned"));
+            if op == UnaryOp::Neg {
+                if matches!(expr.kind(), Expr::Decimal(_)) {
+                    return Err(
+                        self.error(token, "u128 literals cannot be negated; u128 is unsigned")
+                    );
+                }
+                if matches!(expr.kind(), Expr::AmountLiteral(_)) {
+                    let mut error = self.coded_error(
+                        token,
+                        "E_AMOUNT_NEGATIVE",
+                        "Amount literals are non-negative; remove the `-`",
+                    );
+                    error.fix = Some(String::new());
+                    return Err(error);
+                }
             }
-            expr = Expr::Unary {
-                op,
-                expr: Box::new(expr),
-            };
+            expr = self.source_expression_from(
+                token.range.start,
+                Expr::Unary {
+                    op,
+                    expr: Box::new(expr),
+                },
+            );
         }
         Ok(expr)
     }
 
-    fn parse_postfix(&mut self, mut expr: Expr) -> ParseResult<Expr> {
+    fn parse_postfix(&mut self, mut expr: Expr, expression_start: u32) -> ParseResult<Expr> {
         loop {
             if self.peek(TokenKind::Dot) {
                 self.bump();
@@ -1680,48 +2757,98 @@ impl<'a> Parser<'a> {
                     if let Some(token) = field_token.as_ref()
                         && let Some(message) = removed_method_helper_message(&field)
                     {
-                        return Err(self.error(token.clone(), message));
+                        return Err(self.coded_error(
+                            token.clone(),
+                            removed_method_helper_code(&field),
+                            message,
+                        ));
                     }
                     self.bump();
-                    let mut args = Vec::new();
-                    if !self.peek(TokenKind::RParen) {
-                        loop {
-                            args.push(self.parse_expr()?);
-                            if self.peek(TokenKind::Comma) {
-                                self.bump();
-                            } else {
-                                break;
-                            }
-                        }
-                    }
+                    let parameter_names = self.call_parameter_names(&field, true);
+                    let ParsedCallArguments {
+                        mut args,
+                        argument_names,
+                        ..
+                    } = self.parse_call_arguments(parameter_names.as_deref())?;
                     self.expect(TokenKind::RParen)?;
                     // Prepend the receiver as the first argument
                     let mut full_args = Vec::with_capacity(args.len() + 1);
                     full_args.push(expr);
-                    full_args.extend(args);
-                    let call_name = if field == "get" {
-                        STATE_MAP_GET_INTRINSIC.to_owned()
-                    } else {
-                        field
+                    full_args.append(&mut args);
+                    if let Some(token) = field_token.as_ref() {
+                        let call_end = self.previous_end(token.range.end);
+                        let (node, source) = self.record_call(
+                            field.clone(),
+                            token.range,
+                            TextRange::new(expression_start, call_end),
+                            true,
+                        );
+                        let call_name = match field.as_str() {
+                            "get" => STATE_MAP_GET_INTRINSIC.to_owned(),
+                            // The runtime helper retains its internal Numeric-era
+                            // spelling; V1 source exposes the nominal Amount name.
+                            "get_amount" => "get_numeric".to_owned(),
+                            _ => field,
+                        };
+                        expr = Expr::Source {
+                            node,
+                            source,
+                            expression: Box::new(Expr::Call {
+                                name: call_name,
+                                args: full_args,
+                                argument_names,
+                                implicit_receiver: true,
+                            }),
+                        };
+                        continue;
+                    }
+                    let call_name = match field.as_str() {
+                        "get" => STATE_MAP_GET_INTRINSIC.to_owned(),
+                        // The runtime helper retains its internal Numeric-era
+                        // spelling; V1 source exposes the nominal Amount name.
+                        "get_amount" => "get_numeric".to_owned(),
+                        _ => field,
                     };
-                    expr = Expr::Call {
-                        name: call_name,
-                        args: full_args,
-                    };
+                    expr = self.source_expression_from(
+                        expression_start,
+                        Expr::Call {
+                            name: call_name,
+                            args: full_args,
+                            argument_names,
+                            implicit_receiver: true,
+                        },
+                    );
                 } else {
-                    expr = Expr::Member {
-                        object: Box::new(expr),
-                        field,
-                    };
+                    expr = self.source_expression_from(
+                        expression_start,
+                        Expr::Member {
+                            object: Box::new(expr),
+                            field,
+                        },
+                    );
                 }
             } else if self.peek(TokenKind::LBracket) {
                 self.bump();
                 let idx = self.parse_expr()?;
                 self.expect(TokenKind::RBracket)?;
-                expr = Expr::Index {
-                    target: Box::new(expr),
-                    index: Box::new(idx),
+                let range = TextRange::new(expression_start, self.previous_end(expression_start));
+                let node = self.facts.source_map.allocate_owned(
+                    AstNodeKind::IndexExpression,
+                    range,
+                    self.current_function,
+                );
+                expr = Expr::Source {
+                    node,
+                    source: SourceRange::new(self.facts.source_map.source(), range),
+                    expression: Box::new(Expr::Index {
+                        target: Box::new(expr),
+                        index: Box::new(idx),
+                    }),
                 };
+            } else if self.peek(TokenKind::Question) && !self.question_starts_ternary() {
+                self.bump();
+                expr =
+                    self.source_expression_from(expression_start, Expr::Propagate(Box::new(expr)));
             } else {
                 break;
             }
@@ -1731,25 +2858,134 @@ impl<'a> Parser<'a> {
 
     fn parse_primary(&mut self) -> ParseResult<Expr> {
         let tok = self.bump();
-        match &tok.kind {
-            TokenKind::True => Ok(Expr::Bool(true)),
-            TokenKind::False => Ok(Expr::Bool(false)),
+        let expression = match &tok.kind {
+            TokenKind::True => Expr::Bool(true),
+            TokenKind::False => Expr::Bool(false),
             TokenKind::Number(n) => match self.consume_integer_suffix()? {
-                IntegerSuffix::U128 => Ok(Expr::Decimal(n.to_string())),
+                IntegerSuffix::U128 => Expr::Decimal(n.to_string()),
                 IntegerSuffix::None | IntegerSuffix::I64 => {
                     let value = self.number_to_i64(&tok, *n)?;
-                    Ok(Expr::Number(value))
+                    Expr::Number(value)
                 }
             },
-            TokenKind::String(s) => Ok(Expr::String(s.clone())),
-            TokenKind::Bytes(bytes) => Ok(Expr::Bytes(bytes.clone())),
-            TokenKind::Ident(name) => self.parse_named_primary(tok.clone(), name.clone()),
-            TokenKind::State if self.peek(TokenKind::ColonColon) => {
-                self.parse_named_primary(tok.clone(), "state".to_owned())
+            TokenKind::AmountLiteral(spelling) => {
+                let range = tok.range;
+                let node = self.facts.source_map.allocate_owned(
+                    AstNodeKind::AmountLiteral,
+                    range,
+                    self.current_function,
+                );
+                Expr::Source {
+                    node,
+                    source: SourceRange::new(self.facts.source_map.source(), range),
+                    expression: Box::new(Expr::AmountLiteral(spelling.clone())),
+                }
             }
-            TokenKind::LParen => self.parse_parenthesized(tok),
-            _ => Err(self.error(tok, "expression")),
+            TokenKind::String(s) => Expr::String(s.clone()),
+            TokenKind::Bytes(bytes) => Expr::Bytes(bytes.clone()),
+            TokenKind::Ident(name) => self.parse_named_primary(tok.clone(), name.clone())?,
+            TokenKind::If => {
+                self.pos = self.pos.saturating_sub(1);
+                self.parse_if_expression()?
+            }
+            TokenKind::Match => {
+                self.pos = self.pos.saturating_sub(1);
+                self.parse_match_expression()?
+            }
+            TokenKind::State if self.peek(TokenKind::ColonColon) => {
+                self.parse_named_primary(tok.clone(), "state".to_owned())?
+            }
+            TokenKind::LParen => self.parse_parenthesized(tok.clone())?,
+            TokenKind::LBracket => self.parse_list_expression(tok.clone())?,
+            _ => {
+                // An absent expression has no single punctuation token to
+                // name, but the lossless CST still needs a concrete,
+                // zero-width recovery token at the failed primary.  An
+                // identifier is the canonical side-effect-free expression
+                // placeholder and, unlike deriving recovery from diagnostic
+                // prose, keeps editor recovery stable when messages change.
+                let mut error = self.error(tok, "expression");
+                error.expected = Some(SyntaxKind::Ident);
+                error.expected_owner = self.syntax.current();
+                return Err(error);
+            }
+        };
+        let range = TextRange::new(tok.range.start, self.previous_end(tok.range.end));
+        if expression
+            .source()
+            .is_some_and(|source| source.range == range)
+        {
+            Ok(expression)
+        } else {
+            Ok(self.source_expression(AstNodeKind::Expression, range, expression))
         }
+    }
+
+    fn parse_list_expression(&mut self, opening: Token) -> ParseResult<Expr> {
+        let start = opening.range.start;
+        let syntax_list = self.syntax_start(SyntaxKind::ListExpr, start);
+        let result = self.parse_list_expression_inner(opening);
+        if result
+            .as_ref()
+            .is_ok_and(|expression| matches!(expression.kind(), Expr::ListComprehension { .. }))
+        {
+            self.syntax_set_kind(syntax_list, SyntaxKind::ListComprehension);
+        }
+        self.syntax_finish(syntax_list, start);
+        result
+    }
+    fn parse_list_expression_inner(&mut self, opening: Token) -> ParseResult<Expr> {
+        if self.peek(TokenKind::RBracket) {
+            self.bump();
+            return Ok(Expr::List(Vec::new()));
+        }
+
+        let first = self.parse_expr()?;
+        if self.peek(TokenKind::For) {
+            self.bump();
+            let owner = self.begin_node(AstNodeKind::ListComprehension, opening.range.start);
+            let (item, item_token) = self.expect_ident_token()?;
+            self.record_binding(
+                owner,
+                0,
+                item.clone(),
+                item_token.range,
+                BindingFactKind::Comprehension,
+            );
+            self.expect(TokenKind::In)?;
+            let source = self.parse_expr()?;
+            let condition = if self.peek(TokenKind::If) {
+                self.bump();
+                Some(Box::new(self.parse_expr()?))
+            } else {
+                None
+            };
+            self.expect(TokenKind::RBracket)?;
+            let range = TextRange::new(opening.range.start, self.previous_end(opening.range.end));
+            let expression = Expr::ListComprehension {
+                expression: Box::new(first),
+                item,
+                source: Box::new(source),
+                condition,
+            };
+            return Ok(self.finish_owned_expression(
+                owner,
+                AstNodeKind::ListComprehension,
+                range,
+                expression,
+            ));
+        }
+
+        let mut elements = vec![first];
+        while self.peek(TokenKind::Comma) {
+            self.bump();
+            if self.peek(TokenKind::RBracket) {
+                break;
+            }
+            elements.push(self.parse_expr()?);
+        }
+        self.expect(TokenKind::RBracket)?;
+        Ok(Expr::List(elements))
     }
 
     fn parse_parenthesized(&mut self, opening: Token) -> ParseResult<Expr> {
@@ -1767,12 +3003,16 @@ impl<'a> Parser<'a> {
                 .unwrap_or("");
             let caret = " ".repeat(opening.column.saturating_sub(1)) + "^";
             return Err(ParseError {
+                code: "K1001",
                 message: "source-level unit value `()` is not part of Kotodama V1; omit a return value instead"
                     .into(),
                 line: opening.line,
                 column: opening.column,
                 snippet: format!("{line_text}\n{caret}"),
                 range: TextRange::new(opening.range.start, closing.range.end),
+                fix: None,
+                expected: None,
+                expected_owner: None,
             });
         }
 
@@ -1801,40 +3041,477 @@ impl<'a> Parser<'a> {
             name.push_str("::");
             name.push_str(&segment);
         }
+        let name_end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map_or(ident_token.range.end, |token| token.range.end);
+        let name_range = TextRange::new(ident_token.range.start, name_end);
+        if name == "json" {
+            if self.peek(TokenKind::LBrace) {
+                return self.parse_json_object(ident_token.range.start);
+            }
+            if self.peek(TokenKind::LBracket) {
+                return self.parse_json_array(ident_token.range.start);
+            }
+        }
         if self.peek(TokenKind::Bang) {
             return Err(self.error(
                 ident_token,
                 "macros are not part of Kotodama V1; use an ordinary typed constructor such as `AccountId::parse(\"...\")`, `Json::parse(\"{...}\")`, or a `b\"...\"` bytes literal",
             ));
         }
-        if self.peek(TokenKind::LParen) {
-            if let Some(message) = removed_free_helper_message(&name) {
-                return Err(self.error(ident_token, message));
+        if matches!(
+            name.as_str(),
+            "option::some" | "option::none" | "result::ok" | "result::err"
+        ) && self.peek(TokenKind::LParen)
+        {
+            self.bump();
+            let parameter_names = self.call_parameter_names(&name, false);
+            let parsed = self.parse_call_arguments(parameter_names.as_deref())?;
+            self.expect(TokenKind::RParen)?;
+            let end = self
+                .tokens
+                .get(self.pos.saturating_sub(1))
+                .map_or(ident_token.range.end, |token| token.range.end);
+            let range = TextRange::new(ident_token.range.start, end);
+            let replacement = self.legacy_sum_replacement(&name, &parsed);
+            let mut error = self.coded_error(
+                ident_token,
+                "E_LEGACY_SUM_CONSTRUCTOR",
+                format!(
+                    "`{name}` is retired; use the canonical active-only `Option`/`Result` constructor"
+                ),
+            );
+            error.range = range;
+            error.fix = replacement;
+            return Err(error);
+        }
+        if name == "Option::none" {
+            if self.peek(TokenKind::LParen) {
+                let opening = self.bump();
+                let parameter_names = self.call_parameter_names(&name, false);
+                let parsed = self.parse_call_arguments(parameter_names.as_deref())?;
+                self.expect(TokenKind::RParen)?;
+                let end = self
+                    .tokens
+                    .get(self.pos.saturating_sub(1))
+                    .map_or(opening.range.end, |token| token.range.end);
+                let mut error = self.coded_error(
+                    opening,
+                    "E_SUM_CONSTRUCTOR_FORM",
+                    "`Option::none` is a contextual value path; remove the parentheses and inactive placeholder",
+                );
+                error.range = TextRange::new(ident_token.range.start, end);
+                if parsed.argument_names.is_none() {
+                    error.fix = Some("Option::none".into());
+                }
+                return Err(error);
+            }
+            return Ok(Expr::OptionNone);
+        }
+        if matches!(name.as_str(), "Option::some" | "Result::ok" | "Result::err") {
+            if !self.peek(TokenKind::LParen) {
+                return Err(self.error(
+                    ident_token,
+                    "constructor call with exactly one active payload",
+                ));
             }
             self.bump();
-            let mut args = Vec::new();
-            if !self.peek(TokenKind::RParen) {
-                loop {
-                    args.push(self.parse_expr()?);
-                    if self.peek(TokenKind::Comma) {
-                        self.bump();
-                    } else {
-                        break;
-                    }
-                }
-            }
+            let parameter_names = self.call_parameter_names(&name, false);
+            let ParsedCallArguments {
+                mut args,
+                argument_names,
+                ..
+            } = self.parse_call_arguments(parameter_names.as_deref())?;
             self.expect(TokenKind::RParen)?;
-            Ok(Expr::Call { name, args })
+            if argument_names.is_some() || args.len() != 1 {
+                let error = self.coded_error(
+                    ident_token,
+                    "E_SUM_CONSTRUCTOR_ARITY",
+                    format!("`{name}` expects exactly one positional active payload"),
+                );
+                return Err(error);
+            }
+            let payload = Box::new(args.pop().expect("one constructor argument"));
+            return Ok(match name.as_str() {
+                "Option::some" => Expr::OptionSome(payload),
+                "Result::ok" => Expr::ResultOk(payload),
+                "Result::err" => Expr::ResultErr(payload),
+                _ => unreachable!("matched canonical constructor"),
+            });
+        }
+        if self.allow_struct_literals && self.peek(TokenKind::LBrace) {
+            let start = ident_token.range.start;
+            let syntax_literal = self.syntax_start(SyntaxKind::StructLiteral, start);
+            self.bump();
+            let result = (|| -> ParseResult<Expr> {
+                let fields = self.parse_struct_literal_fields()?;
+                self.expect(TokenKind::RBrace)?;
+                Ok(Expr::StructLiteral { name, fields })
+            })();
+            self.syntax_finish(syntax_literal, start);
+            result
+        } else if self.peek(TokenKind::LParen) {
+            if let Some(message) = removed_free_helper_message(&name) {
+                return Err(self.coded_error(
+                    ident_token,
+                    removed_free_helper_code(&name),
+                    message,
+                ));
+            }
+            self.bump();
+            let parameter_names = self.call_parameter_names(&name, false);
+            let ParsedCallArguments {
+                args,
+                argument_names,
+                ..
+            } = self.parse_call_arguments(parameter_names.as_deref())?;
+            self.expect(TokenKind::RParen)?;
+            let call_end = self.previous_end(name_range.end);
+            let (node, source) = self.record_call(
+                name.clone(),
+                name_range,
+                TextRange::new(ident_token.range.start, call_end),
+                false,
+            );
+            Ok(Expr::Source {
+                node,
+                source,
+                expression: Box::new(Expr::Call {
+                    name,
+                    args,
+                    argument_names,
+                    implicit_receiver: false,
+                }),
+            })
         } else {
             Ok(Expr::Ident(name))
         }
     }
 
+    fn parse_json_object(&mut self, start: u32) -> ParseResult<Expr> {
+        self.with_syntax(
+            SyntaxKind::JsonObjectExpr,
+            start,
+            Self::parse_json_object_inner,
+        )
+    }
+
+    fn parse_json_object_inner(&mut self) -> ParseResult<Expr> {
+        self.expect(TokenKind::LBrace)?;
+        let mut entries = Vec::new();
+        while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let entry_start = self.current_start();
+            let entry = self.with_syntax(SyntaxKind::JsonObjectEntry, entry_start, |this| {
+                let key_token = this.bump();
+                let key = match &key_token.kind {
+                    TokenKind::Ident(key) | TokenKind::String(key) => key.clone(),
+                    _ => {
+                        return Err(this.error(
+                            key_token,
+                            "JSON object key as an identifier or quoted string",
+                        ));
+                    }
+                };
+                let key_spelling = this
+                    .source
+                    .get(key_token.range.start as usize..key_token.range.end as usize)
+                    .unwrap_or_default()
+                    .to_owned();
+                this.expect(TokenKind::Colon)?;
+                let value = this.parse_expr()?;
+                Ok(crate::ast::JsonObjectEntry {
+                    key,
+                    key_spelling,
+                    key_range: key_token.range,
+                    value,
+                })
+            })?;
+            entries.push(crate::ast::JsonObjectEntry {
+                key: entry.key,
+                key_spelling: entry.key_spelling,
+                key_range: entry.key_range,
+                value: entry.value,
+            });
+            if !self.peek(TokenKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        self.expect(TokenKind::RBrace)?;
+        Ok(Expr::JsonObject(entries))
+    }
+
+    fn parse_json_array(&mut self, start: u32) -> ParseResult<Expr> {
+        self.with_syntax(
+            SyntaxKind::JsonArrayExpr,
+            start,
+            Self::parse_json_array_inner,
+        )
+    }
+
+    fn parse_json_array_inner(&mut self) -> ParseResult<Expr> {
+        self.expect(TokenKind::LBracket)?;
+        let mut elements = Vec::new();
+        while !self.peek(TokenKind::RBracket) && !self.peek(TokenKind::EOF) {
+            elements.push(self.parse_expr()?);
+            if !self.peek(TokenKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        self.expect(TokenKind::RBracket)?;
+        Ok(Expr::JsonArray(elements))
+    }
+
+    fn call_parameter_names(&self, name: &str, implicit_receiver: bool) -> Option<Vec<String>> {
+        if !implicit_receiver {
+            if let Some(parameters) = self.declared_function_parameters.get(name) {
+                return parameters.clone();
+            }
+            if let Some(builtin) = crate::builtins::Builtin::from_source_name(name) {
+                return Some(
+                    builtin
+                        .signature()
+                        .parameter_names
+                        .iter()
+                        .map(|name| (*name).to_owned())
+                        .collect(),
+                );
+            }
+        }
+
+        let parameters: &[&str] = match name {
+            "Option::some" | "option::some" | "u128::from_i64" | "Amount::from_i64"
+            | "Amount::from_u128" | "try_push" | "contains" => &["value"],
+            "Result::ok" | "result::ok" => &["value"],
+            "Result::err" | "result::err" => &["error"],
+            "get" => &["index"],
+            "try_set" => &["index", "value"],
+            "take" => &["limit"],
+            "div_round" => &["divisor", "scale", "mode"],
+            "get_bool" | "get_i64" | "get_u128" | "get_amount" | "get_string" | "get_bytes"
+            | "get_json" => &["key"],
+            _ => return None,
+        };
+        Some(parameters.iter().map(|name| (*name).to_owned()).collect())
+    }
+
+    fn parse_call_arguments(
+        &mut self,
+        parameter_names: Option<&[String]>,
+    ) -> ParseResult<ParsedCallArguments> {
+        let start = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map_or_else(|| self.current_start(), |token| token.range.start);
+        let syntax_arguments = self.syntax_start(SyntaxKind::ArgumentList, start);
+        let result = self.parse_call_arguments_inner(parameter_names);
+        let end = self
+            .tokens
+            .get(self.pos)
+            .filter(|token| matches!(token.kind, TokenKind::RParen))
+            .map_or_else(|| self.previous_end(start), |token| token.range.end);
+        self.syntax_finish_at(syntax_arguments, end);
+        result
+    }
+
+    fn parse_call_arguments_inner(
+        &mut self,
+        parameter_names: Option<&[String]>,
+    ) -> ParseResult<ParsedCallArguments> {
+        let mut args = Vec::new();
+        let mut names = Vec::new();
+        let mut ranges: Vec<TextRange> = Vec::new();
+        let mut named_mode = None;
+        while !self.peek(TokenKind::RParen) {
+            let is_named = matches!(
+                self.tokens.get(self.pos).map(|token| &token.kind),
+                Some(TokenKind::Ident(_))
+            ) && self.peek_n(1, TokenKind::Colon);
+            if let Some(expected_named) = named_mode
+                && expected_named != is_named
+            {
+                let token = self.bump();
+                let mut error = self.coded_error(
+                    token.clone(),
+                    "E_MIXED_CALL_ARGUMENTS",
+                    "calls must use either all positional or all named source arguments",
+                );
+                if let Some(parameter_names) = parameter_names {
+                    if is_named {
+                        let TokenKind::Ident(current_name) = &token.kind else {
+                            unreachable!("named argument lookahead requires an identifier")
+                        };
+                        let positional_names = parameter_names.get(..args.len());
+                        if let Some(positional_names) = positional_names
+                            && !positional_names.iter().any(|name| name == current_name)
+                            && let (Some(first), Some(last)) = (ranges.first(), ranges.last())
+                        {
+                            let range = TextRange::new(first.start, last.end);
+                            let mut replacement = String::new();
+                            let mut cursor = range.start as usize;
+                            for (argument, parameter) in ranges.iter().zip(positional_names) {
+                                let start = argument.start as usize;
+                                replacement.push_str(&self.source[cursor..start]);
+                                replacement.push_str(parameter);
+                                replacement.push_str(": ");
+                                cursor = start;
+                            }
+                            replacement.push_str(&self.source[cursor..range.end as usize]);
+                            error.range = range;
+                            error.fix = Some(replacement);
+                        }
+                    } else if let Some(parameter) = parameter_names.get(args.len())
+                        && !names.iter().any(|name| name == parameter)
+                    {
+                        error.range = TextRange::empty(token.range.start);
+                        error.fix = Some(format!("{parameter}: "));
+                    }
+                }
+                return Err(error);
+            }
+            named_mode = Some(is_named);
+            let argument_start = self
+                .tokens
+                .get(self.pos)
+                .map_or(0, |token| token.range.start);
+            let syntax_named =
+                is_named.then(|| self.syntax_start(SyntaxKind::NamedArgument, argument_start));
+            let parsed_argument = (|| -> ParseResult<(Option<String>, Expr)> {
+                let name = if is_named {
+                    let token = self.bump();
+                    let TokenKind::Ident(name) = token.kind.clone() else {
+                        unreachable!("named argument lookahead requires an identifier")
+                    };
+                    if names.contains(&name) {
+                        return Err(self.coded_error(
+                            token,
+                            "E_DUPLICATE_NAMED_ARGUMENT",
+                            format!("named argument `{name}` is supplied more than once"),
+                        ));
+                    }
+                    self.expect(TokenKind::Colon)?;
+                    Some(name)
+                } else {
+                    None
+                };
+                Ok((name, self.parse_expr()?))
+            })();
+            if let Some(syntax_named) = syntax_named {
+                self.syntax_finish(syntax_named, argument_start);
+            }
+            let (name, argument) = parsed_argument?;
+            if let Some(name) = name {
+                names.push(name);
+            }
+            args.push(argument);
+            let argument_end = self
+                .tokens
+                .get(self.pos.saturating_sub(1))
+                .map_or(argument_start, |token| token.range.end);
+            ranges.push(TextRange::new(argument_start, argument_end));
+            if !self.peek(TokenKind::Comma) {
+                break;
+            }
+            self.bump();
+            if self.peek(TokenKind::RParen) {
+                break;
+            }
+        }
+        Ok(ParsedCallArguments {
+            args,
+            argument_names: named_mode.unwrap_or(false).then_some(names),
+            ranges,
+        })
+    }
+
+    fn legacy_sum_replacement(&self, name: &str, parsed: &ParsedCallArguments) -> Option<String> {
+        if parsed.argument_names.is_some() {
+            return None;
+        }
+        let source_argument = |index: usize| {
+            let range = parsed.ranges.get(index)?;
+            self.source
+                .get(range.start as usize..range.end as usize)
+                .map(str::trim)
+                .filter(|text| !text.contains("//") && !text.contains("/*"))
+        };
+        match name {
+            "option::some" if parsed.args.len() == 1 => {
+                Some(format!("Option::some({})", source_argument(0)?))
+            }
+            "option::none" if parsed.args.len() == 1 => Some("Option::none".into()),
+            "result::ok" if parsed.args.len() == 2 => {
+                Some(format!("Result::ok({})", source_argument(0)?))
+            }
+            "result::err" if parsed.args.len() == 2 => {
+                Some(format!("Result::err({})", source_argument(1)?))
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_struct_literal_fields(&mut self) -> ParseResult<Vec<StructLiteralField>> {
+        let mut fields = Vec::<StructLiteralField>::new();
+        while !self.peek(TokenKind::RBrace) {
+            let field_start = self.current_start();
+            let field = self.with_syntax(SyntaxKind::StructLiteralField, field_start, |this| {
+                let token = this.bump();
+                let TokenKind::Ident(name) = token.kind.clone() else {
+                    return Err(this.error(token, "named struct field"));
+                };
+                if fields.iter().any(|field| field.name == name) {
+                    return Err(this.coded_error(
+                        token,
+                        "E_DUPLICATE_STRUCT_FIELD",
+                        format!("struct field `{name}` is supplied more than once"),
+                    ));
+                }
+                let (value, shorthand) = if this.peek(TokenKind::Colon) {
+                    this.bump();
+                    (this.parse_expr()?, false)
+                } else {
+                    (
+                        this.source_expression(
+                            AstNodeKind::Expression,
+                            token.range,
+                            Expr::Ident(name.clone()),
+                        ),
+                        true,
+                    )
+                };
+                Ok(StructLiteralField {
+                    name,
+                    value,
+                    shorthand,
+                })
+            })?;
+            fields.push(field);
+            if !self.peek(TokenKind::Comma) {
+                break;
+            }
+            self.bump();
+            if self.peek(TokenKind::RBrace) {
+                break;
+            }
+        }
+        Ok(fields)
+    }
+
     fn expect_ident(&mut self) -> ParseResult<String> {
+        self.expect_ident_token().map(|(name, _)| name)
+    }
+
+    fn expect_ident_token(&mut self) -> ParseResult<(String, Token)> {
         let tok = self.bump();
         match &tok.kind {
-            TokenKind::Ident(name) => Ok(name.clone()),
-            _ => Err(self.error(tok, "identifier")),
+            TokenKind::Ident(name) => Ok((name.clone(), tok.clone())),
+            _ => {
+                let mut error = self.error(tok, "identifier");
+                error.expected = Some(SyntaxKind::Ident);
+                Err(error)
+            }
         }
     }
 
@@ -1854,14 +3531,41 @@ impl<'a> Parser<'a> {
         match &tok.kind {
             TokenKind::Ident(name) => Ok(name.clone()),
             TokenKind::Trigger if self.peek(TokenKind::ColonColon) => Ok("trigger".to_owned()),
-            _ => Err(self.error(tok, "namespace segment")),
+            _ => {
+                let mut error = self.error(tok, "namespace segment");
+                error.expected = Some(SyntaxKind::Ident);
+                Err(error)
+            }
         }
     }
 
     fn parse_type_expr(&mut self) -> ParseResult<TypeExpr> {
+        let start = self.current_start();
+        let ty = self.parse_type_expr_inner()?;
+        let end = self.previous_end(start);
+        let node = self.facts.source_map.allocate_owned(
+            AstNodeKind::Type,
+            TextRange::new(start, end),
+            self.current_function,
+        );
+        Ok(TypeExpr::Source {
+            node,
+            source: SourceRange::new(self.facts.source_map.source(), TextRange::new(start, end)),
+            ty: Box::new(ty),
+        })
+    }
+
+    fn parse_type_expr_inner(&mut self) -> ParseResult<TypeExpr> {
         enum Frame {
-            Generic { base: String, args: Vec<TypeExpr> },
-            Tuple { opening: Token, args: Vec<TypeExpr> },
+            Generic {
+                start: u32,
+                base: String,
+                args: Vec<TypeExpr>,
+            },
+            Tuple {
+                opening: Token,
+                args: Vec<TypeExpr>,
+            },
         }
 
         let mut frames = Vec::new();
@@ -1880,23 +3584,48 @@ impl<'a> Parser<'a> {
                     continue;
                 }
 
-                let base = self.expect_ident()?;
+                if let Some(Token {
+                    kind: TokenKind::Number(value),
+                    ..
+                }) = self.tokens.get(self.pos).cloned()
+                {
+                    let token = self.bump();
+                    let value = u64::try_from(value).map_err(|_| {
+                        self.range_error(
+                            &token,
+                            "compile-time integer type argument is outside the u64 range"
+                                .to_owned(),
+                        )
+                    })?;
+                    break self.source_type(token.range, TypeExpr::Const(value));
+                }
+
+                let (base, base_token) = self.expect_ident_token()?;
+                self.record_type_use(base.clone(), base_token.range);
                 if self.peek(TokenKind::Less) {
                     self.bump();
                     if self.peek(TokenKind::Greater) {
                         self.bump();
-                        break TypeExpr::Generic {
-                            base,
-                            args: Vec::new(),
-                        };
+                        let range = TextRange::new(
+                            base_token.range.start,
+                            self.previous_end(base_token.range.end),
+                        );
+                        break self.source_type(
+                            range,
+                            TypeExpr::Generic {
+                                base,
+                                args: Vec::new(),
+                            },
+                        );
                     }
                     frames.push(Frame::Generic {
+                        start: base_token.range.start,
                         base,
                         args: Vec::new(),
                     });
                     continue;
                 }
-                break TypeExpr::Path(base);
+                break self.source_type(base_token.range, TypeExpr::Path(base));
             };
 
             loop {
@@ -1904,15 +3633,22 @@ impl<'a> Parser<'a> {
                     return Ok(current);
                 };
                 match frame {
-                    Frame::Generic { base, mut args } => {
+                    Frame::Generic {
+                        start,
+                        base,
+                        mut args,
+                    } => {
                         args.push(current);
                         if self.peek(TokenKind::Comma) {
                             self.bump();
-                            frames.push(Frame::Generic { base, args });
+                            frames.push(Frame::Generic { start, base, args });
                             continue 'next_type;
                         }
                         self.expect(TokenKind::Greater)?;
-                        current = TypeExpr::Generic { base, args };
+                        current = self.source_type(
+                            TextRange::new(start, self.previous_end(start)),
+                            TypeExpr::Generic { base, args },
+                        );
                     }
                     Frame::Tuple { opening, mut args } => {
                         args.push(current);
@@ -1926,7 +3662,10 @@ impl<'a> Parser<'a> {
                         if args.len() < 2 {
                             return Err(self.tuple_type_arity_error(&opening, closing));
                         }
-                        current = TypeExpr::Tuple(args);
+                        current = self.source_type(
+                            TextRange::new(opening.range.start, closing.range.end),
+                            TypeExpr::Tuple(args),
+                        );
                     }
                 }
             }
@@ -1941,19 +3680,33 @@ impl<'a> Parser<'a> {
             .unwrap_or("");
         let caret = " ".repeat(opening.column.saturating_sub(1)) + "^";
         ParseError {
+            code: "K1001",
             message: "tuple types require at least two elements; omit the return type for Unit"
                 .into(),
             line: opening.line,
             column: opening.column,
             snippet: format!("{line_text}\n{caret}"),
             range: TextRange::new(opening.range.start, closing.range.end),
+            fix: None,
+            expected: None,
+            expected_owner: None,
         }
     }
 
     fn try_parse_lvalue_expr(&mut self) -> ParseResult<Expr> {
         // Parse an identifier then tail of member/index chains
-        let name = self.expect_ident()?;
-        let mut expr = Expr::Ident(name);
+        let expression_start = self.current_start();
+        let (name, name_token) = self.expect_ident_token()?;
+        let node = self.facts.source_map.allocate_owned(
+            AstNodeKind::Expression,
+            name_token.range,
+            self.current_function,
+        );
+        let mut expr = Expr::Source {
+            node,
+            source: SourceRange::new(self.facts.source_map.source(), name_token.range),
+            expression: Box::new(Expr::Ident(name)),
+        };
         loop {
             if self.peek(TokenKind::Dot) {
                 self.bump();
@@ -1975,17 +3728,37 @@ impl<'a> Parser<'a> {
                     let tok = self.bump();
                     return Err(self.error(tok, "identifier or tuple index"));
                 };
-                expr = Expr::Member {
-                    object: Box::new(expr),
-                    field,
+                let range = TextRange::new(expression_start, self.previous_end(expression_start));
+                let node = self.facts.source_map.allocate_owned(
+                    AstNodeKind::Expression,
+                    range,
+                    self.current_function,
+                );
+                expr = Expr::Source {
+                    node,
+                    source: SourceRange::new(self.facts.source_map.source(), range),
+                    expression: Box::new(Expr::Member {
+                        object: Box::new(expr),
+                        field,
+                    }),
                 };
             } else if self.peek(TokenKind::LBracket) {
                 self.bump();
                 let idx = self.parse_expr()?;
                 self.expect(TokenKind::RBracket)?;
-                expr = Expr::Index {
-                    target: Box::new(expr),
-                    index: Box::new(idx),
+                let range = TextRange::new(expression_start, self.previous_end(expression_start));
+                let node = self.facts.source_map.allocate_owned(
+                    AstNodeKind::IndexExpression,
+                    range,
+                    self.current_function,
+                );
+                expr = Expr::Source {
+                    node,
+                    source: SourceRange::new(self.facts.source_map.source(), range),
+                    expression: Box::new(Expr::Index {
+                        target: Box::new(expr),
+                        index: Box::new(idx),
+                    }),
                 };
             } else {
                 break;
@@ -1994,32 +3767,55 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_for_each_map(&mut self) -> ParseResult<Option<ForEachMapBinding>> {
+    fn parse_for_each_map(
+        &mut self,
+        statement_start: u32,
+    ) -> ParseResult<Option<ForEachMapBinding>> {
         // Patterns: (k, v) in <expr>  OR  k in <expr>
         let save = self.pos;
+        let syntax_checkpoint = self.syntax_checkpoint();
         if self.peek(TokenKind::LParen) {
             self.bump();
-            let k = self.expect_ident()?;
+            let (k, key_token) = self.expect_ident_token()?;
             self.expect(TokenKind::Comma)?;
-            let v = self.expect_ident()?;
+            let (v, value_token) = self.expect_ident_token()?;
             self.expect(TokenKind::RParen)?;
             if self.peek(TokenKind::In) {
                 self.bump();
+                let owner = self.begin_node(AstNodeKind::Statement, statement_start);
+                self.record_binding(
+                    owner,
+                    0,
+                    k.clone(),
+                    key_token.range,
+                    BindingFactKind::Iterator,
+                );
+                self.record_binding(
+                    owner,
+                    1,
+                    v.clone(),
+                    value_token.range,
+                    BindingFactKind::Iterator,
+                );
                 let map = self.parse_expr()?;
-                return Ok(Some((k, Some(v), map)));
+                return Ok(Some((owner, k, Some(v), map)));
             }
         } else if let Some(Token {
             kind: TokenKind::Ident(k),
+            range,
             ..
         }) = self.tokens.get(self.pos).cloned()
             && self.peek_n(1, TokenKind::In)
         {
+            let owner = self.begin_node(AstNodeKind::Statement, statement_start);
             self.bump();
+            self.record_binding(owner, 0, k.clone(), range, BindingFactKind::Iterator);
             self.bump(); // in
             let map = self.parse_expr()?;
-            return Ok(Some((k, None, map)));
+            return Ok(Some((owner, k, None, map)));
         }
         self.pos = save;
+        self.syntax_rollback(syntax_checkpoint);
         Ok(None)
     }
 
@@ -2037,9 +3833,18 @@ impl<'a> Parser<'a> {
 
     fn parse_param(&mut self) -> ParseResult<Param> {
         // Canonical V1 form: `name: Type`.
-        let name = self.expect_ident()?;
+        let (name, name_token) = self.expect_ident_token()?;
+        let node = self.begin_node(AstNodeKind::Parameter, name_token.range.start);
+        self.record_declaration(
+            node,
+            name.clone(),
+            name_token.range,
+            DeclarationKind::Parameter,
+            self.current_function,
+        );
         self.expect(TokenKind::Colon)?;
         let (is_state, ty) = self.parse_param_type_annotation()?;
+        self.finish_node(node);
         Ok(Param {
             ty: Some(ty),
             name,
@@ -2048,6 +3853,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect(&mut self, kind: TokenKind) -> ParseResult<()> {
+        let expected = expected_syntax_kind(&kind);
         let tok = self.tokens.get(self.pos).cloned().unwrap_or_else(|| Token {
             kind: TokenKind::EOF,
             line: self.tokens.last().map_or(1, |token| token.line),
@@ -2060,8 +3866,38 @@ impl<'a> Parser<'a> {
             self.bump();
             Ok(())
         } else {
-            Err(self.error(tok, &format!("{kind:?}")))
+            let mut error = self.error(tok, &format!("{kind:?}"));
+            error.expected = expected;
+            error.expected_owner = self.syntax.current();
+            Err(error)
         }
+    }
+
+    fn expect_or_insert(
+        &mut self,
+        kind: TokenKind,
+        insertion_is_unambiguous: bool,
+    ) -> ParseResult<()> {
+        if self.peek(kind.clone()) {
+            self.bump();
+            return Ok(());
+        }
+        if self.recover && insertion_is_unambiguous {
+            let token = self.tokens.get(self.pos).cloned().unwrap_or_else(|| Token {
+                kind: TokenKind::EOF,
+                line: self.tokens.last().map_or(1, |token| token.line),
+                column: self.tokens.last().map_or(1, |token| token.column),
+                range: self.tokens.last().map_or(TextRange::empty(0), |token| {
+                    TextRange::empty(token.range.end)
+                }),
+            });
+            let mut error = self.error(token, &format!("{kind:?}"));
+            error.expected = expected_syntax_kind(&kind);
+            error.expected_owner = self.syntax.current();
+            self.errors.push(error);
+            return Ok(());
+        }
+        self.expect(kind)
     }
 
     fn consume_integer_suffix(&mut self) -> ParseResult<IntegerSuffix> {
@@ -2070,18 +3906,33 @@ impl<'a> Parser<'a> {
             range,
             ..
         }) = self.tokens.get(self.pos)
-            && self
+        {
+            let adjacent = self
                 .tokens
                 .get(self.pos.saturating_sub(1))
-                .is_some_and(|previous| previous.range.end == range.start)
-        {
-            if suffix == "i64" {
+                .is_some_and(|previous| previous.range.end == range.start);
+            if suffix == "amt" {
+                let tok = self.bump();
+                let (code, message) = if adjacent {
+                    (
+                        "E_AMOUNT_SUFFIX",
+                        "Amount literals require the exact scanner-recognized `amt` suffix",
+                    )
+                } else {
+                    (
+                        "E_AMOUNT_SUFFIX_SEPARATED",
+                        "the `amt` suffix must immediately follow the Amount digits",
+                    )
+                };
+                return Err(self.coded_error(tok, code, message));
+            }
+            if adjacent && suffix == "i64" {
                 self.bump();
                 return Ok(IntegerSuffix::I64);
-            } else if suffix == "u128" {
+            } else if adjacent && suffix == "u128" {
                 self.bump();
                 return Ok(IntegerSuffix::U128);
-            } else if suffix.starts_with('i') || suffix.starts_with('u') {
+            } else if adjacent && (suffix.starts_with('i') || suffix.starts_with('u')) {
                 let tok = self.bump();
                 let line_text = self
                     .source
@@ -2090,11 +3941,15 @@ impl<'a> Parser<'a> {
                     .unwrap_or("");
                 let caret = " ".repeat(tok.column.saturating_sub(1)) + "^";
                 return Err(ParseError {
+                    code: "K1001",
                     message: format!("unknown integer literal suffix `{suffix}`"),
                     line: tok.line,
                     column: tok.column,
                     snippet: format!("{line_text}\n{caret}"),
                     range: tok.range,
+                    fix: None,
+                    expected: None,
+                    expected_owner: None,
                 });
             }
         }
@@ -2142,11 +3997,15 @@ impl<'a> Parser<'a> {
             .unwrap_or("");
         let caret = " ".repeat(token.column.saturating_sub(1)) + "^";
         ParseError {
+            code: "K1001",
             message,
             line: token.line,
             column: token.column,
             snippet: format!("{line_text}\n{caret}"),
             range: token.range,
+            fix: None,
+            expected: None,
+            expected_owner: None,
         }
     }
 
@@ -2162,6 +4021,33 @@ impl<'a> Parser<'a> {
         matches!(
             self.tokens.get(self.pos + offset),
             Some(Token { kind: TokenKind::Ident(s), .. }) if s == name
+        )
+    }
+
+    fn question_starts_ternary(&self) -> bool {
+        self.peek(TokenKind::Question)
+            && self
+                .tokens
+                .get(self.pos.saturating_add(1))
+                .is_some_and(|token| Self::token_starts_expression(&token.kind))
+    }
+
+    fn token_starts_expression(kind: &TokenKind) -> bool {
+        matches!(
+            kind,
+            TokenKind::True
+                | TokenKind::False
+                | TokenKind::Number(_)
+                | TokenKind::AmountLiteral(_)
+                | TokenKind::String(_)
+                | TokenKind::Bytes(_)
+                | TokenKind::Ident(_)
+                | TokenKind::State
+                | TokenKind::LParen
+                | TokenKind::If
+                | TokenKind::Match
+                | TokenKind::Minus
+                | TokenKind::Bang
         )
     }
 
@@ -2248,7 +4134,8 @@ impl<'a> Parser<'a> {
     fn token_starts_source_item(token: &Token) -> bool {
         matches!(
             &token.kind,
-            TokenKind::Struct
+            TokenKind::Hash
+                | TokenKind::Struct
                 | TokenKind::Error
                 | TokenKind::Const
                 | TokenKind::State
@@ -2284,13 +4171,81 @@ impl<'a> Parser<'a> {
     fn error(&self, token: Token, expected: &str) -> ParseError {
         let line_text = self.source.lines().nth(token.line - 1).unwrap_or("");
         let caret = " ".repeat(token.column.saturating_sub(1)) + "^";
+        let message = format!("expected {expected} but found {kind:?}", kind = token.kind);
         ParseError {
-            message: format!("expected {expected} but found {kind:?}", kind = token.kind),
+            code: "K1001",
+            message,
             line: token.line,
             column: token.column,
             snippet: format!("{line_text}\n{caret}"),
             range: token.range,
+            fix: None,
+            expected: None,
+            expected_owner: None,
         }
+    }
+
+    fn coded_error(
+        &self,
+        token: Token,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> ParseError {
+        let mut error = self.error(token, "valid source");
+        error.code = code;
+        error.message = message.into();
+        error
+    }
+}
+
+fn block_expression_has_value(expression: &Expr) -> bool {
+    match expression.kind() {
+        Expr::If {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        }
+        | Expr::IfLet {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } => then_branch.tail.is_some() && else_branch.tail.is_some(),
+        Expr::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|arm| arm.body.tail.is_some())
+        }
+        Expr::If {
+            else_branch: None, ..
+        }
+        | Expr::IfLet {
+            else_branch: None, ..
+        } => false,
+        _ => true,
+    }
+}
+
+fn if_expression_statement_inner(expression: Expr) -> Statement {
+    match expression.into_kind() {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => Statement::If {
+            cond: *condition,
+            then_branch,
+            else_branch,
+        },
+        Expr::IfLet {
+            pattern,
+            value,
+            then_branch,
+            else_branch,
+        } => Statement::IfLet {
+            pattern,
+            value: *value,
+            then_branch,
+            else_branch,
+        },
+        _ => unreachable!("else-if parsing produces an if expression"),
     }
 }
 
@@ -2309,8 +4264,8 @@ fn removed_method_helper_message(name: &str) -> Option<&'static str> {
             Some("`base.path_map_key(segment)` was removed; use `base.path(segment)`")
         }
         "json_get_int" => Some("`json.json_get_int(key)` was removed; use `json.get_int(key)`"),
-        "json_get_numeric" => {
-            Some("`json.json_get_numeric(key)` was removed; use `json.get_numeric(key)`")
+        "get_numeric" | "json_get_numeric" => {
+            Some("`.get_numeric(key)` was retired; use `.get_amount(key)`")
         }
         "json_get_json" => Some("`json.json_get_json(key)` was removed; use `json.get_json(key)`"),
         "json_get_name" => Some("`json.json_get_name(key)` was removed; use `json.get_name(key)`"),
@@ -2327,6 +4282,14 @@ fn removed_method_helper_message(name: &str) -> Option<&'static str> {
             Some("`json.json_get_blob_hex(key)` was removed; use `json.get_blob_hex(key)`")
         }
         _ => None,
+    }
+}
+
+fn removed_method_helper_code(name: &str) -> &'static str {
+    if matches!(name, "get_numeric" | "json_get_numeric") {
+        "E_LEGACY_JSON_GETTER"
+    } else {
+        "K1001"
     }
 }
 
@@ -2358,9 +4321,9 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
         "get_int" | "json_get_int" | "json::get_int" => {
             Some("`get_int(...)` was removed as a free helper; use `json.get_int(key)`")
         }
-        "get_numeric" | "json_get_numeric" | "json::get_numeric" => {
-            Some("`get_numeric(...)` was removed as a free helper; use `json.get_numeric(key)`")
-        }
+        "get_numeric" | "json_get_numeric" | "json::get_numeric" => Some(
+            "`get_numeric(...)` was retired; use `value.get_amount(key)` or `json::get_amount(value, key)`",
+        ),
         "get_json" | "json_get_json" | "json::get_json" => {
             Some("`get_json(...)` was removed as a free helper; use `json.get_json(key)`")
         }
@@ -2392,6 +4355,17 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
     }
 }
 
+fn removed_free_helper_code(name: &str) -> &'static str {
+    if matches!(
+        name,
+        "get_numeric" | "json_get_numeric" | "json::get_numeric"
+    ) {
+        "E_LEGACY_JSON_GETTER"
+    } else {
+        "K1001"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2420,11 +4394,11 @@ mod tests {
             _ => panic!("expected function item"),
         };
         assert_eq!(f.body.statements.len(), 2);
-        match &f.body.statements[0] {
+        match f.body.statements[0].kind() {
             Statement::Return(None) => {}
             _ => panic!("no return;"),
         }
-        match &f.body.statements[1] {
+        match f.body.statements[1].kind() {
             Statement::Return(Some(_)) => {}
             _ => panic!("no return expr"),
         }
@@ -2437,20 +4411,23 @@ mod tests {
         let Item::Function(function) = &program.items[0] else {
             panic!("expected function item");
         };
-        let Statement::Return(Some(Expr::Conditional {
+        let Statement::Return(Some(expression)) = function.body.statements[0].kind() else {
+            panic!("expected return expression");
+        };
+        let Expr::Conditional {
             then_expr,
             else_expr,
             ..
-        })) = &function.body.statements[0]
+        } = expression.kind()
         else {
             panic!("expected outer conditional return");
         };
         assert!(
-            matches!(then_expr.as_ref(), Expr::Conditional { .. }),
+            matches!(then_expr.kind(), Expr::Conditional { .. }),
             "the nested then arm must bind to the outer conditional"
         );
         assert!(
-            matches!(else_expr.as_ref(), Expr::Conditional { .. }),
+            matches!(else_expr.kind(), Expr::Conditional { .. }),
             "the nested else arm must bind to the outer conditional"
         );
     }
@@ -2462,20 +4439,119 @@ mod tests {
         let Item::Struct(definition) = &program.items[0] else {
             panic!("expected struct item");
         };
-        let TypeExpr::Generic { base, args } = &definition.fields[0].1 else {
+        let TypeExpr::Generic { base, args } = definition.fields[0].1.kind() else {
             panic!("expected Result generic");
         };
         assert_eq!(base, "Result");
+        let TypeExpr::Generic {
+            base: option_base,
+            args: option_args,
+        } = args[0].kind()
+        else {
+            panic!("expected Option generic");
+        };
+        assert_eq!(option_base, "Option");
+        assert!(matches!(option_args[0].kind(), TypeExpr::Path(path) if path == "i64"));
+        let TypeExpr::Tuple(elements) = args[1].kind() else {
+            panic!("expected tuple type");
+        };
+        assert!(matches!(elements[0].kind(), TypeExpr::Path(path) if path == "bool"));
+        assert!(matches!(elements[1].kind(), TypeExpr::Path(path) if path == "string"));
+    }
+
+    #[test]
+    fn parses_list_literals_and_filtered_comprehensions() {
+        let program = parse_module(
+            "fn lists() { let values = [1, 2,]; let doubled = [value * 2 for value in values if value > 0]; }",
+        )
+        .expect("parse bounded List forms");
+        let Item::Function(function) = &program.items[0] else {
+            panic!("expected function item");
+        };
+        let Statement::Let { value, .. } = function.body.statements[0].kind() else {
+            panic!("expected literal binding");
+        };
+        assert!(matches!(value.kind(), Expr::List(items) if items.len() == 2));
+        let Statement::Let { value, .. } = function.body.statements[1].kind() else {
+            panic!("expected comprehension binding");
+        };
         assert!(matches!(
-            &args[0],
-            TypeExpr::Generic { base, args }
-                if base == "Option" && matches!(args.as_slice(), [TypeExpr::Path(path)] if path == "i64")
+            value.kind(),
+            Expr::ListComprehension {
+                item,
+                condition: Some(_),
+                ..
+            } if item == "value"
         ));
-        assert!(matches!(
-            &args[1],
-            TypeExpr::Tuple(elements)
-                if matches!(elements.as_slice(), [TypeExpr::Path(left), TypeExpr::Path(right)] if left == "bool" && right == "string")
-        ));
+    }
+
+    #[test]
+    fn canonical_public_parse_output_contains_no_provenance_wrappers() {
+        let program = parse_module(
+            "fn clean(values: List<i64, 4>) -> bool { let copy = [item for item in values if true]; copy.contains(1) }",
+        )
+        .expect("parse representative source-backed tree");
+        let Item::Function(function) = &program.items[0] else {
+            panic!("expected function item")
+        };
+
+        let parameter_ty = function.params[0].ty.as_ref().expect("parameter type");
+        assert!(parameter_ty.source().is_none());
+        let TypeExpr::Generic { args, .. } = parameter_ty else {
+            panic!("List type")
+        };
+        assert!(args.iter().all(|ty| ty.source().is_none()));
+
+        let statement = &function.body.statements[0];
+        assert!(statement.source().is_none());
+        let Statement::Let { value, .. } = statement else {
+            panic!("comprehension binding")
+        };
+        assert!(value.source().is_none());
+        let Expr::ListComprehension {
+            expression,
+            source,
+            condition: Some(condition),
+            ..
+        } = value
+        else {
+            panic!("filtered comprehension")
+        };
+        assert!(expression.source().is_none());
+        assert!(source.source().is_none());
+        assert!(condition.source().is_none());
+
+        let tail = function.body.tail.as_deref().expect("call tail");
+        assert!(tail.source().is_none());
+        let Expr::Call { args, .. } = tail else {
+            panic!("method call")
+        };
+        assert!(args.iter().all(|argument| argument.source().is_none()));
+    }
+
+    #[test]
+    fn list_type_capacity_is_preserved_as_a_constant_argument() {
+        let program =
+            parse_module("fn values(input: List<Option<i64>, 64>) {}").expect("List type");
+        let Item::Function(function) = &program.items[0] else {
+            panic!("expected function item");
+        };
+        let Some(parameter_type) = &function.params[0].ty else {
+            panic!("expected parameter type");
+        };
+        let TypeExpr::Generic { base, args } = parameter_type.kind() else {
+            panic!("expected generic List type");
+        };
+        assert_eq!(base, "List");
+        assert!(matches!(args[0].kind(), TypeExpr::Generic { base, .. } if base == "Option"));
+        assert!(matches!(args[1].kind(), TypeExpr::Const(64)));
+    }
+
+    #[test]
+    fn malformed_list_expression_reports_the_closing_delimiter() {
+        let error = parse_module("fn invalid() { let values = [1, 2; }")
+            .expect_err("unterminated List must fail");
+        assert!(error.contains("RBracket"), "{error}");
     }
 
     #[test]
@@ -2510,8 +4586,8 @@ mod tests {
             panic!("expected grouped function")
         };
         assert!(matches!(
-            &grouped_function.body.statements[0],
-            Statement::Return(Some(Expr::Number(1)))
+            grouped_function.body.statements[0].kind(),
+            Statement::Return(Some(value)) if matches!(value.kind(), Expr::Number(1))
         ));
     }
 
@@ -2527,7 +4603,7 @@ mod tests {
         let Statement::If {
             else_branch: Some(outer_else),
             ..
-        } = &function.body.statements[0]
+        } = function.body.statements[0].kind()
         else {
             panic!("expected outer if with else")
         };
@@ -2535,11 +4611,118 @@ mod tests {
         let Statement::If {
             else_branch: Some(inner_else),
             ..
-        } = &outer_else.statements[0]
+        } = outer_else.statements[0].kind()
         else {
             panic!("else-if must lower to one nested if statement")
         };
         assert_eq!(inner_else.statements.len(), 1);
+    }
+
+    #[test]
+    fn parses_value_tails_and_expression_oriented_control_flow() {
+        let program = parse_module(
+            r#"
+            fn identity(value: i64) -> i64 { value }
+            fn choose(flag: bool) -> i64 { if flag { 1 } else { 2 } }
+            fn unwrap(value: Option<i64>) -> i64 {
+                match value {
+                    Option::some(item) => item,
+                    Option::none => 0,
+                }
+            }
+            fn observe(value: Option<i64>) {
+                if let Option::some(item) = value { let _seen = item; }
+            }
+            "#,
+        )
+        .expect("parse expression-oriented V1 control flow");
+
+        let functions = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(function) => Some(function),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            functions[0].body.tail.as_deref().map(Expr::kind),
+            Some(Expr::Ident(name)) if name == "value"
+        ));
+        assert!(matches!(
+            functions[1].body.tail.as_deref().map(Expr::kind),
+            Some(Expr::If {
+                else_branch: Some(_),
+                ..
+            })
+        ));
+        assert!(matches!(
+            functions[2].body.tail.as_deref().map(Expr::kind),
+            Some(Expr::Match { arms, .. }) if arms.len() == 2
+        ));
+        assert_eq!(functions[3].body.statements.len(), 1);
+        assert!(matches!(
+            functions[3].body.statements[0].kind(),
+            Statement::IfLet {
+                else_branch: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn postfix_propagation_binds_tighter_than_ternary() {
+        let program = parse_module(
+            "fn choose(condition: bool, maybe: Option<i64>, fallback: i64) -> i64 { condition ? maybe? : fallback }",
+        )
+        .expect("parse ternary containing postfix propagation");
+        let Item::Function(function) = &program.items[0] else {
+            panic!("function item")
+        };
+        assert!(matches!(
+            function.body.tail.as_deref().map(Expr::kind),
+            Some(Expr::Conditional { then_expr, .. })
+                if matches!(then_expr.kind(), Expr::Propagate(value)
+                    if matches!(value.kind(), Expr::Ident(name) if name == "maybe"))
+        ));
+    }
+
+    #[test]
+    fn active_only_sum_constructors_have_no_placeholder_payloads() {
+        let program = parse_module(
+            r#"
+            fn some(value: i64) -> Option<i64> { Option::some(value) }
+            fn none() -> Option<i64> { Option::none }
+            fn ok(value: i64) -> Result<i64, string> { Result::ok(value) }
+            fn err(message: string) -> Result<i64, string> { Result::err(message) }
+            "#,
+        )
+        .expect("parse canonical active-only constructors");
+        let tails = program.items.iter().filter_map(|item| match item {
+            Item::Function(function) => function.body.tail.as_deref().map(Expr::kind),
+            _ => None,
+        });
+        assert!(matches!(
+            tails.collect::<Vec<_>>().as_slice(),
+            [
+                Expr::OptionSome(_),
+                Expr::OptionNone,
+                Expr::ResultOk(_),
+                Expr::ResultErr(_),
+            ]
+        ));
+
+        for (source, replacement) in [
+            ("fn f() -> Option<i64> { option::none(0) }", "Option::none"),
+            (
+                "fn f() -> Result<i64, string> { result::ok(1, \"unused\") }",
+                "Result::ok(1)",
+            ),
+        ] {
+            let error = parse_module(source).expect_err("legacy constructor must be rejected");
+            assert!(error.contains("E_LEGACY_SUM_CONSTRUCTOR"), "{error}");
+            assert!(error.contains(replacement), "{error}");
+        }
     }
 
     #[test]
@@ -2596,17 +4779,17 @@ mod tests {
             panic!("expected function")
         };
         assert!(matches!(
-            &function.body.statements[0],
+            function.body.statements[0].kind(),
             Statement::Let { mutable: false, .. }
         ));
         assert!(matches!(
-            &function.body.statements[1],
+            function.body.statements[1].kind(),
             Statement::Let { mutable: true, .. }
         ));
     }
 
     #[test]
-    fn parse_canonical_contract_surface_and_preserve_identity() {
+    fn parse_canonical_seiyaku_surface_and_preserve_identity() {
         let src = r#"
         seiyaku Payments {
             state counter: i64;
@@ -2619,7 +4802,7 @@ mod tests {
         }
         "#;
         let prog = parse(src).unwrap();
-        assert_eq!(prog.unit.kind, SourceUnitKind::Contract);
+        assert_eq!(prog.unit.kind, SourceUnitKind::Seiyaku);
         assert_eq!(prog.unit.name, "Payments");
         let functions = prog
             .items
@@ -2631,28 +4814,22 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(functions.len(), 5);
         assert_eq!(functions[0].name, "hajimari");
-        assert_eq!(functions[0].modifiers.kind, FunctionKind::Init);
+        assert_eq!(functions[0].modifiers.kind, FunctionKind::Hajimari);
         assert_eq!(functions[0].modifiers.permission, None);
         assert_eq!(functions[1].name, "kaizen");
-        assert_eq!(functions[1].modifiers.kind, FunctionKind::Upgrade);
+        assert_eq!(functions[1].modifiers.kind, FunctionKind::Kaizen);
         assert_eq!(functions[1].modifiers.permission, None);
-        assert_eq!(
-            functions[2].modifiers.visibility,
-            FunctionVisibility::Public
-        );
+        assert_eq!(functions[2].modifiers.kind, FunctionKind::Kotoage);
         assert_eq!(functions[2].modifiers.permission.as_deref(), Some("Submit"));
         assert_eq!(functions[3].modifiers.kind, FunctionKind::View);
-        assert_eq!(
-            functions[4].modifiers.visibility,
-            FunctionVisibility::Internal
-        );
+        assert_eq!(functions[4].modifiers.kind, FunctionKind::Private);
     }
 
     #[test]
     fn lifecycle_declarations_reject_source_authorization() {
         for source in [
-            "seiyaku Demo { hajimari() authorize(\"Initialize\") {} }",
-            "seiyaku Demo { kaizen() authorize(\"Upgrade\") {} }",
+            "seiyaku Demo { hajimari() authorize(\"HajimariPermission\") {} }",
+            "seiyaku Demo { kaizen() authorize(\"KaizenPermission\") {} }",
         ] {
             let error = parse(source).expect_err("lifecycle authorization is runtime-owned");
             assert!(
@@ -2683,7 +4860,13 @@ mod tests {
                     dataspace: DataSpaceId
                 ) authorize("TransferAsset") {
                     let sender = context::authority();
-                    ledger::asset::transfer(sender, recipient, asset, amount, dataspace);
+                    ledger::asset::transfer(
+                        source: sender,
+                        destination: recipient,
+                        asset_definition: asset,
+                        amount: amount,
+                        dataspace: dataspace,
+                    );
                 }
             }
             "#,
@@ -2692,17 +4875,19 @@ mod tests {
         let Item::Function(function) = &program.items[0] else {
             panic!("expected function")
         };
-        let Statement::Let { value, .. } = &function.body.statements[0] else {
+        let Statement::Let { value, .. } = function.body.statements[0].kind() else {
             panic!("expected authority binding")
         };
         assert!(matches!(
-            value,
+            value.kind(),
             Expr::Call { name, .. } if name == "context::authority"
         ));
-        assert!(matches!(
-            &function.body.statements[1],
-            Statement::Expr(Expr::Call { name, .. }) if name == "ledger::asset::transfer"
-        ));
+        let Statement::Expr(call) = function.body.statements[1].kind() else {
+            panic!("expected ledger call statement");
+        };
+        assert!(
+            matches!(call.kind(), Expr::Call { name, .. } if name == "ledger::asset::transfer")
+        );
     }
 
     #[test]
@@ -2726,14 +4911,16 @@ mod tests {
                 _ => None,
             })
             .expect("update entrypoint");
-        assert!(matches!(
-            &function.body.statements[0],
-            Statement::Expr(Expr::Call { name, .. }) if name == "state::set"
-        ));
-        assert!(matches!(
-            &function.body.statements[1],
-            Statement::Expr(Expr::Call { name, .. }) if name == "ledger::trigger::set_enabled"
-        ));
+        let Statement::Expr(state_call) = function.body.statements[0].kind() else {
+            panic!("expected state call statement");
+        };
+        assert!(matches!(state_call.kind(), Expr::Call { name, .. } if name == "state::set"));
+        let Statement::Expr(trigger_call) = function.body.statements[1].kind() else {
+            panic!("expected trigger call statement");
+        };
+        assert!(
+            matches!(trigger_call.kind(), Expr::Call { name, .. } if name == "ledger::trigger::set_enabled")
+        );
 
         for binding in ["state", "trigger"] {
             let source = format!("seiyaku Reserved {{ fn bad() {{ let {binding} = 1; }} }}");
@@ -2911,8 +5098,7 @@ mod tests {
             })
             .expect("function present");
         assert_eq!(func.name, "foo");
-        assert_eq!(func.modifiers.visibility, FunctionVisibility::Public);
-        assert_eq!(func.modifiers.kind, FunctionKind::Contract);
+        assert_eq!(func.modifiers.kind, FunctionKind::Kotoage);
         assert_eq!(func.modifiers.permission.as_deref(), Some("Admin"));
     }
 
@@ -2934,13 +5120,348 @@ mod tests {
                 _ => None,
             })
             .expect("function present");
-        let Statement::Let { value, .. } = &function.body.statements[0] else {
+        let Statement::Let { value, .. } = function.body.statements[0].kind() else {
             panic!("expected let statement");
         };
+        assert!(matches!(
+            value.kind(),
+            Expr::Decimal(value) if value == "340282366920938463463374607431768211455"
+        ));
+    }
+
+    #[test]
+    fn amount_literal_ast_retains_exact_source_spelling() {
+        let program = parse_module("fn main() { let value: Amount = 1.250_0amt; }")
+            .expect("parse Amount literal");
+        let function = program
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                Item::Function(function) => Some(function),
+                _ => None,
+            })
+            .expect("function present");
+        let Statement::Let { value, .. } = function.body.statements[0].kind() else {
+            panic!("expected let statement");
+        };
+        assert!(matches!(value.kind(), Expr::AmountLiteral(value) if value == "1.250_0amt"));
+    }
+
+    #[test]
+    fn amount_literals_follow_existing_expression_precedence() {
+        let program = parse_module("fn main() { let value = true ? 1amt : 2amt + 3amt * 4amt; }")
+            .expect("parse Amount expression");
+        let function = program
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                Item::Function(function) => Some(function),
+                _ => None,
+            })
+            .expect("function present");
+        let Statement::Let { value, .. } = function.body.statements[0].kind() else {
+            panic!("expected let statement");
+        };
+        let Expr::Conditional { else_expr, .. } = value.kind() else {
+            panic!("expected conditional expression");
+        };
+        let Expr::Binary {
+            op: BinaryOp::Add,
+            right,
+            ..
+        } = else_expr.kind()
+        else {
+            panic!("expected addition in false branch");
+        };
+        assert!(matches!(
+            right.kind(),
+            Expr::Binary {
+                op: BinaryOp::Mul,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn native_json_preserves_decoded_keys_and_exact_source_spelling() {
+        let program = parse_module(
+            r#"fn build(label: string) -> Json {
+                json { owner: label, "owner-alias": json [label] }
+            }"#,
+        )
+        .expect("parse native JSON object and array");
+        let function = program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) => Some(function),
+                _ => None,
+            })
+            .expect("function");
+        let Expr::JsonObject(entries) = function.body.tail.as_deref().expect("JSON tail").kind()
+        else {
+            panic!("expected native JSON object");
+        };
+        assert_eq!(entries[0].key, "owner");
+        assert_eq!(entries[0].key_spelling, "owner");
+        assert_eq!(entries[1].key, "owner-alias");
+        assert_eq!(entries[1].key_spelling, "\"owner-alias\"");
+        assert!(matches!(entries[1].value.kind(), Expr::JsonArray(items) if items.len() == 1));
+    }
+
+    #[test]
+    fn named_calls_preserve_source_names_and_trailing_comma() {
+        let program = parse_module(
+            "fn target(first: i64, second: string) {} fn main() { target(second: \"two\", first: 1,); }",
+        )
+        .expect("parse named call");
+        let main = program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == "main" => Some(function),
+                _ => None,
+            })
+            .expect("main function");
+        let Statement::Expr(call) = main.body.statements[0].kind() else {
+            panic!("expected call statement");
+        };
+        let Expr::Call {
+            args,
+            argument_names,
+            implicit_receiver,
+            ..
+        } = call.kind()
+        else {
+            panic!("expected call expression");
+        };
+        assert_eq!(args.len(), 2);
         assert_eq!(
-            value,
-            &Expr::Decimal("340282366920938463463374607431768211455".into())
+            argument_names.as_deref(),
+            Some(["second".to_owned(), "first".to_owned()].as_slice())
         );
+        assert!(!implicit_receiver);
+    }
+
+    #[test]
+    fn method_named_arguments_exclude_the_implicit_receiver() {
+        let program = parse_module(
+            "fn main(value: Json, key: Name) { let found = value.get_int(key: key); }",
+        )
+        .expect("parse named method call");
+        let function = program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) => Some(function),
+                _ => None,
+            })
+            .expect("function");
+        let Statement::Let { value, .. } = function.body.statements[0].kind() else {
+            panic!("expected binding");
+        };
+        let Expr::Call {
+            args,
+            argument_names,
+            implicit_receiver,
+            ..
+        } = value.kind()
+        else {
+            panic!("expected method call");
+        };
+        assert_eq!(args.len(), 2);
+        assert_eq!(
+            argument_names.as_deref(),
+            Some(["key".to_owned()].as_slice())
+        );
+        assert!(implicit_receiver);
+    }
+
+    #[test]
+    fn amount_json_getter_uses_canonical_source_name_and_rejects_numeric_legacy() {
+        let program =
+            parse_module("fn main(value: Json, key: Name) { let found = value.get_amount(key); }")
+                .expect("parse canonical Amount JSON getter");
+        let function = program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) => Some(function),
+                _ => None,
+            })
+            .expect("function");
+        let Statement::Let { value, .. } = function.body.statements[0].kind() else {
+            panic!("expected Amount getter binding");
+        };
+        let Expr::Call {
+            name,
+            implicit_receiver,
+            ..
+        } = value.kind()
+        else {
+            panic!("expected Amount getter call");
+        };
+        assert_eq!(name, "get_numeric");
+        assert!(implicit_receiver);
+
+        let error =
+            parse_module("fn main(value: Json, key: Name) { let found = value.get_numeric(key); }")
+                .expect_err("retired Numeric getter must fail");
+        assert!(error.contains("E_LEGACY_JSON_GETTER"), "{error}");
+    }
+
+    #[test]
+    fn mixed_and_duplicate_named_call_arguments_are_rejected() {
+        for (source, code) in [
+            (
+                "fn main() { target(1, second: 2); }",
+                "E_MIXED_CALL_ARGUMENTS",
+            ),
+            (
+                "fn main() { target(first: 1, 2); }",
+                "E_MIXED_CALL_ARGUMENTS",
+            ),
+            (
+                "fn main() { target(first: 1, first: 2); }",
+                "E_DUPLICATE_NAMED_ARGUMENT",
+            ),
+        ] {
+            let error = parse_module(source).expect_err("invalid call style must fail");
+            assert!(error.contains(code), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn mixed_call_fixes_use_the_declared_parameter_mapping_in_both_directions() {
+        for (id, call, original, replacement) in [
+            (7, "target(1, second: 2)", "1", "first: 1"),
+            (8, "target(first: 1, 2)", "", "second: "),
+        ] {
+            let text = format!(
+                "seiyaku C {{ fn target(first: i64, second: i64) {{}} fn main() {{ {call}; }} }}"
+            );
+            let source = SourceFile::new(SourceId(id), "mixed.ko", text.clone());
+            let diagnostics = parse_source(&source, FrontendBudget::v1())
+                .expect_err("mixed call style must fail");
+            let diagnostic = diagnostics
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "E_MIXED_CALL_ARGUMENTS")
+                .expect("mixed-call diagnostic");
+            let fix = diagnostic.fix.as_ref().expect("contextual safe fix");
+            let range = fix.span.byte_range.expect("exact fix range");
+            assert_eq!(&text[range.start as usize..range.end as usize], original);
+            assert_eq!(fix.replacement, replacement);
+
+            let mut repaired = text;
+            repaired.replace_range(range.start as usize..range.end as usize, &fix.replacement);
+            parse(&repaired).expect("the machine fix must produce one named call style");
+        }
+    }
+
+    #[test]
+    fn unresolved_mixed_calls_do_not_guess_parameter_names() {
+        for (id, call) in [(9, "target(1, second: 2)"), (10, "target(first: 1, 2)")] {
+            let source = SourceFile::new(
+                SourceId(id),
+                "mixed-unknown.ko",
+                format!("seiyaku C {{ fn main() {{ {call}; }} }}"),
+            );
+            let diagnostics = parse_source(&source, FrontendBudget::v1())
+                .expect_err("mixed call style must fail before name resolution");
+            let diagnostic = diagnostics
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "E_MIXED_CALL_ARGUMENTS")
+                .expect("mixed-call diagnostic");
+            assert!(
+                diagnostic.fix.is_none(),
+                "the parser must not invent an unresolved callee's parameter mapping"
+            );
+            assert!(
+                diagnostic
+                    .help
+                    .as_deref()
+                    .is_some_and(|help| help.contains("does not guess"))
+            );
+        }
+    }
+
+    #[test]
+    fn named_struct_literals_support_shorthand_and_trailing_comma() {
+        let program = parse_module(
+            "struct Transfer { source: i64, destination: i64, amount: Amount } fn main(source: i64, destination: i64) { let value = Transfer { amount: 10amt, source, destination, }; }",
+        )
+        .expect("parse named struct literal");
+        let function = program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) => Some(function),
+                _ => None,
+            })
+            .expect("function");
+        let Statement::Let { value, .. } = function.body.statements[0].kind() else {
+            panic!("expected binding");
+        };
+        let Expr::StructLiteral { name, fields } = value.kind() else {
+            panic!("expected struct literal");
+        };
+        assert_eq!(name, "Transfer");
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["amount", "source", "destination"]
+        );
+        assert!(!fields[0].shorthand);
+        assert!(fields[1].shorthand && fields[2].shorthand);
+    }
+
+    #[test]
+    fn duplicate_struct_literal_fields_are_rejected() {
+        let error = parse_module(
+            "struct Pair { first: i64, second: i64 } fn main() { let pair = Pair { first: 1, first: 2, second: 3 }; }",
+        )
+        .expect_err("duplicate field must fail");
+        assert!(error.contains("E_DUPLICATE_STRUCT_FIELD"), "{error}");
+    }
+
+    #[test]
+    fn control_flow_block_is_not_parsed_as_a_struct_literal() {
+        parse_module("fn main(ready: bool) { if ready {} }")
+            .expect("if block must remain unambiguous");
+    }
+
+    #[test]
+    fn negative_and_separated_amount_spellings_have_stable_diagnostics() {
+        let negative = parse_module("fn main() { let value: Amount = -10amt; }")
+            .expect_err("Amount is non-negative");
+        assert!(negative.contains("E_AMOUNT_NEGATIVE"), "{negative}");
+
+        let separated = parse_module("fn main() { let value: Amount = 10 amt; }")
+            .expect_err("Amount suffix must be adjacent");
+        assert!(
+            separated.contains("E_AMOUNT_SUFFIX_SEPARATED"),
+            "{separated}"
+        );
+
+        let text = "seiyaku Demo { fn main() { let value: Amount = -10amt; } }";
+        let source = SourceFile::new(SourceId(11), "negative-amount.ko", text);
+        let diagnostics = parse_source(&source, FrontendBudget::v1())
+            .expect_err("negative Amount literal must fail");
+        let diagnostic = diagnostics
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E_AMOUNT_NEGATIVE")
+            .expect("negative Amount diagnostic");
+        let fix = diagnostic.fix.as_ref().expect("minus-removal fix");
+        assert_eq!(
+            source.slice(fix.span.byte_range.expect("minus byte range")),
+            Some("-")
+        );
+        assert_eq!(fix.replacement, "");
     }
 
     #[test]
@@ -3025,10 +5546,10 @@ mod tests {
             })
             .expect("function present");
         let stmt = func.body.statements.first().expect("statement present");
-        match stmt {
+        match stmt.kind() {
             Statement::AssignExpr { op, value, .. } => {
                 assert_eq!(*op, AssignOp::Add);
-                assert!(matches!(value, Expr::Number(1)));
+                assert!(matches!(value.kind(), Expr::Number(1)));
             }
             other => panic!("expected compound assignment, got {other:?}"),
         }
@@ -3047,8 +5568,8 @@ mod tests {
             })
             .expect("function present");
         let stmt = func.body.statements.first().expect("statement present");
-        match stmt {
-            Statement::Let { value, .. } => match value {
+        match stmt.kind() {
+            Statement::Let { value, .. } => match value.kind() {
                 Expr::Bytes(bytes) => assert_eq!(bytes, b"ab"),
                 other => panic!("expected bytes literal, got {other:?}"),
             },
@@ -3099,18 +5620,22 @@ mod tests {
             panic!("expected use_get function");
         };
         let Statement::Let {
-            value: Expr::Call { name: method, .. },
-            ..
-        } = &function.body.statements[0]
+            value: method_call, ..
+        } = function.body.statements[0].kind()
         else {
             panic!("expected StateMap.get call");
         };
+        let Expr::Call { name: method, .. } = method_call.kind() else {
+            panic!("expected StateMap.get call expression");
+        };
         let Statement::Let {
-            value: Expr::Call { name: free, .. },
-            ..
-        } = &function.body.statements[1]
+            value: free_call, ..
+        } = function.body.statements[1].kind()
         else {
             panic!("expected free get call");
+        };
+        let Expr::Call { name: free, .. } = free_call.kind() else {
+            panic!("expected free get call expression");
         };
         assert_eq!(method, STATE_MAP_GET_INTRINSIC);
         assert_eq!(free, "get");
@@ -3581,6 +6106,26 @@ mod tests {
             .expect("function present");
         assert!(func.modifiers.is_test);
         assert_eq!(func.modifiers.test_fixture.as_deref(), Some("seeded"));
+    }
+
+    #[test]
+    fn fixture_actions_accept_formatter_trailing_commas() {
+        let src = r#"
+            module FixtureTrailingComma {
+                koto_test { target: "target.ko" }
+                fixture actors {
+                    actor(
+                        "issuer",
+                        AccountId::parse("issuer"),
+                        "0x00",
+                    );
+                }
+            }
+        "#;
+        let program = parse(src).expect("fixture action with a trailing comma must parse");
+        assert_eq!(program.fixtures.len(), 1);
+        assert_eq!(program.fixtures[0].actions.len(), 1);
+        assert_eq!(program.fixtures[0].actions[0].args.len(), 3);
     }
 
     #[test]

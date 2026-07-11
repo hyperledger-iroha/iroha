@@ -171,6 +171,9 @@ IrohaSwift/(A\ Document\ Being\ Saved\ By\ swift-test*/
 
 .*.log
 **/*.log
+!fixtures/sccp/release_evidence_v1/artifacts/phases/
+fixtures/sccp/release_evidence_v1/artifacts/phases/*
+!fixtures/sccp/release_evidence_v1/artifacts/phases/*.log
 # Keep CBDC rollout fixture logs tracked for validation fixtures.
 !fixtures/nexus/cbdc_rollouts/**/tests/*.log
 .*.out
@@ -188,6 +191,7 @@ test_*
 !python/norito_py/tests/test_header_padding.py
 !crates/iroha_torii/src/test_utils.rs
 !crates/iroha_core/tests/test_world.rs
+!crates/iroha_sccp/src/test_fixtures.rs
 !scripts/tests/test_check_slot_duration.py
 !scripts/tests/test_iroha_monitor_screenshots.py
 !scripts/fastpq/tests/test_*.py

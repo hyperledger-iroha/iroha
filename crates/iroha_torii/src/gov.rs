@@ -42,8 +42,6 @@ use crate::{
 };
 
 const CONTEXT_GOV_PROPOSE_DEPLOY_AUTHORITY: &str = "/v1/gov/proposals/deploy-contract#authority";
-const CONTEXT_GOV_PROPOSE_SCCP_ROUTE_MANIFEST_AUTHORITY: &str =
-    "/v1/gov/proposals/sccp-route-manifest#authority";
 const CONTEXT_GOV_BALLOT_ZK_AUTHORITY: &str = "/v1/gov/ballots/zk#authority";
 const CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY: &str = "/v1/gov/ballots/zk-v1#authority";
 const CONTEXT_GOV_BALLOT_ZK_V1_BALLOT_PROOF_AUTHORITY: &str =
@@ -219,24 +217,18 @@ pub struct ProposeDeployContractResponse {
 }
 
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
-/// Request body for proposing SCCP route-manifest publication via governance.
-pub struct ProposeSccpRouteManifestDto {
-    /// Canonical SCCP route manifest payload.
-    pub manifest: iroha_data_model::isi::bridge::SccpRouteManifest,
+/// Request body for proposing one closed SCCP registry action via governance.
+pub struct ProposeSccpRouteGovernanceDto {
+    /// Atomic closed registry action to apply if governance enacts the proposal.
+    pub action: iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
     /// Optional enactment window override (inclusive).
     pub window: Option<AtWindowDto>,
-    /// Optional voting mode: "Zk" or "Plain" (default Zk).
+    /// Optional exact voting mode (default `Zk`).
     #[norito(default)]
-    pub mode: Option<String>,
-    /// Optional authority as canonical I105 or on-chain account alias.
-    #[norito(default)]
-    pub authority: Option<String>,
-    /// Legacy private key field; rejected when provided.
-    #[norito(default)]
-    pub private_key: Option<String>,
+    pub mode: Option<iroha_data_model::isi::governance::VotingMode>,
 }
 
-impl norito::core::NoritoSerialize for ProposeSccpRouteManifestDto {
+impl norito::core::NoritoSerialize for ProposeSccpRouteGovernanceDto {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
         let value = norito::json::to_value(self)
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
@@ -246,24 +238,24 @@ impl norito::core::NoritoSerialize for ProposeSccpRouteManifestDto {
     }
 }
 
-impl<'de> norito::core::NoritoDeserialize<'de> for ProposeSccpRouteManifestDto {
+impl<'de> norito::core::NoritoDeserialize<'de> for ProposeSccpRouteGovernanceDto {
     fn try_deserialize(
-        archived: &'de norito::core::Archived<ProposeSccpRouteManifestDto>,
+        archived: &'de norito::core::Archived<ProposeSccpRouteGovernanceDto>,
     ) -> Result<Self, norito::core::Error> {
         let archived_json: &norito::core::Archived<String> = archived.cast();
         let json = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_json)?;
         norito::json::from_str(&json).map_err(|err| norito::core::Error::Message(err.to_string()))
     }
 
-    fn deserialize(archived: &'de norito::core::Archived<ProposeSccpRouteManifestDto>) -> Self {
+    fn deserialize(archived: &'de norito::core::Archived<ProposeSccpRouteGovernanceDto>) -> Self {
         Self::try_deserialize(archived)
-            .expect("ProposeSccpRouteManifestDto should deserialize from JSON string")
+            .expect("ProposeSccpRouteGovernanceDto should deserialize from JSON string")
     }
 }
 
-/// Response body for an SCCP route-manifest proposal.
+/// Response body for an SCCP route-governance proposal.
 #[derive(Debug, JsonSerialize)]
-pub struct ProposeSccpRouteManifestResponse {
+pub struct ProposeSccpRouteGovernanceResponse {
     pub ok: bool,
     /// Deterministic 32-byte BLAKE2b proposal id, encoded as lowercase hex.
     pub proposal_id: String,
@@ -1350,8 +1342,8 @@ fn instruction_skeleton_for_propose(
     vec![tx_instr_from_box(boxed)]
 }
 
-fn instruction_skeleton_for_sccp_route_manifest_propose(
-    instr: &iroha_data_model::isi::governance::ProposeSccpRouteManifest,
+fn instruction_skeleton_for_sccp_route_governance_propose(
+    instr: &iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
 ) -> Vec<TxInstr> {
     let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
     vec![tx_instr_from_box(boxed)]
@@ -1459,20 +1451,22 @@ fn compute_proposal_id(
     out
 }
 
-fn compute_sccp_route_manifest_proposal_id(
-    manifest: &iroha_data_model::isi::bridge::SccpRouteManifest,
+fn compute_sccp_route_governance_proposal_id(
+    action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
 ) -> Result<[u8; 32], crate::Error> {
-    let canonical = manifest.encode();
-    let manifest_len: u32 = canonical.len().try_into().map_err(|_| {
-        crate::routing::conversion_error("SCCP route manifest length exceeds 2^32 bytes".into())
+    let canonical = action.encode();
+    let action_len: u32 = canonical.len().try_into().map_err(|_| {
+        crate::routing::conversion_error(
+            "SCCP route governance action length exceeds 2^32 bytes".into(),
+        )
     })?;
     let mut input = Vec::with_capacity(
-        b"iroha:gov:sccp-route-manifest:proposal:v1|".len()
+        b"iroha:gov:sccp-route-governance:proposal:v1|".len()
             + core::mem::size_of::<u32>()
             + canonical.len(),
     );
-    input.extend_from_slice(b"iroha:gov:sccp-route-manifest:proposal:v1|");
-    input.extend_from_slice(&manifest_len.to_le_bytes());
+    input.extend_from_slice(b"iroha:gov:sccp-route-governance:proposal:v1|");
+    input.extend_from_slice(&action_len.to_le_bytes());
     input.extend_from_slice(&canonical);
     let digest = Blake2b512::digest(&input);
     let mut out = [0u8; 32];
@@ -2089,8 +2083,7 @@ pub async fn handle_gov_contract_get(
 
 /// POST /v1/gov/propose-deploy — build a proposal id and instruction skeleton.
 ///
-/// Legacy `private_key` payloads are rejected; callers must submit locally
-/// signed transactions after building the draft instructions.
+/// Callers submit the returned instruction in a locally signed transaction.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the contract target, hashes, ABI version, or request
@@ -2201,37 +2194,19 @@ pub async fn handle_gov_propose_deploy(
     }))
 }
 
-/// POST /v1/gov/proposals/sccp-route-manifest — build a proposal id and instruction skeleton.
+/// POST /v1/gov/proposals/sccp-route-governance — build a proposal id and instruction skeleton.
 ///
 /// Legacy `private_key` payloads are rejected; callers must submit locally
 /// signed transactions after building the draft instructions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the request options fail validation.
-pub async fn handle_gov_propose_sccp_route_manifest(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
-    state: Arc<iroha_core::state::State>,
-    telemetry: MaybeTelemetry,
-    NoritoJson(body): NoritoJson<ProposeSccpRouteManifestDto>,
-) -> Result<JsonBody<ProposeSccpRouteManifestResponse>, crate::Error> {
+pub async fn handle_gov_propose_sccp_route_governance(
+    NoritoJson(body): NoritoJson<ProposeSccpRouteGovernanceDto>,
+) -> Result<JsonBody<ProposeSccpRouteGovernanceResponse>, crate::Error> {
     use iroha_data_model::isi::governance as gov;
 
-    let mode = match body.mode.as_deref() {
-        Some(m) if m.eq_ignore_ascii_case("plain") => Some(gov::VotingMode::Plain),
-        Some(m) if m.eq_ignore_ascii_case("zk") => Some(gov::VotingMode::Zk),
-        Some(other) => {
-            return Err(crate::Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                        "unsupported voting mode: {other}"
-                    )),
-                ),
-            ));
-        }
-        None => None,
-    };
-
+    let mode = body.mode;
     let window = body.window.map(|w| AtWindow {
         lower: w.lower,
         upper: w.upper,
@@ -2249,30 +2224,22 @@ pub async fn handle_gov_propose_sccp_route_manifest(
         }
     }
 
-    let instr = gov::ProposeSccpRouteManifest {
-        manifest: body.manifest,
+    body.action.validate_static().map_err(|error| {
+        crate::routing::conversion_error(format!("invalid SCCP route governance action: {error}"))
+    })?;
+
+    let instr = gov::ProposeSccpRouteGovernance {
+        action: body.action,
         window,
         mode,
     };
 
-    let proposal_id = hex::encode(compute_sccp_route_manifest_proposal_id(&instr.manifest)?);
-    let _submitted = maybe_submit_optional_signer(
-        chain_id,
-        queue,
-        state,
-        telemetry,
-        body.authority.as_deref(),
-        body.private_key.as_deref(),
-        CONTEXT_GOV_PROPOSE_SCCP_ROUTE_MANIFEST_AUTHORITY,
-        core::iter::once(iroha_data_model::isi::InstructionBox::from(instr.clone())),
-        iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_MANIFEST,
-    )
-    .await?;
+    let proposal_id = hex::encode(compute_sccp_route_governance_proposal_id(&instr.action)?);
 
-    Ok(JsonBody(ProposeSccpRouteManifestResponse {
+    Ok(JsonBody(ProposeSccpRouteGovernanceResponse {
         ok: true,
         proposal_id,
-        tx_instructions: instruction_skeleton_for_sccp_route_manifest_propose(&instr),
+        tx_instructions: instruction_skeleton_for_sccp_route_governance_propose(&instr),
     }))
 }
 
@@ -3475,7 +3442,7 @@ mod tests {
         abi_hash: [u8; 32],
     ) -> ManifestProvenance {
         let manifest = ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: Some(iroha_crypto::Hash::prehashed(code_hash)),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
             compiler_fingerprint: None,
@@ -3497,6 +3464,21 @@ mod tests {
         "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
             .parse()
             .expect("contract address")
+    }
+
+    fn sample_sccp_route_governance_action()
+    -> iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1 {
+        iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(
+            iroha_data_model::bridge::SccpRouteKeyV1 {
+                lane_id: iroha_data_model::bridge::SccpLaneIdV1 {
+                    source: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                    target: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                },
+                route_id: iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1.to_owned(),
+                asset_key: iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1.to_owned(),
+                revision: 1,
+            },
+        )
     }
 
     fn sample_agenda_proposal(proposal_id: &str) -> AgendaProposalV1 {
@@ -3722,6 +3704,16 @@ mod tests {
         };
         let s = norito::json::to_json(&req).unwrap();
         let _: ProposeDeployContractDto = norito::json::from_str(&s).unwrap();
+
+        let sccp = ProposeSccpRouteGovernanceDto {
+            action: sample_sccp_route_governance_action(),
+            window: Some(AtWindowDto { lower: 3, upper: 4 }),
+            mode: Some(iroha_data_model::isi::governance::VotingMode::Plain),
+        };
+        let json = norito::json::to_json(&sccp).expect("encode SCCP governance DTO");
+        let decoded: ProposeSccpRouteGovernanceDto =
+            norito::json::from_str(&json).expect("decode SCCP governance DTO");
+        assert_eq!(decoded.action, sccp.action);
     }
 
     #[tokio::test]
@@ -3875,6 +3867,132 @@ mod tests {
         assert_eq!(decoded.code_hash_hex, code_hex);
         assert_eq!(decoded.abi_hash_hex, abi_hex);
         assert_eq!(decoded.abi_version, "1");
+    }
+
+    #[tokio::test]
+    async fn propose_sccp_route_governance_builds_exact_instruction_and_proposal_id() {
+        let action = sample_sccp_route_governance_action();
+        let expected_id = compute_sccp_route_governance_proposal_id(&action).expect("proposal id");
+        let response =
+            handle_gov_propose_sccp_route_governance(NoritoJson(ProposeSccpRouteGovernanceDto {
+                action: action.clone(),
+                window: Some(AtWindowDto {
+                    lower: 10,
+                    upper: 20,
+                }),
+                mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
+            }))
+            .await
+            .expect("valid SCCP governance draft")
+            .0;
+
+        assert!(response.ok);
+        assert_eq!(response.proposal_id, hex::encode(expected_id));
+        assert_eq!(response.tx_instructions.len(), 1);
+        let instruction = decode_tx_instruction(&response.tx_instructions[0]);
+        let decoded = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>()
+            .expect("exact SCCP governance instruction");
+        assert_eq!(decoded.action, action);
+        assert_eq!(
+            decoded.window,
+            Some(AtWindow {
+                lower: 10,
+                upper: 20
+            })
+        );
+        assert_eq!(
+            decoded.mode,
+            Some(iroha_data_model::isi::governance::VotingMode::Zk)
+        );
+    }
+
+    #[tokio::test]
+    async fn propose_sccp_route_governance_rejects_invalid_action_before_drafting() {
+        let mut action = sample_sccp_route_governance_action();
+        let iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(key) = &mut action
+        else {
+            unreachable!("fixture is a remove action");
+        };
+        key.revision = 0;
+
+        let error =
+            handle_gov_propose_sccp_route_governance(NoritoJson(ProposeSccpRouteGovernanceDto {
+                action,
+                window: None,
+                mode: None,
+            }))
+            .await
+            .expect_err("invalid SCCP action must fail before returning a skeleton");
+        assert!(
+            format!("{error:?}").contains("invalid SCCP route governance action"),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn propose_sccp_route_governance_rejects_mode_aliases_and_reversed_window() {
+        let action = sample_sccp_route_governance_action();
+        let canonical = norito::json::to_json(&ProposeSccpRouteGovernanceDto {
+            action: action.clone(),
+            window: None,
+            mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
+        })
+        .expect("canonical SCCP governance DTO");
+        assert!(
+            canonical.contains("\"mode\":\"Zk\""),
+            "unexpected canonical DTO: {canonical}"
+        );
+        for mode in ["zk", "plain", "PLAIN", " Zk", "Zk ", "Quadratic"] {
+            let aliased = canonical.replace("\"mode\":\"Zk\"", &format!("\"mode\":\"{mode}\""));
+            let error = norito::json::from_str::<ProposeSccpRouteGovernanceDto>(&aliased)
+                .expect_err("noncanonical SCCP voting mode must reject during typed decoding");
+            assert!(
+                error.to_string().contains(mode.trim())
+                    || error.to_string().contains("VotingMode")
+                    || error.to_string().contains("unknown variant"),
+                "{mode}: {error}"
+            );
+        }
+
+        let error =
+            handle_gov_propose_sccp_route_governance(NoritoJson(ProposeSccpRouteGovernanceDto {
+                action,
+                window: Some(AtWindowDto {
+                    lower: 21,
+                    upper: 20,
+                }),
+                mode: None,
+            }))
+            .await
+            .expect_err("reversed SCCP governance window must reject");
+        assert!(format!("{error:?}").contains("window.upper"));
+    }
+
+    #[test]
+    fn sccp_route_governance_dto_rejects_retired_signing_and_unknown_fields() {
+        let dto = ProposeSccpRouteGovernanceDto {
+            action: sample_sccp_route_governance_action(),
+            window: None,
+            mode: None,
+        };
+        let canonical = norito::json::to_json(&dto).expect("canonical SCCP governance DTO");
+        let body = canonical.strip_suffix('}').expect("DTO JSON is an object");
+        for (field, value) in [
+            ("authority", "\"sorau...\""),
+            ("private_key", "\"secret\""),
+            ("manifest", "null"),
+            ("future_action_policy", "null"),
+        ] {
+            let injected = format!("{body},\"{field}\":{value}}}");
+            let error = norito::json::from_str::<ProposeSccpRouteGovernanceDto>(&injected)
+                .expect_err("retired or unknown SCCP draft field must reject");
+            assert!(
+                error.to_string().contains(field) || error.to_string().contains("unknown field"),
+                "{field}: {error}"
+            );
+        }
     }
 
     #[tokio::test]

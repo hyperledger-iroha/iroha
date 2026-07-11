@@ -8,7 +8,7 @@ use ivm::{
 
 #[test]
 fn debug_create_nfts_and_set_detail_words() {
-    let src = "seiyaku DebugHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(context::authority(), Name::parse(\"cursor\"), Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";
+    let src = "seiyaku DebugHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";
     let compiler = Compiler::new_with_options(CompilerOptions {
         mode: CompilerMode::Test,
         ..CompilerOptions::default()

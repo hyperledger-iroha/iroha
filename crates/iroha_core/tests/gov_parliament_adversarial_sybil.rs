@@ -72,7 +72,7 @@ fn manifest_provenance(
     }
 
     ContractManifest {
-        contract_name: None,
+        seiyaku_name: None,
         code_hash: Some(Hash::prehashed(parse_hex32(code_hash_hex))),
         abi_hash: Some(Hash::prehashed(parse_hex32(abi_hash_hex))),
         compiler_fingerprint: None,

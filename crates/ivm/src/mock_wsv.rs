@@ -26,6 +26,8 @@ use norito::{
 };
 use sha2::{Digest as _, Sha256};
 
+#[cfg(test)]
+use crate::memory::Memory;
 use crate::{
     VMError,
     axt::{self, AssetHandle, AxtPolicy, ProofBlob, RemoteSpendIntent, TouchManifest},
@@ -77,13 +79,17 @@ pub struct DataspaceAxtPolicy {
     pub current_slot: u64,
 }
 
-fn parse_json_numeric_field(field: &njson::Value) -> Result<Numeric, VMError> {
-    match field {
+fn parse_json_amount_field(field: &njson::Value) -> Result<Numeric, VMError> {
+    let amount = match field {
         njson::Value::String(raw) => raw.parse::<Numeric>().map_err(|_| VMError::DecodeError),
         njson::Value::Number(njson::native::Number::I64(value)) => Ok(Numeric::from(*value)),
         njson::Value::Number(njson::native::Number::U64(value)) => Ok(Numeric::from(*value)),
         _ => Err(VMError::DecodeError),
-    }
+    }?
+    .canonicalize_amount()
+    .map_err(|_| VMError::DecodeError)?;
+    amount.validate_amount().map_err(|_| VMError::DecodeError)?;
+    Ok(amount)
 }
 
 fn decode_json_blob_hex_literal(raw: &str) -> Result<Vec<u8>, VMError> {
@@ -2741,26 +2747,18 @@ impl WsvHost {
         Ok(numeric)
     }
 
-    /// Decode a Numeric from a register that points at NoritoBytes TLV.
-    fn decode_numeric_reg(&self, vm: &IVM, reg: usize) -> Result<Numeric, VMError> {
-        let v = vm.register(reg);
-        match vm.memory.validate_tlv(v) {
-            Ok(tlv) => {
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let numeric =
-                    decode_from_bytes::<Numeric>(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                if norito::to_bytes(&numeric).map_err(|_| VMError::DecodeError)? != tlv.payload {
-                    return Err(VMError::DecodeError);
-                }
-                Self::ensure_u128_integer(numeric)
-            }
-            Err(_) => {
-                let numeric = self.decode_tlv_any_region(vm, v, PointerType::NoritoBytes)?;
-                Self::ensure_u128_integer(numeric)
-            }
+    /// Decode one canonical V1 `Amount` argument from a register.
+    fn decode_amount_reg(&self, vm: &IVM, reg: usize) -> Result<Numeric, VMError> {
+        let tlv = vm.validate_tlv(vm.register(reg))?;
+        if tlv.type_id != PointerType::Amount {
+            return Err(VMError::NoritoInvalid);
         }
+        let amount = decode_from_bytes::<Numeric>(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        if norito::to_bytes(&amount).map_err(|_| VMError::DecodeError)? != tlv.payload {
+            return Err(VMError::DecodeError);
+        }
+        amount.validate_amount().map_err(|_| VMError::DecodeError)?;
+        Ok(amount)
     }
 
     fn decode_numeric_ptr(&self, vm: &IVM, ptr: u64) -> Result<Numeric, VMError> {
@@ -2836,7 +2834,7 @@ impl WsvHost {
         let from = self.decode_account_reg(vm, 10)?;
         let to = self.decode_account_reg(vm, 11)?;
         let asset = self.decode_asset_reg(vm, 12)?;
-        let amount = self.decode_numeric_reg(vm, 13)?;
+        let amount = self.decode_amount_reg(vm, 13)?;
         self.fastpq_batch_entries
             .as_mut()
             .expect("batch presence checked above")
@@ -3541,6 +3539,7 @@ impl IVMHost for WsvHost {
                 | crate::syscalls::SYSCALL_STATE_MAP_KEY_AT
                 | crate::syscalls::SYSCALL_STATE_VALUE_ENCODE
                 | crate::syscalls::SYSCALL_STATE_VALUE_DECODE
+                | crate::syscalls::SYSCALL_JSON_BUILD
         ) {
             return crate::core_host::CoreHost::new().prepare_syscall(number, vm);
         }
@@ -3557,6 +3556,9 @@ impl IVMHost for WsvHost {
                 Some(Self::state_query_gas(value_len))
             }
             crate::syscalls::SYSCALL_STATE_DEL | crate::syscalls::SYSCALL_STATE_HAS => Some(16),
+            crate::syscalls::SYSCALL_CORE_QUERY_GET | crate::syscalls::SYSCALL_CORE_QUERY_PAGE => {
+                Some(Self::state_query_gas(0))
+            }
             _ => None,
         };
         if let Some(quote) = state_quote {
@@ -3577,14 +3579,32 @@ impl IVMHost for WsvHost {
         // Mutating ledger calls and proof verification retain the generic
         // deterministic bound; unlike response-producing reads they have no
         // host-cardinality-dependent output to estimate.
-        Ok(conservative_syscall_gas_quote(vm))
+        Ok(conservative_syscall_gas_quote(number, vm))
     }
 
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         if !crate::syscalls::is_syscall_allowed(vm.syscall_policy(), number) {
             return Err(VMError::UnknownSyscall(number));
         }
+        if crate::syscalls::is_amount_syscall(number) {
+            return crate::amount::execute(number, vm);
+        }
+        let canonical = crate::syscalls::canonical_helper_syscall(number);
+        if crate::syscalls::is_json_getter_syscall(canonical) {
+            let cost = crate::json::typed_getter(
+                vm,
+                number,
+                crate::core_host::CoreHost::resolve_code_tlv_addr,
+            )?;
+            return Ok(Self::json_gas(cost.input_bytes, cost.output_bytes));
+        }
         match number {
+            crate::syscalls::SYSCALL_CORE_QUERY_GET | crate::syscalls::SYSCALL_CORE_QUERY_PAGE => {
+                Err(VMError::metered_not_implemented(
+                    Self::state_query_gas(0),
+                    number,
+                ))
+            }
             // Durable smart-contract state syscalls
             crate::syscalls::SYSCALL_STATE_GET => {
                 // r10 = &Name path -> return r10 = &NoritoBytes value in INPUT (or 0 if none)
@@ -3826,7 +3846,7 @@ impl IVMHost for WsvHost {
                 let size = vm.register(10);
                 let addr = vm.alloc_heap(size)?;
                 vm.set_register(10, addr);
-                Ok(1)
+                Ok(crate::host::allocation_gas(size))
             }
             crate::syscalls::SYSCALL_ENCODE_INT => {
                 // r10 = value (i64) -> r10 = &NoritoBytes (Norito-framed i64)
@@ -4147,7 +4167,7 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_JSON_GET_NFT_ID
             | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX
             | crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
-            | crate::syscalls::SYSCALL_JSON_GET_NUMERIC
+            | crate::syscalls::SYSCALL_JSON_GET_AMOUNT
             | crate::syscalls::SYSCALL_JSON_GET_I64_DIRECT
             | crate::syscalls::SYSCALL_JSON_GET_JSON_DIRECT
             | crate::syscalls::SYSCALL_JSON_GET_NAME_DIRECT
@@ -4155,7 +4175,7 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT
             | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT
             | crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
-            | crate::syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT => {
+            | crate::syscalls::SYSCALL_JSON_GET_AMOUNT_DIRECT => {
                 let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
@@ -4297,12 +4317,11 @@ impl IVMHost for WsvHost {
                         vm.set_register(10, p);
                         Ok(Self::json_gas(input_len, body.len()))
                     }
-                    crate::syscalls::SYSCALL_JSON_GET_NUMERIC => {
-                        let numeric = parse_json_numeric_field(field)?;
-                        let body =
-                            norito::to_bytes(&numeric).map_err(|_| VMError::NoritoInvalid)?;
+                    crate::syscalls::SYSCALL_JSON_GET_AMOUNT => {
+                        let amount = parse_json_amount_field(field)?;
+                        let body = norito::to_bytes(&amount).map_err(|_| VMError::NoritoInvalid)?;
                         let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                        out.extend_from_slice(&(PointerType::Amount as u16).to_be_bytes());
                         out.push(1);
                         out.extend_from_slice(&(body.len() as u32).to_be_bytes());
                         out.extend_from_slice(&body);
@@ -4427,30 +4446,26 @@ impl IVMHost for WsvHost {
             crate::syscalls::SYSCALL_TLV_EQ => {
                 let ptr1 = vm.register(10);
                 let ptr2 = vm.register(11);
-                if ptr1 == ptr2 {
+                if ptr1 == 0 && ptr2 == 0 {
                     vm.set_register(10, 1);
                     return Ok(Self::tlv_eq_gas(0, 0));
                 }
-                if ptr1 == 0 || ptr2 == 0 {
+                if ptr1 == 0 {
+                    let right_len = vm.validate_tlv(ptr2)?.payload.len();
                     vm.set_register(10, 0);
-                    return Ok(Self::tlv_eq_gas(0, 0));
+                    return Ok(Self::tlv_eq_gas(0, right_len));
                 }
-                // Validate both TLVs
-                let tlv1 = match vm.memory.validate_tlv(ptr1) {
-                    Ok(t) => t,
-                    Err(_) => {
-                        vm.set_register(10, 0);
-                        return Ok(Self::tlv_eq_gas(0, 0));
-                    }
-                };
+                let tlv1 = vm.validate_tlv(ptr1)?;
                 let left_len = tlv1.payload.len();
-                let tlv2 = match vm.memory.validate_tlv(ptr2) {
-                    Ok(t) => t,
-                    Err(_) => {
-                        vm.set_register(10, 0);
-                        return Ok(Self::tlv_eq_gas(left_len, 0));
-                    }
-                };
+                if ptr2 == 0 {
+                    vm.set_register(10, 0);
+                    return Ok(Self::tlv_eq_gas(left_len, 0));
+                }
+                if ptr1 == ptr2 {
+                    vm.set_register(10, 1);
+                    return Ok(Self::tlv_eq_gas(left_len, 0));
+                }
+                let tlv2 = vm.validate_tlv(ptr2)?;
                 let right_len = tlv2.payload.len();
                 // Check headers and payload
                 let eq = tlv1.type_id == tlv2.type_id
@@ -4726,7 +4741,8 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
             | crate::syscalls::SYSCALL_STATE_MAP_KEY_AT
             | crate::syscalls::SYSCALL_STATE_VALUE_ENCODE
-            | crate::syscalls::SYSCALL_STATE_VALUE_DECODE => {
+            | crate::syscalls::SYSCALL_STATE_VALUE_DECODE
+            | crate::syscalls::SYSCALL_JSON_BUILD => {
                 crate::core_host::CoreHost::new().syscall(number, vm)
             }
             crate::syscalls::SYSCALL_SHA256_HASH
@@ -6234,7 +6250,7 @@ impl IVMHost for WsvHost {
                 let from_id = self.decode_canonical_account_reg(vm, 10)?;
                 let to_id = self.decode_canonical_account_reg(vm, 11)?;
                 let asset_id = self.decode_asset_reg(vm, 12)?;
-                let amount = self.decode_numeric_reg(vm, 13)?;
+                let amount = self.decode_amount_reg(vm, 13)?;
                 let _dataspace_id = self.decode_dataspace_reg(vm, 14)?;
                 if MockWorldStateView::account_subject(&from_id)
                     != MockWorldStateView::account_subject(&self.caller)
@@ -6264,7 +6280,7 @@ impl IVMHost for WsvHost {
             syscalls::SYSCALL_MINT_ASSET => {
                 let account_id = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_id = self.decode_asset_reg(vm, 11)?;
-                let amount = self.decode_numeric_reg(vm, 12)?;
+                let amount = self.decode_amount_reg(vm, 12)?;
                 let token = PermissionToken::MintAsset(asset_id.clone());
                 if !self.wsv.has_permission(&self.caller, &token) {
                     return Err(VMError::PermissionDenied);
@@ -6278,7 +6294,7 @@ impl IVMHost for WsvHost {
             syscalls::SYSCALL_BURN_ASSET => {
                 let account_id = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_id = self.decode_asset_reg(vm, 11)?;
-                let amount = self.decode_numeric_reg(vm, 12)?;
+                let amount = self.decode_amount_reg(vm, 12)?;
                 if MockWorldStateView::account_subject(&account_id)
                     != MockWorldStateView::account_subject(&self.caller)
                 {
@@ -8278,12 +8294,19 @@ mod tests_null_decode {
         vm.set_register(11, key_name_ptr);
         let get_gas =
             call_syscall_with_quote(&mut vm, syscalls::SYSCALL_JSON_GET_I64).expect("json get");
-        assert_eq!(vm.register(10), 99);
+        assert_eq!(
+            crate::sum::read_words(
+                &vm,
+                vm.register(10),
+                crate::sum::SumLayoutV1::option(1).expect("i64 Option layout"),
+            ),
+            Ok((true, vec![99]))
+        );
         assert_eq!(
             get_gas,
             WsvHost::json_gas(
                 object_with_value_len + key_name_bytes.len(),
-                core::mem::size_of::<i64>()
+                core::mem::size_of::<i64>() + 16
             )
         );
 
@@ -8756,6 +8779,100 @@ mod tests_null_decode {
     }
 
     #[test]
+    fn json_amount_getter_emits_canonical_amount_pointer() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
+        let mut vm = IVM::new(1_000_000);
+        let json = Json::from_str_norito(r#"{"amount":"1.2500"}"#).expect("amount JSON");
+        let json_ptr = vm
+            .alloc_input_tlv(&make_tlv(
+                PointerType::Json,
+                &norito::to_bytes(&json).expect("encode JSON"),
+            ))
+            .expect("allocate JSON");
+        let key: Name = "amount".parse().expect("amount key");
+        let key_ptr = vm
+            .alloc_input_tlv(&make_tlv(
+                PointerType::Name,
+                &norito::to_bytes(&key).expect("encode key"),
+            ))
+            .expect("allocate key");
+        vm.set_register(10, json_ptr);
+        vm.set_register(11, key_ptr);
+
+        host.syscall(syscalls::SYSCALL_JSON_GET_AMOUNT, &mut vm)
+            .expect("get Amount");
+        let (some, words) = crate::sum::read_words(
+            &vm,
+            vm.register(10),
+            crate::sum::SumLayoutV1::option(1).expect("Amount option layout"),
+        )
+        .expect("Amount option");
+        assert!(some);
+        let tlv = vm.memory.validate_tlv(words[0]).expect("Amount TLV");
+        assert_eq!(tlv.type_id, PointerType::Amount);
+        let amount: Numeric = decode_from_bytes(tlv.payload).expect("decode Amount");
+        amount.validate_amount().expect("canonical Amount");
+        assert_eq!(amount, Numeric::new(125_u32, 2));
+
+        let negative = Json::from_str_norito(r#"{"amount":"-1"}"#).expect("negative JSON");
+        let negative_ptr = vm
+            .alloc_input_tlv(&make_tlv(
+                PointerType::Json,
+                &norito::to_bytes(&negative).expect("encode negative JSON"),
+            ))
+            .expect("allocate negative JSON");
+        vm.set_register(10, negative_ptr);
+        vm.set_register(11, key_ptr);
+        host.syscall(syscalls::SYSCALL_JSON_GET_AMOUNT, &mut vm)
+            .expect("invalid Amount is Option::none");
+        assert_eq!(
+            crate::sum::read_words(
+                &vm,
+                vm.register(10),
+                crate::sum::SumLayoutV1::option(1).expect("Amount option layout"),
+            ),
+            Ok((false, vec![]))
+        );
+    }
+
+    #[test]
+    fn asset_amount_decoder_requires_canonical_amount_pointer() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
+        let mut vm = IVM::new(1_000_000);
+        let canonical = Numeric::new(125_u32, 2);
+        let canonical_payload = norito::to_bytes(&canonical).expect("encode canonical Amount");
+        let canonical_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Amount, &canonical_payload))
+            .expect("allocate canonical Amount");
+        vm.set_register(12, canonical_ptr);
+        assert_eq!(host.decode_amount_reg(&vm, 12), Ok(canonical));
+
+        let legacy_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &canonical_payload))
+            .expect("allocate legacy Numeric pointer");
+        vm.set_register(12, legacy_ptr);
+        assert_eq!(host.decode_amount_reg(&vm, 12), Err(VMError::NoritoInvalid));
+
+        let noncanonical = Numeric::new(1_250_u32, 3);
+        let noncanonical_ptr = vm
+            .alloc_input_tlv(&make_tlv(
+                PointerType::Amount,
+                &norito::to_bytes(&noncanonical).expect("encode noncanonical Amount"),
+            ))
+            .expect("allocate noncanonical Amount");
+        vm.set_register(12, noncanonical_ptr);
+        assert_eq!(host.decode_amount_reg(&vm, 12), Err(VMError::DecodeError));
+    }
+
+    #[test]
     fn state_scan_quote_reserves_once_and_exact_execution_handles_adversarial_page() {
         let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -8832,5 +8949,59 @@ mod tests_null_decode {
             .expect_err("malformed name must be rejected by the state scan");
         assert!(matches!(error, VMError::DecodeError));
         assert!(execution_host.actual_access.read_keys.is_empty());
+    }
+
+    #[test]
+    fn wsv_host_tlv_eq_rejects_equal_invalid_raw_addresses() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_register(10, Memory::OUTPUT_START);
+        vm.set_register(11, Memory::OUTPUT_START);
+
+        assert!(host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err());
+        assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
+
+        vm.set_register(10, 0);
+        vm.set_register(11, Memory::OUTPUT_START);
+        assert!(host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err());
+        assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
+    }
+
+    #[test]
+    fn wsv_host_numeric_quote_is_payload_bounded_and_type_checked() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        let left = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &[0xA5; 256]))
+            .expect("allocate left Numeric-shaped fixture");
+        let right = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &[0x5A; 128]))
+            .expect("allocate right Numeric-shaped fixture");
+        vm.set_register(10, left);
+        vm.set_register(11, right);
+
+        assert_eq!(
+            host.prepare_syscall(syscalls::SYSCALL_NUMERIC_ADD, &vm),
+            Ok(WsvHost::numeric_gas() + 256 + 128),
+            "preparation must reserve declared operand bytes without decoding them"
+        );
+
+        let wrong_type = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Blob, &[0x11; 32]))
+            .expect("allocate wrong-type Numeric fixture");
+        vm.set_register(11, wrong_type);
+        assert!(
+            host.prepare_syscall(syscalls::SYSCALL_NUMERIC_ADD, &vm)
+                .is_err(),
+            "preparation must reject a non-Numeric pointer type"
+        );
     }
 }

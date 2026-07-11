@@ -890,7 +890,7 @@ Optional metadata attached to smart-contract deployments; hash fields must match
 | `code_hash` | `Option<Hash>` | Domain-separated canonical hash of the complete deployable `.to` artifact, including its execution header, `CNTR`, literals, and code. |
 | `abi_hash` | `Option<Hash>` | Hash of the syscall/pointer ABI surface for the supplied `abi_version` (see `docs/source/ivm_header.md`). |
 | `compiler_fingerprint` | `Option<String>` | Compiler + toolchain note recorded for provenance. |
-| `features_bitmap` | `Option<u64>` | Bitmask of build features (SIMD, CUDA, etc.). |
+| `features_bitmap` | `Option<u64>` | Compiler-derived, hash-covered V1 execution capabilities (ZK and VECTOR); never host SIMD, Metal, or CUDA availability.. |
 | `access_set_hints` | `Option<AccessSetHints>` | Advisory read/write key hints for the scheduler. |
 | `entrypoints` | `Option<Vec<EntrypointDescriptor>>` | Optional entrypoint descriptors advertised by the compiler. |
 
@@ -910,7 +910,7 @@ Metadata emitted per Kotodama entrypoint.
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | `String` | Symbol name declared in Kotodama source. |
-| `kind` | `EntryPointKind` | Role of the entrypoint (`Public`, `View`, `Init`, or `Upgrade`). |
+| `kind` | `EntryPointKind` | Role of the entrypoint (`Kotoage`, `View`, `Hajimari`, or `Kaizen`). |
 | `permission` | `Option<String>` | Optional dispatcher permission required before invocation. |
 | `read_keys` | `Vec<String>` | Advisory read set scoped to the entrypoint. |
 | `write_keys` | `Vec<String>` | Advisory write set scoped to the entrypoint. |

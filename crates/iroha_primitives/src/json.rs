@@ -141,45 +141,61 @@ impl Json {
     fn serialize_json_value_plain(value: &json::Value, out: &mut String) {
         use norito::json::native::Number;
 
-        match value {
-            json::Value::Null => out.push_str("null"),
-            json::Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-            json::Value::Number(n) => match n {
-                Number::I64(i) => out.push_str(&i.to_string()),
-                Number::U64(u) => out.push_str(&u.to_string()),
-                Number::F64(f) => {
-                    const F64_SAFE_INT: f64 = 9_007_199_254_740_992.0; // 2^53
-                    if f.is_finite() && f.fract() == 0.0 && f.abs() <= F64_SAFE_INT {
-                        let _ = write!(out, "{f:.1}");
-                    } else {
-                        let _ = write!(out, "{f:?}");
+        enum Task<'a> {
+            Value(&'a json::Value),
+            Escaped(&'a str),
+            Byte(char),
+        }
+
+        let mut tasks = vec![Task::Value(value)];
+        while let Some(task) = tasks.pop() {
+            match task {
+                Task::Escaped(value) => Self::escape_json_string_plain(value, out),
+                Task::Byte(value) => out.push(value),
+                Task::Value(value) => match value {
+                    json::Value::Null => out.push_str("null"),
+                    json::Value::Bool(value) => {
+                        out.push_str(if *value { "true" } else { "false" });
                     }
-                }
-            },
-            json::Value::String(s) => Self::escape_json_string_plain(s, out),
-            json::Value::Array(items) => {
-                out.push('[');
-                let mut iter = items.iter().peekable();
-                while let Some(item) = iter.next() {
-                    Self::serialize_json_value_plain(item, out);
-                    if iter.peek().is_some() {
-                        out.push(',');
+                    json::Value::Number(value) => match value {
+                        Number::I64(value) => out.push_str(&value.to_string()),
+                        Number::U64(value) => out.push_str(&value.to_string()),
+                        Number::F64(value) => {
+                            const F64_SAFE_INT: f64 = 9_007_199_254_740_992.0; // 2^53
+                            if value.is_finite()
+                                && value.fract() == 0.0
+                                && value.abs() <= F64_SAFE_INT
+                            {
+                                let _ = write!(out, "{value:.1}");
+                            } else {
+                                let _ = write!(out, "{value:?}");
+                            }
+                        }
+                    },
+                    json::Value::String(value) => Self::escape_json_string_plain(value, out),
+                    json::Value::Array(items) => {
+                        out.push('[');
+                        tasks.push(Task::Byte(']'));
+                        for (index, item) in items.iter().enumerate().rev() {
+                            if index + 1 < items.len() {
+                                tasks.push(Task::Byte(','));
+                            }
+                            tasks.push(Task::Value(item));
+                        }
                     }
-                }
-                out.push(']');
-            }
-            json::Value::Object(map) => {
-                out.push('{');
-                let mut iter = map.iter().peekable();
-                while let Some((k, v)) = iter.next() {
-                    Self::escape_json_string_plain(k, out);
-                    out.push(':');
-                    Self::serialize_json_value_plain(v, out);
-                    if iter.peek().is_some() {
-                        out.push(',');
+                    json::Value::Object(map) => {
+                        out.push('{');
+                        tasks.push(Task::Byte('}'));
+                        for (index, (key, value)) in map.iter().enumerate().rev() {
+                            if index + 1 < map.len() {
+                                tasks.push(Task::Byte(','));
+                            }
+                            tasks.push(Task::Value(value));
+                            tasks.push(Task::Byte(':'));
+                            tasks.push(Task::Escaped(key));
+                        }
                     }
-                }
-                out.push('}');
+                },
             }
         }
     }
@@ -643,6 +659,43 @@ mod tests {
             let reparsed = norito::json::parse_value(&serialized).expect("parse plain");
             assert_eq!(reparsed, value, "mismatch for {serialized}");
         }
+    }
+
+    #[test]
+    fn plain_serializer_covers_the_full_kotodama_boundary_depth() {
+        let levels = norito::core::MAX_OWNED_VALUE_DECODE_DEPTH - 1;
+        let mut nested = norito::json::Value::from(7_u64);
+        for _ in 0..levels {
+            nested = norito::json::Value::Array(vec![nested]);
+        }
+        let mut object = norito::json::native::Map::new();
+        object.insert("value".to_owned(), nested);
+        let boundary = norito::json::Value::Object(object);
+
+        let encoded = Json::from_norito_value_ref(&boundary)
+            .expect("the full V1 type depth plus its parameter object must serialize");
+        let decoded: norito::json::Value = encoded
+            .try_into_any_norito()
+            .expect("the full V1 boundary must parse back");
+        let mut cursor = decoded
+            .as_object()
+            .and_then(|map| map.get("value"))
+            .expect("boundary object contains value");
+        for _ in 0..levels {
+            let items = cursor.as_array().expect("nested boundary list");
+            assert_eq!(items.len(), 1);
+            cursor = &items[0];
+        }
+        assert_eq!(cursor.as_u64(), Some(7));
+
+        let mut too_deep = norito::json::Value::Null;
+        for _ in 0..=norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
+            too_deep = norito::json::Value::Array(vec![too_deep]);
+        }
+        assert!(
+            Json::from_norito_value_ref(&too_deep).is_err(),
+            "the explicit JSON structural bound must still fail closed"
+        );
     }
 
     struct BadJson;

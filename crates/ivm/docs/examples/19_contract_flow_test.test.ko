@@ -4,28 +4,52 @@ module ContractFlowTests {
     }
 
     fixture actors {
-        actor("issuer", AccountId::parse("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX"), "0x0909090909090909090909090909090909090909090909090909090909090909");
+        actor(
+            "issuer",
+            AccountId::parse("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX", ),
+            "0x0909090909090909090909090909090909090909090909090909090909090909",
+        );
     }
 
     #[test(fixture = "actors")]
     fn actor_helpers_roundtrip() {
         let acct = test::actor_account("issuer");
-        test::assert(acct == AccountId::parse("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX"));
+        test::assert(
+            acct == AccountId::parse("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX", ),
+        );
         test::actor_public_key("issuer");
         test::actor_sign("issuer", b"native-flow");
     }
 
     #[test(fixture = "actors")]
     fn invoke_entrypoint_as_runs_the_contract() {
-        test::invoke_entrypoint_as("issuer", "hajimari", Json::parse("{}"));
-        test::invoke_entrypoint_as("issuer", "increment", Json::parse("{}"));
+        test::invoke_entrypoint_as(
+            actor: "issuer",
+            entrypoint: "hajimari",
+            arguments: Json::parse("{}"),
+        );
+        test::invoke_entrypoint_as(
+            actor: "issuer",
+            entrypoint: "increment",
+            arguments: Json::parse("{}"),
+        );
         test::assert(counter == 5);
-        test::invoke_entrypoint_as("issuer", "remember_caller", Json::parse("{}"));
-        test::assert(last_actor == AccountId::parse("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX"));
+        test::invoke_entrypoint_as(
+            actor: "issuer",
+            entrypoint: "remember_caller",
+            arguments: Json::parse("{}"),
+        );
+        test::assert(
+            last_actor == AccountId::parse("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX", ),
+        );
     }
 
     #[test(fixture = "actors")]
     fn expect_reject_as_captures_contract_rejection() {
-        test::expect_reject_as("issuer", "reject_me", Json::parse("{}"));
+        test::expect_reject_as(
+            actor: "issuer",
+            entrypoint: "reject_me",
+            arguments: Json::parse("{}"),
+        );
     }
 }

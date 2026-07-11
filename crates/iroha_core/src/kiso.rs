@@ -1802,6 +1802,7 @@ mod tests {
                         iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
                 },
                 stark: iroha_config::parameters::actual::Stark::default(),
+                sccp: iroha_config::parameters::actual::Sccp::default(),
                 root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
                 ballot_history_cap:
                     iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,

@@ -208,6 +208,9 @@ fn param_type_from_expr(expr: &Option<TypeExpr>) -> Result<Type, String> {
 
 fn convert_type_expr(expr: &TypeExpr) -> Result<Type, String> {
     Ok(match expr {
+        TypeExpr::Source { ty, .. } | TypeExpr::Resolved { ty, .. } => {
+            return convert_type_expr(ty);
+        }
         TypeExpr::Path(name) => match name.as_str() {
             "i64" => Type::Int,
             "u128" => Type::FixedU128,
@@ -221,6 +224,16 @@ fn convert_type_expr(expr: &TypeExpr) -> Result<Type, String> {
                 let key_ty = convert_type_expr(&args[0])?;
                 let value_ty = convert_type_expr(&args[1])?;
                 Type::StateMap(Box::new(key_ty), Box::new(value_ty))
+            } else if base == "List" && args.len() == 2 {
+                let element = convert_type_expr(&args[0])?;
+                let TypeExpr::Const(capacity) = args[1].kind() else {
+                    return Err("List capacity must be a compile-time integer".to_owned());
+                };
+                let capacity = u8::try_from(*capacity)
+                    .ok()
+                    .filter(|capacity| (1..=64).contains(capacity))
+                    .ok_or_else(|| "List capacity must be in 1..=64".to_owned())?;
+                Type::List(Box::new(element), capacity)
             } else {
                 Type::NamedStruct(base.clone())
             }
@@ -231,6 +244,11 @@ fn convert_type_expr(expr: &TypeExpr) -> Result<Type, String> {
                 out.push(convert_type_expr(item)?);
             }
             Type::Tuple(out)
+        }
+        TypeExpr::Const(value) => {
+            return Err(format!(
+                "compile-time integer `{value}` is only valid in List<T, N>"
+            ));
         }
     })
 }
@@ -362,24 +380,33 @@ impl<'a> Evaluator<'a> {
         if depth >= self.recursion_limit {
             return Err(EvalError::RecursionLimitExceeded);
         }
-        let function = self
-            .functions
-            .get(name)
-            .ok_or_else(|| EvalError::Runtime(format!("unknown function `{name}`")))?;
-        if function.params.len() != args.len() {
+        let (params, body) = {
+            let function = self
+                .functions
+                .get(name)
+                .ok_or_else(|| EvalError::Runtime(format!("unknown function `{name}`")))?;
+            (function.params.clone(), function.body.clone())
+        };
+        if params.len() != args.len() {
             return Err(EvalError::Runtime(format!(
                 "function `{name}` parameter count mismatch: expected {}, got {}",
-                function.params.len(),
+                params.len(),
                 args.len()
             )));
         }
         let mut locals = HashMap::new();
-        for (param_name, arg) in function.params.iter().zip(args.iter()) {
+        for (param_name, arg) in params.iter().zip(args.iter()) {
             locals.insert(param_name.clone(), arg.clone());
         }
-        match self.exec_block(&function.body, &mut locals, depth)? {
+        match self.exec_block(&body, &mut locals, depth)? {
             FlowControl::Return(value) => Ok(value),
-            FlowControl::Next => Ok(Value::Unit),
+            FlowControl::Next => {
+                if let Some(tail) = &body.tail {
+                    self.eval_expr(tail, &mut locals, depth)
+                } else {
+                    Ok(Value::Unit)
+                }
+            }
             FlowControl::Break | FlowControl::ContinueLoop => Err(EvalError::Runtime(
                 "loop control statement escaped function body".into(),
             )),
@@ -441,6 +468,7 @@ impl<'a> Evaluator<'a> {
                     Ok(FlowControl::Next)
                 }
             }
+            TypedStatement::IfLet { .. } => Err(EvalError::UnsupportedFeature("if let statement")),
             TypedStatement::While { cond, body } => {
                 let mut iterations = 0usize;
                 loop {
@@ -523,9 +551,13 @@ impl<'a> Evaluator<'a> {
         match &expr.expr {
             ExprKind::Number(n) => Ok(Value::Int(*n)),
             ExprKind::Decimal(_) => Err(EvalError::UnsupportedFeature("decimal literal")),
+            ExprKind::AmountLiteral { .. } => Err(EvalError::UnsupportedFeature("Amount literal")),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::String(_) | ExprKind::Bytes(_) => {
                 Err(EvalError::UnsupportedFeature("string literal"))
+            }
+            ExprKind::List(_) | ExprKind::ListComprehension { .. } => {
+                Err(EvalError::UnsupportedFeature("bounded lists"))
             }
             ExprKind::Ident(name) => locals
                 .get(name)
@@ -580,7 +612,17 @@ impl<'a> Evaluator<'a> {
                     self.eval_expr(else_expr, locals, depth)
                 }
             }
-            ExprKind::Call { name, args } => {
+            ExprKind::If { .. }
+            | ExprKind::IfLet { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::OptionSome { .. }
+            | ExprKind::OptionNone
+            | ExprKind::ResultOk { .. }
+            | ExprKind::ResultErr { .. }
+            | ExprKind::Propagate { .. } => {
+                Err(EvalError::UnsupportedFeature("sum/control-flow expression"))
+            }
+            ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
                 let mut values = Vec::with_capacity(args.len());
                 for arg in args {
                     values.push(self.eval_expr(arg, locals, depth)?);
@@ -591,6 +633,13 @@ impl<'a> Evaluator<'a> {
                 let mut values = Vec::with_capacity(items.len());
                 for item in items {
                     values.push(self.eval_expr(item, locals, depth)?);
+                }
+                Ok(Value::Tuple(values))
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                let mut values = Vec::with_capacity(fields.len());
+                for (_, value) in fields {
+                    values.push(self.eval_expr(value, locals, depth)?);
                 }
                 Ok(Value::Tuple(values))
             }
@@ -614,6 +663,9 @@ impl<'a> Evaluator<'a> {
                 }
             }
             ExprKind::Index { .. } => Err(EvalError::UnsupportedFeature("index expression")),
+            ExprKind::JsonObject(_) | ExprKind::JsonArray(_) => {
+                Err(EvalError::UnsupportedFeature("native JSON construction"))
+            }
         }
     }
 

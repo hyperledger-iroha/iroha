@@ -1,14 +1,13 @@
-//! Canonical single-pass source parser and lossless CST construction.
+//! Canonical single-scan source parser and lossless CST construction.
 
 use crate::{
     ast::Program,
-    diagnostic::{DiagnosticBundle, DiagnosticPhase},
-    lexer::lower_lexed,
+    diagnostic::DiagnosticBundle,
     source::{FrontendBudget, SourceFile},
 };
 
 use super::{
-    cst::{Event, GreenToken, SyntaxTree, build_tree},
+    cst::{SyntaxOutline, SyntaxOutlineBuilder, SyntaxTree, build_tree_from_outline},
     kind::SyntaxKind,
     lexer::lex,
 };
@@ -39,8 +38,13 @@ impl ParseOutput {
 pub struct ProgramParseOutput {
     /// Complete lossless source tree.
     pub tree: SyntaxTree,
-    /// Compiler AST parsed from the spanned tokens, present only after success.
+    /// Plain tooling AST parsed from the spanned tokens, present only after
+    /// success. Hidden source/resolution provenance is stripped iteratively.
     pub program: Option<Program>,
+    /// Wrapper-bearing parser AST consumed only by compiler-internal resolved
+    /// HIR construction. Public tooling receives `program`, whose hidden
+    /// provenance wrappers have been removed iteratively.
+    pub(crate) sourced_program: Option<Program>,
     /// Deterministically ordered, bounded frontend diagnostics.
     pub diagnostics: DiagnosticBundle,
     /// Significant spanned tokens lowered from the same lossless scan.
@@ -49,6 +53,8 @@ pub struct ProgramParseOutput {
     /// ranges; exposing it only within the crate prevents a second scanner
     /// from drifting from the CST.
     pub(crate) tokens: Vec<crate::lexer::Token>,
+    /// Stable CST-derived AST source facts for compiler resolution.
+    pub(crate) ast_facts: Option<crate::spanned_ast::AstFacts>,
 }
 
 impl ProgramParseOutput {
@@ -62,28 +68,119 @@ impl ProgramParseOutput {
 /// Parse one source file once, producing both its lossless CST and compiler AST.
 #[must_use]
 pub fn parse_program(source: &SourceFile, budget: FrontendBudget) -> ProgramParseOutput {
+    parse_program_internal(source, budget, true)
+}
+
+pub(crate) fn parse_spanned_program(
+    source: &SourceFile,
+    budget: FrontendBudget,
+) -> Result<(crate::spanned_ast::SpannedProgram, Vec<crate::lexer::Token>), DiagnosticBundle> {
+    let output = parse_program_internal(source, budget, false);
+    match (output.sourced_program, output.ast_facts) {
+        (Some(program), Some(facts)) => Ok((
+            crate::spanned_ast::SpannedProgram { program, facts },
+            output.tokens,
+        )),
+        _ => Err(output.diagnostics),
+    }
+}
+
+fn parse_program_internal(
+    source: &SourceFile,
+    budget: FrontendBudget,
+    produce_plain_program: bool,
+) -> ProgramParseOutput {
     let lexed = lex(source, budget);
     let lossless_tokens = lexed.tokens.clone();
-    let (program, diagnostics, tokens) = match lower_lexed(source, budget, lexed) {
-        Ok(tokens) => {
-            let (program, diagnostics) =
-                match crate::parser::validate_nesting(source, budget, &tokens) {
-                    Ok(()) => match crate::parser::parse_tokens(source, &tokens) {
-                        Ok(program) => (Some(program), DiagnosticBundle::new(Vec::new())),
-                        Err(diagnostics) => (None, diagnostics),
-                    },
-                    Err(diagnostics) => (None, diagnostics),
+    let (lowered_tokens, lexical_diagnostics) =
+        crate::lexer::lower_lexed_recovering(source, budget, lexed);
+    let lexical_failure = !lexical_diagnostics.is_empty();
+    let resource_failure = lexical_diagnostics
+        .iter()
+        .any(|diagnostic| matches!(diagnostic.code.as_str(), "K0001" | "K0002" | "K0003"));
+    let (
+        mut program,
+        mut sourced_program,
+        mut ast_facts,
+        syntax_diagnostics,
+        tokens,
+        outline,
+        missing,
+    ) = if resource_failure {
+        (
+            None,
+            None,
+            None,
+            DiagnosticBundle::new(Vec::new()),
+            Vec::new(),
+            error_outline(source),
+            Vec::new(),
+        )
+    } else {
+        match crate::parser::validate_nesting(source, budget, &lowered_tokens) {
+            Ok(()) => {
+                let parsed = crate::parser::parse_with_syntax(source, &lowered_tokens);
+                let (program, sourced_program, ast_facts) =
+                    parsed.spanned.map_or((None, None, None), |spanned| {
+                        if produce_plain_program {
+                            let mut plain = spanned.program;
+                            crate::ast::strip_program_provenance(&mut plain);
+                            (Some(plain), None, None)
+                        } else {
+                            (None, Some(spanned.program), Some(spanned.facts))
+                        }
+                    });
+                let tokens = if produce_plain_program {
+                    Vec::new()
+                } else {
+                    lowered_tokens
                 };
-            (program, diagnostics, tokens)
+                (
+                    program,
+                    sourced_program,
+                    ast_facts,
+                    parsed.diagnostics,
+                    tokens,
+                    parsed.outline,
+                    parsed.missing,
+                )
+            }
+            Err(diagnostics) => (
+                None,
+                None,
+                None,
+                diagnostics,
+                Vec::new(),
+                error_outline(source),
+                Vec::new(),
+            ),
         }
-        Err(diagnostics) => (None, diagnostics, Vec::new()),
     };
-    let tree = recovery_tree(source, &lossless_tokens, &diagnostics);
+    if lexical_failure {
+        // Recovery trees are tooling output only. No AST containing or
+        // surrounding a malformed token can cross into semantic analysis.
+        program = None;
+        sourced_program = None;
+        ast_facts = None;
+    }
+    // Parser recovery after a malformed token exists to preserve CST shape,
+    // not to manufacture cascaded user diagnostics from a token that the
+    // semantic stream deliberately omitted. Report the authoritative lexical
+    // failures first; syntax diagnostics become authoritative only when the
+    // token stream itself was valid.
+    let diagnostics = if lexical_failure {
+        DiagnosticBundle::new(lexical_diagnostics)
+    } else {
+        syntax_diagnostics
+    };
+    let tree = build_tree_from_outline(source.id(), &lossless_tokens, &outline, &missing);
     ProgramParseOutput {
         tree,
         program,
+        sourced_program,
         diagnostics,
         tokens,
+        ast_facts,
     }
 }
 
@@ -97,940 +194,624 @@ pub fn parse(source: &SourceFile, budget: FrontendBudget) -> ParseOutput {
     }
 }
 
-fn recovery_tree(
-    source: &SourceFile,
-    tokens: &[GreenToken],
-    diagnostics: &DiagnosticBundle,
-) -> SyntaxTree {
-    let mut recovery_insertions = diagnostics
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| {
-            diagnostic.phase == DiagnosticPhase::Parse && diagnostic.code == "K1001"
-        })
-        .filter_map(|diagnostic| {
-            let span = diagnostic.primary_span.as_ref()?;
-            tokens
-                .iter()
-                .find(|token| {
-                    let position = source.line_column(token.range.start);
-                    position.line == span.start.line && position.column == span.start.column
-                })
-                .map(|token| RecoveryInsertion {
-                    offset: token.range.start,
-                    expected: expected_kind(&diagnostic.message),
-                })
-        })
-        .collect::<Vec<_>>();
-    recovery_insertions.sort_unstable_by_key(|insertion| insertion.offset);
-
-    let mut parser = StructuralParser::new(source, tokens, recovery_insertions);
-    parser.parse_root();
-    build_tree(source.id(), tokens, parser.events)
+fn error_outline(source: &SourceFile) -> SyntaxOutline {
+    let mut builder = SyntaxOutlineBuilder::default();
+    let root = builder.start(SyntaxKind::Root, 0);
+    let error = builder.start(SyntaxKind::ErrorNode, 0);
+    builder.finish(error, source.full_range().end);
+    builder.finish(root, source.full_range().end);
+    builder.into_outline()
 }
 
-#[derive(Clone, Copy, Debug)]
-struct RecoveryInsertion {
-    offset: u32,
-    expected: SyntaxKind,
-}
+#[cfg(test)]
+mod tests {
+    use std::fmt::Write as _;
 
-fn expected_kind(message: &str) -> SyntaxKind {
-    for (needle, kind) in [
-        ("`;`", SyntaxKind::Semicolon),
-        ("semicolon", SyntaxKind::Semicolon),
-        ("`)`", SyntaxKind::RParen),
-        ("`(`", SyntaxKind::LParen),
-        ("`}`", SyntaxKind::RBrace),
-        ("`{`", SyntaxKind::LBrace),
-        ("`]`", SyntaxKind::RBracket),
-        ("`[`", SyntaxKind::LBracket),
-        ("`,`", SyntaxKind::Comma),
-        ("`:`", SyntaxKind::Colon),
-        ("`=`", SyntaxKind::Equal),
-    ] {
-        if message.contains(needle) {
-            return kind;
+    use super::*;
+    use crate::source::SourceId;
+
+    fn count_nodes(node: &crate::syntax::GreenNode, kind: SyntaxKind) -> usize {
+        let mut count = usize::from(node.kind == kind);
+        for child in &node.children {
+            if let crate::syntax::GreenElement::Node(child) = child {
+                count = count.saturating_add(count_nodes(child, kind));
+            }
         }
-    }
-    SyntaxKind::Ident
-}
-
-/// A bounded, error-tolerant structural pass over the canonical lossless
-/// token stream. This pass does not decide whether source is compilable: the
-/// compiler parser above remains authoritative. Its only job is to give
-/// editors stable structure while retaining every token exactly once.
-struct StructuralParser<'source> {
-    source: &'source SourceFile,
-    tokens: &'source [GreenToken],
-    pos: usize,
-    events: Vec<Event>,
-    recovery_insertions: Vec<RecoveryInsertion>,
-    next_recovery: usize,
-    block_depth: usize,
-}
-
-impl<'source> StructuralParser<'source> {
-    fn new(
-        source: &'source SourceFile,
-        tokens: &'source [GreenToken],
-        recovery_insertions: Vec<RecoveryInsertion>,
-    ) -> Self {
-        Self {
-            source,
-            tokens,
-            pos: 0,
-            events: Vec::with_capacity(
-                tokens
-                    .len()
-                    .saturating_add(recovery_insertions.len())
-                    .saturating_mul(2),
-            ),
-            recovery_insertions,
-            next_recovery: 0,
-            block_depth: 0,
-        }
+        count
     }
 
-    fn parse_root(&mut self) {
-        self.start_at(SyntaxKind::Root, 0);
-        self.eat_trivia();
-        if self.at(SyntaxKind::KwSeiyaku) || self.at(SyntaxKind::KwModule) {
-            self.parse_source_unit();
-        } else if !self.at(SyntaxKind::Eof) {
-            self.parse_root_error();
-        }
-
-        loop {
-            self.eat_trivia();
-            if self.at(SyntaxKind::Eof) {
-                break;
-            }
-            if self.pos >= self.tokens.len() {
-                break;
-            }
-            self.parse_root_error();
-        }
-        self.eat_trivia();
-        if self.raw_kind() == Some(SyntaxKind::Eof) {
-            self.bump_raw();
-        } else {
-            self.missing(SyntaxKind::Eof);
-        }
-        self.emit_recovery_through(u32::MAX);
-        self.finish();
-    }
-
-    fn parse_source_unit(&mut self) {
-        self.start(SyntaxKind::SourceUnit);
-        if self.at(SyntaxKind::KwSeiyaku) {
-            self.expect(SyntaxKind::KwSeiyaku);
-        } else {
-            self.expect(SyntaxKind::KwModule);
-        }
-        self.expect(SyntaxKind::Ident);
-        self.expect(SyntaxKind::LBrace);
-
-        self.start(SyntaxKind::ItemList);
-        loop {
-            self.eat_trivia();
-            if self.at(SyntaxKind::RBrace)
-                || self.at(SyntaxKind::Eof)
-                || self.pos >= self.tokens.len()
-            {
-                break;
-            }
-            let before = self.pos;
-            self.parse_item();
-            if self.pos == before {
-                self.parse_source_error();
-            }
-        }
-        self.finish();
-        self.expect(SyntaxKind::RBrace);
-        self.finish();
-    }
-
-    fn parse_item(&mut self) {
-        match self.classify_item() {
-            Some(SyntaxKind::FunctionItem) => self.parse_function_item(),
-            Some(SyntaxKind::StructItem) => self.parse_braced_item(SyntaxKind::StructItem),
-            Some(SyntaxKind::ErrorEnumItem) => {
-                self.parse_braced_item(SyntaxKind::ErrorEnumItem);
-            }
-            Some(SyntaxKind::ConstItem) => self.parse_terminated_item(SyntaxKind::ConstItem),
-            Some(SyntaxKind::StateItem) => self.parse_terminated_item(SyntaxKind::StateItem),
-            Some(SyntaxKind::TriggerItem) => self.parse_braced_item(SyntaxKind::TriggerItem),
-            Some(SyntaxKind::FixtureItem) => self.parse_braced_item(SyntaxKind::FixtureItem),
-            Some(SyntaxKind::TestTargetItem) => {
-                self.parse_braced_item(SyntaxKind::TestTargetItem);
-            }
-            _ => self.parse_source_error(),
-        }
-    }
-
-    fn classify_item(&self) -> Option<SyntaxKind> {
-        let mut cursor = self.next_significant(self.pos)?;
-        while self.tokens.get(cursor)?.kind == SyntaxKind::Hash {
-            cursor = self.after_attribute(cursor)?;
-            cursor = self.next_significant(cursor)?;
-        }
-        self.classify_item_at(cursor)
-    }
-
-    fn classify_item_at(&self, cursor: usize) -> Option<SyntaxKind> {
-        let token = self.tokens.get(cursor)?;
-        match token.kind {
-            SyntaxKind::KwFn
-            | SyntaxKind::KwKotoage
-            | SyntaxKind::KwView
-            | SyntaxKind::KwHajimari
-            | SyntaxKind::KwKaizen => Some(SyntaxKind::FunctionItem),
-            SyntaxKind::KwStruct => Some(SyntaxKind::StructItem),
-            SyntaxKind::KwError => Some(SyntaxKind::ErrorEnumItem),
-            SyntaxKind::KwConst => Some(SyntaxKind::ConstItem),
-            SyntaxKind::KwState => Some(SyntaxKind::StateItem),
-            SyntaxKind::KwTrigger => Some(SyntaxKind::TriggerItem),
-            SyntaxKind::Ident => match self.source.slice(token.range) {
-                Some("fixture") => Some(SyntaxKind::FixtureItem),
-                Some("koto_test") => Some(SyntaxKind::TestTargetItem),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    fn after_attribute(&self, hash: usize) -> Option<usize> {
-        let open = self.next_significant(hash.saturating_add(1))?;
-        if self.tokens.get(open)?.kind != SyntaxKind::LBracket {
-            return Some(open);
-        }
-        let mut cursor = open.saturating_add(1);
-        let mut depth = 1_usize;
-        let mut parenthesis_depth = 0_usize;
-        while let Some(index) = self.next_significant(cursor) {
-            let kind = self.tokens[index].kind;
-            match kind {
-                SyntaxKind::LBracket => depth = depth.saturating_add(1),
-                SyntaxKind::RBracket => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        return Some(index.saturating_add(1));
-                    }
-                }
-                SyntaxKind::LParen => parenthesis_depth = parenthesis_depth.saturating_add(1),
-                SyntaxKind::RParen => parenthesis_depth = parenthesis_depth.saturating_sub(1),
-                SyntaxKind::RBrace | SyntaxKind::Eof => return Some(index),
-                _ if depth == 1
-                    && parenthesis_depth == 0
-                    && self.classify_item_at(index).is_some() =>
-                {
-                    return Some(index);
-                }
-                _ => {}
-            }
-            cursor = index.saturating_add(1);
-        }
-        None
-    }
-
-    fn parse_attributes(&mut self) {
-        while self.at(SyntaxKind::Hash) {
-            self.parse_attribute();
-            if !self.at(SyntaxKind::Hash) {
-                break;
-            }
-        }
-    }
-
-    fn parse_attribute(&mut self) {
-        self.start(SyntaxKind::Attribute);
-        self.expect(SyntaxKind::Hash);
-        if !self.at(SyntaxKind::LBracket) {
-            self.missing(SyntaxKind::LBracket);
-            self.finish();
-            return;
-        }
-        self.expect(SyntaxKind::LBracket);
-        let mut bracket_depth = 1_usize;
-        let mut parenthesis_depth = 0_usize;
-        let mut saw_body = false;
-        loop {
-            self.eat_trivia();
-            let Some(kind) = self.raw_kind() else {
-                self.missing(SyntaxKind::RBracket);
-                break;
-            };
-            match kind {
-                SyntaxKind::Eof | SyntaxKind::RBrace => {
-                    self.missing(SyntaxKind::RBracket);
-                    break;
-                }
-                SyntaxKind::RBracket if bracket_depth == 1 => {
-                    self.bump_raw();
-                    break;
-                }
-                SyntaxKind::LBracket => {
-                    bracket_depth = bracket_depth.saturating_add(1);
-                    saw_body = true;
-                    self.bump_structural_token();
-                }
-                SyntaxKind::RBracket => {
-                    bracket_depth = bracket_depth.saturating_sub(1);
-                    self.bump_structural_token();
-                }
-                SyntaxKind::LParen => {
-                    parenthesis_depth = parenthesis_depth.saturating_add(1);
-                    saw_body = true;
-                    self.bump_structural_token();
-                }
-                SyntaxKind::RParen => {
-                    parenthesis_depth = parenthesis_depth.saturating_sub(1);
-                    self.bump_structural_token();
-                }
-                _ if saw_body
-                    && bracket_depth == 1
-                    && parenthesis_depth == 0
-                    && self.classify_item_at(self.pos).is_some() =>
-                {
-                    self.missing(SyntaxKind::RBracket);
-                    break;
-                }
-                _ => {
-                    saw_body = true;
-                    self.bump_structural_token();
-                }
-            }
-        }
-        self.finish();
-    }
-
-    fn parse_function_item(&mut self) {
-        self.start(SyntaxKind::FunctionItem);
-        self.parse_attributes();
-        self.eat_trivia();
-        let named = match self.raw_kind() {
-            Some(SyntaxKind::KwKotoage | SyntaxKind::KwView) => {
-                self.bump_raw();
-                self.expect(SyntaxKind::KwFn);
-                true
-            }
-            Some(SyntaxKind::KwFn) => {
-                self.bump_raw();
-                true
-            }
-            Some(SyntaxKind::KwHajimari | SyntaxKind::KwKaizen) => {
-                self.bump_raw();
-                false
-            }
-            _ => {
-                self.parse_item_tail_as_error();
-                self.finish();
-                return;
-            }
-        };
-        if named {
-            self.expect(SyntaxKind::Ident);
-        }
-        self.parse_param_list();
-        self.consume_function_header();
-        if self.at(SyntaxKind::LBrace) {
-            self.parse_block();
-        } else {
-            self.parse_missing_block();
-        }
-        self.finish();
-    }
-
-    fn parse_param_list(&mut self) {
-        self.eat_trivia();
-        self.start(SyntaxKind::ParamList);
-        if !self.at(SyntaxKind::LParen) {
-            self.missing(SyntaxKind::LParen);
-            self.missing(SyntaxKind::RParen);
-            self.finish();
-            return;
-        }
-        self.expect(SyntaxKind::LParen);
-        let mut depth = 1_usize;
-        loop {
-            self.eat_trivia();
-            let Some(kind) = self.raw_kind() else {
-                self.missing(SyntaxKind::RParen);
-                break;
-            };
-            match kind {
-                SyntaxKind::Eof | SyntaxKind::RBrace | SyntaxKind::LBrace if depth == 1 => {
-                    self.missing(SyntaxKind::RParen);
-                    break;
-                }
-                SyntaxKind::RParen => {
-                    depth = depth.saturating_sub(1);
-                    self.bump_raw();
-                    if depth == 0 {
-                        break;
-                    }
-                }
-                SyntaxKind::LParen => {
-                    depth = depth.saturating_add(1);
-                    self.bump_structural_token();
-                }
-                _ => self.bump_structural_token(),
-            }
-        }
-        self.finish();
-    }
-
-    fn consume_function_header(&mut self) {
-        let mut parenthesis_depth = 0_usize;
-        let mut bracket_depth = 0_usize;
-        loop {
-            self.eat_trivia();
-            let Some(kind) = self.raw_kind() else {
-                return;
-            };
-            if parenthesis_depth == 0 && bracket_depth == 0 {
-                if matches!(
-                    kind,
-                    SyntaxKind::LBrace | SyntaxKind::RBrace | SyntaxKind::Eof
-                ) || self.starts_unattributed_item_at(self.pos)
-                {
-                    return;
-                }
-            }
-            match kind {
-                SyntaxKind::LParen => parenthesis_depth = parenthesis_depth.saturating_add(1),
-                SyntaxKind::RParen => parenthesis_depth = parenthesis_depth.saturating_sub(1),
-                SyntaxKind::LBracket => bracket_depth = bracket_depth.saturating_add(1),
-                SyntaxKind::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
-                _ => {}
-            }
-            self.bump_structural_token();
-        }
-    }
-
-    fn parse_block(&mut self) {
-        self.start(SyntaxKind::Block);
-        self.expect(SyntaxKind::LBrace);
-        self.start(SyntaxKind::StatementList);
-        self.block_depth = self.block_depth.saturating_add(1);
-        loop {
-            self.eat_trivia();
-            if self.at(SyntaxKind::RBrace)
-                || self.at(SyntaxKind::Eof)
-                || self.pos >= self.tokens.len()
-            {
-                break;
-            }
-            let before = self.pos;
-            if self.block_depth > 256 {
-                self.parse_statement_error();
-            } else {
-                self.parse_statement();
-            }
-            if self.pos == before {
-                self.parse_statement_error();
-            }
-        }
-        self.block_depth = self.block_depth.saturating_sub(1);
-        self.finish();
-        self.expect(SyntaxKind::RBrace);
-        self.finish();
-    }
-
-    fn parse_missing_block(&mut self) {
-        self.start(SyntaxKind::Block);
-        self.missing(SyntaxKind::LBrace);
-        self.start(SyntaxKind::StatementList);
-        self.finish();
-        self.missing(SyntaxKind::RBrace);
-        self.finish();
-    }
-
-    fn parse_statement(&mut self) {
-        match self.peek_kind() {
-            Some(SyntaxKind::KwLet | SyntaxKind::KwVar) => {
-                self.parse_simple_statement(SyntaxKind::LetStmt);
-            }
-            Some(SyntaxKind::KwReturn) => {
-                self.parse_simple_statement(SyntaxKind::ReturnStmt);
-            }
-            Some(SyntaxKind::KwBreak) => {
-                self.parse_simple_statement(SyntaxKind::BreakStmt);
-            }
-            Some(SyntaxKind::KwContinue) => {
-                self.parse_simple_statement(SyntaxKind::ContinueStmt);
-            }
-            Some(SyntaxKind::KwIf) => self.parse_if_statement(),
-            Some(SyntaxKind::KwFor) => self.parse_for_statement(),
-            Some(SyntaxKind::LBrace | SyntaxKind::ErrorToken) => {
-                self.parse_statement_error();
-            }
-            Some(_) => self.parse_simple_statement(SyntaxKind::ExprStmt),
-            None => {}
-        }
-    }
-
-    fn parse_simple_statement(&mut self, kind: SyntaxKind) {
-        self.start(kind);
-        let mut parenthesis_depth = 0_usize;
-        let mut bracket_depth = 0_usize;
-        let mut brace_depth = 0_usize;
-        let mut saw_token = false;
-        loop {
-            self.eat_trivia();
-            let Some(current) = self.raw_kind() else {
-                self.missing(SyntaxKind::Semicolon);
-                break;
-            };
-            let at_base = parenthesis_depth == 0 && bracket_depth == 0 && brace_depth == 0;
-            if matches!(current, SyntaxKind::Eof)
-                || (brace_depth == 0 && current == SyntaxKind::RBrace)
-            {
-                self.missing_unclosed_delimiters(parenthesis_depth, bracket_depth, brace_depth);
-                self.missing(SyntaxKind::Semicolon);
-                break;
-            }
-            if current == SyntaxKind::Semicolon && brace_depth == 0 {
-                self.missing_unclosed_delimiters(parenthesis_depth, bracket_depth, brace_depth);
-                self.bump_raw();
-                break;
-            }
-            if at_base && saw_token && self.starts_statement_at(self.pos) {
-                self.missing(SyntaxKind::Semicolon);
-                break;
-            }
-            match current {
-                SyntaxKind::LParen => parenthesis_depth = parenthesis_depth.saturating_add(1),
-                SyntaxKind::RParen => parenthesis_depth = parenthesis_depth.saturating_sub(1),
-                SyntaxKind::LBracket => bracket_depth = bracket_depth.saturating_add(1),
-                SyntaxKind::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
-                SyntaxKind::LBrace => brace_depth = brace_depth.saturating_add(1),
-                SyntaxKind::RBrace => brace_depth = brace_depth.saturating_sub(1),
-                _ => {}
-            }
-            saw_token = true;
-            self.bump_structural_token();
-        }
-        self.finish();
-    }
-
-    fn parse_if_statement(&mut self) {
-        self.start(SyntaxKind::IfStmt);
-        self.expect(SyntaxKind::KwIf);
-        self.consume_control_header();
-        if self.at(SyntaxKind::LBrace) {
-            self.parse_block();
-        } else {
-            self.parse_missing_block();
-        }
-        if self.at(SyntaxKind::KwElse) {
-            self.expect(SyntaxKind::KwElse);
-            if self.at(SyntaxKind::LBrace) {
-                self.parse_block();
-            } else if self.at(SyntaxKind::KwIf) {
-                self.parse_if_statement();
-            } else {
-                self.parse_missing_block();
-            }
-        }
-        self.finish();
-    }
-
-    fn parse_for_statement(&mut self) {
-        self.start(SyntaxKind::ForStmt);
-        self.expect(SyntaxKind::KwFor);
-        self.consume_control_header();
-        if self.at(SyntaxKind::LBrace) {
-            self.parse_block();
-        } else {
-            self.parse_missing_block();
-        }
-        self.finish();
-    }
-
-    fn consume_control_header(&mut self) {
-        let mut parenthesis_depth = 0_usize;
-        let mut bracket_depth = 0_usize;
-        loop {
-            self.eat_trivia();
-            let Some(kind) = self.raw_kind() else {
-                return;
-            };
-            if parenthesis_depth == 0 && bracket_depth == 0 {
-                if matches!(
-                    kind,
-                    SyntaxKind::LBrace | SyntaxKind::RBrace | SyntaxKind::Eof
-                ) || self.starts_statement_at(self.pos)
-                {
-                    return;
-                }
-            }
-            match kind {
-                SyntaxKind::LParen => parenthesis_depth = parenthesis_depth.saturating_add(1),
-                SyntaxKind::RParen => parenthesis_depth = parenthesis_depth.saturating_sub(1),
-                SyntaxKind::LBracket => bracket_depth = bracket_depth.saturating_add(1),
-                SyntaxKind::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
-                _ => {}
-            }
-            self.bump_structural_token();
-        }
-    }
-
-    fn parse_braced_item(&mut self, kind: SyntaxKind) {
-        self.start(kind);
-        self.parse_attributes();
-        let mut brace_depth = 0_usize;
-        let mut saw_open = false;
-        loop {
-            self.eat_trivia();
-            let Some(current) = self.raw_kind() else {
-                break;
-            };
-            if matches!(current, SyntaxKind::Eof) || (!saw_open && current == SyntaxKind::RBrace) {
-                break;
-            }
-            match current {
-                SyntaxKind::LBrace => {
-                    brace_depth = brace_depth.saturating_add(1);
-                    saw_open = true;
-                }
-                SyntaxKind::RBrace => brace_depth = brace_depth.saturating_sub(1),
-                _ => {}
-            }
-            self.bump_structural_token();
-            if saw_open && brace_depth == 0 {
-                break;
-            }
-        }
-        if !saw_open {
-            self.missing(SyntaxKind::LBrace);
-        }
-        if !saw_open || brace_depth != 0 {
-            self.missing(SyntaxKind::RBrace);
-        }
-        self.finish();
-    }
-
-    fn parse_terminated_item(&mut self, kind: SyntaxKind) {
-        self.start(kind);
-        self.parse_attributes();
-        let mut parenthesis_depth = 0_usize;
-        let mut bracket_depth = 0_usize;
-        loop {
-            self.eat_trivia();
-            let Some(current) = self.raw_kind() else {
-                self.missing(SyntaxKind::Semicolon);
-                break;
-            };
-            if parenthesis_depth == 0 && bracket_depth == 0 {
-                if current == SyntaxKind::Semicolon {
-                    self.bump_raw();
-                    break;
-                }
-                if matches!(current, SyntaxKind::RBrace | SyntaxKind::Eof)
-                    || self.starts_unattributed_item_at(self.pos)
-                {
-                    self.missing(SyntaxKind::Semicolon);
-                    break;
-                }
-            }
-            match current {
-                SyntaxKind::LParen => parenthesis_depth = parenthesis_depth.saturating_add(1),
-                SyntaxKind::RParen => parenthesis_depth = parenthesis_depth.saturating_sub(1),
-                SyntaxKind::LBracket => bracket_depth = bracket_depth.saturating_add(1),
-                SyntaxKind::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
-                _ => {}
-            }
-            self.bump_structural_token();
-        }
-        self.finish();
-    }
-
-    fn parse_root_error(&mut self) {
-        self.start(SyntaxKind::ErrorNode);
-        let mut brace_depth = 0_usize;
-        let mut consumed = false;
-        loop {
-            self.eat_trivia();
-            let Some(kind) = self.raw_kind() else {
-                break;
-            };
-            if kind == SyntaxKind::Eof {
-                break;
-            }
-            if consumed
-                && brace_depth == 0
-                && matches!(kind, SyntaxKind::KwSeiyaku | SyntaxKind::KwModule)
-            {
-                break;
-            }
-            match kind {
-                SyntaxKind::LBrace => brace_depth = brace_depth.saturating_add(1),
-                SyntaxKind::RBrace => brace_depth = brace_depth.saturating_sub(1),
-                _ => {}
-            }
-            consumed = true;
-            self.bump_raw();
-            if brace_depth == 0 && kind == SyntaxKind::Semicolon {
-                break;
-            }
-        }
-        if !consumed && self.raw_kind() != Some(SyntaxKind::Eof) {
-            self.bump_raw();
-        }
-        self.finish();
-    }
-
-    fn parse_source_error(&mut self) {
-        self.start(SyntaxKind::ErrorNode);
-        let mut delimiter_depth = 0_usize;
-        let mut consumed = false;
-        loop {
-            self.eat_trivia();
-            let Some(kind) = self.raw_kind() else {
-                break;
-            };
-            if matches!(kind, SyntaxKind::Eof)
-                || (delimiter_depth == 0 && kind == SyntaxKind::RBrace)
-                || (consumed
-                    && delimiter_depth == 0
-                    && (kind == SyntaxKind::Hash || self.classify_item_at(self.pos).is_some()))
-            {
-                break;
-            }
-            match kind {
-                SyntaxKind::LParen | SyntaxKind::LBracket | SyntaxKind::LBrace => {
-                    delimiter_depth = delimiter_depth.saturating_add(1);
-                }
-                SyntaxKind::RParen | SyntaxKind::RBracket | SyntaxKind::RBrace => {
-                    delimiter_depth = delimiter_depth.saturating_sub(1);
-                }
-                _ => {}
-            }
-            consumed = true;
-            self.bump_raw();
-            if delimiter_depth == 0 && kind == SyntaxKind::Semicolon {
-                break;
-            }
-        }
-        if !consumed
-            && !matches!(
-                self.raw_kind(),
-                None | Some(SyntaxKind::Eof | SyntaxKind::RBrace)
-            )
-        {
-            self.bump_raw();
-        }
-        self.finish();
-    }
-
-    fn parse_statement_error(&mut self) {
-        self.start(SyntaxKind::ErrorNode);
-        let mut delimiter_depth = 0_usize;
-        let mut consumed = false;
-        loop {
-            self.eat_trivia();
-            let Some(kind) = self.raw_kind() else {
-                break;
-            };
-            if matches!(kind, SyntaxKind::Eof)
-                || (delimiter_depth == 0 && kind == SyntaxKind::RBrace)
-                || (consumed && delimiter_depth == 0 && self.starts_statement_at(self.pos))
-            {
-                break;
-            }
-            match kind {
-                SyntaxKind::LParen | SyntaxKind::LBracket | SyntaxKind::LBrace => {
-                    delimiter_depth = delimiter_depth.saturating_add(1);
-                }
-                SyntaxKind::RParen | SyntaxKind::RBracket | SyntaxKind::RBrace => {
-                    delimiter_depth = delimiter_depth.saturating_sub(1);
-                }
-                _ => {}
-            }
-            consumed = true;
-            self.bump_raw();
-            if delimiter_depth == 0 && kind == SyntaxKind::Semicolon {
-                break;
-            }
-        }
-        if !consumed
-            && !matches!(
-                self.raw_kind(),
-                None | Some(SyntaxKind::Eof | SyntaxKind::RBrace)
-            )
-        {
-            self.bump_raw();
-        }
-        self.finish();
-    }
-
-    fn parse_item_tail_as_error(&mut self) {
-        self.start(SyntaxKind::ErrorNode);
-        let before = self.pos;
-        self.parse_source_error_contents();
-        if self.pos == before && self.raw_kind().is_some() {
-            self.bump_raw();
-        }
-        self.finish();
-    }
-
-    fn parse_source_error_contents(&mut self) {
-        let mut delimiter_depth = 0_usize;
-        loop {
-            self.eat_trivia();
-            let Some(kind) = self.raw_kind() else {
-                break;
-            };
-            if matches!(kind, SyntaxKind::Eof)
-                || (delimiter_depth == 0 && kind == SyntaxKind::RBrace)
-            {
-                break;
-            }
-            match kind {
-                SyntaxKind::LParen | SyntaxKind::LBracket | SyntaxKind::LBrace => {
-                    delimiter_depth = delimiter_depth.saturating_add(1);
-                }
-                SyntaxKind::RParen | SyntaxKind::RBracket | SyntaxKind::RBrace => {
-                    delimiter_depth = delimiter_depth.saturating_sub(1);
-                }
-                _ => {}
-            }
-            self.bump_raw();
-            if delimiter_depth == 0 && kind == SyntaxKind::Semicolon {
-                break;
-            }
-        }
-    }
-
-    fn starts_statement_at(&self, cursor: usize) -> bool {
-        self.tokens.get(cursor).is_some_and(|token| {
-            matches!(
-                token.kind,
-                SyntaxKind::KwLet
-                    | SyntaxKind::KwVar
-                    | SyntaxKind::KwReturn
-                    | SyntaxKind::KwBreak
-                    | SyntaxKind::KwContinue
-                    | SyntaxKind::KwIf
-                    | SyntaxKind::KwFor
-            )
-        })
-    }
-
-    fn missing_unclosed_delimiters(
-        &mut self,
-        parenthesis_depth: usize,
-        bracket_depth: usize,
-        brace_depth: usize,
+    fn cst_snapshot(
+        node: &crate::syntax::GreenNode,
+        source: &SourceFile,
+        depth: usize,
+        output: &mut String,
     ) {
-        if parenthesis_depth != 0 {
-            self.missing(SyntaxKind::RParen);
-        }
-        if bracket_depth != 0 {
-            self.missing(SyntaxKind::RBracket);
-        }
-        if brace_depth != 0 {
-            self.missing(SyntaxKind::RBrace);
-        }
-    }
-
-    fn starts_unattributed_item_at(&self, cursor: usize) -> bool {
-        self.classify_item_at(cursor).is_some()
-    }
-
-    fn next_significant(&self, mut cursor: usize) -> Option<usize> {
-        while self.tokens.get(cursor)?.kind.is_trivia() {
-            cursor = cursor.saturating_add(1);
-        }
-        Some(cursor)
-    }
-
-    fn peek_kind(&self) -> Option<SyntaxKind> {
-        self.next_significant(self.pos)
-            .and_then(|index| self.tokens.get(index))
-            .map(|token| token.kind)
-    }
-
-    fn at(&self, kind: SyntaxKind) -> bool {
-        self.peek_kind() == Some(kind)
-    }
-
-    fn raw_kind(&self) -> Option<SyntaxKind> {
-        self.tokens.get(self.pos).map(|token| token.kind)
-    }
-
-    fn expect(&mut self, kind: SyntaxKind) {
-        self.eat_trivia();
-        if self.raw_kind() == Some(kind) {
-            self.bump_raw();
-        } else {
-            self.missing(kind);
+        let indent = "  ".repeat(depth);
+        writeln!(
+            output,
+            "{indent}{:?}@{}..{}",
+            node.kind, node.range.start, node.range.end
+        )
+        .expect("write CST node snapshot");
+        for child in &node.children {
+            match child {
+                crate::syntax::GreenElement::Node(child) => {
+                    cst_snapshot(child, source, depth + 1, output);
+                }
+                crate::syntax::GreenElement::Token(token)
+                    if !token.kind.is_trivia() && token.kind != SyntaxKind::Eof =>
+                {
+                    if token.is_missing() {
+                        writeln!(
+                            output,
+                            "{indent}  Missing({:?})@{}",
+                            token.expected, token.range.start
+                        )
+                        .expect("write missing-token snapshot");
+                    } else {
+                        writeln!(
+                            output,
+                            "{indent}  {:?}={:?}@{}..{}",
+                            token.kind,
+                            source.slice(token.range).unwrap_or_default(),
+                            token.range.start,
+                            token.range.end
+                        )
+                        .expect("write CST token snapshot");
+                    }
+                }
+                crate::syntax::GreenElement::Token(_) => {}
+            }
         }
     }
 
-    fn eat_trivia(&mut self) {
-        while self.raw_kind().is_some_and(SyntaxKind::is_trivia) {
-            self.bump_raw();
-        }
+    #[test]
+    fn cst_preserves_amount_literal_text() {
+        let text = "seiyaku Demo { view fn amount() -> Amount { return 1.250_0amt; } }";
+        let source = SourceFile::new(SourceId(0), "amount.ko", text);
+        let output = parse(&source, FrontendBudget::v1());
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
+        assert_eq!(output.tree.text(&source), text);
+        assert!(
+            output
+                .tree
+                .tokens()
+                .iter()
+                .any(|token| token.kind == SyntaxKind::Amount)
+        );
     }
 
-    fn bump_structural_token(&mut self) {
-        if self.raw_kind() == Some(SyntaxKind::ErrorToken) {
-            self.start(SyntaxKind::ErrorNode);
-            self.bump_raw();
-            self.finish();
-        } else {
-            self.bump_raw();
-        }
+    #[test]
+    fn compiler_uses_one_direct_cst_lowering_without_a_token_only_reparse() {
+        crate::parser::reset_direct_cst_lowering_count();
+        let text = r#"seiyaku Direct {
+            struct Pair { left: i64, right: i64 }
+            const limit: i64 = 2;
+            state value: i64;
+            hajimari() { value = 0; }
+            kotoage fn set(next: i64) authorize("Set") { value = next; }
+            view fn read() -> i64 { value }
+        }"#;
+        let source = SourceFile::new(SourceId(41), "direct.ko", text);
+        let output = parse_program(&source, FrontendBudget::v1());
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
+        assert_eq!(crate::parser::direct_cst_lowering_count(), 1);
+        assert_eq!(output.tree.text(&source), text);
     }
 
-    fn bump_raw(&mut self) {
-        let Some(token) = self.tokens.get(self.pos) else {
-            return;
+    #[test]
+    fn public_ast_is_plain_but_internal_ast_retains_direct_node_ids() {
+        use crate::ast::{Item, Statement};
+
+        let text = "誓約 Direct { 始まり() { let value: i64 = 1; } }";
+        let source = SourceFile::new(SourceId(45), "direct-node-ids.ko", text);
+        let public = parse_program(&source, FrontendBudget::v1());
+        assert!(public.sourced_program.is_none());
+        assert!(public.ast_facts.is_none());
+        assert!(public.tokens.is_empty());
+        let public_program = public.program.expect("plain public AST");
+        let Item::Function(public_function) = &public_program.items[0] else {
+            panic!("expected lifecycle function")
         };
-        self.emit_recovery_through(token.range.start);
-        self.events.push(Event::Token(self.pos));
-        self.pos = self.pos.saturating_add(1);
+        assert!(matches!(
+            public_function.body.statements[0],
+            Statement::Let { .. }
+        ));
+
+        let (spanned, _) = parse_spanned_program(&source, FrontendBudget::v1())
+            .expect("wrapper-bearing compiler AST");
+        let Item::Function(function) = &spanned.program.items[0] else {
+            panic!("expected lifecycle function")
+        };
+        let Statement::Source {
+            node,
+            source: statement_source,
+            ..
+        } = &function.body.statements[0]
+        else {
+            panic!("compiler AST statement must retain direct provenance")
+        };
+        assert_eq!(
+            spanned
+                .facts
+                .source_map
+                .node(*node)
+                .map(|entry| entry.range),
+            Some(statement_source.range)
+        );
     }
 
-    fn emit_recovery_through(&mut self, offset: u32) {
-        while let Some(insertion) = self.recovery_insertions.get(self.next_recovery)
-            && insertion.offset <= offset
-        {
-            self.events.push(Event::Missing {
-                expected: insertion.expected,
-                offset: insertion.offset,
-            });
-            self.next_recovery = self.next_recovery.saturating_add(1);
+    #[test]
+    fn structured_missing_tokens_are_independent_of_diagnostic_wording() {
+        let text = "seiyaku Broken { fn bad(value i64) { return; } }";
+        let source = SourceFile::new(SourceId(46), "structured-missing.ko", text);
+        let lexed = lex(&source, FrontendBudget::v1());
+        let lossless = lexed.tokens.clone();
+        let tokens = crate::lexer::lower_lexed(&source, FrontendBudget::v1(), lexed)
+            .expect("lower significant token view");
+        let mut parsed = crate::parser::parse_with_syntax(&source, &tokens);
+        let missing_offset =
+            u32::try_from(text.find("i64").expect("unexpected type")).expect("source budget");
+        assert!(parsed.missing.iter().any(|missing| {
+            missing.offset == missing_offset && missing.expected == SyntaxKind::Colon
+        }));
+        for diagnostic in &mut parsed.diagnostics.diagnostics {
+            diagnostic.message = "localized parser message without token spelling".into();
+        }
+        let tree =
+            build_tree_from_outline(source.id(), &lossless, &parsed.outline, &parsed.missing);
+        assert!(
+            tree.tokens()
+                .iter()
+                .any(|token| { token.is_missing() && token.expected == Some(SyntaxKind::Colon) })
+        );
+    }
+
+    #[test]
+    fn direct_cst_lowering_preserves_every_branded_declaration_form() {
+        use crate::ast::{FunctionKind, Item, SourceUnitKind};
+
+        let text = r#"誓約 Branded {
+            struct Pair { left: i64, right: i64 }
+            error enum Failure { Bad = 1 }
+            const limit: i64 = 2;
+            state value: i64;
+            trigger tick -> apply { on time pre_commit; }
+            始まり() { value = 0; }
+            改善() { value = value + 1; }
+            言挙げ fn apply(next: i64) authorize("Apply") { value = next; }
+            view fn read() -> i64 { value }
+            fn helper(value: i64) -> i64 { value }
+        }"#;
+        let source = SourceFile::new(SourceId(42), "branded-direct.ko", text);
+        let output = parse_program(&source, FrontendBudget::v1());
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
+        let program = output.program.expect("direct CST AST");
+        assert_eq!(program.unit.kind, SourceUnitKind::Seiyaku);
+        let functions = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(function) => Some((function.name.as_str(), function.modifiers.kind)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            functions,
+            [
+                ("hajimari", FunctionKind::Hajimari),
+                ("kaizen", FunctionKind::Kaizen),
+                ("apply", FunctionKind::Kotoage),
+                ("read", FunctionKind::View),
+                ("helper", FunctionKind::Private),
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_cst_lowering_recovers_multiple_malformed_items() {
+        let text = r#"seiyaku Broken {
+            fn first(value i64) { return; }
+            fn second() { let missing: i64 = ; return; }
+            fn third(flag: bool) { if flag { return } }
+        }"#;
+        let source = SourceFile::new(SourceId(43), "multi-error.ko", text);
+        let output = parse_program(&source, FrontendBudget::v1());
+        assert_eq!(output.tree.text(&source), text);
+        assert!(!output.is_ok());
+        assert!(
+            output.diagnostics.diagnostics.len() >= 2,
+            "{:?}",
+            output.diagnostics
+        );
+        assert!(output.diagnostics.diagnostics.iter().all(|diagnostic| {
+            diagnostic
+                .primary_span
+                .as_ref()
+                .and_then(|span| span.byte_range)
+                .is_some_and(|range| source.slice(range).is_some())
+        }));
+        assert!(output.tree.tokens().iter().any(|token| token.is_missing()));
+    }
+
+    #[test]
+    fn japanese_keyword_name_facts_keep_exact_utf8_byte_ranges() {
+        let text = "誓約 Demo { 始まり() { let message: string = \"雪\"; } }";
+        let source = SourceFile::new(SourceId(44), "unicode-spans.ko", text);
+        let (spanned, _) =
+            parse_spanned_program(&source, FrontendBudget::v1()).expect("direct-ID compiler AST");
+        let facts = spanned.facts;
+        let lifecycle = facts
+            .declarations
+            .iter()
+            .find(|declaration| declaration.name == "hajimari")
+            .expect("hajimari declaration");
+        let name = facts
+            .source_map
+            .node(lifecycle.name_node)
+            .expect("lifecycle name node");
+        let declaration = facts
+            .source_map
+            .node(lifecycle.node)
+            .expect("lifecycle declaration node");
+        assert_eq!(source.slice(name.range), Some("始まり"));
+        assert_eq!(
+            source.slice(declaration.range),
+            Some("始まり() { let message: string = \"雪\"; }")
+        );
+        assert_eq!(
+            name.range.start,
+            u32::try_from(text.find("始まり").expect("keyword offset"))
+                .expect("source budget fits u32")
+        );
+        assert!(text.is_char_boundary(
+            usize::try_from(name.range.start).expect("source budget fits usize")
+        ));
+        assert!(
+            text.is_char_boundary(
+                usize::try_from(name.range.end).expect("source budget fits usize")
+            )
+        );
+    }
+
+    #[test]
+    fn cst_recovers_without_losing_unsuffixed_fraction_text() {
+        let text = "seiyaku Demo { fn invalid() { let value = 1.25; } }";
+        let source = SourceFile::new(SourceId(0), "invalid-amount.ko", text);
+        let output = parse(&source, FrontendBudget::v1());
+        assert!(!output.is_ok());
+        assert_eq!(output.diagnostics.diagnostics[0].code, "E_AMOUNT_SUFFIX");
+        assert_eq!(output.tree.text(&source), text);
+        assert!(
+            output
+                .tree
+                .tokens()
+                .iter()
+                .any(|token| token.kind == SyntaxKind::ErrorToken)
+        );
+    }
+
+    #[test]
+    fn cst_preserves_named_call_and_struct_literal_tokens() {
+        let text = "seiyaku Demo { struct Pair { first: i64, second: string } fn build(first: i64) -> Pair { return Pair { second: \"two\", first, }; } fn call() { build(first: 1,); } }";
+        let source = SourceFile::new(SourceId(0), "named.ko", text);
+        let output = parse(&source, FrontendBudget::v1());
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
+        assert_eq!(output.tree.text(&source), text);
+        let kinds = output
+            .tree
+            .tokens()
+            .iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
+        assert!(
+            kinds
+                .iter()
+                .filter(|kind| **kind == SyntaxKind::Colon)
+                .count()
+                >= 5
+        );
+        assert!(
+            kinds
+                .iter()
+                .filter(|kind| **kind == SyntaxKind::Comma)
+                .count()
+                >= 4
+        );
+    }
+
+    #[test]
+    fn named_source_units_do_not_synthesize_missing_tokens() {
+        for text in ["seiyaku Demo {}", "誓約 Demo {}", "module Demo {}"] {
+            let source = SourceFile::new(SourceId(0), "named-unit.ko", text);
+            let output = parse_program(&source, FrontendBudget::v1());
+            assert!(output.is_ok(), "{text}: {:?}", output.diagnostics);
+            assert_eq!(output.tree.text(&source), text);
+            assert!(
+                output.tree.tokens().iter().all(|token| !token.is_missing()),
+                "valid named source unit synthesized a recovery token: {text}"
+            );
         }
     }
 
-    fn missing(&mut self, expected: SyntaxKind) {
-        self.events.push(Event::Missing {
-            expected,
-            offset: self.current_offset(),
-        });
+    #[test]
+    fn statement_boundaries_lower_only_source_tokens() {
+        let text = r#"seiyaku Statements {
+            state value: i64;
+            hajimari() {
+                value = 0;
+            }
+            kotoage fn update(limit: i64) authorize("Update") {
+                var total: i64 = 0;
+                for item in range(4) {
+                    if item < limit { total += item; } else { continue; }
+                }
+                value = total;
+            }
+            view fn read() -> i64 { return value; }
+        }"#;
+        let source = SourceFile::new(SourceId(0), "statements.ko", text);
+        let output = parse_program(&source, FrontendBudget::v1());
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
+        assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
+        assert_eq!(output.tree.text(&source), text);
     }
 
-    fn current_offset(&self) -> u32 {
-        self.tokens
-            .get(self.pos)
-            .map_or(self.source.full_range().end, |token| token.range.start)
+    #[test]
+    fn cst_terminated_items_do_not_leak_recovery_tokens_into_the_ast_stream() {
+        let text = r#"seiyaku Demo {
+    state values: StateMap<i64, i64>;
+    const limit: i64 = 2;
+    view fn read() -> i64 { values.get(limit).unwrap_or(0) }
+}"#;
+        let source = SourceFile::new(SourceId(0), "terminated-items.ko", text);
+        let output = parse_program(&source, FrontendBudget::v1());
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
+        assert_eq!(output.tree.text(&source), text);
+        assert_eq!(count_nodes(output.tree.root(), SyntaxKind::StateItem), 1);
+        assert_eq!(count_nodes(output.tree.root(), SyntaxKind::ConstItem), 1);
+        assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
     }
 
-    fn start(&mut self, kind: SyntaxKind) {
-        self.start_at(kind, self.current_offset());
+    #[test]
+    fn cst_terminated_items_track_braced_initializers() {
+        let text = r#"seiyaku Demo {
+    struct Entry { value: i64 }
+    const payload: Json = json { value: 1, };
+    const entry: Entry = Entry { value: 2, };
+    view fn read() -> i64 { entry.value }
+}"#;
+        let source = SourceFile::new(SourceId(0), "braced-consts.ko", text);
+        let output = parse_program(&source, FrontendBudget::v1());
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
+        assert_eq!(output.tree.text(&source), text);
+        assert_eq!(count_nodes(output.tree.root(), SyntaxKind::ConstItem), 2);
+        assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
     }
 
-    fn start_at(&mut self, kind: SyntaxKind, offset: u32) {
-        self.events.push(Event::Start { kind, offset });
+    #[test]
+    fn cst_missing_semicolon_recovers_before_an_attributed_item() {
+        let text = r#"seiyaku Demo {
+    const limit: i64 = 2
+    #[test]
+    fn check() {}
+}"#;
+        let source = SourceFile::new(SourceId(0), "attributed-recovery.ko", text);
+        let output = parse_program(&source, FrontendBudget::v1());
+        assert!(!output.is_ok());
+        assert_eq!(output.tree.text(&source), text);
+        assert_eq!(count_nodes(output.tree.root(), SyntaxKind::ConstItem), 1);
+        assert_eq!(count_nodes(output.tree.root(), SyntaxKind::FunctionItem), 1);
+        assert_eq!(count_nodes(output.tree.root(), SyntaxKind::Attribute), 1);
+        assert!(output.tree.tokens().iter().any(|token| {
+            token.kind == SyntaxKind::Missing && token.expected == Some(SyntaxKind::Semicolon)
+        }));
     }
 
-    fn finish(&mut self) {
-        self.events.push(Event::Finish {
-            offset: self.current_offset(),
-        });
+    #[test]
+    fn cst_missing_semicolon_recovers_before_a_plain_item() {
+        let text = r#"seiyaku Demo {
+    const limit: i64 = 2
+    fn check() {}
+}"#;
+        let source = SourceFile::new(SourceId(0), "plain-recovery.ko", text);
+        let output = parse_program(&source, FrontendBudget::v1());
+        assert!(!output.is_ok());
+        assert_eq!(output.tree.text(&source), text);
+        assert_eq!(count_nodes(output.tree.root(), SyntaxKind::ConstItem), 1);
+        assert_eq!(count_nodes(output.tree.root(), SyntaxKind::FunctionItem), 1);
+        assert!(output.tree.tokens().iter().any(|token| {
+            token.kind == SyntaxKind::Missing && token.expected == Some(SyntaxKind::Semicolon)
+        }));
+    }
+
+    #[test]
+    fn pseudo_item_spellings_remain_ordinary_expression_identifiers() {
+        let text = r#"seiyaku Demo {
+    const fixture: i64 = 1;
+    const selected: i64 = fixture;
+    view fn read() -> i64 { selected }
+}"#;
+        let source = SourceFile::new(SourceId(0), "pseudo-item-identifiers.ko", text);
+        let output = parse_program(&source, FrontendBudget::v1());
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
+        assert_eq!(output.tree.text(&source), text);
+        assert_eq!(count_nodes(output.tree.root(), SyntaxKind::ConstItem), 2);
+        assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
+    }
+
+    #[test]
+    fn cst_recovery_preserves_mixed_call_arguments() {
+        let text = "seiyaku Demo { fn invalid() { target(1, second: 2); } }";
+        let source = SourceFile::new(SourceId(0), "mixed.ko", text);
+        let output = parse(&source, FrontendBudget::v1());
+        assert!(!output.is_ok());
+        assert_eq!(
+            output.diagnostics.diagnostics[0].code,
+            "E_MIXED_CALL_ARGUMENTS"
+        );
+        assert_eq!(output.tree.text(&source), text);
+    }
+
+    #[test]
+    fn cst_structures_tail_match_arms_and_sum_patterns_losslessly() {
+        let text = "seiyaku Demo { fn unwrap(value: Option<i64>) -> i64 { match value { Option::some(item) => item, Option::none => 0, } } }";
+        let source = SourceFile::new(SourceId(0), "match.ko", text);
+        let output = parse(&source, FrontendBudget::v1());
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
+        assert_eq!(output.tree.text(&source), text);
+        let root = output.tree.root();
+        assert_eq!(count_nodes(root, SyntaxKind::TailExpr), 1);
+        assert_eq!(count_nodes(root, SyntaxKind::MatchExpr), 1);
+        assert_eq!(count_nodes(root, SyntaxKind::MatchArm), 2);
+        assert_eq!(count_nodes(root, SyntaxKind::SumPattern), 2);
+        assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
+    }
+
+    #[test]
+    fn cst_structures_lists_and_comprehensions_losslessly() {
+        let text = "seiyaku Demo { fn lists() -> List<i64, 4> { let source: List<i64, 4> = [1, [2].get(0).unwrap_or(0),]; [value * 2 for value in source if value > 0] } }";
+        let source = SourceFile::new(SourceId(0), "lists.ko", text);
+        let output = parse(&source, FrontendBudget::v1());
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
+        assert_eq!(output.tree.text(&source), text);
+        let root = output.tree.root();
+        assert_eq!(count_nodes(root, SyntaxKind::ListExpr), 2);
+        assert_eq!(count_nodes(root, SyntaxKind::ListComprehension), 1);
+        assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
+    }
+
+    #[test]
+    fn cst_structures_recursive_native_json_losslessly() {
+        let text = r#"seiyaku Demo { fn build(label: string) -> Json { json { owner: "alice", labels: json ["primary", label], nested: json { "owner": 1, }, } } }"#;
+        let source = SourceFile::new(SourceId(0), "json.ko", text);
+        let output = parse(&source, FrontendBudget::v1());
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
+        assert_eq!(output.tree.text(&source), text);
+        let root = output.tree.root();
+        assert_eq!(count_nodes(root, SyntaxKind::JsonObjectExpr), 2);
+        assert_eq!(count_nodes(root, SyntaxKind::JsonObjectEntry), 4);
+        assert_eq!(count_nodes(root, SyntaxKind::JsonArrayExpr), 1);
+        assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
+    }
+
+    #[test]
+    fn cst_native_json_recovery_inserts_the_specific_closing_delimiter() {
+        let text = "seiyaku Demo { fn invalid() -> Json { json { labels: json [1, 2; } } }";
+        let source = SourceFile::new(SourceId(0), "invalid-json.ko", text);
+        let output = parse(&source, FrontendBudget::v1());
+        assert!(!output.is_ok());
+        assert_eq!(output.tree.text(&source), text);
+        assert_eq!(
+            count_nodes(output.tree.root(), SyntaxKind::JsonObjectExpr),
+            1
+        );
+        assert_eq!(
+            count_nodes(output.tree.root(), SyntaxKind::JsonArrayExpr),
+            1
+        );
+        assert!(output.tree.tokens().iter().any(|token| {
+            token.kind == SyntaxKind::Missing && token.expected == Some(SyntaxKind::RBracket)
+        }));
+    }
+
+    #[test]
+    fn cst_list_recovery_inserts_a_specific_closing_bracket() {
+        let text = "seiyaku Demo { fn invalid() { let values = [1, 2; } }";
+        let source = SourceFile::new(SourceId(0), "invalid-list.ko", text);
+        let output = parse(&source, FrontendBudget::v1());
+        assert!(!output.is_ok());
+        assert_eq!(output.tree.text(&source), text);
+        assert_eq!(count_nodes(output.tree.root(), SyntaxKind::ListExpr), 1);
+        assert!(output.tree.tokens().iter().any(|token| {
+            token.kind == SyntaxKind::Missing && token.expected == Some(SyntaxKind::RBracket)
+        }));
+    }
+
+    #[test]
+    fn cst_snapshot_locks_expression_json_list_and_recovery_structure() {
+        let text = "seiyaku C { fn f(v: Option<i64>) { let choice = v? ? 1 : 2; let payload = json { values: json [1, [x for x in [1, 2] if x > 0]; }; } }";
+        let source = SourceFile::new(SourceId(0), "snapshot.ko", text);
+        let output = parse(&source, FrontendBudget::v1());
+        assert!(!output.is_ok(), "fixture must retain its recovery token");
+        assert_eq!(output.tree.text(&source), text);
+        let mut snapshot = String::new();
+        cst_snapshot(output.tree.root(), &source, 0, &mut snapshot);
+        assert_eq!(
+            snapshot,
+            r#"Root@0..134
+  SourceUnit@0..132
+    KwSeiyaku="seiyaku"@0..7
+    Ident="C"@8..9
+    LBrace="{"@10..11
+    ItemList@11..131
+      FunctionItem@12..129
+        KwFn="fn"@12..14
+        Ident="f"@15..16
+        ParamList@16..32
+          LParen="("@16..17
+          Ident="v"@17..18
+          Colon=":"@18..19
+          Ident="Option"@20..26
+          Less="<"@26..27
+          Ident="i64"@27..30
+          Greater=">"@30..31
+          RParen=")"@31..32
+        Block@33..129
+          LBrace="{"@33..34
+          StatementList@34..128
+            LetStmt@35..59
+              KwLet="let"@35..38
+              Ident="choice"@39..45
+              Equal="="@46..47
+              Ident="v"@48..49
+              Question="?"@49..50
+              Question="?"@51..52
+              Number="1"@53..54
+              Colon=":"@55..56
+              Number="2"@57..58
+              Semicolon=";"@58..59
+            LetStmt@60..127
+              KwLet="let"@60..63
+              Ident="payload"@64..71
+              Equal="="@72..73
+              JsonObjectExpr@74..126
+                Ident="json"@74..78
+                LBrace="{"@79..80
+                JsonObjectEntry@81..126
+                  Ident="values"@81..87
+                  Colon=":"@87..88
+                  JsonArrayExpr@89..126
+                    Ident="json"@89..93
+                    LBracket="["@94..95
+                    Number="1"@95..96
+                    Comma=","@96..97
+                    ListComprehension@98..126
+                      LBracket="["@98..99
+                      Ident="x"@99..100
+                      KwFor="for"@101..104
+                      Ident="x"@105..106
+                      KwIn="in"@107..109
+                      ListExpr@110..116
+                        LBracket="["@110..111
+                        Number="1"@111..112
+                        Comma=","@112..113
+                        Number="2"@114..115
+                        RBracket="]"@115..116
+                      KwIf="if"@117..119
+                      Ident="x"@120..121
+                      Greater=">"@122..123
+                      Number="0"@124..125
+                      RBracket="]"@125..126
+                    Missing(Some(RBracket))@126
+              ErrorNode@126..127
+                Semicolon=";"@126..127
+          RBrace="}"@128..129
+      ErrorNode@129..130
+        Semicolon=";"@129..130
+    RBrace="}"@131..132
+  RBrace="}"@133..134
+"#,
+        );
     }
 }

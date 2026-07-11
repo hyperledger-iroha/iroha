@@ -1,6 +1,9 @@
 //! Checked and explicitly wrapping Kotodama `i64` arithmetic regressions.
 
+use std::collections::BTreeMap;
+
 use iroha_crypto::Hash;
+use iroha_data_model::prelude::Name;
 use iroha_primitives::json::Json;
 use ivm::{
     IVM, ProgramMetadata, VMError, host::DefaultHost, kotodama::compiler::Compiler,
@@ -40,7 +43,7 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn install_argument_record(vm: &mut IVM, program: &[u8], payload: &Json) -> Result<(), VMError> {
+fn argument_host(program: &[u8], payload: &Json) -> Result<DefaultHost, VMError> {
     let parsed = ProgramMetadata::parse(program)?;
     let entrypoint = parsed
         .contract_interface
@@ -57,19 +60,20 @@ fn install_argument_record(vm: &mut IVM, program: &[u8], payload: &Json) -> Resu
         .as_ref()
         .expect("parameterized run entrypoint schema");
     let record = ivm::encode_argument_record_from_json(schema, payload)?;
-    let pointer = vm.alloc_input_tlv(&tlv(PointerType::NoritoBytes, &record))?;
-    vm.set_register(10, pointer);
-    Ok(())
+    let key: Name = "trigger_event_json".parse().expect("public input key");
+    Ok(DefaultHost::new().with_public_inputs(BTreeMap::from([(
+        key,
+        tlv(PointerType::NoritoBytes, &record),
+    )])))
 }
 
 fn run_binary(program: &[u8], left: i64, right: i64) -> Result<i64, VMError> {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(program)?;
     vm.set_program_counter(entrypoint_pc(program))?;
-    vm.set_host(DefaultHost::new());
     let payload = Json::from_str_norito(&format!(r#"{{"left":{left},"right":{right}}}"#))
         .expect("valid binary arguments");
-    install_argument_record(&mut vm, program, &payload)?;
+    vm.set_host(argument_host(program, &payload)?);
     vm.run()?;
     Ok(vm.register(10) as i64)
 }
@@ -78,10 +82,9 @@ fn run_unary(program: &[u8], value: i64) -> Result<i64, VMError> {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(program)?;
     vm.set_program_counter(entrypoint_pc(program))?;
-    vm.set_host(DefaultHost::new());
     let payload =
         Json::from_str_norito(&format!(r#"{{"value":{value}}}"#)).expect("valid unary arguments");
-    install_argument_record(&mut vm, program, &payload)?;
+    vm.set_host(argument_host(program, &payload)?);
     vm.run()?;
     Ok(vm.register(10) as i64)
 }
@@ -174,9 +177,9 @@ fn wrapping_builtins_are_the_explicit_modular_opt_in() {
 seiyaku WrappingArithmetic {
   view fn run() -> (i64, i64, i64, i64) {
     return (
-        math::wrapping_add(9223372036854775807, 1),
-        math::wrapping_sub(-9223372036854775808, 1),
-        math::wrapping_mul(9223372036854775807, 2),
+        math::wrapping_add(left: 9223372036854775807, right: 1),
+        math::wrapping_sub(left: -9223372036854775808, right: 1),
+        math::wrapping_mul(left: 9223372036854775807, right: 2),
         math::wrapping_neg(-9223372036854775808)
     );
   }

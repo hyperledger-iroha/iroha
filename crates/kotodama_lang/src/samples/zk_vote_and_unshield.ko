@@ -40,12 +40,27 @@ seiyaku ZkVoteAndUnshield {
         let vk = b"vk-bytes";
         // Inline builders require literal inputs; for runtime data, prebuild
         // the Norito InstructionBox and pass it as a bytes/NoritoBytes pointer.
-        let submit = ledger::governance::build_submit_ballot("election-1", b"ciphertext", nullifier, "halo2/ipa", proof, vk);
-        verify_and_submit_ballot(env_ballot, submit);
+        let submit = ledger::governance::build_submit_ballot(
+            election_id: "election-1",
+            ciphertext: b"ciphertext",
+            nullifier: nullifier,
+            backend: "halo2/ipa",
+            proof: proof,
+            verification_key: vk,
+        );
+        verify_and_submit_ballot(proof_env: env_ballot, submit: submit);
         // `context::authority()` is runtime data, so the inline builder sample uses a
         // compile-time recipient literal instead.
-        let recipient = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-        let unshield = crypto::zk::build_unshield(AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"), recipient, 1, nullifier, "halo2/ipa", proof, vk);
-        verify_and_unshield(env_unshield, unshield);
+        let recipient = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", );
+        let unshield = crypto::zk::build_unshield(
+            asset_definition: AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"),
+            destination: recipient,
+            amount: 1,
+            inputs: nullifier,
+            backend: "halo2/ipa",
+            proof: proof,
+            verification_key: vk,
+        );
+        verify_and_unshield(proof_env: env_unshield, unshield: unshield);
     }
 }

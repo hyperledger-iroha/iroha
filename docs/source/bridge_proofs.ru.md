@@ -2,65 +2,63 @@
 lang: ru
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: f3f6049cbf3aa135e35e4cf06967993c11c1c571ca97dd11c469142dd620be77
-source_last_modified: "2025-12-11T23:36:13.998930+00:00"
-translation_last_reviewed: 2026-06-21
+source_hash: 465d8cf704022986b169ab93133517428f8cf2ffe01a498cbda458f4a5b2e69b
+source_last_modified: "2026-07-11T15:09:39+04:00"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# Bridge proofs
+> Это сокращённый локализованный обзор по состоянию на 2026-07-11, а не
+> полный нормативный перевод. Точные типы, контракты API и требования к
+> выпуску приведены на [канонической странице на английском](bridge_proofs.md).
 
-Отправка bridge proof проходит по стандартному пути инструкций (`SubmitBridgeProof`) и попадает в реестр доказательств со статусом verified. Текущая поверхность покрывает Merkle proofs в стиле ICS и transparent-ZK payloads с фиксированным удержанием и привязкой к manifest.
+# Доказательства моста SCCP V1 — краткий обзор
 
-## Область запуска SCCP
+## Граница первого выпуска
 
-Текущая поверхность SCCP ограничена Ethereum, BSC, Solana, TON и TRON.
-Retired runtime-network families outside that launch scope are not supported for now.
-SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
-Это предложение фиксирует границу поддержки текущего релиза, а не отложенную задачу запуска SCCP.
-That exclusion is intentional current-launch scope, not a hidden compatibility lane.
-Do not track that family as remaining SCCP launch work in this cycle.
-Для этого семейства сетей в текущий запуск SCCP не входят relayer adapter, route manifest, proof fixture или public discovery route.
+- SCCP V1 имеет закрытую поверхность: поддерживаются только Ethereum mainnet,
+  BSC mainnet и TRON mainnet, а единственной конечной сетью SORA является
+  `sora-taira`. Любой другой профиль сети или идентификатор SORA отклоняется.
+- `SubmitBridgeProof` принимает только типизированные доказательства
+  `NativeProtocol` и `SccpDestination`, привязанные к маршруту. Отправка общих
+  payload `Ics` и `TransparentZk` недоступна и отклоняется по принципу
+  fail-closed.
 
-## Правила принятия
+## Типизированный реестр и история
 
-- Диапазоны должны быть упорядочены/не пусты и соблюдать `zk.bridge_proof_max_range_len` (0 отключает лимит).
-- Опциональные окна высоты отклоняют устаревшие/будущие доказательства: `zk.bridge_proof_max_past_age_blocks` и `zk.bridge_proof_max_future_drift_blocks` измеряются относительно высоты блока, который принимает proof (0 отключает защиту).
-- Bridge proofs не могут перекрываться с существующим proof для того же backend (pinned proofs сохраняются и блокируют пересечения).
-- Manifest hashes не должны быть нулевыми; размер payload ограничен `zk.max_proof_size_bytes`.
-- ICS payloads соблюдают настроенный лимит глубины Merkle и проверяют путь с использованием заявленной хеш-функции; transparent payloads должны объявлять непустую метку backend.
-- Pinned proofs освобождены от удержания по сроку; unpinned proofs все еще соблюдают глобальные настройки `zk.proof_history_cap`/grace/batch.
+- `SccpRegistryV1` типизирован и работает только на добавление. Для каждой lane
+  сохраняется не более 64 ревизий маршрутов и 4 096 native trust anchors.
+  Записи не удаляются неявно; следующее добавление сверх лимита отклоняется
+  атомарно.
+- Интервал anchor использует аутентифицированную координату консенсуса:
+  finalized beacon slot для Ethereum и finalized native block height для
+  BSC/TRON. Старый anchor действителен включительно до checkpoint-преемника и
+  недействителен после него.
+- Устойчивое inbound-состояние раздельно хранит event/finality height и
+  `anchor_interval_height`. High-water для lane+anchor только увеличивается;
+  checkpoint-преемник не может быть ниже него. При загрузке snapshot индекс
+  полностью пересчитывается, а отсутствующие, устаревшие и лишние значения
+  отклоняются. Повторное использование message id и replay также отклоняются.
 
-## Поверхность Torii API
+## Однократная проверка и детерминированные лимиты
 
-- `GET /v1/zk/proofs` и `GET /v1/zk/proofs/count` принимают фильтры, учитывающие bridge:
-  - `bridge_only=true` возвращает только bridge proofs.
-  - `bridge_pinned_only=true` ограничивает pinned bridge proofs.
-  - `bridge_start_from_height` / `bridge_end_until_height` ограничивают окно диапазона bridge.
-- `GET /v1/zk/proof/{backend}/{hash}` возвращает метаданные bridge (диапазон, manifest hash, summary payload) вместе с id/статусом proof и VK bindings.
-- Полная запись Norito proof (включая bytes payload) остается доступной через `GET /v1/proofs/{proof_id}` для проверяющих вне узла.
+- Каждое native- или destination-доказательство канонически декодируется один
+  раз и проходит дорогостоящую криптографическую проверку один раз. До неё
+  консенсус резервирует консервативную, независимую от оборудования оценку
+  работы.
+- `[zk.sccp]` задаёт обязательные ненулевые лимиты на proof, transaction и
+  block для количества/байтов доказательств, native headers, обновлений
+  Ethereum light client, байтов заголовков, восстановлений secp256k1,
+  агрегатных проверок/вкладов BLS и pairing-product проверок BN254. Эти лимиты
+  допуска связаны с консенсусом и должны совпадать у всех валидаторов.
 
-## События bridge receipt
+## Ограничения Torii
 
-Bridge lanes выпускают типизированные receipts через инструкцию `RecordBridgeReceipt`. Выполнение этой инструкции записывает payload `BridgeReceipt` и публикует `DataEvent::Bridge(BridgeEvent::Emitted)` в потоке событий, заменяя прежний log-only stub. CLI helper `iroha bridge emit-receipt` отправляет типизированную инструкцию, чтобы индексаторы могли детерминированно потреблять receipts.
-
-## Эскиз внешней проверки (ICS)
-
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
-
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+`/v1/bridge/proofs/submit` и `/v1/bridge/messages` применяют отдельный лимит
+HTTP body для каждого endpoint. Аутентификация, rate limit и `Content-Length`
+проверяются до чтения тела; chunked body читается только до жёсткой границы.
+Слишком большой запрос возвращает `413`, а некорректный transport/JSON —
+отдельный `400`. Detached transaction payload ограничен 16 MiB, signature
+payload — 16 KiB.

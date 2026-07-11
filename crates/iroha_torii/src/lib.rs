@@ -3013,6 +3013,240 @@ async fn enforce_api_token(
     Ok(next.run(req).await)
 }
 
+#[cfg(feature = "app_api")]
+const SCCP_SUBMIT_MAX_TRANSACTION_PAYLOAD_BYTES_V1: usize = 16 * 1024 * 1024;
+#[cfg(feature = "app_api")]
+const SCCP_SUBMIT_MAX_DETACHED_SIGNATURE_BYTES_V1: usize = 16 * 1024;
+#[cfg(feature = "app_api")]
+const SCCP_SUBMIT_JSON_ENVELOPE_ALLOWANCE_BYTES_V1: usize = 1024 * 1024;
+
+#[cfg(feature = "app_api")]
+const fn canonical_base64_max_len(decoded_len: usize) -> usize {
+    4 * decoded_len.div_ceil(3)
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SccpSubmitIngressPolicy {
+    rate_limit_hint: &'static str,
+    telemetry_label: &'static str,
+    max_body_bytes: usize,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct SccpSubmitIngressState {
+    app: SharedAppState,
+    operator_max_body_bytes: usize,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SccpSubmitBodyReadError {
+    TooLarge,
+    Read,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SccpSubmitContentLengthError {
+    TooLarge,
+    Invalid,
+}
+
+#[cfg(feature = "app_api")]
+fn sccp_submit_ingress_policy(path: &str) -> Option<SccpSubmitIngressPolicy> {
+    let proof_field_max = match path {
+        "/v1/bridge/proofs/submit" => iroha_sccp::SCCP_GROTH16_BN254_MAX_BASE64_ARTIFACT_BYTES_V1,
+        "/v1/bridge/messages" => iroha_sccp::SCCP_NATIVE_ADMISSION_MAX_BASE64_BYTES_V1,
+        _ => return None,
+    };
+    let max_body_bytes = proof_field_max
+        .saturating_add(canonical_base64_max_len(
+            SCCP_SUBMIT_MAX_TRANSACTION_PAYLOAD_BYTES_V1,
+        ))
+        .saturating_add(canonical_base64_max_len(
+            SCCP_SUBMIT_MAX_DETACHED_SIGNATURE_BYTES_V1,
+        ))
+        .saturating_add(SCCP_SUBMIT_JSON_ENVELOPE_ALLOWANCE_BYTES_V1);
+    let (rate_limit_hint, telemetry_label) = match path {
+        "/v1/bridge/proofs/submit" => ("v1/bridge/proofs/submit", "bridge_proof"),
+        "/v1/bridge/messages" => ("v1/bridge/messages", "bridge_message"),
+        _ => unreachable!("SCCP submit path was matched above"),
+    };
+    Some(SccpSubmitIngressPolicy {
+        rate_limit_hint,
+        telemetry_label,
+        max_body_bytes,
+    })
+}
+
+#[cfg(feature = "app_api")]
+async fn collect_sccp_submit_body(
+    body: Body,
+    max_body_bytes: usize,
+) -> Result<axum::body::Bytes, SccpSubmitBodyReadError> {
+    axum::body::to_bytes(body, max_body_bytes)
+        .await
+        .map_err(|error| {
+            let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+            let mut length_limit = false;
+            while let Some(error) = source {
+                if error.is::<http_body_util::LengthLimitError>() {
+                    length_limit = true;
+                    break;
+                }
+                source = error.source();
+            }
+            if length_limit {
+                SccpSubmitBodyReadError::TooLarge
+            } else {
+                SccpSubmitBodyReadError::Read
+            }
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn validate_sccp_submit_content_length(
+    headers: &axum::http::HeaderMap,
+    max_body_bytes: usize,
+) -> Result<Option<usize>, SccpSubmitContentLengthError> {
+    use axum::http::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
+
+    let mut values = headers.get_all(CONTENT_LENGTH).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() || headers.contains_key(TRANSFER_ENCODING) {
+        return Err(SccpSubmitContentLengthError::Invalid);
+    }
+    let encoded = value.as_bytes();
+    if encoded.is_empty() || !encoded.iter().all(u8::is_ascii_digit) {
+        return Err(SccpSubmitContentLengthError::Invalid);
+    }
+    let declared = match value
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        Some(declared) => declared,
+        None => return Err(SccpSubmitContentLengthError::TooLarge),
+    };
+    if declared > u64::try_from(max_body_bytes).unwrap_or(u64::MAX) {
+        return Err(SccpSubmitContentLengthError::TooLarge);
+    }
+    usize::try_from(declared)
+        .map(Some)
+        .map_err(|_| SccpSubmitContentLengthError::TooLarge)
+}
+
+/// Authenticate, rate-limit, and size-bound SCCP submissions before JSON extraction.
+///
+/// This middleware intentionally owns the sole network-body read for these two proof-bearing
+/// endpoints. Rejected authentication and exhausted rate-limit requests therefore never poll the
+/// request body. Malformed, ambiguous, or oversized declared lengths reject before polling;
+/// accepted chunked bodies remain bounded without `Content-Length`, and declared lengths must
+/// match the bytes restored for the downstream JSON extractor.
+#[cfg(feature = "app_api")]
+async fn enforce_sccp_submit_ingress(
+    State(ingress): State<SccpSubmitIngressState>,
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    use axum::response::IntoResponse as _;
+
+    let app = &ingress.app;
+    let Some(policy) = sccp_submit_ingress_policy(req.uri().path()) else {
+        return Ok((StatusCode::NOT_FOUND, "unknown SCCP submission endpoint").into_response());
+    };
+    let max_body_bytes = policy.max_body_bytes.min(ingress.operator_max_body_bytes);
+
+    if let Err(error) = validate_api_token(&app, req.headers()) {
+        app.telemetry
+            .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
+        return Ok(error.into_response());
+    }
+
+    let remote_ip = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|connect_info| connect_info.0.ip());
+    let key = rate_limit_key(
+        req.headers(),
+        remote_ip,
+        policy.rate_limit_hint,
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|metrics| metrics.inc_torii_contract_throttle(policy.telemetry_label));
+        return Ok(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        ))
+        .into_response());
+    }
+
+    let declared_content_length =
+        match validate_sccp_submit_content_length(req.headers(), max_body_bytes) {
+            Ok(declared) => declared,
+            Err(error) => {
+                app.telemetry.with_metrics(|metrics| {
+                    metrics.inc_torii_contract_error(policy.telemetry_label)
+                });
+                return Ok(match error {
+                    SccpSubmitContentLengthError::TooLarge => (
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        format!(
+                            "SCCP submission body exceeds the {}-byte endpoint limit",
+                            max_body_bytes
+                        ),
+                    )
+                        .into_response(),
+                    SccpSubmitContentLengthError::Invalid => (
+                        StatusCode::BAD_REQUEST,
+                        "invalid or ambiguous SCCP submission Content-Length",
+                    )
+                        .into_response(),
+                });
+            }
+        };
+
+    let (parts, body) = req.into_parts();
+    let body = match collect_sccp_submit_body(body, max_body_bytes).await {
+        Ok(body) => body,
+        Err(error) => {
+            app.telemetry
+                .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
+            return Ok(match error {
+                SccpSubmitBodyReadError::TooLarge => (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    format!(
+                        "SCCP submission body exceeds the {}-byte endpoint limit",
+                        max_body_bytes
+                    ),
+                )
+                    .into_response(),
+                SccpSubmitBodyReadError::Read => (
+                    StatusCode::BAD_REQUEST,
+                    "failed to read SCCP submission body",
+                )
+                    .into_response(),
+            });
+        }
+    };
+    if declared_content_length.is_some_and(|declared| declared != body.len()) {
+        app.telemetry
+            .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            "SCCP submission Content-Length does not match the received body",
+        )
+            .into_response());
+    }
+    let request = axum::http::Request::from_parts(parts, Body::from(body));
+    Ok(next.run(request).await)
+}
+
 async fn enforce_api_version(
     State(app): State<SharedAppState>,
     mut req: axum::http::Request<Body>,
@@ -4215,28 +4449,21 @@ async fn handler_gov_propose_deploy(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_gov_propose_sccp_route_manifest(
+async fn handler_gov_propose_sccp_route_governance(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: crate::utils::extractors::NoritoJson<crate::gov::ProposeSccpRouteManifestDto>,
-) -> Result<JsonBody<crate::gov::ProposeSccpRouteManifestResponse>, Error> {
+    body: crate::utils::extractors::NoritoJson<crate::gov::ProposeSccpRouteGovernanceDto>,
+) -> Result<JsonBody<crate::gov::ProposeSccpRouteGovernanceResponse>, Error> {
     let remote_ip = remote.ip();
     check_access(
         &app,
         &headers,
         Some(remote_ip),
-        "v1/gov/proposals/sccp-route-manifest",
+        "v1/gov/proposals/sccp-route-governance",
     )
     .await?;
-    crate::gov::handle_gov_propose_sccp_route_manifest(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        body,
-    )
-    .await
+    crate::gov::handle_gov_propose_sccp_route_governance(body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -14187,6 +14414,9 @@ fn target_scope_singular_query(
         SingularQueryBox::FindDomainById(query) => {
             Some(SignedQueryScope::TargetDomain(query.domain_id().clone()))
         }
+        SingularQueryBox::FindNftById(query) => Some(SignedQueryScope::TargetDomain(
+            query.nft_id().domain().clone(),
+        )),
         _ => None,
     }
 }
@@ -28658,40 +28888,8 @@ async fn handler_post_contract_call_simulate(
 #[cfg(feature = "app_api")]
 async fn handler_post_bridge_proof_submit(
     State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: crate::utils::extractors::JsonOnly<crate::routing::BridgeProofSubmitDto>,
 ) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("bridge_proof"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/bridge/proofs/submit",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("bridge_proof"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
     match crate::routing::handle_post_bridge_proof_submit(
         app.chain_id.clone(),
         app.queue.clone(),
@@ -28713,40 +28911,8 @@ async fn handler_post_bridge_proof_submit(
 #[cfg(feature = "app_api")]
 async fn handler_post_bridge_message_submit(
     State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: crate::utils::extractors::JsonOnly<crate::routing::BridgeMessageSubmitDto>,
 ) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("bridge_message"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/bridge/messages",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("bridge_message"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
     match crate::routing::handle_post_bridge_message_submit(
         app.chain_id.clone(),
         app.queue.clone(),
@@ -38611,6 +38777,14 @@ impl Torii {
     #[allow(clippy::unused_self)]
     #[cfg(feature = "app_api")]
     fn add_contracts_and_vk_routes(&self, builder: &mut RouterBuilder) {
+        let bridge_submit_state = SccpSubmitIngressState {
+            app: builder.state().clone(),
+            operator_max_body_bytes: self
+                .transaction_max_content_len
+                .get()
+                .try_into()
+                .expect("transaction content limit should fit usize"),
+        };
         builder.apply(|router| {
             // Group contracts + VK endpoints into a small sub-router for clarity and merge it.
             let contracts_body_limit = DefaultBodyLimit::max(
@@ -38648,14 +38822,6 @@ impl Torii {
                 .route(
                     "/v1/contracts/call/simulate",
                     post(handler_post_contract_call_simulate),
-                )
-                .route(
-                    "/v1/bridge/proofs/submit",
-                    post(handler_post_bridge_proof_submit),
-                )
-                .route(
-                    "/v1/bridge/messages",
-                    post(handler_post_bridge_message_submit),
                 )
                 .route("/v1/contracts/view", post(handler_post_contract_view))
                 .route(
@@ -39089,7 +39255,25 @@ impl Torii {
                     "/v1/contracts/code/{code_hash}/verified-source-jobs/{job_id}",
                     get(handler_get_contract_verified_source_job),
                 );
-            router.merge(group)
+            let bridge_submit_group = Router::new()
+                .route(
+                    "/v1/bridge/proofs/submit",
+                    post(handler_post_bridge_proof_submit),
+                )
+                .route(
+                    "/v1/bridge/messages",
+                    post(handler_post_bridge_message_submit),
+                )
+                // The SCCP ingress middleware performs the sole bounded body
+                // read and then restores the exact bytes for JSON extraction.
+                // Disable Axum's smaller default extractor limit so it cannot
+                // reject a body already admitted by the endpoint policy.
+                .layer(DefaultBodyLimit::disable())
+                .layer(axum::middleware::from_fn_with_state(
+                    bridge_submit_state,
+                    enforce_sccp_submit_ingress,
+                ));
+            router.merge(group).merge(bridge_submit_group)
         });
     }
 
@@ -40525,8 +40709,8 @@ impl Torii {
                         post(handler_gov_propose_deploy),
                     )
                     .route(
-                        iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_MANIFEST,
-                        post(handler_gov_propose_sccp_route_manifest),
+                        iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE,
+                        post(handler_gov_propose_sccp_route_governance),
                     )
                     // Read endpoints: proposal/referendum/locks/tally
                     .route(
@@ -53237,7 +53421,8 @@ pub(crate) mod tests_runtime_handlers {
         .expect("well-formed SCCP context");
         let record = iroha_data_model::isi::bridge::RecordSccpMessage::new(
             context,
-            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            iroha_sccp::canonical_sccp_payload_bytes(&payload)
+                .expect("valid SCCP indexed-message fixture payload encodes"),
         );
         let tx = checked_torii_test_transaction(
             TransactionBuilder::new(chain, authority).with_instructions([record]),
@@ -53327,7 +53512,7 @@ pub(crate) mod tests_runtime_handlers {
         let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
             .await
             .expect("bundle body");
-        let bundle = norito::json::from_slice::<iroha_sccp::NexusSccpMessageProofV1>(&bundle_bytes)
+        let bundle = norito::json::from_slice::<iroha_sccp::TairaSccpMessageProofV1>(&bundle_bytes)
             .expect("typed bundle JSON");
         assert_eq!(bundle.commitment.message_id, message_id);
         assert!(iroha_sccp::verify_message_bundle_structure(&bundle));
@@ -60720,6 +60905,455 @@ pub(crate) mod tests_runtime_handlers {
         assert!(captured[0].1.message.contains("warm authoritative primary"));
     }
 
+    fn sccp_ingress_test_router_with_limit(
+        app: SharedAppState,
+        operator_max_body_bytes: usize,
+    ) -> axum::Router {
+        use axum::{Router, routing::post};
+
+        Router::new()
+            .route(
+                "/v1/bridge/proofs/submit",
+                post(|_: axum::body::Bytes| async { StatusCode::NO_CONTENT }),
+            )
+            .route(
+                "/v1/bridge/messages",
+                post(|_: axum::body::Bytes| async { StatusCode::NO_CONTENT }),
+            )
+            .layer(axum::extract::DefaultBodyLimit::disable())
+            .layer(axum::middleware::from_fn_with_state(
+                super::SccpSubmitIngressState {
+                    app,
+                    operator_max_body_bytes,
+                },
+                super::enforce_sccp_submit_ingress,
+            ))
+    }
+
+    fn sccp_ingress_test_router(app: SharedAppState) -> axum::Router {
+        sccp_ingress_test_router_with_limit(app, usize::MAX)
+    }
+
+    fn sccp_ingress_echo_router_with_limit(
+        app: SharedAppState,
+        operator_max_body_bytes: usize,
+    ) -> axum::Router {
+        use axum::{Router, routing::post};
+
+        Router::new()
+            .route(
+                "/v1/bridge/proofs/submit",
+                post(|body: axum::body::Bytes| async move { body }),
+            )
+            .route(
+                "/v1/bridge/messages",
+                post(|body: axum::body::Bytes| async move { body }),
+            )
+            .layer(axum::extract::DefaultBodyLimit::disable())
+            .layer(axum::middleware::from_fn_with_state(
+                super::SccpSubmitIngressState {
+                    app,
+                    operator_max_body_bytes,
+                },
+                super::enforce_sccp_submit_ingress,
+            ))
+    }
+
+    fn sccp_body_that_must_not_be_polled() -> axum::body::Body {
+        use std::task::Poll;
+
+        let stream = futures::stream::poll_fn(
+            |_context| -> Poll<Option<Result<axum::body::Bytes, std::io::Error>>> {
+                panic!("rejected SCCP ingress polled the request body")
+            },
+        );
+        axum::body::Body::from_stream(stream)
+    }
+
+    fn sccp_ingress_request(
+        path: &str,
+        body: axum::body::Body,
+    ) -> axum::http::Request<axum::body::Body> {
+        let mut request = axum::http::Request::builder()
+            .method(axum::http::Method::POST)
+            .uri(path)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .expect("valid SCCP ingress request");
+        request
+            .extensions_mut()
+            .insert(crate::loopback_connect_info());
+        request
+    }
+
+    #[test]
+    fn sccp_submit_ingress_has_closed_endpoint_specific_limits() {
+        let destination = super::sccp_submit_ingress_policy("/v1/bridge/proofs/submit")
+            .expect("destination endpoint policy");
+        let native = super::sccp_submit_ingress_policy("/v1/bridge/messages")
+            .expect("native endpoint policy");
+
+        assert_eq!(destination.telemetry_label, "bridge_proof");
+        assert_eq!(native.telemetry_label, "bridge_message");
+        let shared_fields =
+            super::canonical_base64_max_len(super::SCCP_SUBMIT_MAX_TRANSACTION_PAYLOAD_BYTES_V1);
+        let shared_fields = shared_fields
+            + super::canonical_base64_max_len(super::SCCP_SUBMIT_MAX_DETACHED_SIGNATURE_BYTES_V1)
+            + super::SCCP_SUBMIT_JSON_ENVELOPE_ALLOWANCE_BYTES_V1;
+        assert_eq!(
+            destination.max_body_bytes,
+            iroha_sccp::SCCP_GROTH16_BN254_MAX_BASE64_ARTIFACT_BYTES_V1 + shared_fields
+        );
+        assert_eq!(
+            native.max_body_bytes,
+            iroha_sccp::SCCP_NATIVE_ADMISSION_MAX_BASE64_BYTES_V1 + shared_fields
+        );
+        assert!(destination.max_body_bytes > native.max_body_bytes);
+        let default_operator_cap =
+            usize::try_from(iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0)
+                .expect("default Torii content limit fits usize");
+        assert!(destination.max_body_bytes <= default_operator_cap);
+        assert!(native.max_body_bytes <= default_operator_cap);
+        assert!(super::sccp_submit_ingress_policy("/v1/bridge/proofs").is_none());
+        assert!(super::sccp_submit_ingress_policy("/v1/bridge/messages/").is_none());
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_body_caps_chunked_streams_without_content_length() {
+        let stream = futures::stream::iter([
+            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"1234")),
+            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"5678")),
+        ]);
+        let error = super::collect_sccp_submit_body(axum::body::Body::from_stream(stream), 7)
+            .await
+            .expect_err("chunked body must not exceed the explicit cap");
+
+        assert_eq!(error, super::SccpSubmitBodyReadError::TooLarge);
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_body_accepts_exact_cap_and_rejects_one_byte_over() {
+        let exact = super::collect_sccp_submit_body(axum::body::Body::from("12345678"), 8)
+            .await
+            .expect("body at the exact endpoint cap must be accepted");
+        assert_eq!(exact.as_ref(), b"12345678");
+
+        let error = super::collect_sccp_submit_body(axum::body::Body::from("123456789"), 8)
+            .await
+            .expect_err("one byte over the endpoint cap must reject");
+        assert_eq!(error, super::SccpSubmitBodyReadError::TooLarge);
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_body_distinguishes_transport_failure_from_size_rejection() {
+        let stream = futures::stream::iter([Err::<axum::body::Bytes, _>(std::io::Error::other(
+            "adversarial stream failure",
+        ))]);
+        let error = super::collect_sccp_submit_body(axum::body::Body::from_stream(stream), 64)
+            .await
+            .expect_err("transport error must fail closed");
+
+        assert_eq!(error, super::SccpSubmitBodyReadError::Read);
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_rejects_missing_token_without_polling_body() {
+        use tower::ServiceExt as _;
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.require_api_token = true;
+            state.api_tokens_set = Arc::new(HashSet::from(["expected-token".to_owned()]));
+        }
+        let router = sccp_ingress_test_router(app);
+
+        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+            let mut request = sccp_ingress_request(path, sccp_body_that_must_not_be_polled());
+            request.headers_mut().insert(
+                axum::http::header::CONTENT_LENGTH,
+                HeaderValue::from_static("not-a-length"),
+            );
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("middleware response");
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "path {path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_rejects_exhausted_rate_limit_without_polling_body() {
+        use tower::ServiceExt as _;
+
+        let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
+        let headers = HeaderMap::new();
+        let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
+        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+            let policy = super::sccp_submit_ingress_policy(path).expect("known policy");
+            let key = super::rate_limit_key(
+                &headers,
+                Some(remote_ip),
+                policy.rate_limit_hint,
+                app.api_token_enforced(),
+            );
+            assert!(app.deploy_rate_limiter.allow(&key).await);
+        }
+        let router = sccp_ingress_test_router(app);
+
+        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+            let mut request = sccp_ingress_request(path, sccp_body_that_must_not_be_polled());
+            request.headers_mut().insert(
+                axum::http::header::CONTENT_LENGTH,
+                HeaderValue::from_static("not-a-length"),
+            );
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("middleware response");
+            assert_eq!(
+                response.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "path {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_rejects_oversized_content_length_without_polling_body() {
+        use tower::ServiceExt as _;
+
+        let router = sccp_ingress_test_router(mk_app_state_for_tests());
+        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+            let policy = super::sccp_submit_ingress_policy(path).expect("known policy");
+            let mut request = sccp_ingress_request(path, sccp_body_that_must_not_be_polled());
+            request.headers_mut().insert(
+                axum::http::header::CONTENT_LENGTH,
+                HeaderValue::from_str(&policy.max_body_bytes.saturating_add(1).to_string())
+                    .expect("valid oversized content length"),
+            );
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("middleware response");
+            assert_eq!(
+                response.status(),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "path {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_rejects_malformed_or_ambiguous_length_without_polling_body() {
+        use tower::ServiceExt as _;
+
+        let router = sccp_ingress_test_router(mk_app_state_for_tests());
+        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+            for case in 0..3 {
+                let mut request = sccp_ingress_request(path, sccp_body_that_must_not_be_polled());
+                match case {
+                    0 => {
+                        request.headers_mut().insert(
+                            axum::http::header::CONTENT_LENGTH,
+                            HeaderValue::from_static("1x"),
+                        );
+                    }
+                    1 => {
+                        request.headers_mut().append(
+                            axum::http::header::CONTENT_LENGTH,
+                            HeaderValue::from_static("1"),
+                        );
+                        request.headers_mut().append(
+                            axum::http::header::CONTENT_LENGTH,
+                            HeaderValue::from_static("1"),
+                        );
+                    }
+                    2 => {
+                        request.headers_mut().insert(
+                            axum::http::header::CONTENT_LENGTH,
+                            HeaderValue::from_static("1"),
+                        );
+                        request.headers_mut().insert(
+                            axum::http::header::TRANSFER_ENCODING,
+                            HeaderValue::from_static("chunked"),
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+                let response = router
+                    .clone()
+                    .oneshot(request)
+                    .await
+                    .expect("middleware response");
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "path {path}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_treats_overflowing_numeric_length_as_too_large() {
+        use tower::ServiceExt as _;
+
+        let router = sccp_ingress_test_router(mk_app_state_for_tests());
+        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+            let mut request = sccp_ingress_request(path, sccp_body_that_must_not_be_polled());
+            request.headers_mut().insert(
+                axum::http::header::CONTENT_LENGTH,
+                HeaderValue::from_static("9999999999999999999999999999999999999999"),
+            );
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("middleware response");
+            assert_eq!(
+                response.status(),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "path {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_honors_stricter_operator_body_limit() {
+        use tower::ServiceExt as _;
+
+        let router = sccp_ingress_test_router_with_limit(mk_app_state_for_tests(), 8);
+        let mut request =
+            sccp_ingress_request("/v1/bridge/messages", sccp_body_that_must_not_be_polled());
+        request.headers_mut().insert(
+            axum::http::header::CONTENT_LENGTH,
+            HeaderValue::from_static("9"),
+        );
+        let response = router.oneshot(request).await.expect("middleware response");
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_accepts_exact_effective_cap_and_rejects_actual_overage() {
+        use tower::ServiceExt as _;
+
+        let router = sccp_ingress_test_router_with_limit(mk_app_state_for_tests(), 8);
+        for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
+            let mut exact = sccp_ingress_request(path, axum::body::Body::from("12345678"));
+            exact.headers_mut().insert(
+                axum::http::header::CONTENT_LENGTH,
+                HeaderValue::from_static("8"),
+            );
+            let response = router
+                .clone()
+                .oneshot(exact)
+                .await
+                .expect("exact-cap middleware response");
+            assert_eq!(response.status(), StatusCode::NO_CONTENT, "path {path}");
+
+            let over = sccp_ingress_request(path, axum::body::Body::from("123456789"));
+            let response = router
+                .clone()
+                .oneshot(over)
+                .await
+                .expect("over-cap middleware response");
+            assert_eq!(
+                response.status(),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "path {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_rejects_lying_content_length_with_correct_status() {
+        use tower::ServiceExt as _;
+
+        let router = sccp_ingress_test_router_with_limit(mk_app_state_for_tests(), 8);
+        for (body, declared, expected) in [
+            ("12345", "4", StatusCode::BAD_REQUEST),
+            ("12345", "6", StatusCode::BAD_REQUEST),
+            ("123456789", "4", StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            let mut request =
+                sccp_ingress_request("/v1/bridge/messages", axum::body::Body::from(body));
+            request.headers_mut().insert(
+                axum::http::header::CONTENT_LENGTH,
+                HeaderValue::from_str(declared).expect("valid adversarial length"),
+            );
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("lying-length middleware response");
+            assert_eq!(response.status(), expected, "declared {declared}");
+        }
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_preserves_missing_and_chunked_bodies_after_one_consumption() {
+        use tower::ServiceExt as _;
+
+        let router = sccp_ingress_echo_router_with_limit(mk_app_state_for_tests(), 16);
+        for (path, chunked) in [
+            ("/v1/bridge/proofs/submit", false),
+            ("/v1/bridge/messages", true),
+        ] {
+            let yielded = Arc::new(AtomicUsize::new(0));
+            let yielded_for_stream = Arc::clone(&yielded);
+            let chunks = [
+                axum::body::Bytes::from_static(b"abc"),
+                axum::body::Bytes::from_static(b"defgh"),
+            ];
+            let mut index = 0_usize;
+            let stream = futures::stream::poll_fn(move |_context| {
+                if let Some(chunk) = chunks.get(index).cloned() {
+                    index += 1;
+                    yielded_for_stream.fetch_add(1, Ordering::SeqCst);
+                    std::task::Poll::Ready(Some(Ok::<_, std::io::Error>(chunk)))
+                } else {
+                    std::task::Poll::Ready(None)
+                }
+            });
+            let mut request = sccp_ingress_request(path, axum::body::Body::from_stream(stream));
+            if chunked {
+                request.headers_mut().insert(
+                    axum::http::header::TRANSFER_ENCODING,
+                    HeaderValue::from_static("chunked"),
+                );
+            }
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("body-preservation middleware response");
+            assert_eq!(response.status(), StatusCode::OK, "path {path}");
+            let body = axum::body::to_bytes(response.into_body(), 16)
+                .await
+                .expect("echo response body");
+            assert_eq!(body.as_ref(), b"abcdefgh", "path {path}");
+            assert_eq!(yielded.load(Ordering::SeqCst), 2, "path {path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn sccp_submit_ingress_maps_transport_failure_to_bad_request() {
+        use tower::ServiceExt as _;
+
+        let stream = futures::stream::iter([Err::<axum::body::Bytes, _>(std::io::Error::other(
+            "adversarial stream failure",
+        ))]);
+        let request =
+            sccp_ingress_request("/v1/bridge/messages", axum::body::Body::from_stream(stream));
+        let response = sccp_ingress_test_router_with_limit(mk_app_state_for_tests(), 64)
+            .oneshot(request)
+            .await
+            .expect("transport-failure middleware response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
     #[tokio::test]
     async fn contract_deploy_rate_limit_throttles_after_burst() {
         let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
@@ -61911,17 +62545,18 @@ pub(crate) mod tests_runtime_handlers {
                 abi_version,
             };
             let interface = ivm::EmbeddedContractInterfaceV1 {
-                contract_name: "TestContract".to_owned(),
+                seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "torii-lib-tests".to_owned(),
                 features_bitmap: 0,
                 access_set_hints: None,
                 kotoba: Vec::new(),
                 entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
                     name: "main".to_owned(),
-                    kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                    kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
                     params: Vec::new(),
                     argument_schema: None,
                     return_type: None,
+                    return_schema: None,
                     permission: None,
                     read_keys: Vec::new(),
                     write_keys: Vec::new(),

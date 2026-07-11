@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-10
+Last updated: 2026-07-11
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -631,12 +631,6 @@ fail closed on the intended registry/mode guards, and the targeted BFV
 regressions stayed green. The workspace clippy gate also passed on the final
 tree.
 
-The torii SCCP route-manifest DTO and sample fixtures were also updated to the
-current normalized config schema on 2026-07-05. The dedicated torii route
-tests passed, and the fresh workspace rerun reached the integration tail, where
-the stale single-deploy contract-manifest expectation was corrected to read the
-nested contract receipt field.
-
 The `iroha_smart_contract` trybuild placeholder was retired on 2026-07-06.
 The crate now has compile-pass coverage for the public prelude and macro
 re-export plus compile-fail guards for host-managed query cursors and
@@ -683,56 +677,81 @@ scan limited to repository policy text plus intentional guard-test fixtures.
 
 ## SCCP Launch Scope
 
-**Status:** consensus architecture complete; live deployment evidence pending.
+**Status:** exact V1 implementation complete; integrated validation and live
+deployment evidence pending.
 
-The first-release SCCP domain scope is Ethereum, BSC, Solana, TON, and TRON.
-Retired runtime-network families outside that scope are unsupported and are
-not deferred release work.
-SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
+The first release has exactly three production remote profiles: Ethereum
+mainnet, BNB Smart Chain mainnet, and TRON mainnet, each paired with SORA Taira
+chain id `809574f5-fee7-5e69-bfcf-52451e42d50f` and I105 discriminant `369`
+(`0x0171`). Sepolia, BSC testnet, Nile, and Shasta remain exact test profiles.
+Solana, TON, generic proof backends, arbitrary assets, Nexus settlement, and
+compatibility manifests are not part of SCCP V1.
 
-SCCP policy is consensus-owned. The versioned on-chain custom parameter
-`sccp_registry_v1` carries source-verifier material, source-adapter
-deployments, destination rollouts, route allowlists, and wallet route
-manifests as one aggregate. The SCCP route-manifest instructions validate and
-replace that journaled parameter instead of writing side state. Non-empty
-node-local `zk.sccp_*` values are rejected. Direct mutation requires the typed
-`CanManageSccpGovernance` permission, and every registry field is committed to
-the canonical ZK consensus policy hash. The aggregate commits atomically with
-its transaction/block, is read under one state generation, and follows normal
-MVCC soft-fork and snapshot rollback.
+Consensus owns one bounded `SccpRegistryV1`. Typed
+`ApplySccpRouteGovernance` actions register an exact route, change its
+directional activation, switch to the next revision, initialize or advance a
+lane trust anchor by compare-and-swap, or remove only an unused staged
+revision. Direct execution requires `CanManageSccpGovernance`; constitutional
+governance uses the same typed action. Generic parameter writes, node-local
+configuration, HTTP signing fields, and old route-manifest instructions cannot
+change SCCP policy. Registry changes follow normal transaction, block, MVCC,
+snapshot, and rollback semantics.
 
-There is no hard-coded launch mode. Governance may activate any supported lane
-independently when that lane has complete, mutually bound evidence and exactly
-one production-ready wallet route manifest in the same registry. The
-all-lanes readiness result is a diagnostic/release summary only and cannot
-hold an otherwise ready lane closed.
+Each governed route binds the exact transfer-only XOR settlement, source
+emitter, native inbound verifier and trust anchor, immutable token/verifier/
+route deployments, nonzero revision, full BN254 key, and a mandatory typed
+outbound proof policy containing the semantic proof profile and Taira finality
+anchor. Both derived policy hashes participate in destination-binding and route-
+configuration hashes. The destination verifier has exactly eleven public
+signals, twelve IC points including the constant, and a canonical 38-ABI-word
+verifying-key preimage; ten-signal, eleven-IC-point, 36-word, and policy-less
+representations are invalid. A production circuit must prove canonical transfer
+encoding, message-leaf derivation, Merkle inclusion, Taira block commitment,
+commit-QC validity, and continuity from the governed checkpoint. The checked-in
+labeled-signal circuit is explicitly non-production and cannot be promoted by
+metadata.
 
-The checked-in BSC signal-binding and labeled-signal-binding profiles are
-`public-signal-binding-material-only`. They are useful for conformance testing,
-but do not prove SCCP payload semantics, source finality, message inclusion,
-FastPQ verification, or destination semantics. Their artifacts are not
-production routes and no amount of deployment metadata can promote them.
+SCCP proof bindings are payload-owned and role preserving. Closed native and
+destination variants carry the exact historical route-configuration hash;
+generic ICS and transparent-ZK variants carry only a verifier-manifest hash and
+are rejected by bridge submission until a real generic on-chain verifier is
+implemented. Cryptographic finality is mandatory in every SCCP build; the crate
+has no BLS feature switch or alternate no-verification path that could make two
+validator binaries disagree on the same proof.
 
-Remaining release work is evidence from real deployments:
+Torii exposes one exact detached two-phase flow on both SCCP submit endpoints.
+Preparation omits `signature_b64` and `transaction_payload_b64`; direct
+submission supplies both plus positive `creation_time_ms`. Direct admission
+reuses the exact prepared transaction bytes, proof, route, chain, authority,
+and creation time, then verifies a bounded generic single-key signature.
+Multisig authorities use preparation followed by the multisig workflow, never
+the direct detached-signature shortcut. The unified response uses
+`route_configuration_hash_hex`; the retired manifest alias is not accepted.
 
-- For each lane selected by governance, deploy the audited source consensus,
-  inclusion, trust-anchor, and source-adapter verifier artifacts and record
-  immutable code/key hashes plus transaction and receipt evidence.
-- Deploy and read back the immutable destination verifier, bind its network and
-  address/code identity, and collect a successful transaction-bound route
-  canary whose hashes are role-separated from all governed records.
-- Submit the bounded `sccp_registry_v1` aggregate on-chain with
-  `CanManageSccpGovernance`, then verify that independent peers report the same
-  policy hash, route manifest, and lane readiness.
-- Run the production corridor and cross-SDK proof/submission checks against the
-  deployed lane, archive signed logs and artifacts, and publish the verified
-  release bundle. Diagnostic fixtures and material-only BSC bundles do not
-  count as this evidence.
+The remaining SCCP release work is final integrated validation plus external
+evidence:
 
-**Next checkpoint:** one governance-selected lane with independently reproduced
-live source proof, immutable destination readback, successful route canary,
-on-chain policy/route records, matching peer policy hashes, and a signed release
-evidence bundle. Other lanes may follow independently.
+- complete the clean-build Rust/Core/Torii/CLI, production-validator, contract,
+  consolidated cross-SDK, and four-peer admission matrix; focused mobile
+  detached-submit suites are already complete and are no longer roadmap work;
+- obtain independently audited, reproducible semantic circuit, witness
+  generator, proving key, verifying key, toolchain, and audit-report artifacts
+  for all three production profiles;
+- deploy the exact contracts and native source-verifier material, authenticate
+  finalized readbacks, and confirm every governed runtime/key/policy hash;
+- apply the typed governance actions, run successful value-moving canaries in
+  both directions, and confirm replay, stale-revision, wrong-route, and
+  unavailable-ingress failures remain closed; and
+- publish a signed production release-evidence bundle accepted by the Rust
+  validator and independently reproduced by release engineering and security.
+
+No fixture key, signal-binding circuit, synthetic receipt, unavailable lane,
+or self-consistent proof-controlled roster counts as production evidence.
+
+Any SCCP implementation-history paragraphs elsewhere in this file that mention
+Solana, TON, route manifests, generic proof jobs/artifacts, an external token
+constructor argument, or token-address precomputation are superseded by this
+launch-scope section and are not current roadmap work.
 
 ## Release and Stabilization
 
@@ -28707,6 +28726,14 @@ from wallet and service integrations.
   compiler service. The content-addressed module graph, atomic publisher,
   canonical formatter, structural CST, LSP, and human/JSON/SARIF diagnostics
   must continue to share one grammar and compiler session.
+- Replace the local test runner's temporary cross-file AST merge with
+  typed-HIR test linking. The release frontend now keeps canonical `NodeId` and
+  exact `SourceRange` facts in an orthogonal side table through resolution and
+  semantic diagnostics, including multi-source attribution; typed HIR and
+  optimized MIR intentionally contain no source-wrapper nodes, and metadata
+  presence is byte-neutral. Keep the normative grammar, CST recovery, formatter,
+  LSP data, and generated editor tables synchronized as this final test-linking
+  cleanup lands.
 - Preserve the corrected ABI-v1 artifact contract: `code_hash` covers the
   complete canonical `.to` image, debug data is a hash-keyed sidecar, CNTR is
   validated rather than trusted, and transitive bytecode effects/access drive
@@ -28718,13 +28745,27 @@ from wallet and service integrations.
   positive hash-covered cycle limit.
 - Keep public invocation arguments as one bounded, schema-hashed canonical
   Norito record. JSON conversion belongs at Torii/CLI/SDK construction
-  boundaries; quoting occurs before decode/allocation, paid execution decodes
-  once, and signed transport rejects malformed, noncanonical, oversized, or
-  schema-mismatched records.
+  boundaries; a predecode gas quote binds the signed wire lengths and the
+  validated schema's maximum aggregate allocation, signed bytes remain
+  host-owned behind a domain-separated guest binding, paid execution decodes
+  once, and a complete INPUT/owned-HEAP allocation preflight precedes
+  materialization. Signed transport rejects malformed, noncanonical,
+  oversized, schema-mismatched, or deterministically unmaterializable records.
+- Keep caller authorization uniform across direct, nested, trigger, overlay,
+  and proved execution. Protected overlays retain and live-recheck their named
+  permission before applying effects, while every grant, revoke, role binding,
+  and role-permission change shares the synthetic authorization scheduler
+  dependency.
 - Maintain the exhaustive builtin registry as the source of signature, mode,
   effect, syscall, access, gas, and lowering policy. Every new privileged
   operation must update bytecode-derived admission, ABI-v1 hashes/goldens,
   deterministic host behavior, docs, and adversarial tests in the same change.
+- Finish and validate the bounded-List, exact-Amount, native-JSON, and typed
+  core-query-page corridor. The implementation and source migration are under
+  final audit; regenerate every mapped golden, manifest, syscall/pointer table,
+  and ABI hash only after frontend and ABI hardening are green. Then prove one
+  host query and one projection decode per typed request, run the non-skipped
+  four-peer pagination lane, and capture the real-base 5% performance gates.
 - Hold the performance contract: sub-1% assembler padding, compact indexed
   literals/near control flow, SSA optimization and call-aware allocation,
   authenticated no-op builds with zero rewrites, and warm prepared execution
@@ -28747,16 +28788,17 @@ from wallet and service integrations.
   use a checked prefix reader so malformed SIMD headers fail before cursor
   advancement or lane slicing.
 
-**Next checkpoints:** finish the remaining focused IVM/core/Torii/CLI runtime
-matrix, including the pending Kotlin/Java shared-fixture runs; regenerate the
-complete mapped `.to` set with the reset compiler,
-refresh the size baseline, and prove the padding, size-reduction, zero-compile,
-and zero-rewrite no-op gates; run the hidden/dynamic-access scheduler coverage
-on a non-skipped four-peer network; finish the remaining Norito wire-format
-fixtures; capture the controlled-runner 5% benchmark evidence; and pass strict
-Clippy, codec guards, and the final full-workspace test before declaring V1
-ready. Future syscall or opcode changes remain ABI version 1 until this first
-release and must refresh every golden and table together.
+**Next checkpoints:** close the remaining frontend and ABI hardening
+regressions; run the focused Kotodama, IVM, ABI, and core suites; regenerate and
+independently verify every mapped artifact, manifest, syscall/pointer table,
+and ABI hash; then run the non-skipped four-peer typed-query pagination lane,
+the controlled-runner 5% benchmark gates, strict Clippy, and the final
+full-workspace test. Complete the independent runtime-manifest parser
+cross-check and run the pending Kotlin shared-fixture test on a host with Java
+before declaring V1 ready. Continue the separate hidden/dynamic-access
+scheduler and remaining Norito wire-format evidence. Future syscall or opcode
+changes remain ABI version 1 until this first release and must refresh every
+golden and table together.
 
 ## Privacy, ZK, and FHE
 

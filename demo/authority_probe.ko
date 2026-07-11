@@ -1,12 +1,20 @@
 seiyaku AuthorityProbe {
     kotoage fn main() authorize("Admin") {
         let caller = context::authority();
-        let alice = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+        let alice = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", );
         let key = Name::parse("authority_probe");
         if (caller == alice) {
-            ledger::account::set_detail(caller, key, Json::parse("{\"match\":\"alice\"}"));
+            ledger::account::set_detail(
+                account: caller,
+                key: key,
+                value: Json::parse("{\"match\":\"alice\"}"),
+            );
             return;
         }
-        ledger::account::set_detail(caller, key, Json::parse("{\"match\":\"other\"}"));
+        ledger::account::set_detail(
+            account: caller,
+            key: key,
+            value: Json::parse("{\"match\":\"other\"}"),
+        );
     }
 }

@@ -883,7 +883,7 @@ fn sync_committee_from_wire(
             EthereumNativeSourceErrorV1::MalformedWire("sync committee aggregate public key")
         })?;
     Ok(SyncCommittee::new(
-        public_keys,
+        Box::new(public_keys),
         BlsPublicKey::new(aggregate_public_key),
     ))
 }
@@ -1297,6 +1297,31 @@ fn validate_mpt_proof_bounds(
     Ok(())
 }
 
+fn resolve_mpt_node_reference(
+    reference: MptNodeReference,
+    proof: &EthereumNativeMptProofV1,
+    proof_cursor: &mut usize,
+    first_node: bool,
+    role: EthereumNativeMptRoleV1,
+) -> Result<Vec<u8>, EthereumNativeSourceErrorV1> {
+    match reference {
+        MptNodeReference::Hash(expected_hash) => {
+            let raw = proof
+                .nodes
+                .get(*proof_cursor)
+                .ok_or(EthereumNativeSourceErrorV1::MptNodeReferenceMismatch(role))?;
+            *proof_cursor = (*proof_cursor)
+                .checked_add(1)
+                .ok_or(EthereumNativeSourceErrorV1::MptProofBounds(role))?;
+            if keccak256(raw) != expected_hash || (!first_node && raw.len() < 32) {
+                return Err(EthereumNativeSourceErrorV1::MptNodeReferenceMismatch(role));
+            }
+            Ok(raw.clone())
+        }
+        MptNodeReference::Inline(raw) => Ok(raw),
+    }
+}
+
 fn verify_mpt_inclusion(
     root: H256,
     key: &[u8],
@@ -1315,22 +1340,7 @@ fn verify_mpt_inclusion(
     let mut previous_was_extension = false;
 
     loop {
-        let raw = match expected {
-            MptNodeReference::Hash(expected_hash) => {
-                let raw = proof
-                    .nodes
-                    .get(proof_cursor)
-                    .ok_or(EthereumNativeSourceErrorV1::MptNodeReferenceMismatch(role))?;
-                proof_cursor = proof_cursor
-                    .checked_add(1)
-                    .ok_or(EthereumNativeSourceErrorV1::MptProofBounds(role))?;
-                if keccak256(raw) != expected_hash || (!first_node && raw.len() < 32) {
-                    return Err(EthereumNativeSourceErrorV1::MptNodeReferenceMismatch(role));
-                }
-                raw.clone()
-            }
-            MptNodeReference::Inline(raw) => raw,
-        };
+        let raw = resolve_mpt_node_reference(expected, proof, &mut proof_cursor, first_node, role)?;
         first_node = false;
         let items =
             parse_rlp_list(&raw, 17).ok_or(EthereumNativeSourceErrorV1::NonCanonicalMpt(role))?;
@@ -1372,7 +1382,10 @@ fn verify_mpt_inclusion(
                     .ok_or(EthereumNativeSourceErrorV1::NonCanonicalMpt(role))?;
                 let (is_leaf, partial_path) = decode_compact_path(compact)
                     .ok_or(EthereumNativeSourceErrorV1::NonCanonicalMpt(role))?;
-                if (!is_leaf && partial_path.is_empty()) || (!is_leaf && previous_was_extension) {
+                if !is_leaf && partial_path.is_empty() {
+                    return Err(EthereumNativeSourceErrorV1::NonCanonicalMpt(role));
+                }
+                if !is_leaf && previous_was_extension {
                     return Err(EthereumNativeSourceErrorV1::NonCanonicalMpt(role));
                 }
                 let remaining = path
@@ -1470,15 +1483,19 @@ fn rlp_encode_u64(value: u64) -> Vec<u8> {
     encoded
 }
 
+struct ExpectedEthereumSourceEventV1<'a> {
+    emitter: [u8; 20],
+    lane_hash: H256,
+    message_id: H256,
+    event_digest: H256,
+    payload_hash: H256,
+    route_config_hash: H256,
+    payload: &'a [u8],
+}
+
 fn validate_receipt_event(
     receipt: &[u8],
-    expected_emitter: [u8; 20],
-    expected_lane_hash: H256,
-    expected_message_id: H256,
-    expected_event_digest: H256,
-    expected_payload_hash: H256,
-    expected_route_config_hash: H256,
-    expected_payload: &[u8],
+    expected: &ExpectedEthereumSourceEventV1<'_>,
 ) -> Result<(), EthereumNativeSourceErrorV1> {
     let payload = match receipt.first().copied() {
         Some(0x01..=0x04) => receipt
@@ -1498,7 +1515,7 @@ fn validate_receipt_event(
     if status != [1] {
         return Err(EthereumNativeSourceErrorV1::MalformedReceipt);
     }
-    if canonical_uint_bytes(fields[1], 8).is_none_or(|bytes| bytes.is_empty()) {
+    if canonical_uint_bytes(fields[1], 8).is_none_or(<[u8]>::is_empty) {
         return Err(EthereumNativeSourceErrorV1::MalformedReceipt);
     }
     if rlp_bytes(fields[2]).is_none_or(|bloom| bloom.len() != 256) {
@@ -1545,20 +1562,20 @@ fn validate_receipt_event(
             })
             .collect::<Result<Vec<_>, _>>()?;
         let data = rlp_bytes(log_fields[2]).ok_or(EthereumNativeSourceErrorV1::MalformedReceipt)?;
-        if address == expected_emitter
+        if address == expected.emitter
             && topic_bytes
                 .first()
                 .is_some_and(|topic| *topic == event_signature)
         {
             if topic_bytes.len() != 4
-                || topic_bytes[1] != expected_lane_hash
-                || topic_bytes[2] != expected_message_id
-                || topic_bytes[3] != expected_event_digest
+                || topic_bytes[1] != expected.lane_hash
+                || topic_bytes[2] != expected.message_id
+                || topic_bytes[3] != expected.event_digest
                 || !canonical_transfer_event_data_matches(
                     data,
-                    expected_payload_hash,
-                    expected_route_config_hash,
-                    expected_payload,
+                    expected.payload_hash,
+                    expected.route_config_hash,
+                    expected.payload,
                 )
             {
                 return Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch);
@@ -1635,39 +1652,40 @@ fn finalized_execution_matches(
         && explicit.receipts_root != EMPTY_TRIE_ROOT
 }
 
-/// Verify a complete native Ethereum SCCP source proof.
-///
-/// The caller supplies the exact expected identity and its canonical hash, the
-/// governed trusted-anchor hash, and the message statement. The function never
-/// falls back to a numeric domain or an address-only identity.
-///
-/// # Errors
-///
-/// Returns a role-specific error when any identity, light-client, MPT, account,
-/// receipt, or exact transfer-event binding fails validation.
-pub fn verify_ethereum_native_source_proof_v1(
-    expected_source_identity: &SccpSourceIdentityV1,
-    expected_source_identity_hash: H256,
-    expected_trusted_anchor_hash: H256,
-    expected_message_id: H256,
-    expected_payload_hash: H256,
-    expected_payload: &[u8],
+struct EthereumNativeExpectedStatementV1<'a> {
+    source_identity: &'a SccpSourceIdentityV1,
+    source_identity_hash: H256,
+    trusted_anchor_hash: H256,
+    message_id: H256,
+    payload_hash: H256,
+    payload: &'a [u8],
+}
+
+#[derive(Clone, Copy)]
+struct ValidatedEthereumNativeStatementV1 {
+    source_identity_hash: H256,
+    lane_hash: H256,
+    emitter: [u8; 20],
+    runtime_code_hash: H256,
+    route_config_hash: H256,
+    source_event_digest: H256,
+}
+
+fn validate_ethereum_native_statement_v1(
     proof: &EthereumNativeSourceProofV1,
-) -> Result<ValidatedEthereumNativeSourceV1, EthereumNativeSourceErrorV1> {
+    expected: &EthereumNativeExpectedStatementV1<'_>,
+) -> Result<ValidatedEthereumNativeStatementV1, EthereumNativeSourceErrorV1> {
     if proof.version != 1 {
         return Err(EthereumNativeSourceErrorV1::UnsupportedVersion(
             "Ethereum source proof",
         ));
     }
-    if &proof.source_identity != expected_source_identity {
+    if &proof.source_identity != expected.source_identity {
         return Err(EthereumNativeSourceErrorV1::SourceIdentityMismatch);
     }
     if !proof.source_identity.is_well_formed()
         || !is_ethereum_network(proof.source_identity.lane.source)
-        || !matches!(
-            proof.source_identity.lane.target,
-            SccpNetworkV1::SoraNexus | SccpNetworkV1::SoraTaira
-        )
+        || proof.source_identity.lane.target != SccpNetworkV1::SoraTaira
     {
         return Err(EthereumNativeSourceErrorV1::InvalidSourceIdentity);
     }
@@ -1685,8 +1703,8 @@ pub fn verify_ethereum_native_source_proof_v1(
 
     let identity_hash = sccp_source_identity_hash_v1(&proof.source_identity)
         .ok_or(EthereumNativeSourceErrorV1::InvalidSourceIdentity)?;
-    if expected_source_identity_hash.iter().all(|byte| *byte == 0)
-        || identity_hash != expected_source_identity_hash
+    if expected.source_identity_hash.iter().all(|byte| *byte == 0)
+        || identity_hash != expected.source_identity_hash
         || proof.source_identity_hash != identity_hash
     {
         return Err(EthereumNativeSourceErrorV1::SourceIdentityHashMismatch);
@@ -1696,34 +1714,60 @@ pub fn verify_ethereum_native_source_proof_v1(
     if proof.lane_hash != lane_hash {
         return Err(EthereumNativeSourceErrorV1::LaneHashMismatch);
     }
-    if proof.message_id != expected_message_id
-        || proof.payload_hash != expected_payload_hash
-        || expected_message_id.iter().all(|byte| *byte == 0)
-        || expected_payload_hash.iter().all(|byte| *byte == 0)
-        || expected_payload.is_empty()
-        || super::payload_hash(expected_payload) != expected_payload_hash
+    if proof.message_id != expected.message_id
+        || proof.payload_hash != expected.payload_hash
+        || expected.message_id.iter().all(|byte| *byte == 0)
+        || expected.payload_hash.iter().all(|byte| *byte == 0)
+        || expected.payload.is_empty()
+        || super::payload_hash(expected.payload) != expected.payload_hash
     {
         return Err(EthereumNativeSourceErrorV1::MessageStatementMismatch);
     }
-    let decoded_payload = decode_canonical_sccp_payload_bytes(expected_payload)
+    let decoded_payload = decode_canonical_sccp_payload_bytes(expected.payload)
         .ok_or(EthereumNativeSourceErrorV1::MessageStatementMismatch)?;
     if !matches!(decoded_payload, SccpPayloadV1::Transfer(_))
-        || canonical_sccp_payload_bytes(&decoded_payload) != expected_payload
+        || canonical_sccp_payload_bytes(&decoded_payload)
+            .ok()
+            .as_deref()
+            != Some(expected.payload)
         || sccp_message_id(proof.source_identity.lane, &decoded_payload)
-            != Some(expected_message_id)
+            != Some(expected.message_id)
     {
         return Err(EthereumNativeSourceErrorV1::MessageStatementMismatch);
     }
     let source_event_digest = sccp_lane_source_event_digest_v1(
         proof.source_identity.lane,
-        expected_message_id,
-        expected_payload_hash,
+        expected.message_id,
+        expected.payload_hash,
     )
     .ok_or(EthereumNativeSourceErrorV1::SourceEventDigestMismatch)?;
     if proof.source_event_digest != source_event_digest {
         return Err(EthereumNativeSourceErrorV1::SourceEventDigestMismatch);
     }
 
+    Ok(ValidatedEthereumNativeStatementV1 {
+        source_identity_hash: identity_hash,
+        lane_hash,
+        emitter: address,
+        runtime_code_hash,
+        route_config_hash,
+        source_event_digest,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct AuthenticatedEthereumNativeFinalityV1 {
+    trusted_anchor_hash: H256,
+    state_commitment: H256,
+    beacon_slot: u64,
+    beacon_block_root: H256,
+    execution: AuthenticatedExecutionBlock,
+}
+
+fn authenticate_ethereum_native_finality_v1(
+    proof: &EthereumNativeSourceProofV1,
+    expected_trusted_anchor_hash: H256,
+) -> Result<AuthenticatedEthereumNativeFinalityV1, EthereumNativeSourceErrorV1> {
     if proof.trusted_anchor.network != proof.source_identity.lane.source {
         return Err(EthereumNativeSourceErrorV1::UnsupportedNetwork);
     }
@@ -1745,8 +1789,8 @@ pub fn verify_ethereum_native_source_proof_v1(
     for update in &proof.updates {
         state = state.validate_and_apply(update_from_wire(update)?)?;
     }
-    let final_state_commitment = state.state_commitment();
-    if proof.final_state_commitment != final_state_commitment {
+    let state_commitment = state.state_commitment();
+    if proof.final_state_commitment != state_commitment {
         return Err(EthereumNativeSourceErrorV1::FinalStateCommitmentMismatch);
     }
     let finalized_header = state.finalized_header();
@@ -1756,47 +1800,85 @@ pub fn verify_ethereum_native_source_proof_v1(
     if !finalized_execution_matches(&proof.finalized_execution, finalized_header, execution) {
         return Err(EthereumNativeSourceErrorV1::FinalizedExecutionMismatch);
     }
+    Ok(AuthenticatedEthereumNativeFinalityV1 {
+        trusted_anchor_hash,
+        state_commitment,
+        beacon_slot: finalized_header.beacon().slot,
+        beacon_block_root: finalized_header.beacon().hash_tree_root(),
+        execution,
+    })
+}
 
-    let account_key = keccak256(&address);
+/// Verify a complete native Ethereum SCCP source proof.
+///
+/// The caller supplies the exact expected identity and its canonical hash, the
+/// governed trusted-anchor hash, and the message statement. The function never
+/// falls back to a numeric domain or an address-only identity.
+///
+/// # Errors
+///
+/// Returns a role-specific error when any identity, light-client, MPT, account,
+/// receipt, or exact transfer-event binding fails validation.
+pub fn verify_ethereum_native_source_proof_v1(
+    expected_source_identity: &SccpSourceIdentityV1,
+    expected_source_identity_hash: H256,
+    expected_trusted_anchor_hash: H256,
+    expected_message_id: H256,
+    expected_payload_hash: H256,
+    expected_payload: &[u8],
+    proof: &EthereumNativeSourceProofV1,
+) -> Result<ValidatedEthereumNativeSourceV1, EthereumNativeSourceErrorV1> {
+    let expected = EthereumNativeExpectedStatementV1 {
+        source_identity: expected_source_identity,
+        source_identity_hash: expected_source_identity_hash,
+        trusted_anchor_hash: expected_trusted_anchor_hash,
+        message_id: expected_message_id,
+        payload_hash: expected_payload_hash,
+        payload: expected_payload,
+    };
+    let statement = validate_ethereum_native_statement_v1(proof, &expected)?;
+    let finality = authenticate_ethereum_native_finality_v1(proof, expected.trusted_anchor_hash)?;
+
+    let account_key = keccak256(&statement.emitter);
     let account_value = verify_mpt_inclusion(
-        execution.state_root,
+        finality.execution.state_root,
         &account_key,
         &proof.account_proof,
         EthereumNativeMptRoleV1::Account,
     )?;
-    let _storage_root = account_storage_root(&account_value, runtime_code_hash)?;
+    account_storage_root(&account_value, statement.runtime_code_hash)?;
     let receipt_key = rlp_encode_u64(proof.transaction_index);
     let receipt = verify_mpt_inclusion(
-        execution.receipts_root,
+        finality.execution.receipts_root,
         &receipt_key,
         &proof.receipt_proof,
         EthereumNativeMptRoleV1::Receipt,
     )?;
-    validate_receipt_event(
-        &receipt,
-        address,
-        lane_hash,
-        expected_message_id,
-        source_event_digest,
-        expected_payload_hash,
-        route_config_hash,
-        expected_payload,
-    )?;
+    let expected_event = ExpectedEthereumSourceEventV1 {
+        emitter: statement.emitter,
+        lane_hash: statement.lane_hash,
+        message_id: expected.message_id,
+        event_digest: statement.source_event_digest,
+        payload_hash: expected.payload_hash,
+        route_config_hash: statement.route_config_hash,
+        payload: expected.payload,
+    };
+    validate_receipt_event(&receipt, &expected_event)?;
 
     Ok(ValidatedEthereumNativeSourceV1 {
-        source_identity_hash: identity_hash,
-        lane_hash,
-        trusted_anchor_hash,
-        final_state_commitment,
-        message_id: expected_message_id,
-        payload_hash: expected_payload_hash,
-        source_event_digest,
-        finalized_beacon_slot: finalized_header.beacon().slot,
-        finalized_beacon_block_root: finalized_header.beacon().hash_tree_root(),
-        execution_block_number: execution.block_number,
-        execution_block_hash: execution.block_hash,
-        execution_state_root: execution.state_root,
-        execution_receipts_root: execution.receipts_root,
+        source_identity_hash: statement.source_identity_hash,
+        lane_hash: statement.lane_hash,
+        trusted_anchor_hash: finality.trusted_anchor_hash,
+        final_state_commitment: finality.state_commitment,
+        message_id: expected.message_id,
+        payload_hash: expected.payload_hash,
+        source_event_digest: statement.source_event_digest,
+        finalized_beacon_slot: finality.beacon_slot,
+        finalized_beacon_block_root: finality.beacon_block_root,
+        execution_block_number: finality.execution.block_number,
+        execution_block_hash: finality.execution.block_hash,
+        execution_state_root: finality.execution.state_root,
+        execution_receipts_root: finality.execution.receipts_root,
         transaction_index: proof.transaction_index,
     })
 }
@@ -1833,7 +1915,7 @@ mod test_fixtures {
     use sha2::{Digest as _, Sha256};
 
     use super::*;
-    use crate::{SccpLaneIdV1, sccp_source_identity_hash_v1};
+    use crate::sccp_source_identity_hash_v1;
 
     const GENERATOR_PUBLIC_KEY: [u8; 48] = [
         0x97, 0xf1, 0xd3, 0xa7, 0x31, 0x97, 0xd7, 0x94, 0x26, 0x95, 0x63, 0x8c, 0x4f, 0xa9, 0xac,
@@ -2043,38 +2125,35 @@ mod test_fixtures {
         EthereumNativeSourceProofV1,
     ) {
         let payload_hash = super::super::payload_hash(canonical_payload);
-        let identity = SccpSourceIdentityV1 {
-            lane: SccpLaneIdV1 {
-                source: SccpNetworkV1::EthereumMainnet,
-                target: SccpNetworkV1::SoraTaira,
-            },
-            emitter: SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
-                address: [0x11; 20],
-                runtime_code_hash: [0x22; 32],
-                route_config_hash: [0x33; 32],
-            }),
-        };
+        let identity = crate::sccp_exact_evm_governed_route_test_fixture_v1(
+            SccpNetworkV1::EthereumMainnet,
+            iroha_data_model::bridge::SccpRouteActivationV1::Staged,
+        )
+        .source_identity;
         let identity_hash = sccp_source_identity_hash_v1(&identity).unwrap();
         let lane_hash = sccp_lane_id_hash_v1(identity.lane).unwrap();
         let digest =
             sccp_lane_source_event_digest_v1(identity.lane, message_id, payload_hash).unwrap();
 
+        let SccpSourceEmitterV1::Evm(emitter) = identity.emitter else {
+            unreachable!("Ethereum fixture uses an EVM emitter");
+        };
         let storage_root = [0x44; 32];
         let account_value = encode_list(&[
             encode_bytes(&[]),
             encode_bytes(&[]),
             encode_bytes(&storage_root),
-            encode_bytes(&[0x22; 32]),
+            encode_bytes(&emitter.runtime_code_hash),
         ]);
-        let account_key = keccak256(&[0x11; 20]);
+        let account_key = keccak256(&emitter.address);
         let (state_root, account_proof) = single_leaf_proof(&account_key, &account_value);
         let receipt = event_receipt(
-            [0x11; 20],
+            emitter.address,
             lane_hash,
             message_id,
             digest,
             payload_hash,
-            [0x33; 32],
+            emitter.route_config_hash,
             canonical_payload,
             true,
             false,
@@ -2202,6 +2281,7 @@ mod tests {
                     route_id_codec: crate::SCCP_CODEC_CANONICAL_TEXT,
                     route_id: b"ethereum_taira_xor".to_vec(),
                 }))
+                .expect("valid Ethereum SCCP test payload encodes")
             })
             .as_slice()
     }
@@ -2518,19 +2598,18 @@ mod tests {
         let config_hash = [0x55; 32];
         let payload = test_payload();
         let payload_hash = crate::payload_hash(payload);
+        let expected = ExpectedEthereumSourceEventV1 {
+            emitter,
+            lane_hash: lane,
+            message_id,
+            event_digest: digest,
+            payload_hash,
+            route_config_hash: config_hash,
+            payload,
+        };
+        let validate = |receipt: &[u8]| validate_receipt_event(receipt, &expected);
         assert_eq!(
-            validate_receipt_event(
-                &event_receipt(
-                    emitter,
-                    lane,
-                    message_id,
-                    digest,
-                    payload_hash,
-                    config_hash,
-                    payload,
-                    true,
-                    false,
-                ),
+            validate(&event_receipt(
                 emitter,
                 lane,
                 message_id,
@@ -2538,22 +2617,13 @@ mod tests {
                 payload_hash,
                 config_hash,
                 payload,
-            ),
+                true,
+                false,
+            ),),
             Ok(())
         );
         assert_eq!(
-            validate_receipt_event(
-                &event_receipt(
-                    emitter,
-                    lane,
-                    message_id,
-                    digest,
-                    payload_hash,
-                    config_hash,
-                    payload,
-                    false,
-                    false,
-                ),
+            validate(&event_receipt(
                 emitter,
                 lane,
                 message_id,
@@ -2561,7 +2631,9 @@ mod tests {
                 payload_hash,
                 config_hash,
                 payload,
-            ),
+                false,
+                false,
+            ),),
             Err(EthereumNativeSourceErrorV1::FailedReceipt)
         );
         let valid_data = canonical_event_data(payload_hash, config_hash, payload);
@@ -2625,41 +2697,25 @@ mod tests {
                 &valid_data,
                 false,
             ),
-            receipt_with_topics(
-                emitter,
-                &[signature, lane, message_id, digest, [0x77; 32]],
-                true,
-                &valid_data,
-                false,
-            ),
         ] {
             assert_eq!(
-                validate_receipt_event(
-                    &receipt,
-                    emitter,
-                    lane,
-                    message_id,
-                    digest,
-                    payload_hash,
-                    config_hash,
-                    payload,
-                ),
+                validate(&receipt),
                 Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
             );
         }
+        let excessive_topics = receipt_with_topics(
+            emitter,
+            &[signature, lane, message_id, digest, [0x77; 32]],
+            true,
+            &valid_data,
+            false,
+        );
         assert_eq!(
-            validate_receipt_event(
-                &event_receipt(
-                    emitter,
-                    lane,
-                    message_id,
-                    digest,
-                    payload_hash,
-                    config_hash,
-                    payload,
-                    true,
-                    true,
-                ),
+            validate(&excessive_topics),
+            Err(EthereumNativeSourceErrorV1::MalformedReceipt)
+        );
+        assert_eq!(
+            validate(&event_receipt(
                 emitter,
                 lane,
                 message_id,
@@ -2667,8 +2723,10 @@ mod tests {
                 payload_hash,
                 config_hash,
                 payload,
-            ),
-            Err(EthereumNativeSourceErrorV1::MalformedReceipt)
+                true,
+                true,
+            ),),
+            Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
         );
         for mutation in [64usize, 95, 96, valid_data.len() - 1] {
             let mut malformed_data = valid_data.clone();
@@ -2681,16 +2739,7 @@ mod tests {
                 false,
             );
             assert_eq!(
-                validate_receipt_event(
-                    &receipt,
-                    emitter,
-                    lane,
-                    message_id,
-                    digest,
-                    payload_hash,
-                    config_hash,
-                    payload,
-                ),
+                validate(&receipt),
                 Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
             );
         }
@@ -2704,16 +2753,7 @@ mod tests {
             false,
         );
         assert_eq!(
-            validate_receipt_event(
-                &trailing_receipt,
-                emitter,
-                lane,
-                message_id,
-                digest,
-                payload_hash,
-                config_hash,
-                payload,
-            ),
+            validate(&trailing_receipt),
             Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
         );
         let old_event = receipt_with_topics(
@@ -2724,16 +2764,7 @@ mod tests {
             false,
         );
         assert_eq!(
-            validate_receipt_event(
-                &old_event,
-                emitter,
-                lane,
-                message_id,
-                digest,
-                payload_hash,
-                config_hash,
-                payload,
-            ),
+            validate(&old_event),
             Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
         );
         let mut unknown_type = event_receipt(
@@ -2749,16 +2780,7 @@ mod tests {
         );
         unknown_type[0] = 5;
         assert_eq!(
-            validate_receipt_event(
-                &unknown_type,
-                emitter,
-                lane,
-                message_id,
-                digest,
-                payload_hash,
-                config_hash,
-                payload,
-            ),
+            validate(&unknown_type),
             Err(EthereumNativeSourceErrorV1::MalformedReceipt)
         );
     }

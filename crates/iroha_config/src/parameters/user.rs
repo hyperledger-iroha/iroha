@@ -3861,6 +3861,9 @@ pub struct Zk {
     #[config(nested)]
     /// Native STARK/FRI verification configuration.
     pub stark: Stark,
+    #[config(nested)]
+    /// SCCP proof-admission and deterministic verifier-work limits.
+    pub sccp: Sccp,
     /// Maximum number of recent shielded Merkle roots kept per asset.
     #[config(
         env = "ZK_ROOT_HISTORY_CAP",
@@ -3953,6 +3956,7 @@ impl Zk {
             halo2: self.halo2.parse(),
             fastpq: self.fastpq.parse(),
             stark: self.stark.parse(),
+            sccp: self.sccp.parse(),
             root_history_cap: self.root_history_cap,
             ballot_history_cap: self.ballot_history_cap,
             empty_root_on_empty: self.empty_root_on_empty,
@@ -3998,6 +4002,309 @@ impl Zk {
                 per_commitment: defaults::confidential::gas::PER_COMMITMENT,
             },
         }
+    }
+}
+
+/// SCCP proof-admission and deterministic verifier-work limits.
+///
+/// These are consensus execution limits. They deliberately have no environment-variable aliases:
+/// every validator must obtain the same values from its configuration file.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct Sccp {
+    /// Maximum closed SCCP proofs in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION")]
+    pub max_proofs_per_transaction: NonZeroU32,
+    /// Maximum closed SCCP proofs committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_PROOFS_PER_BLOCK")]
+    pub max_proofs_per_block: NonZeroU32,
+    /// Maximum canonical bytes retained for one closed SCCP proof.
+    #[config(default = "defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF")]
+    pub max_proof_bytes_per_proof: NonZeroU64,
+    /// Maximum aggregate SCCP proof bytes in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_PROOF_BYTES_PER_TRANSACTION")]
+    pub max_proof_bytes_per_transaction: NonZeroU64,
+    /// Maximum aggregate SCCP proof bytes committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_PROOF_BYTES_PER_BLOCK")]
+    pub max_proof_bytes_per_block: NonZeroU64,
+    /// Maximum native-finality continuation headers in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_NATIVE_HEADERS_PER_TRANSACTION")]
+    pub max_native_headers_per_transaction: NonZeroU32,
+    /// Maximum native-finality continuation headers committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_NATIVE_HEADERS_PER_BLOCK")]
+    pub max_native_headers_per_block: NonZeroU32,
+    /// Maximum Ethereum light-client updates in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_TRANSACTION")]
+    pub max_ethereum_light_client_updates_per_transaction: NonZeroU32,
+    /// Maximum Ethereum light-client updates committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_BLOCK")]
+    pub max_ethereum_light_client_updates_per_block: NonZeroU32,
+    /// Maximum framed native-finality header bytes in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_NATIVE_HEADER_BYTES_PER_TRANSACTION")]
+    pub max_native_header_bytes_per_transaction: NonZeroU64,
+    /// Maximum framed native-finality header bytes committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_NATIVE_HEADER_BYTES_PER_BLOCK")]
+    pub max_native_header_bytes_per_block: NonZeroU64,
+    /// Maximum secp256k1 recoveries in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_SECP256K1_RECOVERIES_PER_TRANSACTION")]
+    pub max_secp256k1_recoveries_per_transaction: NonZeroU32,
+    /// Maximum secp256k1 recoveries committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_SECP256K1_RECOVERIES_PER_BLOCK")]
+    pub max_secp256k1_recoveries_per_block: NonZeroU32,
+    /// Maximum BLS aggregate-signature checks in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_BLS_AGGREGATE_CHECKS_PER_TRANSACTION")]
+    pub max_bls_aggregate_checks_per_transaction: NonZeroU32,
+    /// Maximum BLS aggregate-signature checks committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_BLS_AGGREGATE_CHECKS_PER_BLOCK")]
+    pub max_bls_aggregate_checks_per_block: NonZeroU32,
+    /// Maximum BLS public-key contributions processed in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION")]
+    pub max_bls_signer_contributions_per_transaction: NonZeroU32,
+    /// Maximum BLS public-key contributions committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK")]
+    pub max_bls_signer_contributions_per_block: NonZeroU32,
+    /// Maximum BN254 Groth16 pairing-product checks in one transaction.
+    #[config(default = "defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION")]
+    pub max_bn254_pairing_checks_per_transaction: NonZeroU32,
+    /// Maximum BN254 Groth16 pairing-product checks committed in one block.
+    #[config(default = "defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_BLOCK")]
+    pub max_bn254_pairing_checks_per_block: NonZeroU32,
+}
+
+impl Default for Sccp {
+    fn default() -> Self {
+        Self {
+            max_proofs_per_transaction: defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION,
+            max_proofs_per_block: defaults::zk::sccp::MAX_PROOFS_PER_BLOCK,
+            max_proof_bytes_per_proof: defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF,
+            max_proof_bytes_per_transaction: defaults::zk::sccp::MAX_PROOF_BYTES_PER_TRANSACTION,
+            max_proof_bytes_per_block: defaults::zk::sccp::MAX_PROOF_BYTES_PER_BLOCK,
+            max_native_headers_per_transaction:
+                defaults::zk::sccp::MAX_NATIVE_HEADERS_PER_TRANSACTION,
+            max_native_headers_per_block: defaults::zk::sccp::MAX_NATIVE_HEADERS_PER_BLOCK,
+            max_ethereum_light_client_updates_per_transaction:
+                defaults::zk::sccp::MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_TRANSACTION,
+            max_ethereum_light_client_updates_per_block:
+                defaults::zk::sccp::MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_BLOCK,
+            max_native_header_bytes_per_transaction:
+                defaults::zk::sccp::MAX_NATIVE_HEADER_BYTES_PER_TRANSACTION,
+            max_native_header_bytes_per_block:
+                defaults::zk::sccp::MAX_NATIVE_HEADER_BYTES_PER_BLOCK,
+            max_secp256k1_recoveries_per_transaction:
+                defaults::zk::sccp::MAX_SECP256K1_RECOVERIES_PER_TRANSACTION,
+            max_secp256k1_recoveries_per_block:
+                defaults::zk::sccp::MAX_SECP256K1_RECOVERIES_PER_BLOCK,
+            max_bls_aggregate_checks_per_transaction:
+                defaults::zk::sccp::MAX_BLS_AGGREGATE_CHECKS_PER_TRANSACTION,
+            max_bls_aggregate_checks_per_block:
+                defaults::zk::sccp::MAX_BLS_AGGREGATE_CHECKS_PER_BLOCK,
+            max_bls_signer_contributions_per_transaction:
+                defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION,
+            max_bls_signer_contributions_per_block:
+                defaults::zk::sccp::MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK,
+            max_bn254_pairing_checks_per_transaction:
+                defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION,
+            max_bn254_pairing_checks_per_block:
+                defaults::zk::sccp::MAX_BN254_PAIRING_CHECKS_PER_BLOCK,
+        }
+    }
+}
+
+impl Sccp {
+    fn parse(self) -> actual::Sccp {
+        fn require_json_safe(value: NonZeroU64, name: &str) {
+            assert!(
+                value.get() <= iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX,
+                "zk.sccp.{name} must not exceed the SCCP V1 JSON-safe integer maximum"
+            );
+        }
+
+        fn require_order<T: Ord + Debug>(
+            transaction: T,
+            block: T,
+            transaction_name: &str,
+            block_name: &str,
+        ) {
+            assert!(
+                transaction <= block,
+                "zk.sccp.{transaction_name} must not exceed zk.sccp.{block_name}"
+            );
+        }
+
+        require_json_safe(self.max_proof_bytes_per_proof, "max_proof_bytes_per_proof");
+        require_json_safe(
+            self.max_proof_bytes_per_transaction,
+            "max_proof_bytes_per_transaction",
+        );
+        require_json_safe(self.max_proof_bytes_per_block, "max_proof_bytes_per_block");
+        require_json_safe(
+            self.max_native_header_bytes_per_transaction,
+            "max_native_header_bytes_per_transaction",
+        );
+        require_json_safe(
+            self.max_native_header_bytes_per_block,
+            "max_native_header_bytes_per_block",
+        );
+
+        require_order(
+            self.max_proofs_per_transaction,
+            self.max_proofs_per_block,
+            "max_proofs_per_transaction",
+            "max_proofs_per_block",
+        );
+        assert!(
+            self.max_proof_bytes_per_proof <= self.max_proof_bytes_per_transaction,
+            "zk.sccp.max_proof_bytes_per_proof must not exceed zk.sccp.max_proof_bytes_per_transaction"
+        );
+        require_order(
+            self.max_proof_bytes_per_transaction,
+            self.max_proof_bytes_per_block,
+            "max_proof_bytes_per_transaction",
+            "max_proof_bytes_per_block",
+        );
+        require_order(
+            self.max_native_headers_per_transaction,
+            self.max_native_headers_per_block,
+            "max_native_headers_per_transaction",
+            "max_native_headers_per_block",
+        );
+        require_order(
+            self.max_ethereum_light_client_updates_per_transaction,
+            self.max_ethereum_light_client_updates_per_block,
+            "max_ethereum_light_client_updates_per_transaction",
+            "max_ethereum_light_client_updates_per_block",
+        );
+        require_order(
+            self.max_native_header_bytes_per_transaction,
+            self.max_native_header_bytes_per_block,
+            "max_native_header_bytes_per_transaction",
+            "max_native_header_bytes_per_block",
+        );
+        require_order(
+            self.max_secp256k1_recoveries_per_transaction,
+            self.max_secp256k1_recoveries_per_block,
+            "max_secp256k1_recoveries_per_transaction",
+            "max_secp256k1_recoveries_per_block",
+        );
+        require_order(
+            self.max_bls_aggregate_checks_per_transaction,
+            self.max_bls_aggregate_checks_per_block,
+            "max_bls_aggregate_checks_per_transaction",
+            "max_bls_aggregate_checks_per_block",
+        );
+        require_order(
+            self.max_bls_signer_contributions_per_transaction,
+            self.max_bls_signer_contributions_per_block,
+            "max_bls_signer_contributions_per_transaction",
+            "max_bls_signer_contributions_per_block",
+        );
+        require_order(
+            self.max_bn254_pairing_checks_per_transaction,
+            self.max_bn254_pairing_checks_per_block,
+            "max_bn254_pairing_checks_per_transaction",
+            "max_bn254_pairing_checks_per_block",
+        );
+
+        actual::Sccp {
+            max_proofs_per_transaction: self.max_proofs_per_transaction,
+            max_proofs_per_block: self.max_proofs_per_block,
+            max_proof_bytes_per_proof: self.max_proof_bytes_per_proof,
+            max_proof_bytes_per_transaction: self.max_proof_bytes_per_transaction,
+            max_proof_bytes_per_block: self.max_proof_bytes_per_block,
+            max_native_headers_per_transaction: self.max_native_headers_per_transaction,
+            max_native_headers_per_block: self.max_native_headers_per_block,
+            max_ethereum_light_client_updates_per_transaction: self
+                .max_ethereum_light_client_updates_per_transaction,
+            max_ethereum_light_client_updates_per_block: self
+                .max_ethereum_light_client_updates_per_block,
+            max_native_header_bytes_per_transaction: self.max_native_header_bytes_per_transaction,
+            max_native_header_bytes_per_block: self.max_native_header_bytes_per_block,
+            max_secp256k1_recoveries_per_transaction: self.max_secp256k1_recoveries_per_transaction,
+            max_secp256k1_recoveries_per_block: self.max_secp256k1_recoveries_per_block,
+            max_bls_aggregate_checks_per_transaction: self.max_bls_aggregate_checks_per_transaction,
+            max_bls_aggregate_checks_per_block: self.max_bls_aggregate_checks_per_block,
+            max_bls_signer_contributions_per_transaction: self
+                .max_bls_signer_contributions_per_transaction,
+            max_bls_signer_contributions_per_block: self.max_bls_signer_contributions_per_block,
+            max_bn254_pairing_checks_per_transaction: self.max_bn254_pairing_checks_per_transaction,
+            max_bn254_pairing_checks_per_block: self.max_bn254_pairing_checks_per_block,
+        }
+    }
+}
+
+#[cfg(test)]
+mod sccp_limit_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_are_nonzero_ordered_and_preserved() {
+        let user = Sccp::default();
+        let actual = user.parse();
+
+        assert_eq!(
+            actual.max_proof_bytes_per_proof,
+            defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF
+        );
+        assert!(actual.max_proofs_per_transaction <= actual.max_proofs_per_block);
+        assert!(actual.max_proof_bytes_per_proof <= actual.max_proof_bytes_per_transaction);
+        assert!(actual.max_proof_bytes_per_transaction <= actual.max_proof_bytes_per_block);
+        assert!(
+            actual.max_bls_signer_contributions_per_transaction
+                <= actual.max_bls_signer_contributions_per_block
+        );
+    }
+
+    #[test]
+    fn rejects_byte_limits_outside_the_exact_json_integer_range() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let maximum = iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX;
+        let exact = NonZeroU64::new(maximum).expect("JSON-safe maximum is nonzero");
+        let over = NonZeroU64::new(maximum + 1).expect("one above maximum is nonzero");
+        let mut boundary = Sccp::default();
+        boundary.max_proof_bytes_per_proof = exact;
+        boundary.max_proof_bytes_per_transaction = exact;
+        boundary.max_proof_bytes_per_block = exact;
+        boundary.max_native_header_bytes_per_transaction = exact;
+        boundary.max_native_header_bytes_per_block = exact;
+        let _ = boundary.parse();
+
+        let mutations: [fn(&mut Sccp, NonZeroU64); 5] = [
+            |value, limit| value.max_proof_bytes_per_proof = limit,
+            |value, limit| value.max_proof_bytes_per_transaction = limit,
+            |value, limit| value.max_proof_bytes_per_block = limit,
+            |value, limit| value.max_native_header_bytes_per_transaction = limit,
+            |value, limit| value.max_native_header_bytes_per_block = limit,
+        ];
+        for mutate in mutations {
+            let mut hostile = boundary;
+            mutate(&mut hostile, over);
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| hostile.parse())).is_err(),
+                "SCCP byte limit above the JSON-safe maximum must reject"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "zk.sccp.max_proof_bytes_per_proof must not exceed zk.sccp.max_proof_bytes_per_transaction"
+    )]
+    fn rejects_per_proof_limit_above_transaction_limit() {
+        let mut limits = Sccp::default();
+        limits.max_proof_bytes_per_transaction = NonZeroU64::new(1).expect("one is nonzero");
+        let _ = limits.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "zk.sccp.max_secp256k1_recoveries_per_transaction must not exceed zk.sccp.max_secp256k1_recoveries_per_block"
+    )]
+    fn rejects_transaction_work_limit_above_block_limit() {
+        let mut limits = Sccp::default();
+        limits.max_secp256k1_recoveries_per_transaction =
+            NonZeroU32::new(2).expect("two is nonzero");
+        limits.max_secp256k1_recoveries_per_block = NonZeroU32::new(1).expect("one is nonzero");
+        let _ = limits.parse();
     }
 }
 

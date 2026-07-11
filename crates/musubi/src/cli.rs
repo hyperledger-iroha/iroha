@@ -44,16 +44,14 @@ use iroha_data_model::{
     },
 };
 use ivm::kotodama::{
-    ast::Item,
     driver::{
         BuildDriver, BuildStatus, LinkedSourceBuildRequest, PublishLayout, PublishMode,
         SourceBuildRequest, read_source_file,
     },
     linker::{
-        ImportBinding, ModuleBuildGraph, SourceLinkRequest, SourceModuleUnit, SourcePackageUnit,
-        is_reserved_import_alias,
+        ImportBinding, ModuleBuildGraph, SourceLinkRequest, SourceModuleUnit,
+        SourcePackageGraphRequest, SourcePackageUnit, is_reserved_import_alias,
     },
-    parser::parse as parse_kotodama,
     session::CompilerSession,
 };
 use sorafs_car::gateway::{
@@ -691,6 +689,9 @@ struct PublishArgs {
     /// Lockfile used to pin resolved dependency versions in the release record
     #[arg(long, default_value = DEFAULT_LOCKFILE)]
     lockfile: PathBuf,
+    /// Authenticated source cache for locked dependency packages
+    #[arg(long, default_value = DEFAULT_CACHE_DIR)]
+    cache_dir: PathBuf,
     /// Print the release payload without submitting it
     #[arg(long)]
     dry_run: bool,
@@ -704,6 +705,17 @@ impl PublishArgs {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
+        validate_dapp_link(&manifest)?;
+        if manifest.exports.is_empty() {
+            bail!("Musubi releases must export at least one Kotodama function");
+        }
+        let lockfile = read_lockfile_optional(&self.lockfile)?;
+        validate_publish_package_graph(
+            manifest_dir,
+            &manifest,
+            lockfile.as_ref(),
+            &self.cache_dir,
+        )?;
         let archive_stats = hash_source_tree(manifest_dir)?;
         let archive_hash = match self.archive_hash {
             Some(value) => {
@@ -748,14 +760,9 @@ impl PublishArgs {
             archive_stats.source_bytes,
             archive_stats.source_file_count,
         );
-        validate_dapp_link(&manifest)?;
         if !archive.is_non_empty() {
             bail!("Musubi releases must include a non-empty source archive");
         }
-        if manifest.exports.is_empty() {
-            bail!("Musubi releases must export at least one Kotodama function");
-        }
-        validate_exported_functions_exist(manifest_dir, &manifest.exports)?;
 
         println!("package = {}", manifest.package.package_ref());
         println!(
@@ -803,7 +810,6 @@ impl PublishArgs {
                 None,
             ))?;
             println!("sorafs_pin_transaction_hash = {pin_hash}");
-            let lockfile = read_lockfile_optional(&self.lockfile)?;
             let release = release_from_manifest(
                 &manifest,
                 lockfile.as_ref(),
@@ -1877,36 +1883,14 @@ fn validate_dapp_link(manifest: &MusubiManifest) -> Result<()> {
     Ok(())
 }
 
-fn validate_exported_functions_exist(root: &Path, exports: &[Name]) -> Result<()> {
-    if exports.is_empty() {
-        return Ok(());
-    }
-    let defined = collect_kotodama_functions(root)?;
-    if defined.is_empty() {
-        bail!(
-            "Musubi release exports functions but no Kotodama `.ko` source files were found under `{}`",
-            root.display()
-        );
-    }
-    for export in exports {
-        if !defined.contains(export) {
-            bail!(
-                "Musubi export `{export}` is not defined by any Kotodama source under `{}`",
-                root.display()
-            );
-        }
-    }
-    Ok(())
-}
-
-fn collect_kotodama_functions(root: &Path) -> Result<BTreeSet<Name>> {
+fn collect_kotodama_source_modules(root: &Path) -> Result<Vec<SourceModuleUnit>> {
     let root = root
         .canonicalize()
         .wrap_err_with(|| format!("failed to canonicalize `{}`", root.display()))?;
     let mut files = Vec::new();
     collect_source_files(&root, &root, &mut files)?;
-
-    let mut functions = BTreeSet::new();
+    files.sort();
+    let mut modules = Vec::new();
     for relative in files.into_iter().filter(|path| {
         path.extension()
             .and_then(|extension| extension.to_str())
@@ -1914,22 +1898,77 @@ fn collect_kotodama_functions(root: &Path) -> Result<BTreeSet<Name>> {
     }) {
         let path = root.join(&relative);
         let source = read_source_file(&path).map_err(|error| eyre!(error))?;
-        let program = parse_kotodama(&source)
-            .map_err(|err| eyre!("failed to parse `{}`: {err}", path.display()))?;
-        for item in program.items {
-            if let Item::Function(function) = item {
-                functions.insert(function.name.parse::<Name>().map_err(|err| {
-                    eyre!(
-                        "Kotodama function `{}` in `{}` is not a valid Musubi export name: {}",
-                        function.name,
-                        path.display(),
-                        err.reason()
-                    )
-                })?);
-            }
-        }
+        let source_name = relative
+            .to_str()
+            .ok_or_else(|| eyre!("Kotodama source path `{}` is not UTF-8", relative.display()))?
+            .replace('\\', "/");
+        modules.push(SourceModuleUnit {
+            source_name,
+            source,
+        });
     }
-    Ok(functions)
+    Ok(modules)
+}
+
+fn validate_publish_package_graph(
+    root: &Path,
+    manifest: &MusubiManifest,
+    lockfile: Option<&MusubiLockfile>,
+    cache_dir: &Path,
+) -> Result<()> {
+    let modules = collect_kotodama_source_modules(root)?;
+    if modules.is_empty() {
+        bail!(
+            "Musubi release exports functions but no Kotodama `.ko` module sources were found under `{}`",
+            root.display()
+        );
+    }
+
+    let (imports, dependencies) = if manifest.dependencies.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        let lockfile = lockfile.ok_or_else(|| {
+            eyre!(
+                "Musubi publish requires a resolved lockfile to validate dependency source graphs"
+            )
+        })?;
+        validate_lockfile_satisfies_manifest(lockfile, manifest)?;
+        let imports = manifest
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                let package = lockfile
+                    .packages
+                    .iter()
+                    .find(|package| package.direct && package.alias == dependency.alias)
+                    .ok_or_else(|| {
+                        eyre!(
+                            "dependency `{}` is not present in lockfile; run `musubi install`",
+                            dependency.alias
+                        )
+                    })?;
+                Ok(ImportBinding {
+                    alias: dependency.alias.to_string(),
+                    package: package.package.to_string(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        (imports, source_packages_with_lockfile(lockfile, cache_dir)?)
+    };
+
+    let request = SourcePackageGraphRequest {
+        package: SourcePackageUnit {
+            identity: manifest.package.package_ref().to_string(),
+            modules,
+            exports: manifest.exports.iter().map(ToString::to_string).collect(),
+            imports,
+        },
+        dependencies,
+    };
+    CompilerSession::default()
+        .validate_package_graph(&ModuleBuildGraph::default(), request)
+        .map_err(|error| eyre!("Kotodama package validation failed: {error}"))?;
+    Ok(())
 }
 
 fn release_from_manifest(
@@ -3216,8 +3255,9 @@ fn source_link_request_with_lockfile(
     lockfile: &MusubiLockfile,
     cache_dir: &Path,
 ) -> Result<SourceLinkRequest> {
+    let workspace_root = std::env::current_dir().wrap_err("failed to locate the workspace root")?;
     let root = SourceModuleUnit {
-        source_name: source_path.display().to_string(),
+        source_name: logical_source_name(source_path, &workspace_root)?,
         source: source.to_owned(),
     };
     let imports = lockfile
@@ -3230,6 +3270,43 @@ fn source_link_request_with_lockfile(
         })
         .collect();
 
+    let packages = source_packages_with_lockfile(lockfile, cache_dir)?;
+
+    Ok(SourceLinkRequest {
+        root,
+        imports,
+        packages,
+    })
+}
+
+fn logical_source_name(source_path: &Path, workspace_root: &Path) -> Result<String> {
+    let source_path = if source_path.is_absolute() {
+        source_path.strip_prefix(workspace_root).wrap_err_with(|| {
+            format!(
+                "Kotodama source `{}` is outside workspace root `{}`; run the build from a common project root",
+                source_path.display(),
+                workspace_root.display()
+            )
+        })?
+    } else {
+        source_path
+    };
+    let source_name = source_path.to_str().ok_or_else(|| {
+        eyre!(
+            "Kotodama source path `{}` is not UTF-8",
+            source_path.display()
+        )
+    })?;
+    if source_name.is_empty() {
+        bail!("Kotodama source path must name a file below the workspace root");
+    }
+    Ok(source_name.replace('\\', "/"))
+}
+
+fn source_packages_with_lockfile(
+    lockfile: &MusubiLockfile,
+    cache_dir: &Path,
+) -> Result<Vec<SourcePackageUnit>> {
     let mut packages = Vec::with_capacity(lockfile.packages.len());
     for package in &lockfile.packages {
         if !package.resolved {
@@ -3267,23 +3344,7 @@ fn source_link_request_with_lockfile(
                     })
             })
             .collect::<Result<Vec<_>>>()?;
-
-        let mut files = Vec::new();
-        collect_source_files(&source_root, &source_root, &mut files)?;
-        files.sort();
-        let mut modules = Vec::new();
-        for relative in files.into_iter().filter(|path| {
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension == "ko")
-        }) {
-            let path = source_root.join(&relative);
-            let module_source = read_source_file(&path).map_err(|error| eyre!(error))?;
-            modules.push(SourceModuleUnit {
-                source_name: path.display().to_string(),
-                source: module_source,
-            });
-        }
+        let modules = collect_kotodama_source_modules(&source_root)?;
         packages.push(SourcePackageUnit {
             identity: package.package.to_string(),
             modules,
@@ -3291,12 +3352,7 @@ fn source_link_request_with_lockfile(
             imports: package_imports,
         });
     }
-
-    Ok(SourceLinkRequest {
-        root,
-        imports,
-        packages,
-    })
+    Ok(packages)
 }
 
 fn release_status_label(status: &MusubiReleaseStatus) -> &'static str {
@@ -4116,7 +4172,27 @@ mod tests {
     }
 
     #[test]
-    fn export_validation_requires_defined_kotodama_function() {
+    fn physical_source_paths_map_to_portable_workspace_relative_names() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let absolute = workspace.path().join("src/app.ko");
+        assert_eq!(
+            logical_source_name(&absolute, workspace.path()).expect("workspace source"),
+            "src/app.ko"
+        );
+        assert_eq!(
+            logical_source_name(Path::new(r"src\app.ko"), workspace.path())
+                .expect("relative Windows spelling"),
+            "src/app.ko"
+        );
+
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let error = logical_source_name(&outside.path().join("app.ko"), workspace.path())
+            .expect_err("absolute source outside the workspace must not enter graph identity");
+        assert!(error.to_string().contains("outside workspace root"));
+    }
+
+    #[test]
+    fn publish_validation_uses_typed_module_exports() {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::create_dir(temp.path().join("src")).expect("src dir");
         fs::write(
@@ -4124,14 +4200,28 @@ mod tests {
             "module Quotes { fn quote() {} }\n",
         )
         .expect("source");
+        let manifest = parse_manifest(
+            r#"
+            [package]
+            namespace = "quotes.universal"
+            name = "core"
+            version = "1.0.0"
 
-        validate_exported_functions_exist(temp.path(), &["quote".parse().expect("export")])
-            .expect("export exists");
-        let err =
-            validate_exported_functions_exist(temp.path(), &["swap".parse().expect("export")])
-                .expect_err("missing export");
+            [exports]
+            functions = ["quote"]
+            "#,
+        )
+        .expect("manifest");
+        let modules = collect_kotodama_source_modules(temp.path()).expect("source modules");
+        assert_eq!(modules[0].source_name, "src/lib.ko");
+        validate_publish_package_graph(temp.path(), &manifest, None, temp.path())
+            .expect("typed export exists");
 
-        assert!(err.to_string().contains("not defined"));
+        let mut missing = manifest;
+        missing.exports = vec!["swap".parse().expect("export")];
+        let err = validate_publish_package_graph(temp.path(), &missing, None, temp.path())
+            .expect_err("missing export");
+        assert!(err.to_string().contains("exports missing function `swap`"));
     }
 
     #[test]

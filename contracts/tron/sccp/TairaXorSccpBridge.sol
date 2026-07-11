@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity ^0.7.4;
+pragma solidity 0.8.24;
 
 import "../../evm/sccp/SccpExactTransferCodec.sol";
+import "./TairaXOR.sol";
 
 interface ITairaXorTronToken {
     function bridge() external view returns (address);
@@ -25,8 +26,28 @@ interface ISccpTronExactVerifier {
     ) external view returns (bytes32 messageId, uint32 sourceDomain, bytes32 commitmentRoot);
 }
 
-/** Concrete exact-profile XOR transfer route between TRON and SORA Taira. */
+/** Exact TRON/Taira route that atomically creates its immutable token. */
 contract TairaXorSccpBridge {
+    struct VerifierPolicyV1 {
+        address verifierAddress;
+        bytes32 verifierCodeHash;
+        bytes32 verifierKeyHash;
+        bytes32 semanticProofProfileHash;
+        bytes32 soraFinalityAnchorHash;
+    }
+
+    struct RouteDeploymentV1 {
+        address tokenAddress;
+        bytes32 tokenCodeHash;
+        VerifierPolicyV1 verifierPolicy;
+        uint8 tronProfile;
+        uint32 routeRevision;
+        bytes32 networkId;
+        bytes32 sourceLaneHash;
+        bytes32 destinationLaneHash;
+        bytes32 destinationBindingHash;
+    }
+
     uint32 private constant DOMAIN_SORA = 0;
     uint32 private constant DOMAIN_TRON = 5;
     uint8 private constant CODEC_TEXT = 1;
@@ -39,7 +60,6 @@ contract TairaXorSccpBridge {
         keccak256("iroha:sccp:tron-destination-binding:v1");
     bytes32 private constant VERIFIER_BACKEND_HASH =
         keccak256("tron-groth16-bn254-v1");
-    bytes32 private constant PROOF_FAMILY_HASH = keccak256("stark-fri-v1");
     bytes32 private constant ROUTE_CONFIG_SEPARATOR =
         keccak256("sccp:concrete-route-config:v1");
     bytes32 private constant EMPTY_CODE_HASH = keccak256("");
@@ -47,6 +67,7 @@ contract TairaXorSccpBridge {
     ITairaXorTronToken public immutable token;
     ISccpTronExactVerifier public immutable verifier;
     uint8 public immutable tronProfile;
+    bytes32 public immutable networkId;
     uint32 public immutable routeRevision;
     bytes32 public immutable tokenCodeHash;
     bytes32 public immutable verifierCodeHash;
@@ -85,110 +106,140 @@ contract TairaXorSccpBridge {
         reentrancyState = 1;
     }
 
+    modifier onExpectedChain() {
+        require(bytes32(_chainId()) == networkId, "Wrong TRON chain id");
+        _;
+    }
+
     constructor(
-        address tokenAddress,
-        address verifierAddress,
-        bytes32 expectedVerifierCodeHash,
-        bytes32 expectedVerifierKeyHash,
-        bytes32 expectedSemanticProofProfileHash,
-        bytes32 expectedSoraFinalityAnchorHash,
+        VerifierPolicyV1 memory configuredVerifierPolicy,
         uint8 configuredTronProfile,
         uint32 configuredRouteRevision
     ) {
-        require(tokenAddress != address(0) && verifierAddress != address(0), "Zero bridge address");
-        require(tokenAddress != verifierAddress, "Bridge roles must differ");
+        require(
+            configuredVerifierPolicy.verifierAddress != address(0),
+            "Verifier address is required"
+        );
         require(configuredTronProfile >= 10 && configuredTronProfile <= 12,
             "Unsupported TRON profile");
+        bytes32 configuredNetworkId = _networkIdWord(configuredTronProfile);
+        require(bytes32(_chainId()) == configuredNetworkId, "Wrong TRON chain id");
         require(configuredRouteRevision != 0, "Route revision is required");
         require(
-            expectedSemanticProofProfileHash != bytes32(0),
+            configuredVerifierPolicy.semanticProofProfileHash != bytes32(0),
             "Semantic proof profile hash is required"
         );
         require(
-            expectedSoraFinalityAnchorHash != bytes32(0),
+            configuredVerifierPolicy.soraFinalityAnchorHash != bytes32(0),
             "SORA finality anchor hash is required"
         );
         require(
-            expectedSemanticProofProfileHash != expectedSoraFinalityAnchorHash,
+            configuredVerifierPolicy.semanticProofProfileHash !=
+                configuredVerifierPolicy.soraFinalityAnchorHash,
             "Semantic profile and finality anchor must differ"
         );
-        ITairaXorTronToken configuredToken = ITairaXorTronToken(tokenAddress);
-        require(configuredToken.bridge() == address(this), "Token route mismatch");
-        ISccpTronExactVerifier configuredVerifier = ISccpTronExactVerifier(verifierAddress);
+        ISccpTronExactVerifier configuredVerifier = ISccpTronExactVerifier(
+            configuredVerifierPolicy.verifierAddress
+        );
         require(configuredVerifier.expectedSourceDomain() == DOMAIN_SORA
             && configuredVerifier.expectedTargetDomain() == DOMAIN_TRON,
             "Verifier domain mismatch");
-        require(configuredVerifier.networkId() == _networkIdWord(configuredTronProfile),
+        require(configuredVerifier.networkId() == configuredNetworkId,
             "Verifier network mismatch");
-        bytes32 actualTokenCodeHash = _codeHash(tokenAddress);
-        require(actualTokenCodeHash != bytes32(0) && actualTokenCodeHash != EMPTY_CODE_HASH,
-            "Token contract is required");
-        bytes32 actualCodeHash = _codeHash(verifierAddress);
-        require(expectedVerifierCodeHash != bytes32(0)
-            && actualCodeHash == expectedVerifierCodeHash
+        bytes32 actualCodeHash = _codeHash(configuredVerifierPolicy.verifierAddress);
+        require(configuredVerifierPolicy.verifierCodeHash != bytes32(0)
+            && actualCodeHash == configuredVerifierPolicy.verifierCodeHash
             && actualCodeHash != EMPTY_CODE_HASH, "Verifier code hash mismatch");
-        require(expectedVerifierKeyHash != bytes32(0)
-            && configuredVerifier.verifyingKeyHash() == expectedVerifierKeyHash,
+        require(configuredVerifierPolicy.verifierKeyHash != bytes32(0)
+            && configuredVerifier.verifyingKeyHash() == configuredVerifierPolicy.verifierKeyHash,
             "Verifier key hash mismatch");
         require(
-            configuredVerifier.semanticProofProfileHash() == expectedSemanticProofProfileHash,
+            configuredVerifier.semanticProofProfileHash() ==
+                configuredVerifierPolicy.semanticProofProfileHash,
             "Semantic proof profile hash mismatch"
         );
         require(
-            configuredVerifier.soraFinalityAnchorHash() == expectedSoraFinalityAnchorHash,
+            configuredVerifier.soraFinalityAnchorHash() ==
+                configuredVerifierPolicy.soraFinalityAnchorHash,
             "SORA finality anchor hash mismatch"
         );
+
+        TairaXOR deployedToken = new TairaXOR(address(this));
+        address tokenAddress = address(deployedToken);
+        ITairaXorTronToken configuredToken = ITairaXorTronToken(tokenAddress);
+        require(tokenAddress != configuredVerifierPolicy.verifierAddress,
+            "Bridge roles must differ");
+        require(configuredToken.bridge() == address(this), "Token route mismatch");
+        bytes32 actualTokenCodeHash = _codeHash(tokenAddress);
+        require(actualTokenCodeHash != bytes32(0) && actualTokenCodeHash != EMPTY_CODE_HASH,
+            "Token contract is required");
+        _requireDistinctDeploymentHashRoles(actualTokenCodeHash, configuredVerifierPolicy);
         bytes32 binding = _routeDestinationBinding(
             configuredTronProfile,
-            verifierAddress,
-            actualCodeHash,
-            expectedVerifierKeyHash,
-            expectedSemanticProofProfileHash,
-            expectedSoraFinalityAnchorHash
+            configuredVerifierPolicy
         );
 
         (bytes32 inboundLaneHash, bytes32 outboundLaneHash) =
             _laneHashes(configuredTronProfile);
-        bytes32 deploymentConfigHash = keccak256(abi.encode(
-            tokenAddress,
-            actualTokenCodeHash,
-            verifierAddress,
-            actualCodeHash,
-            expectedVerifierKeyHash,
-            expectedSemanticProofProfileHash,
-            expectedSoraFinalityAnchorHash,
-            binding
-        ));
-        bytes32 assetRouteConfigHash = keccak256(abi.encode(
-            keccak256(ASSET_ID),
-            keccak256(ROUTE_ID),
-            configuredRouteRevision,
-            TAIRA_TO_TOKEN_SCALE
-        ));
-        bytes32 exactRouteConfigHash = keccak256(abi.encode(
-            ROUTE_CONFIG_SEPARATOR,
-            DOMAIN_TRON,
-            configuredTronProfile,
-            _networkIdWord(configuredTronProfile),
-            inboundLaneHash,
-            outboundLaneHash,
-            deploymentConfigHash,
-            assetRouteConfigHash
-        ));
+        RouteDeploymentV1 memory deployment;
+        deployment.tokenAddress = tokenAddress;
+        deployment.tokenCodeHash = actualTokenCodeHash;
+        deployment.verifierPolicy = configuredVerifierPolicy;
+        deployment.tronProfile = configuredTronProfile;
+        deployment.routeRevision = configuredRouteRevision;
+        deployment.networkId = configuredNetworkId;
+        deployment.sourceLaneHash = inboundLaneHash;
+        deployment.destinationLaneHash = outboundLaneHash;
+        deployment.destinationBindingHash = binding;
+        bytes32 exactRouteConfigHash = _routeConfigurationHash(deployment);
 
         token = configuredToken;
         verifier = configuredVerifier;
         tronProfile = configuredTronProfile;
+        networkId = configuredNetworkId;
         routeRevision = configuredRouteRevision;
         tokenCodeHash = actualTokenCodeHash;
-        verifierCodeHash = actualCodeHash;
-        verifierKeyHash = expectedVerifierKeyHash;
-        semanticProofProfileHash = expectedSemanticProofProfileHash;
-        soraFinalityAnchorHash = expectedSoraFinalityAnchorHash;
+        verifierCodeHash = configuredVerifierPolicy.verifierCodeHash;
+        verifierKeyHash = configuredVerifierPolicy.verifierKeyHash;
+        semanticProofProfileHash = configuredVerifierPolicy.semanticProofProfileHash;
+        soraFinalityAnchorHash = configuredVerifierPolicy.soraFinalityAnchorHash;
         sourceLaneHash = inboundLaneHash;
         destinationLaneHash = outboundLaneHash;
         routeConfigHash = exactRouteConfigHash;
         destinationBindingHash = binding;
+    }
+
+    function _routeConfigurationHash(RouteDeploymentV1 memory deployment)
+        private
+        pure
+        returns (bytes32)
+    {
+        bytes32 deploymentConfigHash = keccak256(abi.encode(
+            deployment.tokenAddress,
+            deployment.tokenCodeHash,
+            deployment.verifierPolicy.verifierAddress,
+            deployment.verifierPolicy.verifierCodeHash,
+            deployment.verifierPolicy.verifierKeyHash,
+            deployment.verifierPolicy.semanticProofProfileHash,
+            deployment.verifierPolicy.soraFinalityAnchorHash,
+            deployment.destinationBindingHash
+        ));
+        bytes32 assetRouteConfigHash = keccak256(abi.encode(
+            keccak256(ASSET_ID),
+            keccak256(ROUTE_ID),
+            deployment.routeRevision,
+            TAIRA_TO_TOKEN_SCALE
+        ));
+        return keccak256(abi.encode(
+            ROUTE_CONFIG_SEPARATOR,
+            DOMAIN_TRON,
+            deployment.tronProfile,
+            deployment.networkId,
+            deployment.sourceLaneHash,
+            deployment.destinationLaneHash,
+            deploymentConfigHash,
+            assetRouteConfigHash
+        ));
     }
 
     function _laneHashes(uint8 profile) private pure returns (bytes32 inbound, bytes32 outbound) {
@@ -200,34 +251,32 @@ contract TairaXorSccpBridge {
 
     function _routeDestinationBinding(
         uint8 profile,
-        address verifierAddress,
-        bytes32 codeHash,
-        bytes32 keyHash,
-        bytes32 semanticProfileHash,
-        bytes32 finalityAnchorHash
+        VerifierPolicyV1 memory policy
     ) private view returns (bytes32) {
         return keccak256(abi.encode(
             DESTINATION_BINDING_SEPARATOR,
             VERIFIER_BACKEND_HASH,
-            PROOF_FAMILY_HASH,
             _networkIdWord(profile),
             uint256(DOMAIN_SORA),
             uint256(DOMAIN_TRON),
-            _tronAddressWord(verifierAddress),
+            _tronAddressWord(policy.verifierAddress),
             _tronAddressWord(address(this)),
-            codeHash,
-            keyHash,
-            semanticProfileHash,
-            finalityAnchorHash
+            policy.verifierCodeHash,
+            policy.verifierKeyHash,
+            policy.semanticProofProfileHash,
+            policy.soraFinalityAnchorHash
         ));
     }
 
     /** Burn wrapped XOR and emit one exact TRON-to-Taira Transfer statement. */
     function transferToTaira(bytes calldata tairaRecipient, uint256 tokenAmount)
-        external nonReentrant returns (bytes32 messageId)
+        external onExpectedChain nonReentrant returns (bytes32 messageId)
     {
         bytes memory recipient = tairaRecipient;
-        require(SccpExactTransferCodec.isCanonicalText(recipient), "Noncanonical Taira recipient");
+        require(
+            SccpExactTransferCodec.isCanonicalTairaRecipient(recipient),
+            "Noncanonical Taira recipient"
+        );
         require(tokenAmount != 0 && tokenAmount % TAIRA_TO_TOKEN_SCALE == 0,
             "Amount is not aligned to Taira scale");
         uint256 tairaAmount = tokenAmount / TAIRA_TO_TOKEN_SCALE;
@@ -280,7 +329,7 @@ contract TairaXorSccpBridge {
         bytes32[6] calldata publicInputs,
         bytes32 statementHash,
         bytes calldata canonicalPayloadBytes
-    ) external nonReentrant returns (bytes32 messageId) {
+    ) external onExpectedChain nonReentrant returns (bytes32 messageId) {
         require(statementHash != bytes32(0), "Statement hash is required");
         require(publicInputs[2] == bytes32(uint256(DOMAIN_TRON)), "Unexpected target domain");
         require(_codeHash(address(token)) == tokenCodeHash, "Token code changed");
@@ -294,7 +343,10 @@ contract TairaXorSccpBridge {
             proofBytes, publicInputs, statementHash, expectedMessageId
         );
         require(!usedDestinationMessages[messageId], "Destination message already used");
-        require(tairaAmount <= uint256(-1) / TAIRA_TO_TOKEN_SCALE, "Token amount overflow");
+        require(
+            tairaAmount <= type(uint256).max / TAIRA_TO_TOKEN_SCALE,
+            "Token amount overflow"
+        );
         uint256 tokenAmount = tairaAmount * TAIRA_TO_TOKEN_SCALE;
 
         usedDestinationMessages[messageId] = true;
@@ -381,7 +433,7 @@ contract TairaXorSccpBridge {
         require(amount != 0, "Zero amount");
         require(_readU8(payload, offset++) == CODEC_TEXT, "Wrong sender codec");
         (start, length, offset) = _readVec(payload, offset);
-        require(_canonicalTextRange(payload, start, length), "Noncanonical sender");
+        require(_canonicalTairaSenderRange(payload, start, length), "Noncanonical sender");
         require(_readU8(payload, offset++) == CODEC_TRON21, "Wrong recipient codec");
         (start, length, offset) = _readVec(payload, offset);
         require(length == 21 && payload[start] == bytes1(0x41), "Wrong TRON recipient");
@@ -399,6 +451,24 @@ contract TairaXorSccpBridge {
         if (profile == 11) return bytes32(uint256(0xcd8690dc));
         if (profile == 12) return bytes32(uint256(0x94a9059e));
         revert("Unsupported TRON profile");
+    }
+    function _requireDistinctDeploymentHashRoles(
+        bytes32 configuredTokenCodeHash,
+        VerifierPolicyV1 memory policy
+    ) private pure {
+        require(
+            configuredTokenCodeHash != policy.verifierCodeHash
+                && configuredTokenCodeHash != policy.verifierKeyHash
+                && configuredTokenCodeHash != policy.semanticProofProfileHash
+                && configuredTokenCodeHash != policy.soraFinalityAnchorHash
+                && policy.verifierCodeHash != policy.verifierKeyHash
+                && policy.verifierCodeHash != policy.semanticProofProfileHash
+                && policy.verifierCodeHash != policy.soraFinalityAnchorHash
+                && policy.verifierKeyHash != policy.semanticProofProfileHash
+                && policy.verifierKeyHash != policy.soraFinalityAnchorHash
+                && policy.semanticProofProfileHash != policy.soraFinalityAnchorHash,
+            "Deployment hash roles must differ"
+        );
     }
     function _tronAddressWord(address account) private pure returns (bytes32) {
         return bytes32((uint256(0x41) << 160) | uint256(uint160(account)));
@@ -430,16 +500,15 @@ contract TairaXorSccpBridge {
         for (uint256 i = 0; i < length; i++) if (value[start + i] != expected[i]) return false;
         return true;
     }
-    function _canonicalTextRange(bytes memory value, uint256 start, uint256 length)
+    function _canonicalTairaSenderRange(bytes memory value, uint256 start, uint256 length)
         private pure returns (bool)
     {
-        if (length == 0 || length > 256) return false;
-        for (uint256 i = 0; i < length; i++) {
-            uint8 c = uint8(value[start + i]); if (c < 0x21 || c > 0x7e) return false;
-        }
-        return true;
+        return SccpExactTransferCodec.isCanonicalTairaAccountRange(value, start, length);
     }
     function _codeHash(address account) private view returns (bytes32 codeHash) {
         assembly { codeHash := extcodehash(account) }
+    }
+    function _chainId() private view returns (uint256 value) {
+        assembly { value := chainid() }
     }
 }

@@ -65,9 +65,9 @@ seiyaku Hello {
 
     kotoage fn write_detail() authorize("Admin") {
         ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
         );
     }
 
@@ -154,63 +154,3 @@ Norito ကျောထောက်နောက်ခံပြုထားသေ�
 - သင့်ကိုယ်ပိုင်စာချုပ်များကို ထပ်ခါတလဲလဲလုပ်သည့်အခါ၊ `npm run sync-norito-snippets` ကို အသုံးပြုပါ။
   ဒေါင်းလုဒ်လုပ်နိုင်သော အတိုအထွာများကို ပြန်လည်ထုတ်ပေးရန် အလုပ်နေရာသည် portal docs နှင့် artefacts များရှိနေစေရန်
   `crates/ivm/docs/examples/` အောက်ရှိ အရင်းအမြစ်များနှင့် ထပ်တူပြုထားသည်။
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```

@@ -2,11 +2,20 @@ package org.hyperledger.iroha.android.client;
 
 import java.util.Arrays;
 import java.util.Base64;
+import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.norito.NoritoHeader;
 
 /** Shared strict encoding checks for SCCP bridge submit DTOs. */
 final class SccpSubmitEncoding {
-  static final int MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
+  static final int MAX_DESTINATION_ARTIFACT_BYTES = 16 * 1024 * 1024 + 64 * 1024;
+  static final int MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024;
+  static final int MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024;
+  static final int MAX_TRANSACTION_PAYLOAD_BYTES = 16 * 1024 * 1024;
+  private static final NoritoJavaCodecAdapter TRANSACTION_CODEC = new NoritoJavaCodecAdapter();
 
   private SccpSubmitEncoding() {}
 
@@ -14,6 +23,9 @@ final class SccpSubmitEncoding {
       final String value, final String field, final int maximum) {
     if (value == null || value.isEmpty() || !value.equals(value.trim())) {
       throw new IllegalArgumentException(field + " must be canonical padded base64");
+    }
+    if (value.length() > maximumBase64Length(maximum)) {
+      throw new IllegalArgumentException(field + " exceeds its canonical size bound");
     }
     final byte[] decoded;
     try {
@@ -54,63 +66,15 @@ final class SccpSubmitEncoding {
     return decoded;
   }
 
-  static String requireCanonicalNonBlank(final String value, final String field) {
-    if (value == null || value.isEmpty() || !value.equals(value.trim())) {
-      throw new IllegalArgumentException(field + " is required and must be canonical");
-    }
-    return value;
-  }
-
-  static String normalizeOptional(final String value) {
-    if (value == null) return null;
-    if (!value.equals(value.trim())) {
+  static String requireCanonicalAuthority(final String value, final String field) {
+    final String canonical = AccountIdLiteral.requireCanonicalI105Address(value, field);
+    final Integer discriminant = AccountAddress.detectI105Discriminant(canonical);
+    if (discriminant == null
+        || discriminant.intValue() != SccpV1.TAIRA_I105_DISCRIMINANT_V1) {
       throw new IllegalArgumentException(
-          "optional string fields must not contain surrounding whitespace");
+          field + " must use the canonical public Taira I105 discriminant");
     }
-    return value.isEmpty() ? null : value;
-  }
-
-  static String normalizeOptionalHex(final String value, final int bytes, final String field) {
-    final String normalized = normalizeOptional(value);
-    if (normalized == null) return null;
-    if (!normalized.startsWith("0x") || normalized.length() != 2 + bytes * 2) {
-      throw new IllegalArgumentException(
-          field + " must be canonical lowercase 0x-prefixed " + bytes + "-byte hex");
-    }
-    boolean nonzero = false;
-    for (int i = 2; i < normalized.length(); i++) {
-      final char item = normalized.charAt(i);
-      if (!((item >= '0' && item <= '9') || (item >= 'a' && item <= 'f'))) {
-        throw new IllegalArgumentException(
-            field + " must be canonical lowercase 0x-prefixed " + bytes + "-byte hex");
-      }
-      nonzero |= item != '0';
-    }
-    if (!nonzero) throw new IllegalArgumentException(field + " must be nonzero");
-    return normalized;
-  }
-
-  static String normalizeOptionalPublicKeyHex(final String value) {
-    final String normalized = normalizeOptional(value);
-    if (normalized == null) return null;
-    if (normalized.length() != 64) {
-      throw new IllegalArgumentException(
-          "publicKeyHex must be exactly 32 nonzero lowercase hexadecimal bytes");
-    }
-    boolean nonzero = false;
-    for (int i = 0; i < normalized.length(); i++) {
-      final char item = normalized.charAt(i);
-      if (!((item >= '0' && item <= '9') || (item >= 'a' && item <= 'f'))) {
-        throw new IllegalArgumentException(
-            "publicKeyHex must be exactly 32 nonzero lowercase hexadecimal bytes");
-      }
-      nonzero |= item != '0';
-    }
-    if (!nonzero) {
-      throw new IllegalArgumentException(
-          "publicKeyHex must be exactly 32 nonzero lowercase hexadecimal bytes");
-    }
-    return normalized;
+    return canonical;
   }
 
   static Long normalizeOptionalCreationTimeMs(final Long value) {
@@ -120,10 +84,84 @@ final class SccpSubmitEncoding {
     return value;
   }
 
-  static String normalizeOptionalExactBase64(final String value, final String field) {
+  static String normalizeOptionalSignature(final String value) {
     if (value == null) return null;
-    if (value.isEmpty() || !value.equals(value.trim())) {
-      throw new IllegalArgumentException(field + " must be exact standard-base64");
+    final byte[] decoded =
+        canonicalBase64(value, "signature_b64", MAX_DETACHED_SIGNATURE_BYTES);
+    if (allZero(decoded)) {
+      throw new IllegalArgumentException(
+          "signature_b64 must contain one admitted nonzero signature payload");
+    }
+    return value;
+  }
+
+  static void validateDetachedSigningState(
+      final String signatureB64,
+      final String transactionPayloadB64,
+      final Long creationTimeMs) {
+    if (signatureB64 == null && transactionPayloadB64 == null) {
+      return;
+    }
+    if (signatureB64 != null && transactionPayloadB64 != null) {
+      if (creationTimeMs == null || creationTimeMs <= 0) {
+        throw new IllegalArgumentException(
+            "signed SCCP submission requires an explicit positive creation_time_ms");
+      }
+      return;
+    }
+    throw new IllegalArgumentException(
+        "SCCP preparation requires neither signature_b64 nor transaction_payload_b64; signed submission requires both");
+  }
+
+  static String normalizeOptionalTransactionPayload(
+      final String value, final Long creationTimeMs, final String expectedAuthority) {
+    if (value == null) return null;
+    final byte[] bytes = canonicalBase64(
+        value, "transaction_payload_b64", MAX_TRANSACTION_PAYLOAD_BYTES);
+    final TransactionPayload payload;
+    final byte[] canonical;
+    try {
+      payload = TRANSACTION_CODEC.decodeTransaction(bytes);
+      canonical = TRANSACTION_CODEC.encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalArgumentException(
+          "transaction_payload_b64 must contain one canonical transaction payload", ex);
+    }
+    if (!Arrays.equals(bytes, canonical)) {
+      throw new IllegalArgumentException("transaction_payload_b64 is not canonical");
+    }
+    if (!sameCanonicalAccountId(payload.authority(), expectedAuthority)) {
+      throw new IllegalArgumentException(
+          "transaction payload authority does not match authority");
+    }
+    if (creationTimeMs != null && payload.creationTimeMs() != creationTimeMs) {
+      throw new IllegalArgumentException(
+          "transaction payload creation time does not match creation_time_ms");
+    }
+    return value;
+  }
+
+  private static boolean sameCanonicalAccountId(final String left, final String right) {
+    try {
+      // AccountId wire identity is domainless and excludes its I105 display discriminant.
+      final byte[] leftBytes =
+          AccountAddress.parseEncodedIgnoringCurveSupport(left, null).address.canonicalBytes();
+      final byte[] rightBytes =
+          AccountAddress.parseEncodedIgnoringCurveSupport(right, null).address.canonicalBytes();
+      return Arrays.equals(leftBytes, rightBytes);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalArgumentException(
+          "transaction payload authority must be canonical I105", ex);
+    }
+  }
+
+  static byte[] canonicalBase64(
+      final String value, final String field, final int maximum) {
+    if (value == null || value.isEmpty() || !value.equals(value.trim())) {
+      throw new IllegalArgumentException(field + " must be canonical padded base64");
+    }
+    if (value.length() > maximumBase64Length(maximum)) {
+      throw new IllegalArgumentException(field + " exceeds its canonical size bound");
     }
     final byte[] decoded;
     try {
@@ -131,13 +169,17 @@ final class SccpSubmitEncoding {
     } catch (final IllegalArgumentException ex) {
       throw new IllegalArgumentException(field + " must be valid base64", ex);
     }
-    if (decoded.length == 0 || !Base64.getEncoder().encodeToString(decoded).equals(value)) {
-      throw new IllegalArgumentException(field + " must be exact standard-base64");
+    if (decoded.length == 0 || decoded.length > maximum) {
+      throw new IllegalArgumentException(field + " exceeds its canonical size bound");
     }
-    if ("signatureB64".equals(field) && decoded.length != 64) {
-      throw new IllegalArgumentException(field + " must contain a 64-byte Ed25519 signature");
+    if (!Base64.getEncoder().encodeToString(decoded).equals(value)) {
+      throw new IllegalArgumentException(field + " must be canonical padded base64");
     }
-    return value;
+    return decoded;
+  }
+
+  private static int maximumBase64Length(final int maximumBytes) {
+    return 4 * ((maximumBytes + 2) / 3);
   }
 
   private static boolean allZero(final byte[] value) {

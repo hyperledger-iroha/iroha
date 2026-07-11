@@ -73,7 +73,7 @@ fn valid_contract_has_declaration_and_statement_structure() {
         SyntaxKind::ExprStmt,
         SyntaxKind::ReturnStmt,
         SyntaxKind::ContinueStmt,
-        SyntaxKind::IfStmt,
+        SyntaxKind::IfExpr,
         SyntaxKind::ForStmt,
     ] {
         assert!(

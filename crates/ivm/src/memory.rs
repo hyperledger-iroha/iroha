@@ -665,10 +665,7 @@ impl Memory {
         Ok(())
     }
 
-    /// Load `len` bytes starting at `addr` and return a slice referencing the
-    /// underlying memory.
-    #[inline]
-    pub fn load_region(&self, addr: u64, len: u64) -> Result<&[u8], VMError> {
+    fn checked_region_bounds(&self, addr: u64, len: u64) -> Result<(usize, usize), VMError> {
         if len > u64::from(u32::MAX) {
             return Err(VMError::MemoryAccessViolation {
                 addr: addr as u32,
@@ -694,6 +691,25 @@ impl Memory {
                 perm: Perm::READ,
             });
         }
+        Ok((start, end))
+    }
+
+    /// Inspect `len` bytes without recording a guest-visible memory access.
+    ///
+    /// This is reserved for side-effect-free host quote preparation. Actual
+    /// syscall execution must use [`Self::load_region`] so access tracing
+    /// remains complete.
+    #[inline]
+    pub(crate) fn inspect_region(&self, addr: u64, len: u64) -> Result<&[u8], VMError> {
+        let (start, end) = self.checked_region_bounds(addr, len)?;
+        Ok(&self.data[start..end])
+    }
+
+    /// Load `len` bytes starting at `addr` and return a slice referencing the
+    /// underlying memory.
+    #[inline]
+    pub fn load_region(&self, addr: u64, len: u64) -> Result<&[u8], VMError> {
+        let (start, end) = self.checked_region_bounds(addr, len)?;
         self.record_read_range(addr, len);
         if crate::dev_env::debug_wsv_enabled() && len <= 64 {
             let win_start = start.saturating_sub(16);
@@ -1211,6 +1227,30 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn quote_inspection_does_not_mutate_memory_access_tracking() {
+        let mut mem = Memory::new(0);
+        let address = mem.alloc(4).expect("allocate quote fixture");
+        mem.store_bytes(address, &[1, 2, 3, 4])
+            .expect("write quote fixture");
+        mem.clear_tracking();
+
+        assert_eq!(
+            mem.inspect_region(address, 4).expect("inspect fixture"),
+            &[1, 2, 3, 4]
+        );
+        assert!(mem.read_set().is_empty());
+
+        mem.load_region(address, 4).expect("tracked load fixture");
+        assert_eq!(
+            mem.read_set(),
+            vec![AccessRange {
+                addr: address,
+                len: 4
+            }]
+        );
     }
 
     #[test]

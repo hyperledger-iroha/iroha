@@ -15836,24 +15836,37 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [Fact]
     public async Task GetContractCodeAsyncEncodesCodeHashAndDeserializesManifest()
     {
+        var manifestCodeHash = new string('b', 64);
+        var manifestAbiHash = new string('d', 64);
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent($$"""
                 {
                   "manifest": {
-                    "code_hash": "{{ContractCodeHashHex}}",
-                    "abi_hash": "{{ContractAbiHashHex}}"
-                  }
+                    "seiyaku_name": null,
+                    "code_hash": "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2",
+                    "abi_hash": "hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071",
+                    "compiler_fingerprint": null,
+                    "features_bitmap": null,
+                    "access_set_hints": null,
+                    "entrypoints": null,
+                    "states": null,
+                    "error_codes": null,
+                    "kotoba": null,
+                    "provenance": null
+                  },
+                  "code_hash": "{{manifestCodeHash}}",
+                  "abi_hash": "{{manifestAbiHash}}"
                 }
                 """),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var record = await client.GetContractCodeAsync(ContractCodeHashHex, cancellationToken: TestContext.Current.CancellationToken);
+        var record = await client.GetContractCodeAsync(manifestCodeHash, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(ContractCodeHashHex, record.Manifest.CodeHash);
-        Assert.Equal(ContractAbiHashHex, record.Manifest.AbiHash);
-        Assert.Equal($"/v1/contracts/code/{ContractCodeHashHex}", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal(manifestCodeHash, record.Manifest.CodeHash);
+        Assert.Equal(manifestAbiHash, record.Manifest.AbiHash);
+        Assert.Equal($"/v1/contracts/code/{manifestCodeHash}", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     public static IEnumerable<object?[]> InvalidContractCodeHashReadOperations()
@@ -21722,11 +21735,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         object? constructed = (operation, propertyName) switch
         {
-            ("manifest", "CodeHash") => ValidContractManifestSummary() with
+            ("manifest", "CodeHash") => ValidContractManifest() with
             {
                 CodeHash = RequiredStringValue(value),
             },
-            ("manifest", "AbiHash") => ValidContractManifestSummary() with
+            ("manifest", "AbiHash") => ValidContractManifest() with
             {
                 AbiHash = RequiredStringValue(value),
             },
@@ -21790,20 +21803,28 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         GC.KeepAlive(constructed);
     }
 
-    private static ToriiContractManifestSummary ValidContractManifestSummary()
+    private static ToriiContractManifest ValidContractManifest()
     {
-        return new ToriiContractManifestSummary
+        return new ToriiContractManifest
         {
-            CodeHash = ContractCodeHashHex,
-            AbiHash = ContractAbiHashHex,
+            CodeHash = new string('b', 64),
+            AbiHash = new string('d', 64),
         };
     }
 
     private static ToriiContractCodeRecord ValidContractCodeRecord()
     {
+        var codeHash = new string('b', 64);
+        var abiHash = new string('d', 64);
         return new ToriiContractCodeRecord
         {
-            Manifest = ValidContractManifestSummary(),
+            Manifest = new ToriiContractManifest
+            {
+                CodeHash = codeHash,
+                AbiHash = abiHash,
+            },
+            CodeHash = codeHash,
+            AbiHash = abiHash,
         };
     }
 

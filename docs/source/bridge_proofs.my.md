@@ -2,59 +2,64 @@
 lang: my
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
-source_last_modified: "2025-12-29T18:16:35.921274+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: 465d8cf704022986b169ab93133517428f8cf2ffe01a498cbda458f4a5b2e69b
+source_last_modified: "2026-07-11T15:09:39+04:00"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# တံတားအထောက်အထားများ
+> ဤစာမျက်နှာသည် 2026-07-11 ရက်နေ့အထိ အကျဉ်းချုပ် ဒေသသုံးဘာသာပြန်ဖြစ်ပြီး
+> စံသတ်မှတ်ချက်အပြည့်အစုံ မဟုတ်ပါ။ အတိအကျ type များ၊ API contract များနှင့်
+> release လိုအပ်ချက်များအတွက် [အင်္ဂလိပ် canonical စာမျက်နှာ](bridge_proofs.md)
+> ကို အသုံးပြုပါ။
 
-တံတားအထောက်အထား တင်ပြချက်များသည် စံညွန်ကြားချက်လမ်းကြောင်း (`SubmitBridgeProof`) မှတဆင့် ဖြတ်သန်းပြီး အထောက်အထား မှတ်ပုံတင်ခြင်းတွင် ဆင်းသက်သည်။ လက်ရှိမျက်နှာပြင်သည် ICS ပုံစံ Merkle အထောက်အထားများနှင့် ဖောက်ထွင်းမြင်ရသော-ZK ပါ၀င်ပစ္စည်းများကို ပင်ထိုးထိန်းသိမ်းထားပြီး ထင်ရှားသောစည်းနှောင်မှုဖြင့် ဖုံးအုပ်ထားသည်။
+# SCCP V1 တံတားအထောက်အထား — အကျဉ်းချုပ်
 
-##လက်ခံမှုစည်းမျဉ်း
+## ပထမ release ၏ နယ်နိမိတ်
 
-- အပိုင်းအခြားများကို အမိန့်ပေးရမည်/ဗလာမဟုတ်သော နှင့် `zk.bridge_proof_max_range_len` ကိုလေးစားရပါမည် (0 ထုပ်ကိုပိတ်သည်)။
-- ရွေးချယ်နိုင်သော အမြင့်ပြတင်းပေါက်များသည် ဟောင်းနွမ်းခြင်း/အနာဂတ် အထောက်အထားများကို ငြင်းပယ်ခြင်း- `zk.bridge_proof_max_past_age_blocks` နှင့် `zk.bridge_proof_max_future_drift_blocks` ကို အထောက်အထားထည့်သွင်းသည့် ဘလောက်အမြင့်နှင့် တိုင်းတာသည် (0 guardrails များကို ပိတ်သည်)။
-- တံတားအထောက်အထားများသည် တူညီသောနောက်ခံအတွက် ရှိပြီးသားအထောက်အထားများကို ထပ်နေမည်မဟုတ်ပါ (ပင်ထိုးထားသောအထောက်အထားများကို ထိန်းသိမ်းထားပြီး ထပ်နေမှုများကို ပိတ်ဆို့ထားသည်)။
-- Manifest hash များသည် သုညမဟုတ်ရပါမည်။ payload များသည် `zk.max_proof_size_bytes` ဖြင့် အရွယ်အစားကို ကန့်သတ်ထားသည်။
-- ICS payloads များသည် သတ်မှတ်ထားသော Merkle အတိမ်အနက်ကို ဂုဏ်ပြုပြီး ကြေညာထားသော hash လုပ်ဆောင်ချက်ကို အသုံးပြု၍ လမ်းကြောင်းကို စစ်ဆေးပါ။ ပွင့်လင်းမြင်သာသော payload များသည် ဗလာမဟုတ်သော နောက်ခံအညွှန်းကို ကြေညာရပါမည်။
-- Pinned proof များသည် retention pruning မှ ကင်းလွတ်ပါသည်။ ပင်မထိုးထားသော အထောက်အထားများသည် ကမ္ဘာလုံးဆိုင်ရာ `zk.proof_history_cap`/grace/batch ဆက်တင်များကို လေးစားဆဲဖြစ်သည်။
+- SCCP V1 သည် ပိတ်ထားသော surface ဖြစ်သည်။ Ethereum mainnet၊ BSC mainnet နှင့်
+  TRON mainnet ကိုသာ ထောက်ပံ့ပြီး SORA ဘက်ရှိ တစ်ခုတည်းသော endpoint သည်
+  `sora-taira` ဖြစ်သည်။ အခြား network profile သို့မဟုတ် SORA identity ကို
+  ပယ်ချသည်။
+- `SubmitBridgeProof` သည် route နှင့် ချိတ်ဆက်ထားသော typed `NativeProtocol`
+  နှင့် `SccpDestination` proof များကိုသာ လက်ခံသည်။ ယေဘုယျ `Ics` နှင့်
+  `TransparentZk` payload တင်သွင်းမှုကို မဖွင့်ထားဘဲ fail-closed ဖြင့် ပယ်ချသည်။
 
-## Torii API မျက်နှာပြင်
+## Typed registry နှင့် မှတ်တမ်း
 
-- `GET /v1/zk/proofs` နှင့် `GET /v1/zk/proofs/count` တံတားသတိပြုမိသော စစ်ထုတ်မှုများကို လက်ခံသည်-
-  - `bridge_only=true` သည် တံတားအထောက်အထားများကိုသာ ပြန်ပေးသည်။
-  - `bridge_pinned_only=true` သည် ချိတ်တွဲထားသော တံတားအထောက်အထားများကို ကျဉ်းစေသည်။
-  - `bridge_start_from_height` / `bridge_end_until_height` တံတားဘောင်ပြတင်းပေါက်ကို ကုပ်ပါ။
-- `GET /v1/zk/proof/{backend}/{hash}` သည် အထောက်အထား id/status/VK bindings များနှင့်အတူ တံတား metadata (အပိုင်းအခြား၊ manifest hash၊ payload summary) ကို ပြန်ပေးသည်။
-- Norito အထောက်အထားမှတ်တမ်း အပြည့်အစုံ (payload bytes အပါအဝင်) ကို off-node verifiers အတွက် `GET /v1/proofs/{proof_id}` မှတစ်ဆင့် ရရှိနိုင်ပါသည်။
+- `SccpRegistryV1` သည် typed နှင့် append-only ဖြစ်သည်။ lane တစ်ခုလျှင် route
+  revision အများဆုံး 64 ခုနှင့် native trust anchor 4,096 ခု ထိန်းသိမ်းသည်။
+  record များကို အလိုအလျောက် မဖယ်ရှားဘဲ ကန့်သတ်ချက်ကျော်သည့် နောက်ထပ် append
+  ကို atomic အဖြစ် ပယ်ချသည်။
+- Anchor interval သည် authenticated consensus coordinate ကို အသုံးပြုသည်။
+  Ethereum တွင် finalized beacon slot၊ BSC/TRON တွင် finalized native block
+  height ဖြစ်သည်။ Anchor အဟောင်းသည် successor checkpoint အပါအဝင်သာ မှန်ကန်ပြီး
+  ထို့နောက် မမှန်တော့ပါ။
+- Durable inbound record တွင် event/finality height နှင့်
+  `anchor_interval_height` ကို သီးခြား သိမ်းသည်။ lane+anchor high-water သည်
+  မြင့်တက်ရုံသာရှိပြီး successor checkpoint သည် ၎င်းထက် မနိမ့်ရပါ။ Snapshot
+  hydration က index ကို အပြည့်အဝ ပြန်တွက်ပြီး missing၊ stale သို့မဟုတ် extra
+  value ကို ပယ်ချသည်။ Message id ပြန်သုံးခြင်းနှင့် replay ကိုလည်း ပယ်ချသည်။
 
-## တံတားဖြတ်ပိုင်းပွဲများ
+## တစ်ကြိမ်တည်း စစ်ဆေးခြင်းနှင့် deterministic limit များ
 
-တံတားလမ်းများသည် `RecordBridgeReceipt` ညွှန်ကြားချက်မှတစ်ဆင့် ရိုက်ထားသည့် ပြေစာများကို ထုတ်လွှတ်ပါသည်။ ဤညွှန်ကြားချက်ကို အကောင်အထည်ဖော်ခြင်း။
-`BridgeReceipt` payload ကို မှတ်တမ်းတင်ပြီး `DataEvent::Bridge(BridgeEvent::Emitted)` ကို ပွဲပေါ်တွင် ထုတ်လွှတ်သည်
-ကြိုတင် မှတ်တမ်းသီးသန့် ဆောင်းပါးတိုကို အစားထိုး၍ စီးကြောင်း။ CLI `iroha bridge emit-receipt` အကူအညီပေးသူက တင်ပြသည်။
-စာရိုက်ထားသည့် ညွှန်ကြားချက်ကြောင့် ညွှန်းကိန်းများသည် ပြေစာများကို အဆုံးအဖြတ်ပေးနိုင်သည်။
+- Native နှင့် destination proof ကို canonical အဖြစ် တစ်ကြိမ်သာ decode လုပ်၍
+  စျေးကြီးသော cryptographic verification ကို တစ်ကြိမ်သာ ဆောင်ရွက်သည်။ ထိုမတိုင်မီ
+  consensus က conservative၊ hardware-independent work estimate ကို reserve
+  လုပ်သည်။
+- `[zk.sccp]` သည် proof count/bytes၊ native headers၊ Ethereum light-client
+  updates၊ header bytes၊ secp256k1 recoveries၊ BLS aggregate checks/signing
+  contributions နှင့် BN254 pairing-product checks အတွက် မဖြစ်မနေ သုညမဟုတ်သော
+  per-proof၊ per-transaction၊ per-block limit များ သတ်မှတ်သည်။ Admission limit
+  များသည် consensus-bound ဖြစ်၍ validator အားလုံးတွင် တူရမည်။
 
-## ပြင်ပအတည်ပြုပုံကြမ်း (ICS)
+## Torii ကန့်သတ်ချက်များ
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
-
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+`/v1/bridge/proofs/submit` နှင့် `/v1/bridge/messages` တွင် endpoint-specific
+HTTP body limit ရှိသည်။ Authentication၊ rate limit နှင့် `Content-Length` ကို
+body မဖတ်မီ စစ်ဆေးပြီး chunked body ကို တင်းကျပ်သော အရွယ်အစားအထိသာ ဖတ်သည်။
+အလွန်ကြီးသော request သည် `413`၊ malformed transport/JSON သည် သီးခြား `400`
+ပြန်ပေးသည်။ Detached transaction payload ကို 16 MiB၊ signature payload ကို
+16 KiB အထိသာ ခွင့်ပြုသည်။

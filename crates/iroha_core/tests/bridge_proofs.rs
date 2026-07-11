@@ -1,4 +1,4 @@
-//! Bridge proof submission and retention tests.
+//! Bridge-proof admission and retention tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::{
@@ -9,8 +9,9 @@ use iroha_core::{
     telemetry::StateTelemetry,
 };
 use iroha_data_model::{
+    bridge::BridgeProofRecord,
     prelude::*,
-    proof::{ProofBox, ProofId, ProofStatus},
+    proof::{ProofBox, ProofId, ProofRecord, ProofStatus},
 };
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
@@ -26,7 +27,7 @@ fn bridge_proof_id(proof: &BridgeProof) -> ProofId {
     }
 }
 
-fn make_ics_proof(leaf_fill: u8, range: (u64, u64), pinned: bool) -> BridgeProof {
+fn make_ics_proof(leaf_fill: u8, range: (u64, u64)) -> BridgeProof {
     let leaves = vec![[leaf_fill; 32], [leaf_fill.wrapping_add(1); 32]];
     let tree = iroha_crypto::MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaves.clone());
     let root_bytes: [u8; 32] = *tree.root().expect("root").as_ref();
@@ -37,212 +38,139 @@ fn make_ics_proof(leaf_fill: u8, range: (u64, u64), pinned: bool) -> BridgeProof
             start_height: range.0,
             end_height: range.1,
         },
-        manifest_hash: [0xAA; 32],
         payload: BridgeProofPayload::Ics(BridgeIcsProof {
+            verifier_manifest_hash: [0xAA; 32],
             state_root: root_bytes,
             leaf_hash: leaves[0],
             proof,
             hash_function: BridgeHashFunction::Sha256,
         }),
-        pinned,
+    }
+}
+
+fn make_transparent_proof(range: (u64, u64)) -> BridgeProof {
+    BridgeProof {
+        range: BridgeProofRange {
+            start_height: range.0,
+            end_height: range.1,
+        },
+        payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+            verifier_manifest_hash: [0xBB; 32],
+            proof: ProofBox::new("halo2/mock".into(), vec![0xDE, 0xAD, 0xBE, 0xEF]),
+            recursion_depth: Some(1),
+        }),
+    }
+}
+
+fn state_for_test() -> State {
+    State::with_telemetry(
+        iroha_core::state::World::new(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        StateTelemetry::default(),
+    )
+}
+
+fn execute_bridge_proof(proof: BridgeProof) -> Result<(), String> {
+    let state = state_for_test();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
+    Executor::default()
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .map_err(|error| format!("{error:?}"))
+}
+
+#[test]
+fn generic_proof_variants_require_authoritative_on_chain_verifiers() {
+    for (label, proof) in [
+        ("ICS", make_ics_proof(0x11, (1, 1))),
+        ("transparent", make_transparent_proof((1, 1))),
+    ] {
+        let error = execute_bridge_proof(proof)
+            .expect_err("caller-supplied generic proof must not be trusted");
+        assert!(
+            error.contains("authoritative on-chain verifier"),
+            "unexpected {label} rejection: {error}"
+        );
     }
 }
 
 #[test]
-fn submit_bridge_proof_records_metadata() {
-    let world = iroha_core::state::World::new();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let telemetry = StateTelemetry::default();
-    let state = State::with_telemetry(world, kura, query_handle, telemetry);
-
+fn rejected_generic_proof_does_not_mutate_proof_registry() {
+    let state = state_for_test();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let exec = Executor::default();
-
-    let proof = make_ics_proof(0x11, (1, 1), false);
+    let proof = make_ics_proof(0x12, (1, 1));
     let expected_id = bridge_proof_id(&proof);
-    let encoded_len = u32::try_from(norito::to_bytes(&proof).expect("encode proof").len())
-        .expect("bridge proof length fits in u32");
-
     let submit: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect("bridge proof accepted");
+    let error = Executor::default()
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .expect_err("generic proof admission must reject");
 
-    let rec = stx
-        .world
-        .proofs()
-        .get(&expected_id)
-        .expect("proof recorded");
-    assert_eq!(rec.status, ProofStatus::Verified);
-    let bridge = rec.bridge.as_ref().expect("bridge metadata stored");
-    assert_eq!(bridge.commitment, expected_id.proof_hash);
-    assert_eq!(bridge.size_bytes, encoded_len);
-    assert_eq!(bridge.proof.range.start_height, 1);
-    assert_eq!(bridge.proof.range.end_height, 1);
+    assert!(format!("{error:?}").contains("authoritative on-chain verifier"));
+    assert!(stx.world.proofs().get(&expected_id).is_none());
+    assert!(stx.world.internal_event_buf.is_empty());
 }
 
 #[test]
-fn bridge_retention_prunes_oldest_unpinned() {
-    let world = iroha_core::state::World::new();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let telemetry = StateTelemetry::default();
-    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+fn bridge_range_and_binding_shape_are_checked_before_backend_admission() {
+    let mut reversed = make_ics_proof(0x13, (2, 1));
+    let error = execute_bridge_proof(reversed.clone()).expect_err("reversed range must reject");
+    assert!(error.contains("start_height <= end_height"));
 
-    state.zk.proof_history_cap = 1;
-    state.zk.proof_retention_grace_blocks = 0;
-    state.zk.proof_prune_batch = 10;
-
-    let exec = Executor::default();
-
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block1 = state.block(header1);
-    let mut stx1 = block1.transaction();
-    let proof1 = make_ics_proof(0x21, (1, 1), false);
-    let id1 = bridge_proof_id(&proof1);
-    let submit1: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof1).into();
-    exec.execute_instruction(&mut stx1, &ALICE_ID.clone(), submit1)
-        .expect("first proof accepted");
-    stx1.apply();
-    block1
-        .commit()
-        .expect("commit first bridge-proof block snapshot");
-
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-    let mut block2 = state.block(header2);
-    let mut stx2 = block2.transaction();
-    let proof2 = make_ics_proof(0x33, (2, 2), false);
-    let id2 = bridge_proof_id(&proof2);
-    let submit2: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof2).into();
-    exec.execute_instruction(&mut stx2, &ALICE_ID.clone(), submit2)
-        .expect("second proof accepted");
-
-    assert!(stx2.world.proofs().get(&id2).is_some());
-    assert!(
-        stx2.world.proofs().get(&id1).is_none(),
-        "older unpinned proof should be pruned when cap is hit"
-    );
-}
-
-#[test]
-fn manual_prune_keeps_pinned_bridge_proofs() {
-    let world = iroha_core::state::World::new();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let telemetry = StateTelemetry::default();
-    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
-
-    state.zk.proof_history_cap = 1;
-    state.zk.proof_retention_grace_blocks = 0;
-    state.zk.proof_prune_batch = 10;
-
-    let exec = Executor::default();
-
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block1 = state.block(header1);
-    let mut stx1 = block1.transaction();
-    let pinned_proof = make_ics_proof(0x23, (1, 1), true);
-    let pinned_id = bridge_proof_id(&pinned_proof);
-    let submit1: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(pinned_proof).into();
-    exec.execute_instruction(&mut stx1, &ALICE_ID.clone(), submit1)
-        .expect("pinned proof accepted");
-    stx1.apply();
-    block1
-        .commit()
-        .expect("commit pinned bridge-proof block snapshot");
-
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-    let mut block2 = state.block(header2);
-    let mut stx2 = block2.transaction();
-    let unpinned_proof = make_ics_proof(0x34, (2, 2), false);
-    let unpinned_id = bridge_proof_id(&unpinned_proof);
-    let submit2: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(unpinned_proof).into();
-    exec.execute_instruction(&mut stx2, &ALICE_ID.clone(), submit2)
-        .expect("unpinned proof accepted");
-    stx2.apply();
-    block2
-        .commit()
-        .expect("commit unpinned bridge-proof block snapshot");
-
-    let header3 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
-    let mut block3 = state.block(header3);
-    let mut stx3 = block3.transaction();
-    let prune: InstructionBox =
-        iroha_data_model::isi::zk::PruneProofs::new(Some("bridge/ics23".to_owned())).into();
-    exec.execute_instruction(&mut stx3, &ALICE_ID.clone(), prune)
-        .expect("manual bridge prune should keep pinned records");
-
-    assert!(
-        stx3.world.proofs().get(&pinned_id).is_some(),
-        "manual pruning must not remove pinned bridge records"
-    );
-    assert!(stx3.world.proofs().get(&unpinned_id).is_some());
+    reversed.range = BridgeProofRange {
+        start_height: 1,
+        end_height: 1,
+    };
+    let BridgeProofPayload::Ics(ics) = &mut reversed.payload else {
+        unreachable!("ICS fixture")
+    };
+    ics.verifier_manifest_hash = [0; 32];
+    let error = execute_bridge_proof(reversed).expect_err("zero verifier binding must reject");
+    assert!(error.contains("binding must not be all zeros"));
 }
 
 #[test]
 fn bridge_range_length_cap_enforced() {
-    let world = iroha_core::state::World::new();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let telemetry = StateTelemetry::default();
-    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
-
+    let mut state = state_for_test();
     state.zk.bridge_proof_max_range_len = 2;
 
-    let exec = Executor::default();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
-    let proof = make_ics_proof(0x44, (5, 10), false);
     let submit: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
-    let err = exec
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(make_ics_proof(0x44, (5, 10))).into();
+    let error = Executor::default()
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
         .expect_err("range cap should reject long bridge proofs");
     assert!(
-        format!("{err:?}").contains("range too large"),
-        "unexpected error: {err:?}"
+        format!("{error:?}").contains("range too large"),
+        "unexpected error: {error:?}"
     );
 }
 
 #[test]
-fn bridge_height_window_respected() {
-    let world = iroha_core::state::World::new();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let telemetry = StateTelemetry::default();
-    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
-
-    let exec = Executor::default();
+fn bridge_height_window_respected_before_generic_backend_rejection() {
+    let mut state = state_for_test();
+    let executor = Executor::default();
 
     state.zk.bridge_proof_max_future_drift_blocks = 1;
     let header_future =
         iroha_data_model::block::BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
     let mut block_future = state.block(header_future);
     let mut stx_future = block_future.transaction();
-    let future_proof = make_ics_proof(0x55, (7, 7), false);
     let submit_future: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(future_proof).into();
-    let err = exec
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(make_ics_proof(0x55, (7, 7))).into();
+    let error = executor
         .execute_instruction(&mut stx_future, &ALICE_ID.clone(), submit_future)
         .expect_err("future drift guard should reject proof ahead of window");
-    assert!(
-        format!("{err:?}").contains("future window"),
-        "unexpected error for future drift: {err:?}"
-    );
+    assert!(format!("{error:?}").contains("future window"));
     drop(stx_future);
     drop(block_future);
 
@@ -252,105 +180,53 @@ fn bridge_height_window_respected() {
         iroha_data_model::block::BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let mut block_past = state.block(header_past);
     let mut stx_past = block_past.transaction();
-    let stale_proof = make_ics_proof(0x66, (1, 7), false);
     let submit_past: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(stale_proof).into();
-    let err = exec
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(make_ics_proof(0x66, (1, 7))).into();
+    let error = executor
         .execute_instruction(&mut stx_past, &ALICE_ID.clone(), submit_past)
         .expect_err("past window should reject stale proof");
-    assert!(
-        format!("{err:?}").contains("past window"),
-        "unexpected error for stale proof: {err:?}"
-    );
+    assert!(format!("{error:?}").contains("past window"));
+}
+
+fn proof_record(proof: BridgeProof, verified_at_height: u64) -> (ProofId, ProofRecord) {
+    let id = bridge_proof_id(&proof);
+    let encoded = norito::to_bytes(&proof).expect("encode retained proof");
+    let record = ProofRecord {
+        id: id.clone(),
+        vk_ref: None,
+        vk_commitment: None,
+        status: ProofStatus::Verified,
+        verified_at_height: Some(verified_at_height),
+        bridge: Some(BridgeProofRecord {
+            proof,
+            commitment: id.proof_hash,
+            size_bytes: u32::try_from(encoded.len()).expect("test proof length fits u32"),
+        }),
+    };
+    (id, record)
 }
 
 #[test]
-fn bridge_overlapping_ranges_are_rejected() {
-    let world = iroha_core::state::World::new();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let telemetry = StateTelemetry::default();
-    let state = State::with_telemetry(world, kura, query_handle, telemetry);
+fn manual_prune_has_no_caller_controlled_retention_bypass() {
+    let mut state = state_for_test();
+    state.zk.proof_history_cap = 1;
+    state.zk.proof_retention_grace_blocks = 0;
+    state.zk.proof_prune_batch = 10;
 
-    let exec = Executor::default();
+    let (older_id, older) = proof_record(make_ics_proof(0x23, (1, 1)), 1);
+    let (newer_id, newer) = proof_record(make_ics_proof(0x34, (2, 2)), 2);
+    insert_proof_record_for_test(&mut state, older_id.clone(), older);
+    insert_proof_record_for_test(&mut state, newer_id.clone(), newer);
 
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block1 = state.block(header1);
-    let mut stx1 = block1.transaction();
-    let proof1 = make_ics_proof(0x71, (10, 12), false);
-    let submit1: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof1).into();
-    exec.execute_instruction(&mut stx1, &ALICE_ID.clone(), submit1)
-        .expect("first proof accepted");
-    stx1.apply();
-    block1
-        .commit()
-        .expect("commit first bridge-proof block snapshot");
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let prune: InstructionBox =
+        iroha_data_model::isi::zk::PruneProofs::new(Some("bridge/ics23".to_owned())).into();
+    Executor::default()
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), prune)
+        .expect("manual bridge prune");
 
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-    let mut block2 = state.block(header2);
-    let mut stx2 = block2.transaction();
-    let proof2 = make_ics_proof(0x72, (11, 13), false);
-    let submit2: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof2).into();
-    let err = exec
-        .execute_instruction(&mut stx2, &ALICE_ID.clone(), submit2)
-        .expect_err("overlapping bridge proof must be rejected");
-    assert!(
-        format!("{err:?}").contains("overlaps existing proof"),
-        "unexpected error for overlap: {err:?}"
-    );
-}
-
-#[test]
-fn re_submitting_identical_bridge_proof_is_rejected() {
-    let world = iroha_core::state::World::new();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let telemetry = StateTelemetry::default();
-    let state = State::with_telemetry(world, kura, query_handle, telemetry);
-
-    let exec = Executor::default();
-    let proof = make_ics_proof(0x73, (21, 21), false);
-    let proof_id = bridge_proof_id(&proof);
-
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block1 = state.block(header1);
-    let mut stx1 = block1.transaction();
-    let submit1: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
-    exec.execute_instruction(&mut stx1, &ALICE_ID.clone(), submit1)
-        .expect("first proof accepted");
-    stx1.apply();
-    block1
-        .commit()
-        .expect("commit first bridge-proof block snapshot");
-
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-    let mut block2 = state.block(header2);
-    let mut stx2 = block2.transaction();
-    let submit2: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
-    let err = exec
-        .execute_instruction(&mut stx2, &ALICE_ID.clone(), submit2)
-        .expect_err("identical proof replay must reject");
-    assert!(
-        format!("{err:?}").contains("already been recorded"),
-        "unexpected duplicate proof error: {err:?}"
-    );
-
-    let rec = stx2
-        .world
-        .proofs()
-        .get(&proof_id)
-        .expect("original proof remains recorded");
-    assert_eq!(rec.status, ProofStatus::Verified);
-    let bridge = rec.bridge.as_ref().expect("bridge metadata stored");
-    assert_eq!(bridge.commitment, proof_id.proof_hash);
-    assert_eq!(bridge.proof.range.start_height, 21);
-    assert_eq!(bridge.proof.range.end_height, 21);
+    assert!(stx.world.proofs().get(&older_id).is_none());
+    assert!(stx.world.proofs().get(&newer_id).is_some());
 }

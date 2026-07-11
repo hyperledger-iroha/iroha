@@ -30,10 +30,16 @@ seiyaku IrohaSwap {
     }
 
     // Create a new pool with caller-chosen LP asset and pool account.
-    kotoage fn init_pool(pool: Name, asset_a: AssetDefinitionId, asset_b: AssetDefinitionId, pool_account: AccountId, lp_asset: AssetDefinitionId) authorize("Admin") {
+    kotoage fn init_pool(
+        pool: Name,
+        asset_a: AssetDefinitionId,
+        asset_b: AssetDefinitionId,
+        pool_account: AccountId,
+        lp_asset: AssetDefinitionId,
+    ) authorize("Admin") {
         let zero = Amount::from_i64(0);
         require(asset_a != asset_b, PoolError::IdenticalAssets);
-        // Refuse re-init.
+        // Refuse duplicate pool creation.
         require(!PoolAssetA.contains(pool), PoolError::PoolAlreadyExists);
         PoolAssetA[pool] = asset_a;
         PoolAssetB[pool] = asset_b;
@@ -46,37 +52,67 @@ seiyaku IrohaSwap {
     }
 
     // Provide liquidity; mints LP proportional to contribution.
-    kotoage fn deposit_liquidity(provider: AccountId, pool: Name, amount_a: Amount, amount_b: Amount) authorize("Admin") {
+    kotoage fn deposit_liquidity(
+        provider: AccountId,
+        pool: Name,
+        amount_a: Amount,
+        amount_b: Amount,
+    ) authorize("Admin") {
         let zero = Amount::from_i64(0);
         require(amount_a > zero, PoolError::InvalidAssetAAmount);
         require(amount_b > zero, PoolError::InvalidAssetBAmount);
         ensure_pool(pool);
-        let asset_a = PoolAssetA.get(pool).unwrap_or(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
-        let asset_b = PoolAssetB.get(pool).unwrap_or(AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"));
+        let asset_a = PoolAssetA.get(pool).unwrap_or(
+            AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+        );
+        let asset_b = PoolAssetB.get(pool).unwrap_or(
+            AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"),
+        );
         let pool_account = PoolAccount.get(pool).unwrap_or(provider);
         let lp_asset = PoolLpAsset.get(pool).unwrap_or(asset_a);
         let reserve_a = ReserveA.ensure(pool, zero);
         let reserve_b = ReserveB.ensure(pool, zero);
         let total_lp = LpSupply.ensure(pool, zero);
-        let minted = (total_lp == zero)?min_value(amount_a, amount_b): min_value((amount_a * total_lp) / reserve_a, (amount_b * total_lp) / reserve_b);
+        let minted = (total_lp == zero) ? min_value(a: amount_a, b: amount_b) : min_value(
+            a: (amount_a * total_lp) / reserve_a,
+            b: (amount_b * total_lp) / reserve_b,
+        );
         require(minted > zero, PoolError::ZeroLiquidityMinted);
         // Move tokens into the pool account.
-        ledger::asset::transfer(provider, pool_account, asset_a, amount_a, DataSpaceId::parse("0"));
-        ledger::asset::transfer(provider, pool_account, asset_b, amount_b, DataSpaceId::parse("0"));
+        ledger::asset::transfer(
+            source: provider,
+            destination: pool_account,
+            asset_definition: asset_a,
+            amount: amount_a,
+            dataspace: DataSpaceId::parse("0"),
+        );
+        ledger::asset::transfer(
+            source: provider,
+            destination: pool_account,
+            asset_definition: asset_b,
+            amount: amount_b,
+            dataspace: DataSpaceId::parse("0"),
+        );
         // Mint LP tokens to the provider.
-        ledger::asset::mint(provider, lp_asset, minted);
+        ledger::asset::mint(account: provider, asset_definition: lp_asset, amount: minted);
         ReserveA[pool] = reserve_a + amount_a;
         ReserveB[pool] = reserve_b + amount_b;
         LpSupply[pool] = total_lp + minted;
     }
 
     // Withdraw liquidity; burns LP and returns proportional reserves.
-    kotoage fn withdraw_liquidity(provider: AccountId, pool: Name, lp_amount: Amount) authorize("Admin") {
+    kotoage fn withdraw_liquidity(provider: AccountId, pool: Name, lp_amount: Amount) authorize(
+        "Admin"
+    ) {
         let zero = Amount::from_i64(0);
         require(lp_amount > zero, PoolError::InvalidLiquidityAmount);
         ensure_pool(pool);
-        let asset_a = PoolAssetA.get(pool).unwrap_or(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
-        let asset_b = PoolAssetB.get(pool).unwrap_or(AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"));
+        let asset_a = PoolAssetA.get(pool).unwrap_or(
+            AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+        );
+        let asset_b = PoolAssetB.get(pool).unwrap_or(
+            AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"),
+        );
         let pool_account = PoolAccount.get(pool).unwrap_or(provider);
         let lp_asset = PoolLpAsset.get(pool).unwrap_or(asset_a);
         let reserve_a = ReserveA.ensure(pool, zero);
@@ -87,29 +123,51 @@ seiyaku IrohaSwap {
         let amount_b = (lp_amount * reserve_b) / total_lp;
         require(amount_a > zero, PoolError::ZeroAssetAOutput);
         require(amount_b > zero, PoolError::ZeroAssetBOutput);
-        ledger::asset::burn(provider, lp_asset, lp_amount);
-        ledger::asset::transfer(pool_account, provider, asset_a, amount_a, DataSpaceId::parse("0"));
-        ledger::asset::transfer(pool_account, provider, asset_b, amount_b, DataSpaceId::parse("0"));
+        ledger::asset::burn(account: provider, asset_definition: lp_asset, amount: lp_amount);
+        ledger::asset::transfer(
+            source: pool_account,
+            destination: provider,
+            asset_definition: asset_a,
+            amount: amount_a,
+            dataspace: DataSpaceId::parse("0"),
+        );
+        ledger::asset::transfer(
+            source: pool_account,
+            destination: provider,
+            asset_definition: asset_b,
+            amount: amount_b,
+            dataspace: DataSpaceId::parse("0"),
+        );
         ReserveA[pool] = reserve_a - amount_a;
         ReserveB[pool] = reserve_b - amount_b;
         LpSupply[pool] = total_lp - lp_amount;
     }
 
     // Swap with 0.3% fee (997/1000).
-    kotoage fn swap(trader: AccountId, pool: Name, input_asset: AssetDefinitionId, amount_in: Amount, min_output: Amount) -> Amount authorize("Admin") {
+    kotoage fn swap(
+        trader: AccountId,
+        pool: Name,
+        input_asset: AssetDefinitionId,
+        amount_in: Amount,
+        min_output: Amount,
+    ) -> Amount authorize("Admin") {
         let zero = Amount::from_i64(0);
         require(amount_in > zero, PoolError::InvalidSwapAmount);
         ensure_pool(pool);
-        let asset_a = PoolAssetA.get(pool).unwrap_or(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
-        let asset_b = PoolAssetB.get(pool).unwrap_or(AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"));
+        let asset_a = PoolAssetA.get(pool).unwrap_or(
+            AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+        );
+        let asset_b = PoolAssetB.get(pool).unwrap_or(
+            AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"),
+        );
         let pool_account = PoolAccount.get(pool).unwrap_or(trader);
         let reserve_a = ReserveA.ensure(pool, zero);
         let reserve_b = ReserveB.ensure(pool, zero);
         let is_a_in = input_asset == asset_a;
         let is_b_in = input_asset == asset_b;
         require(is_a_in || is_b_in, PoolError::AssetNotInPool);
-        let reserve_in = (is_a_in)?reserve_a: reserve_b;
-        let reserve_out = (is_a_in)?reserve_b: reserve_a;
+        let reserve_in = (is_a_in) ? reserve_a : reserve_b;
+        let reserve_out = (is_a_in) ? reserve_b : reserve_a;
         let fee_numerator = Amount::from_i64(997);
         let fee_denominator = Amount::from_i64(1000);
         let effective = (amount_in * fee_numerator) / fee_denominator;
@@ -119,13 +177,37 @@ seiyaku IrohaSwap {
         if (is_a_in) {
             ReserveA[pool] = reserve_in + amount_in;
             ReserveB[pool] = reserve_out - out;
-            ledger::asset::transfer(trader, pool_account, asset_a, amount_in, DataSpaceId::parse("0"));
-            ledger::asset::transfer(pool_account, trader, asset_b, out, DataSpaceId::parse("0"));
+            ledger::asset::transfer(
+                source: trader,
+                destination: pool_account,
+                asset_definition: asset_a,
+                amount: amount_in,
+                dataspace: DataSpaceId::parse("0"),
+            );
+            ledger::asset::transfer(
+                source: pool_account,
+                destination: trader,
+                asset_definition: asset_b,
+                amount: out,
+                dataspace: DataSpaceId::parse("0"),
+            );
         } else {
             ReserveB[pool] = reserve_in + amount_in;
             ReserveA[pool] = reserve_out - out;
-            ledger::asset::transfer(trader, pool_account, asset_b, amount_in, DataSpaceId::parse("0"));
-            ledger::asset::transfer(pool_account, trader, asset_a, out, DataSpaceId::parse("0"));
+            ledger::asset::transfer(
+                source: trader,
+                destination: pool_account,
+                asset_definition: asset_b,
+                amount: amount_in,
+                dataspace: DataSpaceId::parse("0"),
+            );
+            ledger::asset::transfer(
+                source: pool_account,
+                destination: trader,
+                asset_definition: asset_a,
+                amount: out,
+                dataspace: DataSpaceId::parse("0"),
+            );
         }
         return out;
     }

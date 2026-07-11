@@ -14,6 +14,11 @@ public final class ContractJsonParser {
 
   private ContractJsonParser() {}
 
+  /** Parses the complete `/v1/contracts/code/{code_hash}` manifest response. */
+  public static ContractManifestRecord parseManifestRecord(final byte[] payload) {
+    return ContractManifestJsonParser.parseRecord(payload);
+  }
+
   public static ContractDeployResponse parseDeployResponse(final byte[] payload) {
     final Map<String, Object> root =
         expectObject(parse(payload, "contract deploy response"), "contract deploy response");
@@ -41,7 +46,7 @@ public final class ContractJsonParser {
                       optionalString(contract.get("contract_alias")),
                       optionalString(contract.get("contract_address")),
                       optionalString(contract.get("previous_contract_address")),
-                      Boolean.TRUE.equals(contract.get("upgraded")),
+                      Boolean.TRUE.equals(contract.get("kaizen")),
                       optionalString(contract.get("dataspace")),
                       contract.containsKey("deploy_nonce")
                           ? asOptionalLong(

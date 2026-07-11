@@ -9231,6 +9231,7 @@ mod tests {
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
             nonce,
+            route_revision: 1,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
             asset_id: b"xor".to_vec(),
@@ -9250,7 +9251,8 @@ mod tests {
         let (_, private_key) = key_pair.clone().into_parts();
         let authority = AccountId::new(key_pair.public_key().clone());
         let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&proposal_sccp_transfer_payload(nonce));
+            iroha_sccp::canonical_sccp_payload_bytes(&proposal_sccp_transfer_payload(nonce))
+                .expect("valid SCCP proposal fixture payload encodes");
         let mut bytecode = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 0,

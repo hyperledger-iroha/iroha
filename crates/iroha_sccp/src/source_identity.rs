@@ -32,7 +32,6 @@ fn keccak256(prefix: &[u8], payload: &[u8]) -> H256 {
 #[must_use]
 pub const fn sccp_network_from_tag_v1(tag: u8) -> Option<SccpNetworkV1> {
     match tag {
-        0 => Some(SccpNetworkV1::SoraNexus),
         1 => Some(SccpNetworkV1::SoraTaira),
         2 => Some(SccpNetworkV1::EthereumMainnet),
         3 => Some(SccpNetworkV1::EthereumSepolia),
@@ -48,8 +47,8 @@ pub const fn sccp_network_from_tag_v1(tag: u8) -> Option<SccpNetworkV1> {
 /// Return the canonical V1 preimage for an SCCP event emitted on one exact lane.
 ///
 /// Binding the exact lane hash, rather than only the two numeric protocol
-/// domains, prevents a proof from being replayed between mainnet and testnet or
-/// between SORA Nexus and Taira profiles that intentionally share a domain id.
+/// domains, prevents a proof from being replayed between mainnet and testnet
+/// profiles that intentionally share a protocol domain.
 pub fn canonical_sccp_lane_source_event_bytes_v1(
     lane: SccpLaneIdV1,
     message_id: H256,
@@ -95,8 +94,7 @@ mod tests {
 
     use super::*;
 
-    const NETWORKS: [SccpNetworkV1; 9] = [
-        SccpNetworkV1::SoraNexus,
+    const NETWORKS: [SccpNetworkV1; 8] = [
         SccpNetworkV1::SoraTaira,
         SccpNetworkV1::EthereumMainnet,
         SccpNetworkV1::EthereumSepolia,
@@ -205,7 +203,7 @@ mod tests {
         );
         for invalid in [
             SccpLaneIdV1 {
-                source: SccpNetworkV1::SoraNexus,
+                source: SccpNetworkV1::SoraTaira,
                 target: SccpNetworkV1::SoraTaira,
             },
             SccpLaneIdV1 {
@@ -221,7 +219,6 @@ mod tests {
     #[test]
     fn network_profile_tags_are_bijective_and_reject_unknown_values() {
         let networks = [
-            SccpNetworkV1::SoraNexus,
             SccpNetworkV1::SoraTaira,
             SccpNetworkV1::EthereumMainnet,
             SccpNetworkV1::EthereumSepolia,
@@ -238,7 +235,7 @@ mod tests {
         for (index, tag) in tags.iter().enumerate() {
             assert!(tags[index + 1..].iter().all(|other| tag != other));
         }
-        for unknown in (6..=9).chain(13..=u8::MAX) {
+        for unknown in core::iter::once(0).chain(6..=9).chain(13..=u8::MAX) {
             assert!(sccp_network_from_tag_v1(unknown).is_none());
         }
     }
@@ -255,10 +252,6 @@ mod tests {
             source: SccpNetworkV1::EthereumSepolia,
             target: SccpNetworkV1::SoraTaira,
         };
-        let mainnet_nexus = SccpLaneIdV1 {
-            source: SccpNetworkV1::EthereumMainnet,
-            target: SccpNetworkV1::SoraNexus,
-        };
         let expected = sccp_lane_source_event_digest_v1(mainnet_taira, message_id, payload_hash)
             .expect("well-formed exact lane event");
         assert_eq!(
@@ -271,10 +264,6 @@ mod tests {
         assert_ne!(
             Some(expected),
             sccp_lane_source_event_digest_v1(sepolia_taira, message_id, payload_hash)
-        );
-        assert_ne!(
-            Some(expected),
-            sccp_lane_source_event_digest_v1(mainnet_nexus, message_id, payload_hash)
         );
         assert!(sccp_lane_source_event_digest_v1(mainnet_taira, [0; 32], payload_hash).is_none());
         assert!(sccp_lane_source_event_digest_v1(mainnet_taira, message_id, [0; 32]).is_none());
@@ -359,8 +348,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("fixture text {key}"))
         }
         fn hex(value: &str) -> Vec<u8> {
-            crate::decode_hex_bytes(&format!("0x{value}"))
-                .expect("fixture lowercase hexadecimal")
+            crate::decode_hex_bytes(&format!("0x{value}")).expect("fixture lowercase hexadecimal")
         }
 
         let fixture = norito::json::from_str::<norito::json::Value>(include_str!(

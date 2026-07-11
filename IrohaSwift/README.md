@@ -310,6 +310,20 @@ operator receives only earned XOR and the customer gets the refundable balance.
 
 > **Account selectors:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response.
 
+### Kotodama contract manifests
+
+`ToriiClient.fetchContractManifest(codeHashHex:)` reads
+`/v1/contracts/code/{hash}` as a strict `ToriiContractManifestRecord`. The model preserves
+the `seiyaku`/`誓約` identity, the branded `kotoage`/`言挙げ`, `hajimari`/`始まり`, and
+`kaizen`/`改善` lifecycle surface, exact flat-preorder argument and return schemas, bounded
+access hints, triggers, state and error declarations, `kotoba`, and provenance. Unknown
+fields, mismatched convenience hashes, English lifecycle aliases, and callbacks that bypass
+a declared `kotoage` entrypoint are rejected during decoding. V1 type schemas use one flat
+preorder node tape: a `List` node carries only `capacity`, and its element subtree follows it
+immediately. The decoder rejects the retired nested `element` field, incomplete or overlong
+tapes, and forged `AccountView`, `AssetView`, `AssetDefinitionView`, `DomainView`, `NftView`,
+or `QueryPage<View>` shapes.
+
 ### Explorer instruction history
 
 Torii explorer endpoints expose instruction-level data, including transfer details.

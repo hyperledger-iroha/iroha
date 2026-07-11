@@ -1074,6 +1074,8 @@ mod model {
         FindAccountByAlias(account::prelude::FindAccountByAlias),
         /// Fetch a domain by identifier.
         FindDomainById(domain::prelude::FindDomainById),
+        /// Fetch a non-fungible asset by identifier.
+        FindNftById(nft::prelude::FindNftById),
         #[cfg(test)]
         #[doc(hidden)]
         __TestFallback,
@@ -1158,6 +1160,8 @@ mod model {
         AccountId(AccountId),
         /// Domain payload.
         Domain(crate::domain::Domain),
+        /// Non-fungible asset payload.
+        Nft(crate::nft::Nft),
     }
 
     /// The results of a single iterable query request.
@@ -3681,6 +3685,7 @@ impl_singular_queries! {
     musubi::prelude::FindMusubiShortAliasByName => crate::musubi::MusubiPackageId,
     account::prelude::FindAccountByAlias => crate::account::Account,
     domain::prelude::FindDomainById => crate::domain::Domain,
+    nft::prelude::FindNftById => crate::nft::Nft,
 }
 
 // NOTE: Query DSL projection traits are provided generically in dsl module now.
@@ -4602,10 +4607,20 @@ pub mod nft {
 
     use std::{format, string::String, vec::Vec};
 
-    use crate::AccountId;
+    use crate::{AccountId, NftId};
     use derive_more::Display;
 
     queries! {
+        /// [`FindNftById`] finds one `Nft` by its canonical identifier.
+        #[derive(Display)]
+        #[display("Find NFT `{id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindNftById {
+            /// Canonical identifier of the NFT to find.
+            pub id: NftId,
+        }
+
         /// [`FindNfts`] Iroha Query finds all `Nft`s presented.
         #[derive(Copy, Display)]
         #[display("Find all NFTs")]
@@ -4623,6 +4638,13 @@ pub mod nft {
         }
     }
 
+    impl FindNftById {
+        /// Return the queried NFT identifier.
+        pub fn nft_id(&self) -> &NftId {
+            &self.id
+        }
+    }
+
     impl FindNftsByAccountId {
         /// Return the queried account identifier.
         pub fn account_id(&self) -> &AccountId {
@@ -4632,7 +4654,7 @@ pub mod nft {
 
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
-        pub use super::{FindNfts, FindNftsByAccountId};
+        pub use super::{FindNftById, FindNfts, FindNftsByAccountId};
     }
 }
 

@@ -601,7 +601,7 @@ pub mod query {
 
     use super::*;
     use crate::{
-        smartcontracts::ValidQuery,
+        smartcontracts::{ValidQuery, ValidSingularQuery},
         state::{StateReadOnly, WorldReadOnly},
     };
 
@@ -699,6 +699,13 @@ pub mod query {
             id: entry.id().clone(),
             content: details.content,
             owned_by: details.owned_by,
+        }
+    }
+
+    impl ValidSingularQuery for FindNftById {
+        #[metrics(+"find_nft_by_id")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Nft, Error> {
+            Ok(nft_from_entry(state_ro.world().nft(self.nft_id())?))
         }
     }
 
@@ -919,6 +926,39 @@ pub mod query {
         #[test]
         fn checked_keypair_preserves_default_algorithm() {
             assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        }
+
+        #[test]
+        fn find_nft_by_id_returns_present_and_reports_missing() {
+            use iroha_data_model::query::error::FindError;
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+            let nft_id: NftId = "ticket$wonderland.universal".parse().expect("NFT id");
+            let nft = Nft {
+                id: nft_id.clone(),
+                content: Metadata::default(),
+                owned_by: ALICE_ID.clone(),
+            };
+            let (id, value) = nft.clone().into_key_value();
+            state.world.nfts.insert(id, value);
+
+            let view = state.view();
+            assert_eq!(
+                FindNftById::new(nft_id).execute(&view),
+                Ok(nft),
+                "the singular query must materialize the exact stored NFT",
+            );
+
+            let missing: NftId = "missing$wonderland.universal".parse().expect("NFT id");
+            let error = FindNftById::new(missing.clone())
+                .execute(&view)
+                .expect_err("missing NFT must remain a query find error");
+            assert!(
+                matches!(&error, Error::Find(FindError::Nft(id)) if id == &missing),
+                "unexpected missing-NFT error: {error:?}",
+            );
         }
 
         fn new_dummy_block() -> crate::block::CommittedBlock {

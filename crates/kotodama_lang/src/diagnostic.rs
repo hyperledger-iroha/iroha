@@ -19,7 +19,9 @@ pub enum DiagnosticPhase {
     Lex,
     /// Parsing failed.
     Parse,
-    /// Name, type, effect, or policy analysis failed.
+    /// Name binding or module resolution failed.
+    Resolve,
+    /// Type, effect, or policy analysis failed.
     Semantic,
     /// Typed lowering or optimization failed.
     Lowering,
@@ -33,6 +35,7 @@ impl DiagnosticPhase {
         match self {
             Self::Lex => "lex",
             Self::Parse => "parse",
+            Self::Resolve => "resolve",
             Self::Semantic => "semantic",
             Self::Lowering => "lowering",
             Self::Artifact => "artifact",
@@ -102,7 +105,7 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "K0001",
         Lex,
         "source exceeds the 1 MiB V1 limit",
-        "Split the source into typed modules and compile one deployable contract per file."
+        "Split the source into typed modules and compile one deployable seiyaku per file."
     ),
     explanation!(
         "K0002",
@@ -133,6 +136,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         Parse,
         "the source does not match the V1 grammar",
         "Use the primary span and labels to repair the declaration or expression."
+    ),
+    explanation!(
+        "K1099",
+        Parse,
+        "the parser could not bind its internal source-origin table",
+        "Report this compiler bug with the source file; compilation stops without producing typed HIR or bytecode."
     ),
     explanation!(
         "K2001",
@@ -186,7 +195,7 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "K2100",
         Semantic,
         "the program violates the deterministic on-chain profile",
-        "Remove test-only or non-deterministic behavior from the deployable contract."
+        "Remove test-only or non-deterministic behavior from the deployable seiyaku."
     ),
     explanation!(
         "K3001",
@@ -222,7 +231,7 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "K4003",
         Artifact,
         "a reusable module was requested as a deployable artifact",
-        "Link the module into exactly one contract root and build the contract."
+        "Link the module into exactly one seiyaku root and build that seiyaku."
     ),
     explanation!(
         "K5001",
@@ -285,12 +294,6 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Report the finding so it can receive a stable K5000-series code and remediation."
     ),
     explanation!(
-        "K9999",
-        Artifact,
-        "an unmigrated compiler error lacked a native stable code",
-        "Report the error so the remaining adapter can be replaced with a phase-specific diagnostic."
-    ),
-    explanation!(
         "E_ACCESS_INCOMPLETE",
         Semantic,
         "the compiler could not prove a complete access set",
@@ -313,6 +316,432 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         Semantic,
         "checked integer arithmetic overflowed",
         "Change the inputs or use an explicit wrapping operation when modular arithmetic is intentional."
+    ),
+    explanation!(
+        "E_AMOUNT_SUFFIX",
+        Lex,
+        "an Amount literal has a missing or invalid suffix",
+        "Write the lowercase `amt` suffix directly after the base-10 digits, for example `10amt` or `1.25amt`."
+    ),
+    explanation!(
+        "E_AMOUNT_SUFFIX_SEPARATED",
+        Lex,
+        "whitespace separates an Amount value from its suffix",
+        "Remove the whitespace so the complete literal is one token, for example `10amt`."
+    ),
+    explanation!(
+        "E_AMOUNT_MALFORMED",
+        Lex,
+        "an Amount literal has invalid decimal spelling",
+        "Use base-10 digits, at most one decimal point, digit-separating underscores, and the exact lowercase `amt` suffix."
+    ),
+    explanation!(
+        "E_AMOUNT_NEGATIVE",
+        Parse,
+        "an Amount literal is negative",
+        "Amounts are non-negative; remove the unary minus or use a different numeric type."
+    ),
+    explanation!(
+        "E_AMOUNT_SCALE_OVERFLOW",
+        Semantic,
+        "an Amount literal exceeds the 28-digit scale limit",
+        "Reduce the significant fractional precision to at most 28 digits. Trailing fractional zeros are canonicalized away before this limit is checked."
+    ),
+    explanation!(
+        "E_AMOUNT_MANTISSA_OVERFLOW",
+        Semantic,
+        "an Amount literal exceeds the 512-bit mantissa limit",
+        "Reduce the magnitude of the literal so its unscaled decimal mantissa fits in 512 bits."
+    ),
+    explanation!(
+        "E_AMOUNT_REMAINDER",
+        Semantic,
+        "Amount does not define a remainder operation",
+        "Use exact division or amount.div_round with an explicit scale and rounding mode."
+    ),
+    explanation!(
+        "E_AMOUNT_CONSTANT_ARITHMETIC",
+        Semantic,
+        "constant Amount arithmetic is invalid",
+        "Change the literal operands so subtraction does not underflow, the mantissa and canonical scale remain in range, and plain division has an exact finite result; use div_round for intentional rounding."
+    ),
+    explanation!(
+        "E_AMOUNT_DIV_ROUND_ARITY",
+        Semantic,
+        "Amount.div_round has the wrong number of arguments",
+        "Pass exactly divisor, scale, and mode, using named arguments where the call policy requires them."
+    ),
+    explanation!(
+        "E_AMOUNT_DIV_ROUND_RECEIVER",
+        Semantic,
+        "div_round was called on a value that is not Amount",
+        "Call div_round on an Amount value and pass an Amount divisor."
+    ),
+    explanation!(
+        "E_AMOUNT_DIV_ROUND_SCALE",
+        Semantic,
+        "Amount.div_round received a scale outside zero through 28",
+        "Choose a compile-time scale from 0 through 28."
+    ),
+    explanation!(
+        "E_AMOUNT_DIV_ROUND_SCALE_TYPE",
+        Semantic,
+        "Amount.div_round scale is not an i64 constant",
+        "Pass the scale as a compile-time i64 value from 0 through 28."
+    ),
+    explanation!(
+        "E_AMOUNT_ROUNDING_MODE",
+        Semantic,
+        "Amount.div_round received an unknown rounding mode",
+        "Use exactly Rounding::floor, Rounding::ceil, or Rounding::nearest_even."
+    ),
+    explanation!(
+        "E_UNSIGNED_NEGATION",
+        Semantic,
+        "a non-negative numeric type was negated",
+        "Remove the negation or choose a signed type for values that may be negative."
+    ),
+    explanation!(
+        "E_LEGACY_SUM_CONSTRUCTOR",
+        Parse,
+        "source uses a retired placeholder-based Option or Result constructor",
+        "Use Option::some(value), contextual Option::none, Result::ok(value), or Result::err(error)."
+    ),
+    explanation!(
+        "E_SUM_CONSTRUCTOR_FORM",
+        Parse,
+        "an active-only sum constructor has invalid source form",
+        "Write Option::none without parentheses and give active constructors exactly one positional payload."
+    ),
+    explanation!(
+        "E_SUM_CONSTRUCTOR_ARITY",
+        Parse,
+        "an active-only sum constructor has the wrong payload count",
+        "Supply exactly one active payload to Option::some, Result::ok, or Result::err."
+    ),
+    explanation!(
+        "E_SUM_MISSING_CONTEXT",
+        Semantic,
+        "an inactive or partially inferred sum value lacks an exact type context",
+        "Add an Option<T> or Result<T, E> annotation so every generic payload type is known."
+    ),
+    explanation!(
+        "E_SUM_CONTEXT_TYPE",
+        Semantic,
+        "a sum constructor conflicts with its contextual type",
+        "Use the matching Option or Result constructor and an exactly assignable active payload."
+    ),
+    explanation!(
+        "E_PROPAGATE_CONTEXT",
+        Semantic,
+        "postfix propagation is used outside a matching sum-returning function",
+        "Return the same Option or Result family from the enclosing function, or handle the value explicitly."
+    ),
+    explanation!(
+        "E_PROPAGATE_ERROR_TYPE",
+        Semantic,
+        "Result propagation would require implicit error conversion",
+        "Use the exact enclosing Result error type or convert the error explicitly before propagation."
+    ),
+    explanation!(
+        "E_PROPAGATE_TYPE",
+        Semantic,
+        "postfix propagation was applied to a non-sum value",
+        "Apply ? only to Option<T> or Result<T, E>."
+    ),
+    explanation!(
+        "E_IF_EXPRESSION_ELSE",
+        Semantic,
+        "an expression-valued if omits its else branch",
+        "Add an else block whose tail has exactly the same type as the then block tail."
+    ),
+    explanation!(
+        "E_IF_LET_EXPRESSION_ELSE",
+        Semantic,
+        "an expression-valued if let omits its else branch",
+        "Add an else block, or use if let as a statement when no value is needed."
+    ),
+    explanation!(
+        "E_BRANCH_TYPE_MISMATCH",
+        Semantic,
+        "expression branches have different types",
+        "Make every if or match branch tail produce exactly the same type."
+    ),
+    explanation!(
+        "E_DIVERGING_EXPRESSION_CONTEXT",
+        Semantic,
+        "an expression whose branches all diverge lacks an exact result type",
+        "Provide an exact contextual type, or use the construct as a statement when every branch returns from the enclosing function."
+    ),
+    explanation!(
+        "E_PATTERN_FAMILY",
+        Semantic,
+        "a namespaced pattern belongs to the wrong sum family",
+        "Match Option values with Option::some/none and Result values with Result::ok/err."
+    ),
+    explanation!(
+        "E_PATTERN_PAYLOAD",
+        Semantic,
+        "a sum pattern binds a payload on an inactive variant or omits an active payload binding",
+        "Bind or explicitly ignore active payloads; write Option::none without a payload."
+    ),
+    explanation!(
+        "E_PATTERN_TYPE",
+        Semantic,
+        "a sum pattern was applied to a non-Option/non-Result value",
+        "Use namespaced sum patterns only with Option<T> or Result<T, E>."
+    ),
+    explanation!(
+        "E_MATCH_EMPTY",
+        Semantic,
+        "a match expression has no arms",
+        "Add the complete namespaced pattern set for the matched Option or Result."
+    ),
+    explanation!(
+        "E_MATCH_DUPLICATE_PATTERN",
+        Semantic,
+        "a match expression repeats a variant pattern",
+        "Keep exactly one arm for each variant in the matched sum family."
+    ),
+    explanation!(
+        "E_MATCH_NON_EXHAUSTIVE",
+        Semantic,
+        "a sum match omits an active or inactive variant",
+        "Cover both Option variants or both Result variants explicitly."
+    ),
+    explanation!(
+        "E_MATCH_TYPE_CONTEXT",
+        Semantic,
+        "match arm types cannot be inferred consistently",
+        "Add a result type context or make every arm tail have exactly the same type."
+    ),
+    explanation!(
+        "E_QUERY_KEY_TYPE",
+        Semantic,
+        "a typed core query received bytes or the wrong identifier type",
+        "Pass the exact AccountId, AssetId, AssetDefinitionId, DomainId, or NftId required by the query."
+    ),
+    explanation!(
+        "E_QUERY_PAGE_ARGUMENTS",
+        Semantic,
+        "a typed query page has invalid offset or limit arguments",
+        "Pass named offset: i64 and limit: i64 arguments."
+    ),
+    explanation!(
+        "E_QUERY_RESULT_TYPE",
+        Semantic,
+        "a typed core-query projection was assigned to an incompatible result type",
+        "Receive singular queries as Option<View> and plural queries as QueryPage<View>; raw byte compatibility is not part of the five V1 core-query families."
+    ),
+    explanation!(
+        "E_QUERY_OFFSET",
+        Semantic,
+        "a typed query page offset is negative",
+        "Use a non-negative canonical-order offset."
+    ),
+    explanation!(
+        "E_QUERY_LIMIT",
+        Semantic,
+        "a typed query page limit is outside 1 through 64",
+        "Choose a page limit from 1 through 64."
+    ),
+    explanation!(
+        "E_LIST_TYPE_ARITY",
+        Semantic,
+        "List has an invalid number of type arguments",
+        "Declare List<T, N> with one element type and one capacity constant."
+    ),
+    explanation!(
+        "E_LIST_CAPACITY_CONST",
+        Semantic,
+        "a List capacity is not a compile-time integer",
+        "Use an integer capacity constant from 1 through 64."
+    ),
+    explanation!(
+        "E_LIST_CAPACITY",
+        Semantic,
+        "a List capacity is outside 1 through 64",
+        "Choose a compile-time capacity from 1 through 64."
+    ),
+    explanation!(
+        "E_LIST_RESOURCE_ELEMENT",
+        Semantic,
+        "a List element contains a resource handle",
+        "Keep StateMap, Secret, and other resource handles outside List elements."
+    ),
+    explanation!(
+        "E_LIST_ZERO_SIZED_ELEMENT",
+        Semantic,
+        "a List element schema encodes to zero runtime words",
+        "Add at least one runtime-valued field; every List element must encode at least one word."
+    ),
+    explanation!(
+        "E_LIST_EMPTY_CONTEXT",
+        Semantic,
+        "an empty list literal has no element or capacity context",
+        "Add a List<T, N> annotation to the binding, argument, or return position."
+    ),
+    explanation!(
+        "E_LIST_LITERAL_CAPACITY",
+        Semantic,
+        "a list literal exceeds its contextual capacity",
+        "Increase the declared capacity up to 64 or reduce the literal element count."
+    ),
+    explanation!(
+        "E_LIST_CONTEXT_TYPE",
+        Semantic,
+        "a list expression conflicts with its contextual type",
+        "Use a matching List<T, N> context and exactly assignable element values."
+    ),
+    explanation!(
+        "E_LIST_COMPREHENSION_SOURCE",
+        Semantic,
+        "a list comprehension source is not a bounded List",
+        "Iterate a List<T, N> so the compiler can prove the maximum result size."
+    ),
+    explanation!(
+        "E_LIST_COMPREHENSION_FILTER",
+        Semantic,
+        "a list comprehension filter is not boolean",
+        "Use a bool expression after if; filters do not reduce the proven capacity."
+    ),
+    explanation!(
+        "E_LIST_COMPREHENSION_CAPACITY",
+        Semantic,
+        "a list comprehension may exceed its contextual or V1 capacity",
+        "Reduce the source capacity or use a context large enough for the full proven maximum, up to 64."
+    ),
+    explanation!(
+        "E_LIST_UNSAFE_INDEX",
+        Semantic,
+        "source attempted an unchecked List index operation",
+        "Use get(index) for reads and try_set(index, value) for writes."
+    ),
+    explanation!(
+        "E_LIST_INDEX_TYPE",
+        Semantic,
+        "a List index has the wrong type",
+        "Use an i64 index with get or try_set."
+    ),
+    explanation!(
+        "E_LIST_METHOD_ARITY",
+        Semantic,
+        "a bounded List method has the wrong argument count",
+        "Use the declared method signature and account for the implicit receiver."
+    ),
+    explanation!(
+        "E_LIST_CONTAINS_COMPARABILITY",
+        Semantic,
+        "List.contains requires canonically comparable elements",
+        "Use an element type with deterministic structural equality; resource handles and other non-comparable values cannot be searched with contains."
+    ),
+    explanation!(
+        "E_LIST_MUTABLE_RECEIVER",
+        Semantic,
+        "a mutating List method was called on a non-mutable receiver",
+        "Bind the List with var before calling try_set, try_push, or pop."
+    ),
+    explanation!(
+        "E_LIST_TAKE_CONST",
+        Semantic,
+        "List.take received a dynamic limit",
+        "Pass a compile-time integer limit so the result capacity remains proven."
+    ),
+    explanation!(
+        "E_LIST_TAKE_LIMIT",
+        Semantic,
+        "List.take received a limit outside its source capacity",
+        "Use a constant limit from 0 through the source List capacity."
+    ),
+    explanation!(
+        "E_JSON_CAPACITY",
+        Semantic,
+        "a native JSON object or array exceeds the per-node V1 bound",
+        "Use at most 64 object entries or array elements at each JSON node; split larger data into bounded nested nodes."
+    ),
+    explanation!(
+        "E_JSON_DUPLICATE_KEY",
+        Semantic,
+        "a native JSON object repeats a decoded key",
+        "Keep each decoded key exactly once; identifier and quoted spellings of the same key still collide."
+    ),
+    explanation!(
+        "E_JSON_SCHEMA_LIMIT",
+        Semantic,
+        "a native JSON construction exceeds a recursive V1 ABI bound",
+        "Reduce recursive object, array, Option, or List structure so the canonical construction schema fits its node, word, depth, and encoded-byte limits."
+    ),
+    explanation!(
+        "E_JSON_VALUE_TYPE",
+        Semantic,
+        "a value cannot be converted by native JSON construction",
+        "Handle Result and arbitrary structs explicitly, and keep StateMap, Secret, and other resource handles outside JSON."
+    ),
+    explanation!(
+        "E_LEGACY_JSON_GETTER",
+        Parse,
+        "source uses the retired Numeric name for the Amount JSON getter",
+        "Use value.get_amount(key) or json::get_amount(value, key); every typed JSON getter returns Option<T>."
+    ),
+    explanation!(
+        "E_MIXED_CALL_ARGUMENTS",
+        Parse,
+        "a call mixes positional and named arguments",
+        "Use the contextual named-argument fix when offered. If the callee is unresolved, add the declared parameter names manually; the compiler does not guess a parameter mapping. Method receivers are implicit."
+    ),
+    explanation!(
+        "E_DUPLICATE_NAMED_ARGUMENT",
+        Parse,
+        "a named call argument is repeated",
+        "Supply each declared parameter exactly once."
+    ),
+    explanation!(
+        "E_UNKNOWN_NAMED_ARGUMENT",
+        Semantic,
+        "a named argument does not match a declared parameter",
+        "Use one of the callee's declared parameter names."
+    ),
+    explanation!(
+        "E_MISSING_NAMED_ARGUMENT",
+        Semantic,
+        "a named call omits a required parameter",
+        "Supply every required parameter by its declared name."
+    ),
+    explanation!(
+        "E_NAMED_ARGUMENTS_REQUIRED",
+        Semantic,
+        "a safety-sensitive call uses positional arguments",
+        "Name every source argument to make pagination, effects, or repeated parameter types unambiguous."
+    ),
+    explanation!(
+        "E_POSITIONAL_STRUCT",
+        Semantic,
+        "a struct uses retired positional construction",
+        "Use `Type { field: value, shorthand_field }`; apply the diagnostic fix when one is available."
+    ),
+    explanation!(
+        "E_DUPLICATE_STRUCT_FIELD",
+        Parse,
+        "a struct literal field is repeated",
+        "Supply each declared struct field exactly once."
+    ),
+    explanation!(
+        "E_UNKNOWN_STRUCT_FIELD",
+        Semantic,
+        "a struct literal names an undeclared field",
+        "Use only fields declared by the struct type."
+    ),
+    explanation!(
+        "E_MISSING_STRUCT_FIELD",
+        Semantic,
+        "a struct literal omits a declared field",
+        "Supply every declared field; field order in source is unrestricted."
+    ),
+    explanation!(
+        "E_UNKNOWN_STRUCT",
+        Semantic,
+        "a struct literal refers to an unknown type",
+        "Declare the struct in this source unit or import its typed module declaration."
     ),
     explanation!(
         "E_INTERNAL_BUILTIN",
@@ -357,15 +786,15 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Rename the local declaration; V1 rejects all shadowing."
     ),
     explanation!(
-        "E_STATE_INIT_REQUIRED",
+        "E_STATE_HAJIMARI_REQUIRED",
         Semantic,
         "scalar durable state was declared without a hajimari/始まり hook",
-        "Declare init and initialize every scalar state value before any normal return or fallthrough."
+        "Declare hajimari/始まり and initialize every scalar state value before any normal return or fallthrough."
     ),
     explanation!(
-        "E_STATE_INIT_INCOMPLETE",
+        "E_STATE_HAJIMARI_INCOMPLETE",
         Semantic,
-        "scalar durable state is not initialized on every normal init path",
+        "scalar durable state is not initialized on every normal `hajimari`/`始まり` path",
         "Assign every reported scalar state on all branches and before every early return; loop-only and short-circuited writes are not definite."
     ),
     explanation!(
@@ -407,7 +836,7 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     explanation!(
         "E_SECRET_REQUIRES_ZK",
         Semantic,
-        "Secret<T> was used outside a ZK contract build",
+        "Secret<T> was used outside a ZK seiyaku build",
         "Compile through a ZK-enabled project policy and keep the value inside approved proof or commitment operations."
     ),
     explanation!(
@@ -649,49 +1078,6 @@ impl Diagnostic {
         }
     }
 
-    /// Adapt a legacy compiler error while the remaining phases migrate to native spans.
-    pub fn from_legacy(
-        phase: DiagnosticPhase,
-        source: Option<&str>,
-        message: impl Into<String>,
-    ) -> Self {
-        let message = message.into();
-        let code = message
-            .split_once(':')
-            .map(|(candidate, _)| candidate)
-            .filter(|candidate| {
-                candidate.len() >= 2
-                    && matches!(candidate.as_bytes().first(), Some(b'E' | b'K'))
-                    && candidate[1..].chars().all(|character| {
-                        character.is_ascii_uppercase()
-                            || character.is_ascii_digit()
-                            || character == '_'
-                    })
-            })
-            .unwrap_or("K9999")
-            .to_owned();
-        let primary_span = legacy_line_column(&message).map(|position| SourceSpan {
-            source: source.map(ToOwned::to_owned),
-            start: position,
-            end: SourcePosition {
-                line: position.line,
-                column: position.column.saturating_add(1),
-            },
-            byte_range: None,
-        });
-        Self {
-            code,
-            severity: Severity::Error,
-            phase,
-            message,
-            primary_span,
-            labels: Vec::new(),
-            notes: Vec::new(),
-            help: None,
-            fix: None,
-        }
-    }
-
     /// Return the canonical JSON representation used by every diagnostic renderer.
     pub fn to_json_value(&self) -> Value {
         json_object(vec![
@@ -838,16 +1224,6 @@ fn source_span_to_sarif(span: &SourceSpan) -> Value {
     ])
 }
 
-fn legacy_line_column(message: &str) -> Option<SourcePosition> {
-    let (_, suffix) = message.rsplit_once(" at ")?;
-    let location = suffix.lines().next()?;
-    let (line, column) = location.split_once(':')?;
-    Some(SourcePosition {
-        line: line.parse().ok()?,
-        column: column.parse().ok()?,
-    })
-}
-
 /// Collection of diagnostics returned by a failed compiler operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiagnosticBundle {
@@ -911,15 +1287,6 @@ impl DiagnosticBundle {
     /// Build a bundle containing one native compiler error.
     pub fn single(diagnostic: Diagnostic) -> Self {
         Self::new(vec![diagnostic])
-    }
-
-    /// Build a one-error bundle from a legacy phase result.
-    pub fn from_legacy(
-        phase: DiagnosticPhase,
-        source: Option<&str>,
-        message: impl Into<String>,
-    ) -> Self {
-        Self::single(Diagnostic::from_legacy(phase, source, message))
     }
 
     /// Render deterministic human-readable diagnostics.
@@ -1081,24 +1448,36 @@ mod tests {
     }
 
     #[test]
-    fn legacy_adapter_extracts_code_and_location() {
-        let diagnostic = Diagnostic::from_legacy(
-            DiagnosticPhase::Parse,
-            Some("contract.ko"),
-            "K1001: expected expression at 7:9\nsource",
-        );
-        assert_eq!(diagnostic.code, "K1001");
-        let span = diagnostic.primary_span.expect("source span");
-        assert_eq!(span.source.as_deref(), Some("contract.ko"));
-        assert_eq!(span.start, SourcePosition { line: 7, column: 9 });
+    fn v1_data_processing_diagnostics_are_explainable() {
+        for code in [
+            "E_AMOUNT_CONSTANT_ARITHMETIC",
+            "E_AMOUNT_DIV_ROUND_ARITY",
+            "E_AMOUNT_DIV_ROUND_RECEIVER",
+            "E_AMOUNT_DIV_ROUND_SCALE",
+            "E_AMOUNT_DIV_ROUND_SCALE_TYPE",
+            "E_AMOUNT_ROUNDING_MODE",
+            "E_DIVERGING_EXPRESSION_CONTEXT",
+            "E_LIST_CONTAINS_COMPARABILITY",
+        ] {
+            let explanation = diagnostic_explanation(code)
+                .unwrap_or_else(|| panic!("{code} must be registered for `koto explain`"));
+            assert_eq!(explanation.phase, DiagnosticPhase::Semantic, "{code}");
+        }
     }
 
     #[test]
     fn every_renderer_contains_the_same_canonical_fields() {
-        let mut diagnostic = Diagnostic::from_legacy(
+        let primary_span = SourceSpan {
+            source: Some("seiyaku.ko".to_owned()),
+            start: SourcePosition { line: 3, column: 5 },
+            end: SourcePosition { line: 3, column: 6 },
+            byte_range: Some(crate::source::TextRange::new(12, 13)),
+        };
+        let mut diagnostic = Diagnostic::error(
+            "K2001",
             DiagnosticPhase::Semantic,
-            Some("contract.ko"),
-            "K2001: unknown name at 3:5",
+            "unknown name",
+            Some(primary_span),
         );
         diagnostic.labels.push(DiagnosticLabel {
             span: diagnostic.primary_span.clone().expect("span"),
@@ -1118,7 +1497,7 @@ mod tests {
         for expected in [
             "K2001",
             "semantic",
-            "contract.ko:3:5",
+            "seiyaku.ko:3:5",
             "not declared in this scope",
             "names are case-sensitive",
             "declare the value before use",
@@ -1132,7 +1511,7 @@ mod tests {
         for expected in [
             "K2001",
             "semantic",
-            "contract.ko",
+            "seiyaku.ko",
             "not declared in this scope",
             "names are case-sensitive",
             "declare the value before use",
@@ -1161,7 +1540,7 @@ mod tests {
             .expect("SARIF embeds the canonical diagnostic");
         assert_eq!(canonical, embedded);
         assert!(
-            human.contains("contract.ko:3:5-3:6"),
+            human.contains("seiyaku.ko:3:5-3:6"),
             "human renderer must preserve the full primary and label range"
         );
     }

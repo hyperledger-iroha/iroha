@@ -15572,10 +15572,11 @@ mod tests {
     fn soracloud_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypointDescriptor {
         ivm::EmbeddedEntrypointDescriptor {
             name: name.to_owned(),
-            kind: EntryPointKind::Public,
+            kind: EntryPointKind::View,
             params: Vec::new(),
             argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -15596,14 +15597,21 @@ mod tests {
             abi_version: 1,
         };
         let contract_interface = ivm::EmbeddedContractInterfaceV1 {
-            contract_name: "TestContract".to_owned(),
+            seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "irohad-soracloud-tests".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: entrypoints
                 .iter()
-                .map(|name| soracloud_entrypoint(name, 0))
+                .enumerate()
+                .map(|(index, name)| {
+                    let entry_pc = u64::try_from(index)
+                        .expect("test entrypoint index fits u64")
+                        .checked_mul(4)
+                        .expect("test entrypoint pc fits u64");
+                    soracloud_entrypoint(name, entry_pc)
+                })
                 .collect(),
             error_codes: Vec::new(),
             states: Vec::new(),
@@ -15617,7 +15625,8 @@ mod tests {
     }
 
     fn simple_soracloud_contract_artifact(entrypoints: &[&str]) -> Vec<u8> {
-        soracloud_contract_artifact_with_words(entrypoints, &[ivm::encoding::wide::encode_halt()])
+        let code_words = vec![ivm::encoding::wide::encode_halt(); entrypoints.len()];
+        soracloud_contract_artifact_with_words(entrypoints, &code_words)
     }
 
     fn bundle_handler(

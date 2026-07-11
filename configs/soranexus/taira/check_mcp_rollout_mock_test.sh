@@ -187,8 +187,8 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/stat
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/capabilities" ]]; then
   body='{}'
-elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/manifests" ]]; then
-  body='{}'
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/registry" ]]; then
+  body='{"version":1,"lanes":[]}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/zk/proofs/count" ]]; then
   body='{}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/validator-sets" ]]; then

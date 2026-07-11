@@ -71,8 +71,8 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         gas = "G_json_decode + bytes".into();
     } else if up.contains("JSON_GET_") {
         args = "r10=&Json(object), r11=&Name(key)".into();
-        ret = "r10=value or ptr".into();
-        gas = "G_json_get + bytes".into();
+        ret = "r10=Option<T> sum handle".into();
+        gas = "G_json_get + input bytes + active payload + sum allocation".into();
     } else if up.contains("JSON_OBJECT") || n == 0x81 {
         args = "-".into();
         ret = "ptr (&Json({}))".into();
@@ -99,7 +99,7 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         gas = "G_schema + bytes".into();
     } else if up.contains("GET_ACCOUNT_BALANCE") || n == 0xF9 {
         args = "r10=&AccountId, r11=&AssetDefinitionId".into();
-        ret = "ptr (&NoritoBytes(Numeric))".into();
+        ret = "ptr (&Amount)".into();
         gas = "G_get_bal".into();
     } else if up.contains("NAME_DECODE") || n == 0x5C {
         args = "r10=&NoritoBytes(UTF-8 string)".into();
@@ -239,10 +239,18 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&NoritoBytes(QueryRequest)".into();
         ret = "r10=ptr (&NoritoBytes(QueryResponse))".into();
         gas = "G_scq".into();
-    } else if up.starts_with("QUERY_GET_") || n == 0x01_0001 || n == 0x01_0002 {
-        args = "r10=&NoritoBytes(request)".into();
-        ret = "r10=ptr (&NoritoBytes(response))".into();
-        gas = "G_scq".into();
+    } else if up == "CORE_QUERY_GET" || n == 0x01_0001 {
+        args = "r10=CoreQueryEntityTagV1:u64, r11=&typed entity id".into();
+        ret = "r10=Option<View> sum handle (typed leaf TLVs)".into();
+        gas = "G_scq + query items + encoded bytes".into();
+    } else if up == "CORE_QUERY_PAGE" || n == 0x01_0002 {
+        args = "r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64".into();
+        ret = "r10=List<View,64> handle, r11=Option<i64> sum handle".into();
+        gas = "G_scq + offset + query items + encoded bytes".into();
+    } else if up == "JSON_BUILD" || n == 0x01_004E {
+        args = "r10=&NoritoBytes(JsonConstructionSchemaV1), r11=word_table, r12=word_count".into();
+        ret = "r10=&Json".into();
+        gas = "G_json_build + schema + source + words + elements + encoded bytes".into();
     } else if up.contains("SYSVAR_CHAIN_ID") || n == 0x01_0020 {
         ret = "r10=ptr (&Blob(chain_id)) or 0".into();
         gas = "G_sysvar + bytes".into();
@@ -319,7 +327,12 @@ fn spec_entry(
     map: &std::collections::BTreeMap<u32, (String, String, String)>,
     n: u32,
 ) -> (String, String, String) {
-    map.get(&n).cloned().unwrap_or_else(|| guess_defaults(n))
+    map.get(&n).cloned().unwrap_or_else(|| {
+        let (args, ret, gas) = guess_defaults(n);
+        panic!(
+            "ABI syscall 0x{n:06X} has no explicit spec row; suggested starting point: args={args:?}, ret={ret:?}, gas={gas:?}"
+        )
+    })
 }
 
 fn split_gas_terms(gas_raw: &str) -> Vec<&str> {
@@ -430,11 +443,13 @@ fn main() {
     let path = PathBuf::from(manifest_dir).join("docs/syscalls.md");
     let mut text = fs::read_to_string(&path).expect("read syscalls.md");
 
-    // Load spec from TOML if present to enrich Args/Return/Gas; fall back to code defaults.
+    // The explicit spec is the canonical source for ABI signatures and gas
+    // documentation. Heuristic defaults are diagnostic suggestions only.
     let spec_path = PathBuf::from(manifest_dir).join("spec/syscalls.toml");
-    let spec = fs::read_to_string(&spec_path).ok();
+    let spec = fs::read_to_string(&spec_path).expect("read canonical syscall spec");
     let mut map: std::collections::BTreeMap<u32, (String, String, String)> = Default::default();
-    if let Some(s) = spec {
+    {
+        let s = spec.as_str();
         // Very small, ad-hoc parser: supports arrays of tables [[syscall]] with number,args,ret,gas
         // number accepted as hex string (e.g., "0xA4") or decimal.
         let mut cur: Option<(u32, String, String, String)> = None;
@@ -442,7 +457,10 @@ fn main() {
             let t = line.trim();
             if t.starts_with("[[syscall]]") {
                 if let Some((n, a, r, g)) = cur.take() {
-                    map.insert(n, (a, r, g));
+                    assert!(
+                        map.insert(n, (a, r, g)).is_none(),
+                        "duplicate syscall spec row for 0x{n:06X}"
+                    );
                 }
                 cur = Some((0, String::new(), String::new(), String::new()));
                 continue;
@@ -474,8 +492,32 @@ fn main() {
         if let Some((n, a, r, g)) = cur.take()
             && (n != 0 || !a.is_empty() || !r.is_empty() || !g.is_empty())
         {
-            map.insert(n, (a, r, g));
+            assert!(
+                map.insert(n, (a, r, g)).is_none(),
+                "duplicate syscall spec row for 0x{n:06X}"
+            );
         }
+    }
+
+    let allowed = ivm::syscalls::abi_syscall_list()
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    let specified = map
+        .keys()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    let missing = allowed.difference(&specified).copied().collect::<Vec<_>>();
+    let extra = specified.difference(&allowed).copied().collect::<Vec<_>>();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "canonical syscall spec must exactly cover ABI v1; missing={missing:#X?}, extra={extra:#X?}"
+    );
+    for (&number, (args, ret, gas)) in &map {
+        assert!(
+            !args.is_empty() && !ret.is_empty() && !gas.is_empty(),
+            "syscall spec row 0x{number:06X} must define non-empty args, ret, and gas"
+        );
     }
 
     // If requested, generate code and gas assets for the `ivm_abi` crate, which
@@ -485,6 +527,7 @@ fn main() {
         let code_path = abi_src_dir.join("syscalls_doc_gen.rs");
         let mut buf = String::new();
         buf.push_str("// @generated by gen_syscalls_doc.rs; do not edit manually\n");
+        buf.push_str("#[rustfmt::skip]\n");
         buf.push_str("#[allow(dead_code)]\n");
         buf.push_str("pub static DOCS: &[crate::syscalls::SyscallDoc] = &[\n");
         let mut nums: Vec<u32> = ivm::syscalls::abi_syscall_list().to_vec();
@@ -510,8 +553,10 @@ fn main() {
         let gas_code_path = abi_src_dir.join("gas_spec.rs");
         let mut gbuf = String::new();
         gbuf.push_str("// @generated by gen_syscalls_doc.rs; do not edit manually\n");
+        gbuf.push_str("#[rustfmt::skip]\n");
         gbuf.push_str("#[derive(Clone, Copy)]\n");
         gbuf.push_str("pub struct GasAsset { pub key: &'static str, pub asset_id: &'static str, pub unit: &'static str, pub version: &'static str, pub group: &'static str }\n");
+        gbuf.push_str("#[rustfmt::skip]\n");
         gbuf.push_str("pub static GAS_ASSETS: &[GasAsset] = &[\n");
         for k in gas_keys.iter() {
             let asset_id = format!("asset:gas/{k}@ivm.core/v2");

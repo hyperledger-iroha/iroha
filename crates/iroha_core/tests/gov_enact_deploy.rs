@@ -91,6 +91,22 @@ fn sample_contract_address(
     .expect("contract address")
 }
 
+fn governance_contract_artifact() -> (Vec<u8>, ContractManifest) {
+    let (artifact, _) = ivm::KotodamaCompiler::new()
+        .compile_source_with_manifest(
+            r#"
+seiyaku GovernanceEnactFixture {
+    hajimari() {}
+    view fn ready() -> bool { return true; }
+}
+"#,
+        )
+        .expect("compile governance enactment fixture");
+    let verified =
+        ivm::verify_contract_artifact(&artifact).expect("verify governance enactment fixture");
+    (artifact, verified.manifest)
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn enact_inserts_manifest_and_marks_enacted() {
@@ -122,30 +138,29 @@ fn enact_inserts_manifest_and_marks_enacted() {
     Grant::account_permission(p_prop, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant CanProposeContractDeployment");
-    // Propose a contract deployment to create a proposal record
-    let code_hex = "aa".repeat(32);
-    let code_bytes = hex::decode(&code_hex).unwrap();
-    let mut code_arr = [0u8; 32];
-    code_arr.copy_from_slice(&code_bytes);
-    let key = iroha_crypto::Hash::prehashed(code_arr);
-    let abi_hash_bytes = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-    let abi_hex = hex::encode(abi_hash_bytes);
-    let manifest_provenance = ContractManifest {
-        contract_name: None,
-        code_hash: Some(key),
-        abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash_bytes)),
-        compiler_fingerprint: None,
-        features_bitmap: None,
-        access_set_hints: None,
-        entrypoints: None,
-        states: None,
-        kotoba: None,
-        error_codes: None,
-        provenance: None,
+    let lifecycle_permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    Grant::account_permission(lifecycle_permission, account_id.clone())
+        .execute(&account_id, &mut stx)
+        .expect("grant contract lifecycle authority");
+    // Governance activation is fail-closed until the exact verified artifact is stored.
+    let (artifact, manifest) = governance_contract_artifact();
+    let key = manifest.code_hash.expect("verified code hash");
+    let abi_hash = manifest.abi_hash.expect("verified ABI hash");
+    iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
+        code_hash: key,
+        code: artifact,
     }
-    .signed(&kp)
-    .provenance
-    .expect("manifest should be signed");
+    .execute(&account_id, &mut stx)
+    .expect("register verified governance artifact");
+    let code_hash_bytes: [u8; 32] = key.into();
+    let abi_hash_bytes: [u8; 32] = abi_hash.into();
+    let code_hex = hex::encode(code_hash_bytes);
+    let abi_hex = hex::encode(abi_hash_bytes);
+    let manifest_provenance = manifest
+        .signed(&kp)
+        .provenance
+        .expect("exact verified manifest should be signed");
     iroha_data_model::isi::governance::ProposeDeployContract {
         contract_address: contract_address.clone(),
         code_hash_hex: code_hex.clone(),
@@ -219,6 +234,78 @@ fn enact_inserts_manifest_and_marks_enacted() {
 }
 
 #[test]
+fn enact_rejects_unregistered_bytecode_without_creating_an_active_stub() {
+    let (state, account_id, _) = mk_world_with_account();
+    let contract_address = sample_contract_address(&account_id, 10);
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero_ext::nonzero!(1_u64),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
+    Grant::account_permission(permission, account_id.clone())
+        .execute(&account_id, &mut stx)
+        .expect("grant CanEnactGovernance");
+
+    let pid = [0xA5; 32];
+    let code_hash_bytes = [0x5A; 32];
+    let code_hash = iroha_crypto::Hash::prehashed(code_hash_bytes);
+    let abi_hash_bytes = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    stx.world.governance_proposals_mut().insert(
+        pid,
+        iroha_core::state::GovernanceProposalRecord {
+            proposer: account_id.clone(),
+            kind: ProposalKind::DeployContract(DeployContractProposal {
+                contract_address: contract_address.clone(),
+                code_hash_hex: ContractCodeHash::new(code_hash_bytes),
+                abi_hash_hex: ContractAbiHash::new(abi_hash_bytes),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            created_height: 1,
+            status: iroha_core::state::GovernanceProposalStatus::Approved,
+            pipeline: iroha_core::state::GovernancePipeline::seeded(1, None, &stx.gov),
+            parliament_snapshot: None,
+        },
+    );
+
+    let error = iroha_data_model::isi::governance::EnactReferendum {
+        referendum_id: pid,
+        preimage_hash: [0; 32],
+        at_window: iroha_data_model::governance::types::AtWindow { lower: 1, upper: 2 },
+    }
+    .execute(&account_id, &mut stx)
+    .expect_err("governance cannot activate a hash-only contract stub");
+    assert!(
+        error
+            .to_string()
+            .contains("verified contract bytecode must be registered"),
+        "unexpected missing-bytecode error: {error}"
+    );
+    assert!(stx.world.contract_manifests().get(&code_hash).is_none());
+    assert!(
+        stx.world
+            .contract_instances()
+            .get(&contract_address)
+            .is_none()
+    );
+    assert!(matches!(
+        stx.world
+            .governance_proposals()
+            .get(&pid)
+            .expect("proposal remains present")
+            .status,
+        iroha_core::state::GovernanceProposalStatus::Approved
+    ));
+}
+
+#[test]
 fn enact_rejects_on_conflicting_existing_manifest() {
     let (state, account_id, kp) = mk_world_with_account();
     let contract_address = sample_contract_address(&account_id, 1);
@@ -239,15 +326,29 @@ fn enact_rejects_on_conflicting_existing_manifest() {
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant CanEnactGovernance");
+    let lifecycle_permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    Grant::account_permission(lifecycle_permission, account_id.clone())
+        .execute(&account_id, &mut stx)
+        .expect("grant contract lifecycle authority");
 
-    // Prepare code/abi hex and conflicting abi for preexisting manifest
+    // Prepare verified code plus a conflicting preexisting manifest.
     let pid = [0xCDu8; 32];
-    let code_hex = "11".repeat(32);
-    let abi_hash_bytes = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    let (artifact, verified_manifest) = governance_contract_artifact();
+    let key = verified_manifest.code_hash.expect("verified code hash");
+    let abi_hash = verified_manifest.abi_hash.expect("verified ABI hash");
+    iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
+        code_hash: key,
+        code: artifact,
+    }
+    .execute(&account_id, &mut stx)
+    .expect("register verified governance artifact");
+    let code_hash_bytes: [u8; 32] = key.into();
+    let abi_hash_bytes: [u8; 32] = abi_hash.into();
+    let code_hex = hex::encode(code_hash_bytes);
     let abi_hex = hex::encode(abi_hash_bytes);
     let mut abi_conflict_bytes = abi_hash_bytes;
     abi_conflict_bytes[0] ^= 0xFF;
-    let abi_hex_conflict = hex::encode(abi_conflict_bytes);
 
     // Seed proposal
     stx.world.governance_proposals_mut().insert(
@@ -269,27 +370,9 @@ fn enact_rejects_on_conflicting_existing_manifest() {
     );
 
     // Pre-insert conflicting manifest via instruction
-    let code_b = hex::decode(&code_hex).unwrap();
-    let mut code_arr = [0u8; 32];
-    code_arr.copy_from_slice(&code_b);
-    let abi_b = hex::decode(&abi_hex_conflict).unwrap();
-    let mut abi_arr = [0u8; 32];
-    abi_arr.copy_from_slice(&abi_b);
-    let key = iroha_crypto::Hash::prehashed(code_arr);
-    let man = iroha_data_model::smart_contract::manifest::ContractManifest {
-        contract_name: None,
-        code_hash: Some(key),
-        abi_hash: Some(iroha_crypto::Hash::prehashed(abi_arr)),
-        compiler_fingerprint: None,
-        features_bitmap: None,
-        access_set_hints: None,
-        entrypoints: None,
-        states: None,
-        kotoba: None,
-        error_codes: None,
-        provenance: None,
-    }
-    .signed(&kp);
+    let mut man = verified_manifest;
+    man.abi_hash = Some(iroha_crypto::Hash::prehashed(abi_conflict_bytes));
+    let man = man.signed(&kp);
     stx.world
         .contract_manifests_mut_for_testing()
         .insert(key, man);
@@ -302,7 +385,7 @@ fn enact_rejects_on_conflicting_existing_manifest() {
     };
     let err = instr.execute(&account_id, &mut stx).unwrap_err();
     let s = format!("{err}");
-    assert!(s.contains("existing manifest abi_hash mismatch"));
+    assert!(s.contains("existing manifest does not match the verified contract artifact"));
 }
 
 #[test]

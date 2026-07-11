@@ -4,11 +4,13 @@ use ivm::{IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) Inline Kotodama source: a main that returns a pair (a+1, b+1)
     let src = r#"
-        fn main(a: int, b: int) -> (int, int) {
-            let t = (a + 1, b + 1);
-            let x = t.0;
-            let y = t.1;
-            return (x, y);
+        seiyaku TupleReturnDemo {
+            view fn main(a: i64, b: i64) -> (i64, i64) {
+                let t = (a + 1, b + 1);
+                let x = t.0;
+                let y = t.1;
+                return (x, y);
+            }
         }
     "#;
 

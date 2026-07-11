@@ -3,6 +3,21 @@
 These contracts provide the shared exact V1 implementation used by Ethereum
 and BNB Smart Chain routes.
 
+Production sources require exact Solidity `0.8.24`. EVM artifacts use the
+authenticated `0.8.24+commit.e11b9ed9` compiler, optimizer run count `200`, and
+the `istanbul` EVM target; TVM artifacts use the separately authenticated TRON
+0.8.24 compiler. Their compiler identities, complete standard-json inputs,
+ABIs, creation/runtime bytes, immutable-runtime patch ranges, and hashes are
+reviewed release-policy inputs. The fixed opcode target avoids instructions
+that are not shared by every first-release destination. The runtime smoke loads
+production artifacts only from that verified manifest, compiles test-only
+harnesses separately with the same locked EVM compiler, rejects compiler,
+artifact, and source-staleness mutation before creating a provider, and checks
+deployed runtime bytes outside compiler-declared immutable slots. The BLAKE2b
+compressor's intentional modulo-2^64 additions are isolated in the documented
+`_add64` helper with an explicit 64-bit mask; every value-moving overflow remains
+explicitly checked.
+
 ## Components
 
 - `SccpExactTransferCodec.sol` implements the canonical network, lane, Transfer
@@ -16,19 +31,34 @@ and BNB Smart Chain routes.
 - `TairaXorExactEvmSccpBridge.sol` is the concrete value-moving base route. The
   Ethereum and BSC wrappers fix their profiles and route identifiers.
 - `ISccpMessageVerifier.sol` and `SccpGroth16Bn254MessageVerifier.sol` define
-  and implement immutable BN254 verification for the ten exact SCCP signals.
+  and implement immutable BN254 verification for the eleven exact SCCP signals.
+
+Account roles are deliberately asymmetric. An external-to-Taira burn accepts
+only the exact `test...` I105 spelling for discriminant `369` and a single,
+canonical, non-weak Ed25519 controller, matching Taira settlement admission.
+A proof-authenticated Taira-to-external sender may instead be a single-key or
+canonical multisig `AccountId` composed from Ed25519 and compressed secp256k1
+keys. The parser checks the complete V1 AccountAddress tags, big-endian policy
+fields, Rust algorithm-name member order, I105 round trip and checksum, weak
+Ed25519 encodings, and off-curve/noncanonical secp256k1 encodings. Taira rejects
+all other controller algorithms before locking assets, so no accepted outbound
+message can be unfinalizable merely because its sender controller is outside
+the immutable destination parser.
 
 Generic owner emitters and the secp256k1 attestation verifier are intentionally
 absent. Generic proof-only message wrappers are also absent: accepting a proof
 without executing the value-moving route is not settlement. A production
 source event must be coupled to the concrete token burn, and a production
 destination proof must call `finalizeFromTaira` on the immutable typed route.
-The token must be deployed with the precomputed route address immediately
-before the route deployment. The route constructor checks that immutable
-back-reference and a nonzero governed route revision, eliminating a privileged
-initialization window. The revision is encoded immediately after the Transfer
-nonce and is included in `routeConfigHash`, so nonce reuse by a replacement
-route cannot collide with an older route's message identity.
+Each concrete production route creates its token inside the route constructor.
+Token creation, immutable back-reference validation, verifier validation, and
+route creation therefore succeed or revert as one transaction; there is no
+address-precomputation cycle, privileged initialization window, or orphan
+token. The abstract shared route accepts an injected token only for adversarial
+false-return, binding, and reentrancy harnesses. The revision is encoded
+immediately after the Transfer nonce and is included in `routeConfigHash`, so
+nonce reuse by a replacement route cannot collide with an older route's
+message identity.
 
 ## Groth16 statement
 
@@ -46,8 +76,10 @@ abi.encode(
 )
 ```
 
-The verifying key contains eleven G1 input-coefficient points: one constant plus
-ten signals. Each signal is
+The verifying key contains twelve G1 input-coefficient points: one constant plus
+eleven signals. Those points serialize with alpha, beta, gamma, and delta to the
+canonical 38-ABI-word verifying-key preimage. Ten-signal, eleven-IC-point, and
+36-word key representations are invalid. Each signal is
 `uint256(keccak256(abi.encode(label, value))) mod r`, in this order:
 
 1. message id
@@ -60,26 +92,35 @@ ten signals. Each signal is
 8. statement hash
 9. destination binding hash
 10. route-configuration hash
+11. governed SORA finality-anchor hash
 
 The verifier rejects wrong tuple lengths, zero required words, domain overflow
 or equality, noncanonical/zero/off-curve/non-subgroup points, and failed
 pairings. It has no mutable signer set or update function. Route rotation
 creates a new immutable route revision and destination binding.
 
-The concrete destination binding commits the exact network, domains, backend,
-proof family, verifier address, value-moving route address, verifier runtime
-code hash, and verifying-key hash. The separate route-configuration signal also
-commits the governed token identity, token runtime code hash, both lane hashes,
-profile, and route revision. Proofs are therefore not portable between two
-route contracts or route revisions even if the verifier is shared.
+The concrete destination binding commits the exact network, domains, Groth16
+backend, verifier address, value-moving route address, verifier runtime
+code hash, verifying-key hash, audited semantic-profile hash, and governed SORA
+finality-anchor hash. The separate route-configuration signal also commits all
+of those policy roles plus the governed token identity, token runtime code
+hash, both lane hashes, network profile, and route revision. Proofs are
+therefore not portable between policy revisions, route contracts, or route
+revisions even if the verifier is shared. Route constructors take one typed
+`VerifierPolicyV1` tuple and reject zero, aliased, or getter-mismatched roles.
 
 ## Release requirements
 
 A successful pairing only establishes the statement encoded by its circuit.
-Production activation additionally requires an audited, reproducibly generated
-circuit and verifying key that prove the complete SCCP finality semantics. The
-governed registry stores typed deployment identities and derives bindings;
-request callers never supply deployment material or expected-binding aliases.
+The checked-in labeled-signal circuit is a test fixture and is not production
+evidence. Production activation requires a signed independent audit and
+reproducible circuit, witness-generator, proving-key, and verifying-key
+commitments proving canonical payload semantics, message-leaf derivation,
+Merkle inclusion, the block-header commitment root, commit-QC finality, exact
+chain identity, and validator-set continuity rooted in the governed SORA
+anchor. The governed registry stores those typed commitments and derives all
+bindings; request callers never supply deployment material or
+expected-binding aliases.
 
 Run:
 
@@ -87,9 +128,18 @@ Run:
 bash scripts/sccp_evm_contract_smoke.sh
 ```
 
-The suite compiles the shared, Ethereum, BSC, and TRON contracts in a temporary
-environment, enforces the deployed-code ceiling, cross-checks precompiled and
+The suite verifies the authenticated EVM/TVM manifest against the current
+sources and deploys the exact reviewed EVM artifacts in an EVM runtime. Test
+harnesses and the explicitly non-production TRON-on-EVM compatibility copy are
+compiled separately with the locked EVM compiler; exact TVM creation code is
+never sent to Hardhat. The suite enforces runtime, initcode, and deployment-gas
+ceilings, cross-checks precompiled and
 software BLAKE2b results, and exercises positive accounting plus malformed
 payloads, zero or mismatched route revisions, wrong routes/networks/codecs,
 replay, cross-route proof attacks, code/key drift, reentrancy, token failures,
-and adversarial BN254 inputs.
+substituted/zero/aliased semantic-profile or finality-anchor commitments, and
+adversarial BN254 inputs.
+
+EVM execution of the reviewed TRON bytecode is compatibility coverage only. It
+is never accepted as TVM deployment evidence; the production corridor's pinned
+real-TRE phase remains mandatory.

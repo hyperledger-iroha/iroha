@@ -6,6 +6,7 @@ use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
 };
+mod common;
 
 #[test]
 fn kotodama_unregister_domain() {
@@ -36,9 +37,10 @@ fn kotodama_unregister_domain() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&alice, dom));
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(100_000);
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("unregister_domain should validate TLV and queue ISI");
 }
@@ -49,7 +51,7 @@ fn kotodama_transfer_domain() {
     let src = r#"
         seiyaku TransferDomain {
         kotoage fn main() authorize("TransferDomain") {
-          ledger::domain::transfer(context::authority(), DomainId::parse("wonderland.universal"), AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
+          ledger::domain::transfer(source: context::authority(), domain: DomainId::parse("wonderland.universal"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
         }
         }
     "#;
@@ -66,9 +68,10 @@ fn kotodama_transfer_domain() {
     );
     wsv.add_account_unchecked(alice.clone());
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(100_000);
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("transfer_domain should validate TLVs and queue ISI");
 }

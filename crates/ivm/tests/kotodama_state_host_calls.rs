@@ -1,6 +1,7 @@
 //! Kotodama calls to durable state helpers through the public `state` namespace.
 
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+mod common;
 
 #[test]
 fn kotodama_host_state_calls_run() {
@@ -24,5 +25,6 @@ fn kotodama_host_state_calls_run() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run");
 }

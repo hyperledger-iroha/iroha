@@ -3,7 +3,12 @@
 mod common;
 
 use instruction::wide;
-use ivm::{IVM, VMError, cost_of as cost_of_opt, instruction};
+use iroha_primitives::Numeric;
+use ivm::{
+    IVM, PointerType, VMError, cost_of as cost_of_opt,
+    host::{DefaultHost, IVMHost},
+    instruction,
+};
 
 fn push32(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());
@@ -186,7 +191,7 @@ fn gas_getgas_and_jumps_and_vector_sha() {
 
 #[test]
 fn schedule_vs_runtime_syscall_extra() {
-    // Sequence with a syscall that charges extra (ALLOC returns +1 extra gas)
+    // Sequence with a syscall that charges by contiguous eight-byte ABI words.
     // Program: MOV r10=16; SCALL ALLOC; HALT
     let mut code = Vec::new();
     // ADDI r10 = r0 + 16 (wide: opcode 0x20 → rd=10, rs1=0, imm=16)
@@ -197,20 +202,57 @@ fn schedule_vs_runtime_syscall_extra() {
     push32(&mut code, scall);
     halt32(&mut code);
 
-    // Sum base schedule; extra (1) from host must be added
+    // Sum base schedule; 16 bytes cost base 1 + two ABI words.
     let words: Vec<u32> = code
         .chunks(4)
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let program = common::assemble(&code);
     let base: u64 = words.iter().map(|&w| cost_of(w)).sum();
-    let expected = base + 1; // ALLOC extra cost
+    let expected = base + 3;
 
     let start = 10_000u64;
     let mut vm = IVM::new(start);
     vm.load_program(&program).unwrap();
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
+}
+
+#[test]
+fn v1_amount_add_quote_golden() {
+    let mut vm = IVM::new(10_000);
+    let lhs = norito::to_bytes(&Numeric::new(125_u32, 2)).expect("encode lhs Amount");
+    let rhs = norito::to_bytes(&Numeric::new(75_u32, 2)).expect("encode rhs Amount");
+    let lhs = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Amount as u16, &lhs))
+        .expect("allocate lhs Amount");
+    let rhs = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Amount as u16, &rhs))
+        .expect("allocate rhs Amount");
+    vm.set_register(10, lhs);
+    vm.set_register(11, rhs);
+
+    assert_eq!(
+        DefaultHost::new()
+            .prepare_syscall(ivm::syscalls::SYSCALL_AMOUNT_ADD, &vm)
+            .expect("quote Amount addition"),
+        171,
+        "V1 Amount shape-only preparation quotes ten aligned limbs plus the maximum 115-byte result"
+    );
+}
+
+#[test]
+fn v1_json_build_charge_golden() {
+    assert_eq!(
+        ivm::json::build_json_gas(11, 7, 3, 2, 19),
+        74,
+        "JSON_BUILD charges its base plus schema, source, word, collection, and output bytes"
+    );
+    assert_eq!(
+        ivm::json::typed_getter_gas(11, 19),
+        46,
+        "typed JSON getters charge their base plus inspected and materialized bytes"
+    );
 }
 
 fn run_gas(code: &[u8]) -> u64 {

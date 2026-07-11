@@ -27,8 +27,8 @@ Every accepted transfer is bound to all of the following:
 
 No verifier guesses a network, codec flag, contract role, route revision, or
 hash preimage. Unknown profiles, unknown fields, duplicate JSON keys,
-non-canonical encodings, test networks, stale evidence, and unreferenced files
-fail closed.
+non-canonical encodings, test-network production evidence, stale evidence, and
+unreferenced files fail closed.
 
 ## Closed network and lane identities
 
@@ -44,12 +44,30 @@ Domains 3 and 4 are not part of the first-release wire/runtime surface.
 Solana and TON lane records, proofs, deployments, policies, and release
 evidence are rejected rather than reported as supported-but-unready.
 
-The SORA endpoints are `sora-nexus` and `sora-taira`. A governed first-release
-route is an external-to-SORA lane. The exact XOR destination deployments target
-Taira. Network and lane commitments are derived only with
+The closed network enum represents `sora-taira` as its sole SORA endpoint;
+`sora-nexus` has no SCCP V1 representation. Every value-moving governed V1
+route targets Taira. The exact local identity is chain id
+`809574f5-fee7-5e69-bfcf-52451e42d50f` with I105 discriminant `369`
+(`0x0171`, the canonical `test...` sentinel family). Discriminant `753`, a
+generic/default discriminant, or any custom numeric discriminant does not name
+Taira. A governed route is stored in its external-to-Taira direction and also
+binds the exact reverse destination deployment. Network and lane commitments
+are derived only with
 `sccp_network_identity_hash_v1` and `sccp_lane_id_hash_v1` from
 `iroha_data_model::bridge`; SDKs and release scripts must not duplicate those
 preimages.
+
+Account roles on a value-moving route are not interchangeable. An irreversible
+external-to-Taira burn recipient is limited to the exact `test...` I105 spelling
+of a canonical, non-weak single-key Ed25519 account. A proof-authenticated
+Taira-to-external sender may be a canonical single-key or multisig `AccountId`,
+but every controller key must be Ed25519 or compressed secp256k1 in V1. Core
+checks the typed controller and exact discriminant-`369` spelling before moving
+assets into custody; the EVM/TVM contracts independently check the same
+AccountAddress tags, policy ordering, key admission, I105 round trip, and
+checksum before proof dispatch. Other Rust-supported controller algorithms are
+fail-closed for SCCP V1 so they cannot create an outbound lock that the
+destination route cannot finalize.
 
 ## Atomic typed registry
 
@@ -59,11 +77,13 @@ preimages.
 SccpRegistryV1
 └── SccpGovernedLaneV1
     ├── lane_id
-    ├── native_trust_anchor
-    └── routes[]
+    ├── native_trust_anchors[0..=4096]
+    ├── current_native_trust_anchor_hash
+    └── routes[1..=64]
         └── SccpGovernedRouteV1
             ├── lane_id / route_id / asset_key
             ├── activation
+            ├── inbound_finality_cutoff
             ├── source_identity
             ├── destination
             └── settlement
@@ -82,12 +102,64 @@ derivations:
 - `sccp_exact_evm_xor_route_config_hash_v1`; and
 - `sccp_exact_tron_xor_route_config_hash_v1`.
 
-Registration starts in `Staged`. Directional activation is explicit:
-`OutboundOnly` permits SORA-origin delivery and `Bidirectional` additionally
-permits native inbound settlement. An activation that the selected native
-backend cannot authenticate is invalid. Trust-anchor advancement is a
-compare-and-swap operation over the exact lane and never rewrites route
-identity.
+Registration starts in `Staged`. `Bidirectional` is the only state that permits
+new SORA-origin locks. `InboundOnly` drains already-issued external claims
+without admitting new locks, `Paused` is resumable emergency state, and
+`Retired` is terminal historical state. Every lifecycle update, revision
+switch, and trust-anchor advance is an exact compare-and-swap operation; a
+stale expected value or illegal transition fails without rewriting registry
+state. Only a never-used `Staged` revision can be removed.
+
+Native trust-anchor rotation is append-only. The current hash must select the
+last, highest checkpoint, while every earlier checkpoint remains available for
+proofs that were finalized before governance advanced the lane. Anchor hashes
+are unique, heights increase strictly, and all entries use the lane's one
+native verifier family. Admission resolves the proof-carried anchor hash
+through the validated registry index and then compares the complete governed
+anchor before performing chain-specific verification; an unknown hash or a
+known hash paired with forged height/backend material fails closed.
+
+Anchor intervals use an authenticated consensus-progress coordinate, not a
+generic event block number: Ethereum uses the fully verified finalized beacon
+slot, while BSC and TRON use the fully verified finalized native block height.
+An old anchor remains valid through its successor checkpoint inclusively (a
+one-height overlap needed by BSC/TRON boundary proofs) and never beyond it; the
+last current anchor is open-ended. A terminal route carries a mandatory
+`inbound_finality_cutoff` whose `max_anchor_interval_height` must equal the
+referenced historical anchor's successor checkpoint. Governance must therefore
+advance to checkpoint B before atomically retiring the old revision at B. This
+preserves every delayed claim authenticated in the complete A-to-B interval
+while rejecting later events from the retired emitter; mid-interval,
+open-ended-current, unknown-anchor, and zero cutoffs are invalid.
+
+The durable inbound replay record persists both coordinates: the event/source
+finality height used by the proof range and the separately verified
+`anchor_interval_height` used by checkpoint-interval and retirement-cutoff
+admission. This keeps an accepted Ethereum proof auditable as a beacon-slot
+decision even after the original proof bytes are pruned.
+
+Admission also max-raises a fixed-size high-water index keyed by exact lane and
+trust-anchor hash. A trust-anchor advance may select successor checkpoint B
+only when B is at or above every coordinate already admitted under current
+anchor A; equality is valid because the A/B boundary is inclusive. Snapshot
+hydration recomputes this index from durable inbound records and requires exact
+equality, rejecting missing, stale, malformed, or unbacked entries. This keeps
+rotation from retroactively invalidating accepted evidence without adding a
+lifetime replay-map scan to governance execution.
+
+Capacity limits distinguish mutable state from retained history. A lane may
+have at most eight nonterminal (`Staged`, active, draining, or `Paused`) routes
+and the registry at most 64 live routes. Separately, each lane retains at most
+64 total route revisions and 4,096 native anchors. `Retired` revisions do not
+consume the live budget, but retained entries are never evicted implicitly;
+the next append rejects atomically at the history bound so authenticated
+evidence is not silently invalidated. On a single-lineage lane, 64 monthly
+deployments cover more than five years; 4,096 daily anchor rotations cover more
+than eleven years. Multiple lineages share the route horizon. Conservative 4
+KiB-per-route and 64-byte-per-anchor canonical envelopes bound retained entry
+payloads across 16 lanes to 8 MiB before small framing overhead. Each
+governance action still appends at most one record, and operators must plan an
+explicit migration before exhausting either horizon.
 
 ## Destination deployment identity
 
@@ -95,7 +167,11 @@ The registry stores a closed `SccpDestinationDeploymentV1` variant.
 
 For EVM and TRON, the deployment contains distinct token, verifier, and route
 addresses; their exact runtime hashes; the full typed BN254 Groth16 verifying
-key and its exact Solidity-compatible hash; and the fixed amount multiplier.
+key and its exact Solidity-compatible hash; the mandatory typed outbound proof
+policy; and the fixed amount multiplier. The proof policy pins both the audited
+semantic circuit profile and the governed Taira finality anchor. Their
+domain-separated hashes are included in the destination binding and concrete
+route configuration, and are exposed by immutable verifier readbacks.
 Every route has a nonzero immutable revision, preventing a successor deployment
 whose nonce restarts from aliasing a predecessor message id. The route
 constructor receives this revision as a nonzero `uint32`, stores it immutably,
@@ -104,13 +180,30 @@ encodes the revision immediately after the nonce. Its route-config asset tuple
 is exactly `(keccak256(assetKey), keccak256(routeId), uint32 revision,
 amountMultiplier)`.
 
-The wrapped token receives its route bridge in its constructor. `bridge()` is
-immutable, and a route constructor must reject a token whose `bridge()` is not
-the route itself. There is no owner-set bridge, `setBridge`, `lockBridge`, or
-`bridgeLocked` security state. EVM and BSC route hashing uses the EIP-152
-BLAKE2F precompile. TRON uses the deterministic software implementation because
-TVM assigns address `0x09` differently. The production smoke enforces the
-24,576-byte runtime limit for every deployed contract role.
+The route constructor deploys its wrapped token atomically, passing
+`address(this)` as the token's immutable bridge. It then requires the child
+token's `bridge()` readback to equal the route before construction can succeed.
+No production constructor accepts an external `tokenAddress`, and no operator
+precomputes a token address or deploys a token before its route. There is no
+owner-set bridge, `setBridge`, `lockBridge`, or `bridgeLocked` security state.
+EVM and BSC route hashing uses the EIP-152 BLAKE2F precompile. TRON uses the
+deterministic software implementation because TVM assigns address `0x09`
+differently. The production smoke enforces the 24,576-byte runtime limit for
+every deployed contract role.
+
+The release TVM corridor runs only the authenticated TRON artifact on the
+digest-pinned official TRE image. Before execution, it copies the manifest and
+Rust-generated native-transfer vectors once through bounded no-follow file
+descriptors into a runner-owned private, read-only snapshot. It verifies that
+copy against the artifact lock and recomputes the current EVM/TVM standard-JSON
+source-input hashes, so a stale or replaced manifest cannot pass static smoke
+and then feed different bytes to TRE. Live negative cases require an included,
+transaction-ID-matched TRE receipt whose TVM result is not `SUCCESS`;
+transport, ABI, broadcast, and timeout failures are infrastructure failures,
+not proof that the contract rejected an adversarial transaction. The same run
+checks all checked-in Rust native-transfer hash vectors on TVM, boundary-length
+BLAKE2b inputs, independently derived deployment bindings, and the complete
+emitted source-event payload and topics.
 
 A runtime hash is the executable identity. An ABI is an operator interface,
 not a consensus identity. Release policy may pin an audited ABI digest for
@@ -141,6 +234,164 @@ Solana and TON inputs fail profile admission before proof verification. They
 cannot be converted to success by observer assertions, environment variables,
 or release flags.
 
+Cryptographic finality is mandatory in every SCCP build. The crate has no
+consensus-changing BLS feature switch: it always compiles the same
+proof-of-possession, public-key, aggregate-signature, and quorum verification
+paths for Taira and BSC finality. Structural parsers and proof-controlled
+self-consistency helpers are diagnostics, not trust anchors. A validator binary
+whose build metadata enables test-fixture code is not a production release
+validator.
+
+Native continuations are canonical shortest prefixes. A BSC proof may select a
+target only within the first full 1,000-block Parlia epoch after its governed
+anchor and may carry at most four later headers: the three retained
+fast-finality ancestor contexts plus the one contiguous vote that makes the
+target a finalized source. A TRON proof may select a target only within one
+27-witness scheduling round and may use at most one further 27-witness round to
+reach the native 19-of-27 solid-height threshold. Thus the absolute framing
+limits are 1,004 BSC headers and 54 TRON headers, replacing generic large-array
+caps. Governance must advance a stale checkpoint instead of asking every peer
+to replay an older chain segment.
+
+The target must become finalized or solid for the first time on the final
+supplied header. Once that condition is reached, an appended header is rejected
+without parsing it or recovering its signature; a continuation outside the
+protocol window is rejected before anchor or signature verification. The
+cryptography-free `bsc_native_finality_work_estimate` and
+`tron_native_finality_work_estimate` functions expose framed header bytes,
+header counts, secp256k1 recovery counts, and conservative BSC aggregate/signing
+contribution bounds so consensus admission can reserve per-transaction and
+per-block native-verifier work before dispatching cryptography.
+
+## Deterministic verifier-work limits
+
+Closed SCCP proofs use the dedicated, mandatory `[zk.sccp]` consensus limits;
+they do not consume or inherit the unrelated confidential-proof counters. The
+default first-release transaction/block limits are:
+
+| Work dimension | Transaction | Block |
+|---|---:|---:|
+| proofs | 1 | 4 |
+| canonical proof bytes | 8 MiB | 32 MiB |
+| BSC/TRON continuation headers | 1,004 | 4,016 |
+| Ethereum light-client updates | 128 | 512 |
+| framed native-finality bytes | 8 MiB | 32 MiB |
+| secp256k1 recoveries | 1,005 | 4,020 |
+| BLS aggregate checks | 1,004 | 4,016 |
+| BLS key/contribution work items | 131,713 | 526,852 |
+| BN254 pairing-product checks | 1 | 4 |
+
+One proof may contain at most 8 MiB of canonical bytes. All limits are nonzero,
+transaction limits cannot exceed block limits, and they are included in the ZK
+consensus-policy hash. They have no environment-variable aliases: validators
+must obtain identical values from configuration files.
+
+Core preflights proof count and bytes before any proof-controlled canonical
+decode. It then derives hardware-independent work from bounded framing and
+atomically registers the complete transaction/block delta before signature
+recovery, BLS verification, or BN254 pairing. An abandoned or rejected
+transaction does not leak staged work into the block. Destination admission
+conservatively reserves two passes over the maximum 4,096-validator Taira
+roster, covering both key validation and all-signer PoP/aggregation. Ethereum
+reserves one 513-key bootstrap plus up to 128 updates, each with 513 next-
+committee key validations and 512 possible signer contributions. BSC reserves
+all framed headers, the anchor seal and continuation recoveries, every possible
+attestation, and all active/pending/epoch roster validation passes. These are
+upper bounds, so different peer hardware cannot change admission results.
+
+## Proof-local typed admission
+
+`BridgeProof` has no free-standing manifest field that can be reinterpreted by
+the caller. Its payload owns a role-preserving `BridgeProofBinding`:
+
+- `NativeProtocol(BridgeNativeProtocolProofV1)` carries a closed native backend,
+  the exact historical SCCP route-configuration hash, and one canonical typed
+  native envelope;
+- `SccpDestination(BridgeSccpDestinationProofV1)` carries a closed EVM/TVM
+  Groth16 backend, the exact historical route-configuration hash, and one
+  canonical destination artifact; and
+- generic `Ics` and `TransparentZk` payloads carry a distinct
+  `VerifierManifest` binding only.
+
+Core validates the closed SCCP variants against the retained governed route,
+typed source identity or destination policy, exact proof range, durable message
+record, and local committed finality state. `SubmitBridgeProof` rejects generic
+ICS and transparent-ZK payloads until an authoritative on-chain verifier is
+implemented. A generic `ProofBox` backend label, manifest hash, or pairing-valid
+but route-unbound artifact cannot enter SCCP settlement.
+
+## Detached Torii transaction flow
+
+`POST /v1/bridge/proofs/submit` accepts one canonical
+`destination_proof_b64`; `POST /v1/bridge/messages` accepts one canonical
+`native_proof_b64`. Both endpoints are available only on the exact Taira chain
+and use the same two states:
+
+1. **Prepare:** send canonical Taira `authority` and the endpoint artifact,
+   optionally with a positive `creation_time_ms`. Omit both `signature_b64` and
+   `transaction_payload_b64`. The response has `submitted: false`, no
+   `tx_hash_hex`, and returns the exact canonical transaction payload plus its
+   32-byte signing prehash.
+2. **Direct submit:** resend the same artifact with both `signature_b64` and
+   the returned `transaction_payload_b64`, plus the exact positive
+   `creation_time_ms`. Torii decodes and re-encodes the bounded payload,
+   byte-compares its chain, authority, proof instruction, metadata, and time,
+   verifies the detached signature, and queues exactly that transaction. The
+   response has `submitted: true` and `tx_hash_hex`, with no signing scaffold.
+
+Detached signatures are canonical padded base64 of one nonempty, nonzero
+generic signature payload, bounded to 16 KiB; they are not restricted to raw
+Ed25519 length. The authority must be a single-key canonical Taira I105 account.
+Multisig authorities must prepare the payload and use the normal multisig
+propose/approve flow. Transaction payloads are bounded to 16 MiB. Mixed signing
+states, an omitted direct creation time, a payload from another chain,
+authority, route, proof, or time, and a non-verifying signature fail before
+queue submission.
+
+Requests and responses use closed field sets and canonical JSON/base64/Norito
+encodings. The unified response field is
+`route_configuration_hash_hex`; `manifest_hash_hex` and other retired aliases
+are unknown fields, not compatibility spellings. Prepared responses must carry
+the exact transaction-payload prehash, and submitted responses must not retain
+the preparation scaffold.
+
+Torii authenticates and rate-limits both submit endpoints before polling their
+bodies. It rejects malformed, duplicate, conflicting, overflowing, or lying
+`Content-Length` framing with `400`, and rejects declared or streamed bodies
+above the endpoint/operator cap with `413`. Chunked bodies remain bounded by
+actual decoded bytes, and accepted bytes are restored exactly once for the
+strict downstream JSON extractor.
+
+Every supported SDK applies the same fail-closed response contract. Only exact
+HTTP `200` is success. JSON responses require `application/json` (parameters
+such as `charset=utf-8` are allowed, structured-suffix aliases are not), while
+binary responses require `application/x-norito`. The capabilities endpoint is
+bounded to 64 KiB, recent messages to 8 MiB, and other SCCP JSON responses to
+64 MiB. Native-proof Norito responses are bounded to 16 MiB; destination-proof
+Norito responses allow the same 16 MiB proof budget plus 64 KiB of envelope
+overhead. Non-success bodies use the same endpoint-specific bound.
+
+Declared lengths are canonical, unambiguous preflights, never the authority for
+allocation or completion. Transports stream and count the actual post-decoding
+body, cancel/close it on the first over-limit chunk, and enforce the bound when
+`Content-Length` is missing, understated, or describes compressed bytes. An
+empty body, invalid UTF-8 JSON, ambiguous framing, the wrong media type, or a
+trailing/oversized Norito envelope fails before model parsing. JavaScript and
+Python additionally preflight the canonical uncompressed Norito envelope and
+checksum but intentionally return its embedded message as opaque bytes; that
+transport check does not claim to decode or bind the embedded SCCP message id.
+
+`GET /v1/sccp/capabilities` requires two closed limit objects in every V1
+response. `registry_limits` advertises the fixed lane/live/retained capacities,
+while `resource_limits` advertises every consensus-critical `[zk.sccp]` value.
+Rust, Swift, Kotlin, Java, JavaScript/TypeScript, Python, and .NET clients reject
+missing, unknown, zero, reversed transaction/block, or drifted fixed-registry
+limits before accepting the capability snapshot. The five byte-budget fields
+are also restricted to canonical unsigned JSON integer tokens no greater than
+`9,007,199,254,740,991` (`2^53 - 1`). Fractional, exponent, signed, leading-zero,
+and larger spellings are rejected before a runtime with binary floating-point
+numbers can round them into a different consensus limit.
+
 ## Outbound destination authentication
 
 An outbound lane is `verified` only when the canonical Rust release validator
@@ -166,7 +417,9 @@ and governed-route configuration. The Rust validator:
 7. requires `verifyingKeyHash()` to equal both the registry value and the
    policy-approved semantic verifier key, after full key equality, canonical
    curve/subgroup validation, and canonical key hashing;
-8. derives and compares destination-binding, concrete route-config, and
+8. requires `semanticProofProfileHash()` and `soraFinalityAnchorHash()` to
+   equal the independently derived hashes of the governed typed policy; and
+9. derives and compares destination-binding, concrete route-config, and
    governed-route configuration hashes with canonical Rust APIs.
 
 The release timestamp must be no more than 24 hours after the authenticated
@@ -181,9 +434,18 @@ TRON capability is unavailable.
 Pairing-valid algebra is not sufficient. The production trust policy pins, per
 profile:
 
-- a canonical semantic circuit id;
-- the semantics `nexus-finality-v1` and `sccp-exact-statement-v1`;
-- the exact circuit artifact SHA-256;
+- the exact profile-specific semantic circuit id;
+- the complete ordered semantics
+  `sccp-canonical-transfer-v1`, `sccp-message-leaf-v1`,
+  `sccp-merkle-inclusion-v1`, `sora-taira-block-commitment-v1`,
+  `sora-taira-commit-qc-v1`, and
+  `sora-taira-anchor-continuity-v1`;
+- the exact compiled circuit/proving-key artifact SHA-256;
+- the exact reproducible witness-generator SHA-256;
+- the fixed ordered eleven-public-signal schema hash;
+- the domain-separated semantic-profile hash derived from those three roles;
+- a typed Taira checkpoint, validator-set epoch/hash, and hash version, plus
+  the independently derived finality-anchor hash;
 - the exact verifier-key hash;
 - the nonzero route revision and SHA-256 of the canonical full typed key;
 - the prover build and toolchain-lock SHA-256 digests;
@@ -195,12 +457,19 @@ Two distinct policy-pinned auditors sign this complete record: a semantic
 security auditor and a prover reproducibility auditor. Each signature also
 binds the auditor's report digest. The algebraic smoke-test verifier key
 `9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4`
-is explicitly forbidden. Circuit ids containing `smoke` or `test` are also
-rejected.
+is explicitly forbidden. Circuit ids containing `smoke`, `test`,
+`signal-binding`, or `labeled-signal` are also rejected, and the exact SHA-256
+of the checked-in labeled-signal-only circuit is forbidden independently of
+its name.
 
-The policy establishes that the deployed key proves Nexus finality and the
-exact SCCP statement, rather than merely being a syntactically valid Groth16
-key. The bundle commits the complete policy hash.
+The verifier consumes exactly eleven public signals. Signal 10 is the governed
+Taira finality-anchor hash; there are twelve IC points including the constant
+point, and the canonical verifying-key preimage is exactly 38 ABI words.
+Ten-signal, eleven-IC-point, and 36-word representations are invalid. The policy
+therefore establishes that the deployed key proves canonical transfer
+semantics, message inclusion, Taira commit-QC finality, and continuity from the
+governed checkpoint rather than merely checking a syntactically valid Groth16
+equation. The bundle commits the complete policy hash.
 
 ## External release trust policy
 
@@ -268,7 +537,10 @@ invocation receives the lane bytes plus the complete signed policy and evidence;
 Rust re-verifies the signatures, selects the profile-pinned attestor and circuit,
 and binds the result to the signed artifact digest and status. There is no CLI
 that accepts a Python-projected attestor key, verifier hash, revision, or runtime
-hash. Python does not implement SCCP hash formulas.
+hash. Python independently recomputes only the two small, fixed policy hashes
+(semantic profile and Taira anchor) and pins their Rust/Solidity golden vectors;
+lane, message, route, destination, and verifying-key preimages remain solely in
+the canonical Rust/data-model implementation.
 
 ## Deterministic release bundle
 
@@ -345,7 +617,12 @@ negative tests for at least:
 - path traversal, symbolic links, hard links, file swaps, and extra files;
 - stale/future destination attestations and rogue attestor keys;
 - invalid Ed25519 encodings, role swaps, key reuse, and signature replay;
-- unapproved circuit ids, audit/report drift, smoke VK, and policy substitution;
+- mixed detached-signing states, payload/authority/time/proof substitution,
+  wrong Taira discriminants, and preparation/direct response contradictions;
+- generic ICS/transparent-ZK bridge submission and no-BLS finality fallback;
+- unapproved circuit ids, incomplete semantics, signal-only circuit replay,
+  witness/schema/profile substitution, finality-anchor drift, audit/report
+  drift, smoke VK, and policy substitution;
 - mutated native proof, source identity, anchor, event, payload, or finality;
 - mutated raw runtime bytecode, immutable bridge, verifier key, or role address;
 - route activation, settlement, destination binding, and configuration drift;

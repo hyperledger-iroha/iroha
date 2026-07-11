@@ -23,29 +23,58 @@ are not source keywords. Parameters, fields, constants, and state use
 `name: Type`. Locals use immutable `let` or mutable `var`; duplicate names and
 shadowing are errors.
 
+`authorize` is enforced uniformly for direct, nested, trigger, overlay, and
+proved execution. Overlay artifacts retain the requirement and recheck the
+live authority before applying any ledger or durable-state effect. Permission
+and role mutations conflict through a conservative authorization scheduler
+epoch, so a block-start permission snapshot cannot authorize a later revoked
+call or permanently reject a call granted earlier in the same block.
+
 There is no compatibility grammar, source edition, implicit entrypoint,
 source-order dispatch, raw-call sugar, typeless parameter, wildcard import, or
 source `meta` block. ABI v1 is unconditional. Execution capabilities and vector
 metadata are derived by the compiler or supplied through trusted build
-configuration, never selected by contract source.
+configuration, never selected by seiyaku source.
 
 ## Compiler pipeline
 
-The implementation is organized around these boundaries:
+The implementation is currently organized around these boundaries:
 
-1. lossless CST and spanned AST preserve source identity and locations;
-2. resolution produces a named HIR and rejects unknown, duplicate, reserved,
-   cyclic, and ambiguous symbols;
-3. type and effect analysis produces typed HIR and computes transitive effects
-   and access through the complete call graph;
-4. SSA MIR is optimized before register allocation and bytecode emission;
+1. one lossless scan produces a ranged recovery CST and the significant token
+   stream used by the compiler AST parser; transient parser provenance is
+   separated into a stable `NodeId`/`SourceRange` side table before the public,
+   wrapper-free AST leaves parsing;
+2. fail-closed resolution produces a distinct `ResolvedProgram` with stable
+   `SymbolId` bindings and exact ranges for declarations, named type uses, and
+   calls, rejecting unknown, duplicate, reserved, cyclic, and ambiguous names;
+3. type and effect analysis requires resolved input, binds the immutable AST to
+   that side table for the duration of analysis, and emits exact primary ranges,
+   labels, and conservative fix recipes without embedding source wrappers in
+   typed HIR;
+4. transitive effects and access are computed through the complete call graph,
+   then SSA-style MIR is optimized before register allocation and bytecode
+   emission;
 5. the assembler relaxes branches and calls and emits the canonical V1
    artifact plus hash-keyed debug sidecars.
 
-`CompilerSession` owns reusable compiler state. Public driver APIs return either
-a `CompileOutput` or a `DiagnosticBundle`; diagnostics have stable codes,
-phases, severities, spans, labels, notes, help, and optional fixes. Human, JSON,
-and SARIF renderings carry the same semantic fields.
+The CST is genuinely lossless and ranged. Canonical preorder identities cover
+expressions, statements, and types, while resolution records exact declaration,
+name, type-use, and call identities. Semantic diagnostics resolve those facts
+to their precise source file and byte range, including multi-source module
+analysis. Source identity is deliberately orthogonal metadata: typed HIR keeps
+only declaration-level source sidecars needed by reports, and optimized MIR and
+executable code contain no source marker instructions. Tests prove that adding
+or removing source metadata leaves optimized IR and final artifact bytes
+identical and that an inconsistent origin tape fails with a diagnostic rather
+than panicking.
+
+`CompilerSession` explicitly owns deterministic compiler options and replaces
+the old thread-local registries; reusable parsed-module caching currently lives
+in the module build graph rather than the session itself. Public driver APIs
+return either a `CompileOutput` or a `DiagnosticBundle`; diagnostics have stable
+codes, phases, severities, optional primary spans, labels, notes, help, and
+optional fixes.
+Human, JSON, and SARIF renderings carry the same semantic fields.
 
 Hard parser budgets are part of the release contract: 1 MiB of UTF-8 source,
 250,000 tokens including EOF, and 256 levels of delimiter/parse nesting.
@@ -106,9 +135,26 @@ queries, or contract calls.
 
 ## Runtime and tooling
 
-Public calls carry one canonical Norito argument record. The wrapper decodes it
-once and then reads typed ABI words; JSON is confined to Torii and CLI
-boundaries.
+Public calls carry one canonical Norito argument record, with an inclusive
+1 MiB limit. Prepared calls first validate the compiler-owned flat schema and
+derive its conservative maximum aggregate and pointer-allocation bound. The
+bound combines that maximum with the signed wire lengths and must be affordable
+before the untrusted canonical record is decoded. The low-level raw decode
+syscall cannot authenticate either VM envelope while quoting, so its quote uses
+only bounded record/schema envelope lengths and reserves the full HEAP before
+schema and record authentication.
+After affordability is established, the host validates and decodes the record
+exactly once. For prepared calls, the complete signed bytes stay host-owned;
+the wrapper receives only a domain-separated binding and then reads the typed
+ABI word table. Before allocating, the host preflights the complete aligned TLV
+sequence together with
+raw aggregate storage. Pointer TLVs and the table prefer INPUT and spill into
+owned HEAP, while raw `List` and sum storage is always owned HEAP. External
+JSON-to-argument-record conversion remains confined to Torii/CLI/SDK
+construction boundaries. Inside a seiyaku, native `json { ... }`
+and `json [ ... ]` expressions lower to the schema-bound `JSON_BUILD` syscall;
+the host canonicalizes object keys, recursively converts supported typed
+values, and exposes active-only `Option<T>` getters including `Amount`.
 
 Validated bytecode is cached as an immutable `PreparedContract` containing the
 interface, metadata, predecode, and CFG. Warm execution reuses prepared state
@@ -120,10 +166,12 @@ Rust compiler library is canonical for `koto`, `iroha contract dev`,
 Musubi, and the Node native bridge. Browsers use a compiler service; there is
 no independent JavaScript or offline browser compiler.
 
-Generated keyword and operator tables are consumed by formatting, syntax
-highlighting, documentation, and LSP completion. CI compiles every current
-`kotodama` documentation fence so examples cannot silently define a second
-dialect.
+`crates/kotodama_lang/grammar/v1.lex` is the machine-readable lexical source for
+the scanner, LSP/TextMate patterns, and the keyword/operator tables rendered in
+the normative grammar. The build generator emits those tables and the document
+consistency tests compare the checked-in Markdown and editor grammar against
+the generated values. CI also compiles every current `kotodama` documentation
+fence so examples cannot silently define a second dialect.
 
 The formatter is a canonical lossless-token consumer: it preserves comments
 and literal spelling, emits deterministic four-space block layout, is
@@ -144,10 +192,14 @@ dirty-state reset plus invocation.
 
 The canonical golden pipeline also applies deterministic artifact gates before
 publishing anything. Every compiler-generated instruction region must contain
-strictly less than 1% unresolved relocation NOPs. Representative padding-heavy
-checked-in samples must be at least 50% smaller than the audited pre-reset code
-regions recorded in `scripts/kotodama_v1_size_baseline.json`. These checks run
-for both `--check` and `--write`:
+strictly less than 1% unresolved relocation NOPs. The six padding-heavy range,
+bounded-map, ternary, general-control-flow, tuple-return, and checked-in map
+artifacts named by `scripts/kotodama_v1_size_baseline.json` are the normative
+V1 code-size corpus. Each must be at least 50% smaller than its audited
+pre-reset code region. The baseline binds both the audited source revision and
+the corpus identity, so changing the membership requires a new explicit audit
+rather than silently weakening the gate. These checks run for both `--check`
+and `--write`:
 
 ```console
 make kotodama-goldens-check
@@ -176,8 +228,11 @@ set a tighter threshold with `--threshold`. The
 candidate, measures both on the same runner with Criterion's named baseline,
 and applies this checker to every representative median. Timing baselines are
 deliberately runner-local; they are not portable across CPU models or loaded
-hosts. The reset's initial pull request cannot compare against the retired
-compiler because that base has no equivalent phase suite or language input; CI
-detects that one bootstrap case and checks a candidate self-baseline. Once the
-suite lands, absence of any representative base or candidate sample fails
-closed and every later change is subject to the 5% ceiling.
+hosts. CI requires every pre-existing regression workload on the checked-out
+base and compares it with the candidate; it never manufactures a candidate
+self-baseline. New V1 List, Amount, and typed-query workloads are mandatory
+candidate evidence without pretending that an older base contains equivalent
+samples. The List comprehension runtime has a separate zero-slowdown gate
+against its manual-loop baseline; the general five-percent allowance cannot
+loosen that parity requirement. Missing required base samples, candidate
+samples, or coverage fail closed.

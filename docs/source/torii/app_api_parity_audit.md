@@ -91,7 +91,7 @@ val headers = CanonicalRequestSigner.buildHeaders(
 - Owner: Smart Contract WG with Torii Platform.
 - Notes: Public lifecycle is alias-first. `/v1/contracts/deploy` requires
   `contract_alias`, returns a fresh immutable `contract_address`, and reusing
-  the alias performs an in-place upgrade. Runtime calls are by-reference
+  the alias performs an in-place `kaizen`/`改善`. Runtime calls are by-reference
   `ContractCall` executions that accept exactly one of `contract_address` or
   `contract_alias`; the older `/v1/contracts/instance*` server-side-signing
   flow is no longer part of the public lifecycle surface.

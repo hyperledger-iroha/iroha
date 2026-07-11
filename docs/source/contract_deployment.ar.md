@@ -2,15 +2,15 @@
 lang: ar
 direction: rtl
 source: docs/source/contract_deployment.md
-status: needs-update
-source_hash: d3aefb7ebdeb3b9b2d41a3a04ca6c7007e2eb6ac9580a85b7fbdeb9392375660
-source_last_modified: "2026-04-04T12:14:12.575161+00:00"
-translation_last_reviewed: 2026-04-05
+status: complete
+source_hash: ac63aad38fa823c9aa84b7f4a9832e216aad0cc1bb204fac38d08397294428d9
+source_last_modified: "2026-07-11T04:33:26.599199+00:00"
+translation_last_reviewed: 2026-07-11
 ---
 
-> Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
+> Translation sync note (2026-07-11): this locale is an English-language mirror synchronized with the current canonical API and V1 security contract; a refreshed localized translation remains pending.
 
-Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 2025).
+Status: implemented and exercised by Torii, CLI, and core admission tests (May 2026).
 
 ## Overview
 
@@ -20,8 +20,9 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 - Contract `.to` artifacts are self-describing: the required `CNTR` section
   embeds the contract interface ahead of the executable stream, and Torii
   derives the on-chain `ContractManifest` from that section after verification.
-- Nodes recompute `code_hash` and the canonical ABI hash locally; mismatches
-  reject deterministically.
+- Nodes recompute `code_hash` over the complete deployable `.to` bytes,
+  including the execution header, `CNTR`, literals, and code, and recompute the
+  canonical ABI hash locally; mismatches reject deterministically.
 - Stored artifacts live under the on-chain `contract_manifests` and
   `contract_code` registries. Manifests reference hashes only and remain small;
   code bytes are keyed by `code_hash`.
@@ -32,12 +33,14 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 
 ## Stored Artifacts & Retention
 
-- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
-  `code_hash`. When the same hash already exists, it is replaced with the new
-  manifest.
 - `RegisterSmartContractBytes` stores the compiled program under
-  `contract_code[code_hash]`. If bytes for a hash already exist they must match
-  exactly; differing bytes raise an invariant violation.
+  `contract_code[code_hash]` after verifying the self-describing `CNTR`
+  artifact and recomputing its canonical hash. If bytes for a hash already
+  exist they must match exactly; differing bytes raise an invariant violation.
+- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
+  `code_hash` only after the matching bytecode is already stored. The stored
+  bytes must verify as a `CNTR` artifact whose embedded manifest payload
+  matches the submitted manifest payload.
 - Code size is capped by the custom parameter `max_contract_code_bytes`
   (default 16 MiB). Override it with a `SetParameter(Custom)` transaction before
   registering larger artifacts.
@@ -53,7 +56,8 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
   entrypoints, invalid `entry_pc` targets, invalid trigger callbacks, feature
   / ABI mismatches, or unsupported metadata.
 - The canonical manifest is built from the verified `CNTR` payload, signed by
-  the submitting key, and then stored together with the uploaded bytecode.
+  the submitting key, and then stored after the uploaded bytecode has been
+  verified and written under the same `code_hash`.
 - Transactions targeting protected namespaces must include metadata key
   `gov_contract_address`. The admission path compares the derived dataspace and
   address against enacted `DeployContract` proposals; if no matching proposal
@@ -68,16 +72,20 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
     `contract_address`, binds the requested stable `contract_alias` to that
     address, prepends a domainless self-registration for the authority, and
     submits the resulting transaction on behalf of the caller.
-  - Redeploying the same `contract_alias` performs an in-place upgrade:
+  - Redeploying the same `contract_alias` performs an in-place `kaizen`/`改善`:
     Torii deploys a new address, rebinds the alias atomically, and deactivates
     the previous address.
   - Response: `DeployContractBundleReceiptDto` with bundle metadata plus one entry in `contracts[]` for this single-contract shortcut.
   - Errors: invalid base64, invalid contract artifact, size cap exceeded,
     governance gating for protected namespaces, or fee/balance failures.
 - `GET /v1/contracts/code/{code_hash}`
-  - Returns `{ manifest: { code_hash, abi_hash } }`.
-    Additional manifest fields are preserved internally but omitted here for a
-    stable API.
+  - Returns `{ code_hash, abi_hash, manifest: <ContractManifest> }`. The two
+    top-level convenience values are raw lowercase hex; `manifest` uses the
+    complete canonical Norito JSON representation, including `seiyaku_name`,
+    both checksummed `Hash` literals, exact entrypoint argument/return schemas,
+    state and error declarations, access metadata, trigger descriptors,
+    localization data, and signed provenance when present. Fields are never
+    silently truncated.
 - `GET /v1/contracts/code-bytes/{code_hash}`
   - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
@@ -97,8 +105,10 @@ returns HTTP 429; any handler error increments
   strings) to enable admission gating. Torii exposes helpers under
   `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
-- Unprotected namespaces are public: any signer may register code bytes,
-  register manifests, and deploy alias-backed public contracts there.
+- **Canonical V1 security note:** Every raw bytecode registration, manifest
+  registration, activation, deactivation, and bytecode removal requires
+  `CanRegisterSmartContractCode`. Protected namespaces additionally require
+  `CanEnactGovernance`; an empty protection list is never permissionless.
 - Proposals created with `ProposeDeployContract` (or the Torii
   `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(contract_address, code_hash, abi_hash, abi_version)`.

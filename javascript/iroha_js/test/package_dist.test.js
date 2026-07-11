@@ -12,14 +12,11 @@ const {
   ToriiClient,
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_ETH,
-  SCCP_DOMAIN_SOL,
   SCCP_DOMAIN_SORA,
-  SCCP_DOMAIN_TON,
   SCCP_DOMAIN_TRON,
-  SCCP_CODEC_EVM_HEX,
-  SCCP_CODEC_TEXT_UTF8,
-  SCCP_CODEC_TON_RAW,
-  SCCP_CODEC_TRON_BASE58CHECK,
+  SCCP_CODEC_CANONICAL_TEXT,
+  SCCP_CODEC_EVM_ADDRESS20,
+  SCCP_CODEC_TRON_ADDRESS21,
   SCCP_ETH_MAINNET_EVM_CHAIN_ID,
   SCCP_ETH_MAINNET_NETWORK_ID,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
@@ -106,30 +103,6 @@ const {
   PRIVACY_FFI_VERSION_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN,
-  SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM,
-  SCCP_TON_MESSAGE_BODY_BOC_V1,
-  SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
-  SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1,
-  SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1,
-  SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1,
-  SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
-  SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1,
-  SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1,
-  SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1,
-  SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
-  SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
-  SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
-  SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
-  SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1,
-  SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1,
-  SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1,
-  SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
-  SCCP_SOLANA_STAKE_PROGRAM_ID,
-  SCCP_SOLANA_STAKE_HISTORY_SYSVAR_ID,
-  SCCP_SOLANA_SYSVAR_PROGRAM_ID,
-  SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH,
-  SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH,
-  SCCP_SOLANA_VOTE_PROGRAM_ID,
   bscCommitMessageHash,
   bscCommitSealHash,
   bscGroth16VerifierKeyHash,
@@ -195,27 +168,10 @@ const {
   sccpMerkleRootFromCommitment,
   sccpPayloadHash,
   sccpTransferMessageId,
-  buildSolanaSccpAccountsLtHashProofRequest,
-  buildSolanaSccpFullLightClientAuditProofRequest,
-  buildSolanaSccpTowerReplayProofRequest,
-  buildSolanaSccpFullAccountsdbLatticeProofRequest,
-  buildSolanaSccpBankForkChoiceProofRequest,
-  buildSolanaSccpFullLightClientAuditProofRequests,
-  buildSolanaSccpSubmission,
-  wrapSolanaSccpSourceStateVerificationProof,
-  buildTonSccpProofRequest,
-  buildTonSccpSubmission,
-  buildTonShardStateProofRequest,
-  buildTonSccpFullLightClientAuditProofRequest,
-  buildTonSccpFullLightClientAuditProofRequests,
-  TonSccpSourceStateProver,
   buildTronSccpProofRequest,
   buildTronSccpSubmission,
   tronSccpDestinationBinding,
-  wrapTonSccpProofResult,
-  wrapTonSccpSourceStateVerificationProof,
   wrapTronSccpProofResult,
-  wrapSolanaSccpProofResult,
   preferredKagemushaOfflineSpendMode,
   buildKagemushaInstructionArchiveInstruction,
   buildKagemushaInstructionTransaction,
@@ -330,38 +286,7 @@ const {
   ethMainnetSyncCommitteePeriodForSlot,
   ethSyncCommitteePayloadHash,
   ethSyncCommitteeHashFromPayload,
-  canonicalSolanaSccpBankForkBytes,
-  canonicalSolanaSccpRouteCanaryEvidenceBytes,
-  canonicalSolanaSccpAccountsLtHashCommitmentBytes,
-  canonicalSolanaSccpAccountsLtHashVerificationContextBytes,
-  canonicalSolanaSccpSourceStateVerificationProofBytes,
-  canonicalSolanaSccpFinalityContextBytes,
-  canonicalSolanaSccpVoteMessageBytes,
-  canonicalSolanaSccpFullLightClientAuditStatementBytes,
-  canonicalSolanaSccpAccountInclusionLeafBytes,
-  canonicalSolanaSccpAccountInclusionNodeBytes,
-  canonicalSolanaSccpAccountOpeningBytes,
-  canonicalSolanaSccpVoteAccountDataBytes,
-  canonicalSolanaSccpStakeAccountDataBytes,
-  canonicalSolanaSccpStakeActivationBytes,
-  canonicalSolanaSccpStakeAccountStateBytes,
-  canonicalSolanaSccpStakeHistorySysvarDataBytes,
-  canonicalSolanaSccpStakeHistoryBytes,
-  canonicalSolanaSccpTowerLockoutBytes,
-  canonicalSolanaSccpTowerReplayBytes,
-  canonicalTonShardStateProofPublicInputsBytes,
-  canonicalTonShardStateVerificationContextBytes,
-  canonicalTonShardStateWitnessCommitmentBytes,
-  canonicalTonSccpSourceStateVerificationProofBytes,
-  canonicalTonSccpRouteCanaryEvidenceBytes,
   canonicalTronSccpRouteCanaryEvidenceBytes,
-  canonicalTonSccpFullLightClientAuditStatementBytes,
-  canonicalTonMasterchainBlockMessageBytes,
-  canonicalTonMasterchainConfigLeafBytes,
-  canonicalTonMasterchainConfigProofBytes,
-  canonicalTonMasterchainValidatorSignaturesBytes,
-  canonicalTonValidatorSetPayloadBytes,
-  canonicalTonValidatorSetTransitionMessageBytes,
   canonicalTronRawBlockHeaderBytes,
   canonicalTronReceiptRootMptValue,
   canonicalTronSccpReceiptStateProofBytes,
@@ -379,73 +304,11 @@ const {
   sccpSubmitMessageProofCallData,
   sccpDestinationBindingHash,
   sccpDestinationBindingKey,
-  solanaSccpRouteCanaryEvidenceHash,
-  tonSccpRouteCanaryEvidenceHash,
   tronSccpRouteCanaryEvidenceHash,
   sccpSourceAdapterEngineDeploymentHash,
   sccpSourceAdapterDeploymentBindingFromDeployment,
   sccpSourceAdapterVerifierVkHash,
-  sccpSolanaFullLightClientGateHash,
-  sccpTonFullLightClientGateHash,
   sccpSourceVerifierMaterialHash,
-  tonSccpShardStateVerificationProofHash,
-  tonSccpFullLightClientAuditStatementHash,
-  tonSccpFullLightClientAuditPublicInputColumns,
-  tonSccpFullLightClientAuditOpenVerifySchemaDescriptor,
-  solanaSccpAccountOpeningHash,
-  solanaSccpAccountRawDataHash,
-  solanaSccpAccountsLtHashProofHash,
-  solanaSccpFinalityContextHash,
-  solanaSccpVoteMessageHash,
-  solanaSccpFullLightClientAuditStatementHash,
-  solanaSccpFullLightClientAuditPublicInputColumns,
-  solanaSccpFullLightClientAuditOpenVerifySchemaDescriptor,
-  solanaSccpAccountInclusionLeafHash,
-  solanaSccpAccountInclusionNodeHash,
-  solanaSccpAccountInclusionRootFromBranch,
-  solanaSccpAccountInclusionRootAndBranches,
-  solanaSccpAccountsLtHashChecksum,
-  solanaSccpOpenedAccountInclusionWitness,
-  solanaSccpAccountsLtHashPublicInputColumns,
-  solanaSccpAccountsLtHashOpenVerifySchemaDescriptor,
-  solanaSccpAgaveBankHash,
-  solanaSccpBankForkHash,
-  solanaSccpVoteAccountDataHash,
-  solanaSccpVoteAccountDataFromRawVoteState,
-  solanaSccpVoteAccountDataHashFromRawVoteState,
-  solanaSccpVoteAccountDataFromRawVoteStateV1OrV3,
-  solanaSccpVoteAccountDataHashFromRawVoteStateV1OrV3,
-  solanaSccpStakeAccountDataHash,
-  solanaSccpStakeAccountDataFromRawStakeStateV2,
-  solanaSccpStakeAccountDataHashFromRawStakeStateV2,
-  solanaSccpStakeActivationHash,
-  solanaSccpStakeAccountStateHash,
-  solanaSccpStakeHistorySysvarDataHash,
-  solanaSccpStakeHistorySysvarDataHashFromRawData,
-  solanaSccpStakeHistoryHash,
-  solanaSccpTowerLockoutHash,
-  solanaSccpTowerReplayHash,
-  tonMasterchainBlockMessageHash,
-  tonMasterchainConfigLeafHash,
-  tonMasterchainConfigProofHash,
-  tonMasterchainValidatorSignaturesHash,
-  tonConfigValidatorSetPayloadFromProofBoc,
-  tonConfigValidatorSetPayloadHashFromProofBoc,
-  tonHashmapEProofRootHash,
-  tonHashmapECellRefValueHash,
-  tonShardAccountsLastTransaction,
-  tonShardAccountsLastTransactionHash,
-  tonShardStateProofRootHash,
-  tonShardStateAccountsRootHash,
-  tonShardStateOpenVerifySchemaDescriptor,
-  tonShardStateProofPublicInputsHash,
-  tonShardStatePublicInputColumns,
-  tonBocRootHashes,
-  tonBocSingleRootHash,
-  tonValidatorSetHashFromPayload,
-  tonValidatorSetHash,
-  tonValidatorSetPayloadHash,
-  tonValidatorSetTransitionMessageHash,
   tronBlockIdFromRawDataHash,
   tronRawBlockHeaderHash,
   tronSccpReceiptStateProofHash,
@@ -1749,11 +1612,13 @@ const BSC_GROTH16_PUBLIC_SIGNAL_NAMES = Object.freeze([
   "source_domain",
   "statement_hash",
   "destination_binding_hash",
+  "route_configuration_hash",
+  "sora_finality_anchor_hash",
 ]);
 const sampleBscGroth16ProofSelfTestAdversarialChecks = () => ({
   publicSignalMismatch: {
-    attempted: 9,
-    rejected: 9,
+    attempted: BSC_GROTH16_PUBLIC_SIGNAL_NAMES.length,
+    rejected: BSC_GROTH16_PUBLIC_SIGNAL_NAMES.length,
     cases: BSC_GROTH16_PUBLIC_SIGNAL_NAMES.map((name, index) => ({
       index,
       name,
@@ -2110,13 +1975,13 @@ function bscVerifierKeyMaterial(chain) {
     proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
     sourceDomain: SCCP_DOMAIN_SORA,
     targetDomain: SCCP_DOMAIN_BSC,
-    publicInputCount: 9,
+    publicInputCount: 11,
     alpha1: [...BSC_TEST_G1],
     beta2: [...BSC_TEST_G2],
     gamma2: [...BSC_TEST_G2_NEGATED],
     delta2: [...BSC_TEST_G2],
-    ic: Array.from({ length: 10 }, (_, index) =>
-      index === 9 ? BSC_TEST_G1_NEGATED : BSC_TEST_G1,
+    ic: Array.from({ length: 12 }, (_, index) =>
+      index === 11 ? BSC_TEST_G1_NEGATED : BSC_TEST_G1,
     ).flat(),
   };
   const verifierKeyHash = bscGroth16VerifierKeyHash(material);
@@ -2160,7 +2025,7 @@ function sampleBscGroth16ProofSelfTestBytes({
   chainIdHex,
   networkIdHex,
 }) {
-  const publicSignalWords = Array.from({ length: 9 }, (_, index) =>
+  const publicSignalWords = Array.from({ length: 11 }, (_, index) =>
     String(index + 1),
   );
   const proof = {
@@ -2190,8 +2055,10 @@ function sampleBscGroth16ProofSelfTestBytes({
       manifest: {
         path: "groth16-material.manifest.json",
         sha256: materialManifestHash,
-        productionReady: true,
-        productionBlockers: [],
+        productionReady: false,
+        productionBlockers: [
+          "diagnostic labeled-signal circuit is forbidden for production admission",
+        ],
       },
       artifacts: {
         circuitSource: {
@@ -2252,20 +2119,20 @@ function sampleEvmFamilyProofBundleFixture(targetDomain, nonce = 1n) {
     dest_domain: targetDomain,
     nonce,
     asset_home_domain: SCCP_DOMAIN_SORA,
-    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id_codec: SCCP_CODEC_CANONICAL_TEXT,
     asset_id: "xor#package-dist",
     amount: 1000n,
-    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender_codec: SCCP_CODEC_CANONICAL_TEXT,
     sender: "alice@sora",
     recipient_codec:
       targetDomain === SCCP_DOMAIN_TRON
-        ? SCCP_CODEC_TRON_BASE58CHECK
-        : SCCP_CODEC_EVM_HEX,
+        ? SCCP_CODEC_TRON_ADDRESS21
+        : SCCP_CODEC_EVM_ADDRESS20,
     recipient:
       targetDomain === SCCP_DOMAIN_TRON
         ? "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
         : `0x${"11".repeat(20)}`,
-    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id_codec: SCCP_CODEC_CANONICAL_TEXT,
     route_id:
       targetDomain === SCCP_DOMAIN_TRON
         ? "sccp-package-dist-tron-v1"
@@ -2324,114 +2191,6 @@ function sampleTronDestinationBinding() {
     verifierCodeHash: `0x${"bb".repeat(32)}`,
     verifierKeyHash: `0x${"cc".repeat(32)}`,
   });
-}
-
-function sampleSolanaStakeStateV2StakeAccount() {
-  const data = new Uint8Array(200);
-  const view = new DataView(data.buffer);
-  view.setUint32(0, 2, true);
-  data.fill(0x81, 12, 44);
-  data.fill(0x91, 44, 76);
-  data.fill(0xa1, 124, 156);
-  view.setBigUint64(156, 1_000n, true);
-  view.setBigUint64(164, 2n, true);
-  view.setBigUint64(172, 9n, true);
-  data.set([0x0a, 0xd7, 0xa3, 0x70, 0x3d, 0x0a, 0xb7, 0x3f], 180);
-  view.setBigUint64(188, 123n, true);
-  data[196] = 1;
-  return data;
-}
-
-function sampleSolanaVoteStateAccount() {
-  const data = new Uint8Array(3_762);
-  const view = new DataView(data.buffer);
-  let offset = 0;
-  const writeU8 = (value) => {
-    data[offset] = value;
-    offset += 1;
-  };
-  const writeU32 = (value) => {
-    view.setUint32(offset, value, true);
-    offset += 4;
-  };
-  const writeU64 = (value) => {
-    view.setBigUint64(offset, BigInt(value), true);
-    offset += 8;
-  };
-  const writeRepeated = (value, length) => {
-    data.fill(value, offset, offset + length);
-    offset += length;
-  };
-
-  writeU32(2);
-  writeRepeated(0x51, 32);
-  writeRepeated(0x71, 32);
-  writeU8(7);
-  writeU64(31n);
-  for (let index = 0; index < 31; index += 1) {
-    writeU8(0);
-    writeU64(11n + BigInt(index));
-    writeU32(31 - index);
-  }
-  writeU8(1);
-  writeU64(10n);
-  writeU64(2n);
-  writeU64(1n);
-  writeRepeated(0x60, 32);
-  writeU64(3n);
-  writeRepeated(0x61, 32);
-  return data;
-}
-
-function sampleSolanaVoteStateV4Account() {
-  const data = new Uint8Array(3_762);
-  const view = new DataView(data.buffer);
-  let offset = 0;
-  const writeU8 = (value) => {
-    data[offset] = value;
-    offset += 1;
-  };
-  const writeU16 = (value) => {
-    view.setUint16(offset, value, true);
-    offset += 2;
-  };
-  const writeU32 = (value) => {
-    view.setUint32(offset, value, true);
-    offset += 4;
-  };
-  const writeU64 = (value) => {
-    view.setBigUint64(offset, BigInt(value), true);
-    offset += 8;
-  };
-  const writeRepeated = (value, length) => {
-    data.fill(value, offset, offset + length);
-    offset += length;
-  };
-
-  writeU32(3);
-  writeRepeated(0x51, 32);
-  writeRepeated(0x71, 32);
-  writeRepeated(0x81, 32);
-  writeRepeated(0x91, 32);
-  writeU16(1_234);
-  writeU16(9_876);
-  writeU64(456n);
-  writeU8(1);
-  writeRepeated(0xa5, 48);
-  writeU64(31n);
-  for (let index = 0; index < 31; index += 1) {
-    writeU8(0);
-    writeU64(11n + BigInt(index));
-    writeU32(31 - index);
-  }
-  writeU8(1);
-  writeU64(10n);
-  writeU64(2n);
-  writeU64(1n);
-  writeRepeated(0x60, 32);
-  writeU64(3n);
-  writeRepeated(0x61, 32);
-  return data;
 }
 
 function rlpLengthPrefix(length, shortOffset, longOffset) {

@@ -11,7 +11,7 @@
 //! module emit the canonical wide encoding introduced for the first release; no
 //! alternate instruction layouts are generated.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -43,10 +43,7 @@ use iroha_data_model::{
 use norito::json;
 
 use super::{
-    ast::{
-        BinaryOp, FunctionKind, FunctionModifiers, FunctionVisibility, Program, SourceUnitKind,
-        UnaryOp,
-    },
+    ast::{BinaryOp, FunctionKind, FunctionModifiers, SourceLocation, SourceUnitKind, UnaryOp},
     diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
     i18n::{self, Language, Message},
     ir::{self, Instr, Terminator},
@@ -68,7 +65,8 @@ use crate::{
 const WIDE_IMM_MIN: i32 = -128;
 const WIDE_IMM_MAX: i32 = 127;
 const LITERAL_SHIFT_REG: u8 = 26;
-const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
+/// Default hash-covered execution ceiling emitted for a Kotodama V1 artifact.
+pub const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const KOTODAMA_ABI_VERSION: u8 = 1;
 const COLLECTION_ITERATION_CAP: u8 = 64;
 const _: () = assert!(semantic::COLLECTION_ITERATION_LIMIT == COLLECTION_ITERATION_CAP as i64);
@@ -165,7 +163,7 @@ struct CompilationArtifacts {
 
 struct PreparedCompilation {
     typed: TypedProgram,
-    ir_program: ir::Program,
+    ssa_program: crate::ssa::Program,
     source_name: Option<String>,
 }
 
@@ -206,13 +204,6 @@ fn native_diagnostic_bundle(
     ))
 }
 
-fn semantic_diagnostic_bundle(
-    failures: semantic::SemanticFailures,
-    source_name: Option<&str>,
-) -> DiagnosticBundle {
-    crate::semantic_diagnostics::from_semantic_failures(failures, source_name, None, None)
-}
-
 fn lowering_diagnostic_bundle(
     code: &str,
     failures: Vec<ir::LoweringFailure>,
@@ -237,6 +228,7 @@ fn lowering_diagnostic_bundle(
 struct FunctionDebugSeed {
     name: String,
     location: super::ast::SourceLocation,
+    source: Option<crate::source::SourceRange>,
     pc_start: u64,
     pc_end: u64,
     frame_bytes: u32,
@@ -277,6 +269,18 @@ impl CompileReport {
                             .clone()
                             .map_or(json::Value::Null, json::Value::from),
                     ),
+                    (
+                        "source_id",
+                        json::Value::from(u64::from(entry.source.source_id)),
+                    ),
+                    (
+                        "byte_start",
+                        json::Value::from(u64::from(entry.source.byte_start)),
+                    ),
+                    (
+                        "byte_end",
+                        json::Value::from(u64::from(entry.source.byte_end)),
+                    ),
                     ("line", json::Value::from(u64::from(entry.source.line))),
                     ("column", json::Value::from(u64::from(entry.source.column))),
                 ])
@@ -299,19 +303,30 @@ impl CompileReport {
             .budget_report
             .iter()
             .map(|entry| {
-                let (source_path, line, column) = entry.source.as_ref().map_or(
-                    (json::Value::Null, json::Value::Null, json::Value::Null),
-                    |source| {
+                let (source_path, source_id, byte_start, byte_end, line, column) =
+                    entry.source.as_ref().map_or(
                         (
-                            source
-                                .source_path
-                                .clone()
-                                .map_or(json::Value::Null, json::Value::from),
-                            json::Value::from(u64::from(source.line)),
-                            json::Value::from(u64::from(source.column)),
-                        )
-                    },
-                );
+                            json::Value::Null,
+                            json::Value::Null,
+                            json::Value::Null,
+                            json::Value::Null,
+                            json::Value::Null,
+                            json::Value::Null,
+                        ),
+                        |source| {
+                            (
+                                source
+                                    .source_path
+                                    .clone()
+                                    .map_or(json::Value::Null, json::Value::from),
+                                json::Value::from(u64::from(source.source_id)),
+                                json::Value::from(u64::from(source.byte_start)),
+                                json::Value::from(u64::from(source.byte_end)),
+                                json::Value::from(u64::from(source.line)),
+                                json::Value::from(u64::from(source.column)),
+                            )
+                        },
+                    );
                 report_json_object([
                     (
                         "function_name",
@@ -337,6 +352,9 @@ impl CompileReport {
                     ),
                     ("jump_range_risk", json::Value::from(entry.jump_range_risk)),
                     ("source_path", source_path),
+                    ("source_id", source_id),
+                    ("byte_start", byte_start),
+                    ("byte_end", byte_end),
                     ("line", line),
                     ("column", column),
                 ])
@@ -1078,6 +1096,7 @@ enum DataKind {
     ProofBlob,
     SoracloudRequest,
     SoracloudResponse,
+    Amount,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1103,6 +1122,7 @@ fn pointer_type_for_kind(kind: ir::DataRefKind) -> Option<PointerType> {
         ProofBlob => Some(PointerType::ProofBlob),
         SoracloudRequest => Some(PointerType::SoracloudRequest),
         SoracloudResponse => Some(PointerType::SoracloudResponse),
+        Amount => Some(PointerType::Amount),
     }
 }
 
@@ -1124,6 +1144,7 @@ fn data_key_for_pointer(kind: ir::DataRefKind, value: &str) -> DataKey {
         ProofBlob => DataKey(DataKind::ProofBlob, value.to_owned()),
         SoracloudRequest => DataKey(DataKind::SoracloudRequest, value.to_owned()),
         SoracloudResponse => DataKey(DataKind::SoracloudResponse, value.to_owned()),
+        Amount => DataKey(DataKind::Amount, value.to_owned()),
     }
 }
 
@@ -1211,6 +1232,14 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
         }
         DRK::Blob => (PointerType::Blob, decode_hex_or_raw_bytes(raw).ok()?),
         DRK::NoritoBytes => (PointerType::NoritoBytes, decode_hex_or_raw_bytes(raw).ok()?),
+        DRK::Amount => {
+            let amount = raw
+                .parse::<iroha_primitives::numeric::Numeric>()
+                .ok()?
+                .canonicalize_amount()
+                .ok()?;
+            (PointerType::Amount, to_bytes(&amount).ok()?)
+        }
         DRK::DataSpaceId => {
             if let Some(raw_id) = parse_u64_literal(raw) {
                 let id = iroha_data_model::nexus::DataSpaceId::new(raw_id);
@@ -1335,10 +1364,10 @@ mod tests {
         AUTHORITY_ACCOUNT_KEY, COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions,
         DEFAULT_MAX_CYCLES, DeferredTransfer, GLOBAL_WILDCARD_KEY, HINT_SKIP_DYNAMIC_STATE_PATH,
         HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI, NFT_COARSE_KEY,
-        TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX, decoded_control_target, emit_addi,
-        emit_load64, emit_store64, encode_addi, encode_jal, encode_nop, patch_literal_load,
-        pointer_type_for_kind, push_word, relax_control_transfers_with_trampolines, reserve_word,
-        retain_taira_supported_access_key, stack_slot_offset_bytes,
+        STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX,
+        decoded_control_target, emit_addi, emit_load64, emit_store64, encode_addi, encode_jal,
+        encode_nop, patch_literal_load, pointer_type_for_kind, push_word,
+        relax_control_transfers_with_trampolines, reserve_word, stack_slot_offset_bytes,
     };
     use crate::{
         ast::BinaryOp,
@@ -1383,11 +1412,10 @@ mod tests {
         }
     }
 
-    fn assert_taira_supported_access_keys(keys: &[String]) {
+    fn assert_no_global_access_key(keys: &[String]) {
         assert!(
-            keys.iter()
-                .all(|key| retain_taira_supported_access_key(key)),
-            "manifest persisted unsupported Taira access key in {keys:?}"
+            keys.iter().all(|key| key != GLOBAL_WILDCARD_KEY),
+            "access hints unexpectedly require the global wildcard in {keys:?}"
         );
     }
 
@@ -1445,6 +1473,7 @@ mod tests {
             (ProofBlob, PointerType::ProofBlob),
             (SoracloudRequest, PointerType::SoracloudRequest),
             (SoracloudResponse, PointerType::SoracloudResponse),
+            (Amount, PointerType::Amount),
         ];
         for (kind, expected) in cases {
             let ty = pointer_type_for_kind(kind);
@@ -1461,6 +1490,96 @@ mod tests {
         let opts = CompilerOptions::default();
         assert_eq!(opts.max_cycles, DEFAULT_MAX_CYCLES);
         assert!(opts.max_cycles > 0);
+    }
+
+    #[test]
+    fn expression_and_named_call_sugar_emit_identical_executable_bytecode() {
+        fn executable_code(source: &str) -> Vec<u8> {
+            let artifact = Compiler::new()
+                .compile_source(source)
+                .expect("compile V1 source");
+            let metadata = ProgramMetadata::parse(&artifact).expect("parse V1 artifact");
+            artifact[metadata.code_offset..].to_vec()
+        }
+
+        let tail =
+            executable_code("seiyaku Equivalence { view fn main(value: i64) -> i64 { value } }");
+        let explicit = executable_code(
+            "seiyaku Equivalence { view fn main(value: i64) -> i64 { return value; } }",
+        );
+        assert_eq!(
+            tail, explicit,
+            "function tail expressions must add no emitted instructions"
+        );
+
+        let positional = executable_code(
+            "seiyaku Equivalence { fn choose(count: i64, enabled: bool) -> i64 { if enabled { count } else { 0 } } view fn main() -> i64 { choose(7, true) } }",
+        );
+        let named = executable_code(
+            "seiyaku Equivalence { fn choose(count: i64, enabled: bool) -> i64 { if enabled { count } else { 0 } } view fn main() -> i64 { choose(count: 7, enabled: true) } }",
+        );
+        assert_eq!(
+            named, positional,
+            "named-call sugar must be erased before executable code generation"
+        );
+    }
+
+    #[test]
+    fn source_metadata_changes_sidecars_but_not_optimized_ir_or_artifact_bytes() {
+        let source_text =
+            "seiyaku MetadataFree { view fn answer(value: i64) -> i64 { value + 1 } }";
+        let source = crate::source::SourceFile::new(
+            crate::source::SourceId(73),
+            "contracts/metadata_free.ko",
+            source_text,
+        );
+        let (parsed, _) =
+            crate::parser::parse_source_spanned(&source, crate::source::FrontendBudget::v1())
+                .expect("parse source-backed program");
+        let resolved = crate::resolved::resolve(parsed, &source).expect("resolve source program");
+        let sourced = semantic::SemanticContext::new()
+            .analyze_resolved(&resolved)
+            .expect("analyze source-backed program");
+        let mut stripped = sourced.clone();
+        stripped.source_files.clear();
+        for item in &mut stripped.items {
+            let semantic::TypedItem::Function(function) = item;
+            function.source = None;
+            function.name_source = None;
+        }
+        for state in &mut stripped.states {
+            state.source = None;
+        }
+
+        let mut sourced_ir = ir::lower(&sourced).expect("lower source-backed HIR");
+        let mut stripped_ir = ir::lower(&stripped).expect("lower metadata-free HIR");
+        crate::regalloc::optimize_program(&mut sourced_ir);
+        crate::regalloc::optimize_program(&mut stripped_ir);
+        assert_eq!(
+            sourced_ir, stripped_ir,
+            "source metadata must not enter optimized semantic IR"
+        );
+
+        let compiler = Compiler::new();
+        let (sourced_artifact, sourced_manifest, sourced_report) = compiler
+            .compile_typed_program_with_manifest_and_report_diagnostics(sourced, None)
+            .expect("compile source-backed HIR");
+        let (stripped_artifact, stripped_manifest, stripped_report) = compiler
+            .compile_typed_program_with_manifest_and_report_diagnostics(stripped, None)
+            .expect("compile metadata-free HIR");
+        assert_eq!(sourced_artifact, stripped_artifact);
+        assert_eq!(sourced_manifest, stripped_manifest);
+        assert_eq!(sourced_report.artifact_hash, stripped_report.artifact_hash);
+        assert!(sourced_report.source_map.iter().all(|entry| {
+            entry.source.source_id == 73
+                && entry.source.source_path.as_deref() == Some("contracts/metadata_free.ko")
+        }));
+        assert!(
+            stripped_report
+                .source_map
+                .iter()
+                .all(|entry| { entry.source.source_id == 0 && entry.source.source_path.is_none() })
+        );
     }
 
     #[test]
@@ -1913,7 +2032,7 @@ seiyaku ArgumentDecode {
             syscalls::SYSCALL_JSON_GET_ACCOUNT_ID,
             syscalls::SYSCALL_JSON_GET_NFT_ID,
             syscalls::SYSCALL_JSON_GET_BLOB_HEX,
-            syscalls::SYSCALL_JSON_GET_NUMERIC,
+            syscalls::SYSCALL_JSON_GET_AMOUNT,
             syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
         ];
         assert!(words.iter().all(|word| {
@@ -1969,8 +2088,8 @@ seiyaku SumJoinFacts {
         assert_eq!(schema.fields[0].name, "val");
         assert!(matches!(
             schema.fields[0].ty.nodes.as_slice(),
-            [ivm_abi::entrypoint::EntrypointArgumentTypeNodeV1::Leaf(
-                ivm_abi::entrypoint::EntrypointArgumentKindV1::Numeric
+            [ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Leaf(
+                ivm_abi::entrypoint::EntrypointValueKindV1::Amount
             )]
         ));
 
@@ -1989,7 +2108,7 @@ seiyaku SumJoinFacts {
         assert_eq!(record_decodes, 1, "trigger arguments must be decoded once");
         assert!(words.iter().all(|word| {
             instruction::wide::opcode(*word) != instruction::wide::system::SCALL
-                || instruction::wide::imm8(*word) as u8 as u32 != syscalls::SYSCALL_JSON_GET_NUMERIC
+                || instruction::wide::imm8(*word) as u8 as u32 != syscalls::SYSCALL_JSON_GET_AMOUNT
         }));
     }
 
@@ -2076,11 +2195,12 @@ seiyaku SumJoinFacts {
                 call_graph_function("unresolved", vec![direct_call("missing")]),
                 call_graph_function(
                     "indirect",
-                    vec![ir::Instr::CallContract {
-                        dest: ir::Temp(0),
-                        contract: ir::Temp(1),
+                    vec![ir::Instr::InvokeEntrypointAs {
+                        dest: Some(ir::Temp(0)),
+                        actor: ir::Temp(1),
                         entrypoint: ir::Temp(2),
                         payload: ir::Temp(3),
+                        returns_pointer: false,
                     }],
                 ),
             ],
@@ -2288,11 +2408,11 @@ seiyaku NegTest {
         let src = r#"
 seiyaku CompilerFixture {
 
-fn less(a: i64, b: i64) -> bool { return a < b; }
-fn less_equal(a: i64, b: i64) -> bool { return a <= b; }
-fn greater(a: i64, b: i64) -> bool { return a > b; }
-fn greater_equal(a: i64, b: i64) -> bool { return a >= b; }
-fn branch(a: i64, b: i64) -> i64 {
+view fn less(a: i64, b: i64) -> bool { return a < b; }
+view fn less_equal(a: i64, b: i64) -> bool { return a <= b; }
+view fn greater(a: i64, b: i64) -> bool { return a > b; }
+view fn greater_equal(a: i64, b: i64) -> bool { return a >= b; }
+view fn branch(a: i64, b: i64) -> i64 {
   if a < b { return 1; }
   if a >= b { return 2; }
   return 3;
@@ -2345,8 +2465,8 @@ fn branch(a: i64, b: i64) -> i64 {
 seiyaku CompilerFixture {
 
 fn rhs() -> bool { return true; }
-fn both(value: bool) -> bool { return value && rhs(); }
-fn either(value: bool) -> bool { return value || rhs(); }
+view fn both(value: bool) -> bool { return value && rhs(); }
+view fn either(value: bool) -> bool { return value || rhs(); }
 
 }
 "#;
@@ -2378,28 +2498,27 @@ fn either(value: bool) -> bool { return value || rhs(); }
     }
 
     #[test]
-    fn get_numeric_emits_numeric_syscall() {
+    fn get_amount_emits_option_amount_syscall() {
         let src = r#"
 seiyaku JsonNumericTest {
-  fn run() {
-    let ev = context::trigger_event();
-    let _amount: Amount = ev.get_numeric(Name::parse("amount"));
+  view fn run(ev: Json) {
+    let _amount: Option<Amount> = ev.get_amount(Name::parse("amount"));
   }
 }
 "#;
         let compiler = test_mode_compiler();
-        let bytes = compiler.compile_source(src).expect("compile get_numeric");
+        let bytes = compiler.compile_source(src).expect("compile get_amount");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
-            ivm_abi::syscalls::SYSCALL_JSON_GET_NUMERIC as u8,
+            ivm_abi::syscalls::SYSCALL_JSON_GET_AMOUNT as u8,
         )
         .to_le_bytes();
         assert!(
             bytes[parsed.code_offset..]
                 .windows(needle.len())
                 .any(|window| window == needle),
-            "expected JSON_GET_NUMERIC syscall in compiled code"
+            "expected JSON_GET_AMOUNT syscall in compiled code"
         );
     }
 
@@ -2407,8 +2526,7 @@ seiyaku JsonNumericTest {
     fn get_asset_definition_id_emits_asset_definition_syscall() {
         let src = r#"
 seiyaku JsonAssetDefinitionTest {
-  fn run() {
-    let ev = context::trigger_event();
+  view fn run(ev: Json) {
     let _asset = ev.get_asset_definition_id(Name::parse("asset_definition_id"));
   }
 }
@@ -2436,22 +2554,42 @@ seiyaku JsonAssetDefinitionTest {
         let src = r#"
 seiyaku CompilerFixture {
 
-fn main() {
+kotoage fn main() authorize("CompilerFixture") {
   let evidence = b"00";
-  ledger::escrow::open_offer(Name::parse("aitai_offer"), AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), Amount::from_i64(10), evidence);
+  ledger::escrow::open_offer(
+    offer: Name::parse("aitai_offer"),
+    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    amount: Amount::from_i64(10),
+    evidence: evidence,
+  );
   ledger::escrow::accept(Name::parse("aitai_offer"));
   ledger::escrow::mark_payment_sent(Name::parse("aitai_offer"));
   ledger::escrow::release(Name::parse("aitai_offer"));
   ledger::escrow::cancel(Name::parse("aitai_offer"));
   ledger::escrow::open_dispute(Name::parse("aitai_offer"), evidence);
-  ledger::escrow::resolve_dispute(Name::parse("aitai_offer"), Amount::from_i64(6), Amount::from_i64(4), evidence);
-  ledger::escrow::open_offer(Name::parse("aitai_offer_call"), AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), Amount::from_i64(11), evidence);
+  ledger::escrow::resolve_dispute(
+    offer: Name::parse("aitai_offer"),
+    buyer_amount: Amount::from_i64(6),
+    seller_amount: Amount::from_i64(4),
+    evidence: evidence,
+  );
+  ledger::escrow::open_offer(
+    offer: Name::parse("aitai_offer_call"),
+    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    amount: Amount::from_i64(11),
+    evidence: evidence,
+  );
   ledger::escrow::accept(Name::parse("aitai_offer_call"));
   ledger::escrow::mark_payment_sent(Name::parse("aitai_offer_call"));
   ledger::escrow::release(Name::parse("aitai_offer_call"));
   ledger::escrow::cancel(Name::parse("aitai_offer_call"));
   ledger::escrow::open_dispute(Name::parse("aitai_offer_call"), evidence);
-  ledger::escrow::resolve_dispute(Name::parse("aitai_offer_call"), Amount::from_i64(7), Amount::from_i64(4), evidence);
+  ledger::escrow::resolve_dispute(
+    offer: Name::parse("aitai_offer_call"),
+    buyer_amount: Amount::from_i64(7),
+    seller_amount: Amount::from_i64(4),
+    evidence: evidence,
+  );
 }
 
 }
@@ -2501,7 +2639,7 @@ fn main() {
         let src = r#"
 seiyaku CompilerFixture {
 
-fn main() {
+kotoage fn main() authorize("CompilerFixture") {
   let request = b"00";
   let evidence = b"01";
   ledger::escrow::anonymous::open_offer(request);
@@ -2580,13 +2718,23 @@ seiyaku CompilerFixture {{
 
 kotoage fn main() authorize("EscrowAdmin") {{
   let evidence = b"00";
-  ledger::escrow::open_offer(Name::parse("aitai_offer"), AssetDefinitionId::parse("{asset_def}"), Amount::from_i64(10), evidence);
+  ledger::escrow::open_offer(
+    offer: Name::parse("aitai_offer"),
+    asset_definition: AssetDefinitionId::parse("{asset_def}"),
+    amount: Amount::from_i64(10),
+    evidence: evidence,
+  );
   ledger::escrow::accept(Name::parse("aitai_offer"));
   ledger::escrow::mark_payment_sent(Name::parse("aitai_offer"));
   ledger::escrow::release(Name::parse("aitai_offer"));
   ledger::escrow::cancel(Name::parse("aitai_offer"));
   ledger::escrow::open_dispute(Name::parse("aitai_offer"), evidence);
-  ledger::escrow::resolve_dispute(Name::parse("aitai_offer"), Amount::from_i64(6), Amount::from_i64(4), evidence);
+  ledger::escrow::resolve_dispute(
+    offer: Name::parse("aitai_offer"),
+    buyer_amount: Amount::from_i64(6),
+    seller_amount: Amount::from_i64(4),
+    evidence: evidence,
+  );
 }}
 
 }}
@@ -2745,7 +2893,11 @@ kotoage fn main() authorize("EscrowAdmin") {{
 seiyaku CompilerFixture {
 
 fn main() {
-  ledger::escrow::open_offer(Name::parse("deal"), Name::parse("rose"), Amount::from_i64(10));
+  ledger::escrow::open_offer(
+    offer: Name::parse("deal"),
+    asset_definition: Name::parse("rose"),
+    amount: Amount::from_i64(10),
+  );
 }
 
 }
@@ -2781,7 +2933,11 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main() {
-  ledger::escrow::resolve_dispute(Name::parse("deal"), Name::parse("buyer"), Amount::from_i64(4));
+  ledger::escrow::resolve_dispute(
+    offer: Name::parse("deal"),
+    buyer_amount: Name::parse("buyer"),
+    seller_amount: Amount::from_i64(4),
+  );
 }
 
 }
@@ -2851,6 +3007,8 @@ fn main() {
         }
 
         assert_internal_source_names_rejected(&[
+            "soracloud_request",
+            "soracloud_response",
             "soracloud::read_committed_state",
             "soracloud::emit_state_mutation",
             "soracloud::emit_mailbox_message",
@@ -2871,7 +3029,7 @@ fn main() {
             r#"
 seiyaku CompilerFixture {{
 
-fn main() {{
+kotoage fn main() authorize("CompilerFixture") {{
   let account = AccountId::parse("{account}");
   let signatory = Json::parse("\"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774\"");
   ledger::account::add_signatory(account, signatory);
@@ -3047,9 +3205,17 @@ fn main(account: AccountId) {
             r#"
 seiyaku CompilerFixture {{
 
-fn main() {{
-  ledger::account::set_detail(AccountId::parse("{account}"), Name::parse("status"), Json::parse("{{}}"));
-  ledger::account::set_detail(AccountId::parse("{account}"), Name::parse("mirror"), Json::parse("{{}}"));
+kotoage fn main() authorize("CompilerFixture") {{
+  ledger::account::set_detail(
+    account: AccountId::parse("{account}"),
+    key: Name::parse("status"),
+    value: Json::parse("{{}}"),
+  );
+  ledger::account::set_detail(
+    account: AccountId::parse("{account}"),
+    key: Name::parse("mirror"),
+    value: Json::parse("{{}}"),
+  );
 }}
 
 }}
@@ -3104,7 +3270,7 @@ fn main() {{
 seiyaku CompilerFixture {
 
 fn main(account: AccountId) {
-  ledger::account::set_detail(account, 1, Json::parse("{}"));
+  ledger::account::set_detail(account: account, key: 1, value: Json::parse("{}"));
 }
 
 }
@@ -3116,7 +3282,11 @@ fn main(account: AccountId) {
 seiyaku CompilerFixture {
 
 fn main(account: AccountId) {
-  ledger::account::set_detail(account, Name::parse("status"), Name::parse("not_json"));
+  ledger::account::set_detail(
+    account: account,
+    key: Name::parse("status"),
+    value: Name::parse("not_json"),
+  );
 }
 
 }
@@ -3159,13 +3329,13 @@ fn main(account: AccountId) {
             r#"
 seiyaku CompilerFixture {{
 
-fn main() {{
-  ledger::asset::transfer(AccountId::parse("{from_literal}"), AccountId::parse("{to_literal}"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1), DataSpaceId::parse("0"));
-  ledger::asset::mint(AccountId::parse("{to_literal}"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(2));
-  ledger::asset::burn(AccountId::parse("{from_literal}"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1));
-  ledger::asset::transfer(AccountId::parse("{to_literal}"), AccountId::parse("{from_literal}"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1), DataSpaceId::parse("0"));
-  ledger::asset::mint(AccountId::parse("{from_literal}"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(2));
-  ledger::asset::burn(AccountId::parse("{to_literal}"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1));
+kotoage fn main() authorize("CompilerFixture") {{
+  ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: AccountId::parse("{to_literal}"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
+  ledger::asset::mint(account: AccountId::parse("{to_literal}"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(2));
+  ledger::asset::burn(account: AccountId::parse("{from_literal}"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1));
+  ledger::asset::transfer(source: AccountId::parse("{to_literal}"), destination: AccountId::parse("{from_literal}"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
+  ledger::asset::mint(account: AccountId::parse("{from_literal}"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(2));
+  ledger::asset::burn(account: AccountId::parse("{to_literal}"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1));
 }}
 
 }}
@@ -3224,7 +3394,7 @@ fn main() {{
 seiyaku CompilerFixture {
 
 fn main(account: AccountId) {
-  ledger::asset::transfer(account, account, Name::parse("not_asset"), Amount::from_i64(1), DataSpaceId::parse("0"));
+  ledger::asset::transfer(source: account, destination: account, asset_definition: Name::parse("not_asset"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
 }
 
 }
@@ -3236,7 +3406,7 @@ fn main(account: AccountId) {
 seiyaku CompilerFixture {
 
 fn main(account: AccountId, asset: AssetDefinitionId) {
-  ledger::asset::mint(account, asset, Json::parse("{}"));
+  ledger::asset::mint(account: account, asset_definition: asset, amount: Json::parse("{}"));
 }
 
 }
@@ -3248,7 +3418,7 @@ fn main(account: AccountId, asset: AssetDefinitionId) {
 seiyaku CompilerFixture {
 
 fn main(account: AccountId, asset: AssetDefinitionId) {
-  ledger::asset::burn(account, Name::parse("not_asset"), Amount::from_i64(1));
+  ledger::asset::burn(account: account, asset_definition: Name::parse("not_asset"), amount: Amount::from_i64(1));
 }
 
 }
@@ -3279,14 +3449,14 @@ fn main(account: AccountId, asset: AssetDefinitionId) {
             r#"
 seiyaku CompilerFixture {{
 
-fn main() {{
-  ledger::nft::mint(NftId::parse("{nft}"), AccountId::parse("{owner_literal}"));
-  ledger::nft::set_metadata(NftId::parse("{nft}"), Name::parse("issued"), Json::parse("{{\"meta\":1}}"));
-  ledger::nft::transfer(AccountId::parse("{owner_literal}"), NftId::parse("{nft}"), AccountId::parse("{recipient_literal}"));
+kotoage fn main() authorize("CompilerFixture") {{
+  ledger::nft::mint(nft: NftId::parse("{nft}"), owner: AccountId::parse("{owner_literal}"));
+  ledger::nft::set_metadata(nft: NftId::parse("{nft}"), key: Name::parse("issued"), value: Json::parse("{{\"meta\":1}}"));
+  ledger::nft::transfer(source: AccountId::parse("{owner_literal}"), nft: NftId::parse("{nft}"), destination: AccountId::parse("{recipient_literal}"));
   ledger::nft::burn(NftId::parse("{nft}"));
-  ledger::nft::mint(NftId::parse("{nft_alt}"), AccountId::parse("{recipient_literal}"));
-  ledger::nft::set_metadata(NftId::parse("{nft_alt}"), Name::parse("mirror"), Json::parse("{{\"meta\":2}}"));
-  ledger::nft::transfer(AccountId::parse("{recipient_literal}"), NftId::parse("{nft_alt}"), AccountId::parse("{owner_literal}"));
+  ledger::nft::mint(nft: NftId::parse("{nft_alt}"), owner: AccountId::parse("{recipient_literal}"));
+  ledger::nft::set_metadata(nft: NftId::parse("{nft_alt}"), key: Name::parse("mirror"), value: Json::parse("{{\"meta\":2}}"));
+  ledger::nft::transfer(source: AccountId::parse("{recipient_literal}"), nft: NftId::parse("{nft_alt}"), destination: AccountId::parse("{owner_literal}"));
   ledger::nft::burn(NftId::parse("{nft_alt}"));
 }}
 
@@ -3376,7 +3546,7 @@ fn main(account: AccountId) {
 seiyaku CompilerFixture {
 
 fn main(nft: NftId) {
-  ledger::nft::set_metadata(nft, 1, Json::parse("{}"));
+  ledger::nft::set_metadata(nft: nft, key: 1, value: Json::parse("{}"));
 }
 
 }
@@ -3400,7 +3570,7 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main(account: AccountId, nft: NftId) {
-  ledger::nft::transfer(account, nft, Name::parse("bad"));
+  ledger::nft::transfer(source: account, nft: nft, destination: Name::parse("bad"));
 }
 
 }
@@ -3436,26 +3606,26 @@ fn main(account: AccountId, nft: NftId) {
             r#"
 seiyaku CompilerFixture {{
 
-fn main() {{
+kotoage fn main() authorize("CompilerFixture") {{
   let domain_id = DomainId::parse("{domain}");
   let owner = AccountId::parse("{owner_literal}");
   let recipient = AccountId::parse("{recipient_literal}");
   let asset = AssetDefinitionId::parse("{asset_literal}");
   ledger::domain::register(domain_id);
   ledger::domain::unregister(domain_id);
-  ledger::domain::transfer(owner, domain_id, recipient);
+  ledger::domain::transfer(source: owner, domain: domain_id, destination: recipient);
   ledger::account::register(owner);
   ledger::account::unregister(recipient);
-  ledger::asset::register(asset, "ROSE", 0, 1);
-  ledger::asset::create(asset, "ROSE", 7, owner, 1);
+  ledger::asset::register(asset_definition: asset, name: "ROSE", scale: 0, mintable: 1);
+  ledger::asset::create(asset_definition: asset, name: "ROSE", scale: 7, owner: owner, mintable: 1);
   ledger::asset::unregister(asset);
   ledger::domain::register(domain_id);
   ledger::domain::unregister(domain_id);
-  ledger::domain::transfer(owner, domain_id, recipient);
+  ledger::domain::transfer(source: owner, domain: domain_id, destination: recipient);
   ledger::account::register(recipient);
   ledger::account::unregister(owner);
-  ledger::asset::register(asset, "ROSE", 0, 1);
-  ledger::asset::create(asset, "ROSE", 3, owner, 1);
+  ledger::asset::register(asset_definition: asset, name: "ROSE", scale: 0, mintable: 1);
+  ledger::asset::create(asset_definition: asset, name: "ROSE", scale: 3, owner: owner, mintable: 1);
   ledger::asset::unregister(asset);
 }}
 
@@ -3577,7 +3747,7 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main(asset: AssetDefinitionId) {
-  ledger::asset::register(Name::parse("bad"), "ROSE", 1, 0);
+  ledger::asset::register(asset_definition: Name::parse("bad"), name: "ROSE", scale: 1, mintable: 0);
 }
 
 }
@@ -3589,7 +3759,7 @@ fn main(asset: AssetDefinitionId) {
 seiyaku CompilerFixture {
 
 fn main(asset: AssetDefinitionId, account: AccountId) {
-  ledger::asset::create(asset, Json::parse("{}"), 1, account, 0);
+  ledger::asset::create(asset_definition: asset, name: Json::parse("{}"), scale: 1, owner: account, mintable: 0);
 }
 
 }
@@ -3601,7 +3771,7 @@ fn main(asset: AssetDefinitionId, account: AccountId) {
 seiyaku CompilerFixture {
 
 fn main(account: AccountId) {
-  ledger::domain::transfer(account, Json::parse("{}"), account);
+  ledger::domain::transfer(source: account, domain: Json::parse("{}"), destination: account);
 }
 
 }
@@ -3625,7 +3795,7 @@ fn main(account: AccountId) {
         let src = r#"
 seiyaku CompilerFixture {
 
-fn main() {
+kotoage fn main() authorize("CompilerFixture") {
   let trigger_id = Name::parse("wake");
   ledger::peer::register(Json::parse("{}"));
   ledger::peer::unregister(Json::parse("{}"));
@@ -3682,7 +3852,7 @@ fn main() {
         let src = r#"
 seiyaku CompilerFixture {
 
-fn main() {
+kotoage fn main() authorize("CompilerFixture") {
   let trigger_id = Name::parse("wake");
   ledger::trigger::remove(trigger_id);
   ledger::trigger::unregister(trigger_id);
@@ -3716,7 +3886,7 @@ fn main() {
             r#"
 seiyaku CompilerFixture {{
 
-fn main() {{
+kotoage fn main() authorize("CompilerFixture") {{
   let account = AccountId::parse("{account_literal}");
   let role = Name::parse("auditor");
   let perm = Name::parse("read_blocks");
@@ -4073,7 +4243,7 @@ kotoage fn inspect() -> i64 authorize("InspectContract") {
   debug::info(7);
   test::assert(true);
   require(true, ContractError::InvariantViolation);
-  test::assert_eq(1, 1);
+  test::assert_eq(actual: 1, expected: 1);
   return 1;
 }
 
@@ -4156,7 +4326,7 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main() {
-  test::assert_eq(true, 1);
+  test::assert_eq(actual: true, expected: 1);
 }
 
 }
@@ -4181,10 +4351,10 @@ fn main() {
         let src = r#"
 seiyaku CompilerFixture {
 
-fn main() {
+kotoage fn main() authorize("CompilerFixture") {
   let secret = crypto::private_input(0);
   let blinding = crypto::private_input(1);
-  let nullifier = crypto::valcom(secret, blinding);
+  let nullifier = crypto::valcom(left: secret, right: blinding);
   crypto::use_nullifier(nullifier);
   crypto::commit_output();
 }
@@ -4275,7 +4445,7 @@ fn main() {
     }
 
     #[test]
-    fn raw_smart_contract_lifecycle_operations_are_not_source_apis() {
+    fn compiler_internal_seiyaku_lifecycle_operations_are_not_source_apis() {
         assert_internal_source_names_rejected(&[
             "deactivate_contract_instance",
             "remove_smart_contract_bytes",
@@ -4285,6 +4455,11 @@ fn main() {
         ]);
 
         for name in [
+            "seiyaku::deactivate_instance",
+            "seiyaku::remove_code",
+            "seiyaku::register_code",
+            "seiyaku::register_bytes",
+            "seiyaku::activate_instance",
             "contract::deactivate_instance",
             "contract::remove_code",
             "contract::register_code",
@@ -4376,8 +4551,8 @@ kotoage fn apply_batch() authorize("Admin") {{
             .expect("apply_batch entrypoint");
         assert_eq!(apply_batch.access_hints_complete, Some(true));
         assert!(apply_batch.access_hints_skipped.is_empty());
-        assert_taira_supported_access_keys(&apply_batch.read_keys);
-        assert_taira_supported_access_keys(&apply_batch.write_keys);
+        assert_no_global_access_key(&apply_batch.read_keys);
+        assert_no_global_access_key(&apply_batch.write_keys);
         for account in [&from, &to] {
             let key = super::key_asset(&iroha_data_model::asset::AssetId::of(
                 asset_definition.clone(),
@@ -4892,11 +5067,16 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn verify(payload: bytes) {
-  let _proof = crypto::vrf::verify(payload, payload, payload, 1);
+  let _proof = crypto::vrf::verify(
+    message: payload,
+    proof: payload,
+    public_key: payload,
+    variant: 1,
+  );
   let _batch = crypto::vrf::verify_batch(payload);
 }
 
-fn main() {
+view fn main() {
   verify(b"\x01\x02\x03");
 }
 
@@ -4939,7 +5119,12 @@ seiyaku CompilerFixture {
 
 fn main() {
   let payload = b"\x01\x02\x03";
-  let _bad = crypto::vrf::verify(payload, payload, payload, Name::parse("variant"));
+  let _bad = crypto::vrf::verify(
+    message: payload,
+    proof: payload,
+    public_key: payload,
+    variant: Name::parse("variant"),
+  );
 }
 
 }
@@ -4990,7 +5175,7 @@ fn verify_namespaced(payload: bytes) {
   ledger::governance::verify_tally(payload);
 }
 
-fn main() {
+kotoage fn main() authorize("CompilerFixture") {
   let payload = b"\x01\x02\x03";
   verify(payload);
   verify_namespaced(payload);
@@ -5093,31 +5278,31 @@ seiyaku CompilerFixture {{
 
 fn main() {{
   let _ballot = ledger::governance::build_submit_ballot(
-    "election",
-    b"00",
-    b"{nullifier}",
-    "halo2",
-    b"proof",
-    b"vk"
+    election_id: "election",
+    ciphertext: b"00",
+    nullifier: b"{nullifier}",
+    backend: "halo2",
+    proof: b"proof",
+    verification_key: b"vk",
   );
   let _unshield = crypto::zk::build_unshield(
-    AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    AccountId::parse("{account}"),
-    5,
-    b"{input}",
-    "halo2",
-    b"proof",
-    b"vk"
+    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    destination: AccountId::parse("{account}"),
+    amount: 5,
+    inputs: b"{input}",
+    backend: "halo2",
+    proof: b"proof",
+    verification_key: b"vk",
   );
   let _unshield_with_outputs = crypto::zk::build_unshield(
-    AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    AccountId::parse("{account}"),
-    6,
-    b"{input}",
-    b"{outputs}",
-    "halo2",
-    b"proof",
-    b"vk"
+    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    destination: AccountId::parse("{account}"),
+    amount: 6,
+    inputs: b"{input}",
+    outputs: b"{outputs}",
+    backend: "halo2",
+    proof: b"proof",
+    verification_key: b"vk",
   );
 }}
 
@@ -5226,7 +5411,14 @@ fn main() {{
 seiyaku CompilerFixture {
 
 fn main() {
-  let _bytes = ledger::governance::build_submit_ballot("election", 1, b"00", "halo2", b"proof", b"vk");
+  let _bytes = ledger::governance::build_submit_ballot(
+    election_id: "election",
+    ciphertext: 1,
+    nullifier: b"00",
+    backend: "halo2",
+    proof: b"proof",
+    verification_key: b"vk",
+  );
 }
 
 }
@@ -5238,7 +5430,15 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main() {
-  let _bytes = crypto::zk::build_unshield(Name::parse("asset"), context::authority(), 1, b"00", "halo2", b"proof", b"vk");
+  let _bytes = crypto::zk::build_unshield(
+    asset_definition: Name::parse("asset"),
+    destination: context::authority(),
+    amount: 1,
+    inputs: b"00",
+    backend: "halo2",
+    proof: b"proof",
+    verification_key: b"vk",
+  );
 }
 
 }
@@ -5250,7 +5450,15 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main() {
-  let _bytes = crypto::zk::build_unshield(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), context::authority(), 1, b"00", "halo2", 1, b"vk");
+  let _bytes = crypto::zk::build_unshield(
+    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    destination: context::authority(),
+    amount: 1,
+    inputs: b"00",
+    backend: "halo2",
+    proof: 1,
+    verification_key: b"vk",
+  );
 }
 
 }
@@ -5404,7 +5612,8 @@ fn main() {
     #[test]
     fn raw_contract_calls_are_not_a_source_api() {
         for call in [
-            r#"contract::call(target, "settle", payload)"#,
+            r#"contract::call(contract: target, entrypoint: "settle", arguments: payload)"#,
+            r#"seiyaku::call(contract: target, entrypoint: "settle", arguments: payload)"#,
             r#"call_contract(target, "settle", payload)"#,
         ] {
             let src = format!(
@@ -5532,13 +5741,13 @@ seiyaku CompilerFixture {
 
 view fn crypt() -> i64 {
   let payload = b"\x01\x02\x03";
-  let sm2 = crypto::sm2::verify(payload, payload, payload);
-  let sm2_distid = crypto::sm2::verify(payload, payload, payload, payload);
-  let generic = crypto::verify_signature(payload, payload, payload, 0);
-  let gcm = crypto::sm4_gcm::seal(payload, payload, payload, payload);
-  let _opened_gcm = crypto::sm4_gcm::open(payload, payload, payload, gcm);
-  let ccm = crypto::sm4_ccm::seal(payload, payload, payload, payload, 12);
-  let _opened_ccm = crypto::sm4_ccm::open(payload, payload, payload, ccm);
+  let sm2 = crypto::sm2::verify(message: payload, signature: payload, public_key: payload);
+  let sm2_distid = crypto::sm2::verify(message: payload, signature: payload, public_key: payload, distid: payload);
+  let generic = crypto::verify_signature(message: payload, signature: payload, public_key: payload, scheme: 0);
+  let gcm = crypto::sm4_gcm::seal(key: payload, nonce: payload, aad: payload, payload: payload);
+  let _opened_gcm = crypto::sm4_gcm::open(key: payload, nonce: payload, aad: payload, payload: gcm);
+  let ccm = crypto::sm4_ccm::seal(key: payload, nonce: payload, aad: payload, payload: payload, tag_length: 12);
+  let _opened_ccm = crypto::sm4_ccm::open(key: payload, nonce: payload, aad: payload, payload: ccm);
   if !sm2 {
     return 0;
   }
@@ -5606,12 +5815,12 @@ seiyaku CompilerFixture {
 
 fn main() {
   let payload = b"\x01\x02\x03";
-  let _bad = crypto::sm2::verify(payload, payload);
+  let _bad = crypto::sm2::verify(message: payload, signature: payload);
 }
 
 }
 "#,
-                "crypto::sm2::verify expects (bytes, bytes, bytes) or (bytes, bytes, bytes, bytes) where arguments reference INPUT TLVs",
+                "E_MISSING_NAMED_ARGUMENT",
             ),
             (
                 r#"
@@ -5619,7 +5828,7 @@ seiyaku CompilerFixture {
 
 fn main() {
   let payload = b"\x01\x02\x03";
-  let _bad = crypto::sm2::verify(payload, payload, payload, 1);
+  let _bad = crypto::sm2::verify(message: payload, signature: payload, public_key: payload, distid: 1);
 }
 
 }
@@ -5632,7 +5841,7 @@ seiyaku CompilerFixture {
 
 fn main() {
   let payload = b"\x01\x02\x03";
-  let _bad = crypto::verify_signature(payload, payload, payload, Name::parse("scheme"));
+  let _bad = crypto::verify_signature(message: payload, signature: payload, public_key: payload, scheme: Name::parse("scheme"));
 }
 
 }
@@ -5645,7 +5854,7 @@ seiyaku CompilerFixture {
 
 fn main() {
   let payload = b"\x01\x02\x03";
-  let _bad = crypto::sm4_gcm::seal(payload, payload, payload, 1);
+  let _bad = crypto::sm4_gcm::seal(key: payload, nonce: payload, aad: payload, payload: 1);
 }
 
 }
@@ -5658,7 +5867,7 @@ seiyaku CompilerFixture {
 
 fn main() {
   let payload = b"\x01\x02\x03";
-  let _bad = crypto::sm4_ccm::seal(payload, payload, payload, payload, Name::parse("tag"));
+  let _bad = crypto::sm4_ccm::seal(key: payload, nonce: payload, aad: payload, payload: payload, tag_length: Name::parse("tag"));
 }
 
 }
@@ -5668,11 +5877,15 @@ fn main() {
         ] {
             let parsed = parse(src).expect("parse source");
             let err = analyze(&parsed).expect_err("semantic analysis should reject crypto args");
-            assert!(
-                err.message.contains(expected),
-                "expected `{expected}`, got `{}`",
-                err.message
-            );
+            if expected.starts_with("E_") {
+                assert_eq!(err.code, expected, "unexpected diagnostic: {err:?}");
+            } else {
+                assert!(
+                    err.message.contains(expected),
+                    "expected `{expected}`, got `{}`",
+                    err.message
+                );
+            }
         }
     }
 
@@ -5697,15 +5910,15 @@ seiyaku CompilerFixture {
 
 view fn scalar_math() -> i64 {
   let a = math::abs(-5);
-  let b = math::min(1, 2);
-  let c = math::max(3, 4);
-  let d = math::div_ceil(5, 2);
-  let e = math::gcd(21, 6);
-  let f = math::mean(2, 8);
+  let b = math::min(left: 1, right: 2);
+  let c = math::max(left: 3, right: 4);
+  let d = math::div_ceil(left: 5, right: 2);
+  let e = math::gcd(left: 21, right: 6);
+  let f = math::mean(left: 2, right: 8);
   let g = math::isqrt(16);
-  let h = crypto::poseidon2(1, 2);
+  let h = crypto::poseidon2(left: 1, right: 2);
   let i = crypto::pubkgen(3);
-  let j = crypto::valcom(4, 5);
+  let j = crypto::valcom(left: 4, right: 5);
   return a + b + c + d + e + f + g + h + i + j;
 }
 
@@ -5773,7 +5986,7 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main() {
-  let _bad = math::min(1, Name::parse("not_int"));
+  let _bad = math::min(left: 1, right: Name::parse("not_int"));
 }
 
 }
@@ -5785,7 +5998,7 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main() {
-  let _bad = crypto::poseidon2(1, Name::parse("not_int"));
+  let _bad = crypto::poseidon2(left: 1, right: Name::parse("not_int"));
 }
 
 }
@@ -5797,7 +6010,14 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main() {
-  let _bad = crypto::poseidon6(1, 2, 3, 4, 5, Name::parse("not_int"));
+  let _bad = crypto::poseidon6(
+    a: 1,
+    b: 2,
+    c: 3,
+    d: 4,
+    e: 5,
+    f: Name::parse("not_int"),
+  );
 }
 
 }
@@ -5821,7 +6041,7 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main() {
-  let _bad = crypto::valcom(1, Name::parse("not_int"));
+  let _bad = crypto::valcom(left: 1, right: Name::parse("not_int"));
 }
 
 }
@@ -5841,7 +6061,7 @@ fn main() {
     }
 
     #[test]
-    fn numeric_neg_builtin_emits_regular_numeric_neg_syscall_and_complete_access() {
+    fn numeric_neg_builtin_is_rejected_for_nonnegative_wide_types() {
         let src = r#"
 seiyaku CompilerFixture {
 
@@ -5852,53 +6072,10 @@ view fn negate() -> Amount {
 
 }
 "#;
-        let compiler = test_mode_compiler();
-        let (bytes, manifest) = compiler
-            .compile_source_with_manifest(src)
-            .expect("compile numeric_neg builtin");
-        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-        let code = &bytes[parsed.code_offset..];
-
-        for (syscall, label) in [
-            (
-                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
-                "INPUT_PUBLISH_TLV",
-            ),
-            (ivm_abi::syscalls::SYSCALL_NUMERIC_NEG, "NUMERIC_NEG"),
-        ] {
-            let needle = encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(syscall).expect("numeric_neg syscall id fits in u8"),
-            )
-            .to_le_bytes();
-            assert!(
-                code.windows(needle.len()).any(|window| window == needle),
-                "expected {label} syscall in compiled code"
-            );
-        }
-
-        let direct_neg = encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_abi::syscalls::SYSCALL_NUMERIC_NEG_DIRECT)
-                .expect("direct numeric neg syscall id fits in u8"),
-        )
-        .to_le_bytes();
-        assert!(
-            !code
-                .windows(direct_neg.len())
-                .any(|window| window == direct_neg),
-            "numeric_neg must use the regular published-TLV syscall"
-        );
-
-        let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
-        let negate = entrypoints
-            .iter()
-            .find(|entry| entry.name == "negate")
-            .expect("negate entrypoint");
-        assert_ne!(negate.access_hints_complete, Some(false));
-        assert!(negate.access_hints_skipped.is_empty());
-        assert!(negate.read_keys.is_empty());
-        assert!(negate.write_keys.is_empty());
+        let error = test_mode_compiler()
+            .compile_source(src)
+            .expect_err("Amount negation must be rejected before lowering");
+        assert!(error.contains("E_UNSIGNED_NEGATION"), "{error}");
     }
 
     #[test]
@@ -5943,23 +6120,18 @@ view fn convert() -> i64 {
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
 
-        for (syscall, label) in [
-            (
-                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
-                "INPUT_PUBLISH_TLV",
-            ),
-            (ivm_abi::syscalls::SYSCALL_NUMERIC_TO_INT, "NUMERIC_TO_INT"),
-        ] {
-            let needle = encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(syscall).expect("numeric_to_int syscall id fits in u8"),
-            )
-            .to_le_bytes();
-            assert!(
-                code.windows(needle.len()).any(|window| window == needle),
-                "expected {label} syscall in compiled code"
-            );
-        }
+        let publish = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+        )
+        .to_le_bytes();
+        assert!(code.windows(4).any(|window| window == publish));
+        let amount_to_i64 =
+            encoding::wide::encode_syscallx(ivm_abi::syscalls::SYSCALL_AMOUNT_TO_I64).to_le_bytes();
+        assert!(
+            code.windows(4).any(|window| window == amount_to_i64),
+            "Amount conversion must use the nominal extended syscall"
+        );
 
         let direct_to_int = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
@@ -6014,10 +6186,10 @@ fn main() {
         let src = r#"
 seiyaku CompilerFixture {
 
-view fn compute() -> Amount {
-  let left: Amount = Amount::from_i64(7);
-  let right: Amount = Amount::from_i64(3);
-  return numeric::add(left, numeric::rem(left, right));
+view fn compute() -> u128 {
+  let left: u128 = 7u128;
+  let right: u128 = 3u128;
+  return numeric::add(left: left, right: numeric::rem(left: left, right: right));
 }
 
 }
@@ -6088,7 +6260,7 @@ seiyaku CompilerFixture {
 view fn compare() -> i64 {
   let left: Amount = Amount::from_i64(7);
   let right: Amount = Amount::from_i64(3);
-  if numeric::ge(left, right) {
+  if numeric::ge(left: left, right: right) {
     return 1;
   }
   return 0;
@@ -6103,23 +6275,18 @@ view fn compare() -> i64 {
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
 
-        for (syscall, label) in [
-            (
-                ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
-                "INPUT_PUBLISH_TLV",
-            ),
-            (ivm_abi::syscalls::SYSCALL_NUMERIC_GE, "NUMERIC_GE"),
-        ] {
-            let needle = encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(syscall).expect("numeric comparison syscall id fits in u8"),
-            )
-            .to_le_bytes();
-            assert!(
-                code.windows(needle.len()).any(|window| window == needle),
-                "expected {label} syscall in compiled code"
-            );
-        }
+        let publish = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+        )
+        .to_le_bytes();
+        assert!(code.windows(4).any(|window| window == publish));
+        let amount_ge =
+            encoding::wide::encode_syscallx(ivm_abi::syscalls::SYSCALL_AMOUNT_GE).to_le_bytes();
+        assert!(
+            code.windows(4).any(|window| window == amount_ge),
+            "Amount comparison must use the nominal extended syscall"
+        );
 
         let direct_ge = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
@@ -6153,7 +6320,7 @@ seiyaku CompilerFixture {
 
 fn main() {
   let value: Amount = Amount::from_i64(7);
-  let bad = numeric::add(1, value);
+  let bad = numeric::add(left: 1, right: value);
 }
 
 }
@@ -6307,7 +6474,7 @@ fn main() { let _acct = ledger::account::resolve_alias(json::object()); }
                 r#"
 seiyaku CompilerFixture {
 
-fn main() {
+view fn main() {
   let _authority = context::authority();
   let _now = context::current_time_ms();
   let _height = context::block_height();
@@ -6794,7 +6961,7 @@ seiyaku Test {
         let src = r#"
 seiyaku Test {
   kotoage fn main()  authorize("Entry") {
-    test::assert_eq(1, 1);
+    test::assert_eq(actual: 1, expected: 1);
   }
 }
 "#;
@@ -6846,7 +7013,10 @@ seiyaku Test {
 
     #[test]
     fn production_rejects_test_only_assertions() {
-        for assertion in ["test::assert(true);", "test::assert_eq(1, 1);"] {
+        for assertion in [
+            "test::assert(true);",
+            "test::assert_eq(actual: 1, expected: 1);",
+        ] {
             let source = format!(
                 "seiyaku Test {{ kotoage fn main() authorize(\"Entry\") {{ {assertion} }} }}"
             );
@@ -6936,7 +7106,7 @@ seiyaku Test {
         assert_eq!(
             hints.write_keys,
             vec!["state:counter".to_string()],
-            "the contract-wide union must include the init write"
+            "the seiyaku-wide union must include the hajimari write"
         );
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
@@ -6948,6 +7118,40 @@ seiyaku Test {
         assert!(run.write_keys.is_empty());
         assert_eq!(run.access_hints_complete, Some(true));
         assert!(run.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn whole_program_dce_excludes_dead_private_dynamic_access_hints() {
+        let src = r#"
+seiyaku ReachableHints {
+  state Counter: i64;
+  state DeadEntries: StateMap<i64, i64>;
+
+  hajimari() { Counter = 0; }
+
+  fn dead_lookup(key: i64) {
+    let _value = DeadEntries.get(key);
+  }
+
+  view fn counter() -> i64 { return Counter; }
+}
+"#;
+        let (_bytes, manifest, report) = Compiler::new()
+            .compile_source_with_manifest_and_report(src)
+            .expect("compile reachable access hints");
+        assert!(
+            report
+                .budget_report
+                .iter()
+                .all(|function| function.function_name != "dead_lookup")
+        );
+        let hints = manifest
+            .access_set_hints
+            .expect("reachable scalar state emits access hints");
+        assert!(
+            hints.dynamic_reads.is_empty(),
+            "a dynamic read in removed private code must not constrain scheduler metadata: {hints:?}"
+        );
     }
 
     #[test]
@@ -7025,7 +7229,7 @@ seiyaku Test {
     }
 
     #[test]
-    fn manifest_access_set_hints_omit_state_wildcard_for_dynamic_state_path() {
+    fn manifest_access_set_hints_preserve_state_wildcard_for_dynamic_state_path() {
         let src = r#"
 seiyaku Test {
   kotoage fn read(path: Name)  authorize("Entry") {
@@ -7040,15 +7244,19 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
+        assert!(hints.read_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
+        assert!(hints.write_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let read = entrypoints
             .iter()
             .find(|entry| entry.name == "read")
             .expect("read entrypoint");
-        assert_taira_supported_access_keys(&read.read_keys);
-        assert_taira_supported_access_keys(&read.write_keys);
+        assert_no_global_access_key(&read.read_keys);
+        assert_no_global_access_key(&read.write_keys);
+        assert!(read.read_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
+        assert!(read.write_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
         assert_eq!(read.access_hints_complete, Some(false));
         assert!(!read.access_hints_skipped.is_empty());
     }
@@ -7058,7 +7266,7 @@ seiyaku Test {
         let src = r#"
 seiyaku Test {
   kotoage fn relay(target: bytes, payload: Json) -> bytes authorize("Admin") {
-    return contract::call(target, "settle", payload);
+    return contract::call(contract: target, entrypoint: "settle", arguments: payload);
   }
 }
 "#;
@@ -7086,6 +7294,50 @@ seiyaku Test {
         compiler
             .compile_source_with_manifest(src)
             .expect("compile json object builders");
+    }
+
+    #[test]
+    fn native_json_construction_emits_one_extended_build_syscall() {
+        let source = r#"
+seiyaku NativeJson {
+  view fn payload(label: string) -> Json {
+    json {
+      z: true,
+      amount: 1.25amt,
+      labels: json ["primary", label],
+    }
+  }
+}
+"#;
+        let bytes = test_mode_compiler()
+            .compile_source(source)
+            .expect("compile native JSON construction");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse native JSON metadata");
+        let words = bytes[parsed.code_offset..]
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            words
+                .iter()
+                .filter(|word| {
+                    instruction::wide::opcode(**word) == instruction::wide::system::SYSTEM
+                        && encoding::wide::decode_syscallx(**word) == syscalls::SYSCALL_JSON_BUILD
+                })
+                .count(),
+            1,
+            "one native JSON expression must perform exactly one host build"
+        );
+        for retired in [
+            syscalls::SYSCALL_JSON_OBJECT,
+            syscalls::SYSCALL_JSON_SET_I64,
+            syscalls::SYSCALL_JSON_SET_ACCOUNT_ID,
+        ] {
+            assert!(words.iter().all(|word| {
+                instruction::wide::opcode(*word) != instruction::wide::system::SCALL
+                    || instruction::wide::imm8(*word) as u8 as u32 != retired
+            }));
+        }
     }
 
     #[test]
@@ -7118,7 +7370,11 @@ seiyaku Test {
 seiyaku CompilerFixture {
 
 kotoage fn main() authorize("NftAdmin") {
-  ledger::nft::set_metadata(NftId::parse("n0$wonderland.universal"), Name::parse("dpn_metadata"), Json::parse("{\"meta\":1}"));
+  ledger::nft::set_metadata(
+    nft: NftId::parse("n0$wonderland.universal"),
+    key: Name::parse("dpn_metadata"),
+    value: Json::parse("{\"meta\":1}"),
+  );
 }
 
 }
@@ -7155,7 +7411,11 @@ kotoage fn main() authorize("NftAdmin") {
         let src = r#"
 seiyaku Test {
   kotoage fn set_metadata(nft: NftId, metadata: Json) authorize("NftAuthority") {
-    ledger::nft::set_metadata(nft, Name::parse("dpn_metadata"), metadata);
+    ledger::nft::set_metadata(
+      nft: nft,
+      key: Name::parse("dpn_metadata"),
+      value: metadata,
+    );
   }
 }
 "#;
@@ -7224,8 +7484,19 @@ seiyaku Test {
 seiyaku CompilerFixture {{
 
 kotoage fn main() authorize("AssetAdmin") {{
-  ledger::asset::register(AssetDefinitionId::parse("{asset_literal}"), "ROSE", 0, 1);
-  ledger::asset::create(AssetDefinitionId::parse("{asset_literal}"), "ROSE", 1, AccountId::parse("{account_literal}"), 1);
+  ledger::asset::register(
+    asset_definition: AssetDefinitionId::parse("{asset_literal}"),
+    name: "ROSE",
+    scale: 0,
+    mintable: 1,
+  );
+  ledger::asset::create(
+    asset_definition: AssetDefinitionId::parse("{asset_literal}"),
+    name: "ROSE",
+    scale: 1,
+    owner: AccountId::parse("{account_literal}"),
+    mintable: 1,
+  );
 }}
 
 }}
@@ -7264,10 +7535,19 @@ kotoage fn main() authorize("AssetAdmin") {{
 seiyaku CompilerFixture {{
 
 kotoage fn main() authorize("AssetAdmin") {{
-  ledger::asset::register(AssetDefinitionId::parse("{asset_literal}"), "ROSE", 0, 1);
+  ledger::asset::register(
+    asset_definition: AssetDefinitionId::parse("{asset_literal}"),
+    name: "ROSE",
+    scale: 0,
+    mintable: 1,
+  );
   ledger::role::create(Name::parse("minter"), Json::parse("{{\"perms\":[\"mint_asset:{asset_literal}\"]}}"));
   ledger::role::grant(context::authority(), Name::parse("minter"));
-  ledger::asset::mint(context::authority(), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1));
+  ledger::asset::mint(
+    account: context::authority(),
+    asset_definition: AssetDefinitionId::parse("{asset_literal}"),
+    amount: Amount::from_i64(1),
+  );
 }}
 
 }}
@@ -7320,8 +7600,18 @@ seiyaku CompilerFixture {{
 kotoage fn main() authorize("AssetAdmin") {{
   let caller = context::authority();
   let asset = AssetDefinitionId::parse("{asset_literal}");
-  ledger::asset::transfer(caller, caller, asset, Amount::from_i64(1), DataSpaceId::parse("0"));
-  ledger::account::set_detail(caller, Name::parse("status"), Json::parse("{{}}"));
+  ledger::asset::transfer(
+    source: caller,
+    destination: caller,
+    asset_definition: asset,
+    amount: Amount::from_i64(1),
+    dataspace: DataSpaceId::parse("0"),
+  );
+  ledger::account::set_detail(
+    account: caller,
+    key: Name::parse("status"),
+    value: Json::parse("{{}}"),
+  );
 }}
 
 }}
@@ -7423,7 +7713,7 @@ kotoage fn main() authorize("AssetAdmin") {{
         let to_literal = to.to_string();
         let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let src = format!(
-            "seiyaku CompilerFixture {{ kotoage fn main() authorize(\"Admin\") {{ ledger::domain::transfer(AccountId::parse(\"{from_literal}\"), DomainId::parse(\"{domain}\"), AccountId::parse(\"{to_literal}\")); }} }}"
+            "seiyaku CompilerFixture {{ kotoage fn main() authorize(\"Admin\") {{ ledger::domain::transfer(source: AccountId::parse(\"{from_literal}\"), domain: DomainId::parse(\"{domain}\"), destination: AccountId::parse(\"{to_literal}\")); }} }}"
         );
 
         let compiler = Compiler::new();
@@ -7453,7 +7743,7 @@ kotoage fn main() authorize("AssetAdmin") {{
         let src = format!(
             r#"
 seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::parse("{from_literal}"), AccountId::parse("merchant@paynet"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1), DataSpaceId::parse("0")); }}
+kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: AccountId::parse("merchant@paynet"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0")); }}
 }}
 "#
         );
@@ -7465,16 +7755,16 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_taira_supported_access_keys(&main.read_keys);
-        assert_taira_supported_access_keys(&main.write_keys);
+        assert_no_global_access_key(&main.read_keys);
+        assert_no_global_access_key(&main.write_keys);
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
@@ -7487,7 +7777,7 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let src = format!(
             r#"
 seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::parse("{from_literal}"), AccountId::parse("merchant@"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1), DataSpaceId::parse("0")); }}
+kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: AccountId::parse("merchant@"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0")); }}
 }}
 "#
         );
@@ -7499,16 +7789,16 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_taira_supported_access_keys(&main.read_keys);
-        assert_taira_supported_access_keys(&main.write_keys);
+        assert_no_global_access_key(&main.read_keys);
+        assert_no_global_access_key(&main.write_keys);
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
@@ -7521,7 +7811,7 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let src = format!(
             r#"
 seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::parse("{from_literal}"), AccountId::parse("merchant@bank.paynet"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1), DataSpaceId::parse("0")); }}
+kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: AccountId::parse("merchant@bank.paynet"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0")); }}
 }}
 "#
         );
@@ -7533,16 +7823,16 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_taira_supported_access_keys(&main.read_keys);
-        assert_taira_supported_access_keys(&main.write_keys);
+        assert_no_global_access_key(&main.read_keys);
+        assert_no_global_access_key(&main.write_keys);
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
@@ -7555,7 +7845,7 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let src = format!(
             r#"
 seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::parse("{from_literal}"), AccountId::parse("merchant@bank."), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1), DataSpaceId::parse("0")); }}
+kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: AccountId::parse("merchant@bank."), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0")); }}
 }}
 "#
         );
@@ -7567,16 +7857,16 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_taira_supported_access_keys(&main.read_keys);
-        assert_taira_supported_access_keys(&main.write_keys);
+        assert_no_global_access_key(&main.read_keys);
+        assert_no_global_access_key(&main.write_keys);
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
@@ -7588,7 +7878,7 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let src = format!(
             r#"
 seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::parse("{from_literal}"), ledger::account::resolve_alias("merchant@paynet"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1), DataSpaceId::parse("0")); }}
+kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: ledger::account::resolve_alias("merchant@paynet"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0")); }}
 }}
 "#
         );
@@ -7600,16 +7890,16 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_taira_supported_access_keys(&main.read_keys);
-        assert_taira_supported_access_keys(&main.write_keys);
+        assert_no_global_access_key(&main.read_keys);
+        assert_no_global_access_key(&main.write_keys);
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
@@ -7622,7 +7912,7 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let src = format!(
             r#"
 seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::parse("{from_literal}"), ledger::account::resolve_alias("merchant@"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1), DataSpaceId::parse("0")); }}
+kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: ledger::account::resolve_alias("merchant@"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0")); }}
 }}
 "#
         );
@@ -7634,16 +7924,16 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_taira_supported_access_keys(&main.read_keys);
-        assert_taira_supported_access_keys(&main.write_keys);
+        assert_no_global_access_key(&main.read_keys);
+        assert_no_global_access_key(&main.write_keys);
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
@@ -7656,7 +7946,7 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let src = format!(
             r#"
 seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::parse("{from_literal}"), ledger::account::resolve_alias("merchant@bank.paynet"), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1), DataSpaceId::parse("0")); }}
+kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: ledger::account::resolve_alias("merchant@bank.paynet"), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0")); }}
 }}
 "#
         );
@@ -7668,16 +7958,16 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_taira_supported_access_keys(&main.read_keys);
-        assert_taira_supported_access_keys(&main.write_keys);
+        assert_no_global_access_key(&main.read_keys);
+        assert_no_global_access_key(&main.write_keys);
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
@@ -7690,7 +7980,7 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let src = format!(
             r#"
 seiyaku CompilerFixture {{
-kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::parse("{from_literal}"), ledger::account::resolve_alias("merchant@bank."), AssetDefinitionId::parse("{asset_literal}"), Amount::from_i64(1), DataSpaceId::parse("0")); }}
+kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: AccountId::parse("{from_literal}"), destination: ledger::account::resolve_alias("merchant@bank."), asset_definition: AssetDefinitionId::parse("{asset_literal}"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0")); }}
 }}
 "#
         );
@@ -7702,26 +7992,32 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(AccountId::
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
-        assert_taira_supported_access_keys(&main.read_keys);
-        assert_taira_supported_access_keys(&main.write_keys);
+        assert_no_global_access_key(&main.read_keys);
+        assert_no_global_access_key(&main.write_keys);
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_omit_coarse_asset_keys_for_dynamic_asset_contract() {
+    fn manifest_access_set_hints_preserve_coarse_asset_keys_for_dynamic_asset_contract() {
         let src = r#"
 seiyaku Test {
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: Amount) authorize("Admin") {
-    ledger::asset::transfer(from, to, asset, amount, DataSpaceId::parse("0"));
+    ledger::asset::transfer(
+      source: from,
+      destination: to,
+      asset_definition: asset,
+      amount: amount,
+      dataspace: DataSpaceId::parse("0"),
+    );
   }
 }
 "#;
@@ -7732,21 +8028,29 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
+        for key in [super::ASSET_WILDCARD_KEY, super::ASSET_DEF_WILDCARD_KEY] {
+            assert!(hints.read_keys.iter().any(|actual| actual == key));
+            assert!(hints.write_keys.iter().any(|actual| actual == key));
+        }
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|entry| entry.name == "move")
             .expect("move entrypoint");
-        assert_taira_supported_access_keys(&main.read_keys);
-        assert_taira_supported_access_keys(&main.write_keys);
+        assert_no_global_access_key(&main.read_keys);
+        assert_no_global_access_key(&main.write_keys);
+        for key in [super::ASSET_WILDCARD_KEY, super::ASSET_DEF_WILDCARD_KEY] {
+            assert!(main.read_keys.iter().any(|actual| actual == key));
+            assert!(main.write_keys.iter().any(|actual| actual == key));
+        }
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
-    fn manifest_access_set_hints_omit_global_wildcard_for_opaque_host_calls() {
+    fn manifest_access_set_hints_preserve_global_wildcard_for_opaque_host_calls() {
         let src = r#"
 seiyaku Test {
   kotoage fn register() authorize("Admin") {
@@ -7758,17 +8062,33 @@ seiyaku Test {
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
             .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("opaque host calls must preserve their conservative wildcard hint");
+        assert!(hints.read_keys.iter().any(|key| key == GLOBAL_WILDCARD_KEY));
         assert!(
-            manifest.access_set_hints.is_none(),
-            "opaque host calls should not persist wildcard-only access hints"
+            hints
+                .write_keys
+                .iter()
+                .any(|key| key == GLOBAL_WILDCARD_KEY)
         );
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let register = entrypoints
             .iter()
             .find(|entry| entry.name == "register")
             .expect("register entrypoint");
-        assert_taira_supported_access_keys(&register.read_keys);
-        assert_taira_supported_access_keys(&register.write_keys);
+        assert!(
+            register
+                .read_keys
+                .iter()
+                .any(|key| key == GLOBAL_WILDCARD_KEY)
+        );
+        assert!(
+            register
+                .write_keys
+                .iter()
+                .any(|key| key == GLOBAL_WILDCARD_KEY)
+        );
         assert_eq!(register.access_hints_complete, Some(false));
         assert!(!register.access_hints_skipped.is_empty());
     }
@@ -7784,7 +8104,7 @@ seiyaku Test {
         )
         .expect("contract address");
         let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: Some(code_hash),
             abi_hash: None,
             compiler_fingerprint: Some("test".to_owned()),
@@ -7891,8 +8211,8 @@ seiyaku Test {
             .expect("consume entrypoint");
         assert_eq!(consume.access_hints_complete, Some(true));
         assert!(consume.access_hints_skipped.is_empty());
-        assert_taira_supported_access_keys(&consume.read_keys);
-        assert_taira_supported_access_keys(&consume.write_keys);
+        assert_no_global_access_key(&consume.read_keys);
+        assert_no_global_access_key(&consume.write_keys);
         let nullifier_key = super::key_nullifier(42);
         assert_eq!(consume.read_keys, std::slice::from_ref(&nullifier_key));
         assert_eq!(consume.write_keys, [nullifier_key]);
@@ -7928,8 +8248,8 @@ seiyaku Test {{
         let peer_key = format!("peer:{peer}");
         assert_eq!(peers.access_hints_complete, Some(true));
         assert!(peers.access_hints_skipped.is_empty());
-        assert_taira_supported_access_keys(&peers.read_keys);
-        assert_taira_supported_access_keys(&peers.write_keys);
+        assert_no_global_access_key(&peers.read_keys);
+        assert_no_global_access_key(&peers.write_keys);
         assert_eq!(peers.read_keys, std::slice::from_ref(&peer_key));
         assert_eq!(peers.write_keys, [peer_key]);
     }
@@ -7959,8 +8279,8 @@ seiyaku Test {
         ];
         assert_eq!(subscription.access_hints_complete, Some(true));
         assert!(subscription.access_hints_skipped.is_empty());
-        assert_taira_supported_access_keys(&subscription.read_keys);
-        assert_taira_supported_access_keys(&subscription.write_keys);
+        assert_no_global_access_key(&subscription.read_keys);
+        assert_no_global_access_key(&subscription.write_keys);
         assert_eq!(subscription.read_keys, keys);
         assert_eq!(subscription.write_keys, keys);
     }
@@ -7984,7 +8304,12 @@ seiyaku Test {
             .find(|entry| entry.name == "bad_peer")
             .expect("entrypoint");
         assert_eq!(entry.access_hints_complete, Some(false));
-        assert!(!entry.access_hints_skipped.is_empty());
+        assert_eq!(entry.read_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
+        assert_eq!(entry.write_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
+        assert_eq!(
+            entry.access_hints_skipped,
+            [HINT_SKIP_OPAQUE_ISI.to_owned()]
+        );
 
         let (_bytes, production_manifest) = Compiler::new()
             .compile_source_with_manifest(src)
@@ -7995,26 +8320,16 @@ seiyaku Test {
             .into_iter()
             .find(|entry| entry.name == "bad_peer")
             .expect("bad_peer entrypoint");
-        assert_eq!(production_entry.access_hints_complete, Some(false));
-        assert!(
-            production_entry
-                .access_hints_skipped
-                .iter()
-                .any(|reason| reason == HINT_SKIP_OPAQUE_ISI)
+        assert_eq!(production_entry.read_keys, entry.read_keys);
+        assert_eq!(production_entry.write_keys, entry.write_keys);
+        assert_eq!(
+            production_entry.access_hints_complete,
+            entry.access_hints_complete
         );
-
-        let raw_request = r#"
-seiyaku RawSoracloud {
-  kotoage fn read() authorize("Admin") {
-    let request = soracloud_request("opaque");
-    let _secret = soracloud::read_secret(request);
-  }
-}
-"#;
-        let err = test_mode_compiler()
-            .compile_source(raw_request)
-            .expect_err("source must not construct raw Soracloud request envelopes");
-        assert!(err.contains("compiler-internal"), "unexpected error: {err}");
+        assert_eq!(
+            production_entry.access_hints_skipped,
+            entry.access_hints_skipped
+        );
     }
 
     #[test]
@@ -8145,12 +8460,12 @@ seiyaku Hello {
     Counter = 1;
   }
 
-  kotoage fn main() authorize("Admin") {
-    write_detail();
-  }
-
   kotoage fn write_detail() authorize("Admin") {
     Counter = Counter + 1;
+  }
+
+  kotoage fn main() authorize("Admin") {
+    Counter = Counter + 2;
   }
 }
 "#;
@@ -8185,6 +8500,32 @@ seiyaku Hello {
             main_embedded.entry_pc < write_embedded.entry_pc,
             "entrypoint wrappers must be laid out by symbol, not declaration order"
         );
+        for entrypoint in [main_embedded, write_embedded] {
+            let wrapper_start = parsed.code_offset
+                + usize::try_from(entrypoint.entry_pc).expect("entry PC fits usize");
+            let wrapper_call = u32::from_le_bytes(
+                bytes[wrapper_start..wrapper_start + 4]
+                    .try_into()
+                    .expect("wrapper call word"),
+            );
+            let wrapper_halt = u32::from_le_bytes(
+                bytes[wrapper_start + 4..wrapper_start + 8]
+                    .try_into()
+                    .expect("wrapper halt word"),
+            );
+            assert_eq!(
+                instruction::wide::opcode(wrapper_call),
+                instruction::wide::control::JAL,
+                "CNTR entry `{}` must dispatch through its compiler-owned wrapper",
+                entrypoint.name
+            );
+            assert_eq!(
+                instruction::wide::opcode(wrapper_halt),
+                instruction::wide::control::HALT,
+                "CNTR entry `{}` wrapper must terminate after its linked body returns",
+                entrypoint.name
+            );
+        }
         let first_word = u32::from_le_bytes(
             bytes[parsed.code_offset..parsed.code_offset + 4]
                 .try_into()
@@ -8255,28 +8596,30 @@ seiyaku StagedMintRequest {
     let created_at_ms_key = Name::parse("created_at_ms");
     let expires_at_ms_key = Name::parse("expires_at_ms");
 
-    let action = ev.get_name(action_key);
+    let action = ev.get_name(action_key).unwrap_or(Name::parse("missing"));
     if (action == Name::parse("create")) {
-      let request_id = ev.get_name(request_id_key);
+      let request_id = ev.get_name(request_id_key).unwrap_or(Name::parse("missing"));
       let sequence = MintRequestNextSequence + 1;
-      let fi_id = ev.get_name(fi_id_key);
-      let to_account_id = ev.get_account_id(to_account_id_key);
-      let amount_i64 = ev.get_int(amount_i64_key);
-      let requested_by_actor_id = ev.get_json(requested_by_actor_id_key);
-      let created_at_ms = ev.get_int(created_at_ms_key);
-      let expires_at_ms = ev.get_int(expires_at_ms_key);
-      update_record(sequence,
-                    request_id,
-                    fi_id,
-                    to_account_id,
-                    to_account_id,
-                    amount_i64,
-                    requested_by_actor_id,
-                    0,
-                    created_at_ms,
-                    expires_at_ms,
-                    0,
-                    0);
+      let fi_id = ev.get_name(fi_id_key).unwrap_or(Name::parse("missing"));
+      let to_account_id = ev.get_account_id(to_account_id_key).unwrap_or(context::authority());
+      let amount_i64 = ev.get_int(amount_i64_key).unwrap_or(0);
+      let requested_by_actor_id = ev.get_json(requested_by_actor_id_key).unwrap_or(Json::parse("{}"));
+      let created_at_ms = ev.get_int(created_at_ms_key).unwrap_or(0);
+      let expires_at_ms = ev.get_int(expires_at_ms_key).unwrap_or(0);
+      update_record(
+        sequence: sequence,
+        request_id: request_id,
+        fi_id: fi_id,
+        fi_multisig_account_id: to_account_id,
+        to_account_id: to_account_id,
+        amount_i64: amount_i64,
+        requested_by_actor_id: requested_by_actor_id,
+        state_code: 0,
+        created_at_ms: created_at_ms,
+        expires_at_ms: expires_at_ms,
+        finalized_at_ms: 0,
+        canceled_at_ms: 0,
+      );
     }
   }
 }
@@ -8931,8 +9274,10 @@ seiyaku Test {
             .iter()
             .find(|entry| entry.name == "read")
             .expect("read entrypoint");
-        assert_taira_supported_access_keys(&read.read_keys);
-        assert_taira_supported_access_keys(&read.write_keys);
+        assert_no_global_access_key(&read.read_keys);
+        assert_no_global_access_key(&read.write_keys);
+        assert!(read.read_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
+        assert!(read.write_keys.iter().any(|key| key == STATE_WILDCARD_KEY));
         assert_eq!(read.access_hints_complete, Some(false));
         assert_eq!(
             read.access_hints_skipped,
@@ -8962,7 +9307,7 @@ seiyaku Test {
         let src = r#"
 seiyaku Test {
   kotoage fn relay(target: bytes, payload: Json) -> bytes authorize("Admin") {
-    return contract::call(target, "settle", payload);
+    return contract::call(contract: target, entrypoint: "settle", arguments: payload);
   }
 }
 "#;
@@ -8993,8 +9338,18 @@ seiyaku Test {
             .iter()
             .find(|entry| entry.name == "register")
             .expect("register entrypoint");
-        assert_taira_supported_access_keys(&register.read_keys);
-        assert_taira_supported_access_keys(&register.write_keys);
+        assert!(
+            register
+                .read_keys
+                .iter()
+                .any(|key| key == GLOBAL_WILDCARD_KEY)
+        );
+        assert!(
+            register
+                .write_keys
+                .iter()
+                .any(|key| key == GLOBAL_WILDCARD_KEY)
+        );
         assert_eq!(register.access_hints_complete, Some(false));
         assert_eq!(
             register.access_hints_skipped,
@@ -9003,11 +9358,17 @@ seiyaku Test {
     }
 
     #[test]
-    fn production_accepts_dynamic_asset_definition_transfer_with_stripped_coarse_hints() {
+    fn production_preserves_dynamic_asset_definition_transfer_coarse_hints() {
         let src = r#"
 seiyaku Test {
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: Amount) authorize("Admin") {
-    ledger::asset::transfer(from, to, asset, amount, DataSpaceId::parse("0"));
+    ledger::asset::transfer(
+      source: from,
+      destination: to,
+      asset_definition: asset,
+      amount: amount,
+      dataspace: DataSpaceId::parse("0"),
+    );
   }
 }
 "#;
@@ -9016,17 +9377,24 @@ seiyaku Test {
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
             .expect("dynamic asset transfers should use coarse asset access hints");
-        assert!(
-            manifest.access_set_hints.is_none(),
-            "production should omit coarse wildcard-only access hints"
-        );
+        let hints = manifest
+            .access_set_hints
+            .expect("production must preserve coarse wildcard access hints");
+        for key in [super::ASSET_WILDCARD_KEY, super::ASSET_DEF_WILDCARD_KEY] {
+            assert!(hints.read_keys.iter().any(|actual| actual == key));
+            assert!(hints.write_keys.iter().any(|actual| actual == key));
+        }
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let move_entry = entrypoints
             .iter()
             .find(|entry| entry.name == "move")
             .expect("move entrypoint");
-        assert_taira_supported_access_keys(&move_entry.read_keys);
-        assert_taira_supported_access_keys(&move_entry.write_keys);
+        assert_no_global_access_key(&move_entry.read_keys);
+        assert_no_global_access_key(&move_entry.write_keys);
+        for key in [super::ASSET_WILDCARD_KEY, super::ASSET_DEF_WILDCARD_KEY] {
+            assert!(move_entry.read_keys.iter().any(|actual| actual == key));
+            assert!(move_entry.write_keys.iter().any(|actual| actual == key));
+        }
         assert_eq!(move_entry.access_hints_complete, Some(true));
         assert!(move_entry.access_hints_skipped.is_empty());
     }
@@ -9038,7 +9406,13 @@ seiyaku Test {
             r#"
 seiyaku Test {{
   kotoage fn move(from: AccountId, to: AccountId, amount: Amount) authorize("Admin") {{
-    ledger::asset::transfer(from, to, AssetDefinitionId::parse("{asset_literal}"), amount, DataSpaceId::parse("0"));
+    ledger::asset::transfer(
+      source: from,
+      destination: to,
+      asset_definition: AssetDefinitionId::parse("{asset_literal}"),
+      amount: amount,
+      dataspace: DataSpaceId::parse("0"),
+    );
   }}
 }}
 "#
@@ -9059,8 +9433,8 @@ seiyaku Test {{
             !hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()),
             "fixed asset transfers should not require global write wildcards"
         );
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
         assert!(
             hints
                 .read_keys
@@ -9093,7 +9467,13 @@ seiyaku Test {{
 
   kotoage fn move(from: AccountId, to: AccountId, amount: Amount) authorize("Admin") {{
     let asset = settlement_asset();
-    ledger::asset::transfer(from, to, asset, amount, DataSpaceId::parse("0"));
+    ledger::asset::transfer(
+      source: from,
+      destination: to,
+      asset_definition: asset,
+      amount: amount,
+      dataspace: DataSpaceId::parse("0"),
+    );
   }}
 }}
 "#
@@ -9108,8 +9488,8 @@ seiyaku Test {{
             .expect("expected access_set_hints");
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert_taira_supported_access_keys(&hints.read_keys);
-        assert_taira_supported_access_keys(&hints.write_keys);
+        assert_no_global_access_key(&hints.read_keys);
+        assert_no_global_access_key(&hints.write_keys);
         assert!(
             hints
                 .read_keys
@@ -9128,7 +9508,13 @@ seiyaku Test {{
 seiyaku Test {
   #[access(read="*", write="*")]
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: Amount) authorize("Admin") {
-    ledger::asset::transfer(from, to, asset, amount, DataSpaceId::parse("0"));
+    ledger::asset::transfer(
+      source: from,
+      destination: to,
+      asset_definition: asset,
+      amount: amount,
+      dataspace: DataSpaceId::parse("0"),
+    );
   }
 }
 "#;
@@ -9148,7 +9534,13 @@ seiyaku Test {
 seiyaku Test {{
   #[access(read="{account_key}", write="{account_key}")]
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: Amount) authorize("Admin") {{
-    ledger::asset::transfer(from, to, asset, amount, DataSpaceId::parse("0"));
+    ledger::asset::transfer(
+      source: from,
+      destination: to,
+      asset_definition: asset,
+      amount: amount,
+      dataspace: DataSpaceId::parse("0"),
+    );
   }}
 }}
 "#
@@ -9515,6 +9907,20 @@ seiyaku CompilerFixture {
                 .iter()
                 .any(|entry| entry.function_name == "smoke")
         );
+        assert!(
+            report
+                .budget_report
+                .iter()
+                .any(|entry| entry.function_name == "smoke"),
+            "a private #[test] function must be an executable root in test mode"
+        );
+        assert!(
+            report
+                .budget_report
+                .iter()
+                .all(|entry| entry.function_name != "helper"),
+            "an ordinary unreachable private function must not become a test root"
+        );
     }
 
     #[test]
@@ -9565,9 +9971,17 @@ seiyaku CompilerFixture {
             fn smoke() {
                 let _acct = test::actor_account("issuer");
                 let _pk = test::actor_public_key("issuer");
-                let _sig = test::actor_sign("issuer", b"message");
-                test::invoke_entrypoint_as("issuer", "run", Json::parse("{}"));
-                test::expect_reject_as("issuer", "run", Json::parse("{}"));
+                let _sig = test::actor_sign(actor: "issuer", payload: b"message");
+                test::invoke_entrypoint_as(
+                    actor: "issuer",
+                    entrypoint: "run",
+                    arguments: Json::parse("{}"),
+                );
+                test::expect_reject_as(
+                    actor: "issuer",
+                    entrypoint: "run",
+                    arguments: Json::parse("{}"),
+                );
             }
         }
         "#;
@@ -9643,6 +10057,253 @@ seiyaku CompilerFixture {
     }
 
     #[test]
+    fn amount_operators_use_extended_nominal_syscalls_without_low_byte_aliasing() {
+        let source = r#"
+seiyaku AmountOps {
+    view fn calculate(left: Amount, right: Amount) -> Amount {
+        let sum = left + right;
+        let product = sum * right;
+        return product / left;
+    }
+}
+"#;
+        let code = Compiler::new()
+            .compile_source(source)
+            .expect("compile dynamic Amount operators");
+        for syscall in [
+            syscalls::SYSCALL_AMOUNT_ADD,
+            syscalls::SYSCALL_AMOUNT_MUL,
+            syscalls::SYSCALL_AMOUNT_DIV_EXACT,
+        ] {
+            let encoded = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+            assert!(
+                code.windows(encoded.len()).any(|window| window == encoded),
+                "missing extended Amount syscall {syscall:#x}"
+            );
+        }
+        let aliased_create_trigger = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            syscalls::SYSCALL_CREATE_TRIGGER as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            !code
+                .windows(aliased_create_trigger.len())
+                .any(|window| window == aliased_create_trigger),
+            "Amount 0x010040 must not truncate to CREATE_TRIGGER 0x40"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn every_typed_query_page_compiles_with_a_structural_public_schema() {
+        use ivm_abi::entrypoint::{EntrypointValueTypeNodeV1 as Node, EntrypointValueTypeV1};
+
+        let source = r#"
+seiyaku TypedPages {
+  view fn accounts(offset: i64, limit: i64) -> QueryPage<AccountView> {
+    ledger::query::accounts(offset: offset, limit: limit)
+  }
+  view fn assets(offset: i64, limit: i64) -> QueryPage<AssetView> {
+    ledger::query::assets(offset: offset, limit: limit)
+  }
+  view fn asset_definitions(offset: i64, limit: i64) -> QueryPage<AssetDefinitionView> {
+    ledger::query::asset_definitions(offset: offset, limit: limit)
+  }
+  view fn domains(offset: i64, limit: i64) -> QueryPage<DomainView> {
+    ledger::query::domains(offset: offset, limit: limit)
+  }
+  view fn nfts(offset: i64, limit: i64) -> QueryPage<NftView> {
+    ledger::query::nfts(offset: offset, limit: limit)
+  }
+}
+"#;
+        let artifact = Compiler::new()
+            .compile_source(source)
+            .expect("compile every typed query-page projection");
+        let parsed = ProgramMetadata::parse(&artifact).expect("parse typed query-page metadata");
+        let interface = parsed
+            .contract_interface
+            .as_ref()
+            .expect("typed query-page interface");
+        assert_eq!(interface.entrypoints.len(), 5);
+
+        let mut encoded_schemas = HashSet::new();
+        for (entrypoint_name, view_name) in [
+            ("accounts", "AccountView"),
+            ("assets", "AssetView"),
+            ("asset_definitions", "AssetDefinitionView"),
+            ("domains", "DomainView"),
+            ("nfts", "NftView"),
+        ] {
+            let entrypoint = interface
+                .entrypoints
+                .iter()
+                .find(|entrypoint| entrypoint.name == entrypoint_name)
+                .unwrap_or_else(|| panic!("missing {entrypoint_name} descriptor"));
+            let expected_return_type = format!("QueryPage<{view_name}>");
+            assert_eq!(
+                entrypoint.return_type.as_deref(),
+                Some(expected_return_type.as_str())
+            );
+            let schema = entrypoint
+                .return_schema
+                .as_ref()
+                .unwrap_or_else(|| panic!("missing {entrypoint_name} return schema"));
+            let [
+                Node::Struct(page),
+                Node::List(items),
+                Node::Struct(view),
+                ..,
+            ] = schema.nodes.as_slice()
+            else {
+                panic!("unexpected {entrypoint_name} schema: {schema:?}");
+            };
+            assert_eq!(page.name, "QueryPage");
+            assert_eq!(page.fields, ["items", "next_offset"]);
+            assert_eq!(items.capacity, 64);
+            assert_eq!(view.name, view_name);
+            assert!(matches!(
+                schema
+                    .nodes
+                    .as_slice()
+                    .get(schema.nodes.len().saturating_sub(2)..),
+                Some([
+                    Node::Option,
+                    Node::Leaf(ivm_abi::entrypoint::EntrypointValueKindV1::Int)
+                ])
+            ));
+            assert!(schema.validate());
+            assert_eq!(schema.word_count(), Some(2));
+            assert_eq!(
+                schema.canonical_type_name().as_deref(),
+                Some(expected_return_type.as_str()),
+                "artifact verification must see the same structural type name"
+            );
+
+            let encoded = norito::to_bytes(schema).expect("encode embedded query-page schema");
+            let decoded: EntrypointValueTypeV1 =
+                norito::decode_from_bytes(&encoded).expect("decode embedded query-page schema");
+            assert_eq!(&decoded, schema);
+            assert!(
+                encoded_schemas.insert(encoded),
+                "{view_name} must retain a distinct structural specialization"
+            );
+        }
+        assert_eq!(encoded_schemas.len(), 5);
+
+        let syscall = encoding::wide::encode_syscallx(syscalls::SYSCALL_CORE_QUERY_PAGE);
+        assert_eq!(
+            artifact[parsed.code_offset..]
+                .chunks_exact(4)
+                .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
+                .filter(|word| *word == syscall)
+                .count(),
+            5,
+            "each page entrypoint must lower to exactly one core-query host call"
+        );
+    }
+
+    #[test]
+    fn ordinary_struct_entrypoint_names_come_from_the_exact_abi_schema() {
+        let source = r#"
+seiyaku UserStructAbi {
+    struct Pair { left: i64; right: bool; }
+
+    view fn echo(value: Pair) -> Pair {
+        value
+    }
+}
+"#;
+        let artifact = Compiler::new()
+            .compile_source(source)
+            .expect("compile ordinary user-struct entrypoint");
+        let parsed = ProgramMetadata::parse(&artifact)
+            .expect("admission metadata must parse the compiler-produced artifact");
+        let interface = parsed
+            .contract_interface
+            .as_ref()
+            .expect("embedded contract interface");
+        let entrypoint = interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "echo")
+            .expect("echo entrypoint descriptor");
+        let argument_schema = entrypoint
+            .argument_schema
+            .as_ref()
+            .expect("ordinary struct argument schema");
+        let field_schema = &argument_schema
+            .fields
+            .first()
+            .expect("one argument-schema field")
+            .ty;
+        let parameter_type = field_schema
+            .canonical_type_name()
+            .expect("ordinary struct parameter canonical ABI name");
+        assert_eq!(parameter_type, "struct Pair");
+        assert_eq!(
+            entrypoint
+                .params
+                .first()
+                .expect("one entrypoint parameter")
+                .type_name,
+            parameter_type
+        );
+
+        let return_schema = entrypoint
+            .return_schema
+            .as_ref()
+            .expect("ordinary struct return schema");
+        let return_type = return_schema
+            .canonical_type_name()
+            .expect("ordinary struct return canonical ABI name");
+        assert_eq!(return_type, "struct Pair");
+        assert_eq!(
+            entrypoint.return_type.as_deref(),
+            Some(return_type.as_str())
+        );
+    }
+
+    #[test]
+    fn amount_div_round_uses_one_extended_nominal_syscall() {
+        let source = r#"
+seiyaku RoundedAmount {
+    view fn calculate(value: Amount, divisor: Amount, scale: i64) -> Amount {
+        return value.div_round(
+            divisor: divisor,
+            scale: scale,
+            mode: Rounding::nearest_even,
+        );
+    }
+}
+"#;
+        let code = Compiler::new()
+            .compile_source(source)
+            .expect("compile rounded Amount division");
+        let encoded =
+            encoding::wide::encode_syscallx(syscalls::SYSCALL_AMOUNT_DIV_ROUND).to_le_bytes();
+        assert_eq!(
+            code.windows(encoded.len())
+                .filter(|window| *window == encoded)
+                .count(),
+            1,
+            "dynamic rounded division must lower to one extended Amount syscall"
+        );
+        let truncated = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            syscalls::SYSCALL_AMOUNT_DIV_ROUND as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            !code
+                .windows(truncated.len())
+                .any(|window| window == truncated),
+            "AMOUNT_DIV_ROUND must never truncate to its low-byte syscall alias"
+        );
+    }
+
+    #[test]
     fn manifest_state_descriptors_use_canonical_type_names() {
         let src = r#"
         seiyaku Demo {
@@ -9653,8 +10314,8 @@ seiyaku CompilerFixture {
 
             hajimari() {
                 Counter = 0;
-                MaybeCounter = option::none(0);
-                Outcome = result::err(false, "not ready");
+                MaybeCounter = Option::none;
+                Outcome = Result::err("not ready");
             }
 
             view fn get_counter() -> i64 {
@@ -9699,14 +10360,14 @@ seiyaku CompilerFixture {
 
         let (artifact, manifest) = Compiler::new()
             .compile_source_with_manifest(source)
-            .expect("compile named contract");
+            .expect("compile named seiyaku");
         let interface = ProgramMetadata::parse(&artifact)
             .expect("parse contract artifact")
             .contract_interface
             .expect("embedded contract interface");
 
-        assert_eq!(interface.contract_name, "Treasury");
-        assert_eq!(manifest.contract_name.as_deref(), Some("Treasury"));
+        assert_eq!(interface.seiyaku_name, "Treasury");
+        assert_eq!(manifest.seiyaku_name.as_deref(), Some("Treasury"));
     }
 
     #[test]
@@ -9749,6 +10410,208 @@ seiyaku CompilerFixture {
             instruction::wide::opcode(word),
             instruction::wide::control::JALR
         );
+    }
+
+    #[test]
+    fn whole_program_dce_removes_unused_private_code_and_extra_dispatch_wrappers() {
+        let source = r#"
+        seiyaku WholeProgramDce {
+            fn helper(value: i64) -> i64 {
+                return value;
+            }
+
+            fn unused() -> i64 {
+                return 777;
+            }
+
+            view fn exposed(value: i64) -> i64 {
+                return helper(value);
+            }
+        }
+        "#;
+
+        let (artifact, _manifest, report) = Compiler::new()
+            .compile_source_with_manifest_and_report(source)
+            .expect("compile whole-program DCE fixture");
+        assert!(
+            report
+                .budget_report
+                .iter()
+                .all(|function| function.function_name != "unused"),
+            "an unreachable private function must have no emitted bytecode"
+        );
+        assert!(
+            report
+                .budget_report
+                .iter()
+                .any(|function| { function.function_name == "helper" })
+        );
+        assert!(
+            report
+                .budget_report
+                .iter()
+                .any(|function| { function.function_name == "exposed" })
+        );
+        assert!(
+            report
+                .budget_report
+                .iter()
+                .any(|function| { function.function_name == "__entrypoint_impl__exposed" })
+        );
+
+        let metadata = ProgramMetadata::parse(&artifact).expect("parse DCE artifact");
+        let entrypoint_count = metadata
+            .contract_interface
+            .as_ref()
+            .expect("embedded interface")
+            .entrypoints
+            .len();
+        assert_eq!(entrypoint_count, 1);
+        let function_words = report
+            .budget_report
+            .iter()
+            .map(|function| {
+                usize::try_from(function.bytecode_words).expect("word count fits usize")
+            })
+            .sum::<usize>();
+        let emitted_words = artifact[metadata.code_offset..].len() / 4;
+        assert_eq!(
+            emitted_words,
+            1 + function_words + 2 * entrypoint_count,
+            "code must contain only PC-zero HALT, reachable function bodies, and one call/HALT dispatch wrapper per public entrypoint"
+        );
+    }
+
+    #[test]
+    fn whole_program_dce_preserves_lifecycle_trigger_helpers_and_cntr_targets() {
+        let source = r#"
+        seiyaku LifecycleReachability {
+            state Counter: i64;
+
+            fn initialize() {
+                Counter = 0;
+            }
+
+            fn improve() {
+                Counter = Counter + 1;
+            }
+
+            fn handle_trigger() {
+                Counter = Counter + 1;
+            }
+
+            fn orphan() {
+                Counter = 777;
+            }
+
+            hajimari() {
+                initialize();
+            }
+
+            kaizen() {
+                improve();
+            }
+
+            kotoage fn run() authorize("Entry") {
+                handle_trigger();
+            }
+
+            trigger wake -> run {
+                on time pre_commit;
+            }
+
+            view fn inspect() -> i64 {
+                return Counter;
+            }
+        }
+        "#;
+
+        let (artifact, _manifest, report) = Compiler::new()
+            .compile_source_with_manifest_and_report(source)
+            .expect("compile lifecycle reachability fixture");
+        let emitted = report
+            .budget_report
+            .iter()
+            .map(|function| function.function_name.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(
+            [
+                "initialize",
+                "improve",
+                "handle_trigger",
+                "hajimari",
+                "kaizen",
+                "run",
+                "inspect",
+            ]
+            .into_iter()
+            .all(|name| emitted.contains(name)),
+            "every helper reachable from a public or lifecycle root must remain: {emitted:?}"
+        );
+        assert!(
+            !emitted.contains("orphan"),
+            "a private function outside the executable graph must be removed"
+        );
+
+        let metadata = ProgramMetadata::parse(&artifact).expect("parse lifecycle artifact");
+        let interface = metadata
+            .contract_interface
+            .as_ref()
+            .expect("embedded lifecycle interface");
+        assert_eq!(interface.entrypoints.len(), 4);
+        let run = interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "run")
+            .expect("trigger callback entrypoint");
+        assert_eq!(run.triggers.len(), 1);
+
+        for entrypoint in &interface.entrypoints {
+            let wrapper_pc = usize::try_from(entrypoint.entry_pc).expect("entry PC fits usize");
+            let wrapper_start = metadata.code_offset + wrapper_pc;
+            let call = u32::from_le_bytes(
+                artifact[wrapper_start..wrapper_start + 4]
+                    .try_into()
+                    .expect("CNTR wrapper call word"),
+            );
+            assert_eq!(
+                instruction::wide::opcode(call),
+                instruction::wide::control::JAL,
+                "small CNTR wrappers must call their retained body directly"
+            );
+            let (_, link_register, offset_words) = encoding::wide::decode_jump(call);
+            assert_eq!(
+                link_register, 1,
+                "CNTR dispatch must preserve a return link"
+            );
+            let target = decoded_control_target(wrapper_pc, i64::from(offset_words))
+                .expect("valid CNTR wrapper target");
+            let body = report
+                .budget_report
+                .iter()
+                .find(|function| function.function_name == entrypoint.name)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "CNTR descriptor `{}` points at a removed function",
+                        entrypoint.name
+                    )
+                });
+            assert_eq!(
+                target,
+                usize::try_from(body.pc_start).expect("function PC fits usize"),
+                "CNTR descriptor `{}` must call its retained function body",
+                entrypoint.name
+            );
+            let halt = u32::from_le_bytes(
+                artifact[wrapper_start + 4..wrapper_start + 8]
+                    .try_into()
+                    .expect("CNTR wrapper halt word"),
+            );
+            assert_eq!(
+                instruction::wide::opcode(halt),
+                instruction::wide::control::HALT
+            );
+        }
     }
 
     #[test]
@@ -9977,9 +10840,29 @@ seiyaku CompilerFixture {
         let (_artifact, _manifest, mut report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile sidecar fixture");
+        let source_file = crate::source::SourceFile::new(
+            crate::source::SourceId(0),
+            "contracts/sidecar.ko",
+            source,
+        );
+        let mut exact_segments = 0_usize;
         for entry in &mut report.source_map {
             entry.source.source_path = Some("contracts/sidecar.ko".to_owned());
+            if entry.source.byte_start < entry.source.byte_end {
+                exact_segments += 1;
+                let start = usize::try_from(entry.source.byte_start).expect("source offset");
+                let end = usize::try_from(entry.source.byte_end).expect("source offset");
+                assert!(start < end && end <= source.len());
+                assert!(source.is_char_boundary(start) && source.is_char_boundary(end));
+                let expected = source_file.line_column(entry.source.byte_start);
+                assert_eq!(entry.source.line, u32::try_from(expected.line).unwrap());
+                assert_eq!(entry.source.column, u32::try_from(expected.column).unwrap());
+            }
         }
+        assert_eq!(
+            exact_segments, 1,
+            "source metadata is retained once per emitted function without MIR marker instructions"
+        );
         for entry in &mut report.budget_report {
             entry.source.as_mut().expect("budget source").source_path =
                 Some("contracts/sidecar.ko".to_owned());
@@ -10019,19 +10902,38 @@ seiyaku CompilerFixture {
 
     #[test]
     fn legacy_source_facade_cannot_bypass_canonical_resolution_audits() {
-        let error = Compiler::new()
-            .compile_source(
-                r#"
+        let source = r#"
                 seiyaku NoBypass {
                     const limit: i64 = 4;
                     view fn inspect(limit: i64) -> i64 { return limit; }
                 }
-                "#,
-            )
-            .expect_err("a parameter must not shadow a contract constant");
-        assert!(
-            error.contains("shadows an existing name"),
-            "legacy facade returned the wrong diagnostic: {error}"
+                "#;
+        let compiler = Compiler::new();
+        let diagnostics = crate::session::CompilerSession::new(compiler.opts.clone())
+            .build(crate::session::CompileRequest {
+                source,
+                source_name: None,
+            })
+            .expect_err("a parameter must not shadow a seiyaku constant");
+        assert_eq!(diagnostics.diagnostics.len(), 1);
+        let diagnostic = &diagnostics.diagnostics[0];
+        assert_eq!(diagnostic.code, "E_LOCAL_SHADOWING");
+        assert_eq!(
+            diagnostic.phase,
+            crate::diagnostic::DiagnosticPhase::Resolve
+        );
+        assert_eq!(
+            diagnostic.message,
+            "local binding `limit` shadows a const declaration"
+        );
+
+        let error = compiler
+            .compile_source(source)
+            .expect_err("a parameter must not shadow a seiyaku constant");
+        assert_eq!(
+            error,
+            diagnostics.render_human(),
+            "the convenience facade must preserve the canonical structured diagnostic"
         );
     }
 }
@@ -10097,60 +10999,6 @@ impl Compiler {
             .map_err(|diagnostics| diagnostics.render_human())
     }
 
-    /// Compile a parsed [`Program`] into IVM bytecode.
-    pub fn compile(&self, program: &Program) -> Result<Vec<u8>, String> {
-        self.compile_program(program).map(|art| art.bytes)
-    }
-
-    fn compile_program(&self, program: &Program) -> Result<CompilationArtifacts, String> {
-        let semantic_context = semantic::SemanticContext::with_capabilities(
-            self.opts.force_zk,
-            self.opts.mode == CompilerMode::Test,
-        );
-        self.compile_program_in_context(program, &semantic_context)
-    }
-
-    fn compile_program_in_context(
-        &self,
-        program: &Program,
-        semantic_context: &semantic::SemanticContext,
-    ) -> Result<CompilationArtifacts, String> {
-        let prepared = self
-            .prepare_program(program, semantic_context, None)
-            .map_err(|diagnostics| diagnostics.render_human())?;
-        self.compile_prepared(prepared)
-    }
-
-    fn prepare_program(
-        &self,
-        program: &Program,
-        semantic_context: &semantic::SemanticContext,
-        source_name: Option<&str>,
-    ) -> Result<PreparedCompilation, DiagnosticBundle> {
-        if program.unit.kind != SourceUnitKind::Contract {
-            return Err(native_diagnostic_bundle(
-                "K4003",
-                DiagnosticPhase::Artifact,
-                source_name,
-                None,
-                "a reusable module cannot be emitted as a deployable .to artifact".to_owned(),
-            ));
-        }
-        if self.opts.max_cycles == 0 {
-            return Err(native_diagnostic_bundle(
-                "K4001",
-                DiagnosticPhase::Artifact,
-                source_name,
-                None,
-                "the selected max_cycles ceiling must be greater than zero".to_owned(),
-            ));
-        }
-        let typed = semantic_context
-            .analyze_all(program)
-            .map_err(|failures| semantic_diagnostic_bundle(failures, source_name))?;
-        self.prepare_typed_program(typed, source_name)
-    }
-
     fn prepare_typed_program(
         &self,
         typed: TypedProgram,
@@ -10165,7 +11013,7 @@ impl Compiler {
                 "the selected max_cycles ceiling must be greater than zero".to_owned(),
             ));
         }
-        if typed.unit.kind != SourceUnitKind::Contract {
+        if typed.unit.kind != SourceUnitKind::Seiyaku {
             return Err(native_diagnostic_bundle(
                 "K4003",
                 DiagnosticPhase::Artifact,
@@ -10191,11 +11039,10 @@ impl Compiler {
             ));
         }
         semantic::validate_linked_program(&typed, self.opts.force_zk).map_err(|error| {
-            let (code, message) = crate::semantic_diagnostics::semantic_error_parts(error.message);
             DiagnosticBundle::single(Diagnostic::error(
-                code,
+                error.code,
                 DiagnosticPhase::Semantic,
-                message,
+                error.message,
                 source_span(source_name, None),
             ))
         })?;
@@ -10216,16 +11063,36 @@ impl Compiler {
         // Validate features supported by the current code generator.
         validate_codegen_supported(&typed)
             .map_err(|failures| lowering_diagnostic_bundle("K3001", failures, source_name))?;
-        let mut ir_program = ir::lower_with_cap_and_test_mode_diagnostics(
+        let ir_program = ir::lower_with_cap_and_test_mode_diagnostics(
             &typed,
             usize::from(COLLECTION_ITERATION_CAP),
             self.opts.mode == CompilerMode::Test,
         )
         .map_err(|failures| lowering_diagnostic_bundle("K3003", failures, source_name))?;
-        regalloc::optimize_program(&mut ir_program);
+        let executable_roots = executable_ir_roots(&typed, self.opts.mode == CompilerMode::Test);
+        let mut ssa_program = crate::ssa::Program::from_ir(ir_program).map_err(|message| {
+            native_diagnostic_bundle(
+                "K3005",
+                DiagnosticPhase::Lowering,
+                source_name,
+                None,
+                message,
+            )
+        })?;
+        ssa_program
+            .optimize_and_retain(&executable_roots)
+            .map_err(|message| {
+                native_diagnostic_bundle(
+                    "K3004",
+                    DiagnosticPhase::Lowering,
+                    source_name,
+                    None,
+                    message,
+                )
+            })?;
         Ok(PreparedCompilation {
             typed,
-            ir_program,
+            ssa_program,
             source_name: source_name.map(ToOwned::to_owned),
         })
     }
@@ -10236,9 +11103,10 @@ impl Compiler {
     ) -> Result<CompilationArtifacts, String> {
         let PreparedCompilation {
             typed,
-            ir_program: ir_prog,
+            ssa_program,
             source_name,
         } = prepared;
+        let ir_prog = ssa_program.into_ir()?;
         if ir_prog.functions.is_empty() {
             return Err(i18n::translate(self.lang, Message::NoFunctions));
         }
@@ -10347,13 +11215,30 @@ impl Compiler {
                     {
                         int_const_map.insert((func_idx, *dest), neg);
                     }
-                    if let ir::Instr::NumericFromInt { dest, value } = instr
+                    if let ir::Instr::NumericFromInt { dest, value, kind } = instr
                         && let Some(raw) = int_const_map.get(&(func_idx, *value)).copied()
                     {
                         let numeric = iroha_primitives::numeric::Numeric::new(raw, 0);
                         let payload = norito::to_bytes(&numeric).expect("encode numeric");
                         norito_literal_map
                             .insert((func_idx, *dest), format!("0x{}", hex::encode(payload)));
+                        let dataref_kind = match kind {
+                            ir::WideNumericKind::U128 => DRK::NoritoBytes,
+                            ir::WideNumericKind::Amount => DRK::Amount,
+                        };
+                        dataref_kind_map.insert((func_idx, *dest), dataref_kind);
+                    }
+                    if let ir::Instr::AmountFromU128 { dest, .. } = instr {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::Amount);
+                    }
+                    if let ir::Instr::NumericBinary { dest, kind, .. } = instr {
+                        dataref_kind_map.insert(
+                            (func_idx, *dest),
+                            match kind {
+                                ir::WideNumericKind::U128 => DRK::NoritoBytes,
+                                ir::WideNumericKind::Amount => DRK::Amount,
+                            },
+                        );
                     }
                     if let ir::Instr::EncodeInt { dest, value } = instr
                         && let Some(raw) = int_const_map.get(&(func_idx, *value)).copied()
@@ -10771,6 +11656,7 @@ impl Compiler {
                             ir::DataRefKind::ProofBlob => "proof_blob",
                             ir::DataRefKind::SoracloudRequest => "soracloud_request",
                             ir::DataRefKind::SoracloudResponse => "soracloud_response",
+                            ir::DataRefKind::Amount => "amount",
                         };
                         let msg =
                             format!("{name} expects a string literal; pass a literal or bytes");
@@ -10816,8 +11702,9 @@ impl Compiler {
         // Literal table fixups: each becomes one indexed typed-literal load.
         let mut fixups: Vec<LiteralFixup> = Vec::new();
 
-        // We now compile ALL functions and stitch them together. Track global code,
-        // per-function start offsets, and fixups for inter-block control flow.
+        // Compile every function retained by whole-program reachability and stitch
+        // them together. Track global code, per-function start offsets, and fixups
+        // for inter-block control flow.
         // Raw execution never implies a source-level entrypoint. Offset zero is
         // deliberately non-dispatching; hosts must select a CNTR `entry_pc`.
         let mut code: Vec<u8> = Vec::new();
@@ -10829,6 +11716,12 @@ impl Compiler {
         let mut func_start_offsets: HashMap<String, usize> = HashMap::new();
         let mut entrypoint_wrapper_offsets: HashMap<String, usize> = HashMap::new();
         let mut function_debug_seeds: Vec<FunctionDebugSeed> = Vec::new();
+        let mut function_sources = HashMap::new();
+        for item in &typed.items {
+            let TypedItem::Function(function) = item;
+            function_sources.insert(function.name.clone(), function.source);
+            function_sources.insert(entrypoint_ir_symbol_name(function), function.source);
+        }
         struct JumpFixup {
             at: usize,
             target_label: usize,
@@ -10854,8 +11747,8 @@ impl Compiler {
             // Record start offset for call patching
             func_start_offsets.insert(func.name.clone(), code.len());
             let func_base = *func_start_offsets.get(&func.name).unwrap();
-            // Every source function is callable. Public dispatch enters through
-            // a compiler-owned wrapper recorded in CNTR, never through raw PC 0.
+            // Every retained function is callable. Public dispatch enters through a
+            // compiler-owned wrapper recorded in CNTR, never through raw PC 0.
             let is_entry = false;
             let uses_caller_saved_pool = regalloc::uses_caller_saved_pool(func);
             let saves_return_address = !is_entry && regalloc::has_internal_calls(func);
@@ -10897,6 +11790,7 @@ impl Compiler {
             function_debug_seeds.push(FunctionDebugSeed {
                 name: func.name.clone(),
                 location: func.location,
+                source: function_sources.get(&func.name).copied().flatten(),
                 pc_start: func_base as u64,
                 pc_end: 0,
                 frame_bytes: u32::try_from(local_frame).unwrap_or(u32::MAX),
@@ -11702,11 +12596,7 @@ impl Compiler {
                                 Instr::AddSignatory { .. } => syscalls::SYSCALL_ADD_SIGNATORY,
                                 _ => syscalls::SYSCALL_REMOVE_SIGNATORY,
                             };
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscall as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            push_syscall(&mut code, syscall);
                         }
                         Instr::SetAccountQuorum { account, quorum } => {
                             if let Some(acc_str) = string_map.get(&(func_idx, *account)) {
@@ -12250,6 +13140,53 @@ impl Compiler {
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::CoreQueryGet { dest, key, entity } => {
+                            let rkey = src_reg(key, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, rkey, 0)?);
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            emit_addi(&mut code, 10, 0, entity.as_u64() as i64);
+                            push_syscall(&mut code, syscalls::SYSCALL_CORE_QUERY_GET);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::CoreQueryPage {
+                            items_dest,
+                            next_offset_dest,
+                            entity,
+                            offset,
+                            limit,
+                        } => {
+                            let roffset = src_reg(offset, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(11, roffset, 0)?);
+                            let rlimit = src_reg(limit, scratch2, &mut code)?;
+                            push_word(&mut code, encode_addi(12, rlimit, 0)?);
+                            emit_addi(&mut code, 10, 0, entity.as_u64() as i64);
+                            push_syscall(&mut code, syscalls::SYSCALL_CORE_QUERY_PAGE);
+                            // Preserve both syscall results before assigning
+                            // allocator-selected destinations: either result
+                            // may itself be allocated to r10 or r11.
+                            push_word(&mut code, encode_addi(scratch1, 10, 0)?);
+                            push_word(&mut code, encode_addi(scratch2, 11, 0)?);
+                            let (items_reg, items_spilled, items_imm) = dst_reg(items_dest);
+                            push_word(&mut code, encode_addi(items_reg, scratch1, 0)?);
+                            spill_back(items_dest, items_reg, items_spilled, items_imm, &mut code)?;
+                            let (offset_reg, offset_spilled, offset_imm) =
+                                dst_reg(next_offset_dest);
+                            push_word(&mut code, encode_addi(offset_reg, scratch2, 0)?);
+                            spill_back(
+                                next_offset_dest,
+                                offset_reg,
+                                offset_spilled,
+                                offset_imm,
+                                &mut code,
+                            )?;
                         }
                         Instr::GetAccountBalance {
                             dest,
@@ -12915,11 +13852,7 @@ impl Compiler {
                                 Instr::EscrowCancel { .. } => syscalls::SYSCALL_ESCROW_CANCEL,
                                 _ => unreachable!(),
                             };
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscall as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            push_syscall(&mut code, syscall);
                         }
                         Instr::EscrowOpenDispute {
                             escrow,
@@ -13032,11 +13965,7 @@ impl Compiler {
                                 }
                                 _ => unreachable!(),
                             };
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscall as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            push_syscall(&mut code, syscall);
                         }
                         Instr::AnonymousEscrowAccept { escrow }
                         | Instr::AnonymousEscrowMarkPaymentSent { escrow } => {
@@ -13063,11 +13992,7 @@ impl Compiler {
                                 }
                                 _ => unreachable!(),
                             };
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscall as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            push_syscall(&mut code, syscall);
                         }
                         Instr::AnonymousEscrowOpenDispute {
                             escrow,
@@ -13162,11 +14087,12 @@ impl Compiler {
                             key,
                             value,
                         } => {
-                            // Mixed strategy: if any argument was produced via DataRef/StringConst,
-                            // emit a LOAD with a fixup into the appropriate register; otherwise move
-                            // the value from its allocated register. This allows patterns like
-                            // `ledger::account::set_detail(context::authority(), Name::parse("k"), Json::parse("{}"))` where only
-                            // key/value are literals and account is provided by the host.
+                            // Per-argument strategy: values produced via DataRef/StringConst use a
+                            // LOAD fixup in the appropriate register; runtime values move from their
+                            // allocated register. This allows patterns like
+                            // `ledger::account::set_detail(account: context::authority(),
+                            // key: Name::parse("k"), value: Json::parse("{}"))` where only key/value
+                            // are literals and account is provided by the host.
                             // r10 = &AccountId
                             if let Some(k_acc) = string_map
                                 .get(&(func_idx, *account))
@@ -13459,41 +14385,6 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
-                            let (rd, spilled, imm) = dst_reg(dest);
-                            push_word(&mut code, encode_addi(rd, 10, 0)?);
-                            spill_back(dest, rd, spilled, imm, &mut code)?;
-                        }
-                        Instr::CallContract {
-                            dest,
-                            contract,
-                            entrypoint,
-                            payload,
-                        } => {
-                            let contract_reg = src_reg(contract, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(10, contract_reg, 0)?);
-                            let publish_word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-                            );
-                            code.extend_from_slice(&publish_word.to_le_bytes());
-                            push_word(&mut code, encode_addi(13, 10, 0)?);
-
-                            let entrypoint_reg = src_reg(entrypoint, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(10, entrypoint_reg, 0)?);
-                            code.extend_from_slice(&publish_word.to_le_bytes());
-                            push_word(&mut code, encode_addi(14, 10, 0)?);
-
-                            let payload_reg = src_reg(payload, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(10, payload_reg, 0)?);
-                            code.extend_from_slice(&publish_word.to_le_bytes());
-                            push_word(&mut code, encode_addi(12, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, 13, 0)?);
-                            push_word(&mut code, encode_addi(11, 14, 0)?);
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_CALL_CONTRACT as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -14527,6 +15418,88 @@ impl Compiler {
                             emit_load64(&mut code, rd, rbase, *imm as i64, scratch)?;
                             spill_back(dest, rd, spilled, imm_spill, &mut code)?;
                         }
+                        Instr::Load64 { dest, address } => {
+                            let raddress = src_reg(address, scratch1, &mut code)?;
+                            let (rd, spilled, imm_spill) = dst_reg(dest);
+                            let scratch = if rd == raddress {
+                                Some(if rd != scratch1 { scratch1 } else { scratch2 })
+                            } else {
+                                None
+                            };
+                            emit_load64(&mut code, rd, raddress, 0, scratch)?;
+                            spill_back(dest, rd, spilled, imm_spill, &mut code)?;
+                        }
+                        Instr::Store64Imm { base, imm, value } => {
+                            let rbase = src_reg(base, scratch1, &mut code)?;
+                            let value_scratch = if rbase != scratch2 {
+                                scratch2
+                            } else {
+                                scratchd
+                            };
+                            let rvalue = if let Some(kind) =
+                                dataref_kind_map.get(&(func_idx, *value)).copied()
+                                && let Some(literal) = string_map.get(&(func_idx, *value)).cloned()
+                                && !string_literal_temps.contains(&(func_idx, *value))
+                            {
+                                // DataRef emits no standalone instruction: every
+                                // memory use must materialize its literal-table
+                                // pointer at that use site. This is required for
+                                // bytes/ID literals stored inside Lists and the
+                                // native-JSON word table.
+                                emit_literal_load(
+                                    &mut code,
+                                    &mut fixups,
+                                    value_scratch,
+                                    data_key_for_pointer(kind, &literal),
+                                );
+                                value_scratch
+                            } else {
+                                src_reg(value, value_scratch, &mut code)?
+                            };
+                            let address_scratch = [scratch1, scratch2, scratchd]
+                                .into_iter()
+                                .find(|candidate| *candidate != rbase && *candidate != rvalue)
+                                .ok_or_else(|| {
+                                    "no scratch register available for 64-bit list store".to_owned()
+                                })?;
+                            emit_store64(
+                                &mut code,
+                                rbase,
+                                rvalue,
+                                i64::from(*imm),
+                                address_scratch,
+                            )?;
+                        }
+                        Instr::Store64 { address, value } => {
+                            let raddress = src_reg(address, scratch1, &mut code)?;
+                            let value_scratch = if raddress != scratch2 {
+                                scratch2
+                            } else {
+                                scratchd
+                            };
+                            let rvalue = if let Some(kind) =
+                                dataref_kind_map.get(&(func_idx, *value)).copied()
+                                && let Some(literal) = string_map.get(&(func_idx, *value)).cloned()
+                                && !string_literal_temps.contains(&(func_idx, *value))
+                            {
+                                emit_literal_load(
+                                    &mut code,
+                                    &mut fixups,
+                                    value_scratch,
+                                    data_key_for_pointer(kind, &literal),
+                                );
+                                value_scratch
+                            } else {
+                                src_reg(value, value_scratch, &mut code)?
+                            };
+                            let address_scratch = [scratch1, scratch2, scratchd]
+                                .into_iter()
+                                .find(|candidate| *candidate != raddress && *candidate != rvalue)
+                                .ok_or_else(|| {
+                                    "no scratch register available for 64-bit list store".to_owned()
+                                })?;
+                            emit_store64(&mut code, raddress, rvalue, 0, address_scratch)?;
+                        }
                         Instr::MapSet { map, key, value } => {
                             // Minimal map layout: [0..8) key, [8..16) value
                             let rmap = src_reg(map, scratch1, &mut code)?;
@@ -14869,21 +15842,25 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::NumericFromInt { dest, value } => {
+                        Instr::NumericFromInt { dest, value, kind } => {
                             let rv = src_reg(value, scratch1, &mut code)?;
                             push_word(&mut code, encode_addi(10, rv, 0)?);
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_NUMERIC_FROM_INT as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            let syscall = match kind {
+                                ir::WideNumericKind::U128 => syscalls::SYSCALL_NUMERIC_FROM_INT,
+                                ir::WideNumericKind::Amount => syscalls::SYSCALL_AMOUNT_FROM_I64,
+                            };
+                            push_syscall(&mut code, syscall);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::NumericToInt { dest, value } => {
+                        Instr::NumericToInt { dest, value, kind } => {
                             if let Some(s) = string_map.get(&(func_idx, *value)) {
-                                let key = DataKey(DataKind::NoritoBytes, s.clone());
+                                let data_kind = match kind {
+                                    ir::WideNumericKind::U128 => DataKind::NoritoBytes,
+                                    ir::WideNumericKind::Amount => DataKind::Amount,
+                                };
+                                let key = DataKey(data_kind, s.clone());
                                 emit_literal_load(&mut code, &mut fixups, 10, key);
                             } else {
                                 let r = src_reg(value, scratch1, &mut code)?;
@@ -14894,11 +15871,25 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_NUMERIC_TO_INT as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            let syscall = match kind {
+                                ir::WideNumericKind::U128 => syscalls::SYSCALL_NUMERIC_TO_INT,
+                                ir::WideNumericKind::Amount => syscalls::SYSCALL_AMOUNT_TO_I64,
+                            };
+                            push_syscall(&mut code, syscall);
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::AmountFromU128 { dest, value } => {
+                            if let Some(s) = string_map.get(&(func_idx, *value)) {
+                                let key = DataKey(DataKind::NoritoBytes, s.clone());
+                                emit_literal_load(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(value, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            code.extend_from_slice(&publish_tlv);
+                            push_syscall(&mut code, syscalls::SYSCALL_AMOUNT_FROM_U128);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -14938,6 +15929,7 @@ impl Compiler {
                             op,
                             left,
                             right,
+                            kind,
                         } => {
                             let mut load_ptr = |temp: &ir::Temp,
                                                 target: u8,
@@ -14976,12 +15968,42 @@ impl Compiler {
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             // Restore lhs into r10
                             push_word(&mut code, encode_addi(10, scratch2, 0)?);
-                            let num = match op {
-                                BinaryOp::Add => syscalls::SYSCALL_NUMERIC_ADD,
-                                BinaryOp::Sub => syscalls::SYSCALL_NUMERIC_SUB,
-                                BinaryOp::Mul => syscalls::SYSCALL_NUMERIC_MUL,
-                                BinaryOp::Div => syscalls::SYSCALL_NUMERIC_DIV,
-                                BinaryOp::Mod => syscalls::SYSCALL_NUMERIC_REM,
+                            let num = match (kind, op) {
+                                (ir::WideNumericKind::U128, BinaryOp::Add) => {
+                                    syscalls::SYSCALL_NUMERIC_ADD
+                                }
+                                (ir::WideNumericKind::U128, BinaryOp::Sub) => {
+                                    syscalls::SYSCALL_NUMERIC_SUB
+                                }
+                                (ir::WideNumericKind::U128, BinaryOp::Mul) => {
+                                    syscalls::SYSCALL_NUMERIC_MUL
+                                }
+                                (ir::WideNumericKind::U128, BinaryOp::Div) => {
+                                    syscalls::SYSCALL_NUMERIC_DIV
+                                }
+                                (ir::WideNumericKind::U128, BinaryOp::Mod) => {
+                                    syscalls::SYSCALL_NUMERIC_REM
+                                }
+                                (ir::WideNumericKind::Amount, BinaryOp::Add) => {
+                                    syscalls::SYSCALL_AMOUNT_ADD
+                                }
+                                (ir::WideNumericKind::Amount, BinaryOp::Sub) => {
+                                    syscalls::SYSCALL_AMOUNT_SUB
+                                }
+                                (ir::WideNumericKind::Amount, BinaryOp::Mul) => {
+                                    syscalls::SYSCALL_AMOUNT_MUL
+                                }
+                                (ir::WideNumericKind::Amount, BinaryOp::Div) => {
+                                    syscalls::SYSCALL_AMOUNT_DIV_EXACT
+                                }
+                                (ir::WideNumericKind::Amount, BinaryOp::Mod) => {
+                                    return Err(i18n::translate(
+                                        self.lang,
+                                        Message::SemanticError(
+                                            "Amount does not support remainder; use exact division or amount.div_round",
+                                        ),
+                                    ));
+                                }
                                 _ => {
                                     return Err(i18n::translate(
                                         self.lang,
@@ -14991,11 +16013,7 @@ impl Compiler {
                                     ));
                                 }
                             };
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                num as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            push_syscall(&mut code, num);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -15005,6 +16023,7 @@ impl Compiler {
                             op,
                             left,
                             right,
+                            kind,
                         } => {
                             let mut load_ptr = |temp: &ir::Temp,
                                                 target: u8,
@@ -15040,13 +16059,43 @@ impl Compiler {
                             code.extend_from_slice(&publish_tlv);
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             push_word(&mut code, encode_addi(10, scratch2, 0)?);
-                            let num = match op {
-                                BinaryOp::Eq => syscalls::SYSCALL_NUMERIC_EQ,
-                                BinaryOp::Ne => syscalls::SYSCALL_NUMERIC_NE,
-                                BinaryOp::Lt => syscalls::SYSCALL_NUMERIC_LT,
-                                BinaryOp::Le => syscalls::SYSCALL_NUMERIC_LE,
-                                BinaryOp::Gt => syscalls::SYSCALL_NUMERIC_GT,
-                                BinaryOp::Ge => syscalls::SYSCALL_NUMERIC_GE,
+                            let num = match (kind, op) {
+                                (ir::WideNumericKind::U128, BinaryOp::Eq) => {
+                                    syscalls::SYSCALL_NUMERIC_EQ
+                                }
+                                (ir::WideNumericKind::U128, BinaryOp::Ne) => {
+                                    syscalls::SYSCALL_NUMERIC_NE
+                                }
+                                (ir::WideNumericKind::U128, BinaryOp::Lt) => {
+                                    syscalls::SYSCALL_NUMERIC_LT
+                                }
+                                (ir::WideNumericKind::U128, BinaryOp::Le) => {
+                                    syscalls::SYSCALL_NUMERIC_LE
+                                }
+                                (ir::WideNumericKind::U128, BinaryOp::Gt) => {
+                                    syscalls::SYSCALL_NUMERIC_GT
+                                }
+                                (ir::WideNumericKind::U128, BinaryOp::Ge) => {
+                                    syscalls::SYSCALL_NUMERIC_GE
+                                }
+                                (ir::WideNumericKind::Amount, BinaryOp::Eq) => {
+                                    syscalls::SYSCALL_AMOUNT_EQ
+                                }
+                                (ir::WideNumericKind::Amount, BinaryOp::Ne) => {
+                                    syscalls::SYSCALL_AMOUNT_NE
+                                }
+                                (ir::WideNumericKind::Amount, BinaryOp::Lt) => {
+                                    syscalls::SYSCALL_AMOUNT_LT
+                                }
+                                (ir::WideNumericKind::Amount, BinaryOp::Le) => {
+                                    syscalls::SYSCALL_AMOUNT_LE
+                                }
+                                (ir::WideNumericKind::Amount, BinaryOp::Gt) => {
+                                    syscalls::SYSCALL_AMOUNT_GT
+                                }
+                                (ir::WideNumericKind::Amount, BinaryOp::Ge) => {
+                                    syscalls::SYSCALL_AMOUNT_GE
+                                }
                                 _ => {
                                     return Err(i18n::translate(
                                         self.lang,
@@ -15056,11 +16105,7 @@ impl Compiler {
                                     ));
                                 }
                             };
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                num as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            push_syscall(&mut code, num);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -15309,7 +16354,7 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::JsonGetInt { dest, json, key } => {
-                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_I64; move r10 (i64) to dest
+                            // JSON_GET_I64 returns one active-only Option<i64> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_load(&mut code, &mut fixups, 10, key);
@@ -15344,7 +16389,7 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::JsonGetNumeric { dest, json, key } => {
-                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_NUMERIC; move r10
+                            // JSON_GET_AMOUNT returns one active-only Option<Amount> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_load(&mut code, &mut fixups, 10, key);
@@ -15370,7 +16415,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(10, scratch2, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_JSON_GET_NUMERIC as u8,
+                                syscalls::SYSCALL_JSON_GET_AMOUNT as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -15378,7 +16423,7 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::JsonGetJson { dest, json, key } => {
-                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_JSON; move r10
+                            // JSON_GET_JSON returns one active-only Option<Json> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_load(&mut code, &mut fixups, 10, key);
@@ -15413,7 +16458,7 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::JsonGetName { dest, json, key } => {
-                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_NAME; move r10
+                            // JSON_GET_NAME returns one active-only Option<Name> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_load(&mut code, &mut fixups, 10, key);
@@ -15448,7 +16493,7 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::JsonGetAccountId { dest, json, key } => {
-                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_ACCOUNT_ID; move r10
+                            // JSON_GET_ACCOUNT_ID returns one active-only Option<AccountId> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_load(&mut code, &mut fixups, 10, key);
@@ -15483,7 +16528,7 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::JsonGetAssetDefinitionId { dest, json, key } => {
-                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_ASSET_DEFINITION_ID; move r10
+                            // JSON_GET_ASSET_DEFINITION_ID returns one active-only Option handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_load(&mut code, &mut fixups, 10, key);
@@ -15517,7 +16562,7 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::JsonGetNftId { dest, json, key } => {
-                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_NFT_ID; move r10
+                            // JSON_GET_NFT_ID returns one active-only Option<NftId> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_load(&mut code, &mut fixups, 10, key);
@@ -15552,7 +16597,7 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::JsonGetBlobHex { dest, json, key } => {
-                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_BLOB_HEX; move r10
+                            // JSON_GET_BLOB_HEX returns one active-only Option<bytes> handle in r10.
                             if let Some(s) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_load(&mut code, &mut fixups, 10, key);
@@ -16164,13 +17209,28 @@ impl Compiler {
                     }
                 }
             }
-            function_debug_seeds[debug_seed_index].pc_end = code.len() as u64;
+            let function_end = code.len() as u64;
+            let debug_seed = &mut function_debug_seeds[debug_seed_index];
+            debug_seed.pc_end = function_end;
             uses_zk_global |= uses_zk;
         }
 
-        let mut wrapper_functions = ir_prog.functions.iter().collect::<Vec<_>>();
+        let mut wrapper_functions = typed
+            .items
+            .iter()
+            .filter_map(|item| {
+                let TypedItem::Function(function) = item;
+                (function.modifiers.kind != FunctionKind::Private).then_some(function)
+            })
+            .collect::<Vec<_>>();
         wrapper_functions.sort_by(|left, right| left.name.cmp(&right.name));
         for func in wrapper_functions {
+            if !func_start_offsets.contains_key(&func.name) {
+                return Err(format!(
+                    "missing lowered function body for entrypoint `{}`",
+                    func.name
+                ));
+            }
             let wrapper_start = code.len();
             entrypoint_wrapper_offsets.insert(func.name.clone(), wrapper_start);
             let call_at = reserve_word(&mut code);
@@ -16272,6 +17332,7 @@ impl Compiler {
                 DRK::ProofBlob => DataKey(DataKind::ProofBlob, v.clone()),
                 DRK::SoracloudRequest => DataKey(DataKind::SoracloudRequest, v.clone()),
                 DRK::SoracloudResponse => DataKey(DataKind::SoracloudResponse, v.clone()),
+                DRK::Amount => DataKey(DataKind::Amount, v.clone()),
             };
             key_order.insert(dk);
         }
@@ -16529,6 +17590,26 @@ impl Compiler {
                         })?,
                     )
                 }
+                DataKey(DataKind::Amount, s) => {
+                    let value = s
+                        .parse::<iroha_primitives::numeric::Numeric>()
+                        .map_err(|error| {
+                            let error = format!("invalid Amount literal `{s}`: {error}");
+                            i18n::translate(self.lang, Message::SemanticError(&error))
+                        })?
+                        .canonicalize_amount()
+                        .map_err(|error| {
+                            let error = format!("invalid Amount literal `{s}`: {error}");
+                            i18n::translate(self.lang, Message::SemanticError(&error))
+                        })?;
+                    (
+                        PointerType::Amount as u16,
+                        to_bytes(&value).map_err(|error| {
+                            let error = format!("invalid Amount literal `{s}`: {error}");
+                            i18n::translate(self.lang, Message::SemanticError(&error))
+                        })?,
+                    )
+                }
             };
             // TLV envelope: type_id (be), version=1, len (be u32), payload, hash (32 bytes blake2b-32)
             let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
@@ -16571,7 +17652,8 @@ impl Compiler {
             ));
         }
         let state_descriptors = build_state_descriptors(&typed)?;
-        let access_set_hints = build_access_set_hints(&typed, &access_sets, include_hints);
+        let access_set_hints =
+            build_access_set_hints(&typed, &ir_prog.functions, &access_sets, include_hints);
         let message_entries = build_message_entries(&typed.message_entries);
         let mut feature_bits = 0u64;
         if meta.mode & metadata::mode::ZK != 0 {
@@ -16581,7 +17663,7 @@ impl Compiler {
             feature_bits |= CONTRACT_FEATURE_BIT_VECTOR;
         }
         let contract_interface = EmbeddedContractInterfaceV1 {
-            contract_name: typed.unit.name.clone(),
+            seiyaku_name: typed.unit.name.clone(),
             compiler_fingerprint: COMPILER_FINGERPRINT.to_owned(),
             features_bitmap: feature_bits,
             access_set_hints: access_set_hints.clone(),
@@ -16690,6 +17772,7 @@ impl Compiler {
             &function_debug_seeds,
             code.len(),
             source_name.as_deref(),
+            &typed.source_files,
             hint_diagnostics.clone(),
         );
 
@@ -16716,72 +17799,6 @@ impl Compiler {
     > {
         let (bytes, manifest, _report) = self.compile_source_with_manifest_and_report(src)?;
         Ok((bytes, manifest))
-    }
-
-    /// Compile an already parsed program and produce a manifest with code_hash and abi_hash.
-    pub fn compile_program_with_manifest(
-        &self,
-        program: &Program,
-    ) -> Result<
-        (
-            Vec<u8>,
-            iroha_data_model::smart_contract::manifest::ContractManifest,
-        ),
-        String,
-    > {
-        let (bytes, manifest, _report) = self.compile_program_with_manifest_and_report(program)?;
-        Ok((bytes, manifest))
-    }
-
-    /// Compile an already parsed program and produce a manifest plus compiler report data.
-    pub fn compile_program_with_manifest_and_report(
-        &self,
-        program: &Program,
-    ) -> Result<
-        (
-            Vec<u8>,
-            iroha_data_model::smart_contract::manifest::ContractManifest,
-            CompileReport,
-        ),
-        String,
-    > {
-        let artifacts = self.compile_program(program)?;
-        self.manifest_from_artifacts(artifacts)
-    }
-
-    /// Compile a parsed program with native phase-aware diagnostics.
-    pub(crate) fn compile_program_with_manifest_and_report_diagnostics(
-        &self,
-        program: &Program,
-        semantic_context: &semantic::SemanticContext,
-        source_name: Option<&str>,
-    ) -> Result<
-        (
-            Vec<u8>,
-            iroha_data_model::smart_contract::manifest::ContractManifest,
-            CompileReport,
-        ),
-        DiagnosticBundle,
-    > {
-        let prepared = self.prepare_program(program, semantic_context, source_name)?;
-        let artifacts = self.compile_prepared(prepared).map_err(|message| {
-            native_diagnostic_bundle(
-                "K3099",
-                DiagnosticPhase::Lowering,
-                source_name,
-                None,
-                message,
-            )
-        })?;
-        self.manifest_from_artifacts(artifacts).map_err(|message| {
-            native_diagnostic_bundle(
-                "K4002",
-                DiagnosticPhase::Artifact,
-                source_name,
-                None,
-                message,
-            )
-        })
     }
 
     /// Compile already linked typed HIR with native phase-aware diagnostics.
@@ -16863,7 +17880,7 @@ impl Compiler {
         };
         let abi_hash_bytes = crate::syscalls::compute_abi_hash(policy);
         let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
-            contract_name: Some(contract_interface.contract_name.clone()),
+            seiyaku_name: Some(contract_interface.seiyaku_name.clone()),
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash_bytes)),
             compiler_fingerprint: Some(contract_interface.compiler_fingerprint),
@@ -16907,20 +17924,19 @@ fn build_compile_report(
     function_debug_seeds: &[FunctionDebugSeed],
     code_len: usize,
     source_path: Option<&str>,
+    source_files: &BTreeMap<crate::source::SourceId, crate::source::SourceFile>,
     access_hint_diagnostics: AccessHintDiagnostics,
 ) -> CompileReport {
     let mut entries = function_debug_seeds.to_vec();
     entries.sort_by_key(|seed| seed.pc_start);
 
-    let mut source_map = Vec::with_capacity(entries.len());
+    let mut source_map = Vec::new();
     let mut budget_report = Vec::with_capacity(entries.len());
     for seed in &entries {
         let pc_end = seed.pc_end.min(code_len as u64);
-        let source = EmbeddedSourceLocation {
-            source_path: source_path.map(ToOwned::to_owned),
-            line: seed.location.line as u32,
-            column: seed.location.column as u32,
-        };
+        let function_range = seed.source;
+        let source =
+            embedded_source_location(function_range, source_path, seed.location, source_files);
         let bytecode_bytes = pc_end.saturating_sub(seed.pc_start) as u32;
         let bytecode_words = bytecode_bytes / 4;
         source_map.push(EmbeddedSourceMapEntryV1 {
@@ -16950,6 +17966,34 @@ fn build_compile_report(
     }
 }
 
+fn embedded_source_location(
+    source: Option<crate::source::SourceRange>,
+    fallback_path: Option<&str>,
+    fallback_location: SourceLocation,
+    source_files: &BTreeMap<crate::source::SourceId, crate::source::SourceFile>,
+) -> EmbeddedSourceLocation {
+    let file = source.and_then(|range| source_files.get(&range.source));
+    let location = source
+        .zip(file)
+        .map(|(range, file)| file.line_column(range.range.start));
+    EmbeddedSourceLocation {
+        source_path: file
+            .map(|file| file.name().to_owned())
+            .or_else(|| fallback_path.map(ToOwned::to_owned)),
+        source_id: source.map_or(0, |range| range.source.0),
+        byte_start: source.map_or(0, |range| range.range.start),
+        byte_end: source.map_or(0, |range| range.range.end),
+        line: location.map_or_else(
+            || u32::try_from(fallback_location.line).unwrap_or(u32::MAX),
+            |location| u32::try_from(location.line).unwrap_or(u32::MAX),
+        ),
+        column: location.map_or_else(
+            || u32::try_from(fallback_location.column).unwrap_or(u32::MAX),
+            |location| u32::try_from(location.column).unwrap_or(u32::MAX),
+        ),
+    }
+}
+
 fn render_state_hint(hint: Option<&StatePathHint>) -> Option<String> {
     match hint? {
         StatePathHint::Literal(name) => Some(format!("state:{name}")),
@@ -16962,10 +18006,6 @@ fn insert_state_hint(keys: &mut IndexSet<String>, key: String) {
     if let Some(base) = map_base_from_state_key(&key) {
         keys.insert(base);
     }
-}
-
-fn retain_taira_supported_access_key(key: &str) -> bool {
-    key != GLOBAL_WILDCARD_KEY && !key.ends_with(":*")
 }
 
 fn map_base_from_state_key(key: &str) -> Option<String> {
@@ -16991,6 +18031,7 @@ fn state_path_for_norito_key(base: &str, raw: &str) -> Option<String> {
 
 fn build_access_set_hints(
     typed: &TypedProgram,
+    ir_functions: &[ir::Function],
     access_sets: &[AccessSets],
     include_hints: bool,
 ) -> Option<AccessSetHints> {
@@ -17009,15 +18050,7 @@ fn build_access_set_hints(
     for key in writes.iter().cloned() {
         reads.insert(key);
     }
-    // Public Taira currently rejects wildcard access keys in contract artifacts.
-    // Keep literal keys and dynamic hint metadata, but drop coarse wildcard keys
-    // such as `*`, `state:*`, and `asset:*` from the persisted artifact.
-    reads.retain(|key| retain_taira_supported_access_key(key));
-    writes.retain(|key| retain_taira_supported_access_key(key));
-    if reads.is_empty() && writes.is_empty() {
-        return None;
-    }
-    let (dynamic_reads, dynamic_writes) = collect_dynamic_access_hints(typed);
+    let (dynamic_reads, dynamic_writes) = collect_dynamic_access_hints(typed, ir_functions);
     Some(AccessSetHints {
         read_keys: reads.into_iter().collect(),
         write_keys: writes.into_iter().collect(),
@@ -17028,8 +18061,13 @@ fn build_access_set_hints(
 
 fn collect_dynamic_access_hints(
     typed: &TypedProgram,
+    ir_functions: &[ir::Function],
 ) -> (Vec<DynamicAccessHint>, Vec<DynamicAccessHint>) {
     let mut reads = BTreeSet::new();
+    let retained_symbols = ir_functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<HashSet<_>>();
     let state_names = typed
         .states
         .iter()
@@ -17037,6 +18075,11 @@ fn collect_dynamic_access_hints(
         .collect::<HashSet<_>>();
     for item in &typed.items {
         let TypedItem::Function(func) = item;
+        if !retained_symbols.contains(func.name.as_str())
+            && !retained_symbols.contains(entrypoint_ir_symbol_name(func).as_str())
+        {
+            continue;
+        }
         collect_dynamic_access_hints_from_block(&func.body, &state_names, &mut reads);
     }
     (
@@ -17068,8 +18111,18 @@ fn collect_dynamic_access_hints_from_statement(
     state_names: &HashSet<&str>,
     reads: &mut BTreeSet<(String, String, String)>,
 ) {
-    match stmt {
+    match stmt.kind() {
         semantic::TypedStatement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_dynamic_access_hints_from_block(then_branch, state_names, reads);
+            if let Some(block) = else_branch {
+                collect_dynamic_access_hints_from_block(block, state_names, reads);
+            }
+        }
+        semantic::TypedStatement::IfLet {
             then_branch,
             else_branch,
             ..
@@ -17190,6 +18243,9 @@ fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
                 manifest_state_type_name(err)
             )
         }
+        EmbeddedStateType::List { element, capacity } => {
+            format!("List<{}, {capacity}>", manifest_state_type_name(element))
+        }
     }
 }
 
@@ -17240,6 +18296,10 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
             ok: Box::new(build_state_type_descriptor(&ok)?),
             err: Box::new(build_state_type_descriptor(&err)?),
         },
+        Type::List(element, capacity) => EmbeddedStateType::List {
+            element: Box::new(build_state_type_descriptor(&element)?),
+            capacity,
+        },
         Type::NamedStruct(name) => {
             return Err(format!(
                 "state type `{name}` was not resolved before CNTR schema emission"
@@ -17258,14 +18318,26 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
 }
 
 fn entrypoint_ir_symbol_name(func: &semantic::TypedFunction) -> String {
-    let needs_wrapper = (matches!(func.modifiers.kind, super::ast::FunctionKind::View)
-        || func.modifiers.visibility == super::ast::FunctionVisibility::Public)
+    let needs_wrapper = !matches!(func.modifiers.kind, super::ast::FunctionKind::Private)
         && !func.param_types.is_empty();
     if needs_wrapper {
         format!("__entrypoint_impl__{}", func.name)
     } else {
         func.name.clone()
     }
+}
+
+fn executable_ir_roots(typed: &TypedProgram, include_tests: bool) -> BTreeSet<String> {
+    typed
+        .items
+        .iter()
+        .filter_map(|item| {
+            let TypedItem::Function(function) = item;
+            (function.modifiers.kind != FunctionKind::Private
+                || (include_tests && function.modifiers.is_test))
+                .then(|| function.name.clone())
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -17352,8 +18424,7 @@ fn propagate_transitive_access_hints(
                             );
                         }
                     }
-                    ir::Instr::CallContract { .. }
-                    | ir::Instr::InvokeEntrypointAs { .. }
+                    ir::Instr::InvokeEntrypointAs { .. }
                     | ir::Instr::InvokeEntrypointAsMulti { .. }
                     | ir::Instr::ExpectRejectAs { .. } => {
                         mark_conservative(
@@ -17484,17 +18555,6 @@ fn derive_state_access_hints(
                                 .insert(STATE_WILDCARD_KEY.to_string());
                         }
                     }
-                    ir::Instr::CallContract { .. } => {
-                        hint_diagnostics.state_wildcards =
-                            hint_diagnostics.state_wildcards.saturating_add(1);
-                        record_hint_skip(&mut hint_skips[func_idx], HINT_SKIP_CONTRACT_CALL_TARGET);
-                        access_sets[func_idx]
-                            .reads
-                            .insert(STATE_WILDCARD_KEY.to_string());
-                        access_sets[func_idx]
-                            .writes
-                            .insert(STATE_WILDCARD_KEY.to_string());
-                    }
                     _ => {}
                 }
             }
@@ -17556,7 +18616,6 @@ fn record_isi_access(
                 add_dynamic_asset_definition_rw_for_optional_account_hint(access_set, to.as_ref());
             }
         }
-        ir::Instr::CallContract { .. } => {}
         ir::Instr::EscrowOpenOffer { escrow, asset, .. } => {
             let Some(escrow_id) = escrow_id_from_name_temp(string_map, func_idx, *escrow) else {
                 return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
@@ -17894,10 +18953,10 @@ fn record_isi_access(
                 apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
         }
-        ir::Instr::QueryGet { key, syscall, .. } => {
-            if record_typed_query_get_access(
+        ir::Instr::CoreQueryGet { key, entity, .. } => {
+            if record_typed_core_query_get_access(
                 *key,
-                *syscall,
+                *entity,
                 string_map,
                 authority_account_temps,
                 func_idx,
@@ -17907,6 +18966,11 @@ fn record_isi_access(
             {
                 apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
+        }
+        ir::Instr::CoreQueryPage { .. } | ir::Instr::QueryGet { .. } => {
+            record_hint_skip(hint_skips, HINT_SKIP_OPAQUE_ISI);
+            hint_diagnostics.isi_wildcards = hint_diagnostics.isi_wildcards.saturating_add(1);
+            access_set.reads.insert(GLOBAL_WILDCARD_KEY.to_owned());
         }
         ir::Instr::GetAccountBalance { account, asset, .. } => {
             let account = account_access_hint_for_temp(
@@ -18900,46 +19964,51 @@ fn record_singular_query_access(
             add_asset_def_r(access_set, q.asset_definition_id());
             Some(())
         }
+        SingularQueryBox::FindNftById(q) => {
+            add_nft_r(access_set, q.nft_id());
+            Some(())
+        }
         _ => None,
     }
 }
 
-fn record_typed_query_get_access(
+fn record_typed_core_query_get_access(
     key: ir::Temp,
-    syscall: u32,
+    entity: ivm_abi::core_query::CoreQueryEntityTagV1,
     string_map: &HashMap<(usize, ir::Temp), String>,
     authority_account_temps: &HashSet<(usize, ir::Temp)>,
     func_idx: usize,
     access_set: &mut AccessSets,
 ) -> Option<()> {
-    match syscall {
-        syscalls::SYSCALL_QUERY_GET_ACCOUNT => {
+    use ivm_abi::core_query::CoreQueryEntityTagV1;
+
+    match entity {
+        CoreQueryEntityTagV1::Account => {
             let account =
                 account_access_hint_for_temp(string_map, authority_account_temps, func_idx, key)?;
             add_account_hint_r(access_set, &account);
             Some(())
         }
-        syscalls::SYSCALL_QUERY_GET_ASSET => {
+        CoreQueryEntityTagV1::Asset => {
             let id = parse_temp::<AssetId>(string_map, func_idx, key)?;
             add_asset_r(access_set, &id);
             Some(())
         }
-        syscalls::SYSCALL_QUERY_GET_ASSET_DEFINITION => {
+        CoreQueryEntityTagV1::AssetDefinition => {
             let id = parse_temp::<AssetDefinitionId>(string_map, func_idx, key)?;
             add_asset_def_r(access_set, &id);
             Some(())
         }
-        syscalls::SYSCALL_QUERY_GET_DOMAIN => {
+        CoreQueryEntityTagV1::Domain => {
             let id = parse_domain_temp(string_map, func_idx, key)?;
             add_domain_r(access_set, &id);
             Some(())
         }
-        syscalls::SYSCALL_QUERY_GET_NFT => {
+        CoreQueryEntityTagV1::Nft => {
             let id = parse_temp::<NftId>(string_map, func_idx, key)?;
             add_nft_r(access_set, &id);
             Some(())
         }
-        _ => None,
     }
 }
 
@@ -19969,13 +21038,14 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::VendorExecuteQuery { .. }
             | ir::Instr::QueryExecuteNorito { .. }
             | ir::Instr::QueryGet { .. }
+            | ir::Instr::CoreQueryGet { .. }
+            | ir::Instr::CoreQueryPage { .. }
             | ir::Instr::GetAccountBalance { .. }
             | ir::Instr::UseNullifier { .. }
             | ir::Instr::SmartContractLifecycle { .. }
             | ir::Instr::ZkRootsGet { .. }
             | ir::Instr::ZkVoteGetTally { .. }
             | ir::Instr::VrfEpochSeed { .. }
-            | ir::Instr::CallContract { .. }
             | ir::Instr::InvokeEntrypointAs { .. }
             | ir::Instr::InvokeEntrypointAsMulti { .. }
             | ir::Instr::ExpectRejectAs { .. }
@@ -20086,7 +21156,7 @@ fn build_entrypoint_descriptors(
         let trigger_anchor = if trigger.call.namespace.is_some() {
             namespaced_trigger_anchor.clone().ok_or_else(|| {
                 format!(
-                    "trigger `{}` has a namespaced callback but the contract has no entrypoint descriptor to carry it",
+                    "trigger `{}` has a namespaced callback but the seiyaku has no entrypoint descriptor to carry it",
                     trigger.id
                 )
             })?
@@ -20120,8 +21190,6 @@ fn build_entrypoint_descriptors(
         } else {
             (Vec::new(), Vec::new())
         };
-        reads.retain(|key| retain_taira_supported_access_key(key));
-        writes.retain(|key| retain_taira_supported_access_key(key));
         if include_hints && (reads.is_empty() || writes.is_empty()) {
             let (fallback_reads, fallback_writes) =
                 crate::semantic::function_state_accesses(func, &typed.states);
@@ -20131,8 +21199,6 @@ fn build_entrypoint_descriptors(
             if writes.is_empty() && !fallback_writes.is_empty() {
                 writes = fallback_writes.iter().cloned().collect();
             }
-            reads.retain(|key| retain_taira_supported_access_key(key));
-            writes.retain(|key| retain_taira_supported_access_key(key));
         }
         let triggers = triggers_by_name
             .get(func.name.as_str())
@@ -20143,19 +21209,52 @@ fn build_entrypoint_descriptors(
             .get(&func.name)
             .copied()
             .ok_or_else(|| format!("missing function offset for entrypoint `{}`", func.name))?;
+        let argument_schema = crate::ir::entrypoint_argument_schema(&func.param_types)?;
+        let params = match argument_schema.as_ref() {
+            None if func.param_types.is_empty() => Vec::new(),
+            Some(schema) if schema.fields.len() == func.param_types.len() => func
+                .param_types
+                .iter()
+                .zip(&schema.fields)
+                .map(|(param, field)| {
+                    let type_name = field.ty.canonical_type_name().ok_or_else(|| {
+                        format!(
+                            "entrypoint `{}` parameter `{}` has no canonical ABI type name",
+                            func.name, param.name
+                        )
+                    })?;
+                    Ok(EntrypointParamDescriptor {
+                        name: param.name.clone(),
+                        type_name,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+            _ => {
+                return Err(format!(
+                    "entrypoint `{}` argument schema does not match its declared parameters",
+                    func.name
+                ));
+            }
+        };
+        let return_schema = crate::ir::entrypoint_return_schema(&func.name, func.ret_ty.as_ref())?;
+        let return_type = return_schema
+            .as_ref()
+            .map(|schema| {
+                schema.canonical_type_name().ok_or_else(|| {
+                    format!(
+                        "entrypoint `{}` return schema has no canonical ABI type name",
+                        func.name
+                    )
+                })
+            })
+            .transpose()?;
         Ok(EmbeddedEntrypointDescriptor {
             name: func.name.clone(),
             kind,
-            params: func
-                .param_types
-                .iter()
-                .map(|param| EntrypointParamDescriptor {
-                    name: param.name.clone(),
-                    type_name: semantic::render_type_name(&param.ty),
-                })
-                .collect(),
-            argument_schema: crate::ir::entrypoint_argument_schema(&func.param_types)?,
-            return_type: func.ret_ty.as_ref().map(semantic::render_type_name),
+            params,
+            argument_schema,
+            return_type,
+            return_schema,
             permission: func.modifiers.permission.clone(),
             read_keys: reads,
             write_keys: writes,
@@ -20184,11 +21283,11 @@ fn build_entrypoint_descriptors(
 
 fn entrypoint_kind_from_modifiers(modifiers: &FunctionModifiers) -> Option<EntryPointKind> {
     match modifiers.kind {
+        FunctionKind::Kotoage => Some(EntryPointKind::Kotoage),
         FunctionKind::View => Some(EntryPointKind::View),
-        FunctionKind::Init => Some(EntryPointKind::Init),
-        FunctionKind::Upgrade => Some(EntryPointKind::Upgrade),
-        _ if modifiers.visibility == FunctionVisibility::Public => Some(EntryPointKind::Public),
-        _ => None,
+        FunctionKind::Hajimari => Some(EntryPointKind::Hajimari),
+        FunctionKind::Kaizen => Some(EntryPointKind::Kaizen),
+        FunctionKind::Private => None,
     }
 }
 
@@ -20251,7 +21350,7 @@ pub mod test_helpers {
 fn validate_codegen_supported(tp: &semantic::TypedProgram) -> Result<(), Vec<ir::LoweringFailure>> {
     use semantic::{ExprKind as EK, TypedItem, TypedStatement as S};
     fn expr_ok(e: &semantic::TypedExpr) -> Result<(), String> {
-        match &e.expr {
+        match e.kind() {
             EK::Conditional {
                 cond,
                 then_expr,
@@ -20262,21 +21361,82 @@ fn validate_codegen_supported(tp: &semantic::TypedProgram) -> Result<(), Vec<ir:
                 expr_ok(else_expr)?;
                 Ok(())
             }
+            EK::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                expr_ok(condition)?;
+                block_ok(then_branch)?;
+                block_ok(else_branch)
+            }
+            EK::IfLet {
+                value,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                expr_ok(value)?;
+                block_ok(then_branch)?;
+                block_ok(else_branch)
+            }
+            EK::Match { value, arms } => {
+                expr_ok(value)?;
+                for arm in arms {
+                    block_ok(&arm.body)?;
+                }
+                Ok(())
+            }
+            EK::OptionSome { value }
+            | EK::ResultOk { value }
+            | EK::ResultErr { error: value }
+            | EK::Propagate { value } => expr_ok(value),
             EK::Binary { left, right, .. } => {
                 expr_ok(left)?;
                 expr_ok(right)
             }
             EK::Unary { expr, .. } => expr_ok(expr),
             EK::NumericCast { expr } => expr_ok(expr),
-            EK::Call { args, .. } => {
+            EK::Call { args, .. } | EK::NamedCall { args, .. } => {
                 for a in args {
                     expr_ok(a)?;
                 }
                 Ok(())
             }
-            EK::Tuple(elems) => {
+            EK::Tuple(elems) | EK::List(elems) => {
                 for t in elems {
                     expr_ok(t)?;
+                }
+                Ok(())
+            }
+            EK::JsonObject(entries) => {
+                for (_, value) in entries {
+                    expr_ok(value)?;
+                }
+                Ok(())
+            }
+            EK::JsonArray(elements) => {
+                for element in elements {
+                    expr_ok(element)?;
+                }
+                Ok(())
+            }
+            EK::ListComprehension {
+                expression,
+                source,
+                condition,
+                ..
+            } => {
+                expr_ok(source)?;
+                expr_ok(expression)?;
+                if let Some(condition) = condition {
+                    expr_ok(condition)?;
+                }
+                Ok(())
+            }
+            EK::StructLiteral { fields, .. } => {
+                for (_, value) in fields {
+                    expr_ok(value)?;
                 }
                 Ok(())
             }
@@ -20287,15 +21447,17 @@ fn validate_codegen_supported(tp: &semantic::TypedProgram) -> Result<(), Vec<ir:
             }
             EK::Number(_)
             | EK::Decimal(_)
+            | EK::AmountLiteral { .. }
             | EK::Bool(_)
             | EK::String(_)
             | EK::Bytes(_)
-            | EK::Ident(_) => Ok(()),
+            | EK::Ident(_)
+            | EK::OptionNone => Ok(()),
         }
     }
     fn block_ok(b: &semantic::TypedBlock) -> Result<(), String> {
         for s in &b.statements {
-            match s {
+            match s.kind() {
                 S::Let { value, .. } => expr_ok(value)?,
                 S::Expr(e) => expr_ok(e)?,
                 S::Return(Some(e)) => expr_ok(e)?,
@@ -20311,6 +21473,18 @@ fn validate_codegen_supported(tp: &semantic::TypedProgram) -> Result<(), Vec<ir:
                         block_ok(b)?;
                     }
                 }
+                S::IfLet {
+                    value,
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    expr_ok(value)?;
+                    block_ok(then_branch)?;
+                    if let Some(block) = else_branch {
+                        block_ok(block)?;
+                    }
+                }
                 S::While { cond, body } => {
                     expr_ok(cond)?;
                     block_ok(body)?;
@@ -20324,7 +21498,7 @@ fn validate_codegen_supported(tp: &semantic::TypedProgram) -> Result<(), Vec<ir:
                 } => {
                     if let Some(i) = init {
                         // Walk the single init statement inline
-                        match &**i {
+                        match i.kind() {
                             S::Let { value, .. } => expr_ok(value)?,
                             S::Expr(e) => expr_ok(e)?,
                             other => {
@@ -20338,7 +21512,7 @@ fn validate_codegen_supported(tp: &semantic::TypedProgram) -> Result<(), Vec<ir:
                         expr_ok(c)?;
                     }
                     if let Some(st) = step {
-                        match &**st {
+                        match st.kind() {
                             S::Let { value, .. } => expr_ok(value)?,
                             S::Expr(e) => expr_ok(e)?,
                             other => {
@@ -20360,6 +21534,9 @@ fn validate_codegen_supported(tp: &semantic::TypedProgram) -> Result<(), Vec<ir:
                     expr_ok(value)?;
                 }
             }
+        }
+        if let Some(tail) = &b.tail {
+            expr_ok(tail)?;
         }
         Ok(())
     }

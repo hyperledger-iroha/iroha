@@ -155,7 +155,12 @@ const SIGNATURE_VERIFY_GAS_BASE: u64 = 64;
 const SIGNATURE_VERIFY_GAS_PER_BYTE: u64 = 1;
 const SM4_GAS_BASE: u64 = 64;
 const SM4_GAS_PER_BYTE: u64 = 1;
-const STATE_QUERY_GAS_BASE: u64 = 16;
+/// Minimum gas charged before a host may inspect durable or ledger state.
+///
+/// Preparation rejects a smaller budget before the host is invoked. Stateful
+/// scans then spend one additional gas unit per examined item and stop as soon
+/// as the pre-debited reserve is exhausted.
+pub const STATE_QUERY_GAS_BASE: u64 = 16;
 const SYSVAR_GAS_BASE: u64 = 16;
 const SYSVAR_GAS_PER_BYTE: u64 = 1;
 const TLV_EQ_GAS_BASE: u64 = 16;
@@ -164,6 +169,10 @@ const TLV_LEN_GAS_BASE: u64 = 16;
 const TLV_LEN_GAS_PER_BYTE: u64 = 1;
 const VERIFY_GAS_BASE: u64 = 64;
 const VERIFY_GAS_PER_BYTE: u64 = 1;
+
+pub(crate) fn debug_log_gas(payload_len: usize) -> u64 {
+    DEBUG_GAS.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
 const TLV_ENVELOPE_OVERHEAD: usize = 7 + iroha_crypto::Hash::LENGTH;
 
 /// Build the injective V1 durable-map path for canonical Norito key bytes.
@@ -239,7 +248,7 @@ pub(crate) fn checked_state_keys_limit(limit: u64) -> Result<usize, VMError> {
 /// Returns an error when the envelope header, bounds, pointer type, or ABI policy is invalid.
 pub fn quote_any_tlv_at(vm: &IVM, address: u64) -> Result<(PointerType, usize), VMError> {
     vm.ensure_owned_public_tlv_range(address, 7)?;
-    let header = vm.memory.load_region(address, 7)?;
+    let header = vm.memory.inspect_region(address, 7)?;
     let raw_type = u16::from_be_bytes([header[0], header[1]]);
     let pointer_type = PointerType::from_u16(raw_type).ok_or(VMError::NoritoInvalid)?;
     if header[2] != 1 {
@@ -257,8 +266,8 @@ pub fn quote_any_tlv_at(vm: &IVM, address: u64) -> Result<(PointerType, usize), 
         .and_then(|len| len.checked_add(iroha_crypto::Hash::LENGTH))
         .ok_or(VMError::NoritoInvalid)?;
     let total = u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?;
-    vm.ensure_owned_public_tlv_range(address, total)?;
-    vm.memory.load_region(address, total)?;
+    vm.ensure_owned_tlv_range(address, total)?;
+    vm.memory.inspect_region(address, total)?;
     Ok((pointer_type, payload_len))
 }
 
@@ -279,6 +288,147 @@ pub fn quote_tlv_payload_len_at(
     Ok(payload_len)
 }
 
+/// Security-relevant host work class used by ABI-v1 syscall metering.
+///
+/// This is deliberately separate from a compiler builtin's source-level gas
+/// class. It describes which runtime resource must be affordable before the
+/// host performs work or exposes a side effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostSyscallGasClass {
+    /// VM-local or immutable-context work with an input/output-derived bound.
+    VmLocal,
+    /// Guest-memory allocation whose size is known from public registers.
+    Allocation,
+    /// Contract-owned durable-state read.
+    DurableStateRead,
+    /// Contract-owned durable-state write.
+    DurableStateWrite,
+    /// Ledger/world-state query.
+    LedgerRead,
+    /// Ledger/world-state mutation or queued instruction.
+    LedgerWrite,
+    /// Nested, opaque, or externally routed work.
+    Dynamic,
+}
+
+/// Default quote strategy required for a host syscall class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostSyscallQuoteStrategy {
+    /// The host derives a deterministic upper bound from public VM inputs.
+    InputOutputBounded,
+    /// The allocation extent itself determines the exact quote.
+    AllocationExtent,
+    /// Escrow all currently available gas and enforce bounded post-debit work.
+    ReserveAvailable,
+}
+
+/// Exhaustive ABI-v1 host metering metadata for one syscall.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostSyscallMeteringSpec {
+    /// Canonical syscall number.
+    pub number: u32,
+    /// Security-relevant runtime work class.
+    pub gas_class: HostSyscallGasClass,
+    /// Fail-closed default quote strategy.
+    pub quote_strategy: HostSyscallQuoteStrategy,
+    /// Minimum reserve required before host-state work may begin.
+    pub minimum_gas: u64,
+}
+
+/// Return the registered metering metadata for an allowed syscall.
+///
+/// The access registry has no fallback. Consequently, adding a number to the
+/// allowed ABI surface without classifying it makes preparation return
+/// `UnknownSyscall` instead of silently selecting a generic quote.
+#[must_use]
+pub fn host_syscall_metering_spec(
+    policy: SyscallPolicy,
+    number: u32,
+) -> Option<HostSyscallMeteringSpec> {
+    if !syscalls::is_syscall_allowed(policy, number) {
+        return None;
+    }
+    let access = syscalls::registered_syscall_access(number)?;
+    let (gas_class, quote_strategy, minimum_gas) = if matches!(
+        number,
+        syscalls::SYSCALL_ALLOC | syscalls::SYSCALL_GROW_HEAP
+    ) {
+        (
+            HostSyscallGasClass::Allocation,
+            HostSyscallQuoteStrategy::AllocationExtent,
+            1,
+        )
+    } else {
+        match access {
+            syscalls::SyscallAccess::None => (
+                HostSyscallGasClass::VmLocal,
+                HostSyscallQuoteStrategy::InputOutputBounded,
+                0,
+            ),
+            syscalls::SyscallAccess::StateRead => (
+                HostSyscallGasClass::DurableStateRead,
+                HostSyscallQuoteStrategy::ReserveAvailable,
+                STATE_QUERY_GAS_BASE,
+            ),
+            syscalls::SyscallAccess::StateWrite => (
+                HostSyscallGasClass::DurableStateWrite,
+                HostSyscallQuoteStrategy::InputOutputBounded,
+                STATE_QUERY_GAS_BASE,
+            ),
+            syscalls::SyscallAccess::LedgerRead => (
+                HostSyscallGasClass::LedgerRead,
+                HostSyscallQuoteStrategy::ReserveAvailable,
+                STATE_QUERY_GAS_BASE,
+            ),
+            syscalls::SyscallAccess::LedgerWrite => (
+                HostSyscallGasClass::LedgerWrite,
+                HostSyscallQuoteStrategy::ReserveAvailable,
+                STATE_QUERY_GAS_BASE,
+            ),
+            syscalls::SyscallAccess::Dynamic => (
+                HostSyscallGasClass::Dynamic,
+                HostSyscallQuoteStrategy::ReserveAvailable,
+                STATE_QUERY_GAS_BASE,
+            ),
+        }
+    };
+    Some(HostSyscallMeteringSpec {
+        number,
+        gas_class,
+        quote_strategy,
+        minimum_gas,
+    })
+}
+
+/// Return the complete, sorted ABI-v1 host metering registry.
+///
+/// An allowed syscall missing explicit access metadata is intentionally absent.
+/// Production preparation rejects that number, and the exhaustive release test
+/// requires this registry's numbers to equal [`syscalls::abi_syscall_list`].
+pub fn abi_v1_host_syscall_metering_registry() -> &'static [HostSyscallMeteringSpec] {
+    static REGISTRY: std::sync::OnceLock<Box<[HostSyscallMeteringSpec]>> =
+        std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        syscalls::abi_syscall_list()
+            .iter()
+            .filter_map(|&number| host_syscall_metering_spec(SyscallPolicy::AbiV1, number))
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+    })
+}
+
+/// Require registered metering metadata for an allowed host syscall.
+///
+/// # Errors
+///
+/// Returns [`VMError::UnknownSyscall`] for a disallowed or unclassified number.
+pub fn require_host_syscall_metering_spec(
+    policy: SyscallPolicy,
+    number: u32,
+) -> Result<HostSyscallMeteringSpec, VMError> {
+    host_syscall_metering_spec(policy, number).ok_or(VMError::UnknownSyscall(number))
+}
+
 /// Conservative deterministic gas bound for host implementations whose exact
 /// response size is unavailable during syscall preparation.
 ///
@@ -286,13 +436,13 @@ pub fn quote_tlv_payload_len_at(
 /// and reserves the complete host-output regions. Hosts should prefer a tighter
 /// syscall-specific quote whenever they can compute one without side effects.
 #[must_use]
-pub fn conservative_syscall_gas_quote(vm: &IVM) -> u64 {
+pub fn conservative_syscall_gas_quote(number: u32, vm: &IVM) -> u64 {
     const BASE: u64 = 4_096;
     const INPUT_MULTIPLIER: u64 = 64;
     const RESPONSE_MULTIPLIER: u64 = 4;
 
     let mut argument_bytes = 0_u64;
-    for register in 10..=17 {
+    for &register in crate::ivm::syscall_public_input_registers(number) {
         let pointer = vm.register(register);
         if pointer == 0 {
             continue;
@@ -315,8 +465,20 @@ pub fn conservative_syscall_gas_quote(vm: &IVM) -> u64 {
 /// state and before making any guest-visible allocation or mutation. Reserving a non-zero amount
 /// also distinguishes VM-dispatched calls from direct host calls in tests and tooling.
 pub fn reserve_available_syscall_gas(vm: &IVM) -> Result<u64, VMError> {
+    reserve_available_syscall_gas_at_least(vm, 1)
+}
+
+/// Reserve all currently available syscall gas after enforcing a minimum.
+///
+/// The minimum is checked during side-effect-free preparation. This prevents a
+/// caller from triggering even a single host-state lookup or scan with a
+/// reserve smaller than the class's deterministic base charge.
+pub fn reserve_available_syscall_gas_at_least(
+    vm: &IVM,
+    minimum: u64,
+) -> Result<u64, VMError> {
     let available = vm.remaining_gas();
-    if available == 0 {
+    if available < minimum {
         Err(VMError::OutOfGas)
     } else {
         Ok(available)
@@ -334,6 +496,41 @@ pub fn preflight_reserved_syscall_gas(vm: &IVM, actual: u64) -> Result<(), VMErr
         return Err(VMError::metered(reserved, VMError::OutOfGas));
     }
     Ok(())
+}
+
+/// Charge the next state-scan item against the pre-debited syscall reserve.
+///
+/// `examined_before` is the number of items whose host work has already begun.
+/// Callers must invoke this before reading or copying the next item. Direct
+/// low-level host calls have no reserve and remain unbounded for test tooling;
+/// every VM-dispatched call has a non-zero reserve established by preparation.
+///
+/// # Errors
+///
+/// Returns a metered [`VMError::OutOfGas`] before the next item is examined when
+/// the base charge plus item count would exceed the reserved quote.
+pub fn preflight_reserved_state_scan_item(
+    vm: &IVM,
+    examined_before: usize,
+) -> Result<(), VMError> {
+    let reserved = vm.syscall_reserved_gas();
+    if reserved == 0 {
+        return Ok(());
+    }
+    let examined_after = u64::try_from(examined_before)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let actual = STATE_QUERY_GAS_BASE.saturating_add(examined_after);
+    preflight_reserved_syscall_gas(vm, actual)
+}
+
+/// Deterministic gas for one contiguous heap allocation.
+///
+/// Charging by eight-byte ABI words makes bounded collection capacity visible
+/// to metering without depending on the host allocator or hardware page size.
+#[must_use]
+pub(crate) const fn allocation_gas(bytes: u64) -> u64 {
+    1_u64.saturating_add(bytes.saturating_add(7) / 8)
 }
 
 /// Return whether a syscall belongs to the optional ShangMi family.
@@ -357,6 +554,9 @@ pub(crate) const fn is_sm_syscall(number: u32) -> bool {
 /// whose encoded size must be estimated by that host.
 pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u64>, VMError> {
     let number = syscalls::canonical_helper_syscall(number);
+    if let Some(quote) = crate::amount::gas_quote(number, vm)? {
+        return Ok(Some(quote));
+    }
     let blob_len = |register: usize| -> Result<usize, VMError> {
         quote_tlv_payload_len_at(
             vm,
@@ -366,11 +566,26 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
     };
 
     let quote = match number {
-        syscalls::SYSCALL_DEBUG_PRINT
-        | syscalls::SYSCALL_EXIT
-        | syscalls::SYSCALL_ABORT
-        | syscalls::SYSCALL_DEBUG_LOG => DEBUG_GAS,
-        syscalls::SYSCALL_ALLOC => 1,
+        syscalls::SYSCALL_DEBUG_PRINT | syscalls::SYSCALL_EXIT | syscalls::SYSCALL_ABORT => {
+            DEBUG_GAS
+        }
+        syscalls::SYSCALL_DEBUG_LOG => {
+            let pointer = vm.register(10);
+            if pointer == 0 {
+                DEBUG_GAS
+            } else {
+                let (pointer_type, payload_len) =
+                    quote_any_tlv_at(vm, DefaultHost::resolve_code_tlv_addr(vm, pointer))?;
+                if !matches!(
+                    pointer_type,
+                    PointerType::Blob | PointerType::NoritoBytes | PointerType::Json
+                ) {
+                    return Err(VMError::NoritoInvalid);
+                }
+                debug_log_gas(payload_len)
+            }
+        }
+        syscalls::SYSCALL_ALLOC => allocation_gas(vm.register(10)),
         syscalls::SYSCALL_POINTER_TO_NORITO => {
             let pointer = vm.register(10);
             if pointer == 0 {
@@ -396,16 +611,17 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
         syscalls::SYSCALL_TLV_EQ => {
             let left_pointer = vm.register(10);
             let right_pointer = vm.register(11);
-            if left_pointer == right_pointer || left_pointer == 0 || right_pointer == 0 {
-                DefaultHost::tlv_eq_gas(0, 0)
-            } else if let Ok((_, left_len)) = quote_any_tlv_at(vm, left_pointer) {
-                let right_len = quote_any_tlv_at(vm, right_pointer)
-                    .ok()
-                    .map_or(0, |(_, right_len)| right_len);
-                DefaultHost::tlv_eq_gas(left_len, right_len)
+            let left_len = if left_pointer == 0 {
+                0
             } else {
-                DefaultHost::tlv_eq_gas(0, 0)
-            }
+                quote_any_tlv_at(vm, left_pointer)?.1
+            };
+            let right_len = if right_pointer == 0 || right_pointer == left_pointer {
+                0
+            } else {
+                quote_any_tlv_at(vm, right_pointer)?.1
+            };
+            DefaultHost::tlv_eq_gas(left_len, right_len)
         }
         syscalls::SYSCALL_TLV_LEN => {
             let pointer = vm.register(10);
@@ -423,20 +639,41 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
         syscalls::SYSCALL_STATE_VALUE_ENCODE | syscalls::SYSCALL_STATE_VALUE_DECODE => {
             reserve_available_syscall_gas(vm)?
         }
-        syscalls::SYSCALL_NUMERIC_FROM_INT
-        | syscalls::SYSCALL_NUMERIC_TO_INT
-        | syscalls::SYSCALL_NUMERIC_ADD
+        syscalls::SYSCALL_NUMERIC_FROM_INT => DefaultHost::numeric_gas(),
+        syscalls::SYSCALL_NUMERIC_TO_INT | syscalls::SYSCALL_NUMERIC_NEG => {
+            let payload_len = quote_tlv_payload_len_at(
+                vm,
+                DefaultHost::resolve_code_tlv_addr(vm, vm.register(10)),
+                PointerType::NoritoBytes,
+            )?;
+            DefaultHost::numeric_gas()
+                .saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+        }
+        syscalls::SYSCALL_NUMERIC_ADD
         | syscalls::SYSCALL_NUMERIC_SUB
         | syscalls::SYSCALL_NUMERIC_MUL
         | syscalls::SYSCALL_NUMERIC_DIV
         | syscalls::SYSCALL_NUMERIC_REM
-        | syscalls::SYSCALL_NUMERIC_NEG
         | syscalls::SYSCALL_NUMERIC_EQ
         | syscalls::SYSCALL_NUMERIC_NE
         | syscalls::SYSCALL_NUMERIC_LT
         | syscalls::SYSCALL_NUMERIC_LE
         | syscalls::SYSCALL_NUMERIC_GT
-        | syscalls::SYSCALL_NUMERIC_GE => DefaultHost::numeric_gas(),
+        | syscalls::SYSCALL_NUMERIC_GE => {
+            let left_len = quote_tlv_payload_len_at(
+                vm,
+                DefaultHost::resolve_code_tlv_addr(vm, vm.register(10)),
+                PointerType::NoritoBytes,
+            )?;
+            let right_len = quote_tlv_payload_len_at(
+                vm,
+                DefaultHost::resolve_code_tlv_addr(vm, vm.register(11)),
+                PointerType::NoritoBytes,
+            )?;
+            DefaultHost::numeric_gas().saturating_add(
+                u64::try_from(left_len.saturating_add(right_len)).unwrap_or(u64::MAX),
+            )
+        }
         syscalls::SYSCALL_SM3_HASH
         | syscalls::SYSCALL_SHA256_HASH
         | syscalls::SYSCALL_SHA3_HASH
@@ -950,7 +1187,7 @@ impl DefaultHost {
         Self::expect_tlv(vm, 10, PointerType::AccountId)?;
         Self::expect_tlv(vm, 11, PointerType::AccountId)?;
         Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
-        Self::expect_tlv(vm, 13, PointerType::NoritoBytes)?;
+        Self::expect_amount(vm, 13)?;
         let gas = Self::mutation_gas(0);
         preflight_reserved_syscall_gas(vm, gas)?;
         self.fastpq_batch_has_entries = true;
@@ -1031,6 +1268,15 @@ impl DefaultHost {
             });
         }
         Ok(tlv)
+    }
+
+    fn expect_amount(vm: &IVM, reg: usize) -> Result<(), VMError> {
+        let tlv = Self::expect_tlv(vm, reg, PointerType::Amount)?;
+        let amount = decode_from_bytes::<Numeric>(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        if norito::to_bytes(&amount).map_err(|_| VMError::DecodeError)? != tlv.payload {
+            return Err(VMError::DecodeError);
+        }
+        amount.validate_amount().map_err(|_| VMError::DecodeError)
     }
 
     fn resolve_literal_pointer(vm: &IVM, src: usize) -> Option<usize> {
@@ -1578,6 +1824,29 @@ impl IVMHost for DefaultHost {
         if let Some(quote) = common_syscall_gas_quote(number, vm)? {
             return Ok(quote);
         }
+        if crate::syscalls::is_json_getter_syscall(number) {
+            let json = quote_tlv_payload_len_at(
+                vm,
+                Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                PointerType::Json,
+            )?;
+            let key = quote_tlv_payload_len_at(
+                vm,
+                Self::resolve_code_tlv_addr(vm, vm.register(11)),
+                PointerType::Name,
+            )?;
+            let maximum_output = usize::try_from(Memory::INPUT_SIZE).unwrap_or(usize::MAX);
+            let output = if number == crate::syscalls::SYSCALL_JSON_GET_I64 {
+                core::mem::size_of::<i64>()
+            } else {
+                maximum_output
+            }
+            .saturating_add(16);
+            return Ok(crate::json::typed_getter_gas(
+                json.saturating_add(key),
+                output,
+            ));
+        }
         let tlv_len = |register: usize| -> Result<usize, VMError> {
             let pointer = vm.register(register);
             quote_any_tlv_at(vm, pointer).map(|(_, payload_len)| payload_len)
@@ -1607,14 +1876,12 @@ impl IVMHost for DefaultHost {
                 Self::sysvar_gas(self.chain_id.as_ref().map_or(0, Vec::len))
             }
             crate::syscalls::SYSCALL_QUERY_EXECUTE_NORITO
-            | crate::syscalls::SYSCALL_QUERY_GET_ACCOUNT
-            | crate::syscalls::SYSCALL_QUERY_GET_ASSET
-            | crate::syscalls::SYSCALL_QUERY_GET_ASSET_DEFINITION
-            | crate::syscalls::SYSCALL_QUERY_GET_DOMAIN
-            | crate::syscalls::SYSCALL_QUERY_GET_NFT
+            | crate::syscalls::SYSCALL_CORE_QUERY_GET
+            | crate::syscalls::SYSCALL_CORE_QUERY_PAGE
             | crate::syscalls::SYSCALL_QUERY_GET_PARAMETER
             | crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST
             | crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE => STATE_QUERY_GAS_BASE,
+            crate::syscalls::SYSCALL_JSON_BUILD => reserve_available_syscall_gas(vm)?,
             crate::syscalls::SYSCALL_STATE_GET
             | crate::syscalls::SYSCALL_STATE_LEN
             | crate::syscalls::SYSCALL_STATE_KEYS
@@ -1705,7 +1972,22 @@ impl IVMHost for DefaultHost {
     }
 
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        let requested_number = number;
         let number = crate::syscalls::canonical_helper_syscall(number);
+        if crate::syscalls::is_amount_syscall(number) {
+            return crate::amount::execute(number, vm);
+        }
+        if crate::syscalls::is_json_getter_syscall(number) {
+            let cost =
+                crate::json::typed_getter(vm, requested_number, Self::resolve_code_tlv_addr)?;
+            return Ok(crate::json::typed_getter_gas(
+                cost.input_bytes,
+                cost.output_bytes,
+            ));
+        }
+        if number == crate::syscalls::SYSCALL_JSON_BUILD {
+            return crate::json::build_json(vm, Self::resolve_code_tlv_addr);
+        }
         match number {
             crate::syscalls::SYSCALL_DEBUG_PRINT => {
                 let value = vm.register(10);
@@ -1754,11 +2036,8 @@ impl IVMHost for DefaultHost {
                 Ok(Self::sysvar_gas(0))
             }
             crate::syscalls::SYSCALL_QUERY_EXECUTE_NORITO
-            | crate::syscalls::SYSCALL_QUERY_GET_ACCOUNT
-            | crate::syscalls::SYSCALL_QUERY_GET_ASSET
-            | crate::syscalls::SYSCALL_QUERY_GET_ASSET_DEFINITION
-            | crate::syscalls::SYSCALL_QUERY_GET_DOMAIN
-            | crate::syscalls::SYSCALL_QUERY_GET_NFT
+            | crate::syscalls::SYSCALL_CORE_QUERY_GET
+            | crate::syscalls::SYSCALL_CORE_QUERY_PAGE
             | crate::syscalls::SYSCALL_QUERY_GET_PARAMETER
             | crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST
             | crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE => Err(
@@ -1931,29 +2210,26 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_TLV_EQ => {
                 let ptr1 = vm.register(10);
                 let ptr2 = vm.register(11);
-                if ptr1 == ptr2 {
+                if ptr1 == 0 && ptr2 == 0 {
                     vm.set_register(10, 1);
                     return Ok(Self::tlv_eq_gas(0, 0));
                 }
-                if ptr1 == 0 || ptr2 == 0 {
+                if ptr1 == 0 {
+                    let right_len = vm.validate_tlv(ptr2)?.payload.len();
                     vm.set_register(10, 0);
-                    return Ok(Self::tlv_eq_gas(0, 0));
+                    return Ok(Self::tlv_eq_gas(0, right_len));
                 }
-                let tlv1 = match vm.memory.validate_tlv(ptr1) {
-                    Ok(tlv) => tlv,
-                    Err(_) => {
-                        vm.set_register(10, 0);
-                        return Ok(Self::tlv_eq_gas(0, 0));
-                    }
-                };
+                let tlv1 = vm.validate_tlv(ptr1)?;
                 let left_len = tlv1.payload.len();
-                let tlv2 = match vm.memory.validate_tlv(ptr2) {
-                    Ok(tlv) => tlv,
-                    Err(_) => {
-                        vm.set_register(10, 0);
-                        return Ok(Self::tlv_eq_gas(left_len, 0));
-                    }
-                };
+                if ptr2 == 0 {
+                    vm.set_register(10, 0);
+                    return Ok(Self::tlv_eq_gas(left_len, 0));
+                }
+                if ptr1 == ptr2 {
+                    vm.set_register(10, 1);
+                    return Ok(Self::tlv_eq_gas(left_len, 0));
+                }
+                let tlv2 = vm.validate_tlv(ptr2)?;
                 let right_len = tlv2.payload.len();
                 let eq = tlv1.type_id == tlv2.type_id
                     && tlv1.version == tlv2.version
@@ -2021,7 +2297,7 @@ impl IVMHost for DefaultHost {
                             };
                             eprintln!("[IVM] {msg}");
                         }
-                        Ok(DEBUG_GAS)
+                        Ok(debug_log_gas(tlv.payload.len()))
                     }
                     _ => Err(VMError::NoritoInvalid),
                 }
@@ -2076,11 +2352,11 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                 // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId,
-                // r13=&NoritoBytes(Numeric), r14=&DataSpaceId
+                // r13=&Amount, r14=&DataSpaceId
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
-                Self::expect_tlv(vm, 13, PointerType::NoritoBytes)?;
+                Self::expect_amount(vm, 13)?;
                 Self::expect_tlv(vm, 14, PointerType::DataSpaceId)?;
                 Ok(Self::mutation_gas(0))
             }
@@ -2223,8 +2499,7 @@ impl IVMHost for DefaultHost {
                 let size = vm.register(10);
                 let addr = vm.alloc_heap(size)?;
                 vm.set_register(10, addr);
-                // Charge 1 unit of extra gas for the allocation.
-                Ok(1)
+                Ok(allocation_gas(size))
             }
             crate::syscalls::SYSCALL_VRF_VERIFY => {
                 // Envelope-based syscall: r10 = &NoritoBytes(VrfVerifyRequest)
@@ -3413,6 +3688,79 @@ mod tests {
     }
 
     #[test]
+    fn conservative_quote_ignores_registers_outside_the_syscall_signature() {
+        let mut vm = IVM::new(u64::MAX);
+        let pointer = vm
+            .alloc_input_tlv(&test_tlv(PointerType::Blob, &[0x5A; 256]))
+            .expect("allocate quote fixture");
+        let syscall = syscalls::SYSCALL_REGISTER_DOMAIN;
+        let baseline = conservative_syscall_gas_quote(syscall, &vm);
+
+        vm.set_register(15, pointer);
+        vm.registers.set_tag(15, true);
+        assert_eq!(
+            conservative_syscall_gas_quote(syscall, &vm),
+            baseline,
+            "an unrelated secret register must not influence public gas"
+        );
+
+        vm.set_register(10, pointer);
+        assert!(
+            conservative_syscall_gas_quote(syscall, &vm) > baseline,
+            "the documented r10 argument must remain part of the quote"
+        );
+    }
+
+    #[test]
+    fn debug_log_quote_and_execution_charge_payload_bytes() {
+        let mut vm = IVM::new(u64::MAX);
+        let pointer = vm
+            .alloc_input_tlv(&test_tlv(PointerType::Blob, &[b'x'; 256]))
+            .expect("allocate debug log fixture");
+        vm.set_register(10, pointer);
+        let mut host = DefaultHost::new();
+
+        let quoted = host
+            .prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, &vm)
+            .expect("quote debug log");
+        let actual = host
+            .syscall(syscalls::SYSCALL_DEBUG_LOG, &mut vm)
+            .expect("execute debug log");
+        assert_eq!(quoted, actual);
+        assert_eq!(actual, debug_log_gas(256));
+    }
+
+    #[test]
+    fn numeric_quote_is_payload_bounded_and_type_checked() {
+        let mut vm = IVM::new(u64::MAX);
+        let left = vm
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &[0xA5; 256]))
+            .expect("allocate left Numeric-shaped fixture");
+        let right = vm
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &[0x5A; 128]))
+            .expect("allocate right Numeric-shaped fixture");
+        vm.set_register(10, left);
+        vm.set_register(11, right);
+        let host = DefaultHost::new();
+
+        assert_eq!(
+            host.prepare_syscall(syscalls::SYSCALL_NUMERIC_ADD, &vm),
+            Ok(DefaultHost::numeric_gas() + 256 + 128),
+            "preparation must reserve declared operand bytes without decoding them"
+        );
+
+        let wrong_type = vm
+            .alloc_input_tlv(&test_tlv(PointerType::Blob, &[0x11; 32]))
+            .expect("allocate wrong-type Numeric fixture");
+        vm.set_register(11, wrong_type);
+        assert!(
+            host.prepare_syscall(syscalls::SYSCALL_NUMERIC_ADD, &vm)
+                .is_err(),
+            "preparation must reject a non-Numeric pointer type"
+        );
+    }
+
+    #[test]
     fn zk_verify_label_mapping_covers_envelope_syscalls() {
         assert_eq!(
             DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_TRANSFER),
@@ -3863,6 +4211,7 @@ mod tests {
                 .expect("allocate boundary TLV");
             vm.set_register(10, pointer);
             let registers_before = (vm.register(10), vm.register(11));
+            vm.memory.clear_tracking();
             let quote = host
                 .prepare_syscall(syscalls::SYSCALL_POINTER_TO_NORITO, &vm)
                 .expect("quote pointer conversion");
@@ -3870,6 +4219,10 @@ mod tests {
                 (vm.register(10), vm.register(11)),
                 registers_before,
                 "preparation must not mutate registers"
+            );
+            assert!(
+                vm.memory.read_set().is_empty(),
+                "preparation must not mutate memory access tracking"
             );
             assert_eq!(
                 host.syscall(syscalls::SYSCALL_POINTER_TO_NORITO, &mut vm)
@@ -3885,16 +4238,30 @@ mod tests {
             .expect("allocate left TLV");
         vm.set_register(10, left);
         vm.set_register(11, Memory::OUTPUT_START);
-        let quote = host
+        let error = host
             .prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm)
-            .expect("invalid right pointer has a deterministic quote");
-        assert_eq!(quote, DefaultHost::tlv_eq_gas(4, 0));
-        assert_eq!(
-            host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm)
-                .expect("invalid right pointer compares false"),
-            quote
+            .expect_err("invalid right pointer must fail strict pointer-ABI preparation");
+        assert!(matches!(
+            error,
+            VMError::NoritoInvalid | VMError::MemoryAccessViolation { .. }
+        ));
+        assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
+
+        vm.set_register(10, Memory::OUTPUT_START);
+        vm.set_register(11, Memory::OUTPUT_START);
+        assert!(
+            host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err(),
+            "equal raw addresses must not bypass pointer-ABI validation"
         );
-        assert_eq!(vm.register(10), 0);
+        assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
+
+        vm.set_register(10, 0);
+        vm.set_register(11, Memory::OUTPUT_START);
+        assert!(
+            host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err(),
+            "null comparison must still validate the non-null operand"
+        );
+        assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
     }
 
     #[test]
@@ -4366,5 +4733,40 @@ mod tests {
             err,
             VMError::AbiTypeNotAllowed { abi: 2, type_id } if type_id == PointerType::AccountId as u16
         ));
+    }
+
+    #[test]
+    fn amount_arguments_require_canonical_amount_pointer() {
+        crate::set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let canonical = Numeric::new(125_u32, 2);
+        let canonical_payload = norito::to_bytes(&canonical).expect("encode canonical Amount");
+        let canonical_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::Amount, &canonical_payload))
+            .expect("allocate canonical Amount");
+        vm.set_register(13, canonical_ptr);
+        assert_eq!(DefaultHost::expect_amount(&vm, 13), Ok(()));
+
+        let legacy_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &canonical_payload))
+            .expect("allocate legacy Numeric pointer");
+        vm.set_register(13, legacy_ptr);
+        assert_eq!(
+            DefaultHost::expect_amount(&vm, 13),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let noncanonical = Numeric::new(1_250_u32, 3);
+        let noncanonical_ptr = vm
+            .alloc_input_tlv(&test_tlv(
+                PointerType::Amount,
+                &norito::to_bytes(&noncanonical).expect("encode noncanonical Amount"),
+            ))
+            .expect("allocate noncanonical Amount");
+        vm.set_register(13, noncanonical_ptr);
+        assert_eq!(
+            DefaultHost::expect_amount(&vm, 13),
+            Err(VMError::DecodeError)
+        );
     }
 }

@@ -149,13 +149,89 @@ contents.
 ```
 
 `len_u32` is a 4-byte little-endian length of the following payload. The bytes
-are little-endian two's complement and must fit within the 512-bit cap.
+are the unique minimal little-endian two's-complement representation; zero has
+an empty payload. The magnitude is capped at 512 bits. A positive value whose
+512th magnitude bit is set therefore has a 65-byte payload: 64 magnitude bytes
+followed by the required zero sign byte. Values with more than 512 magnitude
+bits and redundant sign-extension bytes are rejected.
 
 `Numeric` encodes as a struct `(mantissa, scale)`:
 - `mantissa` is a `BigInt` containing the raw integer value (no decimal scale
   is embedded in the integer).
 - `scale` is a `u32` count of fractional digits (e.g., `1.88` is mantissa `188`,
   scale `2`).
+
+The V1 Kotodama `Amount` profile uses `Numeric` with a non-negative mantissa
+and scale `0..=28`. Its encoding is canonical: fractional trailing zeroes are
+removed and zero always has scale zero. Amount arithmetic never rounds unless
+the explicitly rounded division operation supplies a scale and rounding mode.
+
+## Kotodama V1 Schema-Bound Aggregates
+
+Kotodama values crossing an entrypoint or durable-state boundary use canonical
+Norito records bound to an exact recursive schema. The schema and record are
+wire data; compiler-owned VM handles and their heap layouts are not.
+
+For entrypoints, `EntrypointValueTypeV1` contains one flat preorder node tape.
+A `List<T, N>` is represented by `EntrypointValueTypeNodeV1::List`; that node
+stores the compile-time capacity `N`, and the complete element subtree follows
+it immediately in the same tape. Struct field counts, tuple arities, and the
+fixed Option/Result/List child counts make every subtree boundary
+deterministic. This representation preserves recursive type structure without
+building a recursively owned Rust value, so binary/JSON decoding, validation,
+cloning, comparison, and destruction do not consume native stack per aggregate
+level. State values use the analogous recursive `StateValueNodeV1::List` node.
+Both profiles require `1 <= N <= 64`, permit nested lists and structured
+elements, and reject records whose logical length exceeds the schema capacity.
+An entrypoint value schema is limited to 256 nodes and aggregate depth 256.
+`EntrypointValueTypeV1` validates the complete tape during binary and JSON
+deserialization, so truncated trees, trailing trees, over-limit depths, and
+otherwise invalid schemas are never returned as decoded values.
+The dynamic JSON `Value` parser permits 257 structural levels: the extra level
+covers the required outer entrypoint parameter object around a value at
+the full V1 type depth. Recursively owned typed JSON decoders retain their
+independent 256-level guard.
+The built-in `QueryPage<View>` product uses the canonical nominal schema name
+`QueryPage`; its `items` list child is followed by the exact `View`
+specialization, so
+generic source punctuation never becomes part of an ABI identifier and the
+five projection schemas remain structurally distinct. `QueryPage` and those
+five projection names are reserved ABI nominals: a decoder rejects schemas
+whose ordered fields, leaf kinds, list capacity, or continuation type differ
+from their declared V1 shapes. Canonical public type strings retain those
+nominals (`AccountView`, `Option<AccountView>`, and
+`QueryPage<AccountView>`), while ordinary user structs retain the explicit
+`struct Name` rendering.
+The exact encoded schema is domain-separated and hashed into its argument,
+return, or state record; a decoder must reject a record whose schema hash or
+flat schema-delimited atom tape does not match.
+
+On wire, a list starts with one flat `List(u8)` atom containing its active
+element count. The count is followed immediately in the record's single atom
+tape by one schema-delimited atom stream for each active element, in order.
+The count must not exceed the schema capacity. Unused capacity, recursive
+per-list containers, end markers, and placeholder elements are not serialized.
+`Option` and `Result` likewise encode one boolean tag followed by atoms for
+only the selected branch (`some`/`ok` when true, `none`/`err` when false); the
+inactive branch is supplied by the schema and contributes no record atoms.
+This rule applies recursively inside products, lists, options, and results.
+
+After schema validation and Norito decoding, the VM materializes different,
+VM-local layouts:
+
+- A list handle names one contiguous owned-heap allocation
+  `[len: u64][capacity: u64][capacity * element_words]`. The allocation reserves
+  the schema capacity up front, while only the `len` active slots have semantic
+  values. The element width comes from the schema and is never inferred from
+  heap bytes.
+- An option/result handle names one owned-heap allocation
+  `[tag: u64][max(branch_words) payload capacity]`. Only the selected branch
+  payload is materialized; inactive payload bytes have no semantic value.
+
+These raw handles are neither pointer-ABI TLVs nor Norito wire values. They
+must never be persisted or transmitted directly. Crossing another boundary
+requires re-encoding the active logical value into its schema-bound canonical
+Norito record.
 
 ## Map Encoding
 

@@ -1,4 +1,4 @@
-// Presence-aware StateMap reads inside a contract.
+// Presence-aware StateMap reads inside a seiyaku.
 seiyaku MapIndexing {
     state values: StateMap<i64, i64>;
     kotoage fn sum_two() -> i64 authorize("Entry") {

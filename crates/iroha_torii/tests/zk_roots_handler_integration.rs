@@ -56,6 +56,7 @@ fn zk_config_with_root_history_cap(
             metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         },
         stark: iroha_config::parameters::actual::Stark::default(),
+        sccp: iroha_config::parameters::actual::Sccp::default(),
         root_history_cap,
         ballot_history_cap: iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
         empty_root_on_empty: iroha_config::parameters::defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,

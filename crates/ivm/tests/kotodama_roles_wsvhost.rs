@@ -8,6 +8,7 @@ use ivm::{
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
+mod common;
 
 const TEST_ACCOUNT_LITERAL: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 const TEST_ASSET_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -43,6 +44,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
         .compile_source(src_create)
         .expect("compile create_role");
     vm.load_program(&prog).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run().expect("create_role should succeed");
     // Inspect host state
     {
@@ -70,6 +72,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
         .compile_source(src_grant)
         .expect("compile grant_role");
     vm.load_program(&prog).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run().expect("grant_role should succeed");
     {
         let host_any = vm.host_mut_any().unwrap();
@@ -97,6 +100,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
         .compile_source(src_cleanup)
         .expect("compile revoke/delete");
     vm.load_program(&prog).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run().expect("revoke+delete should succeed");
     {
         let host_any = vm.host_mut_any().unwrap();

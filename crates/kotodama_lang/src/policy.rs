@@ -66,10 +66,14 @@ impl Checker {
         for stmt in &block.statements {
             self.visit_statement(stmt, func_name);
         }
+        if let Some(tail) = &block.tail {
+            let origin = format!("tail expression in `{func_name}`");
+            self.visit_expr(tail, &origin);
+        }
     }
 
     fn visit_statement(&mut self, stmt: &TypedStatement, func_name: &str) {
-        match stmt {
+        match stmt.kind() {
             TypedStatement::Let { name, value } => {
                 let origin = format!("binding `{name}` in `{func_name}`");
                 self.visit_expr(value, &origin);
@@ -93,6 +97,19 @@ impl Checker {
                 self.visit_block(then_branch, func_name);
                 if let Some(b) = else_branch {
                     self.visit_block(b, func_name);
+                }
+            }
+            TypedStatement::IfLet {
+                value,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let origin = format!("if let value in `{func_name}`");
+                self.visit_expr(value, &origin);
+                self.visit_block(then_branch, func_name);
+                if let Some(block) = else_branch {
+                    self.visit_block(block, func_name);
                 }
             }
             TypedStatement::While { cond, body } => {
@@ -135,13 +152,17 @@ impl Checker {
 
     fn visit_expr(&mut self, expr: &TypedExpr, origin: &str) {
         self.visit_type(&expr.ty, origin);
-        match &expr.expr {
+        match expr.kind() {
             ExprKind::Binary { left, right, .. } => {
                 self.visit_expr(left, origin);
                 self.visit_expr(right, origin);
             }
-            ExprKind::Unary { expr: inner, .. } => self.visit_expr(inner, origin),
-            ExprKind::NumericCast { expr } => self.visit_expr(expr, origin),
+            ExprKind::Unary { expr: inner, .. }
+            | ExprKind::NumericCast { expr: inner }
+            | ExprKind::OptionSome { value: inner }
+            | ExprKind::ResultOk { value: inner }
+            | ExprKind::ResultErr { error: inner }
+            | ExprKind::Propagate { value: inner } => self.visit_expr(inner, origin),
             ExprKind::Conditional {
                 cond,
                 then_expr,
@@ -151,9 +172,64 @@ impl Checker {
                 self.visit_expr(then_expr, origin);
                 self.visit_expr(else_expr, origin);
             }
-            ExprKind::Call { args, .. } | ExprKind::Tuple(args) => {
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                self.visit_expr(condition, origin);
+                self.visit_block(then_branch, origin);
+                self.visit_block(else_branch, origin);
+            }
+            ExprKind::IfLet {
+                value,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.visit_expr(value, origin);
+                self.visit_block(then_branch, origin);
+                self.visit_block(else_branch, origin);
+            }
+            ExprKind::Match { value, arms } => {
+                self.visit_expr(value, origin);
+                for arm in arms {
+                    self.visit_block(&arm.body, origin);
+                }
+            }
+            ExprKind::Call { args, .. }
+            | ExprKind::NamedCall { args, .. }
+            | ExprKind::Tuple(args)
+            | ExprKind::List(args) => {
                 for arg in args {
                     self.visit_expr(arg, origin);
+                }
+            }
+            ExprKind::JsonObject(entries) => {
+                for (_, value) in entries {
+                    self.visit_expr(value, origin);
+                }
+            }
+            ExprKind::JsonArray(elements) => {
+                for element in elements {
+                    self.visit_expr(element, origin);
+                }
+            }
+            ExprKind::ListComprehension {
+                expression,
+                source,
+                condition,
+                ..
+            } => {
+                self.visit_expr(source, origin);
+                self.visit_expr(expression, origin);
+                if let Some(condition) = condition {
+                    self.visit_expr(condition, origin);
+                }
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                for (_, value) in fields {
+                    self.visit_expr(value, origin);
                 }
             }
             ExprKind::Member { object, .. } => self.visit_expr(object, origin),
@@ -163,6 +239,8 @@ impl Checker {
             }
             ExprKind::Number(_)
             | ExprKind::Decimal(_)
+            | ExprKind::AmountLiteral { .. }
+            | ExprKind::OptionNone
             | ExprKind::Bool(_)
             | ExprKind::String(_)
             | ExprKind::Bytes(_)
@@ -238,6 +316,9 @@ fn display_type(ty: &Type) -> String {
         Type::StateMap(k, v) => format!("StateMap<{}, {}>", display_type(&k), display_type(&v)),
         Type::Option(inner) => format!("Option<{}>", display_type(&inner)),
         Type::Result(ok, err) => format!("Result<{}, {}>", display_type(&ok), display_type(&err)),
+        Type::List(element, capacity) => {
+            format!("List<{}, {capacity}>", display_type(&element))
+        }
         Type::Tuple(elems) => {
             let parts: Vec<String> = elems.iter().map(display_type).collect();
             format!("({})", parts.join(", "))

@@ -2,6 +2,10 @@
 // `val` is decoded once from the trigger's canonical Norito argument record.
 seiyaku MintRoseTrigger {
     kotoage fn run(val: Amount) authorize("Admin") {
-        ledger::asset::mint(context::authority(), AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"), val);
+        ledger::asset::mint(
+            account: context::authority(),
+            asset_definition: AssetDefinitionId::parse("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"),
+            amount: val,
+        );
     }
 }

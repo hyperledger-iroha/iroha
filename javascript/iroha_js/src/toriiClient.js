@@ -36,6 +36,11 @@ import { sorafsGatewayFetch } from "./sorafs.js";
 import { buildPacs008Message, buildPacs009Message } from "./isoBridge.js";
 import { looksLikeIban, normalizeIban } from "./identifiers.js";
 import {
+  isCanonicalKotodamaEntrypoint,
+  isCanonicalKotodamaIdentifier,
+} from "./kotodamaIdentifiers.js";
+import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+import {
   createValidationError,
   ValidationErrorCode,
   ValidationError,
@@ -49,6 +54,7 @@ import {
 import {
   noritoEncodeMultisigProposeRequest,
   noritoEncodeTransactionPayloadBatch,
+  validateNoritoFrame,
 } from "./norito.js";
 import {
   normalizeBridgeMessageSubmitPayload,
@@ -71,6 +77,20 @@ const DEFAULT_TX_STATUS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TX_STATUS_TIMEOUT_MS = 30_000;
 const DEFAULT_ISO_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_ISO_POLL_ATTEMPTS = 12;
+// SCCP response limits are part of the client-side resource boundary. They
+// apply to bytes emitted by the decoded response stream, not just advertised
+// Content-Length values, so compressed or chunked responses cannot bypass them.
+const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64 * 1024;
+const SCCP_RECENT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+const SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+const SCCP_SUBMIT_RESPONSE_MAX_BYTES = SCCP_JSON_RESPONSE_MAX_BYTES;
+const SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES =
+  SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024;
+const SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME =
+  "iroha_sccp::TairaSccpMessageProofV1";
+const SCCP_PROOF_REQUEST_NORITO_TYPE_NAME =
+  "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
 const EXPECTED_DATA_MODEL_VERSION = 1;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
@@ -5244,8 +5264,16 @@ export class ToriiClient {
       headers: { Accept: "application/json" },
       signal,
     });
-    await this._expectStatus(response, [200]);
-    return readSccpJsonResponse(response, normalizeSccpCapabilities, "SCCP capabilities");
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP capabilities",
+    });
+    return readSccpJsonResponse(
+      response,
+      normalizeSccpCapabilities,
+      "SCCP capabilities",
+      SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
+    );
   }
 
   /**
@@ -5259,12 +5287,24 @@ export class ToriiClient {
       headers: { Accept: "application/json" },
       signal,
     });
-    await this._expectStatus(response, [200]);
-    return readSccpJsonResponse(response, normalizeSccpRegistry, "SCCP registry");
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_JSON_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP registry",
+    });
+    return readSccpJsonResponse(
+      response,
+      normalizeSccpRegistry,
+      "SCCP registry",
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+    );
   }
 
   /**
    * Fetch one state-derived message/finality bundle by canonical message id.
+   * Native responses are preflighted as canonical uncompressed Norito frames
+   * bound to `TairaSccpMessageProofV1`. This lightweight client returns the
+   * opaque frame and does not decode its embedded message id; callers that need
+   * independent path-to-payload binding must decode the returned typed value.
    * @param {string} messageId
    * @param {{format?: "json" | "norito", signal?: AbortSignal}} [options]
    * @returns {Promise<object | Uint8Array>}
@@ -5279,14 +5319,34 @@ export class ToriiClient {
       headers: { Accept: sccpAcceptHeader(format) },
       signal,
     });
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes:
+        format === "norito"
+          ? SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES
+          : SCCP_JSON_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP message bundle",
+    });
     return format === "norito"
-      ? readSccpNoritoResponse(response, "SCCP message bundle")
-      : readSccpJsonResponse(response, normalizeSccpMessageBundle, "SCCP message bundle");
+      ? readSccpNoritoResponse(
+          response,
+          "SCCP message bundle",
+          SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES,
+          SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME,
+        )
+      : readSccpJsonResponse(
+          response,
+          normalizeSccpMessageBundle,
+          "SCCP message bundle",
+          SCCP_JSON_RESPONSE_MAX_BYTES,
+        );
   }
 
   /**
    * Fetch one query-free, state-derived Groth16 prover request by message id.
+   * Native responses are preflighted as canonical uncompressed Norito frames
+   * bound to `SccpGroth16Bn254ProofRequestV1`. This lightweight client returns
+   * the opaque frame and does not decode its embedded message id; callers that
+   * need independent path-to-payload binding must decode the returned typed value.
    * @param {string} messageId
    * @param {{format?: "json" | "norito", signal?: AbortSignal}} [options]
    * @returns {Promise<object | Uint8Array>}
@@ -5301,10 +5361,26 @@ export class ToriiClient {
       headers: { Accept: sccpAcceptHeader(format) },
       signal,
     });
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes:
+        format === "norito"
+          ? SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES
+          : SCCP_JSON_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP proof request",
+    });
     return format === "norito"
-      ? readSccpNoritoResponse(response, "SCCP proof request")
-      : readSccpJsonResponse(response, normalizeSccpProofRequest, "SCCP proof request");
+      ? readSccpNoritoResponse(
+          response,
+          "SCCP proof request",
+          SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES,
+          SCCP_PROOF_REQUEST_NORITO_TYPE_NAME,
+        )
+      : readSccpJsonResponse(
+          response,
+          normalizeSccpProofRequest,
+          "SCCP proof request",
+          SCCP_JSON_RESPONSE_MAX_BYTES,
+        );
   }
 
   /**
@@ -5324,16 +5400,16 @@ export class ToriiClient {
     }
     const params = {};
     if (record.from !== undefined) {
-      if (!Number.isSafeInteger(record.from) || record.from < 0) {
+      if (!Number.isSafeInteger(record.from) || record.from < 1) {
         throw new TypeError(
-          "getSccpRecentMessages.options.from must be a non-negative safe integer",
+          "getSccpRecentMessages.options.from must be a positive safe integer",
         );
       }
       params.from = String(record.from);
     }
     if (record.limit !== undefined) {
-      if (!Number.isSafeInteger(record.limit) || record.limit < 0 || record.limit > 50) {
-        throw new TypeError("getSccpRecentMessages.options.limit must be an integer in 0..50");
+      if (!Number.isSafeInteger(record.limit) || record.limit < 1 || record.limit > 50) {
+        throw new TypeError("getSccpRecentMessages.options.limit must be an integer in 1..50");
       }
       params.limit = String(record.limit);
     }
@@ -5342,16 +5418,21 @@ export class ToriiClient {
       params,
       signal: record.signal,
     });
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_RECENT_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP recent messages",
+    });
     return readSccpJsonResponse(
       response,
       normalizeSccpRecentMessages,
       "SCCP recent messages",
+      SCCP_RECENT_RESPONSE_MAX_BYTES,
     );
   }
 
   /**
-   * Submit a bridge proof DTO (`POST /v1/bridge/proofs/submit`).
+   * Prepare or submit a bridge proof DTO (`POST /v1/bridge/proofs/submit`). Signed submission
+   * resends the byte-identical prepared transaction payload with its detached signature.
    * @param {object} payload
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
@@ -5364,12 +5445,16 @@ export class ToriiClient {
       body: JSON.stringify(body),
       signal,
     });
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_SUBMIT_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP bridge proof submit",
+    });
     return readSccpBridgeSubmitResponse(response, body);
   }
 
   /**
-   * Submit an inbound bridge message DTO (`POST /v1/bridge/messages`).
+   * Prepare or submit an inbound bridge message DTO (`POST /v1/bridge/messages`). Signed
+   * submission resends the byte-identical prepared transaction payload with its detached signature.
    * @param {object} payload
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
@@ -5382,7 +5467,10 @@ export class ToriiClient {
       body: JSON.stringify(body),
       signal,
     });
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_SUBMIT_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP bridge message submit",
+    });
     return readSccpBridgeSubmitResponse(response, body);
   }
 
@@ -8215,7 +8303,7 @@ export class ToriiClient {
    * @returns {Promise<ContractManifestRecord | null>}
    */
   async getContractManifest(codeHashHex) {
-    const normalizedHash = normalizeHex32String(codeHashHex, "codeHashHex");
+    const normalizedHash = normalizeIrohaHashHex32(codeHashHex, "codeHashHex");
     const response = await this._request("GET", `/v1/contracts/code/${normalizedHash}`, {
       headers: { Accept: "application/json" },
     });
@@ -8236,7 +8324,7 @@ export class ToriiClient {
    * @returns {Promise<ContractCodeBytesRecord | null>}
    */
   async getContractCodeBytes(codeHashHex) {
-    const normalizedHash = normalizeHex32String(codeHashHex, "codeHashHex");
+    const normalizedHash = normalizeIrohaHashHex32(codeHashHex, "codeHashHex");
     const response = await this._request(
       "GET",
       `/v1/contracts/code-bytes/${normalizedHash}`,
@@ -9742,15 +9830,15 @@ export class ToriiClient {
     return error.name === "AbortError";
   }
 
-  async _expectStatus(response, expected) {
+  async _expectStatus(response, expected, options = {}) {
     if (expected.includes(response.status)) {
       return;
     }
-    throw await this._buildHttpError(response, expected);
+    throw await this._buildHttpError(response, expected, options);
   }
 
-  async _buildHttpError(response, expected) {
-    const { bodyText, bodyJson } = await this._readErrorBody(response);
+  async _buildHttpError(response, expected, options = {}) {
+    const { bodyText, bodyJson } = await this._readErrorBody(response, options);
     const details = this._extractErrorDetails(bodyJson);
     const rejectCode = this._extractRejectCode(response, bodyJson);
     const code =
@@ -9772,7 +9860,28 @@ export class ToriiClient {
     });
   }
 
-  async _readErrorBody(response) {
+  async _readErrorBody(response, options = {}) {
+    if (options.maximumBodyBytes !== undefined) {
+      const label = options.responseLabel ?? "Torii";
+      const bytes = await readBoundedSccpResponseBytes(
+        response,
+        options.maximumBodyBytes,
+        `${label} error`,
+      );
+      const text = decodeSccpUtf8(bytes, `${label} error`);
+      if (!text) {
+        return { bodyText: "", bodyJson: null };
+      }
+      const trimmed = text.trim();
+      if (!trimmed) {
+        return { bodyText: "", bodyJson: null };
+      }
+      try {
+        return { bodyText: text, bodyJson: JSON.parse(trimmed) };
+      } catch {
+        return { bodyText: text, bodyJson: null };
+      }
+    }
     const contentType = this._getHeader(response, "content-type");
     const looksLikeJson =
       typeof contentType === "string" &&
@@ -18055,30 +18164,90 @@ function formatAuthorityPrivateKeyHex(value, record, context, label) {
   return `${normalizedAlgorithm}:${hex}`;
 }
 
+function requireCanonicalKotodamaIdentifier(value, context, options) {
+  const identifier = requireExactNonEmptyString(value, context);
+  if (!isCanonicalKotodamaIdentifier(identifier, options)) {
+    throw new TypeError(`${context} must be a canonical Kotodama V1 identifier`);
+  }
+  return identifier;
+}
+
+function requireCanonicalKotodamaEntrypoint(value, context) {
+  const name = requireExactNonEmptyString(value, context);
+  if (!isCanonicalKotodamaEntrypoint(name)) {
+    throw new TypeError(
+      `${context} must be a canonical Kotodama V1 identifier or branded lifecycle selector`,
+    );
+  }
+  return name;
+}
+
 function normalizeManifestPayload(manifest, context) {
   if (!isPlainObject(manifest)) {
     throw new TypeError(`${context} must be an object`);
   }
+  const allowedFields = new Set([
+    "seiyaku_name",
+    "seiyakuName",
+    "code_hash",
+    "codeHash",
+    "abi_hash",
+    "abiHash",
+    "compiler_fingerprint",
+    "compilerFingerprint",
+    "features_bitmap",
+    "featuresBitmap",
+    "access_set_hints",
+    "accessSetHints",
+    "entrypoints",
+    "entryPoints",
+    "states",
+    "error_codes",
+    "errorCodes",
+    "kotoba",
+    "provenance",
+  ]);
+  const unknownFields = Object.keys(manifest).filter((field) => !allowedFields.has(field));
+  if (unknownFields.length !== 0) {
+    throw new TypeError(
+      `${context} contains unsupported fields: ${unknownFields.sort().join(", ")}`,
+    );
+  }
   const hasField = (...keys) =>
     keys.some((key) => Object.prototype.hasOwnProperty.call(manifest, key));
   const getField = (...keys) => {
-    for (const key of keys) {
-      if (Object.prototype.hasOwnProperty.call(manifest, key)) {
-        return manifest[key];
-      }
+    const present = keys.filter((key) =>
+      Object.prototype.hasOwnProperty.call(manifest, key),
+    );
+    if (present.length > 1) {
+      throw new TypeError(`${context} contains conflicting aliases: ${present.join(", ")}`);
     }
-    return undefined;
+    return present.length === 0 ? undefined : manifest[present[0]];
   };
   const normalized = {
+    seiyaku_name: null,
     code_hash: null,
     abi_hash: null,
     compiler_fingerprint: null,
     features_bitmap: null,
     access_set_hints: null,
     entrypoints: null,
+    states: null,
+    error_codes: null,
     kotoba: null,
     provenance: null,
   };
+  if (hasField("seiyaku_name", "seiyakuName")) {
+    const seiyakuName = getField("seiyaku_name", "seiyakuName") ?? null;
+    normalized.seiyaku_name =
+      seiyakuName === null
+        ? null
+        : requireCanonicalKotodamaIdentifier(
+            seiyakuName,
+            `${context}.seiyaku_name`,
+            { declaration: true },
+          );
+  }
   if (hasField("code_hash", "codeHash")) {
     normalized.code_hash = normalizeOptionalHex32(
       getField("code_hash", "codeHash"),
@@ -18124,12 +18293,24 @@ function normalizeManifestPayload(manifest, context) {
       throw new TypeError(`${context}.entrypoints must be an array`);
     } else {
       normalized.entrypoints = entries.map((entry, index) => {
-        if (!isPlainObject(entry)) {
-          throw new TypeError(`${context}.entrypoints[${index}] must be an object`);
-        }
-        return entry;
+        return normalizeManifestEntrypointPayload(
+          entry,
+          `${context}.entrypoints[${index}]`,
+        );
       });
     }
+  }
+  if (hasField("states")) {
+    const states = getField("states");
+    normalized.states =
+      states === null ? null : normalizeManifestStatesPayload(states, `${context}.states`);
+  }
+  if (hasField("error_codes", "errorCodes")) {
+    const errorCodes = getField("error_codes", "errorCodes");
+    normalized.error_codes =
+      errorCodes === null
+        ? null
+        : normalizeManifestErrorCodesPayload(errorCodes, `${context}.error_codes`);
   }
   if (hasField("kotoba")) {
     const kotoba = getField("kotoba");
@@ -18143,7 +18324,105 @@ function normalizeManifestPayload(manifest, context) {
         ? null
         : normalizeManifestProvenancePayload(provenance, `${context}.provenance`);
   }
+  validateNormalizedManifestPayload(normalized, context);
   return normalized;
+}
+
+function validateNormalizedManifestPayload(manifest, context) {
+  const entrypointKinds = new Map();
+  const entrypointNames = new Set();
+  const lifecycleKinds = new Set();
+  const triggerIds = new Set();
+  for (const [index, entrypoint] of (manifest.entrypoints ?? []).entries()) {
+    if (entrypointNames.has(entrypoint.name)) {
+      throw new TypeError(`${context}.entrypoints contains duplicate name ${entrypoint.name}`);
+    }
+    entrypointNames.add(entrypoint.name);
+    entrypointKinds.set(entrypoint.name, entrypoint.kind.kind);
+    if (entrypoint.kind.kind === "Hajimari" || entrypoint.kind.kind === "Kaizen") {
+      if (lifecycleKinds.has(entrypoint.kind.kind)) {
+        throw new TypeError(
+          `${context}.entrypoints contains duplicate ${entrypoint.kind.kind} declarations`,
+        );
+      }
+      lifecycleKinds.add(entrypoint.kind.kind);
+    }
+    for (const trigger of entrypoint.triggers) {
+      if (triggerIds.has(trigger.id)) {
+        throw new TypeError(`${context}.entrypoints contains duplicate trigger ${trigger.id}`);
+      }
+      triggerIds.add(trigger.id);
+    }
+    if (
+      entrypoint.access_hints_complete === true &&
+      entrypoint.access_hints_skipped.length !== 0
+    ) {
+      throw new TypeError(
+        `${context}.entrypoints[${index}] marks access hints complete but records skipped reasons`,
+      );
+    }
+    if (
+      entrypoint.access_hints_complete === false &&
+      entrypoint.access_hints_skipped.length === 0
+    ) {
+      throw new TypeError(
+        `${context}.entrypoints[${index}] marks access hints incomplete without a reason`,
+      );
+    }
+  }
+  for (const [entrypointIndex, entrypoint] of (manifest.entrypoints ?? []).entries()) {
+    for (const [triggerIndex, trigger] of entrypoint.triggers.entries()) {
+      if (trigger.callback.namespace === null) {
+        const targetKind = entrypointKinds.get(trigger.callback.entrypoint);
+        if (targetKind === undefined) {
+          throw new TypeError(
+            `${context}.entrypoints[${entrypointIndex}].triggers[${triggerIndex}] targets an undeclared local entrypoint`,
+          );
+        }
+        if (targetKind !== "Kotoage") {
+          throw new TypeError(
+            `${context}.entrypoints[${entrypointIndex}].triggers[${triggerIndex}] local callback must target kotoage/言挙げ`,
+          );
+        }
+      }
+    }
+  }
+
+  const stateNames = new Set();
+  for (const state of manifest.states ?? []) {
+    if (stateNames.has(state.name)) {
+      throw new TypeError(`${context}.states contains duplicate name ${state.name}`);
+    }
+    stateNames.add(state.name);
+  }
+
+  const errorPaths = new Set();
+  const errorNumbers = new Set();
+  for (const errorCode of manifest.error_codes ?? []) {
+    const path = `${errorCode.namespace}::${errorCode.name}`;
+    if (errorPaths.has(path) || errorNumbers.has(errorCode.code)) {
+      throw new TypeError(`${context}.error_codes contains a duplicate path or numeric code`);
+    }
+    errorPaths.add(path);
+    errorNumbers.add(errorCode.code);
+  }
+
+  const messageIds = new Set();
+  for (const [entryIndex, entry] of (manifest.kotoba ?? []).entries()) {
+    if (messageIds.has(entry.msg_id)) {
+      throw new TypeError(`${context}.kotoba contains duplicate msg_id ${entry.msg_id}`);
+    }
+    messageIds.add(entry.msg_id);
+    const languages = new Set();
+    for (const translation of entry.translations) {
+      if (languages.has(translation.lang)) {
+        throw new TypeError(
+          `${context}.kotoba[${entryIndex}] contains duplicate language ${translation.lang}`,
+        );
+      }
+      languages.add(translation.lang);
+    }
+  }
 }
 
 function normalizeManifestKotobaPayload(value, context) {
@@ -18153,14 +18432,32 @@ function normalizeManifestKotobaPayload(value, context) {
   return value.map((entry, index) => {
     const record = ensureRecord(entry, `${context}[${index}]`);
     return {
-      msg_id: requireNonEmptyString(
+      msg_id: requireExactNonEmptyString(
         record.msg_id ?? record.msgId,
         `${context}[${index}].msg_id`,
       ),
-      translations: cloneJsonValue(
+      translations: normalizeManifestKotobaTranslationsPayload(
         record.translations,
         `${context}[${index}].translations`,
       ),
+    };
+  });
+}
+
+function normalizeManifestKotobaTranslationsPayload(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((translation, index) => {
+    const record = ensureRecord(translation, `${context}[${index}]`);
+    return {
+      lang: requireExactNonEmptyString(record.lang, `${context}[${index}].lang`),
+      text:
+        typeof record.text === "string"
+          ? record.text
+          : (() => {
+              throw new TypeError(`${context}[${index}].text must be a string`);
+            })(),
     };
   });
 }
@@ -18202,21 +18499,26 @@ function normalizeManifestPublicKeyPayload(value, context) {
 }
 
 function normalizeManifestSignaturePayload(value, context) {
+  let body;
   if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
-    return Buffer.from(value).toString("hex").toUpperCase();
+    body = Buffer.from(value).toString("hex");
+  } else if (Array.isArray(value)) {
+    body = normalizeByteArray(value, context).toString("hex");
+  } else {
+    const literal = requireNonEmptyString(value, context).trim();
+    body =
+      literal.includes(":") && literal.indexOf(":") > 0
+        ? literal.slice(literal.indexOf(":") + 1)
+        : literal;
   }
-  if (Array.isArray(value)) {
-    return normalizeByteArray(value, context).toString("hex").toUpperCase();
-  }
-  const literal = requireNonEmptyString(value, context).trim();
-  const body =
-    literal.includes(":") && literal.indexOf(":") > 0
-      ? literal.slice(literal.indexOf(":") + 1)
-      : literal;
   if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9A-Fa-f]+$/u.test(body)) {
     throw new TypeError(`${context} must be an even-length hexadecimal string`);
   }
-  return body.toUpperCase();
+  const canonical = body.toUpperCase();
+  if (/^0+$/u.test(canonical)) {
+    throw new TypeError(`${context} must not be all zero`);
+  }
+  return canonical;
 }
 
 function normalizeManifestProvenancePayload(value, context) {
@@ -18292,6 +18594,437 @@ function normalizeAccessSetHintsPayload(payload, context) {
       `${context}.dynamic_writes`,
     ),
   };
+}
+
+function normalizeManifestEntrypointPayload(value, context) {
+  const record = ensureRecord(value, context);
+  const name = requireCanonicalKotodamaEntrypoint(record.name, `${context}.name`);
+  const kind = normalizeManifestEntrypointKind(record.kind, `${context}.kind`);
+  const lifecycleKind =
+    name === "hajimari" || name === "始まり"
+      ? "Hajimari"
+      : name === "kaizen" || name === "改善"
+        ? "Kaizen"
+        : null;
+  if (
+    (lifecycleKind !== null && kind.kind !== lifecycleKind) ||
+    (lifecycleKind === null && (kind.kind === "Hajimari" || kind.kind === "Kaizen"))
+  ) {
+    throw new TypeError(`${context}.kind does not match its branded lifecycle selector`);
+  }
+  const permission = normalizeOptionalManifestString(
+    record.permission,
+    `${context}.permission`,
+  );
+  if (kind.kind === "Kotoage" && permission === null) {
+    throw new TypeError(`${context}.permission is required for kotoage/言挙げ`);
+  }
+  if ((kind.kind === "Hajimari" || kind.kind === "Kaizen") && permission !== null) {
+    throw new TypeError(
+      `${context}.permission must be null for hajimari/始まり and kaizen/改善`,
+    );
+  }
+  const params = normalizeManifestEntrypointParams(record.params, `${context}.params`);
+  const argumentSchema = normalizeManifestArgumentSchema(
+    record.argument_schema ?? record.argumentSchema,
+    `${context}.argument_schema`,
+  );
+  if (params.length === 0 && argumentSchema !== null) {
+    throw new TypeError(`${context} has an argument schema but no parameters`);
+  }
+  if (params.length !== 0 && argumentSchema === null) {
+    throw new TypeError(`${context} has parameters but no exact argument schema`);
+  }
+  if (
+    argumentSchema !== null &&
+    (argumentSchema.fields.length !== params.length ||
+      argumentSchema.fields.some(
+        (field, index) =>
+          field.name !== params[index].name ||
+          analyzeManifestValueType(field.ty, `${context}.argument_schema.fields[${index}].ty`)
+            .canonicalName !== params[index].type_name,
+      ))
+  ) {
+    throw new TypeError(`${context}.argument_schema does not exactly match its parameters`);
+  }
+  const returnType = normalizeOptionalManifestString(
+    record.return_type ?? record.returnType,
+    `${context}.return_type`,
+  );
+  const returnSchema = normalizeManifestValueType(
+    record.return_schema ?? record.returnSchema,
+    `${context}.return_schema`,
+  );
+  if ((returnType === null) !== (returnSchema === null)) {
+    throw new TypeError(`${context} must declare return_type and return_schema together`);
+  }
+  if (
+    returnSchema !== null
+  ) {
+    const analysis = analyzeManifestValueType(returnSchema, `${context}.return_schema`);
+    if (analysis.canonicalName !== returnType) {
+      throw new TypeError(`${context}.return_schema does not match return_type`);
+    }
+    if (analysis.wordCount > 13) {
+      throw new TypeError(`${context}.return_schema exceeds the V1 13-word return window`);
+    }
+  }
+  return {
+    name,
+    kind,
+    params,
+    argument_schema: argumentSchema,
+    return_type: returnType,
+    return_schema: returnSchema,
+    permission,
+    read_keys: normalizeManifestStringArray(
+      record.read_keys ?? record.readKeys,
+      `${context}.read_keys`,
+    ),
+    write_keys: normalizeManifestStringArray(
+      record.write_keys ?? record.writeKeys,
+      `${context}.write_keys`,
+    ),
+    access_hints_complete: normalizeOptionalManifestBoolean(
+      record.access_hints_complete ?? record.accessHintsComplete,
+      `${context}.access_hints_complete`,
+    ),
+    access_hints_skipped: normalizeManifestStringArray(
+      record.access_hints_skipped ?? record.accessHintsSkipped,
+      `${context}.access_hints_skipped`,
+    ),
+    triggers: normalizeManifestTriggersPayload(record.triggers, `${context}.triggers`),
+  };
+}
+
+function normalizeManifestEntrypointParams(value, context) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  if (value.length > 13) {
+    throw new TypeError(`${context} exceeds the V1 13-parameter limit`);
+  }
+  const names = new Set();
+  return value.map((param, index) => {
+    const record = ensureRecord(param, `${context}[${index}]`);
+    const name = requireCanonicalKotodamaIdentifier(
+      record.name,
+      `${context}[${index}].name`,
+    );
+    if (names.has(name)) {
+      throw new TypeError(`${context} contains duplicate parameter ${name}`);
+    }
+    names.add(name);
+    return {
+      name,
+      type_name: requireExactNonEmptyString(
+        record.type_name ?? record.typeName,
+        `${context}[${index}].type_name`,
+      ),
+    };
+  });
+}
+
+function normalizeManifestArgumentSchema(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const record = ensureRecord(value, context);
+  if (!Array.isArray(record.fields)) {
+    throw new TypeError(`${context}.fields must be an array`);
+  }
+  if (record.fields.length === 0 || record.fields.length > 13) {
+    throw new TypeError(`${context}.fields must contain 1..13 entries`);
+  }
+  const names = new Set();
+  let wordCount = 0;
+  const fields = record.fields.map((field, index) => {
+      const fieldRecord = ensureRecord(field, `${context}.fields[${index}]`);
+      const name = requireCanonicalKotodamaIdentifier(
+        fieldRecord.name,
+        `${context}.fields[${index}].name`,
+      );
+      if (names.has(name)) {
+        throw new TypeError(`${context}.fields contains duplicate name ${name}`);
+      }
+      names.add(name);
+      const ty = normalizeRequiredManifestValueType(
+        fieldRecord.ty,
+        `${context}.fields[${index}].ty`,
+      );
+      wordCount += analyzeManifestValueType(ty, `${context}.fields[${index}].ty`).wordCount;
+      return { name, ty };
+    });
+  if (wordCount > 13) {
+    throw new TypeError(`${context} exceeds the V1 13-word argument window`);
+  }
+  return { fields };
+}
+
+function normalizeManifestValueType(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return normalizeRequiredManifestValueType(value, context);
+}
+
+function normalizeRequiredManifestValueType(value, context) {
+  const record = ensureRecord(value, context);
+  if (!Array.isArray(record.nodes)) {
+    throw new TypeError(`${context}.nodes must be an array`);
+  }
+  const normalized = {
+    nodes: record.nodes.map((node, index) =>
+      normalizeManifestValueTypeNode(node, `${context}.nodes[${index}]`),
+    ),
+  };
+  analyzeManifestValueType(normalized, context);
+  return normalized;
+}
+
+function normalizeManifestValueTypeNode(value, context) {
+  const record = ensureRecord(value, context);
+  const kind = requireNonEmptyString(record.kind, `${context}.kind`);
+  switch (kind) {
+    case "Struct": {
+      const struct = ensureRecord(record.value, `${context}.value`);
+      return {
+        kind,
+        value: {
+          name: requireNonEmptyString(struct.name, `${context}.value.name`),
+          fields: normalizeManifestStringArray(
+            struct.fields,
+            `${context}.value.fields`,
+          ),
+        },
+      };
+    }
+    case "Tuple": {
+      const arity = ToriiClient._normalizeUnsignedInteger(
+        record.value,
+        `${context}.value`,
+        { allowZero: true },
+      );
+      if (arity > 0xffff) {
+        throw new TypeError(`${context}.value must fit in u16`);
+      }
+      return { kind, value: arity };
+    }
+    case "Option":
+    case "Result":
+      requireManifestNull(record.value, `${context}.value`);
+      return { kind, value: null };
+    case "List": {
+      const list = ensureRecord(record.value, `${context}.value`);
+      const fields = Object.keys(list);
+      if (fields.length !== 1 || fields[0] !== "capacity") {
+        throw new TypeError(
+          `${context}.value must contain exactly capacity; the element subtree follows in the nodes tape`,
+        );
+      }
+      const capacity = ToriiClient._normalizeUnsignedInteger(
+        list.capacity,
+        `${context}.value.capacity`,
+        { allowZero: true },
+      );
+      if (capacity < 1 || capacity > 64) {
+        throw new TypeError(`${context}.value.capacity must be in the V1 range 1..64`);
+      }
+      return {
+        kind,
+        value: { capacity },
+      };
+    }
+    case "Leaf":
+      return {
+        kind,
+        value: normalizeManifestValueKind(record.value, `${context}.value`),
+      };
+    default:
+      throw new TypeError(`${context}.kind is not a V1 entrypoint value-type node`);
+  }
+}
+
+function normalizeManifestValueKind(value, context) {
+  const record = ensureRecord(value, context);
+  const kind = requireNonEmptyString(record.kind, `${context}.kind`);
+  const allowed = new Set([
+    "Int",
+    "U128",
+    "Bool",
+    "String",
+    "Amount",
+    "Json",
+    "Name",
+    "AccountId",
+    "AssetDefinitionId",
+    "AssetId",
+    "DomainId",
+    "NftId",
+    "DataSpaceId",
+    "Blob",
+  ]);
+  if (!allowed.has(kind)) {
+    throw new TypeError(`${context}.kind is not a V1 entrypoint value kind`);
+  }
+  requireManifestNull(record.value, `${context}.value`);
+  return { kind, value: null };
+}
+
+function analyzeManifestValueType(value, context) {
+  return analyzeEntrypointValueTypeV1(value, context);
+}
+function normalizeOptionalManifestString(value, context) {
+  return value === undefined || value === null
+    ? null
+    : requireExactNonEmptyString(value, context);
+}
+
+function normalizeOptionalManifestBoolean(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${context} must be a boolean`);
+  }
+  return value;
+}
+
+function normalizeManifestStringArray(value, context) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((entry, index) =>
+    requireExactNonEmptyString(entry, `${context}[${index}]`),
+  );
+}
+
+function requireManifestNull(value, context) {
+  if (value !== undefined && value !== null) {
+    throw new TypeError(`${context} must be null`);
+  }
+}
+
+function normalizeManifestStatesPayload(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((state, index) => {
+    const record = ensureRecord(state, `${context}[${index}]`);
+    return {
+      name: requireCanonicalKotodamaIdentifier(
+        record.name,
+        `${context}[${index}].name`,
+        { declaration: true },
+      ),
+      type_name: requireExactNonEmptyString(
+        record.type_name ?? record.typeName,
+        `${context}[${index}].type_name`,
+      ),
+    };
+  });
+}
+
+function normalizeManifestErrorCodesPayload(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((errorCode, index) => {
+    const record = ensureRecord(errorCode, `${context}[${index}]`);
+    const code = ToriiClient._normalizeUnsignedInteger(
+      record.code,
+      `${context}[${index}].code`,
+      { allowZero: true },
+    );
+    if (code > 0xffff_ffff) {
+      throw new TypeError(`${context}[${index}].code must fit in u32`);
+    }
+    if (code === 0) {
+      throw new TypeError(`${context}[${index}].code must be non-zero`);
+    }
+    return {
+      namespace: requireCanonicalKotodamaIdentifier(
+        record.namespace,
+        `${context}[${index}].namespace`,
+        { declaration: true },
+      ),
+      name: requireCanonicalKotodamaIdentifier(
+        record.name,
+        `${context}[${index}].name`,
+      ),
+      code,
+    };
+  });
+}
+
+function normalizeManifestTriggersPayload(value, context) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((trigger, index) => {
+    const record = ensureRecord(trigger, `${context}[${index}]`);
+    const callback = ensureRecord(record.callback, `${context}[${index}].callback`);
+    const metadata = ensureRecord(record.metadata ?? {}, `${context}[${index}].metadata`);
+    return {
+      id: requireExactNonEmptyString(record.id, `${context}[${index}].id`),
+      repeats: normalizeManifestRepeatsPayload(
+        record.repeats,
+        `${context}[${index}].repeats`,
+      ),
+      filter: normalizeRequiredExactBase64Payload(
+        record.filter,
+        `${context}[${index}].filter`,
+      ),
+      authority:
+        record.authority === undefined || record.authority === null
+          ? null
+          : normalizeAccountId(record.authority, `${context}[${index}].authority`),
+      metadata: cloneJsonValue(metadata, `${context}[${index}].metadata`),
+      callback: {
+        namespace: normalizeOptionalManifestString(
+          callback.namespace,
+          `${context}[${index}].callback.namespace`,
+        ),
+        entrypoint: requireCanonicalKotodamaEntrypoint(
+          callback.entrypoint,
+          `${context}[${index}].callback.entrypoint`,
+        ),
+      },
+    };
+  });
+}
+
+function normalizeManifestRepeatsPayload(value, context) {
+  const record = ensureRecord(value, context);
+  const keys = Object.keys(record);
+  if (keys.length !== 1) {
+    throw new TypeError(`${context} must contain exactly one repeat variant`);
+  }
+  if (keys[0] === "Indefinitely") {
+    requireManifestNull(record.Indefinitely, `${context}.Indefinitely`);
+    return { Indefinitely: null };
+  }
+  if (keys[0] === "Exactly") {
+    const count = ToriiClient._normalizeUnsignedInteger(
+      record.Exactly,
+      `${context}.Exactly`,
+      { allowZero: true },
+    );
+    if (count > 0xffff_ffff) {
+      throw new TypeError(`${context}.Exactly must fit in u32`);
+    }
+    return { Exactly: count };
+  }
+  throw new TypeError(`${context} must be Indefinitely or Exactly`);
 }
 
 function normalizeOptionalBase64Payload(value, name) {
@@ -18420,7 +19153,15 @@ function normalizeOptionalHex32(value, name) {
   if (value === null) {
     return null;
   }
-  return normalizeHex32String(value, name);
+  return normalizeIrohaHashHex32(value, name);
+}
+
+function normalizeIrohaHashHex32(value, name) {
+  const hex = normalizeHex32String(value, name);
+  if ((Number.parseInt(hex.slice(-2), 16) & 1) !== 1) {
+    throw new TypeError(`${name} must set the Iroha Hash marker bit`);
+  }
+  return hex;
 }
 
 function normalizeHex32String(value, name, options = {}) {
@@ -18648,7 +19389,11 @@ function parseHashLiteralToHex(literal, name) {
   if (expected !== checksum.toUpperCase()) {
     throw new TypeError(`${name} has invalid checksum; expected ${expected}`);
   }
-  return body.toLowerCase();
+  const hex = body.toLowerCase();
+  if ((Number.parseInt(hex.slice(-2), 16) & 1) !== 1) {
+    throw new TypeError(`${name} must set the Iroha Hash marker bit`);
+  }
+  return hex;
 }
 
 function formatHashLiteral(bodyHex) {
@@ -19069,7 +19814,7 @@ function normalizeDeployContractResponse(payload) {
         contract.previous_contract_address,
         `deployContract.response.contracts[${index}].previous_contract_address`,
       ),
-      upgraded: Boolean(contract.upgraded),
+      kaizen: Boolean(contract.kaizen),
       dataspace: requireNonEmptyString(
         contract.dataspace,
         `deployContract.response.contracts[${index}].dataspace`,
@@ -19535,6 +20280,17 @@ function normalizeGovernanceWindow(value, name) {
     );
   }
   return { lower, upper };
+}
+
+function normalizeGovernanceVotingMode(value, name) {
+  if (value === "Zk" || value === "Plain") {
+    return value;
+  }
+  throw createValidationError(
+    ValidationErrorCode.INVALID_STRING,
+    `${name} must be either 'Zk' or 'Plain'`,
+    normalizeErrorPath(name),
+  );
 }
 
 function normalizeGovernanceDraftResponse(
@@ -20819,50 +21575,51 @@ function normalizeContractManifestResponse(payload) {
     record.manifest ?? {},
     "contract manifest response.manifest",
   );
-  const accessHints =
-    manifestRecord.access_set_hints ?? null;
-  const entrypointsValue =
-    manifestRecord.entrypoints ?? null;
-  const kotobaValue = manifestRecord.kotoba ?? null;
-  const provenanceValue = manifestRecord.provenance ?? null;
-  return {
-    manifest: {
-      code_hash: normalizeOptionalHex32(
+  const manifest = normalizeManifestPayload(
+    {
+      ...manifestRecord,
+      code_hash: normalizeCanonicalManifestHash(
         manifestRecord.code_hash,
         "manifest.code_hash",
       ),
-      abi_hash: normalizeOptionalHex32(
+      abi_hash: normalizeCanonicalManifestHash(
         manifestRecord.abi_hash,
         "manifest.abi_hash",
       ),
-      compiler_fingerprint:
-        manifestRecord.compiler_fingerprint ?? null,
-      features_bitmap: manifestRecord.features_bitmap ?? null,
-      access_set_hints:
-        accessHints === null
-          ? null
-          : normalizeAccessSetHintsPayload(
-              accessHints,
-              "manifest.access_set_hints",
-            ),
-      entrypoints: normalizeManifestEntrypointsPayload(
-        entrypointsValue,
-        "manifest.entrypoints",
-      ),
-      kotoba:
-        kotobaValue === null
-          ? null
-          : cloneJsonValue(kotobaValue, "manifest.kotoba"),
-      provenance:
-        provenanceValue === null
-          ? null
-          : cloneJsonValue(provenanceValue, "manifest.provenance"),
     },
-    code_bytes:
-      record.code_bytes === undefined || record.code_bytes === null
-        ? null
-        : normalizeOptionalBase64Payload(record.code_bytes, "contractManifest.code_bytes"),
+    "manifest",
+  );
+  const codeHash = normalizeOptionalHex32(record.code_hash, "contractManifest.code_hash") ?? null;
+  const abiHash = normalizeOptionalHex32(record.abi_hash, "contractManifest.abi_hash") ?? null;
+  if (codeHash !== manifest.code_hash) {
+    throw new TypeError(
+      "contractManifest.code_hash does not match manifest.code_hash",
+    );
+  }
+  if (abiHash !== manifest.abi_hash) {
+    throw new TypeError(
+      "contractManifest.abi_hash does not match manifest.abi_hash",
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(record, "code_bytes")) {
+    throw new TypeError("contract manifest response must not include code_bytes");
+  }
+  return {
+    manifest,
+    code_hash: codeHash,
+    abi_hash: abiHash,
   };
+}
+
+function normalizeCanonicalManifestHash(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const literal = requireExactNonEmptyString(value, name);
+  if (!/^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u.test(literal)) {
+    throw new TypeError(`${name} must be a canonical uppercase Norito Hash literal`);
+  }
+  return parseHashLiteralToHex(literal, name);
 }
 
 function normalizeContractCodeBytesResponse(payload) {
@@ -20885,45 +21642,45 @@ function normalizeManifestEntrypointsPayload(value, name) {
   if (value.length === 0) {
     return [];
   }
-  return value.map((entry, index) => {
-    const record = ensureRecord(entry, `${name}[${index}]`);
-    const entryName = requireNonEmptyString(
-      record.name,
-      `${name}[${index}].name`,
-    );
-    const permission =
-      record.permission === undefined || record.permission === null
-        ? null
-        : requireNonEmptyString(
-            record.permission,
-            `${name}[${index}].permission`,
-          );
-    const kind = normalizeManifestEntrypointKind(
-      record.kind,
-      `${name}[${index}].kind`,
-    );
-    return {
-      name: entryName,
-      kind,
-      permission,
-    };
-  });
+  return value.map((entry, index) =>
+    normalizeManifestEntrypointPayload(entry, `${name}[${index}]`),
+  );
 }
 
 function normalizeManifestEntrypointKind(value, name) {
   if (value === undefined || value === null) {
-    return { kind: "Public" };
+    throw new TypeError(`${name} is required`);
   }
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      throw new TypeError(`${name} must be a non-empty string`);
-    }
-    return { kind: trimmed };
+    const canonical = requireExactNonEmptyString(value, name);
+    return { kind: canonicalManifestEntrypointKind(canonical, name), value: null };
   }
   const record = ensureRecord(value, name);
-  const kind = requireNonEmptyString(record.kind, `${name}.kind`);
-  return "value" in record ? { kind, value: record.value } : { kind };
+  const kind = canonicalManifestEntrypointKind(
+    requireExactNonEmptyString(record.kind, `${name}.kind`),
+    `${name}.kind`,
+  );
+  if (record.value !== undefined && record.value !== null) {
+    throw new TypeError(`${name}.value must be null`);
+  }
+  return { kind, value: null };
+}
+
+function canonicalManifestEntrypointKind(value, name) {
+  switch (value) {
+    case "Kotoage":
+      return "Kotoage";
+    case "View":
+      return "View";
+    case "Hajimari":
+      return "Hajimari";
+    case "Kaizen":
+      return "Kaizen";
+    default:
+      throw new TypeError(
+        `${name} must be Kotoage, View, Hajimari, or Kaizen`,
+      );
+  }
 }
 
 function normalizeGovernanceContractResponse(payload) {
@@ -26399,13 +27156,21 @@ function normalizeSignalOnlyOption(options, context) {
 async function readSccpBridgeSubmitResponse(response, request) {
   const contentType = response.headers?.get?.("content-type") ?? "";
   if (!/^application\/json(?:\s*;|$)/iu.test(contentType)) {
-    throw new TypeError("SCCP bridge submit response must use application/json content type");
+    const error = new TypeError(
+      "SCCP bridge submit response must use application/json content type",
+    );
+    await cancelSccpResponseBody(response, error);
+    throw error;
   }
-  if (typeof response.text !== "function") {
-    throw new TypeError("SCCP bridge submit response body is not readable as text");
-  }
-  const text = await response.text();
-  const expectations = {};
+  const text = decodeSccpUtf8(
+    await readBoundedSccpResponseBytes(
+      response,
+      SCCP_SUBMIT_RESPONSE_MAX_BYTES,
+      "SCCP bridge submit",
+    ),
+    "SCCP bridge submit",
+  );
+  const expectations = { submitted: request.signature_b64 !== undefined };
   if (request.creation_time_ms !== undefined) {
     expectations.creation_time_ms = request.creation_time_ms;
   }
@@ -26438,31 +27203,156 @@ function sccpAcceptHeader(format) {
   return format === "norito" ? "application/x-norito" : "application/json";
 }
 
-async function readSccpJsonResponse(response, normalize, label) {
+async function readSccpJsonResponse(response, normalize, label, maximumBodyBytes) {
   const contentType = response.headers?.get?.("content-type") ?? "";
   if (!/^application\/json(?:\s*;|$)/iu.test(contentType)) {
-    throw new TypeError(`${label} response must use application/json content type`);
+    const error = new TypeError(`${label} response must use application/json content type`);
+    await cancelSccpResponseBody(response, error);
+    throw error;
   }
-  if (typeof response.text !== "function") {
-    throw new TypeError(`${label} response body is not readable as text`);
-  }
-  const payload = parseSccpJsonObject(await response.text(), label);
+  const bytes = await readBoundedSccpResponseBytes(response, maximumBodyBytes, label);
+  const payload = parseSccpJsonObject(decodeSccpUtf8(bytes, label), label);
   return normalize(payload);
 }
 
-async function readSccpNoritoResponse(response, label) {
+async function readSccpNoritoResponse(
+  response,
+  label,
+  maximumBodyBytes,
+  expectedTypeName,
+) {
   const contentType = response.headers?.get?.("content-type") ?? "";
   if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
-    throw new TypeError(`${label} response must use application/x-norito content type`);
+    const error = new TypeError(
+      `${label} response must use application/x-norito content type`,
+    );
+    await cancelSccpResponseBody(response, error);
+    throw error;
   }
-  if (typeof response.arrayBuffer !== "function") {
-    throw new TypeError(`${label} response body is not readable as binary data`);
+  const body = await readBoundedSccpResponseBytes(response, maximumBodyBytes, label);
+  validateNoritoFrame(body, {
+    context: `${label} response`,
+    expectedTypeName,
+    requireNonEmptyPayload: true,
+  });
+  return body;
+}
+
+async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
+  if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
+    throw new TypeError(`${label} response byte-size bound is invalid`);
   }
-  const body = new Uint8Array(await response.arrayBuffer());
-  if (body.length === 0 || body.length > 16 * 1024 * 1024) {
-    throw new TypeError(`${label} Norito body is outside its byte-size bound`);
+
+  const rawContentLength = response.headers?.get?.("content-length");
+  if (rawContentLength !== null && rawContentLength !== undefined) {
+    if (
+      typeof rawContentLength !== "string" ||
+      !/^(?:0|[1-9][0-9]*)$/u.test(rawContentLength)
+    ) {
+      const error = new TypeError(
+        `${label} response Content-Length must be a canonical unsigned decimal integer`,
+      );
+      await cancelSccpResponseBody(response, error);
+      throw error;
+    }
+    const declaredLength = Number(rawContentLength);
+    if (!Number.isSafeInteger(declaredLength) || declaredLength > maximumBodyBytes) {
+      const error = new TypeError(
+        `${label} response exceeds its ${maximumBodyBytes}-byte size bound`,
+      );
+      await cancelSccpResponseBody(response, error);
+      throw error;
+    }
+  }
+
+  if (response.body === null || response.body === undefined) {
+    return new Uint8Array(0);
+  }
+  if (typeof response.body.getReader !== "function") {
+    const error = new TypeError(
+      `${label} response body is not readable as a byte stream`,
+    );
+    await cancelSccpResponseBody(response, error);
+    throw error;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  let cancelled = false;
+  try {
+    // A stream can omit Content-Length or advertise the encoded length while
+    // yielding more decoded bytes. The running total is therefore authoritative.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const result = await reader.read();
+      if (!result || typeof result.done !== "boolean") {
+        throw new TypeError(`${label} response body returned an invalid stream result`);
+      }
+      if (result.done) {
+        break;
+      }
+      if (!(result.value instanceof Uint8Array)) {
+        throw new TypeError(`${label} response body returned a non-byte chunk`);
+      }
+      if (result.value.byteLength > maximumBodyBytes - totalBytes) {
+        const error = new TypeError(
+          `${label} response exceeds its ${maximumBodyBytes}-byte size bound`,
+        );
+        cancelled = true;
+        try {
+          await reader.cancel(error);
+        } catch {
+          // Preserve the deterministic size-bound failure if transport cleanup fails.
+        }
+        throw error;
+      }
+      totalBytes += result.value.byteLength;
+      chunks.push(result.value);
+    }
+  } catch (error) {
+    if (!cancelled && typeof reader.cancel === "function") {
+      cancelled = true;
+      try {
+        await reader.cancel(error);
+      } catch {
+        // Preserve the original stream or validation error.
+      }
+    }
+    throw error;
+  } finally {
+    if (typeof reader.releaseLock === "function") {
+      reader.releaseLock();
+    }
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
   }
   return body;
+}
+
+async function cancelSccpResponseBody(response, reason) {
+  const body = response?.body;
+  if (!body || body.locked || typeof body.cancel !== "function") {
+    return;
+  }
+  try {
+    await body.cancel(reason);
+  } catch {
+    // A rejected cancellation must not mask the fail-closed validation error.
+  }
+}
+
+function decodeSccpUtf8(bytes, label) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new TypeError(`${label} response body must be strict UTF-8`, { cause: error });
+  }
 }
 
 function requirePlainObjectOption(value, context, { message } = {}) {

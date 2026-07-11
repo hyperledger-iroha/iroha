@@ -2,59 +2,61 @@
 lang: ka
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
-source_last_modified: "2025-12-29T18:16:35.921274+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: 465d8cf704022986b169ab93133517428f8cf2ffe01a498cbda458f4a5b2e69b
+source_last_modified: "2026-07-11T15:09:39+04:00"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# ხიდის მტკიცებულებები
+> ეს არის 2026-07-11-ის შემოკლებული ლოკალიზებული მიმოხილვა და არა სრული
+> ნორმატიული თარგმანი. ზუსტი ტიპების, API კონტრაქტებისა და გამოშვების
+> მოთხოვნებისთვის გამოიყენეთ [ინგლისური კანონიკური გვერდი](bridge_proofs.md).
 
-ხიდის მტკიცებულების წარდგენები გადის სტანდარტული ინსტრუქციის გზაზე (`SubmitBridgeProof`) და დაფიქსირდა მტკიცებულების რეესტრში დამოწმებული სტატუსით. მიმდინარე ზედაპირი მოიცავს ICS-ის სტილის Merkle-ის მტკიცებულებებს და გამჭვირვალე-ZK დატვირთვას დამაგრებული შეკავებითა და მანიფესტური შეკვრით.
+# SCCP V1 ხიდის მტკიცებულებები — შემოკლებული მიმოხილვა
 
-## მიღების წესები
+## პირველი გამოშვების საზღვარი
 
-- დიაპაზონები უნდა იყოს შეკვეთილი/არა ცარიელი და პატივი სცეს `zk.bridge_proof_max_range_len` (0 გამორთავს თავსახურს).
-- სურვილისამებრ სიმაღლის ფანჯრები უარყოფენ მოძველებულ/მომავალ მტკიცებულებებს: `zk.bridge_proof_max_past_age_blocks` და `zk.bridge_proof_max_future_drift_blocks` იზომება ბლოკის სიმაღლის მიხედვით, რომელიც შთანთქავს მტკიცებულებას (0 გამორთავს დაცვას).
-- ხიდის მტკიცებულებები შეიძლება არ ემთხვეოდეს არსებულ მტკიცებულებას იმავე უკანა ნაწილისთვის (დამაგრებული მტკიცებულებები შენარჩუნებულია და ბლოკავს გადახურვებს).
-- მანიფესტის ჰეშები არ უნდა იყოს ნულოვანი; ტვირთამწეობა იფარება `zk.max_proof_size_bytes`-ით.
-- ICS payloads პატივს სცემს კონფიგურირებულ Merkle-ს სიღრმის თავს და ამოწმებს გზას დეკლარირებული ჰეშის ფუნქციის გამოყენებით; გამჭვირვალე ტვირთამწეობამ უნდა გამოაცხადოს არაცარიელი საფონდო ლეიბლი.
-- დამაგრებული მტკიცებულებები თავისუფლდება შეკავების მორთვისაგან; დაუმაგრებელი მტკიცებულებები კვლავ პატივს სცემს გლობალურ `zk.proof_history_cap`/grace/batch პარამეტრებს.
+- SCCP V1 დახურული ზედაპირია: მხარდაჭერილია მხოლოდ Ethereum mainnet, BSC
+  mainnet და TRON mainnet, ხოლო SORA-ს ერთადერთი ბოლო წერტილია `sora-taira`.
+  სხვა ქსელის პროფილი ან SORA-ს სხვა იდენტობა უარყოფილია.
+- `SubmitBridgeProof` იღებს მხოლოდ მარშრუტზე მიბმულ ტიპიზებულ
+  `NativeProtocol` და `SccpDestination` მტკიცებულებებს. ზოგადი `Ics` და
+  `TransparentZk` payload-ების წარდგენა მიუწვდომელია და fail-closed წესით
+  უარყოფილია.
 
-## Torii API ზედაპირი
+## ტიპიზებული რეესტრი და ისტორია
 
-- `GET /v1/zk/proofs` და `GET /v1/zk/proofs/count` იღებენ ხიდის შემეცნებით ფილტრებს:
-  - `bridge_only=true` აბრუნებს მხოლოდ ხიდის მტკიცებულებებს.
-  - `bridge_pinned_only=true` ვიწროვდება დამაგრებული ხიდის მტკიცებულებამდე.
-  - `bridge_start_from_height` / `bridge_end_until_height` დაამაგრეთ ხიდის დიაპაზონის ფანჯარა.
-- `GET /v1/zk/proof/{backend}/{hash}` აბრუნებს ხიდის მეტამონაცემებს (დიაპაზონი, მანიფესტის ჰეში, დატვირთვის შეჯამება) მტკიცებულების id/სტატუსის/VK აკინძებთან ერთად.
-- სრული Norito მტკიცებულება ჩანაწერი (მათ შორის, დატვირთვის ბაიტი) ხელმისაწვდომი რჩება `GET /v1/proofs/{proof_id}`-ის მეშვეობით კვანძების გარეშე შემმოწმებლებისთვის.
+- `SccpRegistryV1` არის ტიპიზებული და append-only. თითო lane ინარჩუნებს
+  მაქსიმუმ 64 მარშრუტის რევიზიას და 4,096 native trust anchor-ს. ჩანაწერები
+  ფარულად არ იშლება; ზღვრის შემდეგი დამატება ატომურად უარყოფილია.
+- Anchor ინტერვალი იყენებს დამოწმებულ კონსენსუსის კოორდინატს: Ethereum-ზე
+  finalized beacon slot-ს, BSC/TRON-ზე finalized native block height-ს.
+  ძველი anchor ძალაშია მომდევნო checkpoint-ის ჩათვლით და შემდეგ აღარ.
+- მდგრადი inbound ჩანაწერი ცალ-ცალკე ინახავს event/finality height-სა და
+  `anchor_interval_height`-ს. lane+anchor high-water მნიშვნელობა მხოლოდ
+  იზრდება; ახალი checkpoint მასზე დაბალი ვერ იქნება. Snapshot hydration ამ
+  ინდექსს სრულად ხელახლა ითვლის და აკლებული, მოძველებული ან ზედმეტი
+  მნიშვნელობა უარყოფილია. message id-ის ხელახალი გამოყენება ან replay ასევე
+  უარყოფილია.
 
-## ხიდის მიღების ღონისძიებები
+## ერთჯერადი შემოწმება და დეტერმინისტული ლიმიტები
 
-ხიდის ზოლები გამოსცემს აკრეფილ ქვითრებს `RecordBridgeReceipt` ინსტრუქციის მეშვეობით. ამ ინსტრუქციის შესრულება
-ჩაწერს `BridgeReceipt` დატვირთვას და გამოსცემს `DataEvent::Bridge(BridgeEvent::Emitted)` ღონისძიებაზე
-ნაკადი, ჩაანაცვლა მხოლოდ ჟურნალის წინა ნამუშევარი. CLI `iroha bridge emit-receipt` დამხმარე წარადგენს
-აკრეფილი ინსტრუქცია, რათა ინდექსერებმა შეძლონ ქვითრების დეტერმინისტულად გამოყენება.
+- Native და destination მტკიცებულება კანონიკურად იშიფრება ერთხელ და ძვირი
+  კრიპტოგრაფიული შემოწმება ერთხელ სრულდება. მანამდე კონსენსუსი ჯავშნის
+  კონსერვატიულ, hardware-independent სამუშაოს შეფასებას.
+- `[zk.sccp]` ადგენს სავალდებულო არანულოვან per-proof, per-transaction და
+  per-block ლიმიტებს: მტკიცებულებების რაოდენობა/ბაიტები, native headers,
+  Ethereum light-client updates, header bytes, secp256k1 recoveries, BLS
+  aggregate checks/signing contributions და BN254 pairing-product checks.
+  ეს მიღების ლიმიტები კონსენსუსზეა მიბმული და ყველა ვალიდატორზე ერთნაირი
+  უნდა იყოს.
 
-## გარე დადასტურების ესკიზი (ICS)
+## Torii-ის საზღვრები
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
-
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+`/v1/bridge/proofs/submit` და `/v1/bridge/messages` იყენებს endpoint-specific
+HTTP body ლიმიტებს. ავთენტიკაცია, rate limit და `Content-Length` მოწმდება body-ს
+წაკითხვამდე; chunked body იკითხება მხოლოდ მკაცრ ზღვრამდე. ზედმეტად დიდი
+მოთხოვნა აბრუნებს `413`, ხოლო malformed transport/JSON — განცალკევებულ `400`-ს.
+Detached transaction payload მაქსიმუმ 16 MiB-ია, signature payload — 16 KiB.

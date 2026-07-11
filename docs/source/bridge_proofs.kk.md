@@ -2,59 +2,59 @@
 lang: kk
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
-source_last_modified: "2025-12-29T18:16:35.921274+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: 465d8cf704022986b169ab93133517428f8cf2ffe01a498cbda458f4a5b2e69b
+source_last_modified: "2026-07-11T15:09:39+04:00"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# Көпір дәлелдері
+> Бұл — 2026-07-11 күнгі қысқартылған жергіліктендірілген шолу, толық
+> нормативтік аударма емес. Нақты типтер, API келісімдері және релиз талаптары
+> үшін [ағылшын тіліндегі канондық бетті](bridge_proofs.md) пайдаланыңыз.
 
-Көпірді растайтын хабарлар стандартты нұсқау жолы (`SubmitBridgeProof`) арқылы өтеді және расталған күйі бар дәлелдеу тізіліміне түседі. Ағымдағы бет ICS стиліндегі Merkle дәлелдерін және бекітілген ұстауы және манифестпен байланыстыруы бар мөлдір-ZK пайдалы жүктемелерін қамтиды.
+# SCCP V1 көпір дәлелдері — қысқаша шолу
 
-## Қабылдау ережелері
+## Бірінші релиз шекарасы
 
-- Ауқым реттелген/бос емес және `zk.bridge_proof_max_range_len` (0 қақпақты өшіреді) құрметтелуі керек.
-- Қосымша биіктік терезелері ескірген/болашақ дәлелдемелерді қабылдамайды: `zk.bridge_proof_max_past_age_blocks` және `zk.bridge_proof_max_future_drift_blocks` дәлелді қабылдайтын блок биіктігімен өлшенеді (0 қоршауларды өшіреді).
-- Көпір дәлелдері бір сервер үшін бар дәлелдемені қабаттастырмауы мүмкін (қақталған дәлелдер сақталады және қабаттасуларды блоктайды).
-- Манифест хэштері нөлден өзгеше болуы керек; пайдалы жүктемелер өлшемі `zk.max_proof_size_bytes` арқылы шектелген.
-- ICS пайдалы жүктемелері конфигурацияланған Merkle тереңдігінің қақпағын құрметтейді және жарияланған хэш функциясы арқылы жолды тексереді; мөлдір пайдалы жүктемелер бос емес сервер белгісін жариялауы керек.
-- Бекітілген дәлелдер ұстап тұратын кесуден босатылады; бекітілмеген дәлелдер әлі де жаһандық `zk.proof_history_cap`/grace/пакет параметрлерін құрметтейді.
+- SCCP V1 — жабық бет: тек Ethereum mainnet, BSC mainnet және TRON mainnet
+  қолданылады; SORA жағындағы жалғыз нүкте — `sora-taira`. Кез келген өзге
+  желі профилі немесе SORA идентификаторы қабылданбайды.
+- `SubmitBridgeProof` тек маршрутпен байланыстырылған типтелген
+  `NativeProtocol` және `SccpDestination` дәлелдерін қабылдайды. Жалпы `Ics`
+  және `TransparentZk` payload жіберу қолжетімсіз және fail-closed тәртібімен
+  кері қайтарылады.
 
-## Torii API беті
+## Типтелген реестр және тарих
 
-- `GET /v1/zk/proofs` және `GET /v1/zk/proofs/count` көпірден хабардар сүзгілерді қабылдайды:
-  - `bridge_only=true` тек көпір дәлелдерін қайтарады.
-  - `bridge_pinned_only=true` бекітілген көпір дәлелдеріне дейін тарылтады.
-  - `bridge_start_from_height` / `bridge_end_until_height` көпір ауқымының терезесін қысыңыз.
-- `GET /v1/zk/proof/{backend}/{hash}` дәлелдеу идентификаторы/күй/VK байланыстарымен қатар көпір метадеректерін (диапазон, манифест хэші, пайдалы жүктеме туралы қорытынды) қайтарады.
-- Толық Norito дәлелдеме жазбасы (пайдалы жүктеме байттарын қоса) түйіннен тыс тексерушілер үшін `GET /v1/proofs/{proof_id}` арқылы қолжетімді болып қалады.
+- `SccpRegistryV1` типтелген әрі append-only. Әр lane ең көбі 64 маршрут
+  ревизиясын және 4 096 native trust anchor сақтайды. Жазбалар жасырын
+  шығарылмайды; шектен кейінгі қосу атомарлық түрде қабылданбайды.
+- Anchor аралығы расталған консенсус координатын қолданады: Ethereum үшін
+  finalized beacon slot, BSC/TRON үшін finalized native block height. Ескі
+  anchor келесі checkpoint-ті қоса алғанда жарамды, одан кейін жарамсыз.
+- Тұрақты inbound жазбасы event/finality height пен `anchor_interval_height`
+  мәндерін бөлек сақтайды. lane+anchor high-water тек өседі; келесі checkpoint
+  одан төмен бола алмайды. Snapshot hydration индексті толық қайта есептеп,
+  жетіспейтін, ескірген немесе артық мәнді қабылдамайды. Message id қайталау
+  мен replay де кері қайтарылады.
 
-## Көпір алу оқиғалары
+## Бір рет тексеру және детерминдік лимиттер
 
-Көпір жолдары `RecordBridgeReceipt` нұсқауы арқылы терілген түбіртектерді шығарады. Осы нұсқауды орындау
-`BridgeReceipt` пайдалы жүктемесін жазады және оқиғада `DataEvent::Bridge(BridgeEvent::Emitted)` шығарады
-ағыны, алдыңғы тек журналға арналған түйінді ауыстыру. CLI `iroha bridge emit-receipt` көмекшісі жібереді
-индекстеушілер түбіртектерді детерминистикалық түрде тұтынуы үшін терілген нұсқаулық.
+- Native және destination дәлелдері канондық түрде бір рет декодталып, қымбат
+  криптографиялық тексеру бір рет қана орындалады. Оған дейін консенсус
+  консервативті, hardware-independent жұмыс бағасын резервтейді.
+- `[zk.sccp]` proof саны/байты, native headers, Ethereum light-client updates,
+  header bytes, secp256k1 recoveries, BLS aggregate checks/signing contributions
+  және BN254 pairing-product checks үшін міндетті нөлден үлкен per-proof,
+  per-transaction және per-block шектерін қояды. Бұл қабылдау шектері
+  консенсусқа байланыстырылған және барлық валидаторда бірдей болуы тиіс.
 
-## Сыртқы тексеру эскизі (ICS)
+## Torii шектері
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
-
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+`/v1/bridge/proofs/submit` және `/v1/bridge/messages` endpoint-specific HTTP
+body шектерін қолданады. Аутентификация, rate limit және `Content-Length` body
+оқылмай тұрып тексеріледі; chunked body тек қатаң шекке дейін оқылады. Өлшемі
+артық сұрау `413`, malformed transport/JSON бөлек `400` қайтарады. Detached
+transaction payload шегі — 16 MiB, signature payload шегі — 16 KiB.

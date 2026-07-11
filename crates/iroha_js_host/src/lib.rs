@@ -100,7 +100,6 @@ use iroha_data_model::{
         RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
         SetKeyValue, SetParameter, Transfer, TransferBox, Unregister, UnregisterBox,
-        bridge::{RemoveSccpRouteManifest, UpsertSccpRouteManifest},
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
@@ -8239,18 +8238,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             {
                 return kagemusha_instruction_archive_from_json(kagemusha_value);
             }
-            if let Some(upsert_value) = remove_case_insensitive(&mut map, "UpsertSccpRouteManifest")
-            {
-                let instruction: UpsertSccpRouteManifest =
-                    json::from_value(upsert_value).map_err(norito_to_napi)?;
-                return Ok(InstructionBox::from(instruction));
-            }
-            if let Some(remove_value) = remove_case_insensitive(&mut map, "RemoveSccpRouteManifest")
-            {
-                let instruction: RemoveSccpRouteManifest =
-                    json::from_value(remove_value).map_err(norito_to_napi)?;
-                return Ok(InstructionBox::from(instruction));
-            }
             if let Some(parameter_value) = remove_case_insensitive(&mut map, "SetParameter") {
                 let parameter = json::from_value::<Parameter>(parameter_value.clone())
                     .or_else(|_| {
@@ -14814,14 +14801,36 @@ mod tests {
 
     #[test]
     fn canonical_kotodama_binding_returns_full_artifact_manifest() {
-        let request =
-            canonical_kotodama_request("seiyaku Demo { view fn ping() -> i64 { return 1; } }");
+        let request = canonical_kotodama_request(
+            r#"seiyaku Demo {
+                hajimari() {}
+                kaizen() {}
+                kotoage fn run() authorize("RunDemo") {}
+                view fn ping() -> i64 { return 1; }
+            }"#,
+        );
         let result = compile_kotodama_request(&request).expect("compile canonical Kotodama source");
         assert!(result.ok);
         assert!(result.diagnostics_json.is_none());
         let output = result.output.expect("successful compiler output");
         assert!(!output.artifact_bytes.is_empty());
         assert!(output.manifest_json.contains("compiler_fingerprint"));
+        for branded in ["Kotoage", "View", "Hajimari", "Kaizen"] {
+            assert!(
+                output.manifest_json.contains(branded),
+                "manifest omitted branded entrypoint kind {branded}: {}",
+                output.manifest_json
+            );
+        }
+        for retired in ["Public", "Init", "Upgrade"] {
+            assert!(
+                !output
+                    .manifest_json
+                    .contains(&format!(r#""kind":"{retired}""#)),
+                "manifest exposed retired English entrypoint kind {retired}: {}",
+                output.manifest_json
+            );
+        }
         assert_eq!(output.code_hash.len(), 64);
         assert_eq!(output.abi_hash.len(), 64);
         assert!(output.source_map_json.contains("\"kind\": \"source-map\""));
@@ -14872,7 +14881,7 @@ seiyaku Privacy {
   kotoage fn commit() authorize("CanCommitPrivateInput") {
     let value: Secret<i64> = crypto::private_input(0);
     let blinding: Secret<i64> = crypto::private_input(1);
-    let nullifier = crypto::valcom(value, blinding);
+    let nullifier = crypto::valcom(left: value, right: blinding);
     crypto::use_nullifier(nullifier);
     crypto::commit_output();
   }
@@ -24444,6 +24453,23 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn retired_sccp_route_manifest_instructions_are_rejected() {
+        for retired in ["UpsertSccpRouteManifest", "RemoveSccpRouteManifest"] {
+            let value = json::Value::Object(json::Map::from_iter([(
+                retired.to_owned(),
+                json::Value::Object(json::Map::new()),
+            )]));
+            let error = value_to_instruction(value)
+                .expect_err("retired SCCP route-manifest instruction must not decode");
+            assert!(
+                error.reason.contains("unsupported instruction"),
+                "unexpected rejection for {retired}: {}",
+                error.reason
+            );
+        }
+    }
+
+    #[test]
     fn governance_cast_zk_ballot_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(CastZkBallot {
             election_id: "ref-1".to_owned(),
@@ -24847,7 +24873,7 @@ seiyaku Privacy {
         let signing_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
             .expect("fixture seed keypair");
         let manifest = ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: Some(Hash::prehashed(sample_hash(0xAA))),
             abi_hash: Some(Hash::prehashed(sample_hash(0xBB))),
             compiler_fingerprint: Some("rustc-1.79".to_owned()),
@@ -24859,14 +24885,33 @@ seiyaku Privacy {
                 dynamic_writes: Vec::new(),
             }),
             entrypoints: Some(vec![EntrypointDescriptor {
-                name: "upgrade_ledger".to_owned(),
-                kind: EntryPointKind::Upgrade,
+                name: "kaizen".to_owned(),
+                kind: EntryPointKind::Kaizen,
                 params: vec![EntrypointParamDescriptor {
                     name: "reason".to_owned(),
-                    type_name: "String".to_owned(),
+                    type_name: "string".to_owned(),
                 }],
+                argument_schema: Some(
+                    iroha_data_model::smart_contract::entrypoint::EntrypointArgumentSchemaV1 {
+                        fields: vec![iroha_data_model::smart_contract::entrypoint::EntrypointArgumentFieldV1 {
+                            name: "reason".to_owned(),
+                            ty: iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(
+                                    iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::String,
+                                )],
+                            },
+                        }],
+                    },
+                ),
                 return_type: Some("bool".to_owned()),
-                permission: Some("can_upgrade".to_owned()),
+                return_schema: Some(
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                        nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(
+                            iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Bool,
+                        )],
+                    },
+                ),
+                permission: None,
                 read_keys: vec!["contract:ledger".to_owned()],
                 write_keys: vec!["contract:ledger".to_owned()],
                 access_hints_complete: Some(true),

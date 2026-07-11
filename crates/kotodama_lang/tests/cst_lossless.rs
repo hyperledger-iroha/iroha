@@ -41,10 +41,13 @@ fn non_ascii_identifier_characters_are_lossless_errors() {
     assert_eq!(output.tree.text(&source), text);
     assert!(!output.is_ok());
     assert!(output.tree.tokens().into_iter().any(|token| {
-        token.kind == SyntaxKind::ErrorToken && source.slice(token.range) == Some("é")
+        token.kind == SyntaxKind::ErrorToken && source.slice(token.range) == Some("Café")
     }));
     assert!(output.diagnostics.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "K0100" && diagnostic.message.contains("non-ASCII character")
+        diagnostic.code == "K0100"
+            && diagnostic
+                .message
+                .contains("non-ASCII identifier outside the branded Japanese keyword set")
     }));
 }
 
@@ -79,10 +82,10 @@ fn decimal_fraction_is_preserved_but_rejected_by_v1_lexer() {
         token.kind == SyntaxKind::ErrorToken && source.slice(token.range) == Some("1_234.50_0")
     }));
     assert!(output.diagnostics.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "K0100"
+        diagnostic.code == "E_AMOUNT_SUFFIX"
             && diagnostic
                 .message
-                .contains("decimal fractions are not part of Kotodama V1")
+                .contains("decimal fractions require the adjacent lowercase `amt` suffix")
     }));
 }
 

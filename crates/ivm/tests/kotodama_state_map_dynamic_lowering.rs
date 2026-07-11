@@ -39,6 +39,7 @@ fn dynamic_map_set_uses_durable_state() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run");
 
     // Verify durable state via the reversible canonical-Norito key path.

@@ -70,7 +70,7 @@ Terminology
   metadata, raw pointers, direct syscall variants, and opaque instruction
   submission are rejected.
 - Codegen emits pointer-ABI TLVs for ledger syscalls and host helpers:
-  - `MintAsset` sets x10=account, x11=asset, x12=&NoritoBytes(Numeric), then
+  - `MintAsset` sets x10=account, x11=asset, x12=&Amount, then
     calls `SYSCALL_MINT_ASSET`.
   - `BurnAsset`, `TransferAsset`, batch transfers, roles, permissions, triggers,
     contract lifecycle helpers, and selected query/sysvar helpers follow the
@@ -158,7 +158,7 @@ ISI matches native execution semantics.
 
 Use Norito-framed pointer-ABI TLVs for structured arguments. VM registers carry
 pointers to values such as `AccountId`, `AssetDefinitionId`, `Name`, `Json`,
-`NftId`, and `NoritoBytes(Numeric)`, while the host decodes them with the same
+`NftId`, and `Amount`, while the host decodes them with the same
 Norito-backed data-model types used by native ISI.
 
 ### C. Keep syscall naming and coverage aligned with ISI/Data Model
@@ -198,15 +198,18 @@ This is a readable subset. The canonical list is
 
 - `SYSCALL_REGISTER_DOMAIN(id: ptr DomainId)` → ISI `Register<Domain>`
 - `SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId)` → ISI `Register<Account>`
-- `SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8)` → ISI
+- `SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId)` → ISI
   `Register<AssetDefinition>`
 - `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId,
-  amount: ptr NoritoBytes(Numeric))` → ISI `Mint<Numeric, Asset>`
+  amount: ptr Amount)` → ISI `Mint<Numeric, Asset>`
 - `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId,
-  amount: ptr NoritoBytes(Numeric))` → ISI `Burn<Numeric, Asset>`
-- `SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId,
-  asset: ptr AssetDefinitionId, amount: ptr NoritoBytes(Numeric))` → ISI
+  amount: ptr Amount)` → ISI `Burn<Numeric, Asset>`
+- `SYSCALL_TRANSFER_V1(from: ptr AccountId, to: ptr AccountId,
+  asset: ptr AssetDefinitionId, amount: ptr Amount)` → batch-internal ISI
   `Transfer<Asset>`
+- `SYSCALL_TRANSFER_ASSET_SCOPED(from: ptr AccountId, to: ptr AccountId,
+  asset: ptr AssetDefinitionId, amount: ptr Amount,
+  dataspace: ptr DataSpaceId)` → standalone ISI `Transfer<Asset>`
 - `SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes<TransferAssetBatch>)` → ISI
   `TransferAssetBatch`
 - `SYSCALL_NFT_MINT_ASSET(id: ptr NftId, owner: ptr AccountId)` → ISI

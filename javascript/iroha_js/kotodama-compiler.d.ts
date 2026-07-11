@@ -43,15 +43,19 @@ export interface KotodamaCompilerDiagnostic {
 
 export interface KotodamaCompiledTriggerDescriptor {
   id: string;
+  repeats: { Indefinitely: null } | { Exactly: number };
+  /** Canonical standard-base64 NRT0 frame for `EventFilterBox`. */
+  filter: string;
+  authority: string | null;
+  metadata: Record<string, unknown>;
   callback: {
     namespace: string | null;
     entrypoint: string;
   };
-  [field: string]: unknown;
 }
 
 export interface KotodamaCompiledManifestEntrypointKind {
-  kind: "Public" | "View" | "Init" | "Upgrade";
+  kind: "Kotoage" | "View" | "Hajimari" | "Kaizen";
   value: null;
 }
 
@@ -65,19 +69,62 @@ export interface KotodamaCompiledKotobaEntry {
   translations: KotodamaCompiledKotobaTranslation[];
 }
 
+export type KotodamaCompiledEntrypointValueKindName =
+  | "Int"
+  | "U128"
+  | "Bool"
+  | "String"
+  | "Amount"
+  | "Json"
+  | "Name"
+  | "AccountId"
+  | "AssetDefinitionId"
+  | "AssetId"
+  | "DomainId"
+  | "NftId"
+  | "DataSpaceId"
+  | "Blob";
+
+export interface KotodamaCompiledEntrypointValueKind {
+  kind: KotodamaCompiledEntrypointValueKindName;
+  value: null;
+}
+
+export interface KotodamaCompiledEntrypointValueType {
+  nodes: KotodamaCompiledEntrypointValueTypeNode[];
+}
+
+export type KotodamaCompiledEntrypointValueTypeNode =
+  | {
+      kind: "Struct";
+      value: { name: string; fields: string[] };
+    }
+  | { kind: "Tuple"; value: number }
+  | { kind: "Option"; value: null }
+  | { kind: "Result"; value: null }
+  | {
+      kind: "List";
+      value: { capacity: number };
+    }
+  | { kind: "Leaf"; value: KotodamaCompiledEntrypointValueKind };
+
+export interface KotodamaCompiledEntrypointArgumentSchema {
+  fields: Array<{
+    name: string;
+    ty: KotodamaCompiledEntrypointValueType;
+  }>;
+}
+
 export interface KotodamaCompiledEntrypoint {
   name: string;
-  kind:
-    | "public"
-    | "view"
-    | "hajimari"
-    | "kaizen"
-    | KotodamaCompiledManifestEntrypointKind;
+  kind: KotodamaCompiledManifestEntrypointKind;
   params: Array<{
     name: string;
     type_name: string;
   }>;
+  argument_schema: KotodamaCompiledEntrypointArgumentSchema | null;
   return_type: string | null;
+  return_schema: KotodamaCompiledEntrypointValueType | null;
   permission: string | null;
   read_keys: string[];
   write_keys: string[];
@@ -121,8 +168,19 @@ export interface KotodamaCompiledStateDescriptor {
   type_name: string;
 }
 
+export interface KotodamaCompiledErrorCodeDescriptor {
+  namespace: string;
+  name: string;
+  code: number;
+}
+
+export interface KotodamaCompiledManifestProvenance {
+  signer: string;
+  signature: string;
+}
+
 export interface KotodamaCompiledManifestMetadata {
-  contract_name: string | null;
+  seiyaku_name: string | null;
   code_hash: string;
   abi_hash: string;
   compiler_fingerprint: string | null;
@@ -135,9 +193,9 @@ export interface KotodamaCompiledManifestMetadata {
     dynamic_writes: KotodamaCompiledDynamicAccessHint[];
   } | null;
   states: KotodamaCompiledStateDescriptor[] | null;
-  error_codes: unknown[] | null;
+  error_codes: KotodamaCompiledErrorCodeDescriptor[] | null;
   kotoba: KotodamaCompiledKotobaEntry[] | null;
-  provenance: unknown | null;
+  provenance: KotodamaCompiledManifestProvenance | null;
 }
 
 export interface KotodamaCompilerRequestOptions {

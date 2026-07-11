@@ -1,11 +1,19 @@
 //! Reusable canonical compiler session API.
 
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Component, Path, PathBuf},
+};
+
+use indexmap::IndexMap;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
 
 use crate::{
-    ast::{Program, SourceUnitKind},
+    ast::{Item, Program, SourceUnitKind},
     compiler::{CompileReport, Compiler, CompilerMode, CompilerOptions},
-    diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
+    diagnostic::{
+        Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourcePosition, SourceSpan,
+    },
     lexer::{Token, TokenKind},
     semantic::TypedProgram,
     source::{FrontendBudget, MAX_SOURCE_BYTES, SourceFile, SourceId, TextRange},
@@ -31,36 +39,57 @@ pub struct CompileOutput {
     pub report: CompileReport,
 }
 
+/// Paired artifacts produced for one explicitly selected local test suite.
+#[derive(Clone, Debug)]
+pub struct TestCompileOutput {
+    /// Test-mode artifact containing the local test functions.
+    pub suite: CompileOutput,
+    /// Production-mode artifact derived after removing local-only test declarations.
+    pub runtime: CompileOutput,
+}
+
+/// One source-identified input to the typed-HIR local test linker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TestSourceUnit {
+    /// Stable logical path retained in diagnostics and debug sidecars.
+    pub source_name: String,
+    /// Complete bounded Kotodama source text.
+    pub source: String,
+}
+
 /// Explicit reusable compiler context used by CLIs, SDK bindings, and language tools.
 #[derive(Clone, Debug)]
 pub struct CompilerSession {
     options: CompilerOptions,
 }
 
-struct IterativeProgramGuard {
-    program: Option<Program>,
+struct IterativeResolvedGuard {
+    program: Option<crate::resolved::ResolvedProgram>,
 }
 
-impl IterativeProgramGuard {
-    fn new(program: Program) -> Self {
+impl IterativeResolvedGuard {
+    fn new(program: crate::resolved::ResolvedProgram) -> Self {
         Self {
             program: Some(program),
         }
     }
 
-    fn get(&self) -> &Program {
-        self.program.as_ref().expect("program guard is populated")
+    fn get(&self) -> &crate::resolved::ResolvedProgram {
+        self.program.as_ref().expect("resolved guard is populated")
     }
 
-    fn take(mut self) -> Program {
-        self.program.take().expect("program guard is populated")
+    fn take_program(mut self) -> Program {
+        self.program
+            .take()
+            .expect("resolved guard is populated")
+            .into_program()
     }
 }
 
-impl Drop for IterativeProgramGuard {
+impl Drop for IterativeResolvedGuard {
     fn drop(&mut self) {
         if let Some(program) = self.program.take() {
-            crate::ast::drop_program_iterative(program);
+            crate::ast::drop_program_iterative(program.into_program());
         }
     }
 }
@@ -100,7 +129,21 @@ impl CompilerSession {
         }
     }
 
-    /// Parse and type/effect-check one contract or reusable module without
+    /// Validate a reusable package and its authenticated locked dependencies.
+    ///
+    /// Package frontends use this entry point so typed linking receives the
+    /// exact production, ZK, and test capabilities owned by this compiler
+    /// session. Validation does not synthesize a deployable seiyaku and does
+    /// not emit bytecode.
+    pub fn validate_package_graph(
+        &self,
+        graph: &crate::linker::ModuleBuildGraph,
+        request: crate::linker::SourcePackageGraphRequest,
+    ) -> Result<crate::linker::ValidatedSourcePackageGraph, crate::linker::SourceGraphError> {
+        graph.validate_package(request, self.linker_options())
+    }
+
+    /// Parse and type/effect-check one seiyaku or reusable module without
     /// publishing deployable output.
     pub fn check(&self, request: CompileRequest<'_>) -> Result<(), DiagnosticBundle> {
         let program = self.checked_program(request)?;
@@ -131,33 +174,35 @@ impl CompilerSession {
             request.source,
         );
         let (program, tokens) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())?;
-        let program = IterativeProgramGuard::new(program);
         reject_production_test_surface(
             self.options.mode,
-            program.get(),
+            &program.program,
             request.source_name,
             Some((&source, &tokens)),
         )?;
-        crate::semantic_diagnostics::audit(program.get(), &source, &tokens)?;
+        let resolved = IterativeResolvedGuard::new(crate::resolved::resolve(program, &source)?);
         let semantic = crate::semantic::SemanticContext::with_capabilities(
             self.options.force_zk,
             self.options.mode == crate::compiler::CompilerMode::Test,
         );
-        let typed = semantic.analyze_all(program.get()).map_err(|failures| {
-            crate::semantic_diagnostics::from_semantic_failures(
-                failures,
-                request.source_name,
-                Some(&source),
-                Some(&tokens),
-            )
-        })?;
+        let typed = semantic
+            .analyze_resolved(resolved.get())
+            .map_err(|failures| {
+                crate::semantic_diagnostics::from_semantic_failures(
+                    failures,
+                    request.source_name,
+                    Some(&source),
+                    Some(resolved.get()),
+                )
+            })?;
+        enforce_argument_register_window(&typed, &source, resolved.get())?;
         crate::semantic::validate_linked_program(&typed, self.options.force_zk).map_err(
             |error| {
                 crate::semantic_diagnostics::from_semantic_failures(
                     error.into(),
                     request.source_name,
                     Some(&source),
-                    Some(&tokens),
+                    Some(resolved.get()),
                 )
             },
         )?;
@@ -176,7 +221,7 @@ impl CompilerSession {
                     .collect(),
             )
         })?;
-        Ok(program.take())
+        Ok(resolved.take_program())
     }
 
     /// Compile one named source unit into a deployable artifact and sidecar report.
@@ -188,72 +233,235 @@ impl CompilerSession {
             request.source,
         );
         let (program, tokens) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())?;
-        let program = IterativeProgramGuard::new(program);
         reject_production_test_surface(
             self.options.mode,
-            program.get(),
+            &program.program,
             request.source_name,
             Some((&source, &tokens)),
         )?;
-        crate::semantic_diagnostics::audit(program.get(), &source, &tokens)?;
-        require_deployable_contract(program.get(), request.source_name)?;
+        let resolved = IterativeResolvedGuard::new(crate::resolved::resolve(program, &source)?);
         let semantic = crate::semantic::SemanticContext::with_capabilities(
             self.options.force_zk,
             self.options.mode == crate::compiler::CompilerMode::Test,
         );
-        let typed = semantic.analyze_all(program.get()).map_err(|failures| {
-            crate::semantic_diagnostics::from_semantic_failures(
-                failures,
-                request.source_name,
-                Some(&source),
-                Some(&tokens),
-            )
-        })?;
-        drop(program);
+        let typed = semantic
+            .analyze_resolved(resolved.get())
+            .map_err(|failures| {
+                crate::semantic_diagnostics::from_semantic_failures(
+                    failures,
+                    request.source_name,
+                    Some(&source),
+                    Some(resolved.get()),
+                )
+            })?;
+        enforce_argument_register_window(&typed, &source, resolved.get())?;
+        drop(resolved);
         self.build_typed_program(typed, request.source_name)
     }
 
-    /// Compile a resolved source program through the same canonical driver.
+    /// Compile a source-identified local test graph and its verified runtime projection.
     ///
-    /// Typed-HIR module linkers use this entry point after assembling a single
-    /// deployable program; all artifact construction and diagnostics remain
-    /// shared with ordinary source builds.
-    pub fn build_program(
+    /// Every file is parsed and resolved independently with a stable `SourceId`.
+    /// Standalone modules receive only the target's typed function/state
+    /// interface; no AST items are flattened, reordered, or rewritten.
+    pub fn build_test_sources(
         &self,
-        program: &Program,
-        source_name: Option<&str>,
-    ) -> Result<CompileOutput, DiagnosticBundle> {
-        reject_production_test_surface(self.options.mode, program, source_name, None)?;
-        require_deployable_contract(program, source_name)?;
-        let compiler = Compiler::new_with_options(self.options.clone());
-        let semantic_context = crate::semantic::SemanticContext::with_capabilities(
-            self.options.force_zk,
-            self.options.mode == crate::compiler::CompilerMode::Test,
-        );
-        let (artifact, manifest, report) = compiler
-            .compile_program_with_manifest_and_report_diagnostics(
-                program,
-                &semantic_context,
-                source_name,
+        target: &TestSourceUnit,
+        test_modules: &[TestSourceUnit],
+    ) -> Result<TestCompileOutput, DiagnosticBundle> {
+        if self.options.mode != CompilerMode::Test {
+            return Err(DiagnosticBundle::single(Diagnostic::error(
+                "E_TEST_ONLY_PRODUCTION",
+                DiagnosticPhase::Semantic,
+                "the local test compiler requires an explicit test-mode CompilerSession",
+                source_start_span(Some(&target.source_name)),
+            )));
+        }
+        let source_count = 1_usize.saturating_add(test_modules.len());
+        let source_bytes = test_modules
+            .iter()
+            .fold(target.source.len(), |total, source| {
+                total.saturating_add(source.source.len())
+            });
+        if source_count > crate::linker::MAX_MODULE_GRAPH_SOURCES
+            || source_bytes > crate::linker::MAX_MODULE_GRAPH_SOURCE_BYTES
+        {
+            return Err(DiagnosticBundle::single(Diagnostic::error(
+                "K1004",
+                DiagnosticPhase::Parse,
+                format!(
+                    "Kotodama test graph contains {source_count} sources/{source_bytes} bytes; V1 permits at most {} sources/{} bytes",
+                    crate::linker::MAX_MODULE_GRAPH_SOURCES,
+                    crate::linker::MAX_MODULE_GRAPH_SOURCE_BYTES
+                ),
+                source_start_span(Some(&target.source_name)),
+            )));
+        }
+
+        let mut ordered_tests = test_modules.iter().collect::<Vec<_>>();
+        ordered_tests.sort_by(|left, right| {
+            normalize_logical_path(Path::new(&left.source_name))
+                .cmp(&normalize_logical_path(Path::new(&right.source_name)))
+                .then_with(|| left.source_name.cmp(&right.source_name))
+        });
+        let mut names = BTreeSet::new();
+        if !names.insert(normalize_logical_path(Path::new(&target.source_name)))
+            || ordered_tests
+                .iter()
+                .any(|source| !names.insert(normalize_logical_path(Path::new(&source.source_name))))
+        {
+            return Err(DiagnosticBundle::single(Diagnostic::error(
+                "E_DUPLICATE_SOURCE",
+                DiagnosticPhase::Resolve,
+                "the Kotodama test graph contains duplicate logical source paths",
+                source_start_span(Some(&target.source_name)),
+            )));
+        }
+
+        let units = std::iter::once(target)
+            .chain(ordered_tests.iter().copied())
+            .collect::<Vec<_>>();
+        let keys = std::iter::once(format!(
+            "target\0{}",
+            normalize_logical_path(Path::new(&target.source_name)).display()
+        ))
+        .chain(ordered_tests.iter().map(|source| {
+            format!(
+                "test\0{}",
+                normalize_logical_path(Path::new(&source.source_name)).display()
+            )
+        }))
+        .collect::<Vec<_>>();
+        let source_ids = crate::linker::stable_source_ids(&keys);
+        let mut files = Vec::with_capacity(units.len());
+        let mut parsed = Vec::with_capacity(units.len());
+        for (unit, source_id) in units.iter().zip(source_ids) {
+            enforce_source_budget(CompileRequest {
+                source: &unit.source,
+                source_name: Some(&unit.source_name),
+            })?;
+            let file = SourceFile::new(source_id, unit.source_name.clone(), &unit.source);
+            let (program, _) = crate::parser::parse_source_spanned(&file, FrontendBudget::v1())?;
+            files.push(file);
+            parsed.push(program);
+        }
+
+        require_deployable_contract(&parsed[0].program, Some(&target.source_name))?;
+        for (index, program) in parsed.iter().enumerate().skip(1) {
+            validate_test_module_source(
+                &program.program,
+                Some(files[index].name()),
+                &target.source_name,
             )?;
-        Ok(CompileOutput {
-            artifact,
-            manifest,
-            report,
-        })
+        }
+
+        let target_resolved = crate::resolved::resolve(parsed.remove(0), &files[0])?;
+        let target_semantic =
+            crate::semantic::SemanticContext::with_capabilities(self.options.force_zk, true);
+        let target_signatures = target_semantic
+            .resolve_resolved_function_signatures(&target_resolved)
+            .map_err(|error| semantic_error_diagnostic(error, Some(files[0].name())))?;
+        let target_typed =
+            target_semantic
+                .analyze_resolved(&target_resolved)
+                .map_err(|failures| {
+                    crate::semantic_diagnostics::from_semantic_failures(
+                        failures,
+                        Some(files[0].name()),
+                        Some(&files[0]),
+                        Some(&target_resolved),
+                    )
+                })?;
+        let external_names = target_signatures.keys().cloned().collect::<BTreeSet<_>>();
+        let external_states = target_typed
+            .states
+            .iter()
+            .map(|state| (state.name.clone(), state.ty.clone()))
+            .collect::<IndexMap<_, _>>();
+        let external_state_names = external_states.keys().cloned().collect::<BTreeSet<_>>();
+
+        let mut resolved_modules = Vec::with_capacity(parsed.len());
+        for (index, program) in parsed.into_iter().enumerate() {
+            let file = &files[index + 1];
+            resolved_modules.push(crate::resolved::resolve_with_external_environment(
+                program,
+                file,
+                &external_names,
+                &external_state_names,
+            )?);
+        }
+        reject_duplicate_test_graph_symbols(
+            std::iter::once((&target_resolved, &files[0]))
+                .chain(resolved_modules.iter().zip(files.iter().skip(1))),
+        )?;
+
+        let runtime_typed = crate::semantic::project_test_target_to_production(
+            target_typed.clone(),
+            self.options.force_zk,
+        )
+        .map_err(|error| semantic_error_diagnostic(error, Some(&target.source_name)))?;
+        let mut suite_typed = target_typed;
+        let mut error_codes = suite_typed
+            .error_codes
+            .iter()
+            .map(|error| error.code)
+            .collect::<BTreeSet<_>>();
+        for (index, resolved) in resolved_modules.iter().enumerate() {
+            let file = &files[index + 1];
+            let semantic =
+                crate::semantic::SemanticContext::with_capabilities(self.options.force_zk, true);
+            let mut typed = semantic
+                .analyze_resolved_with_test_target(resolved, &target_signatures, &external_states)
+                .map_err(|failures| {
+                    crate::semantic_diagnostics::from_semantic_failures(
+                        failures,
+                        Some(file.name()),
+                        Some(file),
+                        Some(resolved),
+                    )
+                })?;
+            for error in &typed.error_codes {
+                if !error_codes.insert(error.code) {
+                    return Err(DiagnosticBundle::single(Diagnostic::error(
+                        "E_DUPLICATE_ERROR_CODE",
+                        DiagnosticPhase::Semantic,
+                        format!(
+                            "test graph assigns duplicate seiyaku error code {}",
+                            error.code
+                        ),
+                        source_start_span(Some(file.name())),
+                    )));
+                }
+            }
+            merge_source_files(&mut suite_typed, &mut typed, file.name())?;
+            suite_typed.items.append(&mut typed.items);
+            suite_typed.error_codes.append(&mut typed.error_codes);
+            suite_typed
+                .message_entries
+                .append(&mut typed.message_entries);
+        }
+        crate::semantic::validate_linked_program(&suite_typed, self.options.force_zk)
+            .map_err(|error| semantic_error_diagnostic(error, Some(&target.source_name)))?;
+
+        let suite = self.build_typed_program(suite_typed, Some(&target.source_name))?;
+        let mut runtime_options = self.options.clone();
+        runtime_options.mode = CompilerMode::Production;
+        let runtime = CompilerSession::new(runtime_options)
+            .build_typed_program(runtime_typed, Some(&target.source_name))?;
+        Ok(TestCompileOutput { suite, runtime })
     }
 
-    /// Compile a fully resolved and linked typed-HIR program.
+    /// Compile a fully resolved and linked typed-HIR program inside the trusted driver.
     ///
     /// This is the only post-link code-generation entry point. It deliberately
     /// accepts no AST, so package managers cannot reintroduce source rewriting
     /// after module type/effect analysis.
-    pub fn build_typed_program(
+    pub(crate) fn build_typed_program(
         &self,
         program: TypedProgram,
         source_name: Option<&str>,
     ) -> Result<CompileOutput, DiagnosticBundle> {
-        if program.unit.kind != SourceUnitKind::Contract {
+        if program.unit.kind != SourceUnitKind::Seiyaku {
             return Err(non_deployable_module_diagnostic(source_name));
         }
         let compiler = Compiler::new_with_options(self.options.clone());
@@ -265,6 +473,259 @@ impl CompilerSession {
             report,
         })
     }
+}
+
+fn source_range_span(source: &SourceFile, range: crate::source::SourceRange) -> Option<SourceSpan> {
+    (source.id() == range.source).then(|| SourceSpan::from_range(source, range.range))
+}
+
+fn enforce_argument_register_window(
+    program: &TypedProgram,
+    source: &SourceFile,
+    resolved: &crate::resolved::ResolvedProgram,
+) -> Result<(), DiagnosticBundle> {
+    let limit = crate::regalloc::MAX_ARGUMENT_VALUES;
+    let mut diagnostics = Vec::new();
+    for item in &program.items {
+        let crate::semantic::TypedItem::Function(function) = item;
+        let counts = function
+            .param_types
+            .iter()
+            .map(|parameter| {
+                crate::semantic::runtime_value_word_count(&parameter.ty).ok_or_else(|| {
+                    let primary_span = resolved
+                        .parameter_name_source(&function.name, &parameter.name)
+                        .and_then(|range| source_range_span(source, range));
+                    DiagnosticBundle::single(Diagnostic::error(
+                        "K2099",
+                        DiagnosticPhase::Semantic,
+                        format!(
+                            "parameter `{}` of function `{}` retained an unresolved ABI type",
+                            parameter.name, function.name
+                        ),
+                        primary_span,
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let total_words = counts
+            .iter()
+            .try_fold(0_usize, |total, words| total.checked_add(*words))
+            .unwrap_or(usize::MAX);
+        if function.param_types.len() <= limit && total_words <= limit {
+            continue;
+        }
+
+        let mut cumulative_words = 0_usize;
+        let crossing_index = counts
+            .iter()
+            .enumerate()
+            .find_map(|(index, words)| {
+                cumulative_words = cumulative_words.saturating_add(*words);
+                (index >= limit || cumulative_words > limit).then_some(index)
+            })
+            .unwrap_or_else(|| function.param_types.len().saturating_sub(1));
+        let parameter = &function.param_types[crossing_index];
+        let primary_span = resolved
+            .parameter_name_source(&function.name, &parameter.name)
+            .and_then(|range| source_range_span(source, range));
+        let mut diagnostic = Diagnostic::error(
+            "K2007",
+            DiagnosticPhase::Semantic,
+            format!(
+                "function `{}` declares {} source parameter(s) requiring {total_words} flattened argument words; V1 permits at most {limit}",
+                function.name,
+                function.param_types.len(),
+            ),
+            primary_span,
+        );
+        if let Some(range) = function.name_source
+            && let Some(span) = source_range_span(source, range)
+        {
+            diagnostic.labels.push(DiagnosticLabel {
+                span,
+                message: "function exceeds the V1 argument-register window".to_owned(),
+            });
+        }
+        diagnostics.push(diagnostic);
+    }
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(DiagnosticBundle::new(diagnostics))
+    }
+}
+
+fn semantic_error_diagnostic(
+    error: crate::semantic::SemanticError,
+    source_name: Option<&str>,
+) -> DiagnosticBundle {
+    DiagnosticBundle::single(Diagnostic::error(
+        error.code,
+        DiagnosticPhase::Semantic,
+        error.message,
+        source_start_span(source_name),
+    ))
+}
+
+fn validate_test_module_source(
+    program: &Program,
+    source_name: Option<&str>,
+    target_source_name: &str,
+) -> Result<(), DiagnosticBundle> {
+    if program.unit.kind != SourceUnitKind::Module {
+        return Err(DiagnosticBundle::single(Diagnostic::error(
+            "E_TEST_MODULE_KIND",
+            DiagnosticPhase::Semantic,
+            "standalone Kotodama tests must declare a `module` source unit",
+            source_start_span(source_name),
+        )));
+    }
+    let Some(test_target) = program.test_target.as_ref() else {
+        return Err(DiagnosticBundle::single(Diagnostic::error(
+            "E_TEST_TARGET_REQUIRED",
+            DiagnosticPhase::Semantic,
+            "standalone Kotodama tests require a `koto_test { target: \"...\" }` declaration",
+            source_start_span(source_name),
+        )));
+    };
+    let test_source_name = source_name.unwrap_or("<test>");
+    let declared_target = Path::new(test_source_name)
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(&test_target.target);
+    if normalize_logical_path(&declared_target)
+        != normalize_logical_path(Path::new(target_source_name))
+    {
+        return Err(DiagnosticBundle::single(Diagnostic::error(
+            "E_TEST_TARGET_MISMATCH",
+            DiagnosticPhase::Resolve,
+            format!(
+                "standalone test target `{}` does not resolve to graph target `{target_source_name}`",
+                test_target.target
+            ),
+            source_start_span(source_name),
+        )));
+    }
+    for item in &program.items {
+        let invalid = match item {
+            Item::State(_) => Some("durable state declaration"),
+            Item::Trigger(_) => Some("trigger declaration"),
+            Item::Function(function)
+                if function.modifiers.kind != crate::ast::FunctionKind::Private =>
+            {
+                Some("public or lifecycle function")
+            }
+            Item::Function(_) | Item::Struct(_) | Item::ErrorEnum(_) | Item::Const(_) => None,
+        };
+        if let Some(invalid) = invalid {
+            return Err(DiagnosticBundle::single(Diagnostic::error(
+                "E_TEST_MODULE_ITEM",
+                DiagnosticPhase::Semantic,
+                format!("standalone Kotodama test module contains {invalid}"),
+                source_start_span(source_name),
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_logical_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::Normal(segment) => normalized.push(segment),
+        }
+    }
+    normalized
+}
+
+fn reject_duplicate_test_graph_symbols<'program>(
+    units: impl IntoIterator<
+        Item = (
+            &'program crate::resolved::ResolvedProgram,
+            &'program SourceFile,
+        ),
+    >,
+) -> Result<(), DiagnosticBundle> {
+    let units = units.into_iter().collect::<Vec<_>>();
+    let files = units
+        .iter()
+        .map(|(_, file)| (file.id(), *file))
+        .collect::<BTreeMap<_, _>>();
+    let mut declarations = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    for (program, file) in units {
+        for symbol in program.symbols() {
+            if let Some(previous) = declarations.insert(symbol.name.clone(), symbol.source) {
+                let mut diagnostic = Diagnostic::error(
+                    "E_DUPLICATE_DECLARATION",
+                    DiagnosticPhase::Resolve,
+                    format!(
+                        "declaration name `{}` is already used by another test-graph source",
+                        symbol.name
+                    ),
+                    Some(SourceSpan::from_range(file, symbol.source.range)),
+                );
+                if let Some(previous_file) = files.get(&previous.source) {
+                    diagnostic.labels.push(DiagnosticLabel {
+                        span: SourceSpan::from_range(previous_file, previous.range),
+                        message: "first graph declaration is here".to_owned(),
+                    });
+                }
+                diagnostics.push(diagnostic);
+            }
+        }
+    }
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(DiagnosticBundle::new(diagnostics))
+    }
+}
+
+fn merge_source_files(
+    target: &mut TypedProgram,
+    source: &mut TypedProgram,
+    source_name: &str,
+) -> Result<(), DiagnosticBundle> {
+    for (id, node) in std::mem::take(&mut source.hir_nodes) {
+        if target.hir_nodes.insert(id, node).is_some() {
+            return Err(DiagnosticBundle::single(Diagnostic::error(
+                "E_DUPLICATE_HIR_ID",
+                DiagnosticPhase::Resolve,
+                format!(
+                    "typed module graph reused HIR identity {}:{}",
+                    id.source.0, id.local.0
+                ),
+                source_start_span(Some(source_name)),
+            )));
+        }
+    }
+    for (source_id, file) in std::mem::take(&mut source.source_files) {
+        if let Some(previous) = target.source_files.insert(source_id, file.clone())
+            && previous != file
+        {
+            return Err(DiagnosticBundle::single(Diagnostic::error(
+                "E_DUPLICATE_SOURCE_ID",
+                DiagnosticPhase::Resolve,
+                format!(
+                    "compiler assigned SourceId {} to both `{}` and `{}`",
+                    source_id.0,
+                    previous.name(),
+                    file.name()
+                ),
+                source_start_span(Some(source_name)),
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -422,7 +883,7 @@ fn require_deployable_contract(
     program: &Program,
     source_name: Option<&str>,
 ) -> Result<(), DiagnosticBundle> {
-    if program.unit.kind == SourceUnitKind::Contract {
+    if program.unit.kind == SourceUnitKind::Seiyaku {
         Ok(())
     } else {
         Err(non_deployable_module_diagnostic(source_name))
@@ -437,7 +898,7 @@ fn non_deployable_module_diagnostic(source_name: Option<&str>) -> DiagnosticBund
         source_start_span(source_name),
     );
     diagnostic.help =
-        Some("link the module into exactly one contract root, then build that contract".to_owned());
+        Some("link the module into exactly one seiyaku root, then build that seiyaku".to_owned());
     DiagnosticBundle::single(diagnostic)
 }
 
@@ -498,7 +959,7 @@ mod tests {
 
         let error = session
             .build(CompileRequest {
-                source: "not a contract",
+                source: "not a seiyaku",
                 source_name: Some("broken.ko"),
             })
             .expect_err("invalid source must return diagnostics");
@@ -567,12 +1028,21 @@ mod tests {
   }
   view fn inspect(value: Wide) -> i64 { return value.f00; }
 }"#;
-        let diagnostics = CompilerSession::default()
+        let session = CompilerSession::default();
+        let request = CompileRequest {
+            source,
+            source_name: Some("wide-call.ko"),
+        };
+        let checked = session
+            .check(request)
+            .expect_err("oversized flattened argument ABI must fail semantic checking");
+        let diagnostics = session
             .build(CompileRequest {
                 source,
                 source_name: Some("wide-call.ko"),
             })
             .expect_err("oversized flattened argument ABI must fail before lowering");
+        assert_eq!(checked, diagnostics);
         let diagnostic = diagnostics
             .diagnostics
             .iter()
@@ -586,6 +1056,40 @@ mod tests {
             &source[usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()],
             "value"
         );
+
+        let nested = r#"seiyaku NestedWideCall {
+  struct Inner { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64 }
+  struct Outer { left: Inner, right: Inner }
+  view fn inspect_nested(payload: Outer) -> i64 { return payload.left.a; }
+}"#;
+        let nested_error = session
+            .check(CompileRequest {
+                source: nested,
+                source_name: Some("nested-wide-call.ko"),
+            })
+            .expect_err("nested aggregate must use the same recursive ABI word accounting");
+        let nested_diagnostic = nested_error
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "K2007")
+            .expect("nested aggregate argument-limit diagnostic");
+        let nested_range = nested_diagnostic
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.byte_range)
+            .expect("nested parameter range");
+        assert_eq!(
+            &nested[nested_range.start as usize..nested_range.end as usize],
+            "payload"
+        );
+
+        let at_limit = source.replace("f13: i64", "");
+        session
+            .build(CompileRequest {
+                source: &at_limit,
+                source_name: Some("wide-call-at-limit.ko"),
+            })
+            .expect("session preflight and lowering must admit exactly thirteen words");
     }
 
     #[test]
@@ -605,7 +1109,7 @@ mod tests {
     }
 
     #[test]
-    fn check_and_build_return_identical_semantic_records_for_contracts_and_modules() {
+    fn check_and_build_return_identical_resolution_records_for_contracts_and_modules() {
         let session = CompilerSession::default();
         for source in [
             r#"seiyaku Broken {
@@ -628,7 +1132,34 @@ mod tests {
                 .build(request)
                 .expect_err("build must reject source");
             assert_eq!(checked, built);
-            assert!(checked.diagnostics.len() >= 4, "{checked:?}");
+            assert_eq!(checked.diagnostics.len(), 3, "{checked:?}");
+            assert_eq!(
+                checked
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.phase))
+                    .collect::<Vec<_>>(),
+                vec![
+                    ("K2002", DiagnosticPhase::Resolve),
+                    ("K2002", DiagnosticPhase::Resolve),
+                    ("K2002", DiagnosticPhase::Resolve),
+                ]
+            );
+            assert_eq!(
+                checked
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| {
+                        let range = diagnostic
+                            .primary_span
+                            .as_ref()
+                            .and_then(|span| span.byte_range)
+                            .expect("resolved diagnostic range");
+                        &source[range.start as usize..range.end as usize]
+                    })
+                    .collect::<Vec<_>>(),
+                vec!["Missing", "unknown", "missing_call"]
+            );
             assert!(checked.diagnostics.iter().all(|diagnostic| {
                 diagnostic
                     .primary_span
@@ -639,7 +1170,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_failures_are_collected_with_stable_source_spans() {
+    fn resolution_failures_are_collected_with_stable_source_spans() {
         let source = "seiyaku Broken {\nfn first() -> i64 { return missing_first; }\nfn second() -> i64 { return missing_second; }\n}";
         let diagnostics = CompilerSession::default()
             .build(CompileRequest {
@@ -655,7 +1186,7 @@ mod tests {
             .zip([2, 3])
             .zip(["missing_first", "missing_second"])
         {
-            assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
+            assert_eq!(diagnostic.phase, DiagnosticPhase::Resolve);
             assert_eq!(diagnostic.code, "K2002");
             let span = diagnostic.primary_span.as_ref().expect("function span");
             assert_eq!(span.source.as_deref(), Some("multi-error.ko"));
@@ -674,6 +1205,257 @@ mod tests {
             })
             .expect_err("repeated invalid compilation must fail identically");
         assert_eq!(diagnostics, repeated);
+    }
+
+    #[test]
+    fn compiler_session_preserves_explicit_semantic_code_and_plain_message() {
+        let source = "seiyaku Broken { fn missing_context() { let values = []; } }";
+        let diagnostics = CompilerSession::default()
+            .check(CompileRequest {
+                source,
+                source_name: Some("explicit-semantic-code.ko"),
+            })
+            .expect_err("an empty List without a type context must fail");
+        let [diagnostic] = diagnostics.diagnostics.as_slice() else {
+            panic!("expected one semantic diagnostic: {diagnostics:?}");
+        };
+        assert_eq!(diagnostic.code, "E_LIST_EMPTY_CONTEXT");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
+        assert_eq!(
+            diagnostic.message,
+            "an empty list requires an exact `List<T, N>` type context"
+        );
+        assert!(!diagnostic.message.contains("E_LIST_EMPTY_CONTEXT"));
+
+        let human = diagnostics.render_human();
+        let json = diagnostics.render_json().expect("JSON diagnostics");
+        let sarif = diagnostics.render_sarif().expect("SARIF diagnostics");
+        for rendered in [&human, &json, &sarif] {
+            assert!(rendered.contains("E_LIST_EMPTY_CONTEXT"));
+            assert!(rendered.contains(&diagnostic.message));
+        }
+    }
+
+    #[test]
+    fn secret_signature_and_state_rejections_have_exact_type_spans() {
+        let session = CompilerSession::new(CompilerOptions {
+            force_zk: true,
+            ..CompilerOptions::default()
+        });
+        for (source, code) in [
+            (
+                "seiyaku Privacy { state hidden: Secret<i64>; }",
+                "E_SECRET_STATE_TYPE",
+            ),
+            (
+                "seiyaku Privacy { kotoage fn leak(value: Secret<i64>) authorize(\"Leak\") {} }",
+                "E_SECRET_PUBLIC_PARAMETER",
+            ),
+            (
+                "seiyaku Privacy { kotoage fn leak() -> Secret<i64> authorize(\"Leak\") { return crypto::private_input(0); } }",
+                "E_SECRET_PUBLIC_RETURN",
+            ),
+        ] {
+            let diagnostics = session
+                .check(CompileRequest {
+                    source,
+                    source_name: Some("secret-span.ko"),
+                })
+                .expect_err("public or durable Secret<T> use must fail");
+            let diagnostic = diagnostics
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .unwrap_or_else(|| panic!("missing {code}: {diagnostics:?}"));
+            assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
+            assert!(!diagnostic.message.contains(code));
+            let range = diagnostic
+                .primary_span
+                .as_ref()
+                .and_then(|span| span.byte_range)
+                .expect("security diagnostics retain an exact type span");
+            assert_eq!(
+                &source[usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()],
+                "Secret<i64>"
+            );
+        }
+    }
+
+    #[test]
+    fn v1_retired_and_unsafe_diagnostics_have_exact_ranges_and_safe_fixes() {
+        fn reject(source: &str) -> DiagnosticBundle {
+            CompilerSession::default()
+                .check(CompileRequest {
+                    source,
+                    source_name: Some("v1-diagnostic.ko"),
+                })
+                .expect_err("fixture must be rejected")
+        }
+
+        fn diagnostic<'a>(bundle: &'a DiagnosticBundle, code: &str) -> &'a Diagnostic {
+            bundle
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .unwrap_or_else(|| panic!("missing {code}: {bundle:#?}"))
+        }
+
+        fn primary_text<'a>(source: &'a str, diagnostic: &Diagnostic) -> &'a str {
+            let range = diagnostic
+                .primary_span
+                .as_ref()
+                .and_then(|span| span.byte_range)
+                .expect("exact primary byte range");
+            &source[range.start as usize..range.end as usize]
+        }
+
+        fn fix_text<'source, 'diagnostic>(
+            source: &'source str,
+            diagnostic: &'diagnostic Diagnostic,
+        ) -> (&'source str, &'diagnostic str) {
+            let fix = diagnostic.fix.as_ref().expect("machine-applicable fix");
+            let range = fix.span.byte_range.expect("exact fix byte range");
+            (
+                &source[range.start as usize..range.end as usize],
+                &fix.replacement,
+            )
+        }
+
+        let positional =
+            "seiyaku C { struct Pair { left: i64, right: i64 } fn f() { let pair = Pair(1, 2); } }";
+        let positional_error = reject(positional);
+        let positional_diagnostic = diagnostic(&positional_error, "E_POSITIONAL_STRUCT");
+        assert_eq!(
+            primary_text(positional, positional_diagnostic),
+            "Pair(1, 2)"
+        );
+        assert_eq!(
+            fix_text(positional, positional_diagnostic),
+            ("Pair(1, 2)", "Pair { left: 1, right: 2, }")
+        );
+
+        let mixed =
+            "seiyaku C { fn target(first: i64, second: i64) {} fn f() { target(1, second: 2); } }";
+        let mixed_error = reject(mixed);
+        let mixed_diagnostic = diagnostic(&mixed_error, "E_MIXED_CALL_ARGUMENTS");
+        assert_eq!(primary_text(mixed, mixed_diagnostic), "1");
+        assert_eq!(fix_text(mixed, mixed_diagnostic), ("1", "first: 1"));
+
+        let unresolved_mixed = "seiyaku C { fn f() { target(1, second: 2); } }";
+        let unresolved_error = reject(unresolved_mixed);
+        let unresolved_diagnostic = diagnostic(&unresolved_error, "E_MIXED_CALL_ARGUMENTS");
+        assert_eq!(
+            primary_text(unresolved_mixed, unresolved_diagnostic),
+            "second"
+        );
+        assert!(unresolved_diagnostic.fix.is_none());
+
+        let unsafe_read =
+            "seiyaku C { fn read(values: List<i64, 2>) -> Option<i64> { return values[0]; } }";
+        let read_error = reject(unsafe_read);
+        let read_diagnostic = diagnostic(&read_error, "E_LIST_UNSAFE_INDEX");
+        assert_eq!(primary_text(unsafe_read, read_diagnostic), "values[0]");
+        assert_eq!(
+            fix_text(unsafe_read, read_diagnostic),
+            ("values[0]", "values.get(0)")
+        );
+
+        let mistyped_read = "seiyaku C { fn read(values: List<i64, 2>) -> Option<i64> { return values[\"zero\"]; } }";
+        let mistyped_read_error = reject(mistyped_read);
+        assert!(
+            diagnostic(&mistyped_read_error, "E_LIST_UNSAFE_INDEX")
+                .fix
+                .is_none(),
+            "a List.get recipe with a non-i64 index would not type-check"
+        );
+
+        let unsafe_write =
+            "seiyaku C { fn write() { var values: List<i64, 2> = [1]; values[0] = 2; } }";
+        let write_error = reject(unsafe_write);
+        let write_diagnostic = diagnostic(&write_error, "E_LIST_UNSAFE_INDEX");
+        assert_eq!(
+            primary_text(unsafe_write, write_diagnostic),
+            "values[0] = 2;"
+        );
+        assert_eq!(
+            fix_text(unsafe_write, write_diagnostic),
+            ("values[0] = 2;", "values.try_set(index: 0, value: 2);",)
+        );
+
+        for unsafe_without_recipe in [
+            "seiyaku C { fn write() { let values: List<i64, 2> = [1]; values[0] = 2; } }",
+            "seiyaku C { fn write() { var values: List<i64, 2> = [1]; values[\"zero\"] = 2; } }",
+            "seiyaku C { fn write() { var values: List<i64, 2> = [1]; values[0] = \"two\"; } }",
+            "seiyaku C { fn write() { var values: List<i64, 2> = [1]; values[0] += 2; } }",
+            "seiyaku C { fn write() { var values: List<i64, 2> = [1]; values[0] /* keep */ = 2; } }",
+        ] {
+            let error = reject(unsafe_without_recipe);
+            let diagnostic = diagnostic(&error, "E_LIST_UNSAFE_INDEX");
+            assert!(
+                diagnostic.fix.is_none(),
+                "unsafe, non-compiling, compound, or trivia-moving rewrite must fail closed: {diagnostic:#?}"
+            );
+        }
+
+        let legacy_sum = "seiyaku C { fn f() -> Option<i64> { option::none(0) } }";
+        let legacy_error = reject(legacy_sum);
+        let legacy_diagnostic = diagnostic(&legacy_error, "E_LEGACY_SUM_CONSTRUCTOR");
+        assert_eq!(
+            primary_text(legacy_sum, legacy_diagnostic),
+            "option::none(0)"
+        );
+        assert_eq!(
+            fix_text(legacy_sum, legacy_diagnostic),
+            ("option::none(0)", "Option::none")
+        );
+
+        let query_key = "seiyaku C { view fn account(raw: bytes) { let account_view = ledger::query::account(raw); } }";
+        let query_key_error = reject(query_key);
+        let query_key_diagnostic = diagnostic(&query_key_error, "E_QUERY_KEY_TYPE");
+        assert_eq!(
+            primary_text(query_key, query_key_diagnostic),
+            "ledger::query::account(raw)"
+        );
+        assert!(query_key_diagnostic.fix.is_none());
+
+        let query_result = "seiyaku C { view fn account(id: AccountId) { let raw: bytes = ledger::query::account(id); } }";
+        let query_result_error = reject(query_result);
+        let query_result_diagnostic = diagnostic(&query_result_error, "E_QUERY_RESULT_TYPE");
+        assert_eq!(primary_text(query_result, query_result_diagnostic), "bytes");
+        assert_eq!(
+            fix_text(query_result, query_result_diagnostic),
+            ("bytes", "Option<AccountView>")
+        );
+
+        let comprehension = "seiyaku C { fn copy() { let source: List<i64, 8> = [1]; let result: List<i64, 4> = [item for item in source]; } }";
+        let comprehension_error = reject(comprehension);
+        let comprehension_diagnostic =
+            diagnostic(&comprehension_error, "E_LIST_COMPREHENSION_CAPACITY");
+        assert_eq!(
+            primary_text(comprehension, comprehension_diagnostic),
+            "List<i64, 4>"
+        );
+        assert_eq!(
+            fix_text(comprehension, comprehension_diagnostic),
+            ("List<i64, 4>", "List<i64, 8>")
+        );
+
+        let separated_amount = "seiyaku C { fn amount() -> Amount { 1.25 amt } }";
+        let separated_error = reject(separated_amount);
+        let separated_diagnostic = diagnostic(&separated_error, "E_AMOUNT_SUFFIX_SEPARATED");
+        assert_eq!(primary_text(separated_amount, separated_diagnostic), "1.25");
+        assert_eq!(
+            fix_text(separated_amount, separated_diagnostic),
+            ("1.25 amt", "1.25amt")
+        );
+
+        let scale_29 = format!("0.{}1amt", "0".repeat(28));
+        let invalid_amount =
+            format!("seiyaku C {{ fn amount() -> Amount {{ return {scale_29}; }} }}");
+        let amount_error = reject(&invalid_amount);
+        let amount_diagnostic = diagnostic(&amount_error, "E_AMOUNT_SCALE_OVERFLOW");
+        assert_eq!(primary_text(&invalid_amount, amount_diagnostic), scale_29);
+        assert!(amount_diagnostic.fix.is_none());
     }
 
     #[test]
@@ -824,27 +1606,36 @@ mod tests {
         for (source, code, expected_primary) in [
             (
                 "seiyaku Missing { state value: i64; view fn read() -> i64 { return value; } }",
-                "E_STATE_INIT_REQUIRED",
+                "E_STATE_HAJIMARI_REQUIRED",
                 "state",
             ),
             (
                 "seiyaku Partial { state left: i64; state right: i64; hajimari() { left = 0; } }",
-                "E_STATE_INIT_INCOMPLETE",
+                "E_STATE_HAJIMARI_INCOMPLETE",
                 "hajimari",
             ),
         ] {
+            let request = CompileRequest {
+                source,
+                source_name: Some("state.ko"),
+            };
+            let checked = session
+                .check(request)
+                .expect_err("incomplete scalar initialization must fail checking");
             let error = session
                 .build(CompileRequest {
                     source,
                     source_name: Some("state.ko"),
                 })
                 .expect_err("incomplete scalar initialization must fail");
+            assert_eq!(checked, error);
             let diagnostic = error
                 .diagnostics
                 .iter()
                 .find(|diagnostic| diagnostic.code == code)
                 .unwrap_or_else(|| panic!("missing {code}: {error:?}"));
             let span = diagnostic.primary_span.as_ref().expect("primary span");
+            assert_eq!(span.source.as_deref(), Some("state.ko"));
             let range = span.byte_range.expect("byte range");
             assert_eq!(
                 &source[usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()],
@@ -878,10 +1669,20 @@ mod tests {
         );
         let limit = diagnostics.diagnostics.last().expect("limit diagnostic");
         assert_eq!(limit.code, "K0004");
+        assert_eq!(limit.phase, DiagnosticPhase::Resolve);
+        assert!(limit.primary_span.is_none());
         assert!(
             limit.message.contains("17 additional"),
             "unexpected limit diagnostic: {}",
             limit.message
+        );
+        assert_eq!(
+            diagnostics
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "K2002")
+                .count(),
+            crate::diagnostic::MAX_DIAGNOSTICS - 1
         );
     }
 
@@ -894,15 +1695,15 @@ mod tests {
         });
         for (source, expected_span) in [
             (
-                "seiyaku Demo { fn helper() {} #[test] fn smoke() {} }",
+                "seiyaku Demo { view fn helper() {} #[test] fn smoke() {} }",
                 "#[test]",
             ),
             (
-                "seiyaku Demo { fn helper() {} fixture seeded { caller(\"alice\"); } }",
+                "seiyaku Demo { view fn helper() {} fixture seeded { caller(\"alice\"); } }",
                 "fixture",
             ),
             (
-                "seiyaku Demo { fn helper() {} koto_test { target: \"demo.ko\" } }",
+                "seiyaku Demo { view fn helper() {} koto_test { target: \"demo.ko\" } }",
                 "koto_test",
             ),
         ] {
@@ -975,6 +1776,188 @@ mod tests {
             .build_typed_program(typed, Some("test-helper.ko"))
             .expect_err("test-capable HIR must not cross into production codegen");
         assert_eq!(diagnostics.diagnostics[0].code, "E_TEST_ONLY_PRODUCTION");
+    }
+
+    #[test]
+    fn typed_test_graph_is_restricted_to_test_mode_and_derives_a_clean_runtime() {
+        let source = r#"seiyaku Demo {
+            fn current() -> i64 { return 1; }
+            view fn value() -> i64 { return current(); }
+            #[test]
+            fn smoke() { test::assert(current() == 1); }
+        }"#;
+        let target = TestSourceUnit {
+            source_name: "suite.ko".to_owned(),
+            source: source.to_owned(),
+        };
+
+        let diagnostics = CompilerSession::default()
+            .build_test_sources(&target, &[])
+            .expect_err("production sessions must not expose the local test build path");
+        assert_eq!(diagnostics.diagnostics[0].code, "E_TEST_ONLY_PRODUCTION");
+
+        let outputs = CompilerSession::new(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        })
+        .build_test_sources(&target, &[])
+        .expect("explicit test-mode suite build");
+        assert!(
+            outputs
+                .suite
+                .report
+                .source_map
+                .iter()
+                .any(|entry| entry.function_name == "smoke")
+        );
+        assert!(
+            outputs
+                .runtime
+                .report
+                .source_map
+                .iter()
+                .all(|entry| entry.function_name != "smoke")
+        );
+    }
+
+    #[test]
+    fn standalone_test_graph_keeps_stable_distinct_sources_and_typed_target_state() {
+        let target = TestSourceUnit {
+            source_name: "contracts/counter.ko".to_owned(),
+            source: r#"seiyaku Counter {
+                state counter: i64;
+                hajimari() { counter = 0; }
+                fn current() -> i64 { return counter; }
+                view fn value() -> i64 { return current(); }
+            }"#
+            .to_owned(),
+        };
+        let first = TestSourceUnit {
+            source_name: "tests/first.test.ko".to_owned(),
+            source: r#"module FirstTests {
+                koto_test { target: "../contracts/counter.ko" }
+                #[test]
+                fn observes_target_state() { test::assert(counter == 0); }
+            }"#
+            .to_owned(),
+        };
+        let second = TestSourceUnit {
+            source_name: "tests/second.test.ko".to_owned(),
+            source: r#"module SecondTests {
+                koto_test { target: "../contracts/counter.ko" }
+                #[test]
+                fn calls_target_helper() { test::assert(current() == 0); }
+            }"#
+            .to_owned(),
+        };
+        let session = CompilerSession::new(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        });
+        let forward = session
+            .build_test_sources(&target, &[first.clone(), second.clone()])
+            .expect("link source-identified standalone tests");
+        let reverse = session
+            .build_test_sources(&target, &[second, first])
+            .expect("test source order cannot affect linking");
+        assert_eq!(forward.suite.artifact, reverse.suite.artifact);
+        assert_eq!(forward.runtime.artifact, reverse.runtime.artifact);
+
+        let paths = forward
+            .suite
+            .report
+            .source_map
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .source
+                    .source_path
+                    .as_deref()
+                    .map(|path| (path, entry.source.source_id))
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(
+            paths
+                .iter()
+                .any(|(path, _)| *path == "contracts/counter.ko")
+        );
+        assert!(paths.iter().any(|(path, _)| *path == "tests/first.test.ko"));
+        assert!(
+            paths
+                .iter()
+                .any(|(path, _)| *path == "tests/second.test.ko")
+        );
+        assert_eq!(
+            paths
+                .iter()
+                .map(|(_, source_id)| *source_id)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            3,
+            "every logical source must retain a distinct stable SourceId"
+        );
+        assert!(forward.suite.report.source_map.iter().all(|entry| {
+            entry.source.byte_start < entry.source.byte_end && entry.source.source_id != 0
+        }));
+        let source_texts = BTreeMap::from([
+            ("contracts/counter.ko", target.source.as_str()),
+            (
+                "tests/first.test.ko",
+                r#"module FirstTests {
+                koto_test { target: "../contracts/counter.ko" }
+                #[test]
+                fn observes_target_state() { test::assert(counter == 0); }
+            }"#,
+            ),
+            (
+                "tests/second.test.ko",
+                r#"module SecondTests {
+                koto_test { target: "../contracts/counter.ko" }
+                #[test]
+                fn calls_target_helper() { test::assert(current() == 0); }
+            }"#,
+            ),
+        ]);
+        for entry in &forward.suite.report.source_map {
+            let source_path = entry
+                .source
+                .source_path
+                .as_deref()
+                .expect("every source segment retains its logical path");
+            let source = source_texts[source_path];
+            let start = usize::try_from(entry.source.byte_start).expect("source offset fits usize");
+            let end = usize::try_from(entry.source.byte_end).expect("source offset fits usize");
+            assert!(start < end && end <= source.len());
+            assert!(source.is_char_boundary(start) && source.is_char_boundary(end));
+        }
+    }
+
+    #[test]
+    fn standalone_test_graph_rejects_normalized_logical_path_aliases() {
+        let target = TestSourceUnit {
+            source_name: "contracts/demo.ko".to_owned(),
+            source: "seiyaku Demo {}".to_owned(),
+        };
+        let source = r#"module Tests {
+            koto_test { target: "../contracts/demo.ko" }
+            #[test]
+            fn smoke() { test::assert(true); }
+        }"#;
+        let first = TestSourceUnit {
+            source_name: "tests/./demo.test.ko".to_owned(),
+            source: source.to_owned(),
+        };
+        let alias = TestSourceUnit {
+            source_name: "tests/demo.test.ko".to_owned(),
+            source: source.to_owned(),
+        };
+        let diagnostics = CompilerSession::new(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        })
+        .build_test_sources(&target, &[first, alias])
+        .expect_err("normalized aliases must not receive distinct SourceIds");
+        assert_eq!(diagnostics.diagnostics[0].code, "E_DUPLICATE_SOURCE");
     }
 
     #[test]
@@ -1097,7 +2080,7 @@ mod tests {
                 source_name: Some("branches.ko"),
             })
             .expect("documented else-if, grouping, and real tuples must build");
-        assert_eq!(output.manifest.contract_name.as_deref(), Some("Branches"));
+        assert_eq!(output.manifest.seiyaku_name.as_deref(), Some("Branches"));
     }
 
     #[test]
@@ -1108,7 +2091,7 @@ mod tests {
                 r#"
                 seiyaku IntegerContract {
                     struct Shared { value: i64; }
-                    fn make() -> Shared { return Shared(7); }
+                    fn make() -> Shared { return Shared { value: 7 }; }
                     view fn read() -> i64 {
                         let record = make();
                         return record.value;
@@ -1121,7 +2104,7 @@ mod tests {
                 r#"
                 seiyaku BooleanContract {
                     struct Shared { value: bool; }
-                    fn make() -> Shared { return Shared(true); }
+                    fn make() -> Shared { return Shared { value: true }; }
                     view fn read() -> bool {
                         let record = make();
                         return record.value;
@@ -1147,7 +2130,7 @@ mod tests {
                                 })
                                 .expect("parallel compilation must remain isolated");
                             assert_eq!(
-                                output.manifest.contract_name.as_deref(),
+                                output.manifest.seiyaku_name.as_deref(),
                                 Some(expected_name)
                             );
                         }

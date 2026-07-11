@@ -7,12 +7,7 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 /** Closed SCCP payload kinds admitted by the first-release bridge flow. */
 enum class SccpPayloadKindV1(val wireKey: String) {
-    ASSET_REGISTER("asset_register"),
-    ROUTE_ACTIVATE("route_activate"),
-    TRANSFER("transfer"),
-    TOKEN_ADD("token_add"),
-    TOKEN_PAUSE("token_pause"),
-    TOKEN_RESUME("token_resume");
+    TRANSFER("transfer");
 
     companion object {
         fun fromWireKey(value: String): SccpPayloadKindV1? = values().firstOrNull { it.wireKey == value }
@@ -20,14 +15,14 @@ enum class SccpPayloadKindV1(val wireKey: String) {
 }
 
 /** Unified strict detached-signing response returned by both SCCP submit endpoints. */
-data class SccpBridgeSubmitResponse(
+class SccpBridgeSubmitResponse(
     val submitted: Boolean,
     val payloadKind: SccpPayloadKindV1,
     val messageIdHex: String,
     val backend: String,
     val counterpartyDomain: Int,
     val counterpartyChain: String,
-    val manifestHashHex: String,
+    val routeConfigurationHashHex: String,
     val rangeStartHeight: Long,
     val rangeEndHeight: Long,
     val creationTimeMs: Long,
@@ -69,8 +64,8 @@ object SccpBridgeSubmitResponseParser {
         val kind = SccpPayloadKindV1.fromWireKey(kindText)
             ?: throw IllegalArgumentException("payload_kind is unknown or retired")
         val backend = text(value, "backend")
-        require(backend.length <= 128 && Regex("bridge/[a-z0-9/_-]+").matches(backend)) {
-            "backend must be a canonical bridge backend label"
+        require(backend in CLOSED_BACKENDS) {
+            "backend must be one closed SCCP verifier label"
         }
         val counterpartyDomain = integer(value, "counterparty_domain", 1, 5)
         val counterpartyChain = text(value, "counterparty_chain")
@@ -78,10 +73,13 @@ object SccpBridgeSubmitResponseParser {
         require(counterparty?.isExternal == true && counterparty.domainId == counterpartyDomain) {
             "counterparty_chain and counterparty_domain must identify one exact external network"
         }
+        require(backend in backendsForDomain(counterpartyDomain)) {
+            "backend does not match the exact counterparty family"
+        }
         return SccpBridgeSubmitResponse(
             submitted, kind, hash(value, "message_id_hex"), backend,
             counterpartyDomain, counterpartyChain,
-            hash(value, "manifest_hash_hex"), start, end, creationTime,
+            hash(value, "route_configuration_hash_hex"), start, end, creationTime,
             txHash, transactionPayload, signingMessage,
         )
     }
@@ -119,6 +117,10 @@ object SccpBridgeSubmitResponseParser {
     }
     private fun optionalHash(value: Map<String, Any?>, field: String): String? = if (value[field] == null) null else hash(value, field)
     private fun decodeCanonicalBase64(value: String, field: String, exactBytes: Int? = null): ByteArray {
+        val maximumBytes = exactBytes ?: SCCP_MAX_TRANSACTION_PAYLOAD_BYTES
+        require(value.length <= 4 * ((maximumBytes + 2) / 3)) {
+            "$field exceeds its size bound"
+        }
         val decoded = try { Base64.getDecoder().decode(value) } catch (ex: IllegalArgumentException) {
             throw IllegalArgumentException("$field must be canonical base64", ex)
         }
@@ -131,7 +133,6 @@ object SccpBridgeSubmitResponseParser {
 
     private fun validateCanonicalTransactionPayload(value: String, creationTimeMs: Long): ByteArray {
         val bytes = decodeCanonicalBase64(value, "transaction_payload_b64")
-        require(bytes.size <= 16 * 1024 * 1024) { "transaction_payload_b64 exceeds its size bound" }
         val payload = try {
             TRANSACTION_CODEC.decodeTransaction(bytes)
         } catch (ex: Exception) {
@@ -154,8 +155,22 @@ object SccpBridgeSubmitResponseParser {
 
     private val FIELDS = setOf(
         "submitted", "payload_kind", "message_id_hex", "backend", "counterparty_domain",
-        "counterparty_chain", "manifest_hash_hex", "range_start_height", "range_end_height",
+        "counterparty_chain", "route_configuration_hash_hex", "range_start_height", "range_end_height",
         "creation_time_ms", "tx_hash_hex", "transaction_payload_b64", "signing_message_b64",
     )
+    private val CLOSED_BACKENDS = setOf(
+        "evm-groth16-bn254-v1",
+        "tron-groth16-bn254-v1",
+        "bridge/sccp/native/ethereum-beacon-v1",
+        "bridge/sccp/native/bsc-parlia-v1",
+        "bridge/sccp/native/tron-dpos-v1",
+    )
+
+    private fun backendsForDomain(domain: Int): Set<String> = when (domain) {
+        1 -> setOf("evm-groth16-bn254-v1", "bridge/sccp/native/ethereum-beacon-v1")
+        2 -> setOf("evm-groth16-bn254-v1", "bridge/sccp/native/bsc-parlia-v1")
+        5 -> setOf("tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1")
+        else -> emptySet()
+    }
     private val TRANSACTION_CODEC = NoritoJavaCodecAdapter()
 }

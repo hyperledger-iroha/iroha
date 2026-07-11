@@ -25,9 +25,12 @@ npm run build:dist
 
 Native bindings load only after verifying the platform-specific SHA-256 recorded
 in `native/iroha_js_host.checksums.json`. When the checksum is missing or
-mismatched, SDK startup fails. Run `npm run build:native` explicitly after
-installing the Rust toolchain. Set `IROHA_JS_NATIVE_DIR` only in test harnesses
-that need to point at an alternate `native/` folder.
+mismatched, SDK startup fails. The loader authenticates the complete manifest,
+then loads a private, read-only, content-addressed snapshot of the exact bytes it
+hashed so replacing the original path cannot race module loading. Run
+`npm run build:native` explicitly after installing the Rust toolchain. Set
+`IROHA_JS_NATIVE_DIR` only in test harnesses that need to point at an alternate
+`native/` folder.
 
 ## Native SoraFS Reference Validation
 
@@ -2386,7 +2389,7 @@ round-trips the full current manifest metadata surface including
 hash length and accept `Buffer`, typed arrays, or base64 strings. Public
 deployment is now alias-first through `ToriiClient.deployContract`, which
 requires `contractAlias`, returns a fresh immutable `contract_address`, and
-reports whether the deploy upgraded an existing alias binding.
+reports `kaizen` when the deploy replaces an existing alias binding.
 `buildRemoveSmartContractBytesInstruction/Transaction` wires the bytecode
 reclamation ISI into CI/governance tooling and rejects empty reason strings
 before submission so operators get fast feedback during rehearsals.
@@ -2419,7 +2422,7 @@ const response = await torii.callContract({
   entrypoint: "increment",
   payload: { amount: 1 },
   gasAssetId: "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
-  gasLimit: 50_000,
+  gasLimit: 1_500_000,
 });
 
 console.log("queued tx:", response.tx_hash_hex);
@@ -3096,7 +3099,7 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_CONNECT_SESSION` — optional JSON string containing the payload for `createConnectSession()` (`{"sid":"<hex>","node":"torii.devnet.example"}` is a common pattern).
 - `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}` is sufficient). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.
-- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7","entrypoint":"ping","payload":{"value":1},"gasLimit":50000}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.callContract`, waits for the resulting transaction status, and asserts success. The helper accepts camelCase keys plus overrides for `authority`, `privateKeyHex`, `gasAssetId`, and `gasLimit` (required).
+- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7","entrypoint":"ping","payload":{"value":1},"gasLimit":1500000}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.callContract`, waits for the resulting transaction status, and asserts success. The helper accepts camelCase keys plus overrides for `authority`, `privateKeyHex`, `gasAssetId`, and `gasLimit` (required).
 - `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) submitted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority`/`chainId`, so the env var only needs to override vote-specific fields.
 - `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional override for the default devnet chain id (`00000000-0000-0000-0000-000000000000`).
 - `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target the canonical encoded account id derived from `account.public_key`.

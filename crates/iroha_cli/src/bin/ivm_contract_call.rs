@@ -39,7 +39,9 @@ use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
 
 const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
-const DEFAULT_IVM_GAS_LIMIT: u64 = 1_000_000;
+// Canonical argument preparation reserves the bounded 1 MiB HEAP before
+// decoding; keep the default above that floor with room for a small call.
+const DEFAULT_IVM_GAS_LIMIT: u64 = 1_500_000;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -453,6 +455,11 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_gas_limit_covers_strict_argument_admission_floor() {
+        assert!(DEFAULT_IVM_GAS_LIMIT > 1_048_752);
+    }
 
     #[test]
     fn payload_digest_hex_hashes_empty_payload_when_absent() {

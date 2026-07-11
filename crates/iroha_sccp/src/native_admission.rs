@@ -64,7 +64,7 @@ pub enum SccpNativeSourceProofV1 {
     EthereumBeacon(Box<EthereumNativeSourceProofV1>),
     /// BNB Smart Chain Parlia finality and execution-MPT proof.
     BscParlia(Box<BscNativeSourceProofV1>),
-    /// TRON DPoS replay and transaction-inclusion proof.
+    /// TRON `DPoS` replay and transaction-inclusion proof.
     TronDpos(Box<TronNativeSourceProofV1>),
 }
 
@@ -202,6 +202,14 @@ pub struct ValidatedSccpNativeInboundMessageV1 {
     pub source_event_digest: H256,
     /// Native finality point containing the source event.
     pub source_finality: SccpNativeFinalityPointV1,
+    /// Authenticated consensus-progress coordinate comparable to governed
+    /// native trust-anchor checkpoint heights.
+    ///
+    /// Ethereum uses the finalized beacon slot; BSC and TRON use the finalized
+    /// native block height. This is deliberately distinct from
+    /// `source_finality.height`, which is the event-containing execution block.
+    #[norito(with = "crate::json_utils::u64_string")]
+    pub anchor_interval_height: u64,
 }
 
 /// Fail-closed native admission error.
@@ -340,7 +348,7 @@ pub const fn sccp_native_backend_for_source_network_v1(
         SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta => {
             Some(BridgeNativeProofBackendV1::TronDpos)
         }
-        SccpNetworkV1::SoraNexus | SccpNetworkV1::SoraTaira => None,
+        SccpNetworkV1::SoraTaira => None,
     }
 }
 
@@ -427,7 +435,8 @@ fn validate_inbound_statement(
     if !verify_sccp_payload_structure(&proof.payload) {
         return Err(SccpNativeAdmissionErrorV1::InvalidPayload);
     }
-    let canonical_payload = canonical_sccp_payload_bytes(&proof.payload);
+    let canonical_payload = canonical_sccp_payload_bytes(&proof.payload)
+        .map_err(|_| SccpNativeAdmissionErrorV1::InvalidPayload)?;
     if canonical_payload.is_empty()
         || canonical_payload.len() > SCCP_NATIVE_ADMISSION_MAX_PAYLOAD_BYTES_V1
     {
@@ -495,6 +504,11 @@ fn preflight_canonical_norito(bytes: &[u8]) -> Result<(), SccpNativeAdmissionErr
 }
 
 /// Encode one structurally valid source envelope as canonical Norito bytes.
+///
+/// # Errors
+///
+/// Returns an error if the envelope is structurally invalid, cannot be encoded
+/// canonically, or exceeds the V1 encoded-size limit.
 pub fn encode_sccp_native_source_proof_envelope_v1(
     envelope: &SccpNativeSourceProofEnvelopeV1,
 ) -> Result<Vec<u8>, SccpNativeAdmissionErrorV1> {
@@ -506,6 +520,11 @@ pub fn encode_sccp_native_source_proof_envelope_v1(
 }
 
 /// Decode exactly one canonical, size-bounded native source envelope.
+///
+/// # Errors
+///
+/// Returns an error for empty, oversized, compressed, malformed,
+/// noncanonical, or structurally invalid encodings.
 pub fn decode_sccp_native_source_proof_envelope_v1(
     bytes: &[u8],
 ) -> Result<SccpNativeSourceProofEnvelopeV1, SccpNativeAdmissionErrorV1> {
@@ -520,6 +539,11 @@ pub fn decode_sccp_native_source_proof_envelope_v1(
 }
 
 /// Decode one strict, size-bounded JSON native source envelope.
+///
+/// # Errors
+///
+/// Returns an error for empty, oversized, malformed, noncanonical, or
+/// structurally invalid JSON.
 pub fn decode_sccp_native_source_proof_envelope_json_v1(
     json: &str,
 ) -> Result<SccpNativeSourceProofEnvelopeV1, SccpNativeAdmissionErrorV1> {
@@ -544,6 +568,11 @@ pub fn decode_sccp_native_source_proof_envelope_json_v1(
 }
 
 /// Encode one structurally valid native inbound proof as canonical Norito bytes.
+///
+/// # Errors
+///
+/// Returns an error if the statement is invalid, cannot be encoded
+/// canonically, or exceeds the V1 encoded-size limit.
 pub fn encode_sccp_native_inbound_message_proof_v1(
     proof: &SccpNativeInboundMessageProofV1,
 ) -> Result<Vec<u8>, SccpNativeAdmissionErrorV1> {
@@ -555,6 +584,11 @@ pub fn encode_sccp_native_inbound_message_proof_v1(
 }
 
 /// Decode exactly one canonical, size-bounded native inbound proof.
+///
+/// # Errors
+///
+/// Returns an error for empty, oversized, compressed, malformed,
+/// noncanonical, or structurally invalid encodings.
 pub fn decode_sccp_native_inbound_message_proof_v1(
     bytes: &[u8],
 ) -> Result<SccpNativeInboundMessageProofV1, SccpNativeAdmissionErrorV1> {
@@ -569,6 +603,11 @@ pub fn decode_sccp_native_inbound_message_proof_v1(
 }
 
 /// Decode one strict, size-bounded JSON native inbound proof.
+///
+/// # Errors
+///
+/// Returns an error for empty, oversized, malformed, noncanonical, or
+/// structurally invalid JSON.
 pub fn decode_sccp_native_inbound_message_proof_json_v1(
     json: &str,
 ) -> Result<SccpNativeInboundMessageProofV1, SccpNativeAdmissionErrorV1> {
@@ -593,20 +632,38 @@ pub fn decode_sccp_native_inbound_message_proof_json_v1(
 }
 
 /// Build the data-model container for one canonical native inbound proof.
+///
+/// # Errors
+///
+/// Returns an error if the route-configuration hash is zero or the embedded
+/// inbound proof is invalid or cannot be canonically encoded.
 pub fn bridge_native_protocol_proof_v1(
     proof: &SccpNativeInboundMessageProofV1,
+    route_configuration_hash: [u8; 32],
 ) -> Result<BridgeNativeProtocolProofV1, SccpNativeAdmissionErrorV1> {
+    if route_configuration_hash.iter().all(|byte| *byte == 0) {
+        return Err(SccpNativeAdmissionErrorV1::HashRoleCollision);
+    }
     let encoded_envelope = encode_sccp_native_inbound_message_proof_v1(proof)?;
     Ok(BridgeNativeProtocolProofV1 {
         backend: proof.source.proof.backend(),
+        route_configuration_hash,
         encoded_envelope,
     })
 }
 
 /// Decode a data-model native container and require its outer backend to match.
+///
+/// # Errors
+///
+/// Returns an error if the route-configuration hash is zero, the embedded
+/// proof is invalid, or the outer and inner backend tags disagree.
 pub fn decode_bridge_native_protocol_proof_v1(
     proof: &BridgeNativeProtocolProofV1,
 ) -> Result<SccpNativeInboundMessageProofV1, SccpNativeAdmissionErrorV1> {
+    if proof.route_configuration_hash.iter().all(|byte| *byte == 0) {
+        return Err(SccpNativeAdmissionErrorV1::HashRoleCollision);
+    }
     let decoded = decode_sccp_native_inbound_message_proof_v1(&proof.encoded_envelope)?;
     if decoded.source.proof.backend() != proof.backend {
         return Err(SccpNativeAdmissionErrorV1::BackendMismatch);
@@ -640,8 +697,10 @@ fn normalized_result(
     proof: &SccpNativeInboundMessageProofV1,
     lane_hash: H256,
     source_finality: SccpNativeFinalityPointV1,
+    anchor_interval_height: u64,
 ) -> Result<ValidatedSccpNativeInboundMessageV1, SccpNativeAdmissionErrorV1> {
     if source_finality.height == 0
+        || anchor_interval_height == 0
         || !hashes_are_nonzero_and_distinct(&[
             lane_hash,
             proof.source.source_identity_hash,
@@ -664,6 +723,142 @@ fn normalized_result(
         payload_hash: proof.source.payload_hash,
         source_event_digest: proof.source.source_event_digest,
         source_finality,
+        anchor_interval_height,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VerifiedNativeFinalityV1 {
+    source_finality: SccpNativeFinalityPointV1,
+    anchor_interval_height: u64,
+}
+
+struct GovernedNativeAdmissionContextV1<'a> {
+    proof: &'a SccpNativeInboundMessageProofV1,
+    source_identity: &'a SccpSourceIdentityV1,
+    trust_anchor: SccpNativeTrustAnchorV1,
+    lane_hash: H256,
+}
+
+fn verify_ethereum_native_admission_v1(
+    context: &GovernedNativeAdmissionContextV1<'_>,
+    native: &EthereumNativeSourceProofV1,
+) -> Result<VerifiedNativeFinalityV1, SccpNativeAdmissionErrorV1> {
+    if native.trusted_anchor.bootstrap.header.beacon.slot != context.trust_anchor.checkpoint_height
+    {
+        return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
+    }
+    let proof = context.proof;
+    let canonical_payload = canonical_sccp_payload_bytes(&proof.payload)
+        .map_err(|_| SccpNativeAdmissionErrorV1::InvalidPayload)?;
+    let validated = verify_ethereum_native_source_proof_v1(
+        context.source_identity,
+        proof.source.source_identity_hash,
+        proof.source.trust_anchor.anchor_hash,
+        proof.source.message_id,
+        proof.source.payload_hash,
+        &canonical_payload,
+        native,
+    )
+    .map_err(SccpNativeAdmissionErrorV1::Ethereum)?;
+    if validated.source_identity_hash != proof.source.source_identity_hash
+        || validated.lane_hash != context.lane_hash
+        || validated.trusted_anchor_hash != proof.source.trust_anchor.anchor_hash
+        || validated.message_id != proof.source.message_id
+        || validated.payload_hash != proof.source.payload_hash
+        || validated.source_event_digest != proof.source.source_event_digest
+    {
+        return Err(SccpNativeAdmissionErrorV1::NormalizedResultMismatch(
+            "Ethereum statement",
+        ));
+    }
+    Ok(VerifiedNativeFinalityV1 {
+        source_finality: SccpNativeFinalityPointV1 {
+            height: validated.execution_block_number,
+            block_hash: validated.execution_block_hash,
+        },
+        anchor_interval_height: validated.finalized_beacon_slot,
+    })
+}
+
+fn verify_bsc_native_admission_v1(
+    context: &GovernedNativeAdmissionContextV1<'_>,
+    native: &BscNativeSourceProofV1,
+) -> Result<VerifiedNativeFinalityV1, SccpNativeAdmissionErrorV1> {
+    if bsc_native_anchor_block_number(&native.finality.anchor)
+        .map_err(BscNativeSourceError::Finality)
+        .map_err(SccpNativeAdmissionErrorV1::Bsc)?
+        != context.trust_anchor.checkpoint_height
+    {
+        return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
+    }
+    let proof = context.proof;
+    let canonical_payload = canonical_sccp_payload_bytes(&proof.payload)
+        .map_err(|_| SccpNativeAdmissionErrorV1::InvalidPayload)?;
+    let validated = verify_bsc_native_source(
+        native,
+        context.source_identity,
+        proof.source.source_identity_hash,
+        proof.source.trust_anchor.anchor_hash,
+        proof.source.message_id,
+        proof.source.payload_hash,
+        &canonical_payload,
+    )
+    .map_err(SccpNativeAdmissionErrorV1::Bsc)?;
+    if validated.source_identity_hash != proof.source.source_identity_hash
+        || validated.lane_hash != context.lane_hash
+        || validated.finality.anchor_hash != proof.source.trust_anchor.anchor_hash
+        || validated.receipt.lane_hash != context.lane_hash
+        || validated.receipt.source_event_digest != proof.source.source_event_digest
+    {
+        return Err(SccpNativeAdmissionErrorV1::NormalizedResultMismatch(
+            "BSC statement",
+        ));
+    }
+    Ok(VerifiedNativeFinalityV1 {
+        source_finality: SccpNativeFinalityPointV1 {
+            height: validated.finality.block_number,
+            block_hash: validated.finality.block_hash,
+        },
+        anchor_interval_height: validated.finality.block_number,
+    })
+}
+
+fn verify_tron_native_admission_v1(
+    context: &GovernedNativeAdmissionContextV1<'_>,
+    native: &TronNativeSourceProofV1,
+) -> Result<VerifiedNativeFinalityV1, SccpNativeAdmissionErrorV1> {
+    if native.finality.anchor.block_number != context.trust_anchor.checkpoint_height {
+        return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
+    }
+    let proof = context.proof;
+    let validated = verify_tron_native_source(
+        native,
+        context.source_identity,
+        proof.source.source_identity_hash,
+        proof.source.trust_anchor.anchor_hash,
+        proof.source.message_id,
+        proof.source.payload_hash,
+        &proof.payload,
+    )
+    .map_err(SccpNativeAdmissionErrorV1::Tron)?;
+    if validated.source_identity_hash != proof.source.source_identity_hash
+        || validated.finality.anchor_hash != proof.source.trust_anchor.anchor_hash
+        || validated.transaction.lane_hash != context.lane_hash
+        || validated.transaction.message_id != proof.source.message_id
+        || validated.transaction.payload_hash != proof.source.payload_hash
+        || validated.transaction.source_event_digest != proof.source.source_event_digest
+    {
+        return Err(SccpNativeAdmissionErrorV1::NormalizedResultMismatch(
+            "TRON statement",
+        ));
+    }
+    Ok(VerifiedNativeFinalityV1 {
+        source_finality: SccpNativeFinalityPointV1 {
+            height: validated.finality.block_number,
+            block_hash: validated.finality.block_id,
+        },
+        anchor_interval_height: validated.finality.block_number,
     })
 }
 
@@ -672,6 +867,12 @@ fn normalized_result(
 /// Every branch invokes its full protocol-native verifier. Success is returned
 /// only after the verifier's normalized identity, anchor, lane, event, and
 /// source-finality fields are compared with the exact admitted statement.
+///
+/// # Errors
+///
+/// Returns an error if the statement or governed context is inconsistent, a
+/// protocol-native verifier fails, or its normalized result does not exactly
+/// match the admitted proof envelope.
 pub fn verify_sccp_native_inbound_message_proof_v1(
     proof: &SccpNativeInboundMessageProofV1,
     governed_source_identity: &SccpSourceIdentityV1,
@@ -679,112 +880,36 @@ pub fn verify_sccp_native_inbound_message_proof_v1(
 ) -> Result<ValidatedSccpNativeInboundMessageV1, SccpNativeAdmissionErrorV1> {
     let lane_hash = validate_inbound_statement(proof)?;
     validate_governed_context(proof, governed_source_identity, governed_trust_anchor)?;
-
-    let source_finality = match &proof.source.proof {
+    let context = GovernedNativeAdmissionContextV1 {
+        proof,
+        source_identity: governed_source_identity,
+        trust_anchor: governed_trust_anchor,
+        lane_hash,
+    };
+    let verified_finality = match &proof.source.proof {
         SccpNativeSourceProofV1::EthereumBeacon(native) => {
-            if native.trusted_anchor.bootstrap.header.beacon.slot
-                != governed_trust_anchor.checkpoint_height
-            {
-                return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
-            }
-            let validated = verify_ethereum_native_source_proof_v1(
-                governed_source_identity,
-                proof.source.source_identity_hash,
-                proof.source.trust_anchor.anchor_hash,
-                proof.source.message_id,
-                proof.source.payload_hash,
-                &canonical_sccp_payload_bytes(&proof.payload),
-                native,
-            )
-            .map_err(SccpNativeAdmissionErrorV1::Ethereum)?;
-            if validated.source_identity_hash != proof.source.source_identity_hash
-                || validated.lane_hash != lane_hash
-                || validated.trusted_anchor_hash != proof.source.trust_anchor.anchor_hash
-                || validated.message_id != proof.source.message_id
-                || validated.payload_hash != proof.source.payload_hash
-                || validated.source_event_digest != proof.source.source_event_digest
-            {
-                return Err(SccpNativeAdmissionErrorV1::NormalizedResultMismatch(
-                    "Ethereum statement",
-                ));
-            }
-            SccpNativeFinalityPointV1 {
-                height: validated.execution_block_number,
-                block_hash: validated.execution_block_hash,
-            }
+            verify_ethereum_native_admission_v1(&context, native)?
         }
         SccpNativeSourceProofV1::BscParlia(native) => {
-            if bsc_native_anchor_block_number(&native.finality.anchor)
-                .map_err(BscNativeSourceError::Finality)
-                .map_err(SccpNativeAdmissionErrorV1::Bsc)?
-                != governed_trust_anchor.checkpoint_height
-            {
-                return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
-            }
-            let validated = verify_bsc_native_source(
-                native,
-                governed_source_identity,
-                proof.source.source_identity_hash,
-                proof.source.trust_anchor.anchor_hash,
-                proof.source.message_id,
-                proof.source.payload_hash,
-                &canonical_sccp_payload_bytes(&proof.payload),
-            )
-            .map_err(SccpNativeAdmissionErrorV1::Bsc)?;
-            if validated.source_identity_hash != proof.source.source_identity_hash
-                || validated.lane_hash != lane_hash
-                || validated.finality.anchor_hash != proof.source.trust_anchor.anchor_hash
-                || validated.receipt.lane_hash != lane_hash
-                || validated.receipt.source_event_digest != proof.source.source_event_digest
-            {
-                return Err(SccpNativeAdmissionErrorV1::NormalizedResultMismatch(
-                    "BSC statement",
-                ));
-            }
-            SccpNativeFinalityPointV1 {
-                height: validated.finality.block_number,
-                block_hash: validated.finality.block_hash,
-            }
+            verify_bsc_native_admission_v1(&context, native)?
         }
         SccpNativeSourceProofV1::TronDpos(native) => {
-            if native.finality.anchor.block_number != governed_trust_anchor.checkpoint_height {
-                return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
-            }
-            let validated = verify_tron_native_source(
-                native,
-                governed_source_identity,
-                proof.source.source_identity_hash,
-                proof.source.trust_anchor.anchor_hash,
-                proof.source.message_id,
-                proof.source.payload_hash,
-                &proof.payload,
-            )
-            .map_err(SccpNativeAdmissionErrorV1::Tron)?;
-            if validated.source_identity_hash != proof.source.source_identity_hash
-                || validated.finality.anchor_hash != proof.source.trust_anchor.anchor_hash
-                || validated.transaction.lane_hash != lane_hash
-                || validated.transaction.message_id != proof.source.message_id
-                || validated.transaction.payload_hash != proof.source.payload_hash
-                || validated.transaction.source_event_digest != proof.source.source_event_digest
-            {
-                return Err(SccpNativeAdmissionErrorV1::NormalizedResultMismatch(
-                    "TRON statement",
-                ));
-            }
-            SccpNativeFinalityPointV1 {
-                height: validated.finality.block_number,
-                block_hash: validated.finality.block_id,
-            }
+            verify_tron_native_admission_v1(&context, native)?
         }
     };
 
-    if source_finality != proof.source.source_finality {
+    if verified_finality.source_finality != proof.source.source_finality {
         return Err(SccpNativeAdmissionErrorV1::NormalizedResultMismatch(
             "source finality",
         ));
     }
 
-    normalized_result(proof, lane_hash, source_finality)
+    normalized_result(
+        proof,
+        lane_hash,
+        verified_finality.source_finality,
+        verified_finality.anchor_interval_height,
+    )
 }
 
 /// Build a complete positive Ethereum native inbound fixture for one payload.
@@ -808,7 +933,8 @@ pub fn sccp_native_ethereum_inbound_test_fixture_for_payload_v1(
     if !verify_sccp_payload_structure(&payload) {
         return Err(SccpNativeAdmissionErrorV1::InvalidPayload);
     }
-    let canonical_payload = canonical_sccp_payload_bytes(&payload);
+    let canonical_payload = canonical_sccp_payload_bytes(&payload)
+        .map_err(|_| SccpNativeAdmissionErrorV1::InvalidPayload)?;
     if canonical_payload.is_empty()
         || canonical_payload.len() > SCCP_NATIVE_ADMISSION_MAX_PAYLOAD_BYTES_V1
     {
@@ -913,22 +1039,31 @@ pub fn sccp_native_ethereum_transfer_inbound_test_fixture_v1() -> (
 
 #[cfg(any(test, feature = "test-fixtures"))]
 fn ethereum_transfer_test_payload() -> SccpPayloadV1 {
+    let recipient = iroha_data_model::account::AccountId::new(
+        iroha_crypto::KeyPair::try_from_seed(vec![0x91; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("exact native SCCP recipient fixture key")
+            .public_key()
+            .clone(),
+    )
+    .to_account_address()
+    .and_then(|address| address.to_i105_for_discriminant(crate::SCCP_TAIRA_I105_DISCRIMINANT_V1))
+    .expect("exact native SCCP recipient fixture has canonical Taira I105");
     let payload = SccpPayloadV1::Transfer(crate::TransferPayloadV1 {
         version: 1,
         source_domain: crate::SCCP_DOMAIN_ETH,
         dest_domain: crate::SCCP_DOMAIN_SORA,
         nonce: 11,
         route_revision: 1,
-        asset_home_domain: crate::SCCP_DOMAIN_ETH,
+        asset_home_domain: crate::SCCP_DOMAIN_SORA,
         asset_id_codec: crate::SCCP_CODEC_CANONICAL_TEXT,
-        asset_id: b"native-ethereum-asset".to_vec(),
-        amount: 1_000_000_000_000_000_000,
+        asset_id: crate::SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes().to_vec(),
+        amount: 1_000_000_000,
         sender_codec: crate::SCCP_CODEC_EVM_ADDRESS20,
         sender: vec![0x52; 20],
         recipient_codec: crate::SCCP_CODEC_CANONICAL_TEXT,
-        recipient: b"alice@wonderland".to_vec(),
+        recipient: recipient.into_bytes(),
         route_id_codec: crate::SCCP_CODEC_CANONICAL_TEXT,
-        route_id: b"ethereum-mainnet-to-taira".to_vec(),
+        route_id: crate::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1.as_bytes().to_vec(),
     });
     payload
 }
@@ -980,6 +1115,11 @@ mod tests {
         );
         assert_eq!(validated.source_finality.height, 17_000_000);
         assert_eq!(validated.source_finality.block_hash, [7; 32]);
+        assert!(validated.anchor_interval_height >= trust_anchor.checkpoint_height);
+        assert_ne!(
+            validated.anchor_interval_height, validated.source_finality.height,
+            "Ethereum anchor intervals use finalized beacon slots, not execution block numbers"
+        );
     }
 
     #[test]
@@ -1019,12 +1159,14 @@ mod tests {
             Ok(proof.clone())
         );
 
-        let container = bridge_native_protocol_proof_v1(&proof)
+        let route_configuration_hash = [0x91; 32];
+        let container = bridge_native_protocol_proof_v1(&proof, route_configuration_hash)
             .expect("native data-model container is canonical");
         assert_eq!(
             container.backend,
             BridgeNativeProofBackendV1::EthereumBeacon
         );
+        assert_eq!(container.route_configuration_hash, route_configuration_hash);
         assert_eq!(
             decode_bridge_native_protocol_proof_v1(&container),
             Ok(proof.clone())
@@ -1065,6 +1207,18 @@ mod tests {
         assert_eq!(
             decode_bridge_native_protocol_proof_v1(&wrong_backend),
             Err(SccpNativeAdmissionErrorV1::BackendMismatch)
+        );
+
+        assert_eq!(
+            bridge_native_protocol_proof_v1(&proof, [0; 32]),
+            Err(SccpNativeAdmissionErrorV1::HashRoleCollision)
+        );
+        let mut zero_route = wrong_backend;
+        zero_route.backend = BridgeNativeProofBackendV1::EthereumBeacon;
+        zero_route.route_configuration_hash = [0; 32];
+        assert_eq!(
+            decode_bridge_native_protocol_proof_v1(&zero_route),
+            Err(SccpNativeAdmissionErrorV1::HashRoleCollision)
         );
     }
 
@@ -1190,7 +1344,7 @@ mod tests {
         );
 
         let mut cross_sora = proof.clone();
-        cross_sora.source.lane.target = SccpNetworkV1::SoraNexus;
+        cross_sora.source.lane.source = SccpNetworkV1::SoraTaira;
         assert_eq!(
             verify_sccp_native_inbound_message_proof_v1(&cross_sora, &identity, trust_anchor),
             Err(SccpNativeAdmissionErrorV1::BackendMismatch)
@@ -1407,10 +1561,6 @@ mod tests {
                 Some(backend)
             );
         }
-        assert_eq!(
-            sccp_native_backend_for_source_network_v1(SccpNetworkV1::SoraNexus),
-            None
-        );
         assert_eq!(
             sccp_native_backend_for_source_network_v1(SccpNetworkV1::SoraTaira),
             None

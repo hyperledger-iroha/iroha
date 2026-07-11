@@ -13,11 +13,12 @@ emitted by the value-moving route after wrapped XOR is burned.
   mainnet or testnet and the fixed `taira_bsc_xor` route.
 
 The route constructor pins the token code hash, verifier address/runtime code
-hash/verifying-key hash, BSC profile and chain id, lane hashes, destination
-binding, nonzero route revision, and route-config hash. The revision is encoded
-after the Transfer nonce and prevents message-id reuse when a replacement route
-restarts its local nonce. The destination binding includes both verifier and
-route addresses, so a proof for one deployment cannot be replayed through
+hash/verifying-key hash, semantic-proof-profile hash, Taira-finality-anchor
+hash, BSC profile and chain id, lane hashes, destination binding, nonzero route
+revision, and route-config hash. The revision is encoded after the Transfer
+nonce and prevents message-id reuse when a replacement route restarts its local
+nonce. The destination binding includes both policy hashes and both verifier
+and route identities, so a proof for one deployment cannot be replayed through
 another route that shares its verifier.
 
 `transferToTaira(bytes,uint256)` constructs the complete canonical Transfer
@@ -27,6 +28,13 @@ checks the fixed asset/route/domains/address codec and lane-derived message id,
 verifies the route-bound Groth16 statement, records replay state, and mints the
 scaled wrapped amount. All checks and replay writes precede external token
 state changes, and both paths are non-reentrant.
+
+The burn recipient must be the exact discriminant-`369` `test...` I105 spelling
+of a canonical, non-weak single-key Ed25519 account. A proof-authenticated Taira
+sender may be a canonical single or multisig AccountId composed from Ed25519
+and compressed secp256k1 keys. Taira applies the same closed controller policy
+before locking funds; other valid Rust controller algorithms cannot create an
+outbound message that this immutable destination parser would reject.
 
 Governed deployment state must use fixed-width typed addresses and hashes and
 derive the destination binding and route-config hash. Clients do not supply
@@ -39,11 +47,12 @@ Before activation, independently verify:
    governed runtime code hashes.
 2. The route profile and chain id are BSC mainnet (`56`) or BSC testnet (`97`)
    as intended.
-3. Verifier key, both lane hashes, destination binding, and route-config hash
-   match the typed route revision.
+3. Verifier key, `semanticProofProfileHash`, `soraFinalityAnchorHash`, both lane
+   hashes, destination binding, and route-config hash match the typed deployment
+   and route revision.
 4. `TairaXOR.bridge()` is the route, and the token ABI/runtime exposes no
-   owner or bridge-mutation entrypoint. Precompute the route address, deploy
-   the token with it, then deploy that exact route next.
+   owner or bridge-mutation entrypoint. The route must create that token inside
+   its constructor so both contracts are deployed atomically.
 5. The Groth16 key belongs to an audited circuit proving the complete SCCP
    statement, not merely the public-signal wiring.
 6. The optimized route runtime is at most 24,576 bytes and its BLAKE2b-256

@@ -9,9 +9,9 @@ seiyaku Example {
                 break;
             }
             if i == b {
-                let poseidon_commitment = crypto::poseidon2(i, b);
+                let poseidon_commitment = crypto::poseidon2(left: i, right: b);
             } else {
-                let value_commitment = crypto::valcom(i, b);
+                let value_commitment = crypto::valcom(left: i, right: b);
             }
         }
     }

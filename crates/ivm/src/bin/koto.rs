@@ -1,13 +1,14 @@
 //! Unified Kotodama V1 developer command.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     env,
     io::{BufRead, Write},
     path::{Path, PathBuf},
 };
 
 use ivm::kotodama::{
+    builtins::{Builtin, BuiltinSurface},
     compiler::CompilerOptions,
     diagnostic::{
         Diagnostic, DiagnosticBundle, DiagnosticPhase, Severity, SourcePosition, SourceSpan,
@@ -18,6 +19,7 @@ use ivm::kotodama::{
     },
     formatter::format_source,
     lexer::{V1_KEYWORDS, V1_OPERATORS},
+    semantic::{V1_LIST_MEMBER_NAMES, V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, V1_SUM_PATHS},
     session::{CompileOutput, CompileRequest, CompilerSession},
     source::{FrontendBudget, MAX_SOURCE_BYTES, SourceFile, SourceId},
 };
@@ -72,6 +74,13 @@ const MAX_LSP_HEADERS: usize = 32;
 const MAX_LSP_URI_BYTES: usize = 8 * 1024;
 const MAX_LSP_OPEN_DOCUMENTS: usize = 256;
 const MAX_LSP_DOCUMENT_BYTES: usize = 64 * MAX_SOURCE_BYTES;
+
+// Contextual syntax and compiler intrinsics do not appear in the lexical
+// keyword or public builtin registries, but they are still source-visible V1
+// completions. Registered builtins (including receiver methods), sum paths,
+// rounding paths, types, and bounded-list members are sourced from their
+// canonical compiler tables below.
+const V1_CONTEXTUAL_COMPLETIONS: &[(&str, u64)] = &[("json", 14), ("div_round", 2)];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum DiagnosticFormat {
@@ -417,8 +426,8 @@ fn render_contract_documentation(
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
     use std::fmt::Write as _;
 
-    let contract_name = manifest.contract_name.as_deref().unwrap_or("Contract");
-    let mut output = format!("# {}\n", markdown_inline(contract_name));
+    let seiyaku_name = manifest.seiyaku_name.as_deref().unwrap_or("Seiyaku");
+    let mut output = format!("# {}\n", markdown_inline(seiyaku_name));
     if let Some(code_hash) = manifest.code_hash.as_ref() {
         let _ = writeln!(output, "\nCanonical artifact: `{code_hash}`");
     }
@@ -452,19 +461,19 @@ fn render_contract_documentation(
             return_type
         );
         let kind = match entrypoint.kind {
-            EntryPointKind::Public => "kotoage",
-            EntryPointKind::View => "view",
-            EntryPointKind::Init => "hajimari",
-            EntryPointKind::Upgrade => "kaizen",
+            EntryPointKind::Kotoage => "`kotoage`/`言挙げ`",
+            EntryPointKind::View => "`view`",
+            EntryPointKind::Hajimari => "`hajimari`/`始まり`",
+            EntryPointKind::Kaizen => "`kaizen`/`改善`",
         };
-        let _ = writeln!(output, "\nKind: `{kind}`");
+        let _ = writeln!(output, "\nKind: {kind}");
         match entrypoint.permission.as_deref() {
             Some(permission) => {
                 let _ = writeln!(output, "Authorization: `{}`", markdown_inline(permission));
             }
             None if matches!(
                 entrypoint.kind,
-                EntryPointKind::Init | EntryPointKind::Upgrade
+                EntryPointKind::Hajimari | EntryPointKind::Kaizen
             ) =>
             {
                 output.push_str("Authorization: runtime-defined lifecycle policy\n");
@@ -524,7 +533,7 @@ fn render_contract_documentation(
     if let Some(error_codes) = manifest.error_codes.as_deref()
         && !error_codes.is_empty()
     {
-        output.push_str("\n## Contract errors\n");
+        output.push_str("\n## Seiyaku errors\n");
         for error in error_codes {
             let _ = writeln!(
                 output,
@@ -585,11 +594,12 @@ fn parse_format_and_inputs(
 
 fn compile_path(session: &CompilerSession, path: &Path) -> Result<CompileOutput, DiagnosticBundle> {
     let source = read_source_file(path).map_err(|error| {
-        DiagnosticBundle::from_legacy(
-            ivm::kotodama::diagnostic::DiagnosticPhase::Lex,
-            path.to_str(),
-            format!("K0000: failed to read source: {error}"),
-        )
+        DiagnosticBundle::single(Diagnostic::error(
+            "K0000",
+            DiagnosticPhase::Lex,
+            format!("failed to read source `{}`: {error}", path.display()),
+            None,
+        ))
     })?;
     session.build(CompileRequest {
         source: &source,
@@ -602,11 +612,12 @@ fn check_path(
     path: &Path,
 ) -> Result<DiagnosticBundle, DiagnosticBundle> {
     let source = read_source_file(path).map_err(|error| {
-        DiagnosticBundle::from_legacy(
-            ivm::kotodama::diagnostic::DiagnosticPhase::Lex,
-            path.to_str(),
-            format!("K0000: failed to read source: {error}"),
-        )
+        DiagnosticBundle::single(Diagnostic::error(
+            "K0000",
+            DiagnosticPhase::Lex,
+            format!("failed to read source `{}`: {error}", path.display()),
+            None,
+        ))
     })?;
     let warnings = session.check_with_lints(CompileRequest {
         source: &source,
@@ -663,24 +674,7 @@ fn language_server() -> Result<(), String> {
         let id = message.get("id").cloned();
         match method.as_deref() {
             Some("initialize") => {
-                let result = json_object(vec![(
-                    "capabilities",
-                    json_object(vec![
-                        ("textDocumentSync", norito::json::Value::from(1_u64)),
-                        (
-                            "completionProvider",
-                            json_object(vec![(
-                                "resolveProvider",
-                                norito::json::Value::from(false),
-                            )]),
-                        ),
-                        (
-                            "documentFormattingProvider",
-                            norito::json::Value::from(true),
-                        ),
-                    ]),
-                )]);
-                write_lsp_response(&mut output, id, result)?;
+                write_lsp_response(&mut output, id, lsp_initialize_result())?;
             }
             Some("shutdown") => {
                 write_lsp_response(&mut output, id, norito::json::Value::Null)?;
@@ -748,6 +742,18 @@ fn language_server() -> Result<(), String> {
             }
             Some("textDocument/completion") => {
                 write_lsp_response(&mut output, id, lsp_completion_items())?;
+            }
+            Some("textDocument/codeAction") => {
+                let actions = message
+                    .pointer("/params/textDocument/uri")
+                    .and_then(norito::json::Value::as_str)
+                    .and_then(|uri| {
+                        documents
+                            .get(uri)
+                            .map(|source| lsp_code_action_items(&session, uri, source))
+                    })
+                    .unwrap_or_else(|| norito::json::Value::Array(Vec::new()));
+                write_lsp_response(&mut output, id, actions)?;
             }
             Some("textDocument/formatting") => {
                 let edits = message
@@ -980,11 +986,29 @@ fn publish_lsp_diagnostics(
     )
 }
 
-fn lsp_diagnostics(session: &CompilerSession, uri: &str, source: &str) -> Vec<norito::json::Value> {
+fn lsp_initialize_result() -> norito::json::Value {
+    json_object(vec![(
+        "capabilities",
+        json_object(vec![
+            ("textDocumentSync", norito::json::Value::from(1_u64)),
+            (
+                "completionProvider",
+                json_object(vec![("resolveProvider", norito::json::Value::from(false))]),
+            ),
+            (
+                "documentFormattingProvider",
+                norito::json::Value::from(true),
+            ),
+            ("codeActionProvider", norito::json::Value::from(true)),
+        ]),
+    )])
+}
+
+fn collect_lsp_diagnostics(session: &CompilerSession, uri: &str, source: &str) -> DiagnosticBundle {
     // LSP validates reusable modules as well as deployable contracts. Calling
     // `build` here would add the artifact-only K4003 error to every valid
     // module document and perform unnecessary code generation while typing.
-    let diagnostics = match session.check_with_lints(CompileRequest {
+    match session.check_with_lints(CompileRequest {
         source,
         source_name: Some(uri),
     }) {
@@ -995,59 +1019,195 @@ fn lsp_diagnostics(session: &CompilerSession, uri: &str, source: &str) -> Vec<no
                 .collect(),
         ),
         Err(bundle) => bundle,
-    };
-    diagnostics
+    }
+}
+
+fn lsp_diagnostics(session: &CompilerSession, uri: &str, source: &str) -> Vec<norito::json::Value> {
+    collect_lsp_diagnostics(session, uri, source)
         .diagnostics
-        .into_iter()
-        .map(|diagnostic| {
-            let (start_line, start_column, end_line, end_column) = diagnostic
-                .primary_span
-                .as_ref()
-                .map_or((0, 0, 0, 1), |span| {
-                    (
-                        span.start.line.saturating_sub(1) as u64,
-                        span.start.column.saturating_sub(1) as u64,
-                        span.end.line.saturating_sub(1) as u64,
-                        span.end.column.saturating_sub(1) as u64,
-                    )
-                });
-            json_object(vec![
-                (
-                    "range",
-                    json_object(vec![
-                        ("start", lsp_position(start_line, start_column)),
-                        ("end", lsp_position(end_line, end_column)),
-                    ]),
-                ),
-                ("code", norito::json::Value::from(diagnostic.code)),
-                (
-                    "severity",
-                    norito::json::Value::from(match diagnostic.severity {
-                        ivm::kotodama::diagnostic::Severity::Error => 1_u64,
-                        ivm::kotodama::diagnostic::Severity::Warning => 2_u64,
-                    }),
-                ),
-                ("source", norito::json::Value::from("kotodama")),
-                ("message", norito::json::Value::from(diagnostic.message)),
-            ])
-        })
+        .iter()
+        .map(|diagnostic| lsp_diagnostic_value(diagnostic, source))
         .collect()
 }
 
+fn lsp_diagnostic_value(diagnostic: &Diagnostic, source: &str) -> norito::json::Value {
+    let range = diagnostic.primary_span.as_ref().map_or_else(
+        || lsp_range(0, 0, 0, 1),
+        |span| lsp_source_span_range(source, span),
+    );
+    json_object(vec![
+        ("range", range),
+        ("code", norito::json::Value::from(diagnostic.code.clone())),
+        (
+            "severity",
+            norito::json::Value::from(match diagnostic.severity {
+                ivm::kotodama::diagnostic::Severity::Error => 1_u64,
+                ivm::kotodama::diagnostic::Severity::Warning => 2_u64,
+            }),
+        ),
+        ("source", norito::json::Value::from("kotodama")),
+        (
+            "message",
+            norito::json::Value::from(diagnostic.message.clone()),
+        ),
+    ])
+}
+
+fn lsp_code_action_items(
+    session: &CompilerSession,
+    uri: &str,
+    source: &str,
+) -> norito::json::Value {
+    let actions = collect_lsp_diagnostics(session, uri, source)
+        .diagnostics
+        .into_iter()
+        .filter_map(|diagnostic| {
+            let fix = diagnostic.fix.as_ref()?;
+            let byte_range = fix.span.byte_range?;
+            let start = usize::try_from(byte_range.start).ok()?;
+            let end = usize::try_from(byte_range.end).ok()?;
+            if start > end
+                || end > source.len()
+                || !source.is_char_boundary(start)
+                || !source.is_char_boundary(end)
+            {
+                return None;
+            }
+            let edit = json_object(vec![
+                ("range", lsp_text_range(source, byte_range)),
+                (
+                    "newText",
+                    norito::json::Value::from(fix.replacement.clone()),
+                ),
+            ]);
+            let changes =
+                norito::json::object([(uri.to_owned(), norito::json::Value::Array(vec![edit]))])
+                    .ok()?;
+            Some(json_object(vec![
+                (
+                    "title",
+                    norito::json::Value::from(format!(
+                        "Fix {}: {}",
+                        diagnostic.code, diagnostic.message
+                    )),
+                ),
+                ("kind", norito::json::Value::from("quickfix")),
+                ("isPreferred", norito::json::Value::from(true)),
+                (
+                    "diagnostics",
+                    norito::json::Value::Array(vec![lsp_diagnostic_value(&diagnostic, source)]),
+                ),
+                ("edit", json_object(vec![("changes", changes)])),
+            ]))
+        })
+        .collect();
+    norito::json::Value::Array(actions)
+}
+
+fn lsp_source_span_range(source: &str, span: &SourceSpan) -> norito::json::Value {
+    span.byte_range.map_or_else(
+        || {
+            lsp_range(
+                span.start.line.saturating_sub(1) as u64,
+                span.start.column.saturating_sub(1) as u64,
+                span.end.line.saturating_sub(1) as u64,
+                span.end.column.saturating_sub(1) as u64,
+            )
+        },
+        |range| lsp_text_range(source, range),
+    )
+}
+
+fn lsp_text_range(source: &str, range: ivm::kotodama::source::TextRange) -> norito::json::Value {
+    let (start_line, start_character) = lsp_offset_position(source, range.start);
+    let (end_line, end_character) = lsp_offset_position(source, range.end);
+    lsp_range(start_line, start_character, end_line, end_character)
+}
+
+fn lsp_offset_position(source: &str, offset: u32) -> (u64, u64) {
+    let offset = usize::try_from(offset)
+        .unwrap_or(source.len())
+        .min(source.len());
+    let offset = if source.is_char_boundary(offset) {
+        offset
+    } else {
+        let mut boundary = offset;
+        while !source.is_char_boundary(boundary) {
+            boundary = boundary.saturating_sub(1);
+        }
+        boundary
+    };
+    let prefix = &source[..offset];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() as u64;
+    let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
+    let character = prefix[line_start..].encode_utf16().count() as u64;
+    (line, character)
+}
+
+fn lsp_range(
+    start_line: u64,
+    start_character: u64,
+    end_line: u64,
+    end_character: u64,
+) -> norito::json::Value {
+    json_object(vec![
+        ("start", lsp_position(start_line, start_character)),
+        ("end", lsp_position(end_line, end_character)),
+    ])
+}
+
 fn lsp_completion_items() -> norito::json::Value {
-    let keywords = V1_KEYWORDS.iter().map(|keyword| {
-        json_object(vec![
-            ("label", norito::json::Value::from(*keyword)),
-            ("kind", norito::json::Value::from(14_u64)),
-        ])
-    });
-    let operators = V1_OPERATORS.iter().map(|operator| {
-        json_object(vec![
-            ("label", norito::json::Value::from(*operator)),
-            ("kind", norito::json::Value::from(24_u64)),
-        ])
-    });
-    norito::json::Value::Array(keywords.chain(operators).collect())
+    let mut labels = BTreeSet::new();
+    let mut items = Vec::new();
+    let mut push = |label: &'static str, kind: u64| {
+        if labels.insert(label) {
+            items.push(json_object(vec![
+                ("label", norito::json::Value::from(label)),
+                ("kind", norito::json::Value::from(kind)),
+            ]));
+        }
+    };
+    for &keyword in V1_KEYWORDS {
+        push(keyword, 14);
+    }
+    for &operator in V1_OPERATORS {
+        push(operator, 24);
+    }
+    for &ty in V1_SOURCE_TYPE_NAMES {
+        push(ty, 7);
+    }
+    for &path in V1_SUM_PATHS {
+        push(path, 3);
+    }
+    for &path in V1_ROUNDING_PATHS {
+        push(path, 20);
+    }
+    for &member in V1_LIST_MEMBER_NAMES {
+        push(member, 2);
+    }
+    for &(label, kind) in V1_CONTEXTUAL_COMPLETIONS {
+        push(label, kind);
+    }
+    for &builtin in Builtin::ALL {
+        let spec = builtin.spec();
+        match spec.surface {
+            BuiltinSurface::Function => push(spec.name, 3),
+            BuiltinSurface::MethodOnly => push(builtin.name(), 2),
+            BuiltinSurface::FunctionOrMethod => {
+                push(spec.name, 3);
+                // `get_numeric` is the compiler-internal lowering name. The
+                // sole V1 Amount getter spelling is `get_amount`.
+                let method_name = if builtin == Builtin::GetNumeric {
+                    "get_amount"
+                } else {
+                    builtin.name()
+                };
+                push(method_name, 2);
+            }
+            BuiltinSurface::CompilerInternal => continue,
+        }
+    }
+    norito::json::Value::Array(items)
 }
 
 fn lsp_position(line: impl Into<u64>, character: impl Into<u64>) -> norito::json::Value {
@@ -1127,11 +1287,11 @@ mod tests {
         for expected in [
             "# Vault",
             "### `deposit(amount: i64)`",
-            "Kind: `kotoage`",
+            "Kind: `kotoage`/`言挙げ`",
             "Authorization: `CanDeposit`",
             "## Durable state",
             "`balance`: `i64`",
-            "## Contract errors",
+            "## Seiyaku errors",
             "`VaultError::Empty` = `7`",
         ] {
             assert!(
@@ -1178,6 +1338,34 @@ mod tests {
         assert_eq!(format, DiagnosticFormat::Sarif);
         assert!(zk_enabled);
         assert_eq!(inputs, vec![PathBuf::from("proof.ko")]);
+    }
+
+    #[test]
+    fn unreadable_sources_emit_native_structured_diagnostics() {
+        let missing = std::env::temp_dir().join(format!(
+            "koto-missing-source-{}-{}.ko",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        let session = CompilerSession::default();
+
+        for diagnostics in [
+            compile_path(&session, &missing).expect_err("missing build source"),
+            check_path(&session, &missing).expect_err("missing check source"),
+        ] {
+            let diagnostic = diagnostics
+                .diagnostics
+                .first()
+                .expect("one read diagnostic");
+            assert_eq!(diagnostic.code, "K0000");
+            assert_eq!(diagnostic.phase, DiagnosticPhase::Lex);
+            assert!(diagnostic.primary_span.is_none());
+            assert!(diagnostic.message.contains(&missing.display().to_string()));
+            assert!(!diagnostic.message.starts_with("K0000:"));
+        }
     }
 
     #[test]
@@ -1329,6 +1517,12 @@ mod tests {
             message.get("method").and_then(norito::json::Value::as_str),
             Some("initialize")
         );
+        assert_eq!(
+            lsp_initialize_result()
+                .pointer("/capabilities/codeActionProvider")
+                .and_then(norito::json::Value::as_bool),
+            Some(true),
+        );
 
         let completions = lsp_completion_items();
         let labels = completions
@@ -1337,6 +1531,15 @@ mod tests {
             .iter()
             .filter_map(|item| item.get("label").and_then(norito::json::Value::as_str))
             .collect::<Vec<_>>();
+        let completion_kind = |label: &str| {
+            completions
+                .as_array()
+                .expect("completion array")
+                .iter()
+                .find(|item| item.get("label").and_then(norito::json::Value::as_str) == Some(label))
+                .and_then(|item| item.get("kind"))
+                .and_then(norito::json::Value::as_u64)
+        };
         assert!(labels.contains(&"seiyaku"));
         assert!(labels.contains(&"kotoage"));
         assert!(labels.contains(&"hajimari"));
@@ -1346,9 +1549,172 @@ mod tests {
         assert!(labels.contains(&"始まり"));
         assert!(labels.contains(&"改善"));
         assert!(labels.contains(&"&&"));
-        for retired in ["contract", "entry", "init", "upgrade"] {
+        assert_eq!(completion_kind("json"), Some(14));
+        assert_eq!(completion_kind("div_round"), Some(2));
+        for current in V1_SUM_PATHS
+            .iter()
+            .chain(V1_ROUNDING_PATHS)
+            .chain(V1_LIST_MEMBER_NAMES)
+            .chain(V1_CONTEXTUAL_COMPLETIONS.iter().map(|(label, _)| label))
+        {
+            assert!(
+                labels.contains(current),
+                "missing canonical V1 completion `{current}`"
+            );
+        }
+        for current in [
+            "json",
+            "Amount",
+            "List",
+            "AccountView",
+            "AssetDefinitionView",
+            "QueryPage",
+            "Option::some",
+            "Result::err",
+            "Rounding::nearest_even",
+            "div_round",
+            "try_push",
+            "enumerate",
+            "get_int",
+            "get_amount",
+            "get_json",
+            "get_name",
+            "get_account_id",
+            "get_asset_definition_id",
+            "get_nft_id",
+            "get_blob_hex",
+            "ledger::query::account",
+            "ledger::query::asset",
+            "ledger::query::asset_definition",
+            "ledger::query::domain",
+            "ledger::query::nft",
+            "ledger::query::accounts",
+            "ledger::query::assets",
+            "ledger::query::asset_definitions",
+            "ledger::query::domains",
+            "ledger::query::nfts",
+        ] {
+            assert!(
+                labels.contains(&current),
+                "missing V1 completion `{current}`"
+            );
+        }
+        assert_eq!(
+            labels.iter().copied().collect::<BTreeSet<_>>().len(),
+            labels.len(),
+            "completion labels must be stable and duplicate-free",
+        );
+        for retired in [
+            "contract",
+            "entry",
+            "init",
+            "upgrade",
+            "json!",
+            "option::some",
+            "option::none",
+            "result::ok",
+            "result::err",
+            "get_numeric",
+            "json_get_int",
+            "json_get_numeric",
+        ] {
             assert!(!labels.contains(&retired));
         }
+    }
+
+    #[test]
+    fn lsp_quick_fixes_are_exact_current_document_workspace_edits() {
+        let session = CompilerSession::default();
+        let uri = "file:///workspace/fixes.ko";
+
+        let mixed =
+            "seiyaku C { fn target(first: i64, second: i64) {} fn f() { target(1, second: 2); } }";
+        let mixed_actions = lsp_code_action_items(&session, uri, mixed);
+        let mixed_action = mixed_actions
+            .as_array()
+            .expect("code action array")
+            .iter()
+            .find(|action| {
+                action
+                    .pointer("/diagnostics/0/code")
+                    .and_then(norito::json::Value::as_str)
+                    == Some("E_MIXED_CALL_ARGUMENTS")
+            })
+            .expect("mixed-call quick fix");
+        assert_eq!(
+            mixed_action
+                .pointer("/kind")
+                .and_then(norito::json::Value::as_str),
+            Some("quickfix")
+        );
+        let mixed_edit = mixed_action
+            .pointer("/edit/changes")
+            .and_then(|changes| changes.get(uri))
+            .and_then(norito::json::Value::as_array)
+            .and_then(|edits| edits.first())
+            .expect("mixed-call workspace edit");
+        assert_eq!(
+            mixed_edit
+                .get("newText")
+                .and_then(norito::json::Value::as_str),
+            Some("first: 1")
+        );
+        let start = mixed_edit
+            .pointer("/range/start/character")
+            .and_then(norito::json::Value::as_u64)
+            .expect("mixed edit start") as usize;
+        let end = mixed_edit
+            .pointer("/range/end/character")
+            .and_then(norito::json::Value::as_u64)
+            .expect("mixed edit end") as usize;
+        assert_eq!(&mixed[start..end], "1");
+
+        let unresolved = "seiyaku C { fn f() { target(1, second: 2); } }";
+        let unresolved_diagnostics = collect_lsp_diagnostics(&session, uri, unresolved);
+        assert!(unresolved_diagnostics.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E_MIXED_CALL_ARGUMENTS" && diagnostic.fix.is_none()
+        }));
+        let unresolved_actions = lsp_code_action_items(&session, uri, unresolved);
+        assert!(
+            unresolved_actions
+                .as_array()
+                .expect("code action array")
+                .iter()
+                .all(|action| {
+                    action
+                        .pointer("/diagnostics/0/code")
+                        .and_then(norito::json::Value::as_str)
+                        != Some("E_MIXED_CALL_ARGUMENTS")
+                }),
+            "an unresolved call must not receive a guessed parameter-name edit"
+        );
+
+        let positional =
+            "seiyaku C { struct Pair { left: i64, right: i64 } fn f() { let pair = Pair(1, 2); } }";
+        let positional_actions = lsp_code_action_items(&session, uri, positional);
+        let positional_action = positional_actions
+            .as_array()
+            .expect("code action array")
+            .iter()
+            .find(|action| {
+                action
+                    .pointer("/diagnostics/0/code")
+                    .and_then(norito::json::Value::as_str)
+                    == Some("E_POSITIONAL_STRUCT")
+            })
+            .expect("positional-struct quick fix");
+        let positional_edit = positional_action
+            .pointer("/edit/changes")
+            .and_then(|changes| changes.get(uri))
+            .and_then(norito::json::Value::as_array)
+            .and_then(|edits| edits.first())
+            .expect("positional-struct workspace edit");
+        assert_eq!(
+            positional_edit
+                .get("newText")
+                .and_then(norito::json::Value::as_str),
+            Some("Pair { left: 1, right: 2, }")
+        );
     }
 
     #[test]

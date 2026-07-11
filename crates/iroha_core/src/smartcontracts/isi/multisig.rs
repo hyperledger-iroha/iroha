@@ -5876,11 +5876,11 @@ mod tests {
             r#"
 seiyaku TriggerDispatch {
   kotoage fn main() authorize("Admin") {
-    ledger::account::set_detail(context::authority(), Name::parse("entrypoint"), Json::parse("1"));
+    ledger::account::set_detail(account: context::authority(), key: Name::parse("entrypoint"), value: Json::parse("1"));
   }
 
   kotoage fn alternate() authorize("Admin") {
-    ledger::account::set_detail(context::authority(), Name::parse("entrypoint"), Json::parse("2"));
+    ledger::account::set_detail(account: context::authority(), key: Name::parse("entrypoint"), value: Json::parse("2"));
   }
 }
 "#,
@@ -6097,20 +6097,20 @@ seiyaku TriggerDispatch {
               state CreatedAtMs: StateMap<Name, i64>;
               state ExpiresAtMs: StateMap<Name, i64>;
 
-              fn run_impl(ev: Json) {{
-                let request_id = ev.get_name(Name::parse("request_id"));
+              fn run_impl(ev: Json) -> Option<bool> {{
+                let request_id = ev.get_name(Name::parse("request_id"))?;
                 assert(!ProposalStatus.contains(request_id), "mint request already exists");
-                let action = ev.get_name(Name::parse("action"));
+                let action = ev.get_name(Name::parse("action"))?;
                 assert(action == Name::parse("create"), "unsupported staged mint action");
-                let asset_id = ev.get_asset_definition_id(Name::parse("asset_id"));
+                let asset_id = ev.get_asset_definition_id(Name::parse("asset_id"))?;
                 let expected_asset = AssetDefinitionId::parse("66owaQmAQMuHxPzxUN3bqZ6FJfDa");
                 assert(asset_id == expected_asset, "unsupported asset definition");
-                let to_account_id = ev.get_account_id(Name::parse("to_account_id"));
+                let to_account_id = ev.get_account_id(Name::parse("to_account_id"))?;
                 assert(to_account_id == context::authority(), "mint destination account mismatch");
-                let amount_i64 = ev.get_int(Name::parse("amount_i64"));
-                let requested_by_actor = ev.get_blob_hex(Name::parse("requested_by_actor_hex"));
-                let created_at_ms = ev.get_int(Name::parse("created_at_ms"));
-                let expires_at_ms = ev.get_int(Name::parse("expires_at_ms"));
+                let amount_i64 = ev.get_int(Name::parse("amount_i64"))?;
+                let requested_by_actor = ev.get_blob_hex(Name::parse("requested_by_actor_hex"))?;
+                let created_at_ms = ev.get_int(Name::parse("created_at_ms"))?;
+                let expires_at_ms = ev.get_int(Name::parse("expires_at_ms"))?;
                 assert(amount_i64 > 0, "invalid amount");
 
                 Requests_requested_by_actor[request_id] = requested_by_actor;
@@ -6119,10 +6119,11 @@ seiyaku TriggerDispatch {
                 ProposalStatus[request_id] = 1;
                 CreatedAtMs[request_id] = created_at_ms;
                 ExpiresAtMs[request_id] = expires_at_ms;
+                Option::some(true)
               }}
 
               kotoage fn run(ev: Json) authorize("staged_mint_request_run") {{
-                run_impl(ev);
+                assert(run_impl(ev).is_some(), "missing or invalid staged mint field");
               }}
             }}
             "#,

@@ -2,59 +2,95 @@
 lang: dz
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
-source_last_modified: "2025-12-29T18:16:35.921274+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: 465d8cf704022986b169ab93133517428f8cf2ffe01a498cbda458f4a5b2e69b
+source_last_modified: "2026-07-11"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# ཟམ་པའི་བདེན་དཔང་།
+> ཤོག་ལེབ་འདི་ བསྡུས་པའི་སྐད་བསྒྱུར་བཅུད་དོན་ཙམ་ཨིནམ་ལས་
+> ཆ་ཚང་གི་སྐད་བསྒྱུར་མེན། བཅའ་ཁྲིམས་ API དང་ བདེན་དཔང་གི་དོན་དག་
+> དེ་ལས་གསར་བཏོན་གྱི་དགོས་མཁོ་ཚུ་གི་དོན་ལུ་
+> [ཨིང་སྐད་ཀྱི་གཞི་རྟེན་ཤོག་ལེབ](bridge_proofs.md) ལག་ལེན་འཐབ།
 
-ཟམ་གྱི་བདེན་དཔང་ཕུལ་མི་ཚུ་གིས་ གནས་ཚད་ཅན་གྱི་སློབ་སྟོན་ལམ་ལུགས་ (`SubmitBridgeProof`) དང་ བདེན་ཁུངས་ཐོ་བཀོད་ནང་ བདེན་དཔྱད་འབད་ཡོད་པའི་གནས་རིམ་ཐོག་ལས་ འགྱོཝ་ཨིན། ད་ལྟོའི་ཁ་ཐོག་འདི་གིས་ ICS-style Merkle གི་བདེན་ཁུངས་དང་ དྭངས་གསལ་-ZK གི་དངུལ་ཕོགས་ཚུ་ བཀག་བཞག་ནི་དང་ མངོན་གསལ་གྱི་བསྡམ་བཞག་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན།
+# SCCP V1 ཟམ་པའི་བདེན་དཔང་ — བཅུད་དོན།
 
-## ངོས་ལེན་ལམ་ལུགས་ཀྱི་ལམ་ལུགས།
+## གསར་བཏོན་དང་པའི་ཚད།
 
-- ཁྱབ་ཚད་ཚུ་ བཀོད་སྒྲིག་འབད་/སྟོངམ་དང་ སྟོངམ་དང་ བརྩི་མཐོང་ `zk.bridge_proof_max_range_len` (༠ ལྕོགས་མིན་བཟོཝ་ཨིན།)
-- གདམ་ཁའི་མཐོ་ཚད་སྒོ་སྒྲིག་ཚུ་གིས་ ཕྲང་ཏང་ཏ་/མ་འོངས་པའི་བདེན་ཁུངས་ཚུ་ ངོས་ལེན་མ་འབད་བར་: `zk.bridge_proof_max_past_age_blocks` དང་ `zk.bridge_proof_max_future_drift_blocks` ཚུ་ བདེན་དཔང་འབད་མི་ སྡེབ་ཚན་གྱི་མཐོ་ཚད་ལུ་ འཇལ་ཚད་ (༠ སྲུང་སྐྱོབ་ཚུ་ ལྕོགས་མིན་བཟོཝ་ཨིན།)
-- ཟམ་གྱི་བདེན་ཁུངས་ཚུ་གིས་ རྒྱབ་ཐག་གཅིག་པའི་དོན་ལུ་ ད་ལྟོ་ཡོད་པའི་བདེན་ཁུངས་ཅིག་ གཅིག་ལུ་གཅིག་བརྩེགས་མི་འབད་ ༼པིན་འབད་ཡོད་པའི་བདེན་ཁུངས་ཚུ་ ཉམས་སྲུང་འབད་དེ་ བཀག་ཆ་ཚུ་ གཅིག་ཁར་བསྡོམས་ཏེ་ཡོདཔ་ཨིན།༽
-- མ་ཕེསཊ་ཧ་ཤེ་སི་ ཀླད་ཀོར་མེན་དགོ། པེ་ལོཌ་ཚུ་ `zk.max_proof_size_bytes` གིས་ ཚད་བཟུང་ཡོདཔ་ཨིན།
-- ICS གིས་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ Merkle གཏིང་ཚད་ཀྱི་ མགུ་ཏོག་ལུ་གུས་ཞབས་འབད་ཞིནམ་ལས་ གསལ་བསྒྲགས་འབད་ཡོད་པའི་ཧེ་ཤི་ལས་འགན་ལག་ལེན་འཐབ་ཐོག་ལས་ འགྲུལ་ལམ་བདེན་དཔྱད་འབདཝ་ཨིན། དྭངས་གསལ་ཅན་གྱི་གླ་ཆ་ཚུ་གིས་ སྟོངམ་མེན་པའི་རྒྱབ་ཐག་ཁ་ཡིག་ཅིག་ གསལ་བསྒྲགས་འབད་དགོ།
-- པིན་ནའིན་གྱི་བདེན་ཁུངས་ཚུ་ བཀག་འཛིན་གྱི་ གཤག་བཅོས་ལས་ དགོངས་ཞུ་འབད་ཡོདཔ་ཨིན། unpinned བདེན་དཔང་ཚུ་གིས་ ད་ལྟོ་ཡང་ འཛམ་གླིང་ཡོངས་ཁྱབ་ཀྱི་ `zk.proof_history_cap`/grace/batch སྒྲིག་སྟངས་ཚུ་ལུ་ གུས་ཞབས་འབདཝ་ཨིན།
+SCCP V1 འདི་ གསར་བཏོན་དང་པའི་དོན་ལུ་ཁ་བསྡམས་པའི་ལམ་ལུགས་ཨིན།
+ཕྱིའི་འབྱུང་ཁུངས་ `ethereum-mainnet`, `bsc-mainnet` དང་
+`tron-mainnet` རྐྱངམ་ཅིག་ལུ་རྒྱབ་སྐྱོར་ཡོད། SORA གི་འགྲོ་ཡུལ་གཅིག་པུ་
+`sora-taira` ཨིན། Solana, TON, སྒེར་གྱི་ཡོངས་འབྲེལ་ ཡང་ན་ SORA
+གི་འགྲོ་ཡུལ་གཞན་ཚུ་ལུ་རྒྱབ་སྐྱོར་མེདཔ་ལས་ ཉེན་སྲུང་ཐོག་ལས་ངོས་ལེན་མི་འབད།
 
-## Torii API ངོས་འཛིན།
+གསར་བཏོན་འདི་ནང་ `SubmitBridgeProof` གིས་ དབྱེ་བ་ཅན་གྱི
+`NativeProtocol` དང་ `SccpDestination` བདེན་དཔང་རྐྱངམ་ཅིག་ལེནམ་ཨིན།
+སྤྱིར་བཏང་ `Ics` དང་ `TransparentZk` ཕུལ་ནི་མེདཔ་ལས་
+དབང་ཚད་ཅན་གྱི on-chain verifier མ་འཐོབ་ཚུན་ཚོད་ངོས་ལེན་མི་འབད།
 
-- `GET /v1/zk/proofs` དང་ `GET /v1/zk/proofs/count` དང་ལེན་གྱི་ངོས་ལེན་ཅན་གྱི་ཟམ་པའི་ཚགས་མ་ཚུ།
-  - `bridge_only=true` གིས་ ཟམ་གྱི་བདེན་ཁུངས་ཚུ་རྐྱངམ་ཅིག་སླར་ལོག་འབདཝ་ཨིན།
-  - `bridge_pinned_only=true` གིས་ ཟམ་གྱི་བདེན་དཔྱད་ཚུ་ལུ་ རྒྱ་ཆུང་ཀུ་བཟོཝ་ཨིན།
-  - `bridge_start_from_height` / `bridge_end_until_height` ཟམ་གྱི་ཁྱབ་ཚད་སྒོ་སྒྲིག་འདི་བཀག་བཞགཔ་ཨིན།
-- `GET /v1/zk/proof/{backend}/{hash}` གིས་ ཟམ་གྱི་མེ་ཊ་ཌེ་ཊ་ (ཁྱབ་ཚད་, གསལ་སྟོན་ཧེཤ་, པེ་ལོཌི་བཅུད་བསྡུས་) སླར་ལོག་འབདཝ་ཨིན།
-- Norito ཆ་ཚང་བདེན་པའི་དྲན་ཐོ་ (པེ་ལོཌ་བཱའིཊིསི་ཚུ་རྩིས་ཏེ་) ཆ་ཚང་འདི་ `GET /v1/proofs/{proof_id}` བརྒྱུད་དེ་ མཐུད་ལམ་མེད་པའི་བདེན་བཤད་ཚུ་གི་དོན་ལུ་ འཐོབ་ཚུགས།
+## དབྱེ་བ་ཅན་གྱི་ཐོ་དེབ་དང་ replay ཉེན་སྲུང་།
 
-## ཟམ་པའི་དངུལ་འབབ་ཀྱི་བྱུང་བ།
+`SccpRegistryV1` འདི་ lane ལུ་བསྡམས་པའི་ དབྱེ་བ་ཅན་དང་
+ཁ་སྐོང་རྐྱངམ་ཅིག་འབད་བཏུབ་པའི་ (append-only) ཐོ་དེབ་ཨིན།
+lane རེ་རེ་ནང་ route revision 64 དང་ native trust anchor 4,096 ཚུན་ཚོད་
+བཞག་ཚུགས། ལོ་རྒྱུས་ཀྱི་ཐོ་ཚུ་རང་བཞིན་གྱིས་མི་བཏོན། ཚད་ལུ་ལྷོདཔ་ད་
+ཁ་སྐོང་ཤུལ་མམ་འདི་ state མ་བསྒྱུར་བར་ངོས་ལེན་མི་འབད།
 
-ཟམ་གྱི་ལམ་ཚུ་ བཏོན་གཏང་ནི་ `RecordBridgeReceipt` བཀོད་རྒྱ་བརྒྱུད་དེ་ ཡིག་དཔར་རྐྱབས་ཡོདཔ་ཨིན། བཀོད་རྒྱ་འདི་ལག་ལེན་འཐབ་དོ།
-`BridgeReceipt` གིས་ བྱུང་རིམ་གུ་ `DataEvent::Bridge(BridgeEvent::Emitted)` ཅིག་བཟོཝ་ཨིན།
-རྒྱུན་སྤེལ་, སྔ་གོང་ནང་བསྐྱོད་རྐྱངམ་ཅིག་གི་ སྲབ་ཐག་འདི་ བསྐྱར་ལོག་འབད་དོ། CLI `iroha bridge emit-receipt` གྲོགས་རམ་འབད་མི་གིས་ ཕུལ་ཡོདཔ་ཨིན།
-དེ་འབདཝ་ལས་ ཟུར་ཐོར་ཚུ་གིས་ འོང་འབབ་ཚུ་ བཟའ་སྤྱོད་འབད་བཏུབ་པའི་ བཀོད་རྒྱ་ཡིག་དཔར་རྐྱབས།
+Anchor interval འདི་ authentication ཡོད་པའི consensus ཡར་རྒྱས་ཀྱི་
+coordinate གིས་ཚད་འཇལཝ་ཨིན། Ethereum གིས་ finalized beacon slot དང་
+BSC/TRON གིས་ finalized native block height ལག་ལེན་འཐབ། Anchor རྙིངམ་
+འདི་ successor checkpoint ཚུད་དེ་ནུས་ཅན་ཨིན། Anchor མཐའ་མམ་འདི་
+མཇུག་ཁ་ཕྱེ་སྟེ་ཡོད། Terminal route གི finality cutoff འདི་ ལོ་རྒྱུས་ཀྱི་
+anchor གི successor checkpoint དང་ཏག་ཏག་འདྲ་དགོ།
 
-## ཕྱི་ཕྱོགས་བདེན་དཔྱད་ཀྱི་རི་མོ་ (ICS)
+རྒྱུན་བརྟན་ inbound ཐོ་གིས་ event/source finality height དང་
+`anchor_interval_height` གཉིས་ཆ་ར་བཞགཔ་ཨིན། lane དང་ anchor hash གིས་
+ལྡེ་མིག་བཟོ་བའི high-water index གིས་ ཧེ་མ་ངོས་ལེན་འབད་མི་ coordinate
+ལས་དམའ་བའི successor checkpoint གདམ་ཁ་རྐྱབ་མི་བཅུག། Snapshot hydration
+གིས་ index འདི་རྒྱུན་བརྟན་ཐོ་ལས་ལོག་རྩིས་བཏོན་ཏེ་ ཏག་ཏག་འདྲ་དགོ།
+མེད་པ་ རྙིངམ་ མེདཔ་བཏང་མི་ ཡང་ན་རྒྱབ་རྟེན་མེད་པའི index ངོས་ལེན་མི་འབད།
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
+## ཐེངས་གཅིག་གི་བདེན་དཔྱད་དང་ ལཱ་གི་ཚད།
 
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+Destination དང་ native བདེན་དཔང་ཚུ་ ཐེངས་གཅིག་བཀྲལ་ ཐེངས་གཅིག་བསྡམས་
+ཞིནམ་ལས་ གསང་རྩིས་ཀྱི་ལཱ་གོང་ཆེན་མ་འབད་བའི་ཧེ་མ་ deterministic work
+reserve འབདཝ་ཨིན། Destination ལམ་གྱིས་ BN254 pairing-product དང་
+ས་གནས་ཀྱི BLS finality ཐེངས་གཅིག་རེ་བདེན་དཔྱད་འབད། Native ལམ་ཚུ་གིས་
+canonical shortest-prefix དགོ། BSC ལུ header 1,004 དང་ TRON ལུ 54 གི་ཚད་ཨིན།
+
+`[zk.sccp]` གིས་ proof count/bytes, native headers/bytes, Ethereum light-client
+updates, secp256k1 recoveries, BLS aggregate checks/key contributions དང་ BN254
+pairing checks ཚུ་ལུ་ transaction དང་ block རེ་ལུ་ཀླད་ཀོར་མེན་པའི་ཚད་བཀལཝ་ཨིན།
+ངོས་ལེན་གྱི་ཚད་ཚུ་ consensus-bound ཨིནམ་ལས་ validator ཆ་མཉམ་གྱི་
+config file ནང་གནས་གོང་གཅིག་པ་དགོ། Environment-variable override མེད།
+
+གསར་བཏོན་དང་པའི་སྔོན་སྒྲིག་ཚད་ཚུ།
+
+| ལཱ་གི་ཚད | Transaction | Block |
+|---|---:|---:|
+| proofs | 1 | 4 |
+| canonical proof bytes | 8 MiB | 32 MiB |
+| BSC/TRON continuation headers | 1,004 | 4,016 |
+| Ethereum light-client updates | 128 | 512 |
+| framed native-finality bytes | 8 MiB | 32 MiB |
+| secp256k1 recoveries | 1,005 | 4,020 |
+| BLS aggregate checks | 1,004 | 4,016 |
+| BLS key/contribution work items | 131,713 | 526,852 |
+| BN254 pairing-product checks | 1 | 4 |
+
+Proof གཅིག་ནང་ canonical bytes 8 MiB ལས་མང་མི་ཆོག། བཀོག་བཞག་པ་
+ཡང་ན་ངོས་ལེན་མ་འབད་བའི transaction གི་ reserved work འདི་ block ནང་མི་འཛུལ།
+
+## Torii དང་ HTTP ཚད།
+
+Torii གིས་ SCCP endpoint རེ་ལུ་ JSON body གི་ཚད་སོ་སོ་བཀལཝ་ཨིན།
+ཚད་འདི་ body མ་ལྷག་པ་ memory མ་བགོ་བ་ དེ་ལས་གསང་རྩིས་བདེན་དཔྱད་མ་འབད་བའི་ཧེ་མ་བཀལཝ་ཨིན།
+ཚད་ལས་བརྒལ་བའི `Content-Length` ཡང་ན་ chunked body འདི་ HTTP `413` གིས་ངོས་ལེན་མི་འབད།
+Client གིས་ decoded HTTP response ཡང་ཚད་ཅན་གྱི་ནང་ལྷགཔ་ཨིནམ་ལས་
+`Content-Length` མེད་པ་ཡང་ན་རྫུན་མ་གིས་ཚད་བརྒལ་མི་ཚུགས།
+
+JSON, base64 དང་ Norito ཨིན་པུཊ་ཚུ་ canonical དགོ། Unknown fields,
+duplicate keys, network/route/anchor མ་མཐུན་པ་ replay ལཱ་གི་ཚད་བརྒལ་བ་
+ཡང་ན་བདེན་དཔྱད་མ་འགྲུབ་པ་ཚུ་ state ཆ་ཤས་ཅིག་ཡང་མ་བསྒྱུར་བར་ངོས་ལེན་མི་འབད།

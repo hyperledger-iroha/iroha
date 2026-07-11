@@ -1,4 +1,4 @@
-// Durable StateMap set and get wrapped in a contract.
+// Durable StateMap set and get wrapped in a seiyaku.
 seiyaku MapOps {
     state values: StateMap<i64, i64>;
     kotoage fn map_example() -> i64 authorize("Entry") {

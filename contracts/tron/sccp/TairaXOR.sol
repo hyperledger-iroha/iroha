@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity ^0.7.4;
+pragma solidity 0.8.24;
 
 /**
  * @title TairaXOR
@@ -28,6 +28,7 @@ contract TairaXOR {
 
     constructor(address routeBridge) {
         require(routeBridge != address(0), "Bridge address is required");
+        require(msg.sender == routeBridge, "Bridge must create token");
         bridge = routeBridge;
     }
 

@@ -17,8 +17,10 @@ from sccp_release_common import (
     readiness_summary,
     sha256_hex,
     verify_evidence_artifacts,
+    verify_production_semantic_artifacts,
     verify_rust_lane_evidence,
     verify_rust_release_signatures,
+    verify_rust_semantic_proofs,
 )
 
 
@@ -55,7 +57,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         trust_policy, trust_policy_bytes = load_trust_policy(args.trust_policy)
         evidence, evidence_bytes = load_evidence_file(args.evidence, trust_policy)
-        verify_rust_release_signatures(
+        artifact_root = args.artifact_root or args.evidence.parent
+        artifacts = verify_evidence_artifacts(evidence, artifact_root)
+        semantic_records = verify_production_semantic_artifacts(
+            evidence, artifacts, trust_policy
+        )
+        _, signature_validator_hash = verify_rust_release_signatures(
             trust_policy_path=args.trust_policy,
             trust_policy=trust_policy,
             trust_policy_bytes=trust_policy_bytes,
@@ -65,8 +72,18 @@ def main(argv: list[str] | None = None) -> int:
             validator_path=args.rust_validator,
             environment="production",
         )
-        artifact_root = args.artifact_root or args.evidence.parent
-        verify_evidence_artifacts(evidence, artifact_root)
+        verify_rust_semantic_proofs(
+            evidence=evidence,
+            evidence_bytes=evidence_bytes,
+            artifact_root=artifact_root,
+            semantic_records=semantic_records,
+            trust_policy=trust_policy,
+            trust_policy_bytes=trust_policy_bytes,
+            trust_policy_path=args.trust_policy,
+            evidence_path=args.evidence,
+            validator_path=args.rust_validator,
+            expected_executable_hash=signature_validator_hash,
+        )
         receipts, executable_hash = verify_rust_lane_evidence(
             evidence,
             artifact_root,

@@ -27,6 +27,15 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn unwrap_some_word(vm: &IVM) -> u64 {
+    let layout = ivm::sum::SumLayoutV1::option(1).expect("Option layout");
+    let (is_some, words) =
+        ivm::sum::read_words(vm, vm.register(10), layout).expect("read typed JSON getter Option");
+    assert!(is_some, "typed JSON getter must return Option::some");
+    assert_eq!(words.len(), 1);
+    words[0]
+}
+
 fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     let buf = norito::to_bytes(&amount.into()).expect("encode numeric into Norito");
     make_tlv(PointerType::NoritoBytes as u16, &buf)
@@ -199,7 +208,7 @@ fn test_mint_syscall_permission() {
 }
 
 #[test]
-fn test_json_get_numeric_reads_decimal_strings() {
+fn test_json_get_amount_reads_decimal_strings() {
     let domain: DomainId =
         iroha_data_model::DomainId::try_new("domain", "universal").expect("domain");
     let public_key: PublicKey =
@@ -228,15 +237,15 @@ fn test_json_get_numeric_reads_decimal_strings() {
 
     vm.set_register(10, json_ptr);
     vm.set_register(11, key_ptr);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_NUMERIC as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_AMOUNT as u8]);
     vm.load_program(&prog).unwrap();
-    vm.run().expect("json_get_numeric syscall failed");
+    vm.run().expect("json_get_amount syscall failed");
 
     let tlv = vm
         .memory
-        .validate_tlv(vm.register(10))
-        .expect("numeric tlv");
-    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode numeric");
-    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
+        .validate_tlv(unwrap_some_word(&vm))
+        .expect("Amount tlv");
+    assert_eq!(tlv.type_id, PointerType::Amount);
+    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode Amount");
+    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse Amount"));
 }

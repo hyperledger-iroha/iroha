@@ -163,7 +163,14 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   - `connect_timeout_ms` / `request_timeout_ms` (defaults: 500 / 1500): HTTP timeouts for the verifier; zero collapses to the default.
   - `missing_assessment_grace_secs` (default: 0): deterministic fallback window; non-zero values allow temporary pass-through while emitting a warning.
   - `required_minimum_band` (default: `null`): required severity band (`low`, `medium`, `high`, or `critical`). Transactions missing the band or below the threshold are rejected when `enabled` is true.
-- `[zk]`: Zero-knowledge verification settings (backend, curve, budgets). Not consensus-critical; guardrails enforced.
+- `[zk]`: Zero-knowledge and SCCP verification settings. Worker counts, queue sizes, and timing
+  knobs are operator-local; acceptance limits are consensus-critical and are committed into the
+  block ZK/SCCP policy digest, so every validator must use the same file-backed values.
+  - `[zk.sccp]`: mandatory non-zero per-proof, per-transaction, and per-block limits for closed
+    SCCP proof bytes, proof count, native headers, Ethereum light-client updates, native header
+    bytes, secp256k1 recoveries, BLS aggregate checks/key contributions, and BN254 pairing-product
+    checks. Transaction limits may not exceed block limits, and the per-proof byte limit may not
+    exceed the transaction byte limit. These fields deliberately have no environment aliases.
   - `halo2.verifier_worker_threads` / `halo2.verifier_queue_cap` (defaults: `0` / `0`): size the ZK lane verifier worker pool and ingress queue. Zero keeps auto-derivation (`available_parallelism`, queue headroom scaled by workers).
   - `halo2.verifier_enqueue_wait_ms` (default: `25`): bounded enqueue wait used before classifying a saturated admission as timeout.
   - `halo2.verifier_retry_ring_cap` / `halo2.verifier_retry_max_attempts` / `halo2.verifier_retry_tick_ms` (defaults: `2048` / `3` / `5`): in-memory replay policy for important ZK lane tasks (`tx_hash` present). Saturated important tasks enter the retry ring and are replayed opportunistically; exhausted entries increment `iroha_zk_lane_retry_exhausted_total`.

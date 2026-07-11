@@ -2,10 +2,14 @@
 
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
+#[path = "../kotodama_amounts.rs"]
+mod kotodama_amounts;
 #[path = "../kotodama_argument_record.rs"]
 mod kotodama_argument_record;
 #[path = "../kotodama_checked_arithmetic.rs"]
 mod kotodama_checked_arithmetic;
+#[path = "../kotodama_lists.rs"]
+mod kotodama_lists;
 #[path = "../kotodama_state_map_lowering.rs"]
 mod kotodama_state_map_lowering;
 #[path = "../kotodama_state_map_pointer.rs"]

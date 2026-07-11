@@ -13,7 +13,9 @@ use iroha_data_model::{
     isi::smart_contract_code::{
         ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
     },
-    smart_contract::manifest::ContractManifest,
+    name::Name,
+    prelude::ValidationFail,
+    smart_contract::manifest::{ContractManifest, EntryPointKind},
     smart_contract::{ContractAddress, ContractAlias},
 };
 use mv::storage::StorageReadOnly;
@@ -38,6 +40,303 @@ pub enum RegistryError {
     InvalidCode(String),
 }
 
+/// Reserved physical durable-state namespace for consensus-managed contract lifecycle markers.
+///
+/// Raw IVM state syscalls reject this namespace and deployed contracts are always scoped below
+/// `sc/<contract-address-digest>/`, so only the runtime can create or consume these records.
+pub(crate) const CONTRACT_LIFECYCLE_STATE_PREFIX: &str = "lc";
+
+const CONTRACT_LIFECYCLE_RECORD_MAGIC: [u8; 4] = *b"KLC1";
+
+/// Consensus-bound lifecycle transition awaiting its branded hook.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::codec::Decode, norito::codec::Encode)]
+pub(crate) enum PendingContractLifecycle {
+    /// A newly activated instance must execute its `hajimari`/`始まり` hook once.
+    Hajimari {
+        /// Unique deterministic identity of this activation transition.
+        transition_id: Hash,
+        /// Code hash activated for the new instance.
+        code_hash: Hash,
+    },
+    /// An existing instance was rebound from one code hash to another and must execute
+    /// its `kaizen`/`改善` hook once.
+    Kaizen {
+        /// Unique deterministic identity of this replacement transition.
+        transition_id: Hash,
+        /// Code hash that was active immediately before `kaizen`/`改善`.
+        previous_code_hash: Hash,
+        /// Newly activated code hash whose hook must execute.
+        code_hash: Hash,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::codec::Decode, norito::codec::Encode)]
+struct ContractLifecycleRecordV1 {
+    domain: [u8; 4],
+    pending: PendingContractLifecycle,
+}
+
+impl PendingContractLifecycle {
+    /// Code hash whose entrypoint is allowed to consume this transition.
+    #[must_use]
+    pub(crate) const fn code_hash(self) -> Hash {
+        match self {
+            Self::Hajimari { code_hash, .. } | Self::Kaizen { code_hash, .. } => code_hash,
+        }
+    }
+
+    /// Branded entrypoint kind required to consume this transition.
+    #[must_use]
+    pub(crate) const fn entrypoint_kind(self) -> EntryPointKind {
+        match self {
+            Self::Hajimari { .. } => EntryPointKind::Hajimari,
+            Self::Kaizen { .. } => EntryPointKind::Kaizen,
+        }
+    }
+
+    fn encode(self) -> Vec<u8> {
+        norito::codec::Encode::encode(&ContractLifecycleRecordV1 {
+            domain: CONTRACT_LIFECYCLE_RECORD_MAGIC,
+            pending: self,
+        })
+    }
+
+    fn decode(encoded: &[u8]) -> Result<Self, &'static str> {
+        let record: ContractLifecycleRecordV1 = norito::decode_from_bytes(encoded)
+            .map_err(|_| "lifecycle record is not canonical Norito")?;
+        if norito::codec::Encode::encode(&record).as_slice() != encoded {
+            return Err("lifecycle record is not canonical Norito");
+        }
+        if record.domain != CONTRACT_LIFECYCLE_RECORD_MAGIC {
+            return Err("lifecycle record has an invalid domain tag");
+        }
+        Ok(record.pending)
+    }
+}
+
+/// Build a pending lifecycle transition with an ABA-resistant deterministic identity.
+///
+/// The identity binds the current transaction/trigger execution, its transition ordinal, the
+/// exact address and lifecycle kind, and both old and new code hashes. Consequently a later
+/// deactivate/reactivate or A→B→A sequence cannot recreate the bytes observed by a stale
+/// prepared lifecycle call.
+pub(crate) fn new_pending_contract_lifecycle(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    contract_address: &ContractAddress,
+    previous_code_hash: Option<Hash>,
+    code_hash: Hash,
+    kind: EntryPointKind,
+) -> Result<PendingContractLifecycle, &'static str> {
+    let (execution_identity, ordinal) =
+        state_transaction.next_contract_lifecycle_transition_seed()?;
+    let mut preimage = Vec::from(&b"iroha:contract-lifecycle-transition:v1\0"[..]);
+    preimage.extend_from_slice(execution_identity.as_ref());
+    preimage.extend_from_slice(&ordinal.to_le_bytes());
+    preimage.extend_from_slice(
+        &u64::try_from(contract_address.as_str().len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    preimage.extend_from_slice(contract_address.as_str().as_bytes());
+    preimage.push(match kind {
+        EntryPointKind::Hajimari => 0,
+        EntryPointKind::Kaizen => 1,
+        EntryPointKind::Kotoage | EntryPointKind::View => {
+            return Err("ordinary entrypoint kind cannot stage a lifecycle transition");
+        }
+    });
+    if let Some(previous_code_hash) = previous_code_hash {
+        preimage.push(1);
+        preimage.extend_from_slice(previous_code_hash.as_ref());
+    } else {
+        preimage.push(0);
+    }
+    preimage.extend_from_slice(code_hash.as_ref());
+    let transition_id = Hash::new(preimage);
+
+    match (kind, previous_code_hash) {
+        (EntryPointKind::Hajimari, None) => Ok(PendingContractLifecycle::Hajimari {
+            transition_id,
+            code_hash,
+        }),
+        (EntryPointKind::Kaizen, Some(previous_code_hash)) => {
+            Ok(PendingContractLifecycle::Kaizen {
+                transition_id,
+                previous_code_hash,
+                code_hash,
+            })
+        }
+        (EntryPointKind::Hajimari, Some(_)) => {
+            Err("hajimari/始まり cannot stage a previous code hash")
+        }
+        (EntryPointKind::Kaizen, None) => Err("kaizen/改善 requires a previous code hash"),
+        (EntryPointKind::Kotoage | EntryPointKind::View, _) => {
+            Err("ordinary entrypoint kind cannot stage a lifecycle transition")
+        }
+    }
+}
+
+/// Return the reserved physical durable-state key for an instance lifecycle marker.
+#[must_use]
+pub(crate) fn contract_lifecycle_state_key(contract_address: &ContractAddress) -> Name {
+    let digest = hex::encode(Hash::new(contract_address.as_str().as_bytes()).as_ref());
+    format!("{CONTRACT_LIFECYCLE_STATE_PREFIX}/{digest}")
+        .parse()
+        .expect("contract lifecycle state key is a valid Name")
+}
+
+/// Read and validate the pending lifecycle transition for `contract_address`.
+///
+/// Corrupt records fail closed because they are consensus state, not user input.
+pub(crate) fn pending_contract_lifecycle(
+    world: &impl WorldReadOnly,
+    contract_address: &ContractAddress,
+) -> Result<Option<PendingContractLifecycle>, ValidationFail> {
+    let key = contract_lifecycle_state_key(contract_address);
+    world
+        .smart_contract_state()
+        .get(&key)
+        .map(|encoded| {
+            PendingContractLifecycle::decode(encoded).map_err(|reason| {
+                ValidationFail::InternalError(format!(
+                    "invalid lifecycle state for contract `{contract_address}`: {reason}"
+                ))
+            })
+        })
+        .transpose()
+}
+
+/// Stage or clear the runtime-owned pending lifecycle marker.
+pub(crate) fn set_pending_contract_lifecycle(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    contract_address: &ContractAddress,
+    pending: Option<PendingContractLifecycle>,
+) {
+    let key = contract_lifecycle_state_key(contract_address);
+    if let Some(pending) = pending {
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(key, pending.encode());
+    } else {
+        state_transaction.world.smart_contract_state.remove(key);
+    }
+}
+
+/// Validate lifecycle availability for a top-level call against the live binding.
+///
+/// A pending transition blocks all other entrypoints, including views, until its exact branded
+/// hook succeeds. The returned transition is attached to the runtime context so successful VM
+/// execution can consume the marker atomically with the rest of its overlay.
+pub(crate) fn validate_contract_lifecycle_call(
+    world: &impl WorldReadOnly,
+    contract_address: &ContractAddress,
+    executing_code_hash: Hash,
+    kind: EntryPointKind,
+) -> Result<Option<PendingContractLifecycle>, ValidationFail> {
+    let bound_code_hash = world
+        .contract_instances()
+        .get(contract_address)
+        .copied()
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!(
+                "contract instance `{contract_address}` is not active"
+            ))
+        })?;
+    if bound_code_hash != executing_code_hash {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract instance `{contract_address}` changed from code `{executing_code_hash}` to `{bound_code_hash}`"
+        )));
+    }
+
+    let pending = pending_contract_lifecycle(world, contract_address)?;
+    match (kind, pending) {
+        (EntryPointKind::Hajimari, Some(pending @ PendingContractLifecycle::Hajimari { .. }))
+            if pending.code_hash() == executing_code_hash =>
+        {
+            Ok(Some(pending))
+        }
+        (EntryPointKind::Kaizen, Some(pending @ PendingContractLifecycle::Kaizen { .. }))
+            if pending.code_hash() == executing_code_hash =>
+        {
+            Ok(Some(pending))
+        }
+        (EntryPointKind::Hajimari, Some(other)) => Err(ValidationFail::NotPermitted(format!(
+            "contract `{contract_address}` is awaiting {:?}, not hajimari/始まり",
+            other.entrypoint_kind()
+        ))),
+        (EntryPointKind::Kaizen, Some(other)) => Err(ValidationFail::NotPermitted(format!(
+            "contract `{contract_address}` is awaiting {:?}, not kaizen/改善",
+            other.entrypoint_kind()
+        ))),
+        (EntryPointKind::Hajimari, None) => Err(ValidationFail::NotPermitted(format!(
+            "contract `{contract_address}` has no pending hajimari/始まり transition"
+        ))),
+        (EntryPointKind::Kaizen, None) => Err(ValidationFail::NotPermitted(format!(
+            "contract `{contract_address}` has no pending kaizen/改善 transition"
+        ))),
+        (EntryPointKind::Kotoage | EntryPointKind::View, Some(pending)) => {
+            Err(ValidationFail::NotPermitted(format!(
+                "contract `{contract_address}` must complete {:?} before other entrypoints are callable",
+                pending.entrypoint_kind()
+            )))
+        }
+        (EntryPointKind::Kotoage | EntryPointKind::View, None) => Ok(None),
+    }
+}
+
+/// Recheck a prepared lifecycle completion against current state immediately before apply.
+pub(crate) fn validate_contract_lifecycle_completion(
+    world: &impl WorldReadOnly,
+    contract_address: &ContractAddress,
+    expected: PendingContractLifecycle,
+) -> Result<(), ValidationFail> {
+    let current = pending_contract_lifecycle(world, contract_address)?;
+    if current != Some(expected) {
+        return Err(ValidationFail::NotPermitted(format!(
+            "pending hajimari/始まり or kaizen/改善 transition for `{contract_address}` changed before apply"
+        )));
+    }
+    if world.contract_instances().get(contract_address).copied() != Some(expected.code_hash()) {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract binding for `{contract_address}` changed before lifecycle apply"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject a view while its instance is awaiting `hajimari`/`始まり` or `kaizen`/`改善`.
+///
+/// # Errors
+/// Returns an error when the binding changed, the lifecycle marker is corrupt, or a transition
+/// is still pending.
+pub fn ensure_contract_ready_for_view(
+    world: &impl WorldReadOnly,
+    contract_address: &ContractAddress,
+    executing_code_hash: Hash,
+) -> Result<(), ValidationFail> {
+    validate_contract_lifecycle_call(
+        world,
+        contract_address,
+        executing_code_hash,
+        EntryPointKind::View,
+    )
+    .map(|_| ())
+}
+
+/// Validate lifecycle availability for a non-mutating simulation of a top-level entrypoint.
+///
+/// # Errors
+/// Returns an error when the entrypoint does not match the exact pending activation transition.
+pub fn ensure_contract_entrypoint_lifecycle(
+    world: &impl WorldReadOnly,
+    contract_address: &ContractAddress,
+    executing_code_hash: Hash,
+    kind: EntryPointKind,
+) -> Result<(), ValidationFail> {
+    validate_contract_lifecycle_call(world, contract_address, executing_code_hash, kind).map(|_| ())
+}
+
 /// Record combining a contract manifest with optional bytecode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContractCodeRecord {
@@ -49,10 +348,10 @@ pub struct ContractCodeRecord {
 
 /// Register a smart contract manifest on-chain via the canonical ISI.
 ///
-/// Manifest registration is public. Networks can still protect specific
-/// namespaces at activation time via `gov_protected_namespaces`. The manifest
-/// must include `code_hash`, and the corresponding bytecode must already be
-/// stored as a verified self-describing artifact.
+/// The authority must hold `CanRegisterSmartContractCode`. Networks can add
+/// `CanEnactGovernance` for specific namespaces via `gov_protected_namespaces`.
+/// The manifest must include `code_hash`, and the corresponding bytecode must
+/// already be stored as a verified self-describing artifact.
 ///
 /// # Errors
 ///
@@ -74,8 +373,7 @@ pub fn register_manifest(
 ///
 /// The helper verifies the self-describing `CNTR` artifact, uses its canonical
 /// artifact hash, and submits the [`RegisterSmartContractBytes`] instruction.
-/// Bytecode registration is public; namespace protection applies when
-/// instances are activated.
+/// The authority must hold `CanRegisterSmartContractCode`.
 ///
 /// # Errors
 ///
@@ -93,10 +391,13 @@ pub fn register_code_bytes(
     Ok(code_hash)
 }
 
-/// Bind `contract_address` to a `code_hash` to activate an instance.
+/// Bind `contract_address` to a `code_hash` to activate or perform `kaizen`/`改善` on an
+/// instance.
 ///
-/// The binding is idempotent: calling this helper with the same mapping is a
-/// no-op, while conflicting mappings result in an error from the underlying ISI.
+/// The authority must hold `CanRegisterSmartContractCode`, including for an
+/// idempotent request. Rebinding an active address to different verified code
+/// additionally requires `CanEnactGovernance`; it is a genuine in-place
+/// `kaizen`/`改善` and stages its declared `kaizen`/`改善` hook.
 ///
 /// # Errors
 ///
@@ -221,6 +522,11 @@ pub fn fetch_bound_contract_identity(
         .contract_alias_bindings()
         .get(contract_address)
         .map(|binding| binding.alias.clone());
+    if let Some(alias) = contract_alias.as_ref()
+        && state.world().contract_aliases().get(alias) != Some(contract_address)
+    {
+        return None;
+    }
     Some(BoundContractIdentity {
         contract_address: contract_address.clone(),
         contract_alias,
@@ -289,7 +595,7 @@ pub fn fetch_bound_contract_record_by_subject(
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        isi::{Grant, SetParameter},
+        isi::{Grant, SetParameter, smart_contract_code::DeactivateContractInstance},
         nexus::DataSpaceId,
         parameter::custom::{CustomParameter, CustomParameterId},
         permission,
@@ -330,10 +636,11 @@ mod tests {
         };
         let entrypoint = EntrypointDescriptor {
             name: "main".to_owned(),
-            kind: EntryPointKind::Public,
+            kind: EntryPointKind::View,
             params: Vec::new(),
             argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -342,7 +649,7 @@ mod tests {
             triggers: Vec::new(),
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
-            contract_name: "TestContract".to_owned(),
+            seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-test".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
@@ -351,8 +658,9 @@ mod tests {
                 name: entrypoint.name.clone(),
                 kind: entrypoint.kind,
                 params: entrypoint.params.clone(),
-                argument_schema: None,
+                argument_schema: entrypoint.argument_schema.clone(),
                 return_type: entrypoint.return_type.clone(),
+                return_schema: entrypoint.return_schema.clone(),
                 permission: entrypoint.permission.clone(),
                 read_keys: entrypoint.read_keys.clone(),
                 write_keys: entrypoint.write_keys.clone(),
@@ -377,6 +685,17 @@ mod tests {
         minimal_contract_artifact(abi_version).0
     }
 
+    fn lifecycle_contract(
+        source: &str,
+    ) -> (
+        Vec<u8>,
+        iroha_data_model::smart_contract::manifest::ContractManifest,
+    ) {
+        ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile lifecycle contract")
+    }
+
     fn test_state() -> (State, AccountId, KeyPair) {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -386,7 +705,15 @@ mod tests {
         let auth = AccountId::of(pubkey);
         let domain = Domain::new(dom.clone()).build(&auth);
         let account = Account::new(auth.clone()).build(&auth);
-        let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
+        let mut world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
+        let mut permissions = permission::Permissions::new();
+        assert!(permissions.insert(permission::Permission::new(
+            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
+            Json::new(()),
+        )));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(auth.clone(), permissions);
         let state = State::new_for_testing(world, kura, query);
         (state, auth, kp)
     }
@@ -408,7 +735,7 @@ mod tests {
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
 
-        // Register bytecode and manifest, then activate a public namespace binding.
+        // Register bytecode and manifest, then activate an authorized namespace binding.
         let (code, manifest) = minimal_contract_artifact(1);
         let code_hash =
             register_code_bytes(&authority, code.clone(), &mut stx).expect("register bytecode");
@@ -424,6 +751,33 @@ mod tests {
         .expect("contract address");
         activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
             .expect("activate instance");
+        assert_eq!(
+            pending_contract_lifecycle(&stx.world, &contract_address)
+                .expect("valid lifecycle state"),
+            None,
+            "contracts without hajimari remain immediately callable"
+        );
+
+        let alias = ContractAlias::from_components("registry", Some("wonderland"), "universal")
+            .expect("valid contract alias");
+        stx.world
+            .bind_contract_alias(&contract_address, alias.clone(), None, None, 0)
+            .expect("bind contract alias");
+        assert_eq!(
+            fetch_bound_contract_identity(&stx, &contract_address)
+                .expect("consistent alias binding is callable")
+                .contract_alias,
+            Some(alias.clone())
+        );
+        stx.world.contract_aliases.remove(alias.clone());
+        assert!(
+            fetch_bound_contract_identity(&stx, &contract_address).is_none(),
+            "a forward-only alias binding must fail closed before contract execution"
+        );
+        stx.world
+            .contract_aliases
+            .insert(alias, contract_address.clone());
+        stx.world.clear_contract_alias(&contract_address);
 
         stx.apply();
         block.commit().expect("commit block");
@@ -510,6 +864,396 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_hooks_are_single_use_and_bound_to_real_activation_transitions() {
+        let (state, authority, keypair) = test_state();
+        let mut block = state.block(default_header(1));
+        let mut transaction = block.transaction();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+
+        let (v1_code, v1_manifest) = lifecycle_contract(
+            r#"
+seiyaku LifecycleOne {
+  hajimari() {}
+  kaizen() {}
+  kotoage fn run() authorize("CanRunLifecycleOne") {}
+}
+"#,
+        );
+        let v1_hash = register_code_bytes(&authority, v1_code, &mut transaction)
+            .expect("register v1 bytecode");
+        register_manifest(&authority, v1_manifest.signed(&keypair), &mut transaction)
+            .expect("register v1 manifest");
+        activate_instance(
+            &authority,
+            contract_address.clone(),
+            v1_hash,
+            &mut transaction,
+        )
+        .expect("activate v1");
+
+        let hajimari = pending_contract_lifecycle(&transaction.world, &contract_address)
+            .expect("valid lifecycle state")
+            .expect("activation staged hajimari");
+        assert!(matches!(
+            hajimari,
+            PendingContractLifecycle::Hajimari { code_hash, .. } if code_hash == v1_hash
+        ));
+        assert_eq!(
+            validate_contract_lifecycle_call(
+                &transaction.world,
+                &contract_address,
+                v1_hash,
+                EntryPointKind::Hajimari,
+            )
+            .expect("new activation admits hajimari"),
+            Some(hajimari)
+        );
+        assert!(
+            validate_contract_lifecycle_call(
+                &transaction.world,
+                &contract_address,
+                v1_hash,
+                EntryPointKind::Kotoage,
+            )
+            .is_err(),
+            "ordinary calls must wait for hajimari"
+        );
+        assert!(
+            validate_contract_lifecycle_call(
+                &transaction.world,
+                &contract_address,
+                v1_hash,
+                EntryPointKind::Kaizen,
+            )
+            .is_err(),
+            "a fresh activation is not a kaizen transition"
+        );
+
+        validate_contract_lifecycle_completion(&transaction.world, &contract_address, hajimari)
+            .expect("live completion matches pending hajimari");
+        set_pending_contract_lifecycle(&mut transaction, &contract_address, None);
+        assert!(
+            validate_contract_lifecycle_call(
+                &transaction.world,
+                &contract_address,
+                v1_hash,
+                EntryPointKind::Hajimari,
+            )
+            .is_err(),
+            "hajimari cannot replay after consumption"
+        );
+        validate_contract_lifecycle_call(
+            &transaction.world,
+            &contract_address,
+            v1_hash,
+            EntryPointKind::Kotoage,
+        )
+        .expect("ordinary calls open after hajimari");
+
+        activate_instance(
+            &authority,
+            contract_address.clone(),
+            v1_hash,
+            &mut transaction,
+        )
+        .expect("same-code activation is idempotent");
+        assert_eq!(
+            pending_contract_lifecycle(&transaction.world, &contract_address)
+                .expect("valid lifecycle state"),
+            None,
+            "idempotent activation must not recreate a consumed hajimari"
+        );
+
+        let (v2_code, v2_manifest) = lifecycle_contract(
+            r#"
+seiyaku LifecycleTwo {
+  hajimari() {}
+  kaizen() {}
+  kotoage fn run() authorize("CanRunLifecycleTwo") {}
+}
+"#,
+        );
+        let v2_hash = register_code_bytes(&authority, v2_code, &mut transaction)
+            .expect("register v2 bytecode");
+        register_manifest(&authority, v2_manifest.signed(&keypair), &mut transaction)
+            .expect("register v2 manifest");
+        let unauthorized_kaizen = activate_instance(
+            &authority,
+            contract_address.clone(),
+            v2_hash,
+            &mut transaction,
+        )
+        .expect_err("in-place replacement requires governance authorization");
+        assert!(
+            unauthorized_kaizen
+                .to_string()
+                .contains("CanEnactGovernance")
+        );
+        assert_eq!(
+            transaction
+                .world
+                .contract_instances
+                .get(&contract_address)
+                .copied(),
+            Some(v1_hash),
+            "rejected kaizen must preserve the old binding"
+        );
+        Grant::account_permission(
+            iroha_data_model::permission::Permission::new(
+                "CanEnactGovernance".to_owned(),
+                Json::new(()),
+            ),
+            authority.clone(),
+        )
+        .execute(&authority, &mut transaction)
+        .expect("grant in-place kaizen governance permission");
+        activate_instance(
+            &authority,
+            contract_address.clone(),
+            v2_hash,
+            &mut transaction,
+        )
+        .expect("replace the active binding");
+
+        let kaizen = pending_contract_lifecycle(&transaction.world, &contract_address)
+            .expect("valid lifecycle state")
+            .expect("replacement staged kaizen");
+        assert!(matches!(
+            kaizen,
+            PendingContractLifecycle::Kaizen {
+                previous_code_hash,
+                code_hash,
+                ..
+            } if previous_code_hash == v1_hash && code_hash == v2_hash
+        ));
+        assert_eq!(
+            validate_contract_lifecycle_call(
+                &transaction.world,
+                &contract_address,
+                v2_hash,
+                EntryPointKind::Kaizen,
+            )
+            .expect("genuine code replacement admits kaizen"),
+            Some(kaizen)
+        );
+        assert!(
+            validate_contract_lifecycle_call(
+                &transaction.world,
+                &contract_address,
+                v2_hash,
+                EntryPointKind::Hajimari,
+            )
+            .is_err(),
+            "an in-place kaizen is not a new hajimari activation"
+        );
+        assert!(
+            validate_contract_lifecycle_call(
+                &transaction.world,
+                &contract_address,
+                v1_hash,
+                EntryPointKind::Kaizen,
+            )
+            .is_err(),
+            "old code cannot consume the new code's kaizen transition"
+        );
+
+        validate_contract_lifecycle_completion(&transaction.world, &contract_address, kaizen)
+            .expect("live completion matches pending kaizen");
+        set_pending_contract_lifecycle(&mut transaction, &contract_address, None);
+        assert!(
+            validate_contract_lifecycle_call(
+                &transaction.world,
+                &contract_address,
+                v2_hash,
+                EntryPointKind::Kaizen,
+            )
+            .is_err(),
+            "kaizen cannot replay after consumption"
+        );
+    }
+
+    #[test]
+    fn lifecycle_transitions_in_one_execution_have_distinct_ordinals() {
+        let (state, authority, _) = test_state();
+        let mut block = state.block(default_header(1));
+        let mut transaction = block.transaction();
+        transaction.tx_call_hash = Some(Hash::new(b"one-execution-two-lifecycle-transitions"));
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            80,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let code_hash = Hash::new(b"ordinal-regression-code");
+
+        let first = new_pending_contract_lifecycle(
+            &mut transaction,
+            &contract_address,
+            None,
+            code_hash,
+            EntryPointKind::Hajimari,
+        )
+        .expect("first transition");
+        let second = new_pending_contract_lifecycle(
+            &mut transaction,
+            &contract_address,
+            None,
+            code_hash,
+            EntryPointKind::Hajimari,
+        )
+        .expect("second transition");
+
+        assert_ne!(
+            first, second,
+            "the per-execution ordinal must distinguish otherwise identical lifecycle mutations"
+        );
+    }
+
+    #[test]
+    fn stale_hajimari_completion_rejects_deactivate_reactivate_aba() {
+        let (state, authority, keypair) = test_state();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            81,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let (code, manifest) = lifecycle_contract(
+            r#"
+seiyaku LifecycleAba {
+  hajimari() {}
+  kotoage fn run() authorize("CanRunLifecycleAba") {}
+}
+"#,
+        );
+
+        let mut first_block = state.block(default_header(1));
+        let mut first_transaction = first_block.transaction();
+        first_transaction.tx_call_hash = Some(Hash::new(b"lifecycle-aba-first-activation"));
+        let code_hash = register_code_bytes(&authority, code, &mut first_transaction)
+            .expect("register lifecycle bytecode");
+        register_manifest(
+            &authority,
+            manifest.signed(&keypair),
+            &mut first_transaction,
+        )
+        .expect("register lifecycle manifest");
+        activate_instance(
+            &authority,
+            contract_address.clone(),
+            code_hash,
+            &mut first_transaction,
+        )
+        .expect("first activation");
+        let stale_transition =
+            pending_contract_lifecycle(&first_transaction.world, &contract_address)
+                .expect("valid first lifecycle state")
+                .expect("first hajimari transition");
+        first_transaction.apply();
+        first_block.commit().expect("commit first activation");
+
+        let mut completion_block = state.block(default_header(2));
+        let mut completion = completion_block.transaction();
+        set_pending_contract_lifecycle(&mut completion, &contract_address, None);
+        completion.apply();
+        completion_block.commit().expect("commit first completion");
+
+        let mut deactivate_block = state.block(default_header(3));
+        let mut deactivate = deactivate_block.transaction();
+        deactivate.tx_call_hash = Some(Hash::new(b"lifecycle-aba-deactivation"));
+        DeactivateContractInstance {
+            contract_address: contract_address.clone(),
+            reason: Some("ABA regression fixture".to_owned()),
+        }
+        .execute(&authority, &mut deactivate)
+        .expect("authorized deactivation");
+        deactivate.apply();
+        deactivate_block.commit().expect("commit deactivation");
+
+        let mut second_block = state.block(default_header(4));
+        let mut second_transaction = second_block.transaction();
+        second_transaction.tx_call_hash = Some(Hash::new(b"lifecycle-aba-second-activation"));
+        activate_instance(
+            &authority,
+            contract_address.clone(),
+            code_hash,
+            &mut second_transaction,
+        )
+        .expect("second activation");
+        let current_transition =
+            pending_contract_lifecycle(&second_transaction.world, &contract_address)
+                .expect("valid second lifecycle state")
+                .expect("second hajimari transition");
+
+        assert_ne!(
+            current_transition, stale_transition,
+            "a new activation must never recreate an earlier KLC1 record"
+        );
+        assert!(matches!(
+            validate_contract_lifecycle_completion(
+                &second_transaction.world,
+                &contract_address,
+                stale_transition,
+            ),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        validate_contract_lifecycle_completion(
+            &second_transaction.world,
+            &contract_address,
+            current_transition,
+        )
+        .expect("the exact current activation remains completable");
+    }
+
+    #[test]
+    fn corrupt_lifecycle_marker_fails_closed() {
+        let (state, authority, _) = test_state();
+        let mut block = state.block(default_header(1));
+        let mut transaction = block.transaction();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            8,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        transaction.world.smart_contract_state.insert(
+            contract_lifecycle_state_key(&contract_address),
+            b"not-a-lifecycle-record".to_vec(),
+        );
+
+        assert!(matches!(
+            pending_contract_lifecycle(&transaction.world, &contract_address),
+            Err(ValidationFail::InternalError(message))
+                if message.contains("invalid lifecycle state")
+        ));
+
+        let mut trailing = PendingContractLifecycle::Hajimari {
+            transition_id: Hash::new(b"noncanonical-lifecycle-transition"),
+            code_hash: Hash::new(b"noncanonical-lifecycle-record"),
+        }
+        .encode();
+        trailing.push(0);
+        transaction
+            .world
+            .smart_contract_state
+            .insert(contract_lifecycle_state_key(&contract_address), trailing);
+        assert!(matches!(
+            pending_contract_lifecycle(&transaction.world, &contract_address),
+            Err(ValidationFail::InternalError(message))
+                if message.contains("not canonical Norito")
+        ));
+    }
+
+    #[test]
     fn register_code_obeys_size_cap() {
         let (state, authority, _kp) = test_state();
         let mut block = state.block(default_header(1));
@@ -590,7 +1334,7 @@ mod tests {
         let mut stx = block.transaction();
 
         let manifest = ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: None,
             abi_hash: None,
             compiler_fingerprint: None,

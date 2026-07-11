@@ -12,17 +12,23 @@ on:
       - "crates/kotodama_lang/src/**"
       - "crates/iroha_core/src/**"
       - "crates/iroha_core/benches/kotodama_runtime_cache.rs"
+      - "crates/iroha_core/benches/queries.rs"
       - "crates/iroha_core/Cargo.toml"
       - "crates/iroha_torii/src/**"
       - "crates/iroha_cli/src/**"
       - "crates/iroha_js_host/src/**"
       - "crates/irohad/src/soracloud_runtime.rs"
       - "scripts/check_kotodama_perf.py"
+      - "scripts/check_kotodama_docs.py"
       - "scripts/regenerate_kotodama_goldens.py"
       - "scripts/kotodama_goldens.tsv"
       - "scripts/kotodama_v1_size_baseline.json"
       - "pytests/scripts/check_kotodama_perf_test.py"
+      - "pytests/scripts/check_kotodama_docs_test.py"
+      - "pytests/scripts/regenerate_kotodama_goldens_test.py"
       - "**/*.ko"
+      - "**/*.to"
+      - "demo/*.manifest.json"
       - "Cargo.toml"
       - "Cargo.lock"
   workflow_dispatch:
@@ -70,11 +76,14 @@ jobs:
         working-directory: candidate
         run: python3 pytests/scripts/check_kotodama_perf_test.py
 
-      - name: Detect a comparable base benchmark suite
-        id: benchmark-base
+      # Rust build caches may retain Criterion output from an older workflow
+      # run. Performance evidence must be produced by this exact base/candidate
+      # pair, so remove only the generated Criterion results before sampling.
+      - name: Clear cached benchmark evidence
+        run: rm -rf "$CARGO_TARGET_DIR/criterion"
+
+      - name: Require the pre-reset base workloads
         run: |
-          benchmark=baseline/crates/ivm/benches/bench_kotodama.rs
-          comparable=true
           for name in \
             kotodama_phase_parse \
             kotodama_phase_semantic \
@@ -86,33 +95,42 @@ jobs:
           do
             if ! grep -Rq "\"$name\"" \
               baseline/crates/ivm/benches/bench_kotodama.rs \
-              baseline/crates/iroha_core/benches/kotodama_runtime_cache.rs 2>/dev/null
+              baseline/crates/iroha_core/benches/kotodama_runtime_cache.rs \
+              baseline/crates/iroha_core/benches/queries.rs 2>/dev/null
             then
-              comparable=false
+              echo "comparison base is missing pre-reset benchmark $name" >&2
+              exit 1
             fi
           done
-          echo "comparable=$comparable" >> "$GITHUB_OUTPUT"
 
       - name: Measure base revision
-        if: steps.benchmark-base.outputs.comparable == 'true'
         working-directory: baseline
         run: |
           cargo bench -p ivm --bench bench_kotodama -- --save-baseline base
           cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
 
-      - name: Measure candidate revision
-        if: steps.benchmark-base.outputs.comparable == 'true'
-        working-directory: candidate
+      # Criterion writes a `new` sample even while saving the named `base`.
+      # Delete those current slots so a benchmark omitted by the candidate
+      # cannot pass by reusing the base revision's or a cached run's evidence.
+      - name: Clear base current samples
         run: |
-          cargo bench -p ivm --bench bench_kotodama -- --baseline base
-          cargo bench -p iroha_core --bench kotodama_runtime_cache -- --baseline base
+          python3 - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
 
-      - name: Bootstrap first-release benchmark evidence
-        if: steps.benchmark-base.outputs.comparable != 'true'
+          criterion = Path(os.environ["CARGO_TARGET_DIR"]) / "criterion"
+          for current in sorted(criterion.rglob("new")):
+              if current.is_dir():
+                  shutil.rmtree(current)
+          PY
+
+      - name: Measure candidate revision
         working-directory: candidate
         run: |
-          cargo bench -p ivm --bench bench_kotodama -- --save-baseline base
-          cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
+          cargo bench -p ivm --bench bench_kotodama -- --save-baseline candidate
+          cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
+          cargo bench -p iroha_core --bench queries -- typed_core_query_accounts_page_64 --save-baseline candidate
 
       - name: Enforce five-percent ceiling
         working-directory: candidate
@@ -121,15 +139,20 @@ jobs:
           --criterion-dir ../target-kotodama-perf/criterion
           --threshold 0.05
 
-      - name: Build canonical compiler driver
+      - name: Build canonical Kotodama release tools
         working-directory: candidate
-        run: cargo build -p ivm --bin koto
+        run: cargo build -p ivm --bin koto -p iroha_cli --bin iroha
 
-      - name: Enforce artifact size and no-op gates
+      - name: Compile every Kotodama documentation source
+        working-directory: candidate
+        run: >-
+          python3 scripts/check_kotodama_docs.py
+          --koto ../target-kotodama-perf/debug/koto
+
+      - name: Enforce complete artifact release gate
         working-directory: candidate
         run: >-
           python3 scripts/regenerate_kotodama_goldens.py
           --check
           --koto ../target-kotodama-perf/debug/koto
-          --skip-runtime-manifest-check
-          --skip-contract-tests
+          --iroha ../target-kotodama-perf/debug/iroha

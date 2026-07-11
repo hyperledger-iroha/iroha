@@ -6,16 +6,13 @@ import java.util.Map;
 
 /** Closed first-release SCCP network inventory with exact, case-sensitive profile keys. */
 public enum SccpNetworkV1 {
-  SORA_NEXUS("sora-nexus", 0, 0, true),
-  SORA_TAIRA("sora-taira", 1, 0, false),
+  // Tag 0 is permanently reserved for the removed pre-release SORA profile.
+  SORA_TAIRA("sora-taira", 1, 0, true),
   ETHEREUM_MAINNET("ethereum-mainnet", 2, 1, true),
   ETHEREUM_SEPOLIA("ethereum-sepolia", 3, 1, false),
   BSC_MAINNET("bsc-mainnet", 4, 2, true),
   BSC_TESTNET("bsc-testnet", 5, 2, false),
-  SOLANA_MAINNET_BETA("solana-mainnet-beta", 6, 3, true),
-  SOLANA_TESTNET("solana-testnet", 7, 3, false),
-  TON_MAINNET("ton-mainnet", 8, 4, true),
-  TON_TESTNET("ton-testnet", 9, 4, false),
+  // Tags 6 through 9 are permanently reserved for retired prerelease profiles.
   TRON_MAINNET("tron-mainnet", 10, 5, true),
   TRON_NILE("tron-nile", 11, 5, false),
   TRON_SHASTA("tron-shasta", 12, 5, false);
@@ -64,7 +61,7 @@ public enum SccpNetworkV1 {
   }
 
   public boolean isSora() {
-    return this == SORA_NEXUS || this == SORA_TAIRA;
+    return this == SORA_TAIRA;
   }
 
   public boolean isExternal() {

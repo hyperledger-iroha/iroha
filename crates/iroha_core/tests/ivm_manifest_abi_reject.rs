@@ -127,7 +127,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
 
     // Register manifest with wrong abi_hash
     let manifest = manifest::ContractManifest {
-        contract_name: None,
+        seiyaku_name: None,
         code_hash: Some(code_hash),
         abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
         compiler_fingerprint: None,
@@ -214,7 +214,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
 
     // Register manifest with correct abi_hash
     let manifest = manifest::ContractManifest {
-        contract_name: None,
+        seiyaku_name: None,
         code_hash: Some(code_hash),
         abi_hash: Some(iroha_crypto::Hash::prehashed(correct_abi)),
         compiler_fingerprint: None,
@@ -292,7 +292,7 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
 
     // Register manifest with code_hash only
     let manifest = manifest::ContractManifest {
-        contract_name: None,
+        seiyaku_name: None,
         code_hash: Some(code_hash),
         abi_hash: None,
         compiler_fingerprint: None,
@@ -366,7 +366,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         .expect("grant permission");
 
     let manifest = manifest::ContractManifest {
-        contract_name: None,
+        seiyaku_name: None,
         code_hash: Some(code_hash),
         abi_hash: Some(iroha_crypto::Hash::prehashed(abi_current)),
         compiler_fingerprint: None,
@@ -441,7 +441,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
         .expect("grant permission");
 
     let manifest = manifest::ContractManifest {
-        contract_name: None,
+        seiyaku_name: None,
         code_hash: Some(code_hash),
         abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
         compiler_fingerprint: None,

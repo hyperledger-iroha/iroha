@@ -1,6 +1,7 @@
 {
   "schema": "kotodama-v1-size-baseline-v1",
   "unit": "code_bytes",
+  "corpus": "kotodama-v1-audited-padding-heavy-control-flow",
   "source_revision": "ddc6d8607bb2dbf9949c64aaedb271994fbc6931",
   "samples": {
     "crates/ivm/docs/examples/05_range_for.to": 1128,

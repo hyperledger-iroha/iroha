@@ -393,10 +393,7 @@ impl fmt::Debug for PreparedContract {
             .field("code_hash", &self.inner.code_hash)
             .field("header_len", &self.inner.header_len)
             .field("code_offset", &self.inner.code_offset)
-            .field(
-                "contract_name",
-                &self.inner.contract_interface.contract_name,
-            )
+            .field("seiyaku_name", &self.inner.contract_interface.seiyaku_name)
             .field("entrypoints", &self.inner.entrypoints.keys())
             .field("instructions", &self.inner.decoded.len())
             .finish()

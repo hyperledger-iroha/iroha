@@ -28,7 +28,11 @@ fn consume_unknown_meta(meta: syn::meta::ParseNestedMeta) -> SynResult<()> {
     if meta.input.peek(syn::token::Paren) {
         meta.parse_nested_meta(consume_unknown_meta)?
     } else if meta.input.peek(Token![=]) {
-        meta.value()?.parse::<TokenStream2>()?;
+        // Parse exactly one attribute value. Parsing a free-form TokenStream here
+        // consumes every remaining comma-separated item in the enclosing
+        // `#[norito(...)]` list, which can silently hide a later option from a
+        // different derive (for example `tag = "kind", deny_unknown_fields`).
+        meta.value()?.parse::<syn::Expr>()?;
     }
     Ok(())
 }
@@ -215,12 +219,9 @@ fn option_inner_type(ty: &syn::Type) -> Option<syn::Type> {
     None
 }
 
-fn token_stream_mentions_generic(
-    tokens: TokenStream2,
-    generic_names: &[syn::Ident],
-) -> bool {
+fn token_stream_mentions_generic(tokens: TokenStream2, generic_names: &[syn::Ident]) -> bool {
     tokens.into_iter().any(|token| match token {
-        proc_macro2::TokenTree::Ident(ident) => generic_names.iter().any(|name| *name == ident),
+        proc_macro2::TokenTree::Ident(ident) => generic_names.contains(&ident),
         proc_macro2::TokenTree::Group(group) => {
             token_stream_mentions_generic(group.stream(), generic_names)
         }
@@ -556,9 +557,10 @@ fn words(ident: &str) -> Vec<String> {
     result
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct ContainerAttr {
     rename_all: Option<RenameRule>,
+    deny_unknown_fields: bool,
 }
 
 impl ContainerAttr {
@@ -575,6 +577,14 @@ impl ContainerAttr {
                     if out.rename_all.replace(rule).is_some() {
                         return Err(meta.error("duplicate rename_all attribute"));
                     }
+                } else if meta.path.is_ident("deny_unknown_fields") {
+                    if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
+                        return Err(meta.error("deny_unknown_fields does not take a value"));
+                    }
+                    if out.deny_unknown_fields {
+                        return Err(meta.error("duplicate deny_unknown_fields attribute"));
+                    }
+                    out.deny_unknown_fields = true;
                 } else {
                     consume_unknown_meta(meta)?;
                 }
@@ -602,6 +612,70 @@ impl ContainerAttr {
         } else {
             ident.to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod container_attr_tests {
+    use super::*;
+
+    #[test]
+    fn deny_unknown_fields_attribute_is_parsed() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[norito(deny_unknown_fields, rename_all = "snake_case")]
+            struct Demo {
+                field_name: u32,
+            }
+        };
+
+        let attrs = ContainerAttr::parse(&input.attrs).expect("valid container attributes");
+        assert!(attrs.deny_unknown_fields);
+        assert_eq!(
+            attrs.rename_field(&syn::parse_quote!(field_name), &FieldAttr::default()),
+            "field_name"
+        );
+    }
+
+    #[test]
+    fn deny_unknown_fields_after_attributes_owned_by_other_derives_is_parsed() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[norito(tag = "kind", content = "payload", deny_unknown_fields)]
+            enum Demo {
+                Unit,
+            }
+        };
+
+        let attrs = ContainerAttr::parse(&input.attrs).expect("valid mixed attributes");
+        assert!(attrs.deny_unknown_fields);
+    }
+
+    #[test]
+    fn duplicate_deny_unknown_fields_attribute_is_rejected() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[norito(deny_unknown_fields, deny_unknown_fields)]
+            struct Demo {
+                value: u32,
+            }
+        };
+
+        let error = ContainerAttr::parse(&input.attrs).expect_err("duplicate flag must reject");
+        assert_eq!(error.to_string(), "duplicate deny_unknown_fields attribute");
+    }
+
+    #[test]
+    fn deny_unknown_fields_value_is_rejected() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[norito(deny_unknown_fields = true)]
+            struct Demo {
+                value: u32,
+            }
+        };
+
+        let error = ContainerAttr::parse(&input.attrs).expect_err("valued flag must reject");
+        assert_eq!(
+            error.to_string(),
+            "deny_unknown_fields does not take a value"
+        );
     }
 }
 
@@ -4164,6 +4238,15 @@ fn derive_fast_json_struct_flatten(
     }
 
     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
+    let reject_unknown_fields = if container_attrs.deny_unknown_fields {
+        quote! {
+            if let ::core::option::Option::Some(__key) = __map.keys().next() {
+                return Err(norito::json::Error::unknown_field(__key.clone()).into());
+            }
+        }
+    } else {
+        TokenStream2::new()
+    };
     Ok(quote! {
         impl<'a> #impl_generics norito::json::FastFromJson<'a> for #ident #ty_generics #where_clause {
             fn parse<'arena>(
@@ -4182,6 +4265,7 @@ fn derive_fast_json_struct_flatten(
                 #(#init_stmts)*
                 #(#parse_stmts)*
                 #(#flatten_stmts)*
+                #reject_unknown_fields
                 Ok(Self { #(#finals),* })
             }
         }
@@ -4230,6 +4314,15 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                         let mut inits = Vec::new();
                         let mut cases = Vec::new();
                         let mut finals = Vec::new();
+                        let reject_unknown_field = if container_attrs.deny_unknown_fields {
+                            quote! {
+                                return Err(norito::json::Error::unknown_field(w.last_key()).into());
+                            }
+                        } else {
+                            quote! {
+                                w.skip_value()?;
+                            }
+                        };
 
                         for (idx, f) in named.named.iter().enumerate() {
                             let name = f.ident.as_ref().unwrap();
@@ -4725,8 +4818,9 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                                     if w.last_key() == #key_lit {
                                         #parse_body
                                     } else {
-                                        // Hash collision: skip this value deterministically
-                                        w.skip_value()?;
+                                        // A hash collision remains an unknown key after the
+                                        // exact key comparison.
+                                        #reject_unknown_field
                                     }
                                 }
                             });
@@ -4755,8 +4849,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                                         match __kh {
                                             #(#cases),*,
                                             _ => {
-                                                // Unknown key: skip its value
-                                                w.skip_value()?;
+                                                #reject_unknown_field
                                             }
                                         }
                                         let _ = w.consume_comma_if_present()?;
@@ -4805,6 +4898,24 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                 syn::parse_quote! { norito::json::key_hash_const(#tag_lit) };
             let content_hash_expr: syn::Expr =
                 syn::parse_quote! { norito::json::key_hash_const(#content_lit) };
+            let reject_unknown_variant_field = if container_attrs.deny_unknown_fields {
+                quote! {
+                    return Err(norito::json::Error::unknown_field(key).into());
+                }
+            } else {
+                quote! {
+                    __parser.skip_value()?;
+                }
+            };
+            let reject_unknown_envelope_field = if container_attrs.deny_unknown_fields {
+                quote! {
+                    return Err(norito::json::Error::unknown_field(w.last_key()).into());
+                }
+            } else {
+                quote! {
+                    w.skip_value()?;
+                }
+            };
 
             let mut tag_match_arms = Vec::new();
             let mut parse_arms = Vec::new();
@@ -5037,7 +5148,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                                         match key.as_str() {
                                             #( #match_tokens ),*,
                                             _ => {
-                                                __parser.skip_value()?;
+                                                #reject_unknown_variant_field
                                             }
                                         }
                                         __parser.skip_ws();
@@ -5065,10 +5176,6 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                 &format!("unknown variant `{{}}` for {ident}"),
                 proc_macro2::Span::call_site(),
             );
-            let duplicate_tag_msg =
-                syn::LitStr::new("duplicate tag field", proc_macro2::Span::call_site());
-            let duplicate_content_msg =
-                syn::LitStr::new("duplicate content field", proc_macro2::Span::call_site());
             let missing_tag_msg =
                 syn::LitStr::new("missing tag field", proc_macro2::Span::call_site());
             let missing_content_msg =
@@ -5096,9 +5203,9 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                         while !w.peek_object_end()? {
                             let __kh = w.read_key_hash()?;
                             w.expect_colon_resync()?;
-                            if __kh == #tag_hash_expr {
+                            if __kh == #tag_hash_expr && w.last_key() == #tag_lit {
                                 if __variant_idx.is_some() {
-                                    return Err(norito::Error::Message(#duplicate_tag_msg.into()));
+                                    return Err(norito::json::Error::duplicate_field(#tag_lit).into());
                                 }
                                 let __tag_ref = w.parse_string_ref_inline(arena)?;
                                 let __tag_str: &str = match __tag_ref {
@@ -5120,9 +5227,9 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                                     }?;
                                     __result = Some(__value);
                                 }
-                            } else if __kh == #content_hash_expr {
+                            } else if __kh == #content_hash_expr && w.last_key() == #content_lit {
                                 if __content_slice.is_some() || __result.is_some() {
-                                    return Err(norito::Error::Message(#duplicate_content_msg.into()));
+                                    return Err(norito::json::Error::duplicate_field(#content_lit).into());
                                 }
                                 let __start = w.raw_pos();
                                 let mut __parser = norito::json::Parser::new_at(__input, __start);
@@ -5141,7 +5248,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                                     __content_slice = Some(__slice);
                                 }
                             } else {
-                                w.skip_value()?;
+                                #reject_unknown_envelope_field
                             }
                             let _ = w.consume_comma_if_present()?;
                         }
@@ -5554,6 +5661,12 @@ fn derive_struct_json_deserialize(
     container_attrs: &ContainerAttr,
 ) -> syn::Result<TokenStream2> {
     validate_field_attrs(&data.fields)?;
+    if container_attrs.deny_unknown_fields && !matches!(&data.fields, Fields::Named(_)) {
+        return Err(syn::Error::new_spanned(
+            ident,
+            "#[norito(deny_unknown_fields)] requires a struct with named fields",
+        ));
+    }
     let mut r#gen = generics.clone();
     match &data.fields {
         Fields::Named(named) => {
@@ -5569,6 +5682,19 @@ fn derive_struct_json_deserialize(
                     container_attrs,
                 );
             }
+            let unknown_field_arm = if container_attrs.deny_unknown_fields {
+                quote! {
+                    _ => {
+                        return Err(norito::json::Error::unknown_field(key));
+                    }
+                }
+            } else {
+                quote! {
+                    _ => {
+                        parser.skip_value()?;
+                    }
+                }
+            };
             let mut inits = Vec::new();
             let mut arms = Vec::new();
             let mut finals = Vec::new();
@@ -5593,15 +5719,11 @@ fn derive_struct_json_deserialize(
                 attrs.require_json_deserialize_bound(&mut r#gen, &f.ty);
                 let ty = &f.ty;
                 inits.push(quote! { let mut #var_ident: ::core::option::Option<#ty> = ::core::option::Option::None; });
-                let duplicate_msg = syn::LitStr::new(
-                    &format!("duplicate field `{key}`"),
-                    proc_macro2::Span::call_site(),
-                );
                 let deserialize_call = attrs.deserializer_call(ty, quote!(parser));
                 arms.push(quote! {
                     #key_lit => {
                         if #var_ident.is_some() {
-                            return Err(norito::json::Error::Message(#duplicate_msg.into()));
+                            return Err(norito::json::Error::duplicate_field(#key_lit));
                         }
                         let value = #deserialize_call;
                         #var_ident = ::core::option::Option::Some(value);
@@ -5649,9 +5771,7 @@ fn derive_struct_json_deserialize(
                                 parser.expect(b':')?;
                                 match key.as_str() {
                                     #( #arms ),*,
-                                    _ => {
-                                        parser.skip_value()?;
-                                    }
+                                    #unknown_field_arm
                                 }
                                 parser.skip_ws();
                                 if parser.try_consume_char(b',')? {
@@ -5871,6 +5991,15 @@ fn derive_struct_json_deserialize_flatten(
     }
 
     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
+    let reject_unknown_fields = if container_attrs.deny_unknown_fields {
+        quote! {
+            if let ::core::option::Option::Some(__key) = __map.keys().next() {
+                return Err(norito::json::Error::unknown_field(__key.clone()));
+            }
+        }
+    } else {
+        TokenStream2::new()
+    };
     let result = quote! {
         impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
             #[allow(clippy::useless_let_if_seq)]
@@ -5887,6 +6016,7 @@ fn derive_struct_json_deserialize_flatten(
                 #(#init_stmts)*
                 #(#parse_stmts)*
                 #(#flatten_stmts)*
+                #reject_unknown_fields
                 Ok(Self { #(#finals),* })
             }
         }
@@ -5913,6 +6043,19 @@ fn derive_enum_json_deserialize(
     })?;
     let tag_lit = syn::LitStr::new(&tag, proc_macro2::Span::call_site());
     let content_lit = syn::LitStr::new(&content, proc_macro2::Span::call_site());
+    let unknown_variant_field = if container_attrs.deny_unknown_fields {
+        quote! {
+            _ => {
+                return Err(norito::json::Error::unknown_field(key));
+            }
+        }
+    } else {
+        quote! {
+            _ => {
+                __parser.skip_value()?;
+            }
+        }
+    };
 
     let mut r#gen = generics.clone();
     let mut arms = Vec::new();
@@ -6105,9 +6248,7 @@ fn derive_enum_json_deserialize(
                                 __parser.expect(b':')?;
                                 match key.as_str() {
                                     #( #match_tokens ),*,
-                                    _ => {
-                                        __parser.skip_value()?;
-                                    }
+                                    #unknown_variant_field
                                 }
                                 __parser.skip_ws();
                                 if __parser.try_consume_char(b',')? {
@@ -6132,6 +6273,15 @@ fn derive_enum_json_deserialize(
     }
 
     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
+    let unknown_envelope_field = if container_attrs.deny_unknown_fields {
+        quote! {
+            return Err(norito::json::Error::unknown_field(key));
+        }
+    } else {
+        quote! {
+            parser.skip_value()?;
+        }
+    };
     let result = quote! {
         impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
             #[allow(clippy::useless_let_if_seq)]
@@ -6147,13 +6297,19 @@ fn derive_enum_json_deserialize(
                         let key = parser.parse_string()?;
                         parser.expect(b':')?;
                         if key == #tag_lit {
+                            if __norito_tag.is_some() {
+                                return Err(norito::json::Error::duplicate_field(#tag_lit));
+                            }
                             let value = parser.parse_string()?;
                             __norito_tag = ::core::option::Option::Some(value);
                         } else if key == #content_lit {
+                            if __norito_raw.is_some() {
+                                return Err(norito::json::Error::duplicate_field(#content_lit));
+                            }
                             let raw = norito::json::RawValue::json_deserialize(parser)?;
                             __norito_raw = ::core::option::Option::Some(raw.into_string());
                         } else {
-                            parser.skip_value()?;
+                            #unknown_envelope_field
                         }
                         parser.skip_ws();
                         if parser.try_consume_char(b',')? {
@@ -6221,6 +6377,12 @@ fn has_no_fast_from_json_attr(attrs: &[syn::Attribute]) -> bool {
 }
 
 #[proc_macro_derive(JsonDeserialize, attributes(norito))]
+/// Derive Norito JSON deserialization.
+///
+/// Named structs and tagged enums may opt into closed object schemas with
+/// `#[norito(deny_unknown_fields)]`. The option rejects unknown object keys;
+/// nested types remain responsible for selecting the same policy when their
+/// schemas are also closed.
 pub fn derive_json_deserialize(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as DeriveInput);
     let container_attrs = match ContainerAttr::parse(&parsed.attrs) {

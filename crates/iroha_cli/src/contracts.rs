@@ -25,16 +25,20 @@ use iroha_core::{
     pipeline::overlay::build_overlay_for_transaction_with_accounts,
     smartcontracts::ivm::{cache::ProgramSummary, host::CoreHost},
 };
-use iroha_crypto::{Hash, KeyPair, PrivateKey};
+use iroha_crypto::{KeyPair, PrivateKey};
+use ivm::host::IVMHost;
 use ivm::kotodama::driver::{
     BuildDriver as KotodamaBuildDriver, BuildStatus as KotodamaBuildStatus,
     PublishLayout as KotodamaPublishLayout, PublishMode as KotodamaPublishMode,
     SourceBuildRequest as KotodamaSourceBuildRequest, read_source_file as read_kotodama_source,
 };
-use ivm::{PointerType, host::IVMHost};
 use reqwest::StatusCode;
 
 use crate::{Run, RunContext, TransactionWaitArgs, wait_for_transaction_status};
+
+// Canonical argument preparation reserves the bounded 1 MiB HEAP before
+// decoding; keep the default above that floor with room for a small call.
+const DEFAULT_CONTRACT_GAS_LIMIT: u64 = 1_500_000;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -84,6 +88,42 @@ impl Run for Command {
             Command::DebugCall(args) => args.run(context),
             Command::Manifest(cmd) => cmd.run(context),
             Command::Simulate(args) => args.run(context),
+        }
+    }
+}
+
+impl Command {
+    /// Return whether this contract command is entirely local and may use the
+    /// deterministic offline fallback configuration.
+    pub(crate) fn allows_fallback_config(&self) -> bool {
+        match self {
+            Self::App(AppCommand::Build(_))
+            | Self::Dev(
+                DevCommand::Check(_)
+                | DevCommand::Build(_)
+                | DevCommand::Test(_)
+                | DevCommand::Schema(_),
+            )
+            | Self::DeriveAddress(_)
+            | Self::DebugView(_)
+            | Self::DebugCall(_)
+            | Self::Manifest(ManifestCommand::Build(_))
+            | Self::Simulate(_) => true,
+            Self::App(AppCommand::Plan(_) | AppCommand::Deploy(_) | AppCommand::Resume(_))
+            | Self::Dev(
+                DevCommand::Doctor(_)
+                | DevCommand::Deploy(_)
+                | DevCommand::Resume(_)
+                | DevCommand::Call(_)
+                | DevCommand::View(_)
+                | DevCommand::Smoke(_),
+            )
+            | Self::Code(_)
+            | Self::Alias(_)
+            | Self::Deploy(_)
+            | Self::Call(_)
+            | Self::View(_)
+            | Self::Manifest(ManifestCommand::Get(_)) => false,
         }
     }
 }
@@ -482,13 +522,13 @@ pub struct AppResumeArgs {
     pub transaction_ttl_ms: Option<u64>,
 }
 
-fn default_contract_artifact_path(manifest_path: &Path, contract_name: &str) -> Result<PathBuf> {
+fn default_contract_artifact_path(manifest_path: &Path, seiyaku_name: &str) -> Result<PathBuf> {
     let base = manifest_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("artifacts");
     fs::create_dir_all(&base)?;
-    Ok(base.join(format!("{contract_name}.to")))
+    Ok(base.join(format!("{seiyaku_name}.to")))
 }
 
 fn resolve_manifest_path(base: &Path, path: &Path) -> PathBuf {
@@ -901,7 +941,7 @@ fn build_contract_app_bundle(manifest_path: &Path) -> Result<norito::json::Value
                         )
                     })?;
                 if descriptor.kind
-                    != iroha::data_model::smart_contract::manifest::EntryPointKind::Init
+                    != iroha::data_model::smart_contract::manifest::EntryPointKind::Hajimari
                 {
                     return Err(eyre!(
                         "hajimari call `{}` must target a hajimari/始まり entrypoint",
@@ -1058,6 +1098,21 @@ impl DevBuildArgs {
 
 impl DevCheckArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let lint = dev_run_lints(&self.manifest.manifest)?;
+        let lint_ok = lint
+            .get("ok")
+            .and_then(norito::json::Value::as_bool)
+            .unwrap_or(false);
+        if !lint_ok {
+            context.print_data(&norito::json!({
+                "ok": false,
+                "profile": (self.manifest.profile),
+                "lint": (lint),
+            }))?;
+            return Err(eyre!(
+                "contract lint failed; detailed diagnostics were emitted in the lint report"
+            ));
+        }
         let build =
             dev_build_manifest(&self.manifest.manifest, &self.manifest.profile, self.locked)?;
         let test = dev_run_tests(
@@ -1069,7 +1124,6 @@ impl DevCheckArgs {
             false,
             "text",
         )?;
-        let lint = dev_run_lints(&self.manifest.manifest)?;
         context.print_data(&norito::json!({
             "ok": true,
             "profile": (self.manifest.profile),
@@ -1547,7 +1601,7 @@ fn validate_dev_payload_value_for_contract(
 fn dev_profile_default_gas_limit(profile: Option<&ContractDevManifestProfile>) -> u64 {
     profile
         .and_then(|profile| profile.default_gas_limit)
-        .unwrap_or(100_000)
+        .unwrap_or(DEFAULT_CONTRACT_GAS_LIMIT)
 }
 
 fn load_dev_profile_config(
@@ -1769,6 +1823,7 @@ fn dev_run_lints(manifest_path: &Path) -> Result<norito::json::Value> {
     let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     let session = ivm::kotodama::session::CompilerSession::default();
     let mut checked = 0_u64;
+    let mut diagnostic_count = 0_u64;
     let mut diagnostics = Vec::new();
     for contract in &manifest.contracts {
         if let Some(source) = &contract.source {
@@ -1780,36 +1835,64 @@ fn dev_run_lints(manifest_path: &Path) -> Result<norito::json::Value> {
             }) {
                 Ok(warnings) => warnings,
                 Err(bundle) => {
+                    diagnostic_count = diagnostic_count.saturating_add(
+                        u64::try_from(bundle.diagnostics.len()).unwrap_or(u64::MAX),
+                    );
                     diagnostics.push(norito::json!({
                         "source": (source_path.display().to_string()),
                         "kind": "compile",
-                        "diagnostics": (bundle.render_json().unwrap_or_else(|_| bundle.render_human())),
+                        "diagnostics": (norito::json::Value::Array(bundle.diagnostics.iter().map(ivm::kotodama::diagnostic::Diagnostic::to_json_value).collect())),
                     }));
                     checked += 1;
                     continue;
                 }
             };
             if !warnings.is_empty() {
+                diagnostic_count = diagnostic_count
+                    .saturating_add(u64::try_from(warnings.len()).unwrap_or(u64::MAX));
                 let language = ivm::kotodama::i18n::detect_language();
+                let warnings = warnings
+                    .into_iter()
+                    .map(|warning| {
+                        let (line, column) = warning
+                            .source
+                            .as_ref()
+                            .map_or((1, 1), |span| (span.line.max(1), span.column.max(1)));
+                        let position = ivm::kotodama::diagnostic::SourcePosition { line, column };
+                        let mut diagnostic = ivm::kotodama::diagnostic::Diagnostic::warning(
+                            warning.diagnostic_code(),
+                            ivm::kotodama::diagnostic::DiagnosticPhase::Semantic,
+                            warning.localized_message(language),
+                            Some(ivm::kotodama::diagnostic::SourceSpan {
+                                source: Some(source_path.display().to_string()),
+                                start: position,
+                                end: position,
+                                byte_range: None,
+                            }),
+                        );
+                        diagnostic.notes.push(format!(
+                            "lint `{}` in category `{}`",
+                            warning.code,
+                            warning.category.as_str()
+                        ));
+                        diagnostic.to_json_value()
+                    })
+                    .collect::<Vec<_>>();
                 diagnostics.push(norito::json!({
                     "source": (source_path.display().to_string()),
                     "kind": "lint",
-                    "warnings": (warnings.iter().map(|warning| format!("{}: {}", warning.diagnostic_code(), warning.localized_message(language))).collect::<Vec<_>>()),
+                    "diagnostics": (warnings),
                 }));
             }
             checked += 1;
         }
     }
-    if !diagnostics.is_empty() {
-        return Err(eyre!(
-            "contract lint failed for {} source(s)",
-            diagnostics.len()
-        ));
-    }
+    let ok = diagnostics.is_empty();
     Ok(norito::json!({
-        "ok": true,
+        "ok": (ok),
         "checked": (checked),
-        "diagnostic_count": (diagnostics.len() as u64),
+        "failed_source_count": (diagnostics.len() as u64),
+        "diagnostic_count": (diagnostic_count),
         "diagnostics": (diagnostics),
     }))
 }
@@ -2039,10 +2122,10 @@ fn render_dev_schema_markdown(
                 .and_then(norito::json::Value::as_str)
                 .unwrap_or("Unknown");
             let kind = match raw_kind {
-                "Public" => "kotoage",
+                "Kotoage" => "kotoage",
                 "View" => "view",
-                "Init" => "hajimari",
-                "Upgrade" => "kaizen",
+                "Hajimari" => "hajimari",
+                "Kaizen" => "kaizen",
                 other => other,
             };
             let return_type = entrypoint
@@ -2525,7 +2608,7 @@ pub struct CallArgs {
     #[arg(long)]
     pub fee_sponsor: Option<String>,
     /// Gas limit metadata forwarded to the contract call.
-    #[arg(long, default_value_t = 100_000)]
+    #[arg(long, default_value_t = DEFAULT_CONTRACT_GAS_LIMIT)]
     pub gas_limit: u64,
     #[command(flatten)]
     pub target: ContractTargetArgs,
@@ -2635,7 +2718,7 @@ pub struct ViewArgs {
     #[arg(long)]
     pub entrypoint: String,
     /// Gas limit applied to the local view execution.
-    #[arg(long, default_value_t = 100_000)]
+    #[arg(long, default_value_t = DEFAULT_CONTRACT_GAS_LIMIT)]
     pub gas_limit: u64,
     #[command(flatten)]
     pub target: ContractTargetArgs,
@@ -2680,7 +2763,7 @@ pub struct DebugViewArgs {
     #[arg(long)]
     pub entrypoint: String,
     /// Gas limit applied to the local view execution.
-    #[arg(long, default_value_t = 100_000)]
+    #[arg(long, default_value_t = DEFAULT_CONTRACT_GAS_LIMIT)]
     pub gas_limit: u64,
     /// Optional source file used to render snippet context for trapped debug locations.
     #[arg(long, value_name = "PATH")]
@@ -2725,7 +2808,7 @@ pub struct DebugCallArgs {
     #[arg(long)]
     pub entrypoint: String,
     /// Gas limit applied to the local call execution.
-    #[arg(long, default_value_t = 100_000)]
+    #[arg(long, default_value_t = DEFAULT_CONTRACT_GAS_LIMIT)]
     pub gas_limit: u64,
     /// Optional source file used to render snippet context for trapped debug locations.
     #[arg(long, value_name = "PATH")]
@@ -2989,28 +3072,17 @@ fn verify_contract_from_bytes(bytes: &[u8]) -> Result<ivm::VerifiedContractArtif
 }
 
 fn program_summary_from_bytes(bytes: &[u8]) -> Result<ProgramSummary> {
-    let parsed = ivm::ProgramMetadata::parse(bytes)
-        .map_err(|err| eyre!("failed to parse IVM metadata: {err}"))?;
-    let code_hash = ivm::contract_code_hash(bytes);
-    let metadata = parsed.metadata;
-    let policy = match metadata.abi_version {
-        1 => ivm::SyscallPolicy::AbiV1,
+    let summary = ProgramSummary::from_artifact(bytes)
+        .map_err(|err| eyre!("failed to prepare IVM program summary: {err}"))?;
+    match summary.metadata.abi_version {
+        1 => {}
         v => {
             return Err(eyre!(
                 "unsupported abi_version {v}; expected 1 for the first release"
             ));
         }
-    };
-    let abi_hash = Hash::prehashed(ivm::syscalls::compute_abi_hash(policy));
-    let meta_hash = Hash::new(metadata.encode());
-    Ok(ProgramSummary {
-        metadata,
-        code_hash,
-        abi_hash,
-        meta_hash,
-        header_len: parsed.header_len,
-        code_offset: parsed.code_offset,
-    })
+    }
+    Ok(summary)
 }
 
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
@@ -3225,10 +3297,11 @@ enum LocalContractSchemaType {
     Tuple(Vec<LocalContractSchemaType>),
 }
 
-fn encode_local_contract_arguments(
+fn prepare_local_contract_arguments(
     descriptor: &ivm::EmbeddedEntrypointDescriptor,
     payload: Option<&Json>,
-) -> Result<Option<Vec<u8>>> {
+    gas_limit: u64,
+) -> Result<Option<ivm::PreparedArgumentRecord>> {
     match (descriptor.argument_schema.as_ref(), payload) {
         (None, None) => Ok(None),
         (None, Some(_)) => Err(eyre!(
@@ -3239,14 +3312,23 @@ fn encode_local_contract_arguments(
             "parameterized entrypoint `{}` requires a payload",
             descriptor.name
         )),
-        (Some(schema), Some(payload)) => ivm::encode_argument_record_from_json(schema, payload)
-            .map(Some)
-            .map_err(|err| {
-                eyre!(
-                    "payload for entrypoint `{}` does not match its argument schema: {err}",
-                    descriptor.name
-                )
-            }),
+        (Some(schema), Some(payload)) => {
+            let canonical =
+                ivm::encode_argument_record_from_json(schema, payload).map_err(|err| {
+                    eyre!(
+                        "payload for entrypoint `{}` does not match its argument schema: {err}",
+                        descriptor.name
+                    )
+                })?;
+            ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), gas_limit)
+                .map(Some)
+                .map_err(|err| {
+                    eyre!(
+                        "failed to prepare arguments for entrypoint `{}`: {err}",
+                        descriptor.name
+                    )
+                })
+        }
     }
 }
 
@@ -3266,7 +3348,8 @@ fn execute_local_contract_debug_view<C: RunContext>(
         args.payload.payload_file.as_deref(),
     )?;
     let payload = normalize_local_contract_payload(descriptor, payload.as_ref())?;
-    let arguments = encode_local_contract_arguments(descriptor, payload.as_ref())?;
+    let arguments = prepare_local_contract_arguments(descriptor, payload.as_ref(), args.gas_limit)?;
+    let prepared_arguments = arguments.clone();
     let accounts = load_debug_accounts_fixture(
         &authority,
         args.accounts_json.as_deref(),
@@ -3278,7 +3361,11 @@ fn execute_local_contract_debug_view<C: RunContext>(
     )?;
 
     let mut host = if let Some(arguments) = arguments {
-        CoreHost::with_accounts_and_argument_record(authority, Arc::clone(&accounts), arguments)
+        CoreHost::with_accounts_and_argument_record(
+            authority,
+            Arc::clone(&accounts),
+            Some(arguments),
+        )
     } else {
         CoreHost::with_accounts(authority, Arc::clone(&accounts))
     };
@@ -3290,6 +3377,11 @@ fn execute_local_contract_debug_view<C: RunContext>(
     vm.load_program(&code)
         .map_err(|err| eyre!("failed to load contract debug view bytecode: {err}"))?;
     vm.set_gas_limit(args.gas_limit);
+    if let Some(arguments) = prepared_arguments.as_ref() {
+        arguments
+            .precharge_vm(&mut vm)
+            .map_err(|err| eyre!("failed to precharge contract debug arguments: {err}"))?;
+    }
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entrypoint_pc)
         .map_err(|err| eyre!("failed to seek to contract debug entrypoint: {err}"))?;
@@ -3355,14 +3447,13 @@ fn execute_local_contract_debug_view<C: RunContext>(
         });
     }
 
-    let schema = descriptor
-        .return_type
-        .as_deref()
-        .map(parse_local_contract_schema_type)
-        .transpose()?
-        .unwrap_or(LocalContractSchemaType::Unit);
-    let (result, _) = decode_local_contract_view_result_value(&vm, 10, &schema)
-        .map_err(|err| eyre!("failed to decode contract debug view return value: {err}"))?;
+    let result = descriptor.return_schema.as_ref().map_or_else(
+        || Ok(norito::json::Value::Null),
+        |schema| {
+            iroha_core::smartcontracts::ivm::return_value::decode_entrypoint_return(&vm, schema)
+                .map_err(|err| eyre!("failed to decode contract debug view return value: {err}"))
+        },
+    )?;
 
     Ok(LocalContractDebugViewResponse {
         ok: true,
@@ -3396,7 +3487,8 @@ fn execute_local_contract_debug_call<C: RunContext>(
         args.payload.payload_file.as_deref(),
     )?;
     let payload = normalize_local_contract_payload(descriptor, payload.as_ref())?;
-    let arguments = encode_local_contract_arguments(descriptor, payload.as_ref())?;
+    let arguments = prepare_local_contract_arguments(descriptor, payload.as_ref(), args.gas_limit)?;
+    let prepared_arguments = arguments.clone();
     let accounts = load_debug_accounts_fixture(
         &authority,
         args.accounts_json.as_deref(),
@@ -3408,7 +3500,11 @@ fn execute_local_contract_debug_call<C: RunContext>(
     )?;
 
     let mut host = if let Some(arguments) = arguments {
-        CoreHost::with_accounts_and_argument_record(authority, Arc::clone(&accounts), arguments)
+        CoreHost::with_accounts_and_argument_record(
+            authority,
+            Arc::clone(&accounts),
+            Some(arguments),
+        )
     } else {
         CoreHost::with_accounts(authority, Arc::clone(&accounts))
     };
@@ -3420,6 +3516,11 @@ fn execute_local_contract_debug_call<C: RunContext>(
     vm.load_program(&code)
         .map_err(|err| eyre!("failed to load contract debug call bytecode: {err}"))?;
     vm.set_gas_limit(args.gas_limit);
+    if let Some(arguments) = prepared_arguments.as_ref() {
+        arguments
+            .precharge_vm(&mut vm)
+            .map_err(|err| eyre!("failed to precharge contract debug arguments: {err}"))?;
+    }
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entrypoint_pc)
         .map_err(|err| eyre!("failed to seek to contract debug entrypoint: {err}"))?;
@@ -3457,19 +3558,14 @@ fn execute_local_contract_debug_call<C: RunContext>(
         });
     }
 
-    let schema = descriptor
-        .return_type
-        .as_deref()
-        .map(parse_local_contract_schema_type)
-        .transpose()?
-        .unwrap_or(LocalContractSchemaType::Unit);
-    let result = if schema == LocalContractSchemaType::Unit {
-        None
-    } else {
-        let (value, _) = decode_local_contract_view_result_value(&vm, 10, &schema)
-            .map_err(|err| eyre!("failed to decode contract debug call return value: {err}"))?;
-        Some(value)
-    };
+    let result = descriptor
+        .return_schema
+        .as_ref()
+        .map(|schema| {
+            iroha_core::smartcontracts::ivm::return_value::decode_entrypoint_return(&vm, schema)
+                .map_err(|err| eyre!("failed to decode contract debug call return value: {err}"))
+        })
+        .transpose()?;
 
     Ok(LocalContractDebugCallResponse {
         ok: true,
@@ -3751,7 +3847,7 @@ fn resolve_local_public_entrypoint<'a>(
     resolve_local_entrypoint(
         artifact,
         selector,
-        iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
         "kotoage",
     )
 }
@@ -3937,187 +4033,25 @@ fn normalize_local_contract_payload(
     descriptor: &ivm::EmbeddedEntrypointDescriptor,
     payload: Option<&norito::json::Value>,
 ) -> Result<Option<iroha_primitives::json::Json>> {
-    if descriptor.params.is_empty() {
-        if payload.is_some() {
-            return Err(eyre!(
-                "contract payload must be omitted for zero-parameter entrypoints"
-            ));
-        }
-        return Ok(None);
-    }
-
-    let payload = payload
-        .ok_or_else(|| eyre!("contract payload is required for parameterized entrypoints"))?;
-    let object = payload
-        .as_object()
-        .ok_or_else(|| eyre!("contract payload must be a JSON object keyed by parameter name"))?;
-
-    let mut normalized = norito::json::Map::new();
-    for param in &descriptor.params {
-        let value = object.get(&param.name).ok_or_else(|| {
-            eyre!(
-                "missing contract payload field `{}` for entrypoint `{}`",
-                param.name,
-                descriptor.name
-            )
-        })?;
-        let schema = parse_local_contract_schema_type(&param.type_name)?;
-        validate_local_contract_value(&schema, value, &param.name)?;
-        normalized.insert(param.name.clone(), value.clone());
-    }
-
-    for key in object.keys() {
-        if !descriptor.params.iter().any(|param| param.name == *key) {
-            return Err(eyre!(
-                "unexpected contract payload field `{key}` for entrypoint `{}`",
-                descriptor.name
-            ));
-        }
-    }
-
-    Ok(Some(iroha_primitives::json::Json::from(
-        norito::json::Value::Object(normalized),
-    )))
-}
-
-fn decode_local_contract_view_result_value(
-    vm: &ivm::IVM,
-    start_register: usize,
-    schema: &LocalContractSchemaType,
-) -> Result<(norito::json::Value, usize)> {
-    let pointer_string = |ptr: u64| -> Result<String> {
-        if ptr == 0 {
-            return Err(eyre!(
-                "contract view returned a null pointer for a non-nullable type"
-            ));
-        }
-        Ok(ptr.to_string())
-    };
-
-    match schema {
-        LocalContractSchemaType::Unit => Ok((norito::json::Value::Null, 0)),
-        LocalContractSchemaType::Int => {
-            let raw = vm.register(start_register);
-            let value = decode_contract_view_signed_i64(raw);
-            Ok((norito::json::Value::from(value), 1))
-        }
-        LocalContractSchemaType::Bool => Ok((
-            norito::json::Value::Bool(vm.register(start_register) != 0),
-            1,
+    match (descriptor.argument_schema.as_ref(), payload) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(eyre!(
+            "contract payload must be omitted for zero-parameter entrypoints"
         )),
-        LocalContractSchemaType::Numeric => {
-            let ptr = vm.register(start_register);
-            let value: iroha_primitives::numeric::Numeric =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)
-                    .map_err(|err| eyre!("failed to decode numeric return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::String => {
-            Err(eyre!("string contract view returns are not supported yet"))
-        }
-        LocalContractSchemaType::Json => {
-            let ptr = vm.register(start_register);
-            let value = CoreHost::decode_tlv_json(vm, ptr)
-                .map_err(|err| eyre!("failed to decode JSON return: {err}"))?;
-            let parsed = norito::json::parse_value(value.get())
-                .map_err(|err| eyre!("invalid JSON return payload: {err}"))?;
-            Ok((parsed, 1))
-        }
-        LocalContractSchemaType::Name => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::name::Name =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::Name)
-                    .map_err(|err| eyre!("failed to decode Name return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::AccountId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::account::AccountId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AccountId)
-                    .map_err(|err| eyre!("failed to decode AccountId return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::AssetDefinitionId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::asset::AssetDefinitionId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)
-                    .map_err(|err| eyre!("failed to decode AssetDefinitionId return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::AssetId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::asset::AssetId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetId)
-                    .map_err(|err| eyre!("failed to decode AssetId return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::DomainId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::domain::DomainId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::DomainId)
-                    .map_err(|err| eyre!("failed to decode DomainId return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::NftId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nft::NftId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::NftId)
-                    .map_err(|err| eyre!("failed to decode NftId return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::Blob | LocalContractSchemaType::Bytes => {
-            let ptr = vm.register(start_register);
-            let value = CoreHost::decode_tlv_blob(vm, ptr)
-                .map_err(|err| eyre!("failed to decode blob return: {err}"))?;
-            Ok((
-                norito::json::Value::from(format!("0x{}", hex::encode(value))),
-                1,
-            ))
-        }
-        LocalContractSchemaType::DataSpaceId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nexus::DataSpaceId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::DataSpaceId)
-                    .map_err(|err| eyre!("failed to decode DataSpaceId return: {err}"))?;
-            Ok((norito::json::Value::from(value.as_u64()), 1))
-        }
-        LocalContractSchemaType::AxtDescriptor => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nexus::AxtDescriptor =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AxtDescriptor)
-                    .map_err(|err| eyre!("failed to decode AxtDescriptor return: {err}"))?;
-            Ok((norito::json::to_value(&value)?, 1))
-        }
-        LocalContractSchemaType::AssetHandle => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nexus::AssetHandle =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetHandle)
-                    .map_err(|err| eyre!("failed to decode AssetHandle return: {err}"))?;
-            Ok((norito::json::to_value(&value)?, 1))
-        }
-        LocalContractSchemaType::ProofBlob => {
-            let ptr = vm.register(start_register);
-            let value = pointer_string(ptr)?;
-            Ok((norito::json::Value::from(value), 1))
-        }
-        LocalContractSchemaType::Tuple(items) => {
-            let mut values = Vec::with_capacity(items.len());
-            let mut consumed = 0_usize;
-            for item in items {
-                let (value, used) =
-                    decode_local_contract_view_result_value(vm, start_register + consumed, item)?;
-                values.push(value);
-                consumed += used;
-            }
-            Ok((norito::json::Value::Array(values), consumed))
+        (Some(_), None) => Err(eyre!(
+            "contract payload is required for parameterized entrypoints"
+        )),
+        (Some(schema), Some(payload)) => {
+            let payload = iroha_primitives::json::Json::from(payload.clone());
+            ivm::encode_argument_record_from_json(schema, &payload).map_err(|error| {
+                eyre!(
+                    "contract payload for entrypoint `{}` does not match its exact argument schema: {error}",
+                    descriptor.name
+                )
+            })?;
+            Ok(Some(payload))
         }
     }
-}
-
-fn decode_contract_view_signed_i64(raw: u64) -> i64 {
-    // IVM exposes signed integer returns in the register file as raw
-    // two's-complement bits inside a u64 register value.
-    raw as i64
 }
 
 #[cfg(test)]
@@ -4130,6 +4064,12 @@ mod tests {
     use ivm::kotodama::session::{CompileRequest, CompilerSession};
     use tempfile::tempdir;
     use url::Url;
+
+    #[test]
+    fn default_contract_gas_limit_covers_strict_argument_admission_floor() {
+        assert_eq!(dev_profile_default_gas_limit(None), DEFAULT_CONTRACT_GAS_LIMIT);
+        assert!(DEFAULT_CONTRACT_GAS_LIMIT > 1_048_752);
+    }
 
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -4195,13 +4135,6 @@ mod tests {
     }
 
     #[test]
-    fn local_contract_view_signed_int_decodes_twos_complement_register_bits() {
-        assert_eq!(decode_contract_view_signed_i64(u64::MAX), -1);
-        assert_eq!(decode_contract_view_signed_i64(i64::MAX as u64), i64::MAX);
-        assert_eq!(decode_contract_view_signed_i64(i64::MIN as u64), i64::MIN);
-    }
-
-    #[test]
     fn resolve_contract_manifest_alias_uses_default_dataspace() {
         let alias = resolve_contract_manifest_alias("router", Some("universal"))
             .expect("resolve contract alias");
@@ -4230,7 +4163,9 @@ mod tests {
         let error = parse_contract_app_manifest(value)
             .expect_err("the English lifecycle table must not be accepted");
         assert!(
-            error.to_string().contains("unknown contract manifest field `init`"),
+            error
+                .to_string()
+                .contains("unknown contract manifest field `init`"),
             "unexpected error: {error}",
         );
     }
@@ -4719,6 +4654,109 @@ mod tests {
     }
 
     #[test]
+    fn dev_lint_report_preserves_canonical_diagnostic_records() {
+        let dir = tempdir().expect("tempdir");
+        let contracts_dir = dir.path().join("contracts");
+        fs::create_dir_all(&contracts_dir).expect("create contracts dir");
+        fs::write(
+            contracts_dir.join("greeter.ko"),
+            r#"
+                seiyaku Greeter {
+                    view fn status(unused: i64) -> i64 { return 7; }
+                }
+            "#,
+        )
+        .expect("write contract");
+
+        let manifest_path = dir.path().join("iroha.contracts.toml");
+        fs::write(
+            &manifest_path,
+            r#"
+                bundle_name = "demo"
+
+                [[contracts]]
+                name = "demo.greeter"
+                alias = "greeter::universal"
+                source = "contracts/greeter.ko"
+            "#,
+        )
+        .expect("write manifest");
+
+        let report = dev_run_lints(&manifest_path).expect("lint report");
+        assert_eq!(
+            report.get("ok").and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            report
+                .get("diagnostic_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            report
+                .get("failed_source_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        let diagnostic = report
+            .get("diagnostics")
+            .and_then(norito::json::Value::as_array)
+            .and_then(|sources| sources.first())
+            .and_then(|source| source.get("diagnostics"))
+            .and_then(norito::json::Value::as_array)
+            .and_then(|diagnostics| diagnostics.first())
+            .expect("canonical lint diagnostic");
+        assert_eq!(
+            diagnostic.get("code").and_then(norito::json::Value::as_str),
+            Some("K5003")
+        );
+        assert_eq!(
+            diagnostic
+                .get("severity")
+                .and_then(norito::json::Value::as_str),
+            Some("warning")
+        );
+        assert_eq!(
+            diagnostic
+                .get("phase")
+                .and_then(norito::json::Value::as_str),
+            Some("semantic")
+        );
+        assert!(diagnostic.get("primary_span").is_some());
+        assert!(diagnostic.get("notes").is_some());
+        assert!(diagnostic.get("help").is_some());
+        assert!(diagnostic.get("fix").is_some());
+
+        let mut context = TestContext::new(fixture_account(0x44));
+        let error = DevCheckArgs {
+            manifest: DevManifestArgs {
+                manifest: manifest_path,
+                profile: "local".to_owned(),
+            },
+            locked: false,
+        }
+        .run(&mut context)
+        .expect_err("lint findings must keep a failing exit status");
+        assert!(
+            error
+                .to_string()
+                .contains("detailed diagnostics were emitted")
+        );
+        let output = context.take_output().expect("printed dev-check report");
+        assert_eq!(
+            output.get("ok").and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            output
+                .pointer("/lint/diagnostics/0/diagnostics/0/code")
+                .and_then(norito::json::Value::as_str),
+            Some("K5003")
+        );
+    }
+
+    #[test]
     fn dev_test_path_filter_selects_files_without_becoming_a_name_filter() {
         let invocations = prepare_dev_test_invocations(
             vec![
@@ -4868,7 +4906,10 @@ mod tests {
         assert_eq!(dev_sample_value_for_type("bool"), norito::json!(false));
         assert_eq!(dev_sample_value_for_type("string"), norito::json!(""));
         assert_eq!(dev_sample_value_for_type("bytes"), norito::json!("0x"));
-        assert_eq!(dev_sample_value_for_type("DataSpaceId"), norito::json!(0_u64));
+        assert_eq!(
+            dev_sample_value_for_type("DataSpaceId"),
+            norito::json!(0_u64)
+        );
 
         for retired in ["int", "Balance", "FixedU128", "Blob"] {
             assert_eq!(
@@ -5483,7 +5524,9 @@ mod tests {
         assert_eq!(summary.code_hash, expected_code_hash);
         assert_eq!(
             summary.abi_hash,
-            Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
+            iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(
+                ivm::SyscallPolicy::AbiV1,
+            ))
         );
     }
 
@@ -5542,7 +5585,7 @@ mod tests {
             code_file: None,
             code_b64: Some(code_b64),
             entrypoint: "inspect".to_owned(),
-            gas_limit: 50_000,
+            gas_limit: DEFAULT_CONTRACT_GAS_LIMIT,
             source_file: None,
             accounts_json: None,
             accounts_file: None,
@@ -5848,7 +5891,7 @@ mod tests {
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("gas_limit").expect("static gas_limit key"),
-            iroha_primitives::json::Json::from(50_000u64),
+            iroha_primitives::json::Json::from(DEFAULT_CONTRACT_GAS_LIMIT),
         );
         metadata.insert(
             Name::from_str("contract_entrypoint").expect("static contract_entrypoint key"),

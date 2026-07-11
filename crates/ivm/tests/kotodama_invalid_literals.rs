@@ -45,11 +45,7 @@ fn invalid_json_literal_reports_error() {
     let src = r#"
         seiyaku InvalidJson {
           kotoage fn main() authorize("SetAccountDetail") {
-            ledger::account::set_detail(
-                AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-                Name::parse("cursor"),
-                Json::parse("{\"unterminated\":}")
-            );
+            ledger::account::set_detail(account: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), key: Name::parse("cursor"), value: Json::parse("{\"unterminated\":}"));
           }
         }
     "#;
@@ -67,9 +63,7 @@ fn build_submit_ballot_inline_rejects_runtime_bytes() {
         seiyaku RuntimeBallotBytes {
           kotoage fn main(cipher: bytes, nullifier: bytes, proof: bytes, vk: bytes)
             authorize("SubmitBallot") {
-            ledger::governance::build_submit_ballot(
-                "election", cipher, nullifier, "ipa", proof, vk
-            );
+            ledger::governance::build_submit_ballot(election_id: "election", ciphertext: cipher, nullifier: nullifier, backend: "ipa", proof: proof, verification_key: vk);
           }
         }
     "#;
@@ -85,25 +79,17 @@ fn build_submit_ballot_inline_rejects_runtime_bytes() {
 fn build_unshield_inline_rejects_non_literal_amount() {
     let src = r#"
         seiyaku NonLiteralAmount {
-          kotoage fn main() authorize("Unshield") {
-            let amt = 1 + 1;
-            let inputs = b"\x01\x02\x03\x04";
-            crypto::zk::build_unshield(
-                AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-                AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-                amt,
-                inputs,
-                "ipa",
-                b"\x0a\x0b\x0c",
-                b"\x0d\x0e\x0f"
-            );
+          kotoage fn main(amt: i64) authorize("Unshield") {
+            let inputs = b"0123456789abcdef0123456789abcdef";
+            crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: amt, inputs: inputs, backend: "ipa", proof: b"\x0a\x0b\x0c", verification_key: b"\x0d\x0e\x0f");
           }
         }
     "#;
 
     let err = english_compiler().compile_source(src).unwrap_err();
     assert!(
-        err.contains("build_unshield_inline requires literal amount"),
+        err.contains("error[K3099]")
+            && err.contains("build_unshield_inline requires literal amount"),
         "expected literal amount error, got: {err}"
     );
 }
@@ -113,14 +99,7 @@ fn build_submit_ballot_inline_rejects_wrong_nullifier_length() {
     let src = r#"
         seiyaku ShortNullifier {
           kotoage fn main() authorize("SubmitBallot") {
-            ledger::governance::build_submit_ballot(
-                "election",
-                b"ciphertext",
-                b"short",
-                "ipa",
-                b"proof",
-                b"vk"
-            );
+            ledger::governance::build_submit_ballot(election_id: "election", ciphertext: b"ciphertext", nullifier: b"short", backend: "ipa", proof: b"proof", verification_key: b"vk");
           }
         }
     "#;
@@ -137,22 +116,15 @@ fn build_unshield_inline_rejects_wrong_inputs_length() {
     let src = r#"
         seiyaku ShortUnshieldInputs {
           kotoage fn main() authorize("Unshield") {
-            crypto::zk::build_unshield(
-                AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-                AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-                1,
-                b"short",
-                "ipa",
-                b"proof",
-                b"vk"
-            );
+            crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: 1, inputs: b"short", backend: "ipa", proof: b"proof", verification_key: b"vk");
           }
         }
     "#;
 
     let err = english_compiler().compile_source(src).unwrap_err();
     assert!(
-        err.contains("build_unshield_inline inputs must be 32 bytes"),
+        err.contains("error[K3099]")
+            && err.contains("build_unshield_inline inputs must be a multiple of 32 bytes"),
         "expected inputs length error, got: {err}"
     );
 }
@@ -162,15 +134,7 @@ fn build_unshield_inline_rejects_negative_amount() {
     let src = r#"
         seiyaku NegativeUnshieldAmount {
           kotoage fn main() authorize("Unshield") {
-            crypto::zk::build_unshield(
-                AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-                AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-                -1,
-                b"0123456789abcdef0123456789abcdef",
-                "ipa",
-                b"proof",
-                b"vk"
-            );
+            crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: -1, inputs: b"0123456789abcdef0123456789abcdef", backend: "ipa", proof: b"proof", verification_key: b"vk");
           }
         }
     "#;

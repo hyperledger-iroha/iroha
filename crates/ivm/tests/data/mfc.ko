@@ -5,29 +5,41 @@ seiyaku MakotoFreeCash {
     fn send_mfc(from_account: AccountId, to_account: AccountId, amount: Amount) {
         // Use constant asset id 1 representing the Makoto Free Cash token
         let mfc = mfc_asset();
-        ledger::asset::transfer(from_account, to_account, mfc, amount, DataSpaceId::parse("0"));
+        ledger::asset::transfer(
+            source: from_account,
+            destination: to_account,
+            asset_definition: mfc,
+            amount: amount,
+            dataspace: DataSpaceId::parse("0"),
+        );
     }
 
     fn loop_mfc(from_account: AccountId, to_account: AccountId) {
         let mfc = mfc_asset();
         var qty: Amount = Amount::from_i64(369);
         for _offset in range(64) {
-            ledger::asset::transfer(from_account, to_account, mfc, qty, DataSpaceId::parse("0"));
+            ledger::asset::transfer(
+                source: from_account,
+                destination: to_account,
+                asset_definition: mfc,
+                amount: qty,
+                dataspace: DataSpaceId::parse("0"),
+            );
             qty = qty + Amount::from_i64(1);
         }
     }
 
-    // Example entry routine demonstrating asset creation and usage.
+    // Example kotoage/言挙げ declaration demonstrating asset creation and usage.
     // It first registers the Makoto Free Cash asset, mints some
     // quantity to the caller, then performs the transfers.
     kotoage fn main(from: AccountId, to: AccountId) authorize("ManageMfc") {
         // Register the asset definition before minting any tokens.
         let mfc = mfc_asset();
-        ledger::asset::register(mfc, "MFC", 0, 1);
-        ledger::asset::mint(from, mfc, Amount::from_i64(1337));
+        ledger::asset::register(asset_definition: mfc, name: "MFC", scale: 0, mintable: 1);
+        ledger::asset::mint(account: from, asset_definition: mfc, amount: Amount::from_i64(1337));
         let dest = to;
-        send_mfc(from, dest, Amount::from_i64(369));
-        loop_mfc(from, dest);
+        send_mfc(from_account: from, to_account: dest, amount: Amount::from_i64(369));
+        loop_mfc(from_account: from, to_account: dest);
     }
 
     fn mfc_asset() -> AssetDefinitionId {

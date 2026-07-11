@@ -15,8 +15,10 @@ from sccp_release_common import (
     public_error,
     readiness_summary,
     verify_evidence_artifacts,
+    verify_production_semantic_artifacts,
     verify_rust_lane_evidence,
     verify_rust_release_signatures,
+    verify_rust_semantic_proofs,
 )
 from sccp_verify_release_bundle import verify_bundle
 
@@ -85,7 +87,12 @@ def main(argv: list[str] | None = None) -> int:
             root_hash = index["bundle_root_hash_hex"]
         else:
             evidence, evidence_bytes = load_evidence_file(args.source, trust_policy)
-            verify_rust_release_signatures(
+            artifact_root = args.artifact_root or args.source.parent
+            artifacts = verify_evidence_artifacts(evidence, artifact_root)
+            semantic_records = verify_production_semantic_artifacts(
+                evidence, artifacts, trust_policy
+            )
+            _, executable_hash = verify_rust_release_signatures(
                 trust_policy_path=args.trust_policy,
                 trust_policy=trust_policy,
                 trust_policy_bytes=trust_policy_bytes,
@@ -95,8 +102,18 @@ def main(argv: list[str] | None = None) -> int:
                 validator_path=args.rust_validator,
                 environment="production",
             )
-            artifact_root = args.artifact_root or args.source.parent
-            verify_evidence_artifacts(evidence, artifact_root)
+            verify_rust_semantic_proofs(
+                evidence=evidence,
+                evidence_bytes=evidence_bytes,
+                artifact_root=artifact_root,
+                semantic_records=semantic_records,
+                trust_policy=trust_policy,
+                trust_policy_bytes=trust_policy_bytes,
+                trust_policy_path=args.trust_policy,
+                evidence_path=args.source,
+                validator_path=args.rust_validator,
+                expected_executable_hash=executable_hash,
+            )
             verify_rust_lane_evidence(
                 evidence,
                 artifact_root,

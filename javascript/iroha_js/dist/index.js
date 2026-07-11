@@ -254,6 +254,7 @@ export {
   noritoEncodeMultisigProposeRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigContractCallApproveRequest,
+  validateNoritoFrame,
 } from "./norito.js";
 export {
   buildGatewayRequest,

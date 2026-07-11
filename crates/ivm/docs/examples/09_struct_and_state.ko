@@ -6,11 +6,17 @@ seiyaku StructAndState {
 
     state stored_pair: Pair;
     hajimari() {
-        stored_pair = Pair(0, 0);
+        stored_pair = Pair {
+            first: 0,
+            second: 0,
+        };
     }
 
     kotoage fn set_pair(a: i64, b: i64) authorize("Entry") {
-        stored_pair = Pair(a, b);
+        stored_pair = Pair {
+            first: a,
+            second: b,
+        };
         debug::info("pair set");
     }
 }

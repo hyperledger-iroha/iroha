@@ -8,6 +8,7 @@ use super::*;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct SccpSetRouteActivationV1 {
     /// Exact route to update.
     pub key: crate::bridge::SccpRouteKeyV1,
@@ -15,20 +16,24 @@ pub struct SccpSetRouteActivationV1 {
     pub expected_current: crate::bridge::SccpRouteActivationV1,
     /// Legal replacement activation state.
     pub next: crate::bridge::SccpRouteActivationV1,
+    /// Required authenticated delayed-claim cutoff when `next` is terminal;
+    /// absent for every nonterminal transition.
+    pub inbound_finality_cutoff: Option<crate::bridge::SccpInboundFinalityCutoffV1>,
 }
 
-/// Native trust-anchor update for one exact governed SCCP route.
+/// Append-only native trust-anchor update for one exact governed SCCP lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct SccpAdvanceLaneTrustAnchorV1 {
-    /// Exact lane whose single checkpoint advances.
+    /// Exact lane whose current checkpoint advances.
     pub lane_id: crate::bridge::SccpLaneIdV1,
     /// Checkpoint that must still be current when governance executes.
     pub expected_current: crate::bridge::SccpNativeTrustAnchorV1,
-    /// Replacement family-tagged native checkpoint.
+    /// New family-tagged native checkpoint appended to retained history.
     pub next: crate::bridge::SccpNativeTrustAnchorV1,
 }
 
@@ -38,6 +43,7 @@ pub struct SccpAdvanceLaneTrustAnchorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct SccpInitializeLaneTrustAnchorV1 {
     /// Exact lane whose absent checkpoint is initialized.
     pub lane_id: crate::bridge::SccpLaneIdV1,
@@ -53,10 +59,11 @@ pub struct SccpInitializeLaneTrustAnchorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct SccpRegisterRouteV1 {
     /// Complete immutable route, necessarily staged at registration.
     pub route: crate::bridge::SccpGovernedRouteV1,
-    /// Optional initial lane anchor, or the exact existing value when joining a lane.
+    /// Optional initial lane anchor, or the exact current value when joining a lane.
     pub native_trust_anchor: Option<crate::bridge::SccpNativeTrustAnchorV1>,
 }
 
@@ -66,6 +73,7 @@ pub struct SccpRegisterRouteV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct SccpSwitchRouteRevisionV1 {
     /// Currently selected immutable revision.
     pub previous_key: crate::bridge::SccpRouteKeyV1,
@@ -73,6 +81,9 @@ pub struct SccpSwitchRouteRevisionV1 {
     pub expected_previous: crate::bridge::SccpRouteActivationV1,
     /// Inbound-draining or emergency-paused state assigned to the previous revision.
     pub previous_next: crate::bridge::SccpRouteActivationV1,
+    /// Required authenticated delayed-claim cutoff when the previous revision
+    /// becomes terminal in this atomic cutover; otherwise absent.
+    pub previous_inbound_finality_cutoff: Option<crate::bridge::SccpInboundFinalityCutoffV1>,
     /// Already-registered staged monotonic successor.
     pub successor_key: crate::bridge::SccpRouteKeyV1,
     /// Bidirectional state assigned to the successor.
@@ -85,6 +96,7 @@ pub struct SccpSwitchRouteRevisionV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 #[norito(tag = "action", content = "route")]
 pub enum SccpRouteGovernanceActionV1 {
     /// Register one complete immutable route in staged state.
@@ -99,7 +111,7 @@ pub enum SccpRouteGovernanceActionV1 {
     /// Install the first native source trust anchor using a `None` compare-and-swap.
     #[codec(index = 3)]
     InitializeTrustAnchor(SccpInitializeLaneTrustAnchorV1),
-    /// Advance only the native source trust anchor.
+    /// Append and select the next native source trust anchor without deleting history.
     #[codec(index = 4)]
     AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1),
     /// Remove a never-used staged route.
@@ -121,7 +133,14 @@ impl SccpRouteGovernanceActionV1 {
             }
             Self::SetActivation(update) => {
                 update.key.validate()?;
-                if !update.expected_current.can_transition_to(update.next) {
+                let cutoff_valid = if update.next.is_terminal() {
+                    update
+                        .inbound_finality_cutoff
+                        .is_some_and(crate::bridge::SccpInboundFinalityCutoffV1::is_well_formed)
+                } else {
+                    update.inbound_finality_cutoff.is_none()
+                };
+                if !update.expected_current.can_transition_to(update.next) || !cutoff_valid {
                     return Err(SccpRouteValidationError::InvalidActivationTransition);
                 }
                 Ok(())
@@ -132,6 +151,26 @@ impl SccpRouteGovernanceActionV1 {
                 let same_lineage = update.previous_key.lane_id == update.successor_key.lane_id
                     && update.previous_key.route_id == update.successor_key.route_id
                     && update.previous_key.asset_key == update.successor_key.asset_key;
+                let terminal_cutover = update.previous_next.is_terminal();
+                let previous_transition_valid = if terminal_cutover {
+                    matches!(
+                        update.expected_previous,
+                        crate::bridge::SccpRouteActivationV1::Bidirectional
+                            | crate::bridge::SccpRouteActivationV1::InboundOnly
+                            | crate::bridge::SccpRouteActivationV1::Paused
+                    )
+                } else {
+                    update
+                        .expected_previous
+                        .can_transition_to(update.previous_next)
+                };
+                let cutoff_valid = if terminal_cutover {
+                    update
+                        .previous_inbound_finality_cutoff
+                        .is_some_and(crate::bridge::SccpInboundFinalityCutoffV1::is_well_formed)
+                } else {
+                    update.previous_inbound_finality_cutoff.is_none()
+                };
                 if !same_lineage
                     || update.successor_key.revision
                         != update
@@ -139,13 +178,13 @@ impl SccpRouteGovernanceActionV1 {
                             .revision
                             .checked_add(1)
                             .ok_or(SccpRouteValidationError::InvalidRouteRevision)?
-                    || !update
-                        .expected_previous
-                        .can_transition_to(update.previous_next)
+                    || !previous_transition_valid
+                    || !cutoff_valid
                     || !matches!(
                         update.previous_next,
                         crate::bridge::SccpRouteActivationV1::InboundOnly
                             | crate::bridge::SccpRouteActivationV1::Paused
+                            | crate::bridge::SccpRouteActivationV1::Retired
                     )
                     || !crate::bridge::SccpRouteActivationV1::Staged
                         .can_transition_to(update.successor_next)
@@ -199,8 +238,9 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct SubmitBridgeProof {
-        /// Bridge proof payload (ICS or transparent ZK).
+        /// Typed bridge proof payload and its payload-owned verifier binding.
         pub proof: crate::bridge::BridgeProof,
     }
 }
@@ -241,6 +281,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct ApplySccpRouteGovernance {
         /// Complete closed governance action.
         pub action: SccpRouteGovernanceActionV1,
@@ -326,6 +367,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct RecordSccpMessage {
         /// Exact governed lane and destination binding for this outbound message.
         pub context: crate::bridge::SccpOutboundMessageContextV1,
@@ -461,6 +503,7 @@ mod sccp_governance_tests {
             previous_key: key(1),
             expected_previous: SccpRouteActivationV1::Bidirectional,
             previous_next: SccpRouteActivationV1::InboundOnly,
+            previous_inbound_finality_cutoff: None,
             successor_key: key(2),
             successor_next: SccpRouteActivationV1::Bidirectional,
         });
@@ -470,6 +513,7 @@ mod sccp_governance_tests {
             previous_key: key(u32::MAX),
             expected_previous: SccpRouteActivationV1::Bidirectional,
             previous_next: SccpRouteActivationV1::InboundOnly,
+            previous_inbound_finality_cutoff: None,
             successor_key: key(u32::MAX),
             successor_next: SccpRouteActivationV1::Bidirectional,
         });
@@ -483,11 +527,74 @@ mod sccp_governance_tests {
                 previous_key: key(1),
                 expected_previous: SccpRouteActivationV1::Bidirectional,
                 previous_next: SccpRouteActivationV1::Retired,
+                previous_inbound_finality_cutoff: None,
                 successor_key: key(2),
                 successor_next: SccpRouteActivationV1::Bidirectional,
             });
         assert_eq!(
             unsafe_retire.validate_static(),
+            Err(SccpRouteValidationError::InvalidActivationTransition)
+        );
+
+        let safe_retire = SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
+            previous_key: key(1),
+            expected_previous: SccpRouteActivationV1::Bidirectional,
+            previous_next: SccpRouteActivationV1::Retired,
+            previous_inbound_finality_cutoff: Some(crate::bridge::SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: [0x91; 32],
+                max_anchor_interval_height: 101,
+            }),
+            successor_key: key(2),
+            successor_next: SccpRouteActivationV1::Bidirectional,
+        });
+        assert!(safe_retire.validate_static().is_ok());
+    }
+
+    #[test]
+    fn terminal_activation_requires_one_well_formed_inbound_finality_cutoff() {
+        let cutoff = crate::bridge::SccpInboundFinalityCutoffV1 {
+            trust_anchor_hash: anchor(1, 100).anchor_hash,
+            max_anchor_interval_height: 150,
+        };
+        let valid = SccpRouteGovernanceActionV1::SetActivation(SccpSetRouteActivationV1 {
+            key: key(1),
+            expected_current: SccpRouteActivationV1::InboundOnly,
+            next: SccpRouteActivationV1::Retired,
+            inbound_finality_cutoff: Some(cutoff),
+        });
+        assert!(valid.validate_static().is_ok());
+
+        for inbound_finality_cutoff in [
+            None,
+            Some(crate::bridge::SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: [0; 32],
+                ..cutoff
+            }),
+            Some(crate::bridge::SccpInboundFinalityCutoffV1 {
+                max_anchor_interval_height: 0,
+                ..cutoff
+            }),
+        ] {
+            let invalid = SccpRouteGovernanceActionV1::SetActivation(SccpSetRouteActivationV1 {
+                key: key(1),
+                expected_current: SccpRouteActivationV1::InboundOnly,
+                next: SccpRouteActivationV1::Retired,
+                inbound_finality_cutoff,
+            });
+            assert_eq!(
+                invalid.validate_static(),
+                Err(SccpRouteValidationError::InvalidActivationTransition)
+            );
+        }
+
+        let cutoff_on_live = SccpRouteGovernanceActionV1::SetActivation(SccpSetRouteActivationV1 {
+            key: key(1),
+            expected_current: SccpRouteActivationV1::Paused,
+            next: SccpRouteActivationV1::InboundOnly,
+            inbound_finality_cutoff: Some(cutoff),
+        });
+        assert_eq!(
+            cutoff_on_live.validate_static(),
             Err(SccpRouteValidationError::InvalidActivationTransition)
         );
     }
@@ -544,12 +651,11 @@ mod tests {
                 start_height: 7,
                 end_height: 9,
             },
-            manifest_hash: [0xAB; 32],
             payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+                verifier_manifest_hash: [0xAB; 32],
                 proof: ProofBox::new("halo2/mock".into(), vec![0xDE, 0xAD, 0xBE, 0xEF]),
                 recursion_depth: Some(2),
             }),
-            pinned: true,
         }
     }
 

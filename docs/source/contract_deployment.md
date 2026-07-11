@@ -64,16 +64,23 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (May 2
     `contract_address`, binds the requested stable `contract_alias` to that
     address, prepends a domainless self-registration for the authority, and
     submits the resulting transaction on behalf of the caller.
-  - Redeploying the same `contract_alias` performs an in-place upgrade:
+  - Redeploying the same `contract_alias` performs an in-place `kaizen`/`改善`:
     Torii deploys a new address, rebinds the alias atomically, and deactivates
     the previous address.
   - Response: `DeployContractBundleReceiptDto` with bundle metadata plus one entry in `contracts[]` for this single-contract shortcut.
   - Errors: invalid base64, invalid contract artifact, size cap exceeded,
     governance gating for protected namespaces, or fee/balance failures.
 - `GET /v1/contracts/code/{code_hash}`
-  - Returns `{ manifest: { code_hash, abi_hash } }`.
-    Additional manifest fields are preserved internally but omitted here for a
-    stable API.
+  - Returns `{ code_hash, abi_hash, manifest: <ContractManifest> }`. The two
+    top-level convenience values are raw lowercase hex; `manifest` uses the
+    complete canonical Norito JSON representation, including `seiyaku_name`,
+    both checksummed `Hash` literals, exact entrypoint argument/return schemas,
+    state and error declarations, access metadata, trigger descriptors,
+    localization data, and signed provenance when present. Fields are never
+    silently truncated. V1 aggregate schemas are one flat preorder tape. A
+    `List` node contains only `capacity`; its exact element subtree immediately
+    follows it. Missing or trailing nodes and the retired nested `element`
+    representation are rejected.
 - `GET /v1/contracts/code-bytes/{code_hash}`
   - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
@@ -93,8 +100,10 @@ returns HTTP 429; any handler error increments
   strings) to enable admission gating. Torii exposes helpers under
   `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
-- Unprotected namespaces are public: any signer may register code bytes,
-  register manifests, and deploy alias-backed public contracts there.
+- Every raw bytecode registration, manifest registration, activation,
+  deactivation, or bytecode removal requires `CanRegisterSmartContractCode`.
+  Protected namespaces additionally require `CanEnactGovernance`; an empty
+  `gov_protected_namespaces` list never makes lifecycle mutation permissionless.
 - Proposals created with `ProposeDeployContract` (or the Torii
   `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(contract_address, code_hash, abi_hash, abi_version)`.

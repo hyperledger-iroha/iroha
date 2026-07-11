@@ -55,7 +55,7 @@ public final class ContractDeployResponse {
     private final String contractAlias;
     private final String contractAddress;
     private final String previousContractAddress;
-    private final boolean upgraded;
+    private final boolean kaizen;
     private final String dataspace;
     private final Long deployNonce;
     private final String txHashHex;
@@ -69,7 +69,7 @@ public final class ContractDeployResponse {
         final String contractAlias,
         final String contractAddress,
         final String previousContractAddress,
-        final boolean upgraded,
+        final boolean kaizen,
         final String dataspace,
         final Long deployNonce,
         final String txHashHex,
@@ -81,7 +81,7 @@ public final class ContractDeployResponse {
       this.contractAlias = contractAlias;
       this.contractAddress = contractAddress;
       this.previousContractAddress = previousContractAddress;
-      this.upgraded = upgraded;
+      this.kaizen = kaizen;
       this.dataspace = dataspace;
       this.deployNonce = deployNonce;
       this.txHashHex = txHashHex;
@@ -95,7 +95,7 @@ public final class ContractDeployResponse {
     public String contractAlias() { return contractAlias; }
     public String contractAddress() { return contractAddress; }
     public String previousContractAddress() { return previousContractAddress; }
-    public boolean upgraded() { return upgraded; }
+    public boolean kaizen() { return kaizen; }
     public String dataspace() { return dataspace; }
     public Long deployNonce() { return deployNonce; }
     public String txHashHex() { return txHashHex; }

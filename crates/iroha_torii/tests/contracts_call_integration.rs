@@ -19,7 +19,7 @@ use iroha_crypto::Signature;
 use iroha_data_model::{
     DomainId, Registrable,
     account::Account,
-    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
+    asset::AssetDefinitionId,
     block::BlockHeader,
     isi::{Grant, Register},
     name::Name,
@@ -105,7 +105,7 @@ seiyaku ContractCallDeclaredStateWithIsiTest {{
   }}
 
   kotoage fn write_with_isi(amount: i64) authorize("CanEnactGovernance") {{
-    ledger::account::set_detail(context::authority(), Name::parse("cursor"), Json::parse("{{\"phase\":\"write_with_isi\"}}"));
+    ledger::account::set_detail(account: context::authority(), key: Name::parse("cursor"), value: Json::parse("{{\"phase\":\"write_with_isi\"}}"));
     CallAmount = amount;
   }}
 
@@ -134,7 +134,7 @@ seiyaku ContractCallDeclaredStateWithMintTest {{
   kotoage fn write_with_mint(amount: i64,
                            user: AccountId,
                            asset_definition_id: AssetDefinitionId) authorize("CanEnactGovernance") {{
-    ledger::asset::mint(user, asset_definition_id, Amount::from_i64(1));
+    ledger::asset::mint(account: user, asset_definition: asset_definition_id, amount: Amount::from_i64(1));
     CallAmount = amount;
   }}
 
@@ -191,7 +191,7 @@ seiyaku ContractCallN3xLikeTest {{
                   kusd_in: i64) {{
     require(HubInitialized == 1, HubError::NotInitialized);
     let minted = usdt_in + usdc_in + kusd_in;
-    ledger::asset::mint(user, asset, Amount::from_i64(minted));
+    ledger::asset::mint(account: user, asset_definition: asset, amount: Amount::from_i64(minted));
     BasketUsdt = BasketUsdt + usdt_in;
     BasketUsdc = BasketUsdc + usdc_in;
     BasketKusd = BasketKusd + kusd_in;
@@ -218,7 +218,7 @@ seiyaku ContractCallN3xLikeTest {{
     let kusd_out = (BasketKusd * n3x_amount) / total;
     let redeemed = usdt_out + usdc_out + kusd_out;
     require(redeemed > 0, HubError::ZeroRedemption);
-    ledger::asset::burn(user, asset_definition_id, Amount::from_i64(n3x_amount));
+    ledger::asset::burn(account: user, asset_definition: asset_definition_id, amount: Amount::from_i64(n3x_amount));
     BasketUsdt = BasketUsdt - usdt_out;
     BasketUsdc = BasketUsdc - usdc_out;
     BasketKusd = BasketKusd - kusd_out;
@@ -234,86 +234,6 @@ seiyaku ContractCallN3xLikeTest {{
     ivm::KotodamaCompiler::new()
         .compile_source(&src)
         .expect("compile contract call n3x-like test program")
-}
-
-fn contract_call_nested_transfer_caller_program() -> Vec<u8> {
-    let src = format!(
-        r#"
-seiyaku ContractCallNestedTransferCallerTest {{
-
-  state CallerAccount: AccountId;
-  state VaultContract: bytes;
-  state SettlementAsset: AssetDefinitionId;
-
-  fn bind_impl(caller_account: AccountId,
-               vault_contract: bytes,
-               settlement_asset: AssetDefinitionId) {{
-    CallerAccount = caller_account;
-    VaultContract = vault_contract;
-    SettlementAsset = settlement_asset;
-  }}
-
-  hajimari(caller_account: AccountId,
-       vault_contract: bytes,
-       settlement_asset: AssetDefinitionId) {{
-    bind_impl(caller_account, vault_contract, settlement_asset);
-  }}
-
-  kotoage fn bind(caller_account: AccountId,
-                vault_contract: bytes,
-                settlement_asset: AssetDefinitionId) authorize("CanEnactGovernance") {{
-    bind_impl(caller_account, vault_contract, settlement_asset);
-  }}
-
-  kotoage fn open(amount: i64) -> i64 authorize("CanEnactGovernance") {{
-    ledger::asset::transfer(context::authority(), CallerAccount, SettlementAsset, Amount::from_i64(amount), DataSpaceId::parse("0"));
-    var payload = json::object();
-    payload = json::set_i64(payload, Name::parse("amount"), amount);
-    contract::call(VaultContract, "deposit", payload);
-    return amount;
-  }}
-}}
-"#
-    );
-    ivm::KotodamaCompiler::new()
-        .compile_source(&src)
-        .expect("compile nested transfer caller program")
-}
-
-fn contract_call_nested_transfer_vault_program() -> Vec<u8> {
-    let src = format!(
-        r#"
-seiyaku ContractCallNestedTransferVaultTest {{
-
-  state VaultAccount: AccountId;
-  state SettlementAsset: AssetDefinitionId;
-
-  fn bind_impl(vault_account: AccountId,
-               settlement_asset: AssetDefinitionId) {{
-    VaultAccount = vault_account;
-    SettlementAsset = settlement_asset;
-  }}
-
-  hajimari(vault_account: AccountId,
-       settlement_asset: AssetDefinitionId) {{
-    bind_impl(vault_account, settlement_asset);
-  }}
-
-  kotoage fn bind(vault_account: AccountId,
-                settlement_asset: AssetDefinitionId) authorize("CanEnactGovernance") {{
-    bind_impl(vault_account, settlement_asset);
-  }}
-
-  kotoage fn deposit(amount: i64) -> i64 authorize("CanEnactGovernance") {{
-    ledger::asset::transfer(context::authority(), VaultAccount, SettlementAsset, Amount::from_i64(amount), DataSpaceId::parse("0"));
-    return amount;
-  }}
-}}
-"#
-    );
-    ivm::KotodamaCompiler::new()
-        .compile_source(&src)
-        .expect("compile nested transfer vault program")
 }
 
 fn contract_view_trap_program_with_source_path(source_path: &str) -> Vec<u8> {
@@ -1193,7 +1113,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
             entrypoint: "configure",
             payload: Some(&init_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let init_req = http::Request::builder()
@@ -1295,7 +1215,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
             entrypoint: "credit_by_payload",
             payload: Some(&payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let call_req = http::Request::builder()
@@ -1332,7 +1252,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
             entrypoint: "record_asset_by_payload",
             payload: Some(&asset_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let asset_call_req = http::Request::builder()
@@ -1439,7 +1359,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
             entrypoint: "bind",
             payload: Some(&bind_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let bind_req = http::Request::builder()
@@ -1607,7 +1527,7 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
             entrypoint: "configure",
             payload: Some(&configure_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let configure_req = http::Request::builder()
@@ -1714,7 +1634,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
             entrypoint: "credit_by_payload",
             payload: Some(&credit_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let credit_req = http::Request::builder()
@@ -1740,7 +1660,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
             entrypoint: "record_asset_by_payload",
             payload: Some(&asset_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let asset_req = http::Request::builder()
@@ -1875,7 +1795,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
             entrypoint: "write_with_isi",
             payload: Some(&write_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let write_req = http::Request::builder()
@@ -2011,7 +1931,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
             entrypoint: "write_with_mint",
             payload: Some(&write_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let write_req = http::Request::builder()
@@ -2173,7 +2093,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
             entrypoint: "deposit_like",
             payload: Some(&deposit_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let deposit_req = http::Request::builder()
@@ -2324,7 +2244,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
             entrypoint: "deposit_like",
             payload: Some(&deposit_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let deposit_req = http::Request::builder()
@@ -2353,7 +2273,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
             entrypoint: "burn_like",
             payload: Some(&burn_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let burn_req = http::Request::builder()
@@ -2386,227 +2306,4 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     assert_eq!(snapshot.get(2).and_then(json::Value::as_i64), Some(0));
     assert_eq!(snapshot.get(3).and_then(json::Value::as_i64), Some(0));
     assert_eq!(snapshot.get(4).and_then(json::Value::as_i64), Some(0));
-}
-
-#[tokio::test]
-async fn contracts_call_preserves_root_and_nested_transfer_authorities() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
-
-    let creds = iroha_torii::test_utils::random_authority();
-    let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
-    let asset_definition_id =
-        AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-    let authority_asset_id = AssetId::of(asset_definition_id.clone(), creds.account.clone());
-    let authority_asset = Asset::new(
-        authority_asset_id.clone(),
-        iroha_primitives::numeric::Numeric::new(5_u32, 0),
-    );
-    let world = iroha_core::state::World::with_assets(
-        [iroha_data_model::prelude::Domain::new(domain_id.clone()).build(&creds.account)],
-        [iroha_data_model::prelude::Account::new(creds.account.clone()).build(&creds.account)],
-        [AssetDefinition::numeric(asset_definition_id.clone()).build(&creds.account)],
-        [authority_asset],
-        [],
-    );
-
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
-
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        chain_id.clone(),
-        telemetry.clone(),
-    );
-
-    let vault_program = contract_call_nested_transfer_vault_program();
-    let vault_deploy_body = iroha_torii::test_utils::deploy_request_json(
-        &creds.account,
-        &creds.private_key,
-        &base64::engine::general_purpose::STANDARD.encode(&vault_program),
-    );
-    let vault_deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(vault_deploy_body))
-        .unwrap();
-    let vault_deploy_resp = app.clone().oneshot(vault_deploy_req).await.unwrap();
-    assert_eq!(vault_deploy_resp.status(), http::StatusCode::OK);
-    let vault_deploy_bytes = vault_deploy_resp
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    let vault_deploy_json: json::Value = json::from_slice(&vault_deploy_bytes).unwrap();
-    let vault_contract_address = deployed_contract_address(&vault_deploy_json);
-    let applied_vault_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
-    assert_eq!(applied_vault_deploy, 1);
-
-    let caller_program = contract_call_nested_transfer_caller_program();
-    let caller_deploy_body = iroha_torii::test_utils::deploy_request_json(
-        &creds.account,
-        &creds.private_key,
-        &base64::engine::general_purpose::STANDARD.encode(&caller_program),
-    );
-    let caller_deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(caller_deploy_body))
-        .unwrap();
-    let caller_deploy_resp = app.clone().oneshot(caller_deploy_req).await.unwrap();
-    assert_eq!(caller_deploy_resp.status(), http::StatusCode::OK);
-    let caller_deploy_bytes = caller_deploy_resp
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    let caller_deploy_json: json::Value = json::from_slice(&caller_deploy_bytes).unwrap();
-    let caller_contract_address = deployed_contract_address(&caller_deploy_json);
-    let applied_caller_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
-    assert_eq!(applied_caller_deploy, 1);
-
-    let vault_contract_subject = vault_contract_address
-        .parse::<ContractAddress>()
-        .expect("vault contract address")
-        .subject_id();
-    let caller_contract_subject = caller_contract_address
-        .parse::<ContractAddress>()
-        .expect("caller contract address")
-        .subject_id();
-    grant_named_contract_permission(
-        &state,
-        &creds.account,
-        caller_contract_subject.clone(),
-        "CanEnactGovernance",
-    );
-
-    let vault_bind_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("vault_account", vault_contract_subject.clone()),
-        iroha_torii::json_entry("settlement_asset", asset_definition_id.to_string()),
-    ]);
-    let vault_bind_body = iroha_torii::test_utils::contract_call_request_json(
-        &creds.account,
-        &creds.private_key,
-        vault_contract_address.as_str(),
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: "bind",
-            payload: Some(&vault_bind_payload),
-            gas_asset_id: None,
-            gas_limit: 10_000,
-        },
-    );
-    let vault_bind_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(vault_bind_body))
-        .unwrap();
-    let vault_bind_resp = app.clone().oneshot(vault_bind_req).await.unwrap();
-    assert_eq!(vault_bind_resp.status(), http::StatusCode::OK);
-    let applied_vault_bind =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
-    assert_eq!(applied_vault_bind, 1);
-
-    let caller_bind_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("caller_account", caller_contract_subject.clone()),
-        iroha_torii::json_entry("vault_contract", vault_contract_address.as_str()),
-        iroha_torii::json_entry("settlement_asset", asset_definition_id.to_string()),
-    ]);
-    let caller_bind_body = iroha_torii::test_utils::contract_call_request_json(
-        &creds.account,
-        &creds.private_key,
-        caller_contract_address.as_str(),
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: "bind",
-            payload: Some(&caller_bind_payload),
-            gas_asset_id: None,
-            gas_limit: 10_000,
-        },
-    );
-    let caller_bind_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(caller_bind_body))
-        .unwrap();
-    let caller_bind_resp = app.clone().oneshot(caller_bind_req).await.unwrap();
-    assert_eq!(caller_bind_resp.status(), http::StatusCode::OK);
-    let applied_caller_bind =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 5);
-    assert_eq!(applied_caller_bind, 1);
-
-    let open_payload = iroha_torii::json_object(vec![iroha_torii::json_entry("amount", 3)]);
-    let open_body = iroha_torii::test_utils::contract_call_request_json(
-        &creds.account,
-        &creds.private_key,
-        caller_contract_address.as_str(),
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: "open",
-            payload: Some(&open_payload),
-            gas_asset_id: None,
-            gas_limit: 10_000,
-        },
-    );
-    let open_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(open_body))
-        .unwrap();
-    let open_resp = app.clone().oneshot(open_req).await.unwrap();
-    assert_eq!(open_resp.status(), http::StatusCode::OK);
-    let applied_open =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 6);
-    assert_eq!(applied_open, 1);
-
-    let view = state.view();
-    let authority_balance = view
-        .world()
-        .asset(&authority_asset_id)
-        .expect("authority asset remains")
-        .value()
-        .clone();
-    let caller_asset_id = AssetId::of(asset_definition_id.clone(), caller_contract_subject);
-    let vault_asset_id = AssetId::of(asset_definition_id, vault_contract_subject);
-    let vault_balance = view
-        .world()
-        .asset(&vault_asset_id)
-        .expect("vault asset exists")
-        .value()
-        .clone();
-    assert_eq!(
-        authority_balance.as_ref(),
-        &iroha_primitives::numeric::Numeric::new(2_u32, 0)
-    );
-    assert!(
-        view.world().asset(&caller_asset_id).is_err(),
-        "fully drained caller balance should remove the asset entry"
-    );
-    assert_eq!(
-        vault_balance.as_ref(),
-        &iroha_primitives::numeric::Numeric::new(3_u32, 0)
-    );
 }

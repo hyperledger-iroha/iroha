@@ -2,17 +2,19 @@ package org.hyperledger.iroha.android.sccp;
 
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import org.bouncycastle.crypto.digests.KeccakDigest;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 
 /** Consensus-compatible exact-lane hashing and fixed layouts for SCCP V1. */
 public final class SccpV1 {
+  /** Exact I105 discriminant used by the public SORA Taira SCCP endpoint. */
+  public static final int TAIRA_I105_DISCRIMINANT_V1 = 369;
+
   private static final byte[] LANE_HASH_PREFIX =
       "sccp:lane-id:v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] MESSAGE_ID_PREFIX =
@@ -33,23 +35,11 @@ public final class SccpV1 {
     out.write(network.tag());
     writeU32(out, network.domainId());
     switch (network) {
-      case SORA_NEXUS -> write(out, decodeLowerHex("00000000000000000000000000000753"));
       case SORA_TAIRA -> write(out, decodeLowerHex("809574f5fee75e69bfcf52451e42d50f"));
       case ETHEREUM_MAINNET -> writeUnsignedLe(out, BigInteger.ONE, 8);
       case ETHEREUM_SEPOLIA -> writeUnsignedLe(out, BigInteger.valueOf(11_155_111L), 8);
       case BSC_MAINNET -> writeUnsignedLe(out, BigInteger.valueOf(56), 8);
       case BSC_TESTNET -> writeUnsignedLe(out, BigInteger.valueOf(97), 8);
-      case SOLANA_MAINNET_BETA ->
-          writeBytes(
-              out,
-              "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp".getBytes(StandardCharsets.US_ASCII));
-      case SOLANA_TESTNET ->
-          writeBytes(
-              out,
-              "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY"
-                  .getBytes(StandardCharsets.US_ASCII));
-      case TON_MAINNET -> writeI32(out, -239);
-      case TON_TESTNET -> writeI32(out, -3);
       case TRON_MAINNET -> writeU32Bits(out, 0x2b6653dcL);
       case TRON_NILE -> writeU32Bits(out, 0xcd8690dcL);
       case TRON_SHASTA -> writeU32Bits(out, 0x94a9059eL);
@@ -93,6 +83,54 @@ public final class SccpV1 {
     return prefixedBlake2b(PAYLOAD_HASH_PREFIX, payload.canonicalBytes());
   }
 
+  /** Decode exactly one canonical transfer payload and reject retired or trailing forms. */
+  public static SccpTransferPayloadV1 decodeCanonicalPayload(final byte[] bytes) {
+    final Cursor cursor = new Cursor(bytes);
+    if (cursor.u8() != 2) {
+      throw new IllegalArgumentException("unsupported or retired SCCP payload discriminant");
+    }
+    if (cursor.u8() != 1) {
+      throw new IllegalArgumentException("unsupported SCCP transfer version");
+    }
+    final int source = cursor.u32Domain("source");
+    final int destination = cursor.u32Domain("destination");
+    final BigInteger nonce = cursor.unsigned(8);
+    final long routeRevision = cursor.u32();
+    final int assetHomeDomain = cursor.u32Domain("assetHomeDomain");
+    final int assetCodec = cursor.u8();
+    final byte[] assetId = cursor.bytes();
+    final BigInteger amount = cursor.unsigned(16);
+    final int senderCodec = cursor.u8();
+    final byte[] sender = cursor.bytes();
+    final int recipientCodec = cursor.u8();
+    final byte[] recipient = cursor.bytes();
+    final int routeCodec = cursor.u8();
+    final byte[] routeId = cursor.bytes();
+    if (!cursor.finished()) {
+      throw new IllegalArgumentException("canonical SCCP payload must not contain trailing bytes");
+    }
+    final SccpTransferPayloadV1 payload =
+        new SccpTransferPayloadV1(
+            source,
+            destination,
+            nonce,
+            routeRevision,
+            assetHomeDomain,
+            assetCodec,
+            assetId,
+            amount,
+            senderCodec,
+            sender,
+            recipientCodec,
+            recipient,
+            routeCodec,
+            routeId);
+    if (!Arrays.equals(payload.canonicalBytes(), bytes)) {
+      throw new IllegalArgumentException("non-canonical SCCP payload");
+    }
+    return payload;
+  }
+
   /** Canonical contract-computable source-event preimage after the domain prefix. */
   public static byte[] canonicalSourceEventBytes(
       final SccpLaneIdV1 lane, final byte[] messageId, final byte[] payloadHash) {
@@ -120,13 +158,14 @@ public final class SccpV1 {
     final List<byte[]> roles = new ArrayList<>();
     roles.add(laneHash(context.lane()));
     roles.add(context.destinationBindingHash());
+    roles.add(context.routeConfigurationHash());
     roles.add(messageId(context.lane(), payload));
     roles.add(payloadHash(payload));
     requireDistinctHashRoles(roles);
-    return new SccpHubCommitmentV1(payload.kind(), context, roles.get(2), roles.get(3));
+    return new SccpHubCommitmentV1(payload.kind(), context, roles.get(3), roles.get(4));
   }
 
-  /** Fixed V1 commitment bytes: version, kind, exact profile tags, and three hashes. */
+  /** Fixed V1 commitment bytes with four independently governed/hash roles. */
   public static byte[] canonicalCommitmentBytes(final SccpHubCommitmentV1 commitment) {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(1);
@@ -134,6 +173,7 @@ public final class SccpV1 {
     out.write(commitment.context().lane().source().tag());
     out.write(commitment.context().lane().target().tag());
     write(out, commitment.context().destinationBindingHash());
+    write(out, commitment.context().routeConfigurationHash());
     write(out, commitment.messageId());
     write(out, commitment.payloadHash());
     return out.toByteArray();
@@ -141,8 +181,8 @@ public final class SccpV1 {
 
   /** Decode and canonically re-encode a fixed V1 commitment. */
   public static SccpHubCommitmentV1 decodeCanonicalCommitment(final byte[] bytes) {
-    if (bytes == null || bytes.length != 100) {
-      throw new IllegalArgumentException("canonical SCCP commitment must contain 100 bytes");
+    if (bytes == null || bytes.length != 132) {
+      throw new IllegalArgumentException("canonical SCCP commitment must contain 132 bytes");
     }
     if ((bytes[0] & 0xff) != 1) {
       throw new IllegalArgumentException("unsupported SCCP commitment version");
@@ -155,17 +195,20 @@ public final class SccpV1 {
     }
     final SccpOutboundMessageContextV1 context =
         new SccpOutboundMessageContextV1(
-            new SccpLaneIdV1(source, target), Arrays.copyOfRange(bytes, 4, 36));
+            new SccpLaneIdV1(source, target),
+            Arrays.copyOfRange(bytes, 4, 36),
+            Arrays.copyOfRange(bytes, 36, 68));
     final SccpHubCommitmentV1 result =
         new SccpHubCommitmentV1(
             kind,
             context,
-            Arrays.copyOfRange(bytes, 36, 68),
-            Arrays.copyOfRange(bytes, 68, 100));
+            Arrays.copyOfRange(bytes, 68, 100),
+            Arrays.copyOfRange(bytes, 100, 132));
     requireDistinctHashRoles(
         Arrays.asList(
             laneHash(context.lane()),
             context.destinationBindingHash(),
+            context.routeConfigurationHash(),
             result.messageId(),
             result.payloadHash()));
     if (!Arrays.equals(canonicalCommitmentBytes(result), bytes)) {
@@ -206,7 +249,7 @@ public final class SccpV1 {
   }
 
   static void requireDomain(final int value, final String field) {
-    if (value < 0 || value > 5) {
+    if (value != 0 && value != 1 && value != 2 && value != 5) {
       throw new IllegalArgumentException(field + " must be a supported SCCP domain");
     }
   }
@@ -222,8 +265,6 @@ public final class SccpV1 {
     return switch (domain) {
       case 0 -> 1;
       case 1, 2 -> 2;
-      case 3 -> 3;
-      case 4 -> 4;
       case 5 -> 5;
       default -> throw new IllegalArgumentException("unsupported SCCP domain");
     };
@@ -276,36 +317,39 @@ public final class SccpV1 {
     boolean valid;
     switch (codec) {
       case 1 -> {
-        valid = value.length <= 256;
-        for (final byte item : value) {
-          final int octet = item & 0xff;
-          valid &= octet >= 0x21 && octet <= 0x7e;
-        }
+        valid = isCanonicalText(value, field);
       }
       case 2 -> valid = value.length == 20 && !allZero(value);
-      case 3 -> valid = value.length == 32 && !allZero(value);
-      case 4 -> {
-        final int workchain =
-            value.length < 4
-                ? Integer.MIN_VALUE
-                : ByteBuffer.wrap(value, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
-        valid =
-            value.length == 36
-                && (workchain == -1 || workchain == 0)
-                && !allZero(Arrays.copyOfRange(value, 4, value.length));
-      }
       case 5 ->
           valid =
               value.length == 21
                   && (value[0] & 0xff) == 0x41
                   && !allZero(Arrays.copyOfRange(value, 1, value.length));
-      case 6 -> valid = value.length == 32 && !allZero(value);
       default -> valid = false;
     }
     if (!valid) {
       throw new IllegalArgumentException(field + " does not match SCCP codec " + codec);
     }
     return Arrays.copyOf(value, value.length);
+  }
+
+  private static boolean isCanonicalText(final byte[] value, final String field) {
+    if (value.length > 256) return false;
+    boolean ascii = true;
+    for (final byte item : value) {
+      final int octet = item & 0xff;
+      ascii &= octet >= 0x21 && octet <= 0x7e;
+    }
+    if (ascii) return true;
+
+    final String literal = new String(value, StandardCharsets.UTF_8);
+    if (!Arrays.equals(value, literal.getBytes(StandardCharsets.UTF_8))) return false;
+    try {
+      AccountIdLiteral.requireCanonicalI105Address(literal, field);
+      return true;
+    } catch (final IllegalArgumentException ignored) {
+      return false;
+    }
   }
 
   static void writeU32(final ByteArrayOutputStream out, final int value) {
@@ -322,10 +366,6 @@ public final class SccpV1 {
     for (int shift = 0; shift < 4; shift++) {
       out.write((int) ((value >>> (shift * 8)) & 0xff));
     }
-  }
-
-  static void writeI32(final ByteArrayOutputStream out, final int value) {
-    write(out, ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array());
   }
 
   static void writeUnsignedLe(
@@ -395,6 +435,70 @@ public final class SccpV1 {
 
   private static boolean isLowerHex(final char value) {
     return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+  }
+
+  private static final class Cursor {
+    private final byte[] input;
+    private int offset;
+
+    private Cursor(final byte[] input) {
+      if (input == null) {
+        throw new IllegalArgumentException("canonical SCCP bytes must not be null");
+      }
+      this.input = input;
+    }
+
+    private int u8() {
+      return exact(1)[0] & 0xff;
+    }
+
+    private long u32() {
+      final byte[] value = exact(4);
+      return (value[0] & 0xffL)
+          | ((value[1] & 0xffL) << 8)
+          | ((value[2] & 0xffL) << 16)
+          | ((value[3] & 0xffL) << 24);
+    }
+
+    private int u32Domain(final String field) {
+      final long value = u32();
+      if (value > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException(field + " is outside the closed domain inventory");
+      }
+      final int result = (int) value;
+      requireDomain(result, field);
+      return result;
+    }
+
+    private BigInteger unsigned(final int size) {
+      final byte[] littleEndian = exact(size);
+      final byte[] bigEndian = new byte[size];
+      for (int index = 0; index < size; index++) {
+        bigEndian[index] = littleEndian[size - index - 1];
+      }
+      return new BigInteger(1, bigEndian);
+    }
+
+    private byte[] bytes() {
+      final long size = u32();
+      if (size > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException("SCCP byte vector is too large");
+      }
+      return exact((int) size);
+    }
+
+    private boolean finished() {
+      return offset == input.length;
+    }
+
+    private byte[] exact(final int size) {
+      if (size < 0 || offset > input.length - size) {
+        throw new IllegalArgumentException("truncated SCCP canonical bytes");
+      }
+      final byte[] value = Arrays.copyOfRange(input, offset, offset + size);
+      offset += size;
+      return value;
+    }
   }
 
 }

@@ -49,6 +49,7 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_abi_version(FindAbiVersion),
         visit_find_asset_by_id(FindAssetById),
         visit_find_asset_definition_by_id(FindAssetDefinitionById),
+        visit_find_nft_by_id(FindNftById),
         visit_find_trigger_by_id(FindTriggerById),
         visit_find_oracle_feed_by_id(FindOracleFeedById),
         visit_find_oracle_dispute_by_id(FindOracleDisputeById),
@@ -159,6 +160,7 @@ macro_rules! query_visitors {
             visit_find_asset_definition_by_id(
                 &$crate::query::asset::prelude::FindAssetDefinitionById
             ),
+            visit_find_nft_by_id(&$crate::query::nft::prelude::FindNftById),
             visit_find_trigger_by_id(&$crate::query::trigger::prelude::FindTriggerById),
             visit_find_oracle_feed_by_id(
                 &$crate::query::oracle::prelude::FindOracleFeedById
@@ -305,6 +307,7 @@ mod tests {
             SingularQueryBox::FindAbiVersion(_) => {}
             SingularQueryBox::FindAssetById(_) => {}
             SingularQueryBox::FindAssetDefinitionById(_) => {}
+            SingularQueryBox::FindNftById(_) => {}
             SingularQueryBox::FindAssetEscrowById(_) => {}
             SingularQueryBox::FindAnonymousAssetEscrowById(_) => {}
             SingularQueryBox::FindTriggerById(_) => {}
@@ -410,6 +413,7 @@ mod tests {
                 "rose".parse().unwrap(),
             );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
+        let nft_id: NftId = "ticket$wonderland.universal".parse().expect("valid NFT id");
         let queries = vec![
             SingularQueryBox::FindExecutorDataModel(FindExecutorDataModel),
             SingularQueryBox::FindParameters(FindParameters),
@@ -448,6 +452,7 @@ mod tests {
                     asset_id.definition().clone(),
                 ),
             ),
+            SingularQueryBox::FindNftById(crate::query::nft::prelude::FindNftById::new(nft_id)),
             SingularQueryBox::FindTriggerById(
                 crate::query::trigger::prelude::FindTriggerById::new(
                     "demo_trigger".parse().expect("valid trigger id"),

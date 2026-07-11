@@ -6,7 +6,7 @@ class ContractDeployResponseContract(
     @JvmField val contractAlias: String?,
     @JvmField val contractAddress: String?,
     @JvmField val previousContractAddress: String?,
-    @JvmField val upgraded: Boolean,
+    @JvmField val kaizen: Boolean,
     @JvmField val dataspace: String?,
     @JvmField val deployNonce: Long?,
     @JvmField val txHashHex: String?,

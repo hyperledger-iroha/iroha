@@ -5,6 +5,8 @@
 pub mod cache;
 /// Host adapter for IVM. See module docs for design and current limitations.
 pub mod host;
+/// Exact, privacy-safe public return decoding.
+pub mod return_value;
 
 use std::num::NonZeroU64;
 

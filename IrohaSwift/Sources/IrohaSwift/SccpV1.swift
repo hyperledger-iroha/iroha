@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// Errors raised when first-release SCCP values are not canonical.
@@ -14,32 +13,22 @@ public enum SccpV1Error: Error, Equatable, CustomStringConvertible {
 
 /// Closed first-release SCCP network inventory.
 public enum SccpNetworkV1: String, CaseIterable, Sendable {
-    case soraNexus = "sora-nexus"
     case soraTaira = "sora-taira"
     case ethereumMainnet = "ethereum-mainnet"
     case ethereumSepolia = "ethereum-sepolia"
     case bscMainnet = "bsc-mainnet"
     case bscTestnet = "bsc-testnet"
-    case solanaMainnetBeta = "solana-mainnet-beta"
-    case solanaTestnet = "solana-testnet"
-    case tonMainnet = "ton-mainnet"
-    case tonTestnet = "ton-testnet"
     case tronMainnet = "tron-mainnet"
     case tronNile = "tron-nile"
     case tronShasta = "tron-shasta"
 
     public var tag: UInt8 {
         switch self {
-        case .soraNexus: 0
         case .soraTaira: 1
         case .ethereumMainnet: 2
         case .ethereumSepolia: 3
         case .bscMainnet: 4
         case .bscTestnet: 5
-        case .solanaMainnetBeta: 6
-        case .solanaTestnet: 7
-        case .tonMainnet: 8
-        case .tonTestnet: 9
         case .tronMainnet: 10
         case .tronNile: 11
         case .tronShasta: 12
@@ -48,11 +37,9 @@ public enum SccpNetworkV1: String, CaseIterable, Sendable {
 
     public var domainId: UInt32 {
         switch self {
-        case .soraNexus, .soraTaira: 0
+        case .soraTaira: 0
         case .ethereumMainnet, .ethereumSepolia: 1
         case .bscMainnet, .bscTestnet: 2
-        case .solanaMainnetBeta, .solanaTestnet: 3
-        case .tonMainnet, .tonTestnet: 4
         case .tronMainnet, .tronNile, .tronShasta: 5
         }
     }
@@ -86,19 +73,13 @@ public struct SccpLaneIdV1: Equatable, Hashable, Sendable {
 public enum SccpCodecV1: UInt8, CaseIterable, Sendable {
     case canonicalText = 1
     case evmAddress20 = 2
-    case solanaPubkey32 = 3
-    case tonAccount36 = 4
     case tronAddress21 = 5
-    case soraAssetId = 6
 
     public var wireKey: String {
         switch self {
         case .canonicalText: "canonical_text"
         case .evmAddress20: "evm_address20"
-        case .solanaPubkey32: "solana_pubkey32"
-        case .tonAccount36: "ton_account36"
         case .tronAddress21: "tron_address21"
-        case .soraAssetId: "sora_asset_id"
         }
     }
 
@@ -107,26 +88,24 @@ public enum SccpCodecV1: UInt8, CaseIterable, Sendable {
         let valid: Bool
         switch self {
         case .canonicalText:
-            valid = (1...256).contains(value.count) && value.allSatisfy { (0x21...0x7e).contains($0) }
+            guard (1...256).contains(value.count) else {
+                throw SccpV1Error.invalid("value does not match SCCP codec \(wireKey)")
+            }
+            if value.allSatisfy({ (0x21...0x7e).contains($0) }) {
+                valid = true
+            } else if let literal = String(data: value, encoding: .utf8),
+                      let prefix = try? AccountAddress.inspectI105NetworkPrefix(literal),
+                      let address = try? AccountAddress.fromI105(literal),
+                      let canonical = try? address.toI105(networkPrefix: prefix.chainDiscriminant)
+            {
+                valid = canonical == literal
+            } else {
+                valid = false
+            }
         case .evmAddress20:
             valid = value.count == 20 && value.contains { $0 != 0 }
-        case .solanaPubkey32:
-            valid = value.count == 32 && value.contains { $0 != 0 }
-        case .tonAccount36:
-            guard value.count == 36 else {
-                throw SccpV1Error.invalid("value does not match SCCP codec ton_account36")
-            }
-            let workchain = Int32(bitPattern:
-                UInt32(value[0]) |
-                UInt32(value[1]) << 8 |
-                UInt32(value[2]) << 16 |
-                UInt32(value[3]) << 24
-            )
-            valid = (workchain == -1 || workchain == 0) && value.dropFirst(4).contains { $0 != 0 }
         case .tronAddress21:
             valid = value.count == 21 && value.first == 0x41 && value.dropFirst().contains { $0 != 0 }
-        case .soraAssetId:
-            valid = value.count == 32 && value.contains { $0 != 0 }
         }
         guard valid else {
             throw SccpV1Error.invalid("value does not match SCCP codec \(wireKey)")
@@ -139,16 +118,12 @@ public enum SccpCodecV1: UInt8, CaseIterable, Sendable {
 public enum SccpNativeBackendV1: String, CaseIterable, Sendable {
     case ethereumBeacon = "ethereum_beacon_v1"
     case bscParlia = "bsc_parlia_v1"
-    case solanaTower = "solana_tower_v1"
-    case tonMasterchain = "ton_masterchain_v1"
     case tronDpos = "tron_dpos_v1"
 
     public var backendLabel: String {
         switch self {
         case .ethereumBeacon: "bridge/sccp/native/ethereum-beacon-v1"
         case .bscParlia: "bridge/sccp/native/bsc-parlia-v1"
-        case .solanaTower: "bridge/sccp/native/solana-tower-v1"
-        case .tonMasterchain: "bridge/sccp/native/ton-masterchain-v1"
         case .tronDpos: "bridge/sccp/native/tron-dpos-v1"
         }
     }
@@ -157,8 +132,6 @@ public enum SccpNativeBackendV1: String, CaseIterable, Sendable {
         switch self {
         case .ethereumBeacon: network == .ethereumMainnet || network == .ethereumSepolia
         case .bscParlia: network == .bscMainnet || network == .bscTestnet
-        case .solanaTower: network == .solanaMainnetBeta || network == .solanaTestnet
-        case .tonMasterchain: network == .tonMainnet || network == .tonTestnet
         case .tronDpos: network == .tronMainnet || network == .tronNile || network == .tronShasta
         }
     }
@@ -168,8 +141,6 @@ public enum SccpNativeBackendV1: String, CaseIterable, Sendable {
 /// never a mutable owner address.
 public enum SccpSourceEmitterV1: Equatable, Sendable {
     case evm(address: Data, runtimeCodeHash: Data, routeConfigHash: Data)
-    case solana(programId: Data, executableHash: Data, authorizedEmitter: Data)
-    case ton(workchain: Int32, accountId: Data, codeHash: Data, immutableConfigHash: Data)
     case tron(address: Data, runtimeCodeHash: Data, routeConfigHash: Data)
 
     public static func validatedEvm(address: Data, runtimeCodeHash: Data, routeConfigHash: Data) throws -> Self {
@@ -178,25 +149,6 @@ public enum SccpSourceEmitterV1: Equatable, Sendable {
         try requireRole(routeConfigHash, count: 32, name: "route_config_hash")
         try requireDistinct([runtimeCodeHash, routeConfigHash], label: "EVM emitter hash roles")
         return .evm(address: Data(address), runtimeCodeHash: Data(runtimeCodeHash), routeConfigHash: Data(routeConfigHash))
-    }
-
-    public static func validatedSolana(programId: Data, executableHash: Data, authorizedEmitter: Data) throws -> Self {
-        try [programId, executableHash, authorizedEmitter].enumerated().forEach {
-            try requireRole($0.element, count: 32, name: "Solana emitter role \($0.offset)")
-        }
-        try requireDistinct([programId, executableHash, authorizedEmitter], label: "Solana emitter roles")
-        return .solana(programId: Data(programId), executableHash: Data(executableHash), authorizedEmitter: Data(authorizedEmitter))
-    }
-
-    public static func validatedTon(workchain: Int32, accountId: Data, codeHash: Data, immutableConfigHash: Data) throws -> Self {
-        guard workchain == -1 || workchain == 0 else {
-            throw SccpV1Error.invalid("TON source emitter workchain must be -1 or 0")
-        }
-        try [accountId, codeHash, immutableConfigHash].enumerated().forEach {
-            try requireRole($0.element, count: 32, name: "TON emitter role \($0.offset)")
-        }
-        try requireDistinct([accountId, codeHash, immutableConfigHash], label: "TON emitter roles")
-        return .ton(workchain: workchain, accountId: Data(accountId), codeHash: Data(codeHash), immutableConfigHash: Data(immutableConfigHash))
     }
 
     public static func validatedTron(address: Data, runtimeCodeHash: Data, routeConfigHash: Data) throws -> Self {
@@ -226,6 +178,9 @@ public enum SccpSourceEmitterV1: Equatable, Sendable {
 
 /// Consensus-compatible exact-lane hashing and fixed layouts for SCCP V1.
 public enum SccpV1 {
+    /// Exact I105 discriminant used by the public SORA Taira SCCP endpoint.
+    public static let tairaI105DiscriminantV1: UInt16 = 369
+
     private static let laneHashPrefix = Data("sccp:lane-id:v1".utf8)
     private static let messageIdPrefix = Data("sccp:lane-message-id:v1".utf8)
     private static let payloadHashPrefix = Data("sccp:payload:v1".utf8)
@@ -236,8 +191,6 @@ public enum SccpV1 {
         var out = Data([1, network.tag])
         appendUInt32LE(network.domainId, to: &out)
         switch network {
-        case .soraNexus:
-            out.append(try! decodeLowerHex("00000000000000000000000000000753"))
         case .soraTaira:
             out.append(try! decodeLowerHex("809574f5fee75e69bfcf52451e42d50f"))
         case .ethereumMainnet:
@@ -248,14 +201,6 @@ public enum SccpV1 {
             appendUInt64LE(56, to: &out)
         case .bscTestnet:
             appendUInt64LE(97, to: &out)
-        case .solanaMainnetBeta:
-            appendBytes(Data("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp".utf8), to: &out)
-        case .solanaTestnet:
-            appendBytes(Data("4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY".utf8), to: &out)
-        case .tonMainnet:
-            appendInt32LE(-239, to: &out)
-        case .tonTestnet:
-            appendInt32LE(-3, to: &out)
         case .tronMainnet:
             appendUInt32LE(0x2b66_53dc, to: &out)
         case .tronNile:
@@ -368,8 +313,4 @@ public enum SccpV1 {
         withUnsafeBytes(of: &little) { out.append(contentsOf: $0) }
     }
 
-    private static func appendInt32LE(_ value: Int32, to out: inout Data) {
-        var little = value.littleEndian
-        withUnsafeBytes(of: &little) { out.append(contentsOf: $0) }
-    }
 }

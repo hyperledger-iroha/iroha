@@ -9293,6 +9293,7 @@ pub(crate) mod valid {
                 durable_state_reads: Option<DurableStateReadSnapshot>,
                 access_fence: VmAccessFence,
                 force_live_rebuild: bool,
+                prepared_argument_record: Option<ivm::PreparedArgumentRecord>,
                 cache_idx: usize,
             }
 
@@ -9346,6 +9347,7 @@ pub(crate) mod valid {
                                             metadata,
                                             &mut ivm_cache,
                                             capture_vm_access_log(tx),
+                                            None,
                                         )
                                         .map(|prepared| {
                                             let durable_state_reads =
@@ -9360,6 +9362,8 @@ pub(crate) mod valid {
                                                 durable_state_reads,
                                                 access_fence: prepared.access_fence,
                                                 force_live_rebuild: prepared.force_live_rebuild,
+                                                prepared_argument_record: prepared
+                                                    .prepared_argument_record,
                                                 cache_idx,
                                             }
                                         });
@@ -9399,6 +9403,7 @@ pub(crate) mod valid {
                                     metadata,
                                     &mut ivm_cache,
                                     capture_vm_access_log(tx),
+                                    None,
                                 )
                                 .map(|prepared| {
                                     let durable_state_reads = DurableStateReadSnapshot::capture(
@@ -9412,6 +9417,7 @@ pub(crate) mod valid {
                                         durable_state_reads,
                                         access_fence: prepared.access_fence,
                                         force_live_rebuild: prepared.force_live_rebuild,
+                                        prepared_argument_record: prepared.prepared_argument_record,
                                         cache_idx,
                                     }
                                 });
@@ -9444,6 +9450,7 @@ pub(crate) mod valid {
                                 metadata,
                                 &mut ivm_cache,
                                 capture_vm_access_log(tx),
+                                None,
                             )
                             .map(|prepared| {
                                 let durable_state_reads = DurableStateReadSnapshot::capture(
@@ -9457,6 +9464,7 @@ pub(crate) mod valid {
                                     durable_state_reads,
                                     access_fence: prepared.access_fence,
                                     force_live_rebuild: prepared.force_live_rebuild,
+                                    prepared_argument_record: prepared.prepared_argument_record,
                                     cache_idx: 0,
                                 }
                             });
@@ -9500,6 +9508,7 @@ pub(crate) mod valid {
                                 durable_state_reads: None,
                                 access_fence: VmAccessFence::Global,
                                 force_live_rebuild: true,
+                                prepared_argument_record: None,
                                 cache_idx: 0,
                             });
                     }
@@ -9684,7 +9693,7 @@ pub(crate) mod valid {
                     tx.instructions(),
                     Executable::ContractCall(_) | Executable::Ivm(_)
                 );
-                let (stale_durable_read, force_live_rebuild, cache_idx) =
+                let (stale_durable_read, force_live_rebuild, cache_idx, prepared_argument_record) =
                     match prepared_overlays[idx].as_ref() {
                         Ok(prepared) => (
                             prepared
@@ -9693,11 +9702,13 @@ pub(crate) mod valid {
                                 .is_some_and(|snapshot| !snapshot.is_current(state_ro)),
                             prepared.force_live_rebuild,
                             prepared.cache_idx,
+                            prepared.prepared_argument_record.clone(),
                         ),
                         Err(err) if is_vm && err.may_change_with_live_state() => (
                             false,
                             true,
                             overlay_cache_indices[idx].load(AtomicOrdering::Relaxed),
+                            None,
                         ),
                         Err(err) => return Err(err.clone()),
                     };
@@ -9737,6 +9748,7 @@ pub(crate) mod valid {
                         metadata,
                         &mut ivm_cache,
                         false,
+                        prepared_argument_record,
                     )
                     .map(|prepared| prepared.overlay)
                 }?;
@@ -13336,6 +13348,7 @@ pub(crate) mod valid {
                 source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
                 dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
                 nonce: 1,
+                route_revision: 1,
                 asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
                 asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
                 asset_id: b"xor".to_vec(),
@@ -13370,7 +13383,8 @@ pub(crate) mod valid {
             keypair: &KeyPair,
             record_count: usize,
         ) -> AcceptedTransaction<'static> {
-            let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&sccp_transfer_payload());
+            let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&sccp_transfer_payload())
+                .expect("valid SCCP block fixture payload encodes");
             let overlay = core::iter::repeat_with(|| {
                 InstructionBox::from(crate::bridge::test_record_sccp_message(
                     payload_bytes.clone(),
@@ -24351,6 +24365,109 @@ mod tests {
         assert!(
             ValidBlock::sequential_entrypoints_for_live_execution(&proved_block).is_none(),
             "proved overlays are transaction-supplied and should keep their existing path"
+        );
+    }
+
+    #[test]
+    fn block_overlay_rejects_protected_contract_call_without_persisting_state() {
+        let chain_id = ChainId::from("protected-contract-overlay");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").expect("valid domain"))
+                .build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([domain], [account], []);
+
+        let source = r#"
+seiyaku GuardedOverlay {
+  state Values: StateMap<i64, i64>;
+
+  kotoage fn write(value: i64) authorize("CanWriteGuardedOverlay") {
+    Values[0] = value;
+  }
+}
+"#;
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile protected overlay contract");
+        let interface = ivm::ProgramMetadata::parse(&program)
+            .expect("parse protected contract")
+            .contract_interface
+            .expect("compiled contract interface");
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&keypair));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+
+        let state = State::new_with_chain_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        let payload = Json::new(norito::json!({ "value": 9 }));
+        let schema = interface
+            .entrypoints
+            .iter()
+            .find(|descriptor| descriptor.name == "write")
+            .and_then(|descriptor| descriptor.argument_schema.as_ref());
+        let arguments = crate::executor::encode_contract_argument_record(schema, Some(&payload))
+            .expect("encode guarded arguments")
+            .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
+            .transpose()
+            .expect("bounded guarded arguments");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "gas_limit".parse().expect("gas_limit name"),
+            Json::new(100_000_u64),
+        );
+        let transaction = TransactionBuilder::new(chain_id, authority.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address,
+                    entrypoint: "write".to_owned(),
+                    arguments,
+                },
+            ))
+            .sign(keypair.private_key());
+        let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
+            transaction,
+        ))])
+        .chain(0, state.view().latest_block().as_deref())
+        .sign(keypair.private_key())
+        .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results = valid
+            .as_ref()
+            .entrypoint_results()
+            .map(|(_, _, result)| result.0.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0]
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("CanWriteGuardedOverlay")),
+            "protected overlay call must be rejected with its stable permission name: {results:?}"
+        );
+        assert!(
+            state_block.world.smart_contract_state.is_empty(),
+            "a denied overlay must not persist any contract state"
         );
     }
 

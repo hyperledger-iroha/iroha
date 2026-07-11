@@ -50,10 +50,16 @@ This initial slice provides the foundation needed for a usable managed SDK:
 - direct contract instance and instance-inventory response DTO construction
   rejects malformed contract ids, code hashes, and namespace text before
   callers can serialize or trust manually constructed instance listings
-- direct contract manifest/code-record and verified-source reference/job DTO
-  construction rejects malformed manifest hashes, source provenance text,
-  verified-source job ids/status/timestamps/messages, and actual-code hashes
-  before callers can serialize or trust manually constructed metadata records
+- contract manifest/code-record DTOs preserve the complete Kotodama V1 shape:
+  `seiyaku_name`, branded entrypoints, exact flat-preorder argument/return schemas,
+  dynamic access hints and completeness, triggers, state, error codes, `kotoba`,
+  and typed provenance; parsing rejects unknown fields, malformed checksummed
+  Norito hashes, wrapper/manifest hash mismatches, and inconsistent schemas
+  before callers trust metadata records; aggregate types use one flat preorder
+  tape where a `List` node carries only `capacity` and its element subtree
+  immediately follows, while retired nested `element` payloads, truncated or
+  overlong tapes, and forged core-query `View`/`QueryPage<View>` shapes are
+  rejected
 - direct contract code-view DTO construction rejects malformed access-hint
   keys, entrypoint params, entrypoint metadata, syscall names, analysis memory
   and syscall lists, top-level code/ABI hashes, permissions, warnings, and

@@ -22,8 +22,8 @@ use iroha_data_model::{
     transaction::{Executable, TransactionEntrypoint},
 };
 use iroha_sccp::{
-    NexusBridgeFinalityProofV1, NexusConsensusPhaseV1, NexusQcRefV1, SccpHubCommitmentV1,
-    SccpPayloadV1,
+    SccpHubCommitmentV1, SccpPayloadV1, TairaBridgeFinalityProofV1, TairaConsensusPhaseV1,
+    TairaQcRefV1,
 };
 use thiserror::Error;
 
@@ -219,7 +219,11 @@ pub(crate) enum RecordedSccpMessageValidationError {
 
 pub(crate) fn decode_recorded_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<SccpPayloadV1> {
     let payload = iroha_sccp::decode_canonical_sccp_payload_bytes(payload_bytes)?;
-    if iroha_sccp::canonical_sccp_payload_bytes(&payload).as_slice() != payload_bytes {
+    if iroha_sccp::canonical_sccp_payload_bytes(&payload)
+        .ok()?
+        .as_slice()
+        != payload_bytes
+    {
         return None;
     }
     iroha_sccp::verify_sccp_payload_structure(&payload).then_some(payload)
@@ -242,40 +246,24 @@ pub(crate) fn test_sccp_outbound_context_for_payload_bytes(
         _ => None,
     }
     .unwrap_or(SccpNetworkV1::EthereumMainnet);
-    let destination_binding_hash = if matches!(
+    let (destination_binding_hash, route_configuration_hash) = if matches!(
         target_domain,
         iroha_sccp::SCCP_DOMAIN_ETH | iroha_sccp::SCCP_DOMAIN_BSC
     ) {
-        let seed = if target_domain == iroha_sccp::SCCP_DOMAIN_ETH {
-            0x20_u8
-        } else {
-            0x30_u8
-        };
-        let address = |fill: u8| {
-            let digit = char::from(b'1' + (fill % 9));
-            format!("0x{}", digit.to_string().repeat(40))
-        };
-        let network_id = if target_domain == iroha_sccp::SCCP_DOMAIN_ETH {
-            iroha_sccp::sccp_eth_mainnet_network_id_word_v1()
-        } else {
-            iroha_sccp::sccp_bsc_mainnet_network_id_word_v1()
-        };
-        iroha_sccp::sccp_evm_mainnet_destination_rollout_with_binding_v1(
-            target_domain,
-            address(seed + 10),
-            format!("0x{}", hex::encode([seed + 11; 32])),
-            format!("0x{}", hex::encode([seed + 12; 32])),
-            format!("0x{}", hex::encode(network_id)),
-            address(seed + 14),
+        let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+            target,
+            iroha_data_model::bridge::SccpRouteActivationV1::Staged,
+        );
+        (
+            route
+                .destination_binding_hash()
+                .expect("exact test EVM destination binding"),
+            route
+                .route_configuration_hash()
+                .expect("exact test EVM route configuration"),
         )
-        .and_then(|rollout| rollout.destination_binding_hash)
-        .and_then(|hash| hex::decode(hash.trim_start_matches("0x")).ok())
-        .and_then(|bytes| bytes.try_into().ok())
-        .expect("test EVM rollout must expose a 32-byte destination binding")
     } else {
-        iroha_sccp::sccp_destination_binding_for_domain(target_domain)
-            .map(|binding| binding.binding_hash)
-            .unwrap_or([0x36; 32])
+        ([0x36; 32], [0x37; 32])
     };
     iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
         SccpLaneIdV1 {
@@ -283,7 +271,7 @@ pub(crate) fn test_sccp_outbound_context_for_payload_bytes(
             target,
         },
         destination_binding_hash,
-        [0x37; 32],
+        route_configuration_hash,
     )
     .expect("test SCCP outbound context must be valid")
 }
@@ -298,14 +286,16 @@ pub(crate) fn test_record_sccp_message(
 
 #[cfg(test)]
 pub(crate) fn test_sccp_outbound_message_key(payload: &SccpPayloadV1) -> SccpOutboundMessageKeyV1 {
-    let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(payload);
+    let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(payload)
+        .expect("valid SCCP outbound-key fixture payload encodes");
     let context = test_sccp_outbound_context_for_payload_bytes(&payload_bytes);
     sccp_outbound_message_key(context.lane, payload).expect("test SCCP outbound key must be valid")
 }
 
 #[cfg(test)]
 pub(crate) fn test_sccp_hub_commitment(payload: &SccpPayloadV1) -> SccpHubCommitmentV1 {
-    let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(payload);
+    let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(payload)
+        .expect("valid SCCP commitment fixture payload encodes");
     let context = test_sccp_outbound_context_for_payload_bytes(&payload_bytes);
     iroha_sccp::hub_commitment_from_sccp_payload(context, payload)
         .expect("test SCCP hub commitment must be valid")
@@ -1431,14 +1421,6 @@ pub struct FinalityProofVerificationConfig<'a> {
     pub trusted_validator_set_hash: Option<HashOf<Vec<PeerId>>>,
 }
 
-const fn min_votes_for_len(len: usize) -> usize {
-    if len > 3 {
-        ((len.saturating_sub(1)) / 3) * 2 + 1
-    } else {
-        len
-    }
-}
-
 /// Verify a [`BridgeFinalityProof`] against chain/height/validator set expectations.
 ///
 /// Callers supply the expected chain id and may optionally bind the proof to a specific
@@ -1550,7 +1532,7 @@ pub fn verify_finality_proof(
             },
         );
     }
-    let required = min_votes_for_len(roster_len);
+    let required = sumeragi::network_topology::commit_quorum_from_len(roster_len);
     let mut seen = BTreeSet::new();
     for (byte_idx, byte) in certificate.aggregate.signers_bitmap.iter().enumerate() {
         if *byte == 0 {
@@ -1650,16 +1632,16 @@ fn sccp_hash_to_h256(hash: &Hash) -> [u8; 32] {
     out
 }
 
-fn sccp_consensus_phase(phase: sumeragi::consensus::Phase) -> NexusConsensusPhaseV1 {
+fn sccp_consensus_phase(phase: sumeragi::consensus::Phase) -> TairaConsensusPhaseV1 {
     match phase {
-        sumeragi::consensus::Phase::Prepare => NexusConsensusPhaseV1::Prepare,
-        sumeragi::consensus::Phase::Commit => NexusConsensusPhaseV1::Commit,
-        sumeragi::consensus::Phase::NewView => NexusConsensusPhaseV1::NewView,
+        sumeragi::consensus::Phase::Prepare => TairaConsensusPhaseV1::Prepare,
+        sumeragi::consensus::Phase::Commit => TairaConsensusPhaseV1::Commit,
+        sumeragi::consensus::Phase::NewView => TairaConsensusPhaseV1::NewView,
     }
 }
 
-fn sccp_qc_ref(reference: &iroha_data_model::block::consensus::QcRef) -> NexusQcRefV1 {
-    NexusQcRefV1 {
+fn sccp_qc_ref(reference: &iroha_data_model::block::consensus::QcRef) -> TairaQcRefV1 {
+    TairaQcRefV1 {
         height: reference.height,
         view: reference.view,
         epoch: reference.epoch,
@@ -1669,12 +1651,12 @@ fn sccp_qc_ref(reference: &iroha_data_model::block::consensus::QcRef) -> NexusQc
 }
 
 fn sccp_qc_projection_matches_local(
-    finality: &NexusBridgeFinalityProofV1,
+    finality: &TairaBridgeFinalityProofV1,
     trusted_qc: &Qc,
 ) -> bool {
     let qc = &finality.commit_qc;
     qc.version == 1
-        && qc.phase == NexusConsensusPhaseV1::Commit
+        && qc.phase == TairaConsensusPhaseV1::Commit
         && trusted_qc.phase == sumeragi::consensus::Phase::Commit
         && qc.height == trusted_qc.height
         && qc.view == trusted_qc.view
@@ -1754,14 +1736,33 @@ fn validate_local_sccp_records_against_commitment_root(
 #[allow(clippy::too_many_lines)]
 pub fn verify_sccp_finality_proof_against_local_state(
     state: &impl SccpFinalityStateReadOnly,
-    finality: &NexusBridgeFinalityProofV1,
+    finality: &TairaBridgeFinalityProofV1,
 ) -> Result<BridgeFinalityProof, String> {
-    if !iroha_sccp::verify_nexus_bridge_finality_proof_structure(finality) {
+    if !iroha_sccp::verify_taira_bridge_finality_proof_structure(finality) {
         return Err("SCCP finality proof failed structural verification".to_owned());
     }
-    if !iroha_sccp::verify_nexus_bridge_finality_proof_cryptographic(finality) {
-        return Err("SCCP finality proof failed cryptographic verification".to_owned());
-    }
+    verify_structural_sccp_finality_proof_against_local_state(state, finality)
+}
+
+/// Bind an opaque route/Groth16-verified destination context to local committed
+/// block and QC state without repeating proof-controlled parsing or crypto.
+///
+/// # Errors
+/// Returns a human-readable rejection reason when the context's finality
+/// projection differs from authoritative local state or the trusted local QC
+/// fails its single BLS aggregate verification.
+pub fn verify_sccp_destination_context_against_local_state(
+    state: &impl SccpFinalityStateReadOnly,
+    context: &iroha_sccp::SccpVerifiedDestinationContextV1,
+) -> Result<BridgeFinalityProof, String> {
+    verify_structural_sccp_finality_proof_against_local_state(state, context.finality())
+}
+
+#[allow(clippy::too_many_lines)]
+fn verify_structural_sccp_finality_proof_against_local_state(
+    state: &impl SccpFinalityStateReadOnly,
+    finality: &TairaBridgeFinalityProofV1,
+) -> Result<BridgeFinalityProof, String> {
     if finality.chain_id != state.sccp_chain_id().as_str() {
         return Err(format!(
             "SCCP finality proof chain_id mismatch: expected {}, actual {}",
@@ -1828,6 +1829,7 @@ pub fn verify_sccp_finality_proof_against_local_state(
         commit_qc: trusted_qc,
         validator_set_pops: finality.commit_qc.validator_set_pops.clone(),
     };
+    count_sccp_local_bls_verification_for_tests();
     verify_finality_proof(
         &proof,
         &FinalityProofVerificationConfig {
@@ -1838,6 +1840,31 @@ pub fn verify_sccp_finality_proof_against_local_state(
     )
     .map_err(|err| format!("trusted local finality QC failed verification: {err}"))?;
     Ok(proof)
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static SCCP_LOCAL_BLS_VERIFICATIONS: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn count_sccp_local_bls_verification_for_tests() {
+    SCCP_LOCAL_BLS_VERIFICATIONS.with(|counter| counter.set(counter.get().saturating_add(1)));
+}
+
+#[cfg(not(test))]
+fn count_sccp_local_bls_verification_for_tests() {}
+
+#[cfg(test)]
+pub(crate) fn reset_sccp_local_bls_verifications_for_tests() {
+    SCCP_LOCAL_BLS_VERIFICATIONS.with(|counter| counter.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn sccp_local_bls_verifications_for_tests() -> usize {
+    SCCP_LOCAL_BLS_VERIFICATIONS.with(core::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -1875,6 +1902,16 @@ mod tests {
             .expect("bridge BLS fixture key generation should succeed")
     }
 
+    fn canonical_test_sccp_payload_bytes(payload: &SccpPayloadV1) -> Vec<u8> {
+        iroha_sccp::canonical_sccp_payload_bytes(payload)
+            .expect("valid SCCP bridge fixture payload encodes")
+    }
+
+    fn canonical_test_transfer_payload_bytes(payload: &iroha_sccp::TransferPayloadV1) -> Vec<u8> {
+        iroha_sccp::canonical_transfer_payload_bytes(payload)
+            .expect("valid SCCP transfer fixture payload encodes")
+    }
+
     #[test]
     fn checked_keypair_helpers_preserve_requested_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -1883,6 +1920,12 @@ mod tests {
 
     struct EmptySccpFinalityState {
         chain_id: ChainId,
+    }
+
+    struct PersistedSccpFinalityState {
+        chain_id: ChainId,
+        block: Arc<SignedBlock>,
+        commit_qc: Qc,
     }
 
     struct PersistedQcBridgeState {
@@ -1932,6 +1975,26 @@ mod tests {
             _block_hash: HashOf<BlockHeader>,
         ) -> Option<Qc> {
             None
+        }
+    }
+
+    impl SccpFinalityStateReadOnly for PersistedSccpFinalityState {
+        fn sccp_chain_id(&self) -> &ChainId {
+            &self.chain_id
+        }
+
+        fn sccp_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
+            (u64::try_from(height.get()).ok() == Some(self.block.header().height().get()))
+                .then(|| Arc::clone(&self.block))
+        }
+
+        fn sccp_commit_qc_for_block(
+            &self,
+            height: u64,
+            block_hash: HashOf<BlockHeader>,
+        ) -> Option<Qc> {
+            (self.commit_qc.height == height && self.commit_qc.subject_block_hash == block_hash)
+                .then(|| self.commit_qc.clone())
         }
     }
 
@@ -2218,8 +2281,108 @@ mod tests {
     }
 
     #[test]
-    fn sccp_finality_local_state_check_rejects_unsigned_qc_before_state_lookup() {
-        let chain_id: ChainId = iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1
+    fn destination_context_uses_one_decode_pairing_and_local_bls() {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
+        let parsed = iroha_sccp::parse_sccp_destination_proof_v1(&fixture.bridge_proof)
+            .expect("exact destination proof parses");
+        let verified = iroha_sccp::verify_parsed_sccp_destination_proof_v1(parsed, &fixture.route)
+            .expect("exact destination proof verifies against governed route");
+        assert_eq!(
+            iroha_sccp::sccp_destination_proof_work_counters_v1(),
+            iroha_sccp::SccpDestinationProofWorkCountersV1 {
+                artifact_framing_decodes: 1,
+                bundle_decodes: 1,
+                groth16_pairings: 1,
+                bls_verifications: 0,
+            }
+        );
+
+        let finality = verified.finality();
+        let header = norito::decode_from_bytes::<BlockHeader>(&finality.block_header_bytes)
+            .expect("fixture finality header decodes");
+        let payload = canonical_test_sccp_payload_bytes(&fixture.bundle.payload);
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
+        ]));
+        let entry_hash = tx.hash_as_entrypoint();
+        let block_signer = checked_keypair();
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(block_signer.private_key(), header.hash())
+                .expect("fixture local block signature"),
+        );
+        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("fixture local block results");
+        assert_eq!(sccp_block_hash_to_h256(&block.hash()), finality.block_hash);
+
+        let validator_set = finality
+            .commit_qc
+            .validator_public_keys
+            .iter()
+            .map(|key| {
+                key.parse::<PublicKey>()
+                    .map(PeerId::from)
+                    .expect("fixture BLS public key")
+            })
+            .collect::<Vec<_>>();
+        let validator_set_hash = HashOf::new(&validator_set);
+        assert_eq!(
+            sccp_hash_to_h256(&validator_set_hash),
+            finality.commit_qc.validator_set_hash
+        );
+        assert!(finality.commit_qc.highest_qc.is_none());
+        let trusted_qc = Qc {
+            phase: CertPhase::Commit,
+            subject_block_hash: block.hash(),
+            parent_state_root: Hash::prehashed(finality.commit_qc.parent_state_root),
+            post_state_root: Hash::prehashed(finality.commit_qc.post_state_root),
+            height: finality.height,
+            view: finality.commit_qc.view,
+            epoch: finality.commit_qc.epoch,
+            chain_order_hash: Hash::prehashed(finality.commit_qc.chain_order_hash),
+            rechain_seq: finality.commit_qc.rechain_seq,
+            mode_tag: finality.commit_qc.mode_tag.clone(),
+            highest_qc: None,
+            validator_set_hash,
+            validator_set_hash_version: finality.commit_qc.validator_set_hash_version,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: finality.commit_qc.signers_bitmap.clone(),
+                bls_aggregate_signature: finality.commit_qc.bls_aggregate_signature.clone(),
+            },
+        };
+        let state = PersistedSccpFinalityState {
+            chain_id: finality.chain_id.parse().expect("fixture chain id"),
+            block: Arc::new(block),
+            commit_qc: trusted_qc,
+        };
+        reset_sccp_local_bls_verifications_for_tests();
+
+        verify_sccp_destination_context_against_local_state(&state, &verified)
+            .expect("route-bound context must anchor to exact local block and QC");
+        assert_eq!(sccp_local_bls_verifications_for_tests(), 1);
+        assert_eq!(
+            iroha_sccp::sccp_destination_proof_work_counters_v1(),
+            iroha_sccp::SccpDestinationProofWorkCountersV1 {
+                artifact_framing_decodes: 1,
+                bundle_decodes: 1,
+                groth16_pairings: 1,
+                bls_verifications: 0,
+            },
+            "local anchoring must not re-enter proof-controlled SCCP crypto"
+        );
+    }
+
+    #[test]
+    fn sccp_finality_local_state_check_rejects_unanchored_qc_before_bls() {
+        let chain_id: ChainId = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
             .parse()
             .expect("chain id");
         let validator_keypair = checked_bls_keypair();
@@ -2228,8 +2391,7 @@ mod tests {
         let validator_set_hash = HashOf::new(&validator_set);
         let mut validator_set_hash_bytes = [0u8; 32];
         validator_set_hash_bytes.copy_from_slice(validator_set_hash.as_ref().as_ref());
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(7, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(7, [0x22; 20]));
         let (block, _) = signed_block_with_sccp_payloads(&[payload], 7);
         let messages = collect_sccp_messages_from_signed_block(&block);
         let commitment_root =
@@ -2238,16 +2400,16 @@ mod tests {
         block_header.set_sccp_commitment_root(Some(commitment_root));
         let block_hash = sccp_block_hash_to_h256(&block_header.hash());
         let block_header_bytes = norito::to_bytes(&block_header).expect("encode block header");
-        let finality = NexusBridgeFinalityProofV1 {
+        let finality = TairaBridgeFinalityProofV1 {
             version: 1,
             chain_id: chain_id.to_string(),
             height: 7,
             block_hash,
             commitment_root,
             block_header_bytes,
-            commit_qc: iroha_sccp::NexusCommitQcV1 {
+            commit_qc: iroha_sccp::TairaCommitQcV1 {
                 version: 1,
-                phase: NexusConsensusPhaseV1::Commit,
+                phase: TairaConsensusPhaseV1::Commit,
                 height: 7,
                 view: 0,
                 epoch: 0,
@@ -2266,15 +2428,17 @@ mod tests {
                 bls_aggregate_signature: vec![2; 96],
             },
         };
-        assert!(iroha_sccp::verify_nexus_bridge_finality_proof_structure(
+        assert!(iroha_sccp::verify_taira_bridge_finality_proof_structure(
             &finality
         ));
-        assert!(!iroha_sccp::verify_nexus_bridge_finality_proof_cryptographic(&finality));
+        assert!(!iroha_sccp::verify_taira_bridge_finality_proof_cryptographic(&finality));
 
         let state = EmptySccpFinalityState { chain_id };
+        reset_sccp_local_bls_verifications_for_tests();
         let err = verify_sccp_finality_proof_against_local_state(&state, &finality)
-            .expect_err("unsigned SCCP finality must be rejected before local anchoring");
-        assert_eq!(err, "SCCP finality proof failed cryptographic verification");
+            .expect_err("unanchored SCCP finality must fail before trusted-QC crypto");
+        assert!(err.contains("local committed block 7 not found"), "{err}");
+        assert_eq!(sccp_local_bls_verifications_for_tests(), 0);
     }
 
     #[test]
@@ -2285,8 +2449,8 @@ mod tests {
     #[test]
     fn sccp_commitment_root_matches_direct_merkle_root() {
         let payloads = vec![
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(1, [0x22; 20])),
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(2, [0x22; 20])),
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(1, [0x22; 20])),
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(2, [0x22; 20])),
         ];
         let (block, _) = signed_block_with_sccp_payloads(&payloads, 1);
         let messages = collect_sccp_messages_from_signed_block(&block);
@@ -2303,8 +2467,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_block_without_results_keeps_preexecution_records() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(15, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(15, [0x22; 20]));
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload.clone())),
         ]));
@@ -2328,8 +2491,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_plain_instruction_executable() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(12, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(12, [0x22; 20]));
         let tx = signed_transaction_with_executable(Executable::Instructions(
             vec![InstructionBox::from(
                 crate::bridge::test_record_sccp_message(payload.clone()),
@@ -2350,8 +2512,8 @@ mod tests {
     #[test]
     fn collect_sccp_messages_from_block_preserves_payload_order() {
         let payloads = vec![
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(1, [0x22; 20])),
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(2, [0x22; 20])),
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(1, [0x22; 20])),
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(2, [0x22; 20])),
         ];
         let (block, decoded_payloads) = signed_block_with_sccp_payloads(&payloads, 1);
 
@@ -2379,7 +2541,7 @@ mod tests {
     #[test]
     fn collect_sccp_messages_rejects_unprefixed_ascii_hex_record_payload_bytes() {
         let expected_payload = sample_transfer_payload(6, [0x22; 20]);
-        let payload = iroha_sccp::canonical_sccp_payload_bytes(&expected_payload);
+        let payload = canonical_test_sccp_payload_bytes(&expected_payload);
         let encoded_payload = hex::encode(&payload).into_bytes();
         let (block, _) = signed_block_with_sccp_payloads(&[encoded_payload], 4);
 
@@ -2393,7 +2555,7 @@ mod tests {
     #[test]
     fn collect_sccp_messages_rejects_prefixed_ascii_hex_record_payload_bytes() {
         let expected_payload = sample_transfer_payload(7, [0x22; 20]);
-        let payload = iroha_sccp::canonical_sccp_payload_bytes(&expected_payload);
+        let payload = canonical_test_sccp_payload_bytes(&expected_payload);
         let encoded_payload = format!("0x{}", hex::encode(&payload)).into_bytes();
         let (block, _) = signed_block_with_sccp_payloads(&[encoded_payload], 4);
 
@@ -2407,7 +2569,7 @@ mod tests {
     #[test]
     fn collect_sccp_messages_rejects_ascii_hex_record_payload_aliases() {
         let expected_payload = sample_transfer_payload(8, [0x22; 20]);
-        let payload = iroha_sccp::canonical_sccp_payload_bytes(&expected_payload);
+        let payload = canonical_test_sccp_payload_bytes(&expected_payload);
         let lowercase_hex = hex::encode(&payload);
         let uppercase_hex = lowercase_hex.to_ascii_uppercase();
         let cases = [
@@ -2433,10 +2595,10 @@ mod tests {
     #[test]
     fn collect_sccp_messages_ignores_ascii_hex_aliases_for_commitment_root() {
         let accepted_payload = sample_transfer_payload(9, [0x22; 20]);
-        let accepted_bytes = iroha_sccp::canonical_sccp_payload_bytes(&accepted_payload);
+        let accepted_bytes = canonical_test_sccp_payload_bytes(&accepted_payload);
 
         let rejected_payload = sample_transfer_payload(10, [0x22; 20]);
-        let rejected_bytes = iroha_sccp::canonical_sccp_payload_bytes(&rejected_payload);
+        let rejected_bytes = canonical_test_sccp_payload_bytes(&rejected_payload);
         let rejected_hex = hex::encode(&rejected_bytes);
         let uppercase_alias = rejected_hex.to_ascii_uppercase().into_bytes();
         let prefixed_alias = format!("0x{rejected_hex}").into_bytes();
@@ -2465,7 +2627,7 @@ mod tests {
     #[test]
     fn collect_sccp_messages_skips_undecodable_payloads() {
         let payloads = vec![
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(3, [0x22; 20])),
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(3, [0x22; 20])),
             vec![0xff, 0x00, 0x01],
         ];
         let (block, decoded_payloads) = signed_block_with_sccp_payloads(&payloads, 2);
@@ -2482,6 +2644,7 @@ mod tests {
             source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
             dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             nonce: 11,
+            route_revision: 1,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
             asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
             asset_id: b"weth#eth".to_vec(),
@@ -2493,10 +2656,8 @@ mod tests {
             route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
             route_id: b"eth:sora:weth".to_vec(),
         });
-        let (block, _) = signed_block_with_sccp_payloads(
-            &[iroha_sccp::canonical_sccp_payload_bytes(&inbound)],
-            2,
-        );
+        let (block, _) =
+            signed_block_with_sccp_payloads(&[canonical_test_sccp_payload_bytes(&inbound)], 2);
 
         assert!(collect_sccp_messages_from_signed_block(&block).is_empty());
     }
@@ -2510,16 +2671,16 @@ mod tests {
         invalid_transfer.amount = 0;
         let invalid_payload = SccpPayloadV1::Transfer(invalid_transfer);
         assert!(
-            iroha_sccp::decode_canonical_sccp_payload_bytes(
-                &iroha_sccp::canonical_sccp_payload_bytes(&invalid_payload)
-            )
+            iroha_sccp::decode_canonical_sccp_payload_bytes(&canonical_test_sccp_payload_bytes(
+                &invalid_payload
+            ))
             .is_some()
         );
         assert!(!iroha_sccp::verify_sccp_payload_structure(&invalid_payload));
         let valid_payload = sample_transfer_payload(5, [0x22; 20]);
         let payloads = vec![
-            iroha_sccp::canonical_sccp_payload_bytes(&invalid_payload),
-            iroha_sccp::canonical_sccp_payload_bytes(&valid_payload),
+            canonical_test_sccp_payload_bytes(&invalid_payload),
+            canonical_test_sccp_payload_bytes(&valid_payload),
         ];
         let (block, _) = signed_block_with_sccp_payloads(&payloads, 3);
 
@@ -2564,9 +2725,9 @@ mod tests {
     #[test]
     fn collect_sccp_messages_preserves_instruction_indices_after_skips() {
         let payloads = vec![
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(4, [0x22; 20])),
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(4, [0x22; 20])),
             vec![0x00, 0x01, 0xff],
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(5, [0x22; 20])),
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(5, [0x22; 20])),
         ];
         let (block, decoded_payloads) = signed_block_with_sccp_payloads(&payloads, 3);
 
@@ -2586,9 +2747,9 @@ mod tests {
     #[test]
     fn collect_sccp_messages_preserves_transaction_indices_across_block() {
         let first_payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(6, [0x22; 20]));
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(6, [0x22; 20]));
         let second_payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(7, [0x22; 20]));
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(7, [0x22; 20]));
         let ignored_tx =
             signed_transaction_with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![
                 0xAA,
@@ -2624,8 +2785,7 @@ mod tests {
             TransactionEntrypoint::Time(time_entry),
         ));
 
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(6, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(6, [0x22; 20]));
         let external_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload.clone())),
         ]));
@@ -2646,8 +2806,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_accepted_transactions_includes_sealed_reveals() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(7, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(7, [0x22; 20]));
         let [commitment, reveal] = sealed_sccp_record_entrypoints(payload.clone());
         let accepted_commitment =
             AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment));
@@ -2672,8 +2831,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_accepted_transactions_deduplicates_outbound_keys() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(8, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(8, [0x22; 20]));
         let first = accepted_transaction_with_sccp_payload(payload.clone());
         let second = accepted_transaction_with_sccp_payload(payload.clone());
 
@@ -2690,8 +2848,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_accepted_transactions_ignores_hex_aliases() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(8, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(8, [0x22; 20]));
         let hex_alias = format!("0x{}", hex::encode(&payload)).into_bytes();
 
         for (first, second, expected_tx_index) in [
@@ -2716,9 +2873,9 @@ mod tests {
     #[test]
     fn collect_sccp_messages_from_accepted_transactions_filter_preserves_entry_indices() {
         let skipped_payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(8, [0x22; 20]));
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(8, [0x22; 20]));
         let included_payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(9, [0x22; 20]));
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(9, [0x22; 20]));
         let skipped = accepted_transaction_with_sccp_payload(skipped_payload);
         let included = accepted_transaction_with_sccp_payload(included_payload.clone());
 
@@ -2748,9 +2905,8 @@ mod tests {
             unreachable!("sample payload is a transfer");
         };
         transfer.route_id.clear();
-        let accepted = accepted_transaction_with_sccp_payload(
-            iroha_sccp::canonical_sccp_payload_bytes(&payload),
-        );
+        let accepted =
+            accepted_transaction_with_sccp_payload(canonical_test_sccp_payload_bytes(&payload));
 
         let messages = collect_sccp_messages_from_accepted_transactions(&[accepted]);
 
@@ -2768,9 +2924,8 @@ mod tests {
         transfer.route_id = iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1
             .as_bytes()
             .to_vec();
-        let accepted = accepted_transaction_with_sccp_payload(
-            iroha_sccp::canonical_sccp_payload_bytes(&payload),
-        );
+        let accepted =
+            accepted_transaction_with_sccp_payload(canonical_test_sccp_payload_bytes(&payload));
 
         let messages = collect_sccp_messages_from_accepted_transactions(&[accepted]);
 
@@ -2788,9 +2943,8 @@ mod tests {
         transfer.route_id = iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1
             .as_bytes()
             .to_vec();
-        let accepted = accepted_transaction_with_sccp_payload(
-            iroha_sccp::canonical_sccp_payload_bytes(&payload),
-        );
+        let accepted =
+            accepted_transaction_with_sccp_payload(canonical_test_sccp_payload_bytes(&payload));
 
         let messages = collect_sccp_messages_from_accepted_transactions(&[accepted]);
 
@@ -2802,8 +2956,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_accepted_transactions_deduplicates_same_overlay_key() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(8, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(8, [0x22; 20]));
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload.clone())),
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload.clone())),
@@ -2825,9 +2978,8 @@ mod tests {
     fn collect_new_sccp_messages_from_accepted_transactions_skips_existing_outbox_keys() {
         let payload = sample_transfer_payload(9, [0x22; 20]);
         let key = test_sccp_outbound_message_key(&payload);
-        let accepted = accepted_transaction_with_sccp_payload(
-            iroha_sccp::canonical_sccp_payload_bytes(&payload),
-        );
+        let accepted =
+            accepted_transaction_with_sccp_payload(canonical_test_sccp_payload_bytes(&payload));
 
         let messages =
             collect_new_sccp_messages_from_accepted_transactions(&[accepted], |candidate| {
@@ -2839,8 +2991,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_block_deduplicates_successful_duplicate_outbound_keys() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(10, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(10, [0x22; 20]));
         let first_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload.clone())),
         ]));
@@ -2866,8 +3017,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_block_ignores_hex_aliases() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(11, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(11, [0x22; 20]));
         let encoded_payload = format!("0x{}", hex::encode(&payload)).into_bytes();
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(encoded_payload)),
@@ -2889,7 +3039,7 @@ mod tests {
     #[test]
     fn local_sccp_finality_records_reject_duplicate_successful_outbound_keys() {
         let payload = sample_transfer_payload(12, [0x22; 20]);
-        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
         let first_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(
                 payload_bytes.clone(),
@@ -2915,7 +3065,7 @@ mod tests {
     #[test]
     fn local_sccp_finality_records_reject_hex_alias_payload() {
         let payload = sample_transfer_payload(13, [0x22; 20]);
-        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
         let encoded_payload = format!("0x{}", hex::encode(&payload_bytes)).into_bytes();
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(encoded_payload)),
@@ -2939,8 +3089,7 @@ mod tests {
 
     #[test]
     fn validate_sccp_commitment_root_for_signed_block_rejects_resultless_sccp_root() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(14, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(14, [0x22; 20]));
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
@@ -2963,8 +3112,7 @@ mod tests {
         let plain_tx = signed_transaction_with_executable(Executable::Instructions(
             Vec::<InstructionBox>::new().into(),
         ));
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(16, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(16, [0x22; 20]));
         let sccp_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
@@ -3012,8 +3160,7 @@ mod tests {
 
     #[test]
     fn validate_sccp_commitment_root_for_signed_block_rejects_hex_alias_payload() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(15, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(15, [0x22; 20]));
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(
                 format!("0x{}", hex::encode(&payload)).into_bytes(),
@@ -3043,7 +3190,7 @@ mod tests {
         };
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(
-                iroha_sccp::canonical_transfer_payload_bytes(&transfer),
+                canonical_test_transfer_payload_bytes(&transfer),
             )),
         ]));
         let block = signed_block_with_transactions(vec![tx], 9);
@@ -3064,8 +3211,7 @@ mod tests {
 
     #[test]
     fn validate_sccp_commitment_root_for_signed_block_rejects_non_sora_record_payload() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&non_sora_source_transfer_payload(18));
+        let payload = canonical_test_sccp_payload_bytes(&non_sora_source_transfer_payload(18));
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
@@ -3093,7 +3239,7 @@ mod tests {
             unreachable!("sample payload is a transfer");
         };
         transfer.route_id.clear();
-        let payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let payload = canonical_test_sccp_payload_bytes(&payload);
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
@@ -3119,7 +3265,7 @@ mod tests {
         let mut payload = sample_transfer_payload(24, [0x22; 20]);
         let SccpPayloadV1::Transfer(transfer) = &mut payload;
         transfer.asset_id = b"xor#universal#shadow".to_vec();
-        let payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let payload = canonical_test_sccp_payload_bytes(&payload);
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
@@ -3145,7 +3291,7 @@ mod tests {
         let mut payload = sample_transfer_payload(25, [0x22; 20]);
         let SccpPayloadV1::Transfer(transfer) = &mut payload;
         transfer.asset_id = b"xor#universal".to_vec();
-        let payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let payload = canonical_test_sccp_payload_bytes(&payload);
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
@@ -3171,8 +3317,7 @@ mod tests {
 
     #[test]
     fn validate_sccp_commitment_root_for_signed_block_accepts_direct_record_instruction() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(19, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(19, [0x22; 20]));
         let tx = signed_transaction_with_executable(Executable::Instructions(
             vec![InstructionBox::from(
                 crate::bridge::test_record_sccp_message(payload),
@@ -3212,8 +3357,7 @@ mod tests {
         let plain_tx = signed_transaction_with_executable(Executable::Instructions(
             Vec::<InstructionBox>::new().into(),
         ));
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(17, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(17, [0x22; 20]));
         let sccp_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
@@ -3233,8 +3377,7 @@ mod tests {
 
     #[test]
     fn local_sccp_finality_records_reject_resultless_matching_root() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(15, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(15, [0x22; 20]));
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
@@ -3251,9 +3394,9 @@ mod tests {
     #[test]
     fn collect_sccp_messages_from_block_skips_failed_transactions() {
         let first_payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(10, [0x22; 20]));
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(10, [0x22; 20]));
         let second_payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(11, [0x22; 20]));
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(11, [0x22; 20]));
         let first_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(
                 first_payload.clone(),
@@ -3297,8 +3440,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_block_skips_failed_external_with_time_trigger_result() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(12, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(12, [0x22; 20]));
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
@@ -3336,8 +3478,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_block_uses_entrypoint_index_after_sealed_commitment() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(13, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(13, [0x22; 20]));
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
@@ -3369,8 +3510,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_block_includes_successful_sealed_reveal() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(14, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(14, [0x22; 20]));
         let [commitment, reveal] = sealed_sccp_record_entrypoints(payload.clone());
         let mut block = signed_block_with_transactions(Vec::new(), 12);
         block.set_external_entrypoints(vec![commitment, reveal]);
@@ -3405,8 +3545,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_ivm_proved_overlay() {
-        let payload =
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(7, [0x22; 20]));
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(7, [0x22; 20]));
         let executable = Executable::IvmProved(IvmProved {
             bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
             overlay: vec![InstructionBox::from(

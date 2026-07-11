@@ -65,4 +65,22 @@ class ProposeDeployContractInstructionTest {
             error.message,
         )
     }
+
+    @Test
+    fun `voting mode parser accepts only canonical wire spellings`() {
+        assertEquals(
+            GovernanceInstructionUtils.VotingMode.ZK,
+            GovernanceInstructionUtils.VotingMode.parse("Zk"),
+        )
+        assertEquals(
+            GovernanceInstructionUtils.VotingMode.PLAIN,
+            GovernanceInstructionUtils.VotingMode.parse("Plain"),
+        )
+
+        for (alias in listOf("zk", "plain", "ZK", "PLAIN", " Zk", "Plain ", "quadratic")) {
+            assertFailsWith<IllegalArgumentException>(alias) {
+                GovernanceInstructionUtils.VotingMode.parse(alias)
+            }
+        }
+    }
 }

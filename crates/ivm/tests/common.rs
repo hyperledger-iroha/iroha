@@ -14,6 +14,27 @@ use ivm_abi::state_value::{
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 pub const HALT: [u8; 4] = HALT_WORD.to_le_bytes();
 
+/// Select a named Kotodama V1 entrypoint after loading its artifact.
+///
+/// V1 artifacts deliberately begin with a non-dispatching `HALT`; raw VM tests
+/// must exercise the same CNTR selector-to-PC mapping used by production hosts
+/// instead of relying on source declaration order.
+pub fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
+    let parsed = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
+    let entrypoint = parsed
+        .contract_interface
+        .as_ref()
+        .expect("Kotodama V1 artifact must embed CNTR")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == name)
+        .unwrap_or_else(|| panic!("missing Kotodama V1 entrypoint `{name}`"));
+    let pc =
+        u64::try_from(parsed.prefix_len()).expect("program prefix fits u64") + entrypoint.entry_pc;
+    vm.set_program_counter(pc)
+        .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
+}
+
 fn i64_state_schema() -> StateValueSchemaV1 {
     StateValueSchemaV1 {
         nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],

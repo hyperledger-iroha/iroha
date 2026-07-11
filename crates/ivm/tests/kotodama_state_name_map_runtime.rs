@@ -6,6 +6,7 @@ use iroha_crypto::PublicKey;
 use iroha_data_model::prelude::AccountId;
 use ivm::mock_wsv::{MockWorldStateView, WsvHost};
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+mod common;
 
 fn run_program(src: &str) -> IVM {
     let code = KotodamaCompiler::new()
@@ -14,6 +15,7 @@ fn run_program(src: &str) -> IVM {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run program");
     vm
 }
@@ -36,6 +38,7 @@ fn run_program_with_wsv(src: &str, wsv: MockWorldStateView) -> (IVM, MockWorldSt
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&code).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run program");
 
     let wsv = {
@@ -151,7 +154,7 @@ fn durable_name_map_struct_value_roundtrip_through_helper() {
             state Entries: StateMap<Name, Entry>;
 
             fn read_score(key: Name) -> i64 {
-                let entry = Entries.get(key).unwrap_or(Entry(0, false));
+                let entry = Entries.get(key).unwrap_or(Entry { amount: 0, active: false });
                 var value = entry.amount;
                 if (entry.active) {
                     value = value + 1;
@@ -160,7 +163,7 @@ fn durable_name_map_struct_value_roundtrip_through_helper() {
             }
 
             kotoage fn main() -> i64 authorize("WriteState") {
-                Entries[Name::parse("alice")] = Entry(41, true);
+                Entries[Name::parse("alice")] = Entry { amount: 41, active: true };
                 return read_score(Name::parse("alice"));
             }
         }
@@ -253,16 +256,17 @@ fn durable_name_to_account_id_map_roundtrip() {
         seiyaku C {
             state Foo: StateMap<Name, AccountId>;
 
-            kotoage fn main() authorize("WriteState") {
+            kotoage fn main() -> bool authorize("WriteState") {
                 let key = Name::parse("alice");
                 Foo[key] = context::authority();
-                test::assert(Foo.contains(key));
-                test::assert(Foo.get(key).unwrap_or(context::authority()) == context::authority());
+                return Foo.contains(key)
+                    && Foo.get(key).unwrap_or(context::authority()) == context::authority();
             }
         }
     "#;
 
-    run_program(src);
+    let vm = run_program(src);
+    assert_eq!(vm.register(10), 1);
 }
 
 #[test]
@@ -280,16 +284,17 @@ fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
         seiyaku C {
             state Foo: StateMap<Name, AccountId>;
 
-            view fn main() {
+            view fn main() -> bool {
                 let key = Name::parse("alice");
-                test::assert(Foo.contains(key));
-                test::assert(Foo.get(key).unwrap_or(context::authority()) == context::authority());
+                return Foo.contains(key)
+                    && Foo.get(key).unwrap_or(context::authority()) == context::authority();
             }
         }
     "#;
 
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
-    let _ = run_program_with_wsv(read_src, wsv);
+    let (vm, _) = run_program_with_wsv(read_src, wsv);
+    assert_eq!(vm.register(10), 1);
 }
 
 #[test]
@@ -298,17 +303,21 @@ fn durable_name_to_blob_map_write_from_json_hex_roundtrip() {
         seiyaku C {
             state Foo: StateMap<Name, bytes>;
 
-            kotoage fn main() authorize("WriteState") {
-                let ev = Json::parse("{\"value_hex\":\"68656c6c6f\"}");
+            kotoage fn main() -> bool authorize("WriteState") {
+                let ev = Json::parse("{\"value_hex\":\"0x68656c6c6f\"}");
                 let key = Name::parse("alice");
-                Foo[key] = ev.get_blob_hex(Name::parse("value_hex"));
-                test::assert(Foo.contains(key));
-                test::assert(Foo.get(key).unwrap_or(b"") == b"hello");
+                if let Option::some(value) = ev.get_blob_hex(Name::parse("value_hex")) {
+                    Foo[key] = value;
+                } else {
+                    return false;
+                }
+                return Foo.contains(key) && Foo.get(key).unwrap_or(b"") == b"hello";
             }
         }
     "#;
 
-    run_program(src);
+    let vm = run_program(src);
+    assert_eq!(vm.register(10), 1);
 }
 
 #[test]
@@ -389,7 +398,7 @@ fn durable_name_map_branch_value_survives_path_work() {
     let src = r#"
         seiyaku C {
             state Foo: StateMap<Name, i64>;
-            state EntryByKey: StateMap<Name, i64>;
+            state EntryByPosition: StateMap<i64, i64>;
 
             kotoage fn main() -> i64 authorize("WriteState") {
                 let key = Name::parse("alice");
@@ -400,7 +409,7 @@ fn durable_name_map_branch_value_survives_path_work() {
                     value = Foo.get(key).unwrap_or(0);
                 }
 
-                EntryByKey[key.path(value)] = 7;
+                EntryByPosition[value] = 7;
                 return value;
             }
         }
@@ -417,7 +426,7 @@ fn durable_name_map_branch_value_survives_following_state_work() {
             state Counter: StateMap<i64, i64>;
             state CountByKey: StateMap<Name, i64>;
             state IndexById: StateMap<Name, i64>;
-            state EntryByKey: StateMap<Name, i64>;
+            state EntryByPosition: StateMap<i64, i64>;
 
             fn next_index() -> i64 {
                 let value = Counter.ensure(1, 0);
@@ -438,7 +447,7 @@ fn durable_name_map_branch_value_survives_following_state_work() {
 
                 IndexById[tranche_id] = index;
                 CountByKey[beneficiary_lookup_key] = beneficiary_lookup_position + 1;
-                EntryByKey[beneficiary_lookup_key.path(beneficiary_lookup_position)] = index;
+                EntryByPosition[beneficiary_lookup_position] = index;
                 return CountByKey.get(beneficiary_lookup_key).unwrap_or(0);
             }
         }

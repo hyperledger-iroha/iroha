@@ -903,6 +903,18 @@ resolved.ifPresentOrElse(
     () -> System.out.println("alias not found"));
 ```
 
+### Reading Kotodama Manifests
+
+`HttpClientTransport.getContractManifest(codeHash)` reads
+`/v1/contracts/code/{code_hash}` into the complete Kotodama V1 manifest model.
+The strict decoder retains `seiyaku_name`, branded entrypoint kinds, exact
+flat-preorder argument/return schemas, dynamic access hints,
+completeness/skips, triggers, state, error codes, `kotoba`, and provenance. A
+`List` node contains only `capacity` and its element subtree immediately follows
+it. Unknown fields, legacy nested `element` metadata, incomplete or trailing
+tapes, over-depth schemas, noncanonical Norito hashes, wrapper/manifest hash
+mismatches, and inconsistent schemas are rejected before the future completes.
+
 ### Key Manager Defaults
 
 `IrohaKeyManager.withDefaultProviders()` constructs a manager that prefers

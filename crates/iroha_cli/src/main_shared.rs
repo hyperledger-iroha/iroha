@@ -567,15 +567,19 @@ impl Command {
             | Self::Ledger(_)
             | Self::Trigger(_)
             | Self::Ops(_)
-            | Self::Contract(_)
             | Self::Taira(_) => false,
+            Self::Contract(command) => command.allows_fallback_config(),
             Self::Offline(command) => command.allows_fallback_config(),
             Self::Soracloud(command) => command.allows_fallback_config(),
         }
     }
 
     fn allows_fallback_config_in_machine_mode(&self) -> bool {
-        matches!(self, Self::Offline(command) if command.allows_fallback_config())
+        match self {
+            Self::Offline(command) => command.allows_fallback_config(),
+            Self::Contract(command) => command.allows_fallback_config(),
+            _ => false,
+        }
     }
 }
 
@@ -8512,6 +8516,92 @@ mod tests {
         ])
         .expect("parse runtime tx status");
         assert!(!args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "--machine",
+            "contract",
+            "manifest",
+            "build",
+            "--code-file",
+            "contract.to",
+            "--out",
+            "contract.manifest.json",
+        ])
+        .expect("parse local contract manifest build");
+        assert!(args.command.allows_fallback_config());
+        assert!(args.command.allows_fallback_config_in_machine_mode());
+
+        for command in [
+            vec!["iroha", "--machine", "contract", "app", "build"],
+            vec!["iroha", "--machine", "contract", "dev", "check"],
+            vec!["iroha", "--machine", "contract", "dev", "build"],
+            vec!["iroha", "--machine", "contract", "dev", "test"],
+            vec!["iroha", "--machine", "contract", "dev", "schema"],
+            vec![
+                "iroha",
+                "--machine",
+                "contract",
+                "derive-address",
+                "--authority",
+                "fixture-authority",
+                "--deploy-nonce",
+                "1",
+            ],
+            vec![
+                "iroha",
+                "--machine",
+                "contract",
+                "debug-view",
+                "--code-file",
+                "contract.to",
+                "--entrypoint",
+                "show",
+            ],
+            vec![
+                "iroha",
+                "--machine",
+                "contract",
+                "debug-call",
+                "--code-file",
+                "contract.to",
+                "--entrypoint",
+                "run",
+            ],
+            vec![
+                "iroha",
+                "--machine",
+                "contract",
+                "simulate",
+                "--authority",
+                "fixture-authority",
+                "--private-key",
+                "fixture-private-key",
+                "--code-file",
+                "contract.to",
+                "--gas-limit",
+                "1",
+            ],
+        ] {
+            let args = Args::try_parse_from(command).expect("parse local contract command");
+            assert!(args.command.allows_fallback_config());
+            assert!(args.command.allows_fallback_config_in_machine_mode());
+        }
+
+        let args = Args::try_parse_from(["iroha", "contract", "dev", "doctor"])
+            .expect("parse network-aware contract doctor");
+        assert!(!args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "contract",
+            "manifest",
+            "get",
+            "--code-hash",
+            "hash:0000000000000000000000000000000000000000000000000000000000000000#0000",
+        ])
+        .expect("parse on-chain contract manifest query");
+        assert!(!args.command.allows_fallback_config());
     }
 
     #[test]
@@ -13363,7 +13453,7 @@ mod cli_integration_harness {
         let mut server = MockQueryServer::default();
         let code_hash = Hash::new(b"manifest-demo");
         let manifest = ContractManifest {
-            contract_name: None,
+            seiyaku_name: None,
             code_hash: Some(code_hash.clone()),
             abi_hash: None,
             compiler_fingerprint: Some("kotodama-compiler".into()),

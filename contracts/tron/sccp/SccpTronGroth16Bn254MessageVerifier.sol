@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity ^0.7.4;
+pragma solidity 0.8.24;
 
 import "../../evm/sccp/SccpGroth16Bn254MessageVerifier.sol";
 
@@ -21,12 +21,9 @@ contract SccpTronGroth16Bn254MessageVerifier is SccpGroth16Bn254MessageVerifier 
 
     bytes32 private constant TRON_GROTH16_BACKEND_HASH =
         keccak256("tron-groth16-bn254-v1");
-    bytes32 private constant STARK_FRI_PROOF_FAMILY_HASH =
-        keccak256("stark-fri-v1");
 
     bytes32 public immutable verifierKeyHash;
     bytes32 public immutable verifierBackendHash;
-    bytes32 public immutable proofFamilyHash;
     bytes32 public immutable networkId;
     uint32 public immutable expectedSourceDomain;
     uint32 public immutable expectedTargetDomain;
@@ -35,7 +32,6 @@ contract SccpTronGroth16Bn254MessageVerifier is SccpGroth16Bn254MessageVerifier 
         address indexed verifier,
         bytes32 verifierKeyHash,
         bytes32 verifierBackendHash,
-        bytes32 proofFamilyHash,
         bytes32 semanticProofProfileHash,
         bytes32 soraFinalityAnchorHash
     );
@@ -49,7 +45,6 @@ contract SccpTronGroth16Bn254MessageVerifier is SccpGroth16Bn254MessageVerifier 
         bytes32 configuredSemanticProofProfileHash,
         bytes32 configuredSoraFinalityAnchorHash,
         bytes32 expectedVerifierKeyHash,
-        string memory proofFamily,
         bytes32 configuredNetworkId,
         uint32 configuredSourceDomain,
         uint32 configuredTargetDomain
@@ -72,8 +67,8 @@ contract SccpTronGroth16Bn254MessageVerifier is SccpGroth16Bn254MessageVerifier 
             verifyingKeyHash() == expectedVerifierKeyHash,
             "Verifier key hash mismatch"
         );
-        require(bytes(proofFamily).length != 0, "Proof family is required");
         require(configuredNetworkId != bytes32(0), "Network id is required");
+        require(bytes32(_chainId()) == configuredNetworkId, "Wrong TRON chain id");
         require(
             configuredTargetDomain == SCCP_DOMAIN_TRON,
             "Target domain must be TRON"
@@ -87,15 +82,8 @@ contract SccpTronGroth16Bn254MessageVerifier is SccpGroth16Bn254MessageVerifier 
             "Source and target domains must differ"
         );
 
-        bytes32 configuredProofFamilyHash = keccak256(bytes(proofFamily));
-        require(
-            configuredProofFamilyHash == STARK_FRI_PROOF_FAMILY_HASH,
-            "Proof family must be stark-fri-v1"
-        );
-
         verifierKeyHash = expectedVerifierKeyHash;
         verifierBackendHash = TRON_GROTH16_BACKEND_HASH;
-        proofFamilyHash = configuredProofFamilyHash;
         networkId = configuredNetworkId;
         expectedSourceDomain = configuredSourceDomain;
         expectedTargetDomain = configuredTargetDomain;
@@ -104,7 +92,6 @@ contract SccpTronGroth16Bn254MessageVerifier is SccpGroth16Bn254MessageVerifier 
             address(this),
             expectedVerifierKeyHash,
             TRON_GROTH16_BACKEND_HASH,
-            configuredProofFamilyHash,
             configuredSemanticProofProfileHash,
             configuredSoraFinalityAnchorHash
         );
@@ -120,6 +107,10 @@ contract SccpTronGroth16Bn254MessageVerifier is SccpGroth16Bn254MessageVerifier 
         assembly {
             codeHash := extcodehash(account)
         }
+    }
+
+    function _chainId() private view returns (uint256 value) {
+        assembly { value := chainid() }
     }
 
 }

@@ -3,103 +3,56 @@ import Foundation
 
 /// Closed bridge payload kinds admitted in SCCP V1.
 public enum SccpPayloadKindV1: String, CaseIterable, Sendable {
-    case assetRegister = "asset_register"
-    case routeActivate = "route_activate"
     case transfer
-    case tokenAdd = "token_add"
-    case tokenPause = "token_pause"
-    case tokenResume = "token_resume"
 }
 
 /// Request payload for `POST /v1/bridge/proofs/submit`.
 public struct ToriiBridgeProofSubmitRequest: Encodable, Equatable, Sendable {
     public let authority: String
-    public let publicKeyHex: String?
     public let signatureB64: String?
-    public let messageBundleB64: String
-    public let networkIdHex: String?
-    public let verifierAddressHex: String?
-    public let bridgeAddressHex: String?
-    public let verifierCodeHashHex: String?
-    public let verifierKeyHashHex: String?
-    public let tronVerifierAddress: String?
-    public let proofBytesHex: String?
+    public let transactionPayloadB64: String?
+    public let destinationProofB64: String
     public let creationTimeMs: UInt64?
 
     public init(
         authority: String,
-        messageBundleB64: String,
-        publicKeyHex: String? = nil,
+        destinationProofB64: String,
         signatureB64: String? = nil,
-        networkIdHex: String? = nil,
-        verifierAddressHex: String? = nil,
-        bridgeAddressHex: String? = nil,
-        verifierCodeHashHex: String? = nil,
-        verifierKeyHashHex: String? = nil,
-        tronVerifierAddress: String? = nil,
-        proofBytesHex: String? = nil,
+        transactionPayloadB64: String? = nil,
         creationTimeMs: UInt64? = nil
     ) throws {
         self.authority = try SccpSubmitValidation.authority(authority)
-        (self.publicKeyHex, self.signatureB64) = try SccpSubmitValidation.detachedSigner(
-            publicKeyHex: publicKeyHex,
-            signatureB64: signatureB64,
-            authority: self.authority
-        )
+        self.signatureB64 = try SccpSubmitValidation.optionalSignature(signatureB64)
+        self.transactionPayloadB64 = try transactionPayloadB64.map {
+            _ = try SccpSubmitValidation.canonicalBase64(
+                $0,
+                field: "transaction_payload_b64",
+                maximumBytes: SccpSubmitValidation.maximumTransactionPayloadBytes
+            )
+            return $0
+        }
         _ = try SccpSubmitValidation.canonicalNoritoBase64(
-            messageBundleB64,
-            field: "message_bundle_b64"
+            destinationProofB64,
+            field: "destination_proof_b64",
+            maximumBytes: SccpSubmitValidation.maximumDestinationArtifactBytes
         )
-        self.messageBundleB64 = messageBundleB64
-        self.networkIdHex = try SccpSubmitValidation.optionalHex(networkIdHex, bytes: 32, field: "network_id_hex")
-        self.verifierAddressHex = try SccpSubmitValidation.optionalHex(verifierAddressHex, bytes: 20, field: "verifier_address_hex")
-        self.bridgeAddressHex = try SccpSubmitValidation.optionalHex(bridgeAddressHex, bytes: 20, field: "bridge_address_hex")
-        self.verifierCodeHashHex = try SccpSubmitValidation.optionalHex(verifierCodeHashHex, bytes: 32, field: "verifier_code_hash_hex")
-        self.verifierKeyHashHex = try SccpSubmitValidation.optionalHex(verifierKeyHashHex, bytes: 32, field: "verifier_key_hash_hex")
-        self.tronVerifierAddress = try SccpSubmitValidation.optionalCanonicalText(
-            tronVerifierAddress,
-            field: "tron_verifier_address",
-            maximumUtf8Bytes: 128
-        )
-        self.proofBytesHex = try SccpSubmitValidation.optionalProofHex(proofBytesHex)
+        self.destinationProofB64 = destinationProofB64
         if let creationTimeMs, creationTimeMs == 0 {
             throw SccpV1Error.invalid("creation_time_ms must be positive")
         }
         self.creationTimeMs = creationTimeMs
-
-        let evm = self.verifierAddressHex != nil || self.bridgeAddressHex != nil
-        let tron = self.tronVerifierAddress != nil
-        let destination = self.networkIdHex != nil || evm || tron ||
-            self.verifierCodeHashHex != nil || self.verifierKeyHashHex != nil
-        guard (self.proofBytesHex != nil) == destination else {
-            throw SccpV1Error.invalid("proof_bytes_hex and complete destination material must be supplied together")
-        }
-        if destination {
-            guard evm != tron,
-                  self.networkIdHex != nil,
-                  self.verifierCodeHashHex != nil,
-                  self.verifierKeyHashHex != nil
-            else {
-                throw SccpV1Error.invalid("destination material must select exactly one complete EVM or TRON family")
-            }
-            if evm, self.verifierAddressHex == nil || self.bridgeAddressHex == nil {
-                throw SccpV1Error.invalid("complete EVM SCCP destination material is required")
-            }
-        }
+        try SccpSubmitValidation.detachedSigningState(
+            signatureB64: self.signatureB64,
+            transactionPayloadB64: self.transactionPayloadB64,
+            creationTimeMs: creationTimeMs
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case publicKeyHex = "public_key_hex"
         case signatureB64 = "signature_b64"
-        case messageBundleB64 = "message_bundle_b64"
-        case networkIdHex = "network_id_hex"
-        case verifierAddressHex = "verifier_address_hex"
-        case bridgeAddressHex = "bridge_address_hex"
-        case verifierCodeHashHex = "verifier_code_hash_hex"
-        case verifierKeyHashHex = "verifier_key_hash_hex"
-        case tronVerifierAddress = "tron_verifier_address"
-        case proofBytesHex = "proof_bytes_hex"
+        case transactionPayloadB64 = "transaction_payload_b64"
+        case destinationProofB64 = "destination_proof_b64"
         case creationTimeMs = "creation_time_ms"
     }
 }
@@ -107,36 +60,49 @@ public struct ToriiBridgeProofSubmitRequest: Encodable, Equatable, Sendable {
 /// Native-proof-only request for `POST /v1/bridge/messages`.
 public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
     public let authority: String
-    public let publicKeyHex: String?
     public let signatureB64: String?
+    public let transactionPayloadB64: String?
     public let nativeProofB64: String
     public let creationTimeMs: UInt64?
 
     public init(
         authority: String,
         nativeProofB64: String,
-        publicKeyHex: String? = nil,
         signatureB64: String? = nil,
+        transactionPayloadB64: String? = nil,
         creationTimeMs: UInt64? = nil
     ) throws {
         self.authority = try SccpSubmitValidation.authority(authority)
-        (self.publicKeyHex, self.signatureB64) = try SccpSubmitValidation.detachedSigner(
-            publicKeyHex: publicKeyHex,
-            signatureB64: signatureB64,
-            authority: self.authority
+        self.signatureB64 = try SccpSubmitValidation.optionalSignature(signatureB64)
+        self.transactionPayloadB64 = try transactionPayloadB64.map {
+            _ = try SccpSubmitValidation.canonicalBase64(
+                $0,
+                field: "transaction_payload_b64",
+                maximumBytes: SccpSubmitValidation.maximumTransactionPayloadBytes
+            )
+            return $0
+        }
+        _ = try SccpSubmitValidation.canonicalNoritoBase64(
+            nativeProofB64,
+            field: "native_proof_b64",
+            maximumBytes: SccpSubmitValidation.maximumNativeArtifactBytes
         )
-        _ = try SccpSubmitValidation.canonicalNoritoBase64(nativeProofB64, field: "native_proof_b64")
         self.nativeProofB64 = nativeProofB64
         if let creationTimeMs, creationTimeMs == 0 {
             throw SccpV1Error.invalid("creation_time_ms must be positive")
         }
         self.creationTimeMs = creationTimeMs
+        try SccpSubmitValidation.detachedSigningState(
+            signatureB64: self.signatureB64,
+            transactionPayloadB64: self.transactionPayloadB64,
+            creationTimeMs: creationTimeMs
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case publicKeyHex = "public_key_hex"
         case signatureB64 = "signature_b64"
+        case transactionPayloadB64 = "transaction_payload_b64"
         case nativeProofB64 = "native_proof_b64"
         case creationTimeMs = "creation_time_ms"
     }
@@ -189,7 +155,7 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
     public let backend: String
     public let counterpartyDomain: UInt32
     public let counterpartyChain: SccpNetworkV1
-    public let manifestHashHex: String
+    public let routeConfigurationHashHex: String
     public let rangeStartHeight: UInt64
     public let rangeEndHeight: UInt64
     public let creationTimeMs: UInt64
@@ -205,7 +171,7 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
         let object = try SccpStrictJSON.object(data, label: "bridge submit response")
         let fields: Set<String> = [
             "submitted", "payload_kind", "message_id_hex", "backend",
-            "counterparty_domain", "counterparty_chain", "manifest_hash_hex",
+            "counterparty_domain", "counterparty_chain", "route_configuration_hash_hex",
             "range_start_height", "range_end_height", "creation_time_ms", "tx_hash_hex",
             "transaction_payload_b64", "signing_message_b64",
         ]
@@ -219,20 +185,44 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
             field: "message_id_hex"
         )
         let backend = try SccpStrictJSON.text(object, "backend")
-        let backendPattern = try NSRegularExpression(pattern: #"^bridge/[a-z0-9/_-]+$"#)
-        guard backend.utf8.count <= 128,
-              backendPattern.firstMatch(in: backend, range: NSRange(backend.startIndex..., in: backend)) != nil
-        else {
-            throw SccpV1Error.invalid("backend must be a canonical bridge backend label")
+        let exactBackends = Set(SccpNativeBackendV1.allCases.map(\.backendLabel)).union([
+            "evm-groth16-bn254-v1",
+            "tron-groth16-bn254-v1",
+        ])
+        guard exactBackends.contains(backend) else {
+            throw SccpV1Error.invalid("backend must be one closed SCCP V1 backend label")
         }
         let domain = try SccpStrictJSON.uint32(object, "counterparty_domain", minimum: 1, maximum: 5)
         let chainKey = try SccpStrictJSON.text(object, "counterparty_chain")
         guard let chain = SccpNetworkV1(rawValue: chainKey), chain.isExternal, chain.domainId == domain else {
             throw SccpV1Error.invalid("counterparty_chain and counterparty_domain must identify one exact external network")
         }
-        let manifestHash = try SccpSubmitValidation.responseHash(
-            SccpStrictJSON.text(object, "manifest_hash_hex"),
-            field: "manifest_hash_hex"
+        let backendsForDomain: Set<String>
+        switch domain {
+        case 1:
+            backendsForDomain = [
+                "evm-groth16-bn254-v1",
+                "bridge/sccp/native/ethereum-beacon-v1",
+            ]
+        case 2:
+            backendsForDomain = [
+                "evm-groth16-bn254-v1",
+                "bridge/sccp/native/bsc-parlia-v1",
+            ]
+        case 5:
+            backendsForDomain = [
+                "tron-groth16-bn254-v1",
+                "bridge/sccp/native/tron-dpos-v1",
+            ]
+        default:
+            backendsForDomain = []
+        }
+        guard backendsForDomain.contains(backend) else {
+            throw SccpV1Error.invalid("backend does not match the exact counterparty family")
+        }
+        let routeConfigurationHash = try SccpSubmitValidation.responseHash(
+            SccpStrictJSON.text(object, "route_configuration_hash_hex"),
+            field: "route_configuration_hash_hex"
         )
         let start = try SccpStrictJSON.uint64(object, "range_start_height", minimum: 1)
         let end = try SccpStrictJSON.uint64(object, "range_end_height", minimum: start)
@@ -273,7 +263,7 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
             backend: backend,
             counterpartyDomain: domain,
             counterpartyChain: chain,
-            manifestHashHex: manifestHash,
+            routeConfigurationHashHex: routeConfigurationHash,
             rangeStartHeight: start,
             rangeEndHeight: end,
             creationTimeMs: creation,
@@ -301,51 +291,63 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
 }
 
 enum SccpSubmitValidation {
-    static let maximumArtifactBytes = 16 * 1024 * 1024
+    static let maximumNativeArtifactBytes = 16 * 1024 * 1024
+    static let maximumDestinationArtifactBytes = maximumNativeArtifactBytes + 64 * 1024
+    static let maximumDetachedSignatureBytes = 16 * 1024
+    static let maximumTransactionPayloadBytes = 16 * 1024 * 1024
+    static let maximumArtifactBytes = maximumDestinationArtifactBytes
 
     static func authority(_ value: String) throws -> String {
         guard !value.isEmpty, value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               let address = try? AccountAddress.parseEncoded(value),
-              let canonical = try? address.toI105(networkPrefix: 0x02f1),
+              let canonical = try? address.toI105(
+                  networkPrefix: SccpV1.tairaI105DiscriminantV1
+              ),
               canonical == value
         else {
-            throw SccpV1Error.invalid("authority must be a canonical AccountId")
+            throw SccpV1Error.invalid(
+                "authority must be a canonical public Taira I105 AccountId (discriminant 369)"
+            )
         }
         return value
     }
 
-    static func detachedSigner(
-        publicKeyHex: String?,
-        signatureB64: String?,
-        authority: String
-    ) throws -> (String?, String?) {
-        guard (publicKeyHex == nil) == (signatureB64 == nil) else {
-            throw SccpV1Error.invalid("public_key_hex and signature_b64 must be supplied together")
+    static func optionalSignature(_ signatureB64: String?) throws -> String? {
+        guard let signatureB64 else { return nil }
+        let signature = try canonicalBase64(
+            signatureB64,
+            field: "signature_b64",
+            maximumBytes: maximumDetachedSignatureBytes
+        )
+        guard signature.contains(where: { $0 != 0 }) else {
+            throw SccpV1Error.invalid("signature_b64 must contain one admitted nonzero signature payload")
         }
-        guard let publicKeyHex, let signatureB64 else { return (nil, nil) }
-        guard publicKeyHex.count == 64,
-              publicKeyHex.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
-              let publicKey = Data(hexString: publicKeyHex),
-              Ed25519PublicKeyAdmission.isValidPublicKey(publicKey)
-        else {
-            throw SccpV1Error.invalid("public_key_hex must be one canonical Ed25519 public key")
-        }
-        guard let address = try? AccountAddress.parseEncoded(authority),
-              let controller = address.singleControllerInfo(),
-              controller.algorithm == .ed25519,
-              controller.publicKey == publicKey
-        else {
-            throw SccpV1Error.invalid("public_key_hex does not match authority")
-        }
-        let signature = try canonicalBase64(signatureB64, field: "signature_b64", exactBytes: 64)
-        guard Ed25519SignatureAdmission.isValidSignature(signature), canonicalEd25519Scalar(signature.suffix(32)) else {
-            throw SccpV1Error.invalid("signature_b64 must contain one canonical Ed25519 signature")
-        }
-        return (publicKeyHex, signatureB64)
+        return signatureB64
     }
 
-    static func canonicalNoritoBase64(_ value: String, field: String) throws -> Data {
-        let data = try canonicalBase64(value, field: field, maximumBytes: maximumArtifactBytes)
+    static func detachedSigningState(
+        signatureB64: String?,
+        transactionPayloadB64: String?,
+        creationTimeMs: UInt64?
+    ) throws {
+        switch (signatureB64, transactionPayloadB64) {
+        case (nil, nil):
+            return
+        case (.some, .some):
+            guard creationTimeMs != nil else {
+                throw SccpV1Error.invalid(
+                    "signed SCCP submission requires an explicit positive creation_time_ms"
+                )
+            }
+        default:
+            throw SccpV1Error.invalid(
+                "SCCP preparation requires neither signature_b64 nor transaction_payload_b64; signed submission requires both"
+            )
+        }
+    }
+
+    static func canonicalNoritoBase64(_ value: String, field: String, maximumBytes: Int) throws -> Data {
+        let data = try canonicalBase64(value, field: field, maximumBytes: maximumBytes)
         guard let frame = noritoDecodeFrame(data),
               frame.header.compression == .none,
               frame.header.schema.contains(where: { $0 != 0 }),
@@ -363,7 +365,10 @@ enum SccpSubmitValidation {
         exactBytes: Int? = nil,
         maximumBytes: Int = maximumArtifactBytes
     ) throws -> Data {
-        guard !value.isEmpty, value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+        let byteBound = exactBytes ?? maximumBytes
+        let encodedLengthBound = 4 * ((byteBound + 2) / 3)
+        guard !value.isEmpty, value.utf8.count <= encodedLengthBound,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               let decoded = Data(base64Encoded: value),
               !decoded.isEmpty,
               decoded.count <= maximumBytes,
@@ -377,17 +382,6 @@ enum SccpSubmitValidation {
         return decoded
     }
 
-    static func optionalHex(_ value: String?, bytes: Int, field: String) throws -> String? {
-        guard let value else { return nil }
-        guard value.count == 2 + bytes * 2, value.hasPrefix("0x"),
-              value.dropFirst(2).utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
-              value.dropFirst(2).contains(where: { $0 != "0" })
-        else {
-            throw SccpV1Error.invalid("\(field) must be canonical lowercase nonzero 0x-prefixed \(bytes)-byte hex")
-        }
-        return value
-    }
-
     static func responseHash(_ value: String, field: String) throws -> String {
         guard value.count == 64,
               value.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
@@ -398,54 +392,6 @@ enum SccpSubmitValidation {
         return value
     }
 
-    static func optionalCanonicalText(
-        _ value: String?,
-        field: String,
-        maximumUtf8Bytes: Int
-    ) throws -> String? {
-        guard let value else { return nil }
-        guard !value.isEmpty, value == value.trimmingCharacters(in: .whitespacesAndNewlines),
-              value.utf8.count <= maximumUtf8Bytes
-        else {
-            throw SccpV1Error.invalid("\(field) must be canonical nonempty text")
-        }
-        return value
-    }
-
-    static func optionalProofHex(_ value: String?) throws -> String? {
-        guard let value else { return nil }
-        guard value.count == 768,
-              value.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
-              value.contains(where: { $0 != "0" }),
-              let proof = Data(hexString: value)
-        else {
-            throw SccpV1Error.invalid("proof_bytes_hex must be canonical lowercase nonzero 384-byte hex")
-        }
-        let version = proof.prefix(32)
-        guard version.dropLast().allSatisfy({ $0 == 0 }), version.last == 1,
-              proof[32..<64].contains(where: { $0 != 0 }),
-              proof[64..<96].allSatisfy({ $0 == 0 }),
-              proof[96..<128].contains(where: { $0 != 0 })
-        else {
-            throw SccpV1Error.invalid("proof_bytes_hex has invalid SCCP public inputs")
-        }
-        return value
-    }
-
-    private static func canonicalEd25519Scalar(_ scalar: Data.SubSequence) -> Bool {
-        let order: [UInt8] = [
-            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
-            0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
-        ]
-        let bytes = Array(scalar)
-        for index in stride(from: 31, through: 0, by: -1) {
-            if bytes[index] < order[index] { return true }
-            if bytes[index] > order[index] { return false }
-        }
-        return false
-    }
 }
 
 enum SccpStrictJSON {
@@ -458,10 +404,19 @@ enum SccpStrictJSON {
     }
 
     static func exactFields(_ value: [String: Any], _ fields: Set<String>, label: String) throws {
-        if let unknown = value.keys.first(where: { !fields.contains($0) }) {
+        try exactFields(value, allowed: fields, required: fields, label: label)
+    }
+
+    static func exactFields(
+        _ value: [String: Any],
+        allowed: Set<String>,
+        required: Set<String>,
+        label: String
+    ) throws {
+        if let unknown = value.keys.first(where: { !allowed.contains($0) }) {
             throw SccpV1Error.invalid("\(label) contains unknown or retired field `\(unknown)`")
         }
-        if let missing = fields.first(where: { value[$0] == nil }) {
+        if let missing = required.first(where: { value[$0] == nil }) {
             throw SccpV1Error.invalid("\(label) is missing required field `\(missing)`")
         }
     }
@@ -500,7 +455,12 @@ enum SccpStrictJSON {
         return UInt32(number)
     }
 
-    static func uint64(_ value: [String: Any], _ field: String, minimum: UInt64) throws -> UInt64 {
+    static func uint64(
+        _ value: [String: Any],
+        _ field: String,
+        minimum: UInt64,
+        maximum: UInt64 = UInt64.max
+    ) throws -> UInt64 {
         guard let number = value[field] as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID(),
               number.doubleValue.isFinite,
@@ -511,7 +471,7 @@ enum SccpStrictJSON {
             throw SccpV1Error.invalid("\(field) must be an unsigned integer")
         }
         let result = number.uint64Value
-        guard result >= minimum, number.doubleValue == Double(result) else {
+        guard result >= minimum, result <= maximum, number.doubleValue == Double(result) else {
             throw SccpV1Error.invalid("\(field) is out of range")
         }
         return result
@@ -651,7 +611,6 @@ enum SccpStrictJSON {
         }
 
         mutating func number() throws {
-            _ = consumeIf("-")
             guard let first = peek(), first.isNumber else { throw SccpV1Error.invalid("invalid JSON number") }
             if first == "0" {
                 advance()
@@ -659,16 +618,10 @@ enum SccpStrictJSON {
             } else {
                 while let char = peek(), char.isNumber { advance() }
             }
-            if consumeIf(".") {
-                guard let first = peek(), first.isNumber else { throw SccpV1Error.invalid("invalid JSON number") }
-                while let char = peek(), char.isNumber { advance() }
-            }
-            if let char = peek(), char == "e" || char == "E" {
-                advance()
-                _ = consumeIf("+") || consumeIf("-")
-                guard let first = peek(), first.isNumber else { throw SccpV1Error.invalid("invalid JSON number") }
-                while let digit = peek(), digit.isNumber { advance() }
-            }
+            // SCCP V1 has no signed or fractional JSON fields. The scanner
+            // deliberately leaves '.', 'e', and 'E' unconsumed so the
+            // surrounding grammar rejects coercible spellings such as 1.0,
+            // 1e0, or -0 before JSONSerialization loses their wire form.
         }
 
         mutating func whitespace() {

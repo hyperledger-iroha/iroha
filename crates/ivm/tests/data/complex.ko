@@ -4,9 +4,9 @@
 seiyaku Example {
     kotoage fn complex(a: i64, b: i64) authorize("Entry") {
         let c = a + b;
-        let d = crypto::poseidon2(c, b);
+        let d = crypto::poseidon2(left: c, right: b);
         let e = crypto::pubkgen(d);
-        let f = crypto::valcom(e, a);
+        let f = crypto::valcom(left: e, right: a);
         let g = f + d;
     }
 }

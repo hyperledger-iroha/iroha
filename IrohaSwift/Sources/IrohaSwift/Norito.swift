@@ -130,6 +130,7 @@ func noritoDecodeFrame(_ data: Data) -> NoritoFrame? {
     let payloadStart = data.count - payloadLen
     guard payloadStart >= headerLength else { return nil }
     let paddingLength = payloadStart - headerLength
+    guard paddingLength <= 64 else { return nil }
     if paddingLength > 0 {
         let padding = data[headerLength..<payloadStart]
         if padding.contains(where: { $0 != 0 }) {

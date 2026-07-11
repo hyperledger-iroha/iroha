@@ -7,8 +7,9 @@ fn lower_call_tuple_return_emits_callmulti_and_tuplepack() {
         seiyaku TupleCalls {
             fn g(a: i64, b: i64) -> (i64, i64) { return (a, b); }
             fn f(a: i64, b: i64) -> (i64, i64) {
-                // Return the tuple produced by g(a,b)
-                return g(a, b);
+                // Return the tuple produced by g(a,b). Repeated parameter
+                // types make the call named-only in Kotodama V1.
+                return g(a: a, b: b);
             }
         }
     "#;

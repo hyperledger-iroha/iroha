@@ -103,8 +103,10 @@ iroha-core-tests = []
 # Allow offline balance proof verification bypass + dummy backend in dev builds.
 
 # Enable BLS admission-time micro-batching (deterministic grouping + bisection path in block validation).
-# This forwards to `iroha_crypto/bls` and compiles the BLS path in `block.rs` guarded by `#[cfg(feature = "bls")]`.
-bls = ["iroha_crypto/bls", "iroha_data_model/bls", "iroha_sccp/bls"]
+# This forwards to `iroha_crypto/bls` and compiles the non-SCCP BLS paths in
+# `block.rs` guarded by `#[cfg(feature = "bls")]`. SCCP verification itself is
+# mandatory in every `iroha_sccp` build and is deliberately not feature-gated.
+bls = ["iroha_crypto/bls", "iroha_data_model/bls"]
 bls-multi-pairing = ["iroha_crypto/bls-multi-pairing"]
 # Compatibility flag kept for downstream feature sets. `halo2-ecc` is no
 # longer linked by `iroha_core`.

@@ -1,12 +1,13 @@
 //! Kotodama control-flow codegen coverage for `break`/`continue`.
 
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+mod common;
 
 #[test]
 fn break_exits_bounded_for_loop() {
     let src = r#"
         seiyaku BreakLoop {
-            fn main() -> i64 {
+            view fn main() -> i64 {
                 var last = 0;
                 for i in range(10) {
                     last = i;
@@ -24,6 +25,7 @@ fn break_exits_bounded_for_loop() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute break program");
     assert_eq!(vm.register(10), 3);
 }
@@ -32,7 +34,7 @@ fn break_exits_bounded_for_loop() {
 fn continue_skips_range_iteration() {
     let src = r#"
         seiyaku ContinueLoop {
-            fn main() -> i64 {
+            view fn main() -> i64 {
                 var sum = 0;
                 for i in range(5) {
                     if i == 2 {
@@ -50,6 +52,7 @@ fn continue_skips_range_iteration() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute continue program");
     assert_eq!(vm.register(10), 8);
 }

@@ -1105,6 +1105,26 @@ fn integer_query_param(name: &str, description: &str, format: Option<&str>) -> V
     Value::Object(param)
 }
 
+fn bounded_integer_query_param(
+    name: &str,
+    description: &str,
+    format: Option<&str>,
+    minimum: u64,
+    maximum: Option<u64>,
+) -> Value {
+    let Value::Object(mut param) = integer_query_param(name, description, format) else {
+        unreachable!("integer query parameter helper always returns an object");
+    };
+    let Some(Value::Object(schema)) = param.get_mut("schema") else {
+        unreachable!("integer query parameter helper always contains a schema object");
+    };
+    schema.insert("minimum".into(), Value::from(minimum));
+    if let Some(maximum) = maximum {
+        schema.insert("maximum".into(), Value::from(maximum));
+    }
+    Value::Object(param)
+}
+
 fn bool_query_param(name: &str, description: &str) -> Value {
     let mut param = Map::new();
     param.insert("name".into(), Value::String(name.to_owned()));
@@ -2053,7 +2073,7 @@ fn contracts_paths() -> Map {
         Value::Object(json_get_operation(
             "Contracts",
             "Fetch contract metadata.",
-            "Fetch contract metadata by code hash.",
+            "Fetch the complete canonical ContractManifest plus derived raw-hex hash conveniences by code hash.",
             "#/components/schemas/JsonValue",
             vec![string_path_param("code_hash", "Contract code hash (hex).")],
         )),
@@ -2631,6 +2651,10 @@ fn governance_paths() -> Map {
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
+    );
+    paths.insert(
+        iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE.to_owned(),
+        Value::Object(sccp_route_governance_operation()),
     );
     paths.insert(
         "/v1/gov/proposals/{id}".to_owned(),
@@ -6301,23 +6325,24 @@ fn sumeragi_paths() -> Map {
     );
     paths.insert(
         "/v1/sccp/messages/recent".to_owned(),
-        Value::Object(json_get_operation(
-            "Bridge",
-            "List recent finalized SCCP outbound messages.",
-            "Returns at most 50 newest messages from the authoritative height-ordered outbound index.",
-            "#/components/schemas/JsonValue",
-            vec![
-                Value::Object(integer_query_param(
-                    "from",
-                    "Optional inclusive maximum recorded block height.",
-                    Some("uint64"),
-                )),
-                Value::Object(integer_query_param(
-                    "limit",
-                    "Optional result limit, clamped to 50.",
-                    Some("uint64"),
-                )),
-            ],
+        Value::Object(sccp_recent_messages_operation()),
+    );
+    paths.insert(
+        "/v1/bridge/proofs/submit".to_owned(),
+        Value::Object(sccp_bridge_submit_operation(
+            "bridgeProofSubmit",
+            "Prepare or submit an SCCP destination-proof transaction.",
+            "The JSON-only request carries a canonical destination proof. Preparation omits both detached-signing fields; direct submission must provide both `signature_b64` and the byte-identical prepared `transaction_payload_b64`, together with the exact positive `creation_time_ms` returned by preparation.",
+            "#/components/schemas/SccpBridgeProofSubmitRequest",
+        )),
+    );
+    paths.insert(
+        "/v1/bridge/messages".to_owned(),
+        Value::Object(sccp_bridge_submit_operation(
+            "bridgeMessageSubmit",
+            "Prepare or submit a protocol-native SCCP admission transaction.",
+            "The JSON-only request carries one canonical native proof. Preparation omits both detached-signing fields; direct submission must provide both `signature_b64` and the byte-identical prepared `transaction_payload_b64`, together with the exact positive `creation_time_ms` returned by preparation.",
+            "#/components/schemas/SccpBridgeMessageSubmitRequest",
         )),
     );
     paths.insert(
@@ -6560,7 +6585,10 @@ fn sccp_capabilities_operation() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".into(),
-        json_response("SCCP capability snapshot.", schema_ref("JsonValue")),
+        sccp_dual_format_response(
+            "SCCP capability snapshot.",
+            "#/components/schemas/SccpCapabilitiesV1",
+        ),
     );
     responses.insert("406".into(), not_acceptable_response());
     operation.insert("responses".into(), Value::Object(responses));
@@ -6594,7 +6622,10 @@ fn sccp_registry_operation() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".into(),
-        json_response("Authoritative SCCP registry.", schema_ref("JsonValue")),
+        sccp_dual_format_response(
+            "Authoritative SCCP registry.",
+            "#/components/schemas/SccpRegistryV1",
+        ),
     );
     responses.insert("406".into(), not_acceptable_response());
     operation.insert("responses".into(), Value::Object(responses));
@@ -6636,9 +6667,9 @@ fn sccp_message_bundle_operation() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".into(),
-        json_response(
+        sccp_dual_format_response(
             "Canonical finalized SCCP message bundle.",
-            schema_ref("JsonValue"),
+            "#/components/schemas/SccpMessageBundleV1",
         ),
     );
     responses.insert(
@@ -6685,9 +6716,9 @@ fn sccp_proof_request_operation() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".into(),
-        json_response(
+        sccp_dual_format_response(
             "Canonical state-derived SCCP Groth16 proof request.",
-            schema_ref("JsonValue"),
+            "#/components/schemas/SccpProofRequestV1",
         ),
     );
     responses.insert(
@@ -6698,6 +6729,183 @@ fn sccp_proof_request_operation() -> Map {
     operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_recent_messages_operation() -> Map {
+    let mut methods = json_get_operation(
+        "Bridge",
+        "List recent finalized SCCP outbound messages.",
+        "Returns at most 50 newest messages from the authoritative height-ordered outbound index. \
+         Values outside the documented window are rejected rather than clamped.",
+        "#/components/schemas/SccpRecentMessagesV1",
+        vec![
+            bounded_integer_query_param(
+                "from",
+                "Optional inclusive maximum recorded block height.",
+                Some("uint64"),
+                1,
+                None,
+            ),
+            bounded_integer_query_param(
+                "limit",
+                "Optional result limit in the inclusive range 1 through 50.",
+                Some("uint64"),
+                1,
+                Some(50),
+            ),
+        ],
+    );
+    let Some(Value::Object(operation)) = methods.get_mut("get") else {
+        unreachable!("JSON GET helper always returns one GET operation");
+    };
+    let Some(Value::Object(responses)) = operation.get_mut("responses") else {
+        unreachable!("JSON GET helper always returns a responses object");
+    };
+    responses.insert(
+        "200".into(),
+        sccp_dual_format_response(
+            "Recent finalized SCCP outbound messages.",
+            "#/components/schemas/SccpRecentMessagesV1",
+        ),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    methods
+}
+
+fn sccp_dual_format_response(description: &str, schema_ref: &str) -> Value {
+    norito::json!({
+        "description": description,
+        "content": {
+            "application/json": {
+                "schema": { "$ref": schema_ref }
+            },
+            "application/x-norito": {
+                "schema": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Canonical Norito encoding of the JSON schema's typed payload."
+                }
+            }
+        }
+    })
+}
+
+fn sccp_bridge_submit_operation(
+    operation_id: &str,
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert("operationId".into(), Value::String(operation_id.to_owned()));
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![string_header_param(
+            "X-API-Token",
+            "Optional deployment API token; required only when the node enables API-token enforcement.",
+            false,
+        )]),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body(request_schema_ref)),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response(
+            "Canonical prepared or submitted SCCP transaction state.",
+            schema_ref("SccpBridgeSubmitResponseV1"),
+        ),
+    );
+    responses.insert(
+        "400".into(),
+        json_response(
+            "Malformed, noncanonical, stale, mixed-state, or proof-invalid SCCP request.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "415".into(),
+        json_response(
+            "The detached-submit routes accept JSON request bodies only.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "429".into(),
+        json_response(
+            "The deployment API rate limit rejected the request.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
+    methods
+}
+
+fn sccp_route_governance_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Governance".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Draft an SCCP route-governance proposal.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Accepts exactly one typed SCCP registry action, an optional inclusive block window, \
+             and optional exact `Zk` or `Plain` voting mode. The endpoint returns one canonical \
+             instruction for local signing and never accepts signer or private-key material."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("proposeSccpRouteGovernance".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_or_norito_request_body(
+            "#/components/schemas/SccpRouteGovernanceDraftRequestV1",
+        )),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response(
+            "Deterministic proposal id and exactly one canonical instruction draft.",
+            schema_ref("SccpRouteGovernanceDraftResponseV1"),
+        ),
+    );
+    responses.insert(
+        "400".into(),
+        json_response(
+            "The action, window, mode, or JSON field set is invalid.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "415".into(),
+        json_response(
+            "The request Content-Type is neither application/json nor application/x-norito.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
     methods
 }
 
@@ -9220,8 +9428,1606 @@ fn app_page_schema(item_schema_ref: &str) -> Value {
     schema
 }
 
+fn sccp_schemas() -> Map {
+    let mut schemas = Map::new();
+    schemas.insert(
+        "SccpHex32".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "not": { "pattern": "^0{64}$" },
+            "description": "Canonical lowercase nonzero 32-byte hexadecimal value without a prefix."
+        }),
+    );
+    schemas.insert(
+        "SccpPrefixedHex32".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 66,
+            "maxLength": 66,
+            "pattern": "^0x[0-9a-f]{64}$",
+            "not": { "pattern": "^0x0{64}$" },
+            "description": "Canonical lowercase nonzero 32-byte hexadecimal value with an exact 0x prefix."
+        }),
+    );
+    schemas.insert(
+        "SccpUpperHex20".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 40,
+            "maxLength": 40,
+            "pattern": "^[0-9A-F]{40}$",
+            "not": { "pattern": "^0{40}$" },
+            "description": "Canonical uppercase 20-byte hexadecimal address without a prefix."
+        }),
+    );
+    schemas.insert(
+        "SccpUpperHex32".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
+            "description": "Canonical uppercase 32-byte hexadecimal value without a prefix."
+        }),
+    );
+    schemas.insert(
+        "SccpNonzeroUpperHex32".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/SccpUpperHex32" },
+                { "not": { "pattern": "^0{64}$" } }
+            ],
+            "description": "Canonical nonzero uppercase 32-byte hexadecimal commitment."
+        }),
+    );
+    schemas.insert(
+        "SccpCanonicalBase64".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 4,
+            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+            "description": "Nonempty canonical RFC 4648 standard base64 with required padding and no whitespace."
+        }),
+    );
+    schemas.insert(
+        "SccpSigningMessageBase64".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 44,
+            "maxLength": 44,
+            "pattern": "^[A-Za-z0-9+/]{43}=$",
+            "description": "Canonical padded base64 encoding of the exact 32-byte transaction signing prehash."
+        }),
+    );
+    schemas.insert(
+        "SccpTairaI105Account".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 12,
+            "maxLength": 512,
+            "pattern": "^test",
+            "description": "Exact canonical I105 account literal for Taira discriminant 369 (0x0171). Runtime admission verifies the complete alphabet, minimal base-105 form, checksum, controller layout, and byte-for-byte canonical re-rendering."
+        }),
+    );
+    schemas.insert(
+        "SccpTairaNetworkV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["network", "profile"],
+            "additionalProperties": false,
+            "properties": {
+                "network": { "const": "sora_taira" },
+                "profile": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpExternalNetworkV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["network", "profile"],
+            "additionalProperties": false,
+            "properties": {
+                "network": {
+                    "type": "string",
+                    "enum": [
+                        "ethereum_mainnet", "ethereum_sepolia", "bsc_mainnet", "bsc_testnet",
+                        "tron_mainnet", "tron_nile", "tron_shasta"
+                    ]
+                },
+                "profile": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpInboundLaneIdV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["source", "target"],
+            "additionalProperties": false,
+            "properties": {
+                "source": { "$ref": "#/components/schemas/SccpExternalNetworkV1" },
+                "target": { "$ref": "#/components/schemas/SccpTairaNetworkV1" }
+            },
+            "description": "Exact first-release external-to-Taira SCCP lane."
+        }),
+    );
+    schemas.insert(
+        "SccpOutboundLaneIdV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["source", "target"],
+            "additionalProperties": false,
+            "properties": {
+                "source": { "$ref": "#/components/schemas/SccpTairaNetworkV1" },
+                "target": { "$ref": "#/components/schemas/SccpExternalNetworkV1" }
+            },
+            "description": "Exact first-release Taira-to-external SCCP lane."
+        }),
+    );
+    schemas.insert(
+        "SccpNativeProofBackendV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["backend", "protocol"],
+            "additionalProperties": false,
+            "properties": {
+                "backend": {
+                    "type": "string",
+                    "enum": ["ethereum_beacon_v1", "bsc_parlia_v1", "tron_dpos_v1"]
+                },
+                "protocol": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpNativeTrustAnchorV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["backend", "anchor_hash", "checkpoint_height"],
+            "additionalProperties": false,
+            "properties": {
+                "backend": { "$ref": "#/components/schemas/SccpNativeProofBackendV1" },
+                "anchor_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "checkpoint_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64,
+                    "description": "Backend-specific consensus-progress coordinate: finalized beacon slot for Ethereum, finalized block height for BSC and TRON."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpRouteActivationV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["activation", "direction"],
+            "additionalProperties": false,
+            "properties": {
+                "activation": {
+                    "type": "string",
+                    "enum": ["staged", "bidirectional", "inbound_only", "paused", "retired"]
+                },
+                "direction": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpRouteKeyV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["lane_id", "route_id", "asset_key", "revision"],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": { "$ref": "#/components/schemas/SccpInboundLaneIdV1" },
+                "route_id": {
+                    "type": "string", "minLength": 1, "maxLength": 64,
+                    "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+                },
+                "asset_key": {
+                    "type": "string", "minLength": 1, "maxLength": 64,
+                    "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+                },
+                "revision": {
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": 4294967295_u64
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpSourceEmitterIdentityV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["address", "runtime_code_hash", "route_config_hash"],
+            "additionalProperties": false,
+            "properties": {
+                "address": { "$ref": "#/components/schemas/SccpUpperHex20" },
+                "runtime_code_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "route_config_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpSourceEmitterV1".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object", "required": ["emitter", "identity"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "emitter": { "const": "evm" },
+                        "identity": { "$ref": "#/components/schemas/SccpSourceEmitterIdentityV1" }
+                    }
+                },
+                {
+                    "type": "object", "required": ["emitter", "identity"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "emitter": { "const": "tron" },
+                        "identity": { "$ref": "#/components/schemas/SccpSourceEmitterIdentityV1" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "SccpSourceIdentityV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["lane", "emitter"],
+            "additionalProperties": false,
+            "properties": {
+                "lane": { "$ref": "#/components/schemas/SccpInboundLaneIdV1" },
+                "emitter": { "$ref": "#/components/schemas/SccpSourceEmitterV1" }
+            }
+        }),
+    );
+
+    sccp_crypto_and_registry_schemas(&mut schemas);
+    sccp_artifact_and_recent_schemas(&mut schemas);
+    sccp_submit_and_governance_schemas(&mut schemas);
+    schemas
+}
+
+fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "SccpBn254G1PointV1".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["x", "y"], "additionalProperties": false,
+            "properties": {
+                "x": { "$ref": "#/components/schemas/SccpUpperHex32" },
+                "y": { "$ref": "#/components/schemas/SccpUpperHex32" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpBn254G2PointV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["x_c0", "x_c1", "y_c0", "y_c1"],
+            "additionalProperties": false,
+            "properties": {
+                "x_c0": { "$ref": "#/components/schemas/SccpUpperHex32" },
+                "x_c1": { "$ref": "#/components/schemas/SccpUpperHex32" },
+                "y_c0": { "$ref": "#/components/schemas/SccpUpperHex32" },
+                "y_c1": { "$ref": "#/components/schemas/SccpUpperHex32" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpGroth16Bn254IcV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "constant", "signal_0", "signal_1", "signal_2", "signal_3", "signal_4",
+                "signal_5", "signal_6", "signal_7", "signal_8", "signal_9", "signal_10"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "constant": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "signal_0": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "signal_1": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "signal_2": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "signal_3": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "signal_4": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "signal_5": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "signal_6": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "signal_7": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "signal_8": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "signal_9": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "signal_10": { "$ref": "#/components/schemas/SccpBn254G1PointV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpGroth16Bn254VerifyingKeyV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "alpha1", "beta2", "gamma2", "delta2", "ic"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "alpha1": { "$ref": "#/components/schemas/SccpBn254G1PointV1" },
+                "beta2": { "$ref": "#/components/schemas/SccpBn254G2PointV1" },
+                "gamma2": { "$ref": "#/components/schemas/SccpBn254G2PointV1" },
+                "delta2": { "$ref": "#/components/schemas/SccpBn254G2PointV1" },
+                "ic": { "$ref": "#/components/schemas/SccpGroth16Bn254IcV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpSemanticProofProfileV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["profile", "commitments"],
+            "additionalProperties": false,
+            "properties": {
+                "profile": { "const": "sora_taira_finality_inclusion_groth16_bn254" },
+                "commitments": {
+                    "type": "object",
+                    "required": [
+                        "version", "circuit_commitment", "witness_generator_commitment",
+                        "public_signal_schema_hash"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                        "version": { "type": "integer", "enum": [1] },
+                        "circuit_commitment": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                        "witness_generator_commitment": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                        "public_signal_schema_hash": {
+                            "const": "7567439F41173D6745A3D51923CB70371ACC7D66F23CEFB4100D6D5D7A432CBB"
+                        }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpSoraFinalityAnchorV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "source_network", "chain_id_hash", "checkpoint_height",
+                "checkpoint_block_hash", "validator_set_epoch", "validator_set_hash",
+                "validator_set_hash_version"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "source_network": { "$ref": "#/components/schemas/SccpTairaNetworkV1" },
+                "chain_id_hash": {
+                    "const": "3F139C4B2A31457994D17BE5CE922D87FC702939116359F0E47314AB36A7F588"
+                },
+                "checkpoint_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "checkpoint_block_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "validator_set_epoch": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "validator_set_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "validator_set_hash_version": { "type": "integer", "enum": [1] }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpOutboundProofPolicyV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "semantic_profile", "sora_finality_anchor"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "semantic_profile": { "$ref": "#/components/schemas/SccpSemanticProofProfileV1" },
+                "sora_finality_anchor": { "$ref": "#/components/schemas/SccpSoraFinalityAnchorV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpDestinationDeploymentDetailsV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "token_address", "token_code_hash", "verifier_address", "verifier_code_hash",
+                "verifying_key", "verifier_key_hash", "outbound_proof_policy", "route_address",
+                "route_code_hash", "taira_to_token_multiplier"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "token_address": { "$ref": "#/components/schemas/SccpUpperHex20" },
+                "token_code_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "verifier_address": { "$ref": "#/components/schemas/SccpUpperHex20" },
+                "verifier_code_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "verifying_key": { "$ref": "#/components/schemas/SccpGroth16Bn254VerifyingKeyV1" },
+                "verifier_key_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "outbound_proof_policy": { "$ref": "#/components/schemas/SccpOutboundProofPolicyV1" },
+                "route_address": { "$ref": "#/components/schemas/SccpUpperHex20" },
+                "route_code_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "taira_to_token_multiplier": {
+                    "type": "integer", "format": "uint64", "enum": [1000000000]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpDestinationDeploymentV1".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object", "required": ["family", "deployment"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "family": { "const": "evm" },
+                        "deployment": { "$ref": "#/components/schemas/SccpDestinationDeploymentDetailsV1" }
+                    }
+                },
+                {
+                    "type": "object", "required": ["family", "deployment"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "family": { "const": "tron" },
+                        "deployment": { "$ref": "#/components/schemas/SccpDestinationDeploymentDetailsV1" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "SccpSoraSettlementV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["asset_definition_id", "custody_account_id", "payload_amount_scale"],
+            "additionalProperties": false,
+            "properties": {
+                "asset_definition_id": { "const": "6TEAJqbb8oEPmLncoNiMRbLEK6tw" },
+                "custody_account_id": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "payload_amount_scale": { "type": "integer", "enum": [9] }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpGovernedRouteV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "lane_id", "route_id", "asset_key", "revision", "activation",
+                "inbound_finality_cutoff", "source_identity", "destination", "settlement"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": { "$ref": "#/components/schemas/SccpInboundLaneIdV1" },
+                "route_id": {
+                    "type": "string", "minLength": 1, "maxLength": 64,
+                    "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+                },
+                "asset_key": {
+                    "type": "string", "minLength": 1, "maxLength": 64,
+                    "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+                },
+                "revision": {
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": 4294967295_u64
+                },
+                "activation": { "$ref": "#/components/schemas/SccpRouteActivationV1" },
+                "inbound_finality_cutoff": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SccpInboundFinalityCutoffV1" },
+                        { "type": "null" }
+                    ],
+                    "description": "Present exactly for Retired routes; delayed claims at or below the cutoff remain admissible."
+                },
+                "source_identity": { "$ref": "#/components/schemas/SccpSourceIdentityV1" },
+                "destination": { "$ref": "#/components/schemas/SccpDestinationDeploymentV1" },
+                "settlement": { "$ref": "#/components/schemas/SccpSoraSettlementV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpGovernedLaneV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "lane_id", "native_trust_anchors",
+                "current_native_trust_anchor_hash", "routes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": { "$ref": "#/components/schemas/SccpInboundLaneIdV1" },
+                "native_trust_anchors": {
+                    "type": "array",
+                    "maxItems": 4096,
+                    "items": { "$ref": "#/components/schemas/SccpNativeTrustAnchorV1" },
+                    "description": "Append-only checkpoints ordered by a strictly increasing backend-specific consensus-progress coordinate; governance rejects rather than evicts at the 4,096-entry bound."
+                },
+                "current_native_trust_anchor_hash": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                        { "type": "null" }
+                    ],
+                    "description": "Hash of the final/highest retained checkpoint, or null only when the history is empty."
+                },
+                "routes": {
+                    "type": "array", "minItems": 1, "maxItems": 64,
+                    "items": { "$ref": "#/components/schemas/SccpGovernedRouteV1" },
+                    "description": "Up to 64 immutable revisions are retained without eviction; at most eight nonterminal revisions may coexist on one lane."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpRegistryV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "lanes"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "lanes": {
+                    "type": "array", "maxItems": 16,
+                    "items": { "$ref": "#/components/schemas/SccpGovernedLaneV1" },
+                    "description": "At most 16 unique lanes and 64 nonterminal governed routes in total; terminal history remains retained for exact message resolution."
+                }
+            }
+        }),
+    );
+}
+
+fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
+    let json_safe_integer_max = iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX;
+    schemas.insert(
+        "SccpRegistryLimitsV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "max_governed_lanes", "max_live_governed_routes",
+                "max_live_routes_per_lane", "max_retained_routes_per_lane",
+                "max_retained_native_trust_anchors_per_lane"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "max_governed_lanes": { "type": "integer", "const": 16 },
+                "max_live_governed_routes": { "type": "integer", "const": 64 },
+                "max_live_routes_per_lane": { "type": "integer", "const": 8 },
+                "max_retained_routes_per_lane": { "type": "integer", "const": 64 },
+                "max_retained_native_trust_anchors_per_lane": {
+                    "type": "integer", "const": 4096
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpResourceLimitsV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "max_proofs_per_transaction", "max_proofs_per_block",
+                "max_proof_bytes_per_proof", "max_proof_bytes_per_transaction",
+                "max_proof_bytes_per_block", "max_native_headers_per_transaction",
+                "max_native_headers_per_block",
+                "max_ethereum_light_client_updates_per_transaction",
+                "max_ethereum_light_client_updates_per_block",
+                "max_native_header_bytes_per_transaction",
+                "max_native_header_bytes_per_block",
+                "max_secp256k1_recoveries_per_transaction",
+                "max_secp256k1_recoveries_per_block",
+                "max_bls_aggregate_checks_per_transaction",
+                "max_bls_aggregate_checks_per_block",
+                "max_bls_signer_contributions_per_transaction",
+                "max_bls_signer_contributions_per_block",
+                "max_bn254_pairing_checks_per_transaction",
+                "max_bn254_pairing_checks_per_block"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "max_proofs_per_transaction": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_proofs_per_block": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_proof_bytes_per_proof": { "type": "integer", "minimum": 1, "maximum": json_safe_integer_max },
+                "max_proof_bytes_per_transaction": { "type": "integer", "minimum": 1, "maximum": json_safe_integer_max },
+                "max_proof_bytes_per_block": { "type": "integer", "minimum": 1, "maximum": json_safe_integer_max },
+                "max_native_headers_per_transaction": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_native_headers_per_block": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_ethereum_light_client_updates_per_transaction": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_ethereum_light_client_updates_per_block": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_native_header_bytes_per_transaction": { "type": "integer", "minimum": 1, "maximum": json_safe_integer_max },
+                "max_native_header_bytes_per_block": { "type": "integer", "minimum": 1, "maximum": json_safe_integer_max },
+                "max_secp256k1_recoveries_per_transaction": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_secp256k1_recoveries_per_block": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_bls_aggregate_checks_per_transaction": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_bls_aggregate_checks_per_block": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_bls_signer_contributions_per_transaction": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_bls_signer_contributions_per_block": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_bn254_pairing_checks_per_transaction": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
+                "max_bn254_pairing_checks_per_block": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpCapabilitiesV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "registry_revision", "registry_path", "message_bundle_path",
+                "proof_request_path", "recent_messages_path", "registry_limits",
+                "resource_limits"
+            ],
+            "dependentRequired": {
+                "proof_submit_path": ["native_message_submit_path"],
+                "native_message_submit_path": ["proof_submit_path"]
+            },
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "registry_revision": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "registry_path": { "const": "/v1/sccp/registry" },
+                "message_bundle_path": { "const": "/v1/sccp/proofs/message/{message_id}" },
+                "proof_request_path": { "const": "/v1/sccp/proof-requests/{message_id}" },
+                "recent_messages_path": { "const": "/v1/sccp/messages/recent" },
+                "registry_limits": { "$ref": "#/components/schemas/SccpRegistryLimitsV1" },
+                "resource_limits": { "$ref": "#/components/schemas/SccpResourceLimitsV1" },
+                "proof_submit_path": { "const": "/v1/bridge/proofs/submit" },
+                "native_message_submit_path": { "const": "/v1/bridge/messages" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpCanonicalTextValueV1".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["CanonicalText"],
+            "additionalProperties": false,
+            "properties": {
+                "CanonicalText": {
+                    "type": "object", "required": ["value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "value": { "type": "string", "minLength": 1, "maxLength": 512 }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpXorAssetValueV1".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["CanonicalText"],
+            "additionalProperties": false,
+            "properties": {
+                "CanonicalText": {
+                    "type": "object", "required": ["value"],
+                    "additionalProperties": false,
+                    "properties": { "value": { "const": "xor" } }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpExactRouteValueV1".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["CanonicalText"],
+            "additionalProperties": false,
+            "properties": {
+                "CanonicalText": {
+                    "type": "object", "required": ["value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "value": {
+                            "type": "string",
+                            "enum": ["taira_eth_xor", "taira_bsc_xor", "taira_tron_xor"]
+                        }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpEvmAddressValueV1".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["EvmAddress20"],
+            "additionalProperties": false,
+            "properties": {
+                "EvmAddress20": {
+                    "type": "object", "required": ["bytes"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "bytes": {
+                            "type": "string", "minLength": 42, "maxLength": 42,
+                            "pattern": "^0x[0-9a-f]{40}$"
+                        }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpTronAddressValueV1".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["TronAddress21"],
+            "additionalProperties": false,
+            "properties": {
+                "TronAddress21": {
+                    "type": "object", "required": ["bytes"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "bytes": {
+                            "type": "string", "minLength": 44, "maxLength": 44,
+                            "pattern": "^0x41[0-9a-f]{40}$"
+                        }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpNormalizedCodecValueV1".to_owned(),
+        norito::json!({
+            "oneOf": [
+                { "$ref": "#/components/schemas/SccpCanonicalTextValueV1" },
+                { "$ref": "#/components/schemas/SccpEvmAddressValueV1" },
+                { "$ref": "#/components/schemas/SccpTronAddressValueV1" }
+            ]
+        }),
+    );
+    schemas.insert(
+        "SccpTransferProjectionV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "source_domain", "dest_domain", "nonce", "route_revision",
+                "asset_home_domain", "asset_id", "amount", "sender", "recipient", "route_id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "source_domain": { "type": "integer", "const": 0 },
+                "dest_domain": { "type": "integer", "enum": [1, 2, 5] },
+                "nonce": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "route_revision": {
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": 4294967295_u64
+                },
+                "asset_home_domain": { "type": "integer", "const": 0 },
+                "asset_id": { "$ref": "#/components/schemas/SccpXorAssetValueV1" },
+                "amount": {
+                    "type": "integer", "minimum": 1,
+                    "description": "Positive unsigned 128-bit transfer amount."
+                },
+                "sender": { "$ref": "#/components/schemas/SccpCanonicalTextValueV1" },
+                "recipient": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SccpEvmAddressValueV1" },
+                        { "$ref": "#/components/schemas/SccpTronAddressValueV1" }
+                    ]
+                },
+                "route_id": { "$ref": "#/components/schemas/SccpExactRouteValueV1" }
+            },
+            "oneOf": [
+                {
+                    "properties": {
+                        "dest_domain": { "const": 1 },
+                        "recipient": { "$ref": "#/components/schemas/SccpEvmAddressValueV1" },
+                        "route_id": {
+                            "type": "object", "required": ["CanonicalText"],
+                            "properties": {
+                                "CanonicalText": {
+                                    "type": "object", "required": ["value"],
+                                    "properties": { "value": { "const": "taira_eth_xor" } }
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "properties": {
+                        "dest_domain": { "const": 2 },
+                        "recipient": { "$ref": "#/components/schemas/SccpEvmAddressValueV1" },
+                        "route_id": {
+                            "type": "object", "required": ["CanonicalText"],
+                            "properties": {
+                                "CanonicalText": {
+                                    "type": "object", "required": ["value"],
+                                    "properties": { "value": { "const": "taira_bsc_xor" } }
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "properties": {
+                        "dest_domain": { "const": 5 },
+                        "recipient": { "$ref": "#/components/schemas/SccpTronAddressValueV1" },
+                        "route_id": {
+                            "type": "object", "required": ["CanonicalText"],
+                            "properties": {
+                                "CanonicalText": {
+                                    "type": "object", "required": ["value"],
+                                    "properties": { "value": { "const": "taira_tron_xor" } }
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "SccpPayloadProjectionV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["Transfer"],
+            "additionalProperties": false,
+            "properties": {
+                "Transfer": { "$ref": "#/components/schemas/SccpTransferProjectionV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpRecentMessageLinksV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["bundle_path", "proof_request_path"],
+            "additionalProperties": false,
+            "properties": {
+                "bundle_path": {
+                    "type": "string",
+                    "pattern": "^/v1/sccp/proofs/message/[0-9a-f]{64}$"
+                },
+                "proof_request_path": {
+                    "type": "string",
+                    "pattern": "^/v1/sccp/proof-requests/[0-9a-f]{64}$"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpRecentMessageV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "height", "message_id_hex", "kind", "source_profile", "target_profile",
+                "destination_binding_hash", "route_configuration_hash", "target_domain",
+                "amount", "payload_projection", "links"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "height": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "message_id_hex": { "$ref": "#/components/schemas/SccpHex32" },
+                "kind": { "const": "transfer" },
+                "source_profile": { "const": "sora-taira" },
+                "target_profile": {
+                    "type": "string",
+                    "enum": [
+                        "ethereum-mainnet", "ethereum-sepolia", "bsc-mainnet", "bsc-testnet",
+                        "tron-mainnet", "tron-nile", "tron-shasta"
+                    ]
+                },
+                "destination_binding_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "route_configuration_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "target_domain": { "type": "integer", "enum": [1, 2, 5] },
+                "asset_id": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                "route_id": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                "recipient": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                "amount": {
+                    "type": "string", "minLength": 1, "maxLength": 39,
+                    "pattern": "^[1-9][0-9]*$",
+                    "description": "Canonical positive unsigned 128-bit decimal string."
+                },
+                "payload_projection": { "$ref": "#/components/schemas/SccpPayloadProjectionV1" },
+                "links": { "$ref": "#/components/schemas/SccpRecentMessageLinksV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpRecentMessagesV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["items"],
+            "additionalProperties": false,
+            "properties": {
+                "items": {
+                    "type": "array", "maxItems": 50,
+                    "items": { "$ref": "#/components/schemas/SccpRecentMessageV1" },
+                    "description": "Unique messages ordered by descending block height."
+                }
+            }
+        }),
+    );
+    sccp_bundle_and_proof_request_schemas(schemas);
+}
+
+fn sccp_bundle_and_proof_request_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "SccpRawTransferPayloadV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "source_domain", "dest_domain", "nonce", "route_revision",
+                "asset_home_domain", "asset_id_codec", "asset_id", "amount", "sender_codec",
+                "sender", "recipient_codec", "recipient", "route_id_codec", "route_id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "source_domain": { "type": "integer", "const": 0 },
+                "dest_domain": { "type": "integer", "enum": [1, 2, 5] },
+                "nonce": {
+                    "type": "string", "minLength": 1, "maxLength": 20,
+                    "pattern": "^(?:0|[1-9][0-9]*)$"
+                },
+                "route_revision": {
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": 4294967295_u64
+                },
+                "asset_home_domain": { "type": "integer", "const": 0 },
+                "asset_id_codec": { "type": "integer", "const": 1 },
+                "asset_id": { "const": "0x786f72" },
+                "amount": {
+                    "type": "string", "minLength": 1, "maxLength": 39,
+                    "pattern": "^[1-9][0-9]*$"
+                },
+                "sender_codec": { "type": "integer", "const": 1 },
+                "sender": {
+                    "type": "string", "minLength": 4, "maxLength": 514,
+                    "pattern": "^0x(?:[0-9a-f]{2})+$"
+                },
+                "recipient_codec": { "type": "integer", "enum": [2, 5] },
+                "recipient": {
+                    "oneOf": [
+                        {
+                            "type": "string", "minLength": 42, "maxLength": 42,
+                            "pattern": "^0x[0-9a-f]{40}$",
+                            "not": { "pattern": "^0x0{40}$" }
+                        },
+                        {
+                            "type": "string", "minLength": 44, "maxLength": 44,
+                            "pattern": "^0x41[0-9a-f]{40}$",
+                            "not": { "pattern": "^0x410{40}$" }
+                        }
+                    ]
+                },
+                "route_id_codec": { "type": "integer", "const": 1 },
+                "route_id": {
+                    "type": "string",
+                    "enum": [
+                        "0x74616972615f6574685f786f72",
+                        "0x74616972615f6273635f786f72",
+                        "0x74616972615f74726f6e5f786f72"
+                    ]
+                }
+            },
+            "oneOf": [
+                {
+                    "properties": {
+                        "dest_domain": { "const": 1 },
+                        "recipient_codec": { "const": 2 },
+                        "route_id": { "const": "0x74616972615f6574685f786f72" }
+                    }
+                },
+                {
+                    "properties": {
+                        "dest_domain": { "const": 2 },
+                        "recipient_codec": { "const": 2 },
+                        "route_id": { "const": "0x74616972615f6273635f786f72" }
+                    }
+                },
+                {
+                    "properties": {
+                        "dest_domain": { "const": 5 },
+                        "recipient_codec": { "const": 5 },
+                        "route_id": { "const": "0x74616972615f74726f6e5f786f72" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "SccpMessageBundleV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "commitment_root", "commitment", "merkle_proof", "payload",
+                "finality_proof"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "commitment_root": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "commitment": {
+                    "type": "object",
+                    "required": ["version", "kind", "context", "message_id", "payload_hash"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "version": { "type": "integer", "enum": [1] },
+                        "kind": { "const": "Transfer" },
+                        "context": {
+                            "type": "object",
+                            "required": ["lane", "destination_binding_hash", "route_configuration_hash"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "lane": { "$ref": "#/components/schemas/SccpOutboundLaneIdV1" },
+                                "destination_binding_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                                "route_configuration_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" }
+                            }
+                        },
+                        "message_id": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                        "payload_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" }
+                    }
+                },
+                "merkle_proof": {
+                    "type": "object", "required": ["steps"], "additionalProperties": false,
+                    "properties": {
+                        "steps": {
+                            "type": "array", "maxItems": 64,
+                            "items": {
+                                "type": "object",
+                                "required": ["sibling_hash", "sibling_is_left"],
+                                "additionalProperties": false,
+                                "properties": {
+                                    "sibling_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                                    "sibling_is_left": { "type": "boolean" }
+                                }
+                            }
+                        }
+                    }
+                },
+                "payload": {
+                    "type": "object", "required": ["Transfer"], "additionalProperties": false,
+                    "properties": {
+                        "Transfer": { "$ref": "#/components/schemas/SccpRawTransferPayloadV1" }
+                    }
+                },
+                "finality_proof": {
+                    "type": "string", "minLength": 4, "maxLength": 33554434,
+                    "pattern": "^0x(?:[0-9a-f]{2})+$"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpDestinationProofBackendV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["backend", "family"],
+            "additionalProperties": false,
+            "properties": {
+                "backend": {
+                    "type": "string",
+                    "enum": ["evm_groth16_bn254_v1", "tron_groth16_bn254_v1"]
+                },
+                "family": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpMessagePublicInputsV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "message_id", "payload_hash", "target_domain", "commitment_root",
+                "finality_height", "finality_block_hash"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "message_id": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "payload_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "target_domain": { "type": "integer", "enum": [1, 2, 5] },
+                "commitment_root": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "finality_height": {
+                    "type": "string", "minLength": 1, "maxLength": 20,
+                    "pattern": "^[1-9][0-9]*$"
+                },
+                "finality_block_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpProofRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "backend", "source_network", "target_network", "public_inputs",
+                "verifying_key", "verifier_key_hash", "semantic_proof_profile",
+                "semantic_proof_profile_hash", "sora_finality_anchor",
+                "sora_finality_anchor_hash", "bundle_bytes", "statement_hash",
+                "destination_binding_hash", "route_configuration_hash", "request_hash"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "backend": { "$ref": "#/components/schemas/SccpDestinationProofBackendV1" },
+                "source_network": { "$ref": "#/components/schemas/SccpTairaNetworkV1" },
+                "target_network": { "$ref": "#/components/schemas/SccpExternalNetworkV1" },
+                "public_inputs": { "$ref": "#/components/schemas/SccpMessagePublicInputsV1" },
+                "verifying_key": { "$ref": "#/components/schemas/SccpGroth16Bn254VerifyingKeyV1" },
+                "verifier_key_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "semantic_proof_profile": { "$ref": "#/components/schemas/SccpSemanticProofProfileV1" },
+                "semantic_proof_profile_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "sora_finality_anchor": { "$ref": "#/components/schemas/SccpSoraFinalityAnchorV1" },
+                "sora_finality_anchor_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "bundle_bytes": {
+                    "type": "string", "minLength": 4, "maxLength": 33554434,
+                    "pattern": "^0x(?:[0-9a-f]{2})+$"
+                },
+                "statement_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "destination_binding_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "route_configuration_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "request_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" }
+            },
+            "description": "Exact query-free Taira-to-external Groth16 request. The target family, backend, target domain, and all role-separated hashes must agree."
+        }),
+    );
+}
+
+fn sccp_submit_and_governance_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "SccpBridgeProofPrepareRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["authority", "destination_proof_b64"],
+            "additionalProperties": false,
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "destination_proof_b64": {
+                    "$ref": "#/components/schemas/SccpCanonicalBase64",
+                    "maxLength": 22457004,
+                    "description": "Canonical Norito SccpGroth16Bn254ProofArtifactV1 bytes."
+                },
+                "creation_time_ms": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpBridgeProofSignedRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "authority", "signature_b64", "transaction_payload_b64",
+                "destination_proof_b64", "creation_time_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "signature_b64": {
+                    "$ref": "#/components/schemas/SccpCanonicalBase64",
+                    "maxLength": 21848,
+                    "description": "Canonical algorithm-specific detached signature bytes for authority."
+                },
+                "transaction_payload_b64": {
+                    "$ref": "#/components/schemas/SccpCanonicalBase64",
+                    "maxLength": 22369624,
+                    "description": "Byte-identical canonical transaction payload returned by preparation."
+                },
+                "destination_proof_b64": {
+                    "$ref": "#/components/schemas/SccpCanonicalBase64",
+                    "maxLength": 22457004,
+                    "description": "Canonical Norito SccpGroth16Bn254ProofArtifactV1 bytes."
+                },
+                "creation_time_ms": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64,
+                    "description": "Exact timestamp returned with the prepared payload."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpBridgeProofSubmitRequest".to_owned(),
+        norito::json!({
+            "oneOf": [
+                { "$ref": "#/components/schemas/SccpBridgeProofPrepareRequest" },
+                { "$ref": "#/components/schemas/SccpBridgeProofSignedRequest" }
+            ],
+            "description": "Closed two-state request: preparation has neither signing field; direct submission has both and an explicit positive creation timestamp."
+        }),
+    );
+    schemas.insert(
+        "SccpBridgeMessagePrepareRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["authority", "native_proof_b64"],
+            "additionalProperties": false,
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "native_proof_b64": {
+                    "$ref": "#/components/schemas/SccpCanonicalBase64",
+                    "maxLength": 22369624,
+                    "description": "Canonical Norito native SCCP admission proof bytes."
+                },
+                "creation_time_ms": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpBridgeMessageSignedRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "authority", "signature_b64", "transaction_payload_b64", "native_proof_b64",
+                "creation_time_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "signature_b64": {
+                    "$ref": "#/components/schemas/SccpCanonicalBase64",
+                    "maxLength": 21848,
+                    "description": "Canonical algorithm-specific detached signature bytes for authority."
+                },
+                "transaction_payload_b64": {
+                    "$ref": "#/components/schemas/SccpCanonicalBase64",
+                    "maxLength": 22369624,
+                    "description": "Byte-identical canonical transaction payload returned by preparation."
+                },
+                "native_proof_b64": {
+                    "$ref": "#/components/schemas/SccpCanonicalBase64",
+                    "maxLength": 22369624,
+                    "description": "Canonical Norito native SCCP admission proof bytes."
+                },
+                "creation_time_ms": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64,
+                    "description": "Exact timestamp returned with the prepared payload."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpBridgeMessageSubmitRequest".to_owned(),
+        norito::json!({
+            "oneOf": [
+                { "$ref": "#/components/schemas/SccpBridgeMessagePrepareRequest" },
+                { "$ref": "#/components/schemas/SccpBridgeMessageSignedRequest" }
+            ],
+            "description": "Closed two-state request: preparation has neither signing field; direct submission has both and an explicit positive creation timestamp."
+        }),
+    );
+    schemas.insert(
+        "SccpBridgeSubmitResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "submitted", "payload_kind", "message_id_hex", "backend", "counterparty_domain",
+                "counterparty_chain", "route_configuration_hash_hex", "range_start_height",
+                "range_end_height", "creation_time_ms", "tx_hash_hex", "transaction_payload_b64",
+                "signing_message_b64"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "submitted": { "type": "boolean" },
+                "payload_kind": { "const": "transfer" },
+                "message_id_hex": { "$ref": "#/components/schemas/SccpHex32" },
+                "backend": {
+                    "type": "string",
+                    "enum": [
+                        "evm-groth16-bn254-v1", "tron-groth16-bn254-v1",
+                        "bridge/sccp/native/ethereum-beacon-v1",
+                        "bridge/sccp/native/bsc-parlia-v1",
+                        "bridge/sccp/native/tron-dpos-v1"
+                    ]
+                },
+                "counterparty_domain": { "type": "integer", "enum": [1, 2, 5] },
+                "counterparty_chain": {
+                    "type": "string",
+                    "enum": [
+                        "ethereum-mainnet", "ethereum-sepolia", "bsc-mainnet", "bsc-testnet",
+                        "tron-mainnet", "tron-nile", "tron-shasta"
+                    ]
+                },
+                "route_configuration_hash_hex": { "$ref": "#/components/schemas/SccpHex32" },
+                "range_start_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "range_end_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "creation_time_ms": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "tx_hash_hex": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SccpHex32" },
+                        { "type": "null" }
+                    ]
+                },
+                "transaction_payload_b64": {
+                    "oneOf": [
+                        {
+                            "$ref": "#/components/schemas/SccpCanonicalBase64",
+                            "maxLength": 22369624
+                        },
+                        { "type": "null" }
+                    ]
+                },
+                "signing_message_b64": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SccpSigningMessageBase64" },
+                        { "type": "null" }
+                    ]
+                }
+            },
+            "oneOf": [
+                {
+                    "properties": {
+                        "submitted": { "const": false },
+                        "tx_hash_hex": { "type": "null" },
+                        "transaction_payload_b64": { "$ref": "#/components/schemas/SccpCanonicalBase64" },
+                        "signing_message_b64": { "$ref": "#/components/schemas/SccpSigningMessageBase64" }
+                    }
+                },
+                {
+                    "properties": {
+                        "submitted": { "const": true },
+                        "tx_hash_hex": { "$ref": "#/components/schemas/SccpHex32" },
+                        "transaction_payload_b64": { "type": "null" },
+                        "signing_message_b64": { "type": "null" }
+                    }
+                }
+            ],
+            "description": "Prepared responses carry only the canonical transaction payload and its exact 32-byte signing prehash; submitted responses carry only the transaction hash."
+        }),
+    );
+    sccp_governance_schemas(schemas);
+}
+
+fn sccp_governance_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "SccpInboundFinalityCutoffV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["trust_anchor_hash", "max_anchor_interval_height"],
+            "additionalProperties": false,
+            "properties": {
+                "trust_anchor_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "max_anchor_interval_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64,
+                    "description": "Inclusive successor-checkpoint boundary in the backend's authenticated consensus-progress coordinate."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpAtWindowV1".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["lower", "upper"], "additionalProperties": false,
+            "properties": {
+                "lower": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "upper": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                }
+            },
+            "description": "Inclusive block window; upper must be greater than or equal to lower."
+        }),
+    );
+    schemas.insert(
+        "SccpRegisterRouteActionV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["route", "native_trust_anchor"],
+            "additionalProperties": false,
+            "properties": {
+                "route": { "$ref": "#/components/schemas/SccpGovernedRouteV1" },
+                "native_trust_anchor": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SccpNativeTrustAnchorV1" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpSetRouteActivationActionV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["key", "expected_current", "next", "inbound_finality_cutoff"],
+            "additionalProperties": false,
+            "properties": {
+                "key": { "$ref": "#/components/schemas/SccpRouteKeyV1" },
+                "expected_current": { "$ref": "#/components/schemas/SccpRouteActivationV1" },
+                "next": { "$ref": "#/components/schemas/SccpRouteActivationV1" },
+                "inbound_finality_cutoff": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SccpInboundFinalityCutoffV1" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpSwitchRouteRevisionActionV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "previous_key", "expected_previous", "previous_next",
+                "previous_inbound_finality_cutoff", "successor_key", "successor_next"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "previous_key": { "$ref": "#/components/schemas/SccpRouteKeyV1" },
+                "expected_previous": { "$ref": "#/components/schemas/SccpRouteActivationV1" },
+                "previous_next": { "$ref": "#/components/schemas/SccpRouteActivationV1" },
+                "previous_inbound_finality_cutoff": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SccpInboundFinalityCutoffV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "successor_key": { "$ref": "#/components/schemas/SccpRouteKeyV1" },
+                "successor_next": { "$ref": "#/components/schemas/SccpRouteActivationV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpInitializeTrustAnchorActionV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["lane_id", "expected_current", "initial"],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": { "$ref": "#/components/schemas/SccpInboundLaneIdV1" },
+                "expected_current": { "type": "null" },
+                "initial": { "$ref": "#/components/schemas/SccpNativeTrustAnchorV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpAdvanceTrustAnchorActionV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["lane_id", "expected_current", "next"],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": { "$ref": "#/components/schemas/SccpInboundLaneIdV1" },
+                "expected_current": { "$ref": "#/components/schemas/SccpNativeTrustAnchorV1" },
+                "next": { "$ref": "#/components/schemas/SccpNativeTrustAnchorV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpRouteGovernanceActionV1".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object", "required": ["action", "route"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "action": { "const": "Register" },
+                        "route": { "$ref": "#/components/schemas/SccpRegisterRouteActionV1" }
+                    }
+                },
+                {
+                    "type": "object", "required": ["action", "route"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "action": { "const": "SetActivation" },
+                        "route": { "$ref": "#/components/schemas/SccpSetRouteActivationActionV1" }
+                    }
+                },
+                {
+                    "type": "object", "required": ["action", "route"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "action": { "const": "SwitchRevision" },
+                        "route": { "$ref": "#/components/schemas/SccpSwitchRouteRevisionActionV1" }
+                    }
+                },
+                {
+                    "type": "object", "required": ["action", "route"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "action": { "const": "InitializeTrustAnchor" },
+                        "route": { "$ref": "#/components/schemas/SccpInitializeTrustAnchorActionV1" }
+                    }
+                },
+                {
+                    "type": "object", "required": ["action", "route"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "action": { "const": "AdvanceTrustAnchor" },
+                        "route": { "$ref": "#/components/schemas/SccpAdvanceTrustAnchorActionV1" }
+                    }
+                },
+                {
+                    "type": "object", "required": ["action", "route"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "action": { "const": "Remove" },
+                        "route": { "$ref": "#/components/schemas/SccpRouteKeyV1" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "SccpRouteGovernanceDraftRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["action"],
+            "additionalProperties": false,
+            "properties": {
+                "action": { "$ref": "#/components/schemas/SccpRouteGovernanceActionV1" },
+                "window": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SccpAtWindowV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "mode": {
+                    "oneOf": [
+                        { "type": "string", "enum": ["Zk", "Plain"] },
+                        { "type": "null" }
+                    ],
+                    "default": "Zk"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpRouteGovernanceInstructionDraftV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["wire_id", "payload_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "wire_id": {
+                    "type": "string", "minLength": 1,
+                    "description": "Registered ProposeSccpRouteGovernance instruction wire id."
+                },
+                "payload_hex": {
+                    "type": "string", "minLength": 2,
+                    "pattern": "^(?:[0-9a-f]{2})+$",
+                    "description": "Canonical framed instruction bytes as lowercase unprefixed hex."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpRouteGovernanceDraftResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "proposal_id", "tx_instructions"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "const": true },
+                "proposal_id": { "$ref": "#/components/schemas/SccpHex32" },
+                "tx_instructions": {
+                    "type": "array", "minItems": 1, "maxItems": 1,
+                    "items": { "$ref": "#/components/schemas/SccpRouteGovernanceInstructionDraftV1" }
+                }
+            }
+        }),
+    );
+}
+
 fn openapi_schemas() -> Map {
     let mut schemas = Map::new();
+    schemas.extend(sccp_schemas());
     schemas.insert(
         "JsonValue".to_owned(),
         norito::json!({
@@ -13401,6 +15207,1036 @@ mod tests {
             assert!(!description.contains("TON"));
             assert!(!description.contains("legacy proof backends"));
         }
+
+        for (path, expected_schema) in [
+            (
+                "/v1/sccp/capabilities",
+                "#/components/schemas/SccpCapabilitiesV1",
+            ),
+            ("/v1/sccp/registry", "#/components/schemas/SccpRegistryV1"),
+            (
+                "/v1/sccp/proofs/message/{message_id}",
+                "#/components/schemas/SccpMessageBundleV1",
+            ),
+            (
+                "/v1/sccp/proof-requests/{message_id}",
+                "#/components/schemas/SccpProofRequestV1",
+            ),
+            (
+                "/v1/sccp/messages/recent",
+                "#/components/schemas/SccpRecentMessagesV1",
+            ),
+        ] {
+            let content = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("get"))
+                .and_then(Value::as_object)
+                .and_then(|get| get.get("responses"))
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .expect("SCCP success response content");
+            assert!(content.contains_key("application/json"), "{path}");
+            assert!(content.contains_key("application/x-norito"), "{path}");
+            assert_eq!(
+                content
+                    .get("application/json")
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(expected_schema),
+                "{path} JSON schema"
+            );
+            let norito_schema = content
+                .get("application/x-norito")
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .expect("SCCP Norito response schema");
+            assert_eq!(
+                norito_schema.get("type").and_then(Value::as_str),
+                Some("string")
+            );
+            assert_eq!(
+                norito_schema.get("format").and_then(Value::as_str),
+                Some("binary")
+            );
+        }
+
+        let parameters = paths
+            .get("/v1/sccp/messages/recent")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|get| get.get("parameters"))
+            .and_then(Value::as_array)
+            .expect("SCCP recent query parameters");
+        let schema_for = |name: &str| {
+            parameters
+                .iter()
+                .filter_map(Value::as_object)
+                .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name))
+                .and_then(|parameter| parameter.get("schema"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing SCCP recent `{name}` schema"))
+        };
+        assert_eq!(schema_for("from").get("minimum"), Some(&Value::from(1_u64)));
+        assert_eq!(
+            schema_for("limit").get("minimum"),
+            Some(&Value::from(1_u64))
+        );
+        assert_eq!(
+            schema_for("limit").get("maximum"),
+            Some(&Value::from(50_u64))
+        );
+    }
+
+    #[test]
+    fn generated_spec_sccp_v1_requires_eleven_signals_and_outbound_policy() {
+        fn schema<'a>(schemas: &'a Map, name: &str) -> &'a Map {
+            schemas
+                .get(name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing SCCP schema `{name}`"))
+        }
+
+        fn required<'a>(schema: &'a Map, name: &str) -> Vec<&'a str> {
+            schema
+                .get("required")
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("missing required fields for SCCP schema `{name}`"))
+                .iter()
+                .map(|field| field.as_str().expect("required field name"))
+                .collect()
+        }
+
+        fn properties<'a>(schema: &'a Map, name: &str) -> &'a Map {
+            schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing properties for SCCP schema `{name}`"))
+        }
+
+        fn is_exact_v1_enum(schema: &Map, field: &str) -> bool {
+            schema
+                .get(field)
+                .and_then(Value::as_object)
+                .and_then(|field| field.get("enum"))
+                .and_then(Value::as_array)
+                .is_some_and(|values| {
+                    values.len() == 1 && values.first().and_then(Value::as_u64) == Some(1)
+                })
+        }
+
+        let doc = generate_spec();
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas section");
+
+        let external_network_name = "SccpExternalNetworkV1";
+        let external_network = schema(schemas, external_network_name);
+        assert_eq!(
+            required(external_network, external_network_name),
+            ["network", "profile"]
+        );
+        let external_network_properties = properties(external_network, external_network_name);
+        let external_networks = external_network_properties
+            .get("network")
+            .and_then(Value::as_object)
+            .and_then(|network| network.get("enum"))
+            .and_then(Value::as_array)
+            .expect("closed SCCP external-network enum")
+            .iter()
+            .map(|network| network.as_str().expect("SCCP external-network name"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            external_networks,
+            [
+                "ethereum_mainnet",
+                "ethereum_sepolia",
+                "bsc_mainnet",
+                "bsc_testnet",
+                "tron_mainnet",
+                "tron_nile",
+                "tron_shasta",
+            ],
+            "SCCP V1 must expose only the Ethereum/BSC/TRON release corridor"
+        );
+        assert_eq!(
+            external_network_properties
+                .get("profile")
+                .and_then(Value::as_object)
+                .and_then(|profile| profile.get("type"))
+                .and_then(Value::as_str),
+            Some("null")
+        );
+        assert_eq!(
+            external_network.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+
+        let taira_network_name = "SccpTairaNetworkV1";
+        let taira_network = schema(schemas, taira_network_name);
+        assert_eq!(
+            required(taira_network, taira_network_name),
+            ["network", "profile"]
+        );
+        let taira_network_properties = properties(taira_network, taira_network_name);
+        assert_eq!(taira_network_properties.len(), 2);
+        assert_eq!(
+            taira_network_properties
+                .get("network")
+                .and_then(Value::as_object)
+                .and_then(|network| network.get("const"))
+                .and_then(Value::as_str),
+            Some("sora_taira")
+        );
+        assert_eq!(
+            taira_network_properties
+                .get("profile")
+                .and_then(Value::as_object)
+                .and_then(|profile| profile.get("type"))
+                .and_then(Value::as_str),
+            Some("null")
+        );
+        assert_eq!(
+            taira_network.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+
+        let g1_name = "SccpBn254G1PointV1";
+        let g1 = schema(schemas, g1_name);
+        assert_eq!(required(g1, g1_name), ["x", "y"]);
+        let g1_words = properties(g1, g1_name).len();
+        assert_eq!(g1_words, 2);
+
+        let g2_name = "SccpBn254G2PointV1";
+        let g2 = schema(schemas, g2_name);
+        assert_eq!(required(g2, g2_name), ["x_c0", "x_c1", "y_c0", "y_c1"]);
+        let g2_words = properties(g2, g2_name).len();
+        assert_eq!(g2_words, 4);
+
+        let ic_name = "SccpGroth16Bn254IcV1";
+        let ic = schema(schemas, ic_name);
+        let ic_fields = [
+            "constant",
+            "signal_0",
+            "signal_1",
+            "signal_2",
+            "signal_3",
+            "signal_4",
+            "signal_5",
+            "signal_6",
+            "signal_7",
+            "signal_8",
+            "signal_9",
+            "signal_10",
+        ];
+        assert_eq!(required(ic, ic_name), ic_fields);
+        assert_eq!(
+            ic.get("properties")
+                .and_then(Value::as_object)
+                .map(Map::len),
+            Some(12),
+            "SCCP V1 IC must expose the constant plus exactly eleven signal points"
+        );
+        for field in ic_fields {
+            assert_eq!(
+                properties(ic, ic_name)
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|point| point.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/SccpBn254G1PointV1"),
+                "IC field `{field}` must remain one G1 point"
+            );
+        }
+
+        let verifying_key_name = "SccpGroth16Bn254VerifyingKeyV1";
+        let verifying_key = schema(schemas, verifying_key_name);
+        assert_eq!(
+            required(verifying_key, verifying_key_name),
+            ["version", "alpha1", "beta2", "gamma2", "delta2", "ic"]
+        );
+        let verifying_key_properties = properties(verifying_key, verifying_key_name);
+        assert_eq!(verifying_key_properties.len(), 6);
+        for (field, reference) in [
+            ("alpha1", "#/components/schemas/SccpBn254G1PointV1"),
+            ("beta2", "#/components/schemas/SccpBn254G2PointV1"),
+            ("gamma2", "#/components/schemas/SccpBn254G2PointV1"),
+            ("delta2", "#/components/schemas/SccpBn254G2PointV1"),
+            ("ic", "#/components/schemas/SccpGroth16Bn254IcV1"),
+        ] {
+            assert_eq!(
+                verifying_key_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|point| point.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(reference),
+                "verifying-key field `{field}` must retain its canonical point role"
+            );
+        }
+        let ic_points = properties(ic, ic_name).len();
+        assert_eq!(
+            g1_words + 3 * g2_words + ic_points * g1_words,
+            38,
+            "SCCP V1 verifying-key preimage must contain exactly 38 ABI words"
+        );
+
+        let semantic_profile_name = "SccpSemanticProofProfileV1";
+        let semantic_profile = schema(schemas, semantic_profile_name);
+        assert_eq!(
+            required(semantic_profile, semantic_profile_name),
+            ["profile", "commitments"]
+        );
+        let semantic_profile_properties = properties(semantic_profile, semantic_profile_name);
+        assert_eq!(semantic_profile_properties.len(), 2);
+        assert_eq!(
+            semantic_profile_properties
+                .get("profile")
+                .and_then(Value::as_object)
+                .and_then(|profile| profile.get("const"))
+                .and_then(Value::as_str),
+            Some("sora_taira_finality_inclusion_groth16_bn254")
+        );
+        let commitments = semantic_profile_properties
+            .get("commitments")
+            .and_then(Value::as_object)
+            .expect("SCCP semantic-profile commitments schema");
+        assert_eq!(
+            required(commitments, "SccpGroth16Bn254SemanticCircuitV1"),
+            [
+                "version",
+                "circuit_commitment",
+                "witness_generator_commitment",
+                "public_signal_schema_hash",
+            ]
+        );
+        let commitment_properties = properties(commitments, "SccpGroth16Bn254SemanticCircuitV1");
+        assert_eq!(commitment_properties.len(), 4);
+        assert!(is_exact_v1_enum(commitment_properties, "version"));
+        for field in ["circuit_commitment", "witness_generator_commitment"] {
+            assert_eq!(
+                commitment_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|commitment| commitment.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/SccpNonzeroUpperHex32"),
+                "semantic-profile field `{field}` must be a nonzero commitment"
+            );
+        }
+        assert_eq!(
+            commitment_properties
+                .get("public_signal_schema_hash")
+                .and_then(Value::as_object)
+                .and_then(|commitment| commitment.get("const"))
+                .and_then(Value::as_str),
+            Some("7567439F41173D6745A3D51923CB70371ACC7D66F23CEFB4100D6D5D7A432CBB")
+        );
+        assert_eq!(
+            commitments.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            semantic_profile.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+
+        let finality_anchor_name = "SccpSoraFinalityAnchorV1";
+        let finality_anchor = schema(schemas, finality_anchor_name);
+        assert_eq!(
+            required(finality_anchor, finality_anchor_name),
+            [
+                "version",
+                "source_network",
+                "chain_id_hash",
+                "checkpoint_height",
+                "checkpoint_block_hash",
+                "validator_set_epoch",
+                "validator_set_hash",
+                "validator_set_hash_version",
+            ]
+        );
+        let finality_anchor_properties = properties(finality_anchor, finality_anchor_name);
+        assert_eq!(finality_anchor_properties.len(), 8);
+        for field in ["version", "validator_set_hash_version"] {
+            assert!(
+                is_exact_v1_enum(finality_anchor_properties, field),
+                "Taira finality-anchor field `{field}` must remain V1"
+            );
+        }
+        assert_eq!(
+            finality_anchor_properties
+                .get("source_network")
+                .and_then(Value::as_object)
+                .and_then(|network| network.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SccpTairaNetworkV1")
+        );
+        assert_eq!(
+            finality_anchor_properties
+                .get("chain_id_hash")
+                .and_then(Value::as_object)
+                .and_then(|hash| hash.get("const"))
+                .and_then(Value::as_str),
+            Some("3F139C4B2A31457994D17BE5CE922D87FC702939116359F0E47314AB36A7F588")
+        );
+        for field in ["checkpoint_block_hash", "validator_set_hash"] {
+            assert_eq!(
+                finality_anchor_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|hash| hash.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/SccpNonzeroUpperHex32"),
+                "Taira finality-anchor field `{field}` must be a nonzero commitment"
+            );
+        }
+        assert_eq!(
+            finality_anchor_properties
+                .get("checkpoint_height")
+                .and_then(Value::as_object)
+                .and_then(|height| height.get("minimum"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            finality_anchor.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+
+        let deployment_details_name = "SccpDestinationDeploymentDetailsV1";
+        let deployment_details = schema(schemas, deployment_details_name);
+        assert!(
+            required(deployment_details, deployment_details_name)
+                .contains(&"outbound_proof_policy"),
+            "SCCP destination deployment details must require outbound_proof_policy"
+        );
+        assert_eq!(
+            deployment_details
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("outbound_proof_policy"))
+                .and_then(Value::as_object)
+                .and_then(|policy| policy.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SccpOutboundProofPolicyV1")
+        );
+
+        let outbound_policy_name = "SccpOutboundProofPolicyV1";
+        let outbound_policy = schema(schemas, outbound_policy_name);
+        assert_eq!(
+            required(outbound_policy, outbound_policy_name),
+            ["version", "semantic_profile", "sora_finality_anchor"]
+        );
+        let outbound_policy_properties = properties(outbound_policy, outbound_policy_name);
+        assert_eq!(
+            outbound_policy_properties.len(),
+            3,
+            "the outbound proof policy must have no policy-less or hash-only compatibility fields"
+        );
+        assert!(is_exact_v1_enum(outbound_policy_properties, "version"));
+        for (field, reference) in [
+            (
+                "semantic_profile",
+                "#/components/schemas/SccpSemanticProofProfileV1",
+            ),
+            (
+                "sora_finality_anchor",
+                "#/components/schemas/SccpSoraFinalityAnchorV1",
+            ),
+        ] {
+            assert_eq!(
+                outbound_policy_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|policy| policy.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(reference),
+                "outbound proof-policy field `{field}` must retain its typed role"
+            );
+        }
+        assert_eq!(
+            outbound_policy.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+
+        let proof_request_name = "SccpProofRequestV1";
+        let proof_request = schema(schemas, proof_request_name);
+        assert_eq!(
+            required(proof_request, proof_request_name),
+            [
+                "version",
+                "backend",
+                "source_network",
+                "target_network",
+                "public_inputs",
+                "verifying_key",
+                "verifier_key_hash",
+                "semantic_proof_profile",
+                "semantic_proof_profile_hash",
+                "sora_finality_anchor",
+                "sora_finality_anchor_hash",
+                "bundle_bytes",
+                "statement_hash",
+                "destination_binding_hash",
+                "route_configuration_hash",
+                "request_hash",
+            ]
+        );
+        let proof_request_properties = proof_request
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("SCCP proof-request properties");
+        assert_eq!(proof_request_properties.len(), 16);
+        for (field, reference) in [
+            (
+                "semantic_proof_profile",
+                "#/components/schemas/SccpSemanticProofProfileV1",
+            ),
+            (
+                "semantic_proof_profile_hash",
+                "#/components/schemas/SccpPrefixedHex32",
+            ),
+            (
+                "sora_finality_anchor",
+                "#/components/schemas/SccpSoraFinalityAnchorV1",
+            ),
+            (
+                "sora_finality_anchor_hash",
+                "#/components/schemas/SccpPrefixedHex32",
+            ),
+        ] {
+            assert_eq!(
+                proof_request_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|property| property.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(reference),
+                "SCCP proof request field `{field}` must retain its exact typed role"
+            );
+        }
+        assert_eq!(
+            proof_request.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+
+        let cutoff_name = "SccpInboundFinalityCutoffV1";
+        let cutoff = schema(schemas, cutoff_name);
+        assert_eq!(
+            required(cutoff, cutoff_name),
+            ["trust_anchor_hash", "max_anchor_interval_height"]
+        );
+        assert_eq!(
+            cutoff
+                .get("properties")
+                .and_then(Value::as_object)
+                .map(Map::len),
+            Some(2)
+        );
+        assert_eq!(
+            cutoff.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+
+        let deployment = schema(schemas, "SccpDestinationDeploymentV1");
+        let variants = deployment
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("EVM/TRON SCCP deployment variants");
+        assert_eq!(variants.len(), 2);
+        for (variant, expected_family) in variants.iter().zip(["evm", "tron"]) {
+            let properties = variant
+                .as_object()
+                .and_then(|variant| variant.get("properties"))
+                .and_then(Value::as_object)
+                .expect("SCCP destination deployment variant properties");
+            assert_eq!(
+                properties
+                    .get("family")
+                    .and_then(Value::as_object)
+                    .and_then(|family| family.get("const"))
+                    .and_then(Value::as_str),
+                Some(expected_family)
+            );
+            assert_eq!(
+                properties
+                    .get("deployment")
+                    .and_then(Value::as_object)
+                    .and_then(|details| details.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/SccpDestinationDeploymentDetailsV1"),
+                "{expected_family} deployments must use the policy-bearing details schema"
+            );
+        }
+
+        let governed_lane_name = "SccpGovernedLaneV1";
+        let governed_lane = schema(schemas, governed_lane_name);
+        assert_eq!(
+            required(governed_lane, governed_lane_name),
+            [
+                "lane_id",
+                "native_trust_anchors",
+                "current_native_trust_anchor_hash",
+                "routes",
+            ],
+            "governed lanes must expose only the canonical append-only trust-anchor history"
+        );
+        let governed_lane_properties = governed_lane
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("SCCP governed-lane properties");
+        assert_eq!(governed_lane_properties.len(), 4);
+        assert!(governed_lane_properties.contains_key("native_trust_anchors"));
+        assert!(governed_lane_properties.contains_key("current_native_trust_anchor_hash"));
+        assert!(
+            !governed_lane_properties.contains_key("native_trust_anchor"),
+            "the policy-less singular governed-lane trust-anchor shape is not a V1 alias"
+        );
+    }
+
+    #[test]
+    fn generated_spec_sccp_submit_and_governance_contracts_are_closed() {
+        fn schema<'a>(schemas: &'a Map, name: &str) -> &'a Map {
+            schemas
+                .get(name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing SCCP schema `{name}`"))
+        }
+
+        fn required(schema: &Map) -> Vec<&str> {
+            schema
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("required field array")
+                .iter()
+                .map(|field| field.as_str().expect("required field name"))
+                .collect()
+        }
+
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas section");
+
+        for (path, request_schema) in [
+            (
+                "/v1/bridge/proofs/submit",
+                "#/components/schemas/SccpBridgeProofSubmitRequest",
+            ),
+            (
+                "/v1/bridge/messages",
+                "#/components/schemas/SccpBridgeMessageSubmitRequest",
+            ),
+        ] {
+            let post = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("post"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing SCCP POST `{path}`"));
+            let request_content = post
+                .get("requestBody")
+                .and_then(Value::as_object)
+                .and_then(|body| body.get("content"))
+                .and_then(Value::as_object)
+                .expect("SCCP submit request content");
+            assert_eq!(request_content.len(), 1, "{path} must be JSON-only");
+            assert!(!request_content.contains_key("application/x-norito"));
+            assert_eq!(
+                request_content
+                    .get("application/json")
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(request_schema)
+            );
+            let response_content = post
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .expect("SCCP submit response content");
+            assert_eq!(response_content.len(), 1, "{path} response is JSON-only");
+            assert_eq!(
+                response_content
+                    .get("application/json")
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/SccpBridgeSubmitResponseV1")
+            );
+            assert!(
+                post.get("responses")
+                    .and_then(Value::as_object)
+                    .is_some_and(|responses| responses.contains_key("415")),
+                "{path} documents JSON-only rejection"
+            );
+        }
+
+        let governance = paths
+            .get(iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE)
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("SCCP governance POST");
+        let governance_content = governance
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .expect("SCCP governance request content");
+        assert!(governance_content.contains_key("application/json"));
+        assert!(governance_content.contains_key("application/x-norito"));
+        assert_eq!(
+            governance_content
+                .get("application/x-norito")
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("format"))
+                .and_then(Value::as_str),
+            Some("binary")
+        );
+
+        for name in [
+            "SccpTairaI105Account",
+            "SccpTairaNetworkV1",
+            "SccpExternalNetworkV1",
+            "SccpInboundLaneIdV1",
+            "SccpOutboundLaneIdV1",
+            "SccpCapabilitiesV1",
+            "SccpRegistryLimitsV1",
+            "SccpResourceLimitsV1",
+            "SccpRegistryV1",
+            "SccpMessageBundleV1",
+            "SccpProofRequestV1",
+            "SccpRecentMessagesV1",
+            "SccpBridgeProofSubmitRequest",
+            "SccpBridgeMessageSubmitRequest",
+            "SccpBridgeSubmitResponseV1",
+            "SccpRouteGovernanceDraftRequestV1",
+            "SccpRouteGovernanceDraftResponseV1",
+        ] {
+            assert!(schemas.contains_key(name), "missing SCCP schema `{name}`");
+        }
+
+        let capabilities = schema(schemas, "SccpCapabilitiesV1");
+        let capability_required = required(capabilities);
+        assert!(capability_required.contains(&"registry_limits"));
+        assert!(capability_required.contains(&"resource_limits"));
+        let capability_properties = capabilities
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("SCCP capability properties");
+        assert_eq!(
+            capability_properties
+                .get("registry_limits")
+                .and_then(Value::as_object)
+                .and_then(|value| value.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SccpRegistryLimitsV1")
+        );
+        assert_eq!(
+            capability_properties
+                .get("resource_limits")
+                .and_then(Value::as_object)
+                .and_then(|value| value.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SccpResourceLimitsV1")
+        );
+        assert_eq!(required(schema(schemas, "SccpResourceLimitsV1")).len(), 19);
+        let registry_limits = schema(schemas, "SccpRegistryLimitsV1")
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("SCCP registry limit properties");
+        for (field, expected) in [
+            ("max_governed_lanes", 16_u64),
+            ("max_live_governed_routes", 64),
+            ("max_live_routes_per_lane", 8),
+            ("max_retained_routes_per_lane", 64),
+            ("max_retained_native_trust_anchors_per_lane", 4_096),
+        ] {
+            assert_eq!(
+                registry_limits
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|value| value.get("const"))
+                    .and_then(Value::as_u64),
+                Some(expected),
+                "wrong SCCP registry capability limit for {field}"
+            );
+        }
+
+        assert_eq!(
+            schema(schemas, "SccpTairaI105Account")
+                .get("pattern")
+                .and_then(Value::as_str),
+            Some("^test")
+        );
+        for request in [
+            "SccpBridgeProofPrepareRequest",
+            "SccpBridgeProofSignedRequest",
+            "SccpBridgeMessagePrepareRequest",
+            "SccpBridgeMessageSignedRequest",
+        ] {
+            assert_eq!(
+                schema(schemas, request)
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get("authority"))
+                    .and_then(Value::as_object)
+                    .and_then(|authority| authority.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/SccpTairaI105Account"),
+                "{request} must expose only Taira-discriminant authorities"
+            );
+        }
+
+        for (prepare, signed) in [
+            (
+                "SccpBridgeProofPrepareRequest",
+                "SccpBridgeProofSignedRequest",
+            ),
+            (
+                "SccpBridgeMessagePrepareRequest",
+                "SccpBridgeMessageSignedRequest",
+            ),
+        ] {
+            let prepare = schema(schemas, prepare);
+            let signed = schema(schemas, signed);
+            assert_eq!(
+                prepare.get("additionalProperties"),
+                Some(&Value::Bool(false))
+            );
+            assert_eq!(
+                signed.get("additionalProperties"),
+                Some(&Value::Bool(false))
+            );
+            let prepare_properties = prepare
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("prepare request properties");
+            assert!(!prepare_properties.contains_key("signature_b64"));
+            assert!(!prepare_properties.contains_key("transaction_payload_b64"));
+            let signed_required = required(signed);
+            assert!(signed_required.contains(&"signature_b64"));
+            assert!(signed_required.contains(&"transaction_payload_b64"));
+            assert!(signed_required.contains(&"creation_time_ms"));
+            let signed_properties = signed
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("signed request properties");
+            assert_eq!(
+                signed_properties
+                    .get("signature_b64")
+                    .and_then(Value::as_object)
+                    .and_then(|field| field.get("maxLength"))
+                    .and_then(Value::as_u64),
+                Some(21_848)
+            );
+            assert_eq!(
+                signed_properties
+                    .get("transaction_payload_b64")
+                    .and_then(Value::as_object)
+                    .and_then(|field| field.get("maxLength"))
+                    .and_then(Value::as_u64),
+                Some(22_369_624)
+            );
+            assert_eq!(
+                signed_properties
+                    .get("creation_time_ms")
+                    .and_then(Value::as_object)
+                    .and_then(|field| field.get("minimum"))
+                    .and_then(Value::as_u64),
+                Some(1)
+            );
+        }
+        assert_eq!(
+            schema(schemas, "SccpBridgeProofSubmitRequest")
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+
+        let response = schema(schemas, "SccpBridgeSubmitResponseV1");
+        let response_required = required(response);
+        assert!(response_required.contains(&"route_configuration_hash_hex"));
+        assert!(response_required.contains(&"tx_hash_hex"));
+        assert!(response_required.contains(&"transaction_payload_b64"));
+        assert!(response_required.contains(&"signing_message_b64"));
+        let response_properties = response
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("SCCP response properties");
+        assert!(!response_properties.contains_key("manifest_hash_hex"));
+        assert_eq!(
+            response
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+
+        let registry = schema(schemas, "SccpRegistryV1");
+        assert_eq!(
+            registry
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("lanes"))
+                .and_then(Value::as_object)
+                .and_then(|lanes| lanes.get("maxItems"))
+                .and_then(Value::as_u64),
+            Some(16)
+        );
+        let governed_lane = schema(schemas, "SccpGovernedLaneV1");
+        let anchors = governed_lane
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("native_trust_anchors"))
+            .and_then(Value::as_object)
+            .expect("governed lane retained anchors schema");
+        assert_eq!(anchors.get("maxItems").and_then(Value::as_u64), Some(4096));
+        let routes = governed_lane
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("routes"))
+            .and_then(Value::as_object)
+            .expect("governed lane routes schema");
+        assert_eq!(routes.get("minItems").and_then(Value::as_u64), Some(1));
+        assert_eq!(routes.get("maxItems").and_then(Value::as_u64), Some(64));
+        let recent = schema(schemas, "SccpRecentMessagesV1");
+        assert_eq!(
+            recent
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("items"))
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("maxItems"))
+                .and_then(Value::as_u64),
+            Some(50)
+        );
+        assert!(required(schema(schemas, "SccpRecentMessageV1")).contains(&"payload_projection"));
+
+        let raw_transfer = schema(schemas, "SccpRawTransferPayloadV1");
+        let raw_properties = raw_transfer
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("raw SCCP transfer properties");
+        for (field, expected) in [
+            ("source_domain", 0_u64),
+            ("asset_home_domain", 0),
+            ("asset_id_codec", 1),
+            ("sender_codec", 1),
+            ("route_id_codec", 1),
+        ] {
+            assert_eq!(
+                raw_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_u64),
+                Some(expected),
+                "raw SCCP transfer `{field}` must be exact"
+            );
+        }
+        assert_eq!(
+            raw_transfer
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(3),
+            "raw SCCP transfer must bind each destination to its codec and route"
+        );
+
+        let governance_action = schema(schemas, "SccpRouteGovernanceActionV1");
+        let actions = governance_action
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("closed SCCP governance actions");
+        assert_eq!(actions.len(), 6);
+        let action_names = actions
+            .iter()
+            .filter_map(Value::as_object)
+            .filter_map(|action| action.get("properties"))
+            .filter_map(Value::as_object)
+            .filter_map(|properties| properties.get("action"))
+            .filter_map(Value::as_object)
+            .filter_map(|action| action.get("const"))
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            action_names,
+            [
+                "Register",
+                "SetActivation",
+                "SwitchRevision",
+                "InitializeTrustAnchor",
+                "AdvanceTrustAnchor",
+                "Remove",
+            ]
+        );
+        let governance_request = schema(schemas, "SccpRouteGovernanceDraftRequestV1");
+        let modes = governance_request
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("mode"))
+            .and_then(Value::as_object)
+            .and_then(|mode| mode.get("oneOf"))
+            .and_then(Value::as_array)
+            .and_then(|modes| modes.first())
+            .and_then(Value::as_object)
+            .and_then(|mode| mode.get("enum"))
+            .and_then(Value::as_array)
+            .expect("SCCP voting mode enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(modes, ["Zk", "Plain"]);
+
+        let serialized_sccp_schemas = norito::json::to_string(&Value::Object(sccp_schemas()))
+            .expect("serialize SCCP schemas");
+        for retired in [
+            "manifest_hash_hex",
+            "client_signature_b64",
+            "public_key_hex",
+            "private_key",
+            "allow_unready",
+        ] {
+            assert!(
+                !serialized_sccp_schemas.contains(retired),
+                "retired SCCP field `{retired}` reappeared"
+            );
+        }
+        assert!(
+            !serialized_sccp_schemas.contains("sora_nexus"),
+            "Sora Nexus must not re-enter the first-release Taira OpenAPI surface"
+        );
     }
 
     #[test]
@@ -13479,6 +16315,8 @@ mod tests {
         assert!(paths.contains_key("/v1/sccp/proofs/message/{message_id}"));
         assert!(paths.contains_key("/v1/sccp/proof-requests/{message_id}"));
         assert!(paths.contains_key("/v1/sccp/messages/recent"));
+        assert!(paths.contains_key("/v1/bridge/proofs/submit"));
+        assert!(paths.contains_key("/v1/bridge/messages"));
         assert!(!paths.contains_key("/v1/sccp/manifests"));
         assert!(!paths.contains_key("/v1/sccp/artifacts/message/{message_id}"));
         assert!(!paths.contains_key("/v1/sccp/jobs/message/{message_id}"));
@@ -13585,6 +16423,7 @@ mod tests {
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/draft"));
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
+        assert!(paths.contains_key(iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE));
         assert!(paths.contains_key("/v1/gov/citizens"));
         assert!(paths.contains_key("/v1/gov/stream"));
         #[cfg(feature = "gov_vrf")]
@@ -15079,6 +17918,18 @@ mod tests {
         for key in [
             "JsonValue",
             "JsonList",
+            "SccpCapabilitiesV1",
+            "SccpRegistryLimitsV1",
+            "SccpResourceLimitsV1",
+            "SccpRegistryV1",
+            "SccpMessageBundleV1",
+            "SccpProofRequestV1",
+            "SccpRecentMessagesV1",
+            "SccpBridgeProofSubmitRequest",
+            "SccpBridgeMessageSubmitRequest",
+            "SccpBridgeSubmitResponseV1",
+            "SccpRouteGovernanceDraftRequestV1",
+            "SccpRouteGovernanceDraftResponseV1",
             "NexusLaneLifecycleResponse",
             "AppPageMetadata",
             "AccountQueryResponse",

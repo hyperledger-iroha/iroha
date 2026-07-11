@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use criterion::Criterion;
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
-use iroha_primitives::json::Json;
+use iroha_primitives::{AmountRoundingMode, Numeric, json::Json};
 use ivm::{
     IVM, ProgramMetadata, encoding,
     host::DefaultHost,
@@ -147,7 +147,7 @@ fn literal_heavy_source(count: usize) -> String {
     let mut src = String::from("seiyaku Literals {\n  kotoage fn main() authorize(\"Bench\") {\n");
     for i in 0..count {
         src.push_str(&format!(
-            "    ledger::account::set_detail(context::authority(), Name::parse(\"literal{i}\"), Json::parse(\"{{\\\"value\\\":{i}}}\"));\n"
+            "    ledger::account::set_detail(account: context::authority(), key: Name::parse(\"literal{i}\"), value: Json::parse(\"{{\\\"value\\\":{i}}}\"));\n"
         ));
     }
     src.push_str("  }\n}\n");
@@ -177,6 +177,216 @@ fn bench_compiler_phases(c: &mut Criterion) {
     });
 }
 
+fn bounded_list_source() -> String {
+    let values = (0..64)
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "seiyaku BoundedLists {{ fn main() -> i64 {{ \
+            let source: List<i64, 64> = [{values}]; \
+            let mapped: List<i64, 64> = [value + 1 for value in source if value >= 0]; \
+            mapped.len() \
+        }} }}"
+    )
+}
+
+fn bounded_list_runtime_source(manual: bool) -> String {
+    let values = (0..64)
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let body = if manual {
+        "var mapped: List<i64, 64> = []; \
+         for index in range(64) { \
+             let value = source.get(index).unwrap_or(0); \
+             if !mapped.try_push(value + 1) { return -1; } \
+         }"
+    } else {
+        "let mapped: List<i64, 64> = [value + 1 for value in source];"
+    };
+    format!(
+        "seiyaku BoundedListRuntime {{ view fn main() -> i64 {{ \
+            let source: List<i64, 64> = [{values}]; \
+            {body} \
+            mapped.get(63).unwrap_or(-1) \
+        }} }}"
+    )
+}
+
+fn warm_list_runtime(source: &str) -> (IVM, ivm::RuntimeTemplate) {
+    let code = Compiler::new()
+        .compile_source(source)
+        .expect("compile bounded List runtime benchmark");
+    let pc = entrypoint_pc(&code, "main");
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&code)
+        .expect("load bounded List runtime benchmark");
+    vm.set_program_counter(pc)
+        .expect("select bounded List runtime benchmark entrypoint");
+    let template = vm.runtime_template();
+    vm.run().expect("verify bounded List runtime benchmark");
+    assert_eq!(vm.register(10), 64);
+    vm.reset_from_runtime_template(&template);
+    (vm, template)
+}
+
+fn bench_compiled_bounded_list_runtime(c: &mut Criterion) {
+    let (mut sugar_vm, sugar_template) = warm_list_runtime(&bounded_list_runtime_source(false));
+    c.bench_function("kotodama_list_comprehension_runtime_64", |b| {
+        b.iter(|| {
+            sugar_vm.reset_from_runtime_template(&sugar_template);
+            sugar_vm
+                .run()
+                .expect("execute List comprehension benchmark");
+            std::hint::black_box(sugar_vm.register(10));
+        })
+    });
+
+    let (mut manual_vm, manual_template) = warm_list_runtime(&bounded_list_runtime_source(true));
+    c.bench_function("kotodama_list_manual_runtime_64", |b| {
+        b.iter(|| {
+            manual_vm.reset_from_runtime_template(&manual_template);
+            manual_vm.run().expect("execute manual List benchmark");
+            std::hint::black_box(manual_vm.register(10));
+        })
+    });
+}
+
+fn bench_bounded_lists(c: &mut Criterion) {
+    let source = bounded_list_source();
+    let parsed = parser::parse(&source).expect("parse bounded List benchmark");
+    c.bench_function("kotodama_list_semantic_64", |b| {
+        b.iter(|| {
+            let context = SemanticContext::new();
+            std::hint::black_box(
+                context
+                    .analyze(&parsed)
+                    .expect("analyze bounded List benchmark"),
+            )
+        })
+    });
+
+    let typed = SemanticContext::new()
+        .analyze(&parsed)
+        .expect("analyze bounded List benchmark");
+    c.bench_function("kotodama_list_lower_64", |b| {
+        b.iter(|| std::hint::black_box(ir::lower(&typed).expect("lower bounded List benchmark")))
+    });
+
+    let layout = ivm::list::ListLayoutV1::try_new(64, 1).expect("bounded List layout");
+    let elements = (0..63).map(|value| vec![value]).collect::<Vec<_>>();
+    let mut vm = IVM::new(u64::MAX);
+    let handle = ivm::list::allocate_words(&mut vm, layout, &elements)
+        .expect("allocate contiguous bounded List");
+
+    c.bench_function("kotodama_list_get_64", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                ivm::list::get_words(&vm, handle, layout, 62).expect("read List element"),
+            )
+        })
+    });
+    c.bench_function("kotodama_list_try_set_64", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                ivm::list::try_set_words(&mut vm, handle, layout, 62, &[62])
+                    .expect("replace List element"),
+            )
+        })
+    });
+    c.bench_function("kotodama_list_try_push_pop_64", |b| {
+        b.iter(|| {
+            let pushed = ivm::list::try_push_words(&mut vm, handle, layout, &[63])
+                .expect("append List element");
+            let popped = ivm::list::pop_words(&mut vm, handle, layout).expect("pop List element");
+            std::hint::black_box((pushed, popped));
+        })
+    });
+    c.bench_function("kotodama_list_contains_64", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                ivm::list::contains_words(&vm, handle, layout, &[62])
+                    .expect("search List elements"),
+            )
+        })
+    });
+}
+
+fn amount(value: &str) -> Numeric {
+    value
+        .parse::<Numeric>()
+        .expect("benchmark Amount literal parses")
+        .canonicalize_amount()
+        .expect("benchmark Amount is canonical and nonnegative")
+}
+
+fn bench_amount_arithmetic(c: &mut Criterion) {
+    let add_lhs = amount("1234567890123456789012345678901234567890.1234567890123456789012345678");
+    let add_rhs = amount("0.8765432109876543210987654321");
+    let sub_rhs = amount("0.1234567890123456789012345678");
+    let mul_lhs = amount("1234567890123456789012345678901234567890.12345678901234");
+    let mul_rhs = amount("98765432109876543210.87654321098765");
+    let exact_lhs = amount("123456789012345678901234567890.125");
+    let exact_divisor = amount("8");
+    let rounded_divisor = amount("7");
+
+    c.bench_function("kotodama_amount_add", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                add_lhs
+                    .checked_amount_add(&add_rhs)
+                    .expect("benchmark Amount addition"),
+            )
+        })
+    });
+    c.bench_function("kotodama_amount_sub", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                add_lhs
+                    .checked_amount_sub(&sub_rhs)
+                    .expect("benchmark Amount subtraction"),
+            )
+        })
+    });
+    c.bench_function("kotodama_amount_mul", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                mul_lhs
+                    .checked_amount_mul(&mul_rhs)
+                    .expect("benchmark Amount multiplication"),
+            )
+        })
+    });
+    c.bench_function("kotodama_amount_div_exact", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                exact_lhs
+                    .checked_amount_div_exact(&exact_divisor)
+                    .expect("benchmark exact Amount division"),
+            )
+        })
+    });
+    for (name, mode) in [
+        ("kotodama_amount_div_round_floor", AmountRoundingMode::Floor),
+        ("kotodama_amount_div_round_ceil", AmountRoundingMode::Ceil),
+        (
+            "kotodama_amount_div_round_nearest_even",
+            AmountRoundingMode::NearestEven,
+        ),
+    ] {
+        c.bench_function(name, |b| {
+            b.iter(|| {
+                std::hint::black_box(
+                    exact_lhs
+                        .checked_amount_div_round(&rounded_divisor, 28, mode)
+                        .expect("benchmark rounded Amount division"),
+                )
+            })
+        });
+    }
+}
+
 fn bench_literal_heavy_compile(c: &mut Criterion) {
     let src = literal_heavy_source(LITERAL_BENCH_SIZE);
     let compiler = Compiler::new();
@@ -198,6 +408,9 @@ fn main() {
     bench_kotodama(&mut c);
     bench_asm(&mut c);
     bench_compiler_phases(&mut c);
+    bench_bounded_lists(&mut c);
+    bench_compiled_bounded_list_runtime(&mut c);
+    bench_amount_arithmetic(&mut c);
     bench_literal_heavy_compile(&mut c);
     c.final_summary();
 }

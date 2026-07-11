@@ -7,6 +7,8 @@
 //! scope, not pending compatibility work.
 //!
 //! The crate targets the Rust standard library unconditionally.
+//! BLS verification for Taira and BSC finality is also unconditional so Cargo
+//! feature selection cannot change consensus admission results.
 
 extern crate alloc;
 
@@ -22,8 +24,15 @@ mod tron_native;
 pub use tron_native::*;
 mod native_admission;
 pub use native_admission::*;
+#[cfg(any(test, feature = "test-fixtures"))]
+mod test_fixtures;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use test_fixtures::{
+    SccpExactOutboundTestFixtureV1, sccp_exact_evm_governed_route_test_fixture_v1,
+    sccp_exact_outbound_test_fixture_for_nonce_v1, sccp_exact_outbound_test_fixture_v1,
+};
 
-use alloc::{borrow::ToOwned, format, string::String, vec::Vec};
+use alloc::{borrow::ToOwned, collections::BTreeSet, format, string::String, vec::Vec};
 
 use blake2::{
     Blake2bVar,
@@ -40,18 +49,123 @@ use halo2curves::{
 use iroha_crypto::Algorithm;
 #[cfg(test)]
 use iroha_crypto::{KeyPair, Signature};
+#[cfg(test)]
+use iroha_data_model::bridge::{
+    SccpGroth16Bn254SemanticCircuitV1, sccp_groth16_bn254_public_signal_schema_hash_v1,
+    sccp_sora_taira_chain_id_hash_v1,
+};
 use iroha_data_model::{
+    account::{AccountController, AccountId},
     block::BlockHeader,
     bridge::{
         BridgeSccpDestinationProofBackendV1, BridgeSccpDestinationProofV1, SccpBn254G1PointV1,
         SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpGovernedRouteV1,
-        SccpGroth16Bn254VerifyingKeyV1,
+        SccpGroth16Bn254VerifyingKeyV1, SccpOutboundProofPolicyV1, SccpSemanticProofProfileV1,
+        SccpSoraFinalityAnchorV1, canonical_sccp_semantic_proof_profile_bytes_v1,
+        canonical_sccp_sora_finality_anchor_bytes_v1, sccp_semantic_proof_profile_hash_v1,
+        sccp_sora_finality_anchor_hash_v1,
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     peer::PeerId,
 };
 use norito::to_bytes;
 use tiny_keccak::Hasher;
+
+#[cfg(any(test, feature = "test-fixtures"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Per-thread work counters for the closed SCCP destination-proof path.
+///
+/// This instrumentation is compiled only for crate tests or with the existing
+/// `test-fixtures` feature, so production verification does not pay for atomic
+/// or thread-local accounting.
+pub struct SccpDestinationProofWorkCountersV1 {
+    /// Canonical outer destination artifacts decoded on this thread.
+    pub artifact_framing_decodes: usize,
+    /// Canonical embedded Taira message bundles decoded on this thread.
+    pub bundle_decodes: usize,
+    /// BN254 Groth16 pairing equations evaluated on this thread.
+    pub groth16_pairings: usize,
+    /// Taira commit-QC BLS aggregates evaluated on this thread.
+    pub bls_verifications: usize,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+std::thread_local! {
+    static SCCP_DESTINATION_PROOF_WORK_COUNTERS_V1:
+        core::cell::Cell<SccpDestinationProofWorkCountersV1> = const {
+            core::cell::Cell::new(SccpDestinationProofWorkCountersV1 {
+                artifact_framing_decodes: 0,
+                bundle_decodes: 0,
+                groth16_pairings: 0,
+                bls_verifications: 0,
+            })
+        };
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn update_sccp_destination_proof_work_counters_v1(
+    update: impl FnOnce(&mut SccpDestinationProofWorkCountersV1),
+) {
+    SCCP_DESTINATION_PROOF_WORK_COUNTERS_V1.with(|counter| {
+        let mut value = counter.get();
+        update(&mut value);
+        counter.set(value);
+    });
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn count_sccp_destination_artifact_decode_v1() {
+    update_sccp_destination_proof_work_counters_v1(|value| {
+        value.artifact_framing_decodes = value.artifact_framing_decodes.saturating_add(1);
+    });
+}
+
+#[cfg(not(any(test, feature = "test-fixtures")))]
+fn count_sccp_destination_artifact_decode_v1() {}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn count_sccp_destination_bundle_decode_v1() {
+    update_sccp_destination_proof_work_counters_v1(|value| {
+        value.bundle_decodes = value.bundle_decodes.saturating_add(1);
+    });
+}
+
+#[cfg(not(any(test, feature = "test-fixtures")))]
+fn count_sccp_destination_bundle_decode_v1() {}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn count_sccp_destination_groth16_pairing_v1() {
+    update_sccp_destination_proof_work_counters_v1(|value| {
+        value.groth16_pairings = value.groth16_pairings.saturating_add(1);
+    });
+}
+
+#[cfg(not(any(test, feature = "test-fixtures")))]
+fn count_sccp_destination_groth16_pairing_v1() {}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn count_sccp_destination_bls_verification_v1() {
+    update_sccp_destination_proof_work_counters_v1(|value| {
+        value.bls_verifications = value.bls_verifications.saturating_add(1);
+    });
+}
+
+#[cfg(not(any(test, feature = "test-fixtures")))]
+fn count_sccp_destination_bls_verification_v1() {}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+/// Reset closed destination-proof work counters for the current test thread.
+pub fn reset_sccp_destination_proof_work_counters_v1() {
+    SCCP_DESTINATION_PROOF_WORK_COUNTERS_V1.with(|counter| {
+        counter.set(SccpDestinationProofWorkCountersV1::default());
+    });
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+/// Snapshot closed destination-proof work counters for the current test thread.
+pub fn sccp_destination_proof_work_counters_v1() -> SccpDestinationProofWorkCountersV1 {
+    SCCP_DESTINATION_PROOF_WORK_COUNTERS_V1.with(core::cell::Cell::get)
+}
 
 /// SCCP protocol domain assigned to SORA networks.
 pub const SCCP_DOMAIN_SORA: u32 = 0;
@@ -61,15 +175,16 @@ pub const SCCP_DOMAIN_ETH: u32 = 1;
 pub const SCCP_DOMAIN_BSC: u32 = 2;
 /// SCCP protocol domain assigned to TRON networks.
 pub const SCCP_DOMAIN_TRON: u32 = 5;
-/// Public Sora Nexus chain id bound into SORA-origin SCCP finality proofs.
-pub const SCCP_NEXUS_FINALITY_CHAIN_ID_V1: &str = "00000000-0000-0000-0000-000000000753";
 /// Public TAIRA chain id bound into TAIRA-origin SCCP finality proofs.
 pub const SCCP_TAIRA_FINALITY_CHAIN_ID_V1: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
-/// TAIRA testnet SCCP route id used for the initial XOR bridge to TRON Nile.
+/// Canonical I105 chain discriminant required for every SCCP Taira account literal.
+pub const SCCP_TAIRA_I105_DISCRIMINANT_V1: u16 =
+    iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_TAIRA;
+/// TAIRA SCCP route id used for the initial XOR bridge to TRON Nile.
 pub const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: &str = "taira_tron_xor";
 /// TAIRA SCCP route id used for the exact XOR bridge to Ethereum.
 pub const SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1: &str = "taira_eth_xor";
-/// TAIRA testnet SCCP route id used for the XOR bridge to BSC.
+/// TAIRA SCCP route id used for the XOR bridge to BSC.
 pub const SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1: &str = "taira_bsc_xor";
 /// TAIRA SCCP asset key for XOR in every exact EVM-family and TRON route.
 pub const SCCP_TAIRA_XOR_ASSET_KEY_V1: &str = "xor";
@@ -78,7 +193,7 @@ pub const SCCP_FINALIZE_FROM_TAIRA_ABI_V1: &str =
     "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)";
 /// Keccak-256 selector for [`SCCP_FINALIZE_FROM_TAIRA_ABI_V1`].
 pub const SCCP_FINALIZE_FROM_TAIRA_SELECTOR_V1: [u8; 4] = [0x95, 0xd7, 0x57, 0xc4];
-/// Canonical printable-ASCII text used by SORA accounts and route-local identifiers.
+/// Printable ASCII or an exact canonical I105 account identifier.
 pub const SCCP_CODEC_CANONICAL_TEXT: u8 = 1;
 /// Raw nonzero 20-byte EVM account address.
 pub const SCCP_CODEC_EVM_ADDRESS20: u8 = 2;
@@ -93,6 +208,34 @@ pub const SCCP_CORE_REMOTE_DOMAINS: [u32; 3] = [SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC
 /// Remote SCCP domains in the current supported production launch scope.
 pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 3] =
     [SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC, SCCP_DOMAIN_TRON];
+
+/// Return whether every key in an account controller is executable by the V1
+/// EVM/TVM destination contracts.
+///
+/// Rust supports additional account-key algorithms, but accepting one as a
+/// Taira-origin SCCP sender would create an outbound lock that the immutable
+/// first-release destination routes cannot parse exactly. V1 therefore admits
+/// single-key and canonical multisig controllers composed only from Ed25519 and
+/// compressed secp256k1 public keys. This check is an economic admission rule,
+/// not a signature-policy shortcut: normal transaction authorization still
+/// verifies the complete controller before this predicate is reached.
+#[must_use]
+pub fn sccp_destination_contract_supports_account_v1(account: &AccountId) -> bool {
+    fn supports_key(key: &iroha_crypto::PublicKey) -> bool {
+        matches!(
+            key.try_algorithm(),
+            Ok(Algorithm::Ed25519 | Algorithm::Secp256k1)
+        )
+    }
+
+    match account.controller() {
+        AccountController::Single(key) => supports_key(key),
+        AccountController::Multisig(policy) => policy
+            .members()
+            .iter()
+            .all(|member| supports_key(member.public_key())),
+    }
+}
 
 /// External protocol domains that can safely originate native SCCP messages in V1.
 ///
@@ -119,29 +262,29 @@ const SCCP_PAYLOAD_HASH_PREFIX_V1: &[u8] = b"sccp:payload:v1";
 const SCCP_GROTH16_STATEMENT_PREFIX_V1: &[u8] = b"sccp:groth16-bn254:statement:v1";
 const SCCP_GROTH16_PROOF_REQUEST_PREFIX_V1: &[u8] = b"sccp:groth16-bn254:proof-request:v1";
 const SCCP_GROTH16_PROOF_RESULT_PREFIX_V1: &[u8] = b"sccp:groth16-bn254:proof-result:v1";
-/// Maximum canonical Norito size of a Nexus SCCP proof artifact.
-pub const SCCP_NEXUS_MAX_ENCODED_PROOF_BYTES_V1: usize = 16 * 1024 * 1024;
+/// Maximum canonical Norito size of a Taira SCCP proof artifact.
+pub const SCCP_TAIRA_MAX_ENCODED_PROOF_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum canonical Norito size of a Groth16 request, result, or complete artifact.
 ///
-/// A request may contain one maximum-sized Nexus bundle. The fixed allowance
-/// covers the closed 36-word verification key, proof, hashes, and Norito
+/// A request may contain one maximum-sized Taira bundle. The fixed allowance
+/// covers the closed 38-word verification key, proof, hashes, and Norito
 /// framing without making the admission bound depend on decoded lengths.
 pub const SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1: usize =
-    SCCP_NEXUS_MAX_ENCODED_PROOF_BYTES_V1 + 64 * 1024;
+    SCCP_TAIRA_MAX_ENCODED_PROOF_BYTES_V1 + 64 * 1024;
 /// Maximum padded-base64 size accepted by an HTTP adapter for one Groth16 artifact.
 pub const SCCP_GROTH16_BN254_MAX_BASE64_ARTIFACT_BYTES_V1: usize =
     4 * SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1.div_ceil(3);
 /// Maximum canonical JSON size accepted for a Groth16 request, result, or artifact.
 pub const SCCP_GROTH16_BN254_MAX_JSON_ARTIFACT_BYTES_V1: usize =
     2 * SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1 + 256 * 1024;
-/// Maximum number of sibling nodes in a Nexus SCCP commitment proof.
-pub const SCCP_NEXUS_MAX_MERKLE_PROOF_STEPS_V1: usize = 64;
-/// Maximum validator roster accepted in a Nexus SCCP commit QC.
-pub const SCCP_NEXUS_MAX_FINALITY_VALIDATORS_V1: usize = 4_096;
-const SCCP_NEXUS_MAX_BLOCK_HEADER_BYTES_V1: usize = 256 * 1024;
-const SCCP_NEXUS_MAX_CONSENSUS_MODE_TAG_BYTES_V1: usize = 128;
-const SCCP_NEXUS_MAX_PUBLIC_KEY_TEXT_BYTES_V1: usize = 256;
-const SCCP_NEXUS_MAX_BLS_PROOF_BYTES_V1: usize = 256;
+/// Maximum number of sibling nodes in a Taira SCCP commitment proof.
+pub const SCCP_TAIRA_MAX_MERKLE_PROOF_STEPS_V1: usize = 64;
+/// Maximum validator roster accepted in a Taira SCCP commit QC.
+pub const SCCP_TAIRA_MAX_FINALITY_VALIDATORS_V1: usize = 4_096;
+const SCCP_TAIRA_MAX_BLOCK_HEADER_BYTES_V1: usize = 256 * 1024;
+const SCCP_TAIRA_MAX_CONSENSUS_MODE_TAG_BYTES_V1: usize = 128;
+const SCCP_TAIRA_MAX_PUBLIC_KEY_TEXT_BYTES_V1: usize = 256;
+const SCCP_TAIRA_MAX_BLS_PROOF_BYTES_V1: usize = 256;
 const SCCP_NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
 const SCCP_NORITO_LENGTH_OFFSET: usize = SCCP_NORITO_COMPRESSION_OFFSET + 1;
 /// BSC system-contract address that publishes the active validator set.
@@ -183,6 +326,8 @@ const SCCP_GROTH16_BN254_SIGNAL_DESTINATION_BINDING_HASH_V1: &[u8] =
     b"sccp:groth16-bn254:signal:destination-binding-hash:v1";
 const SCCP_GROTH16_BN254_SIGNAL_ROUTE_CONFIGURATION_HASH_V1: &[u8] =
     b"sccp:groth16-bn254:signal:route-configuration-hash:v1";
+const SCCP_GROTH16_BN254_SIGNAL_SORA_FINALITY_ANCHOR_HASH_V1: &[u8] =
+    b"sccp:groth16-bn254:signal:sora-finality-anchor-hash:v1";
 const SCCP_GROTH16_BN254_SCALAR_FIELD_MODULUS_BE: H256 = [
     0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
     0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91, 0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
@@ -227,7 +372,7 @@ fn decode_ascii_lower_hex_nibble(byte: u8) -> Option<u8> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn decode_fixed_hex_bytes<const N: usize>(value: &str) -> Option<[u8; N]> {
     let raw = value
         .strip_prefix("0x")
@@ -461,6 +606,7 @@ mod json_utils {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Canonical cross-domain asset transfer payload.
 pub struct TransferPayloadV1 {
     /// Payload schema version. SCCP V1 requires `1`.
@@ -514,6 +660,37 @@ impl SccpPayloadV1 {
     const TRANSFER_DISCRIMINANT: u8 = 2;
 }
 
+/// Failure to encode a value in the canonical SCCP V1 payload layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SccpCanonicalPayloadEncodingErrorV1 {
+    /// A variable-length field cannot be represented by the V1 `u32` prefix.
+    FieldLengthOverflow {
+        /// Stable canonical field name.
+        field: &'static str,
+        /// Actual field length in bytes.
+        actual: usize,
+        /// Largest field length representable by the V1 layout.
+        maximum: u32,
+    },
+}
+
+impl core::fmt::Display for SccpCanonicalPayloadEncodingErrorV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::FieldLengthOverflow {
+                field,
+                actual,
+                maximum,
+            } => write!(
+                formatter,
+                "SCCP canonical payload field `{field}` length {actual} exceeds V1 maximum {maximum}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SccpCanonicalPayloadEncodingErrorV1 {}
+
 #[derive(
     Clone,
     Copy,
@@ -540,6 +717,7 @@ pub enum SccpHubMessageKind {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Merkle-leaf commitment for one outbound SCCP message.
 pub struct SccpHubCommitmentV1 {
     /// Commitment schema version. SCCP V1 requires `1`.
@@ -567,6 +745,7 @@ pub struct SccpHubCommitmentV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// One sibling step in an SCCP commitment Merkle proof.
 pub struct SccpMerkleStepV1 {
     /// Hash of the sibling node at this level.
@@ -586,6 +765,7 @@ pub struct SccpMerkleStepV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Bounded Merkle path from one SCCP commitment to its block commitment root.
 pub struct SccpMerkleProofV1 {
     /// Bottom-up sibling steps.
@@ -601,8 +781,8 @@ pub struct SccpMerkleProofV1 {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Consensus phase encoded in a Nexus finality certificate.
-pub enum NexusConsensusPhaseV1 {
+/// Consensus phase encoded in a Taira finality certificate.
+pub enum TairaConsensusPhaseV1 {
     /// Prepare/prevote phase.
     Prepare = 1,
     /// Commit/precommit phase.
@@ -622,8 +802,9 @@ pub enum NexusConsensusPhaseV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Compact reference to the highest quorum certificate carried by a commit QC.
-pub struct NexusQcRefV1 {
+pub struct TairaQcRefV1 {
     /// Certified block height.
     #[norito(with = "json_utils::u64_string")]
     pub height: u64,
@@ -637,7 +818,7 @@ pub struct NexusQcRefV1 {
     #[norito(with = "json_utils::hex32")]
     pub subject_block_hash: H256,
     /// Phase in which the certificate was formed.
-    pub phase: NexusConsensusPhaseV1,
+    pub phase: TairaConsensusPhaseV1,
 }
 
 #[derive(
@@ -650,12 +831,13 @@ pub struct NexusQcRefV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
-/// Nexus commit quorum certificate used by SCCP finality verification.
-pub struct NexusCommitQcV1 {
+#[norito(deny_unknown_fields)]
+/// Taira commit quorum certificate used by SCCP finality verification.
+pub struct TairaCommitQcV1 {
     /// Certificate schema version. SCCP V1 requires `1`.
     pub version: u8,
-    /// Consensus phase; production finality requires [`NexusConsensusPhaseV1::Commit`].
-    pub phase: NexusConsensusPhaseV1,
+    /// Consensus phase; production finality requires [`TairaConsensusPhaseV1::Commit`].
+    pub phase: TairaConsensusPhaseV1,
     /// Certified block height.
     #[norito(with = "json_utils::u64_string")]
     pub height: u64,
@@ -683,7 +865,7 @@ pub struct NexusCommitQcV1 {
     #[norito(with = "json_utils::u64_string")]
     pub rechain_seq: u64,
     /// Optional highest-QC reference included in the signed vote transcript.
-    pub highest_qc: Option<NexusQcRefV1>,
+    pub highest_qc: Option<TairaQcRefV1>,
     /// Canonical hash of the validator roster.
     #[norito(with = "json_utils::hex32")]
     pub validator_set_hash: H256,
@@ -712,8 +894,9 @@ pub struct NexusCommitQcV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
-/// Self-contained Nexus block-finality proof for an SCCP commitment root.
-pub struct NexusBridgeFinalityProofV1 {
+#[norito(deny_unknown_fields)]
+/// Self-contained Taira block-finality proof for an SCCP commitment root.
+pub struct TairaBridgeFinalityProofV1 {
     /// Proof schema version. SCCP V1 requires `1`.
     pub version: u8,
     /// Exact chain identifier included in the consensus transcript.
@@ -731,7 +914,7 @@ pub struct NexusBridgeFinalityProofV1 {
     #[norito(with = "json_utils::bytes_hex")]
     pub block_header_bytes: Vec<u8>,
     /// Commit QC that finalizes the block.
-    pub commit_qc: NexusCommitQcV1,
+    pub commit_qc: TairaCommitQcV1,
 }
 
 #[derive(
@@ -744,8 +927,9 @@ pub struct NexusBridgeFinalityProofV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
-/// Canonical SORA-origin SCCP message, Merkle inclusion, and Nexus finality bundle.
-pub struct NexusSccpMessageProofV1 {
+#[norito(deny_unknown_fields)]
+/// Canonical SORA-origin SCCP message, Merkle inclusion, and Taira finality bundle.
+pub struct TairaSccpMessageProofV1 {
     /// Bundle schema version. SCCP V1 requires `1`.
     pub version: u8,
     /// Commitment-tree root authenticated by [`Self::finality_proof`].
@@ -757,7 +941,7 @@ pub struct NexusSccpMessageProofV1 {
     pub merkle_proof: SccpMerkleProofV1,
     /// Canonical payload whose identity and hash are committed by the leaf.
     pub payload: SccpPayloadV1,
-    /// Canonical encoded [`NexusBridgeFinalityProofV1`].
+    /// Canonical encoded [`TairaBridgeFinalityProofV1`].
     #[norito(with = "json_utils::bytes_hex")]
     pub finality_proof: Vec<u8>,
 }
@@ -773,8 +957,9 @@ pub struct NexusSccpMessageProofV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Public statement exposed to a destination-chain SCCP verifier.
-pub struct SccpMessageTransparentPublicInputsV1 {
+pub struct SccpMessagePublicInputsV1 {
     /// Statement schema version. SCCP V1 requires `1`.
     pub version: u8,
     /// Exact lane-bound SCCP message identifier.
@@ -785,13 +970,13 @@ pub struct SccpMessageTransparentPublicInputsV1 {
     pub payload_hash: H256,
     /// Destination SCCP protocol domain.
     pub target_domain: u32,
-    /// SCCP commitment root authenticated by Nexus finality.
+    /// SCCP commitment root authenticated by Taira finality.
     #[norito(with = "json_utils::hex32")]
     pub commitment_root: H256,
-    /// Finalized Nexus block height.
+    /// Finalized Taira block height.
     #[norito(with = "json_utils::u64_string")]
     pub finality_height: u64,
-    /// Finalized Nexus block hash.
+    /// Finalized Taira block hash.
     #[norito(with = "json_utils::hex32")]
     pub finality_block_hash: H256,
 }
@@ -807,7 +992,12 @@ pub struct SccpMessageTransparentPublicInputsV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
-#[norito(tag = "family", content = "target", rename_all = "snake_case")]
+#[norito(
+    tag = "family",
+    content = "target",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 /// Exact governed destination contract selected for a verified SCCP call.
 pub enum SccpDestinationCallTargetV1 {
     /// EVM route contract on the exact governed EVM network.
@@ -838,6 +1028,7 @@ pub enum SccpDestinationCallTargetV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// State-verified destination call derived from one closed SCCP proof artifact.
 pub struct SccpVerifiedDestinationCallV1 {
     /// Call schema version. SCCP V1 requires `1`.
@@ -854,10 +1045,20 @@ pub struct SccpVerifiedDestinationCallV1 {
     /// Immutable historical governed route configuration committed by the message.
     #[norito(with = "json_utils::hex32")]
     pub route_configuration_hash: H256,
+    /// Exact audited semantic circuit profile resolved from governed state.
+    pub semantic_proof_profile: SccpSemanticProofProfileV1,
+    /// Domain-separated commitment to [`Self::semantic_proof_profile`].
+    #[norito(with = "json_utils::hex32")]
+    pub semantic_proof_profile_hash: H256,
+    /// Exact governed SORA finality checkpoint resolved from state.
+    pub sora_finality_anchor: SccpSoraFinalityAnchorV1,
+    /// Domain-separated commitment to [`Self::sora_finality_anchor`].
+    #[norito(with = "json_utils::hex32")]
+    pub sora_finality_anchor_hash: H256,
     /// Exact governed route contract that must receive [`Self::calldata`].
     pub target: SccpDestinationCallTargetV1,
     /// Public statement authenticated by the Groth16 proof.
-    pub public_inputs: SccpMessageTransparentPublicInputsV1,
+    pub public_inputs: SccpMessagePublicInputsV1,
     /// Hash of the canonical typed SCCP statement.
     #[norito(with = "json_utils::hex32")]
     pub statement_hash: H256,
@@ -874,7 +1075,77 @@ pub struct SccpVerifiedDestinationCallV1 {
     #[norito(with = "json_utils::bytes_hex")]
     pub calldata: Vec<u8>,
     /// Original SORA message and finality bundle retained for audit and settlement.
-    pub bundle: NexusSccpMessageProofV1,
+    pub bundle: TairaSccpMessageProofV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+/// One canonically framed destination artifact with its embedded bundle and
+/// finality proof decoded exactly once but not yet trusted against governance.
+///
+/// Fields are intentionally private. Callers may inspect them to resolve the
+/// authoritative historical route, but only
+/// [`verify_parsed_sccp_destination_proof_v1`] can create the opaque verified
+/// context used to bypass repeated cryptographic verification.
+pub struct SccpParsedDestinationProofV1 {
+    artifact: SccpGroth16Bn254ProofArtifactV1,
+    bundle: TairaSccpMessageProofV1,
+    finality: TairaBridgeFinalityProofV1,
+    canonical_payload_bytes: Vec<u8>,
+    public_signal_words: [H256; 11],
+    groth16_proof: SccpEvmGroth16Bn254ProofV1,
+}
+
+impl SccpParsedDestinationProofV1 {
+    /// Return the canonically decoded Groth16 artifact.
+    #[must_use]
+    pub const fn artifact(&self) -> &SccpGroth16Bn254ProofArtifactV1 {
+        &self.artifact
+    }
+
+    /// Return the canonically decoded message bundle.
+    #[must_use]
+    pub const fn bundle(&self) -> &TairaSccpMessageProofV1 {
+        &self.bundle
+    }
+
+    /// Return the structurally checked Taira finality proof.
+    #[must_use]
+    pub const fn finality(&self) -> &TairaBridgeFinalityProofV1 {
+        &self.finality
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+/// Opaque route-bound destination verification result.
+///
+/// Construction proves that the embedded finality proof has passed its one
+/// Groth16 pairing and that the finality projection is structurally canonical.
+/// Core must bind that projection to its trusted local block and QC, then
+/// perform the single authoritative BLS aggregate verification there.
+pub struct SccpVerifiedDestinationContextV1 {
+    call: SccpVerifiedDestinationCallV1,
+    finality: TairaBridgeFinalityProofV1,
+}
+
+impl SccpVerifiedDestinationContextV1 {
+    /// Return the exact governed destination call.
+    #[must_use]
+    pub const fn call(&self) -> &SccpVerifiedDestinationCallV1 {
+        &self.call
+    }
+
+    /// Return the structurally checked finality projection awaiting Core's
+    /// authoritative local-QC BLS verification.
+    #[must_use]
+    pub const fn finality(&self) -> &TairaBridgeFinalityProofV1 {
+        &self.finality
+    }
+
+    /// Consume the context and return its destination call.
+    #[must_use]
+    pub fn into_call(self) -> SccpVerifiedDestinationCallV1 {
+        self.call
+    }
 }
 
 #[derive(
@@ -882,7 +1153,7 @@ pub struct SccpVerifiedDestinationCallV1 {
 )]
 /// Decoded value of one closed SCCP V1 wire codec.
 pub enum SccpNormalizedCodecValueV1 {
-    /// Printable-ASCII canonical text.
+    /// Printable ASCII text or an exact canonical I105 account literal.
     CanonicalText {
         /// Decoded text value.
         value: String,
@@ -909,6 +1180,7 @@ pub enum SccpNormalizedCodecValueV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Normalized transfer payload consumed by proof backends.
 pub struct SccpTransferProjectionV1 {
     /// Payload schema version.
@@ -1032,6 +1304,33 @@ fn json_required_field<'a>(
     })
 }
 
+fn json_require_exact_fields(
+    type_name: &'static str,
+    value: &norito::json::Value,
+    expected_fields: &[&'static str],
+) -> Result<(), norito::json::Error> {
+    let Some(object) = value.as_object() else {
+        return Err(norito::json::Error::Message(format!(
+            "{type_name} variant payload must be an object"
+        )));
+    };
+    for field in object.keys() {
+        if !expected_fields.contains(&field.as_str()) {
+            return Err(norito::json::Error::Message(format!(
+                "unknown field `{field}` in {type_name} payload"
+            )));
+        }
+    }
+    for field in expected_fields {
+        if !object.contains_key(*field) {
+            return Err(norito::json::Error::Message(format!(
+                "missing `{field}` field in {type_name} payload"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn json_fixed_hex_field<const N: usize>(
     type_name: &'static str,
     value: &norito::json::Value,
@@ -1103,10 +1402,10 @@ impl_str_json_enum!(SccpHubMessageKind, "unsupported SCCP hub message kind", {
     SccpHubMessageKind::Transfer => "Transfer",
 });
 
-impl_str_json_enum!(NexusConsensusPhaseV1, "unsupported Nexus consensus phase", {
-    NexusConsensusPhaseV1::Prepare => "Prepare",
-    NexusConsensusPhaseV1::Commit => "Commit",
-    NexusConsensusPhaseV1::NewView => "NewView",
+impl_str_json_enum!(TairaConsensusPhaseV1, "unsupported Taira consensus phase", {
+    TairaConsensusPhaseV1::Prepare => "Prepare",
+    TairaConsensusPhaseV1::Commit => "Commit",
+    TairaConsensusPhaseV1::NewView => "NewView",
 });
 
 impl_external_tagged_tuple_json_enum!(SccpPayloadV1, "unsupported SCCP payload variant", {
@@ -1155,17 +1454,46 @@ impl norito::json::JsonDeserialize for SccpNormalizedCodecValueV1 {
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         let (tag, payload) = json_external_tagged_variant("SccpNormalizedCodecValueV1", value)?;
         match tag {
-            "CanonicalText" => Ok(Self::CanonicalText {
-                value: <String as norito::json::JsonDeserialize>::json_from_value(
-                    json_required_field("SccpNormalizedCodecValueV1", payload, "value")?,
-                )?,
-            }),
-            "EvmAddress20" => Ok(Self::EvmAddress20 {
-                bytes: json_fixed_hex_field::<20>("SccpNormalizedCodecValueV1", payload, "bytes")?,
-            }),
-            "TronAddress21" => Ok(Self::TronAddress21 {
-                bytes: json_fixed_hex_field::<21>("SccpNormalizedCodecValueV1", payload, "bytes")?,
-            }),
+            "CanonicalText" => {
+                json_require_exact_fields(
+                    "SccpNormalizedCodecValueV1::CanonicalText",
+                    payload,
+                    &["value"],
+                )?;
+                Ok(Self::CanonicalText {
+                    value: <String as norito::json::JsonDeserialize>::json_from_value(
+                        json_required_field("SccpNormalizedCodecValueV1", payload, "value")?,
+                    )?,
+                })
+            }
+            "EvmAddress20" => {
+                json_require_exact_fields(
+                    "SccpNormalizedCodecValueV1::EvmAddress20",
+                    payload,
+                    &["bytes"],
+                )?;
+                Ok(Self::EvmAddress20 {
+                    bytes: json_fixed_hex_field::<20>(
+                        "SccpNormalizedCodecValueV1",
+                        payload,
+                        "bytes",
+                    )?,
+                })
+            }
+            "TronAddress21" => {
+                json_require_exact_fields(
+                    "SccpNormalizedCodecValueV1::TronAddress21",
+                    payload,
+                    &["bytes"],
+                )?;
+                Ok(Self::TronAddress21 {
+                    bytes: json_fixed_hex_field::<21>(
+                        "SccpNormalizedCodecValueV1",
+                        payload,
+                        "bytes",
+                    )?,
+                })
+            }
             _ => Err(norito::json::Error::Message(
                 "unsupported SCCP normalized codec value variant".into(),
             )),
@@ -1210,6 +1538,7 @@ pub struct SccpEvmGroth16Bn254ProofV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Immutable input archive handed to an external EVM/TVM Groth16 prover.
 pub struct SccpGroth16Bn254ProofRequestV1 {
     /// Request schema version. SCCP V1 requires `1`.
@@ -1220,17 +1549,27 @@ pub struct SccpGroth16Bn254ProofRequestV1 {
     pub source_network: SccpNetworkV1,
     /// Exact external destination network profile.
     pub target_network: SccpNetworkV1,
-    /// Structured transparent public inputs.
-    pub public_inputs: SccpMessageTransparentPublicInputsV1,
+    /// Structured base inputs committed by the governed Groth16 statement.
+    pub public_inputs: SccpMessagePublicInputsV1,
     /// Exact audited verification key pinned by the governed deployment.
     pub verifying_key: SccpGroth16Bn254VerifyingKeyV1,
     /// Solidity-compatible hash of [`Self::verifying_key`].
     #[norito(with = "json_utils::hex32")]
     pub verifier_key_hash: H256,
+    /// Exact governed semantic circuit profile selected by route state.
+    pub semantic_proof_profile: SccpSemanticProofProfileV1,
+    /// Domain-separated hash of [`Self::semantic_proof_profile`].
+    #[norito(with = "json_utils::hex32")]
+    pub semantic_proof_profile_hash: H256,
+    /// Exact governed Taira finality checkpoint exposed as public signal 10.
+    pub sora_finality_anchor: SccpSoraFinalityAnchorV1,
+    /// Domain-separated hash of [`Self::sora_finality_anchor`].
+    #[norito(with = "json_utils::hex32")]
+    pub sora_finality_anchor_hash: H256,
     /// Canonical encoded SORA message and finality bundle.
     #[norito(with = "json_utils::bytes_hex")]
     pub bundle_bytes: Vec<u8>,
-    /// Canonical transparent statement hash.
+    /// Canonical governed statement hash.
     #[norito(with = "json_utils::hex32")]
     pub statement_hash: H256,
     /// Exact typed governed destination deployment binding hash.
@@ -1259,6 +1598,7 @@ pub type SccpTronGroth16Bn254ProofRequestV1 = SccpGroth16Bn254ProofRequestV1;
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Minimal request-bound result returned by an external BN254 Groth16 prover.
 pub struct SccpGroth16Bn254ProofResultV1 {
     /// Result schema version. SCCP V1 requires `1`.
@@ -1284,6 +1624,7 @@ pub struct SccpGroth16Bn254ProofResultV1 {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Self-contained canonical Groth16 proof artifact.
 pub struct SccpGroth16Bn254ProofArtifactV1 {
     /// Artifact schema version. SCCP V1 requires `1`.
@@ -1350,7 +1691,7 @@ pub fn sccp_codec_key(codec_id: u8) -> Option<&'static str> {
 pub fn sccp_codec_description(codec_id: u8) -> Option<&'static str> {
     match codec_id {
         SCCP_CODEC_CANONICAL_TEXT => Some(
-            "Non-empty printable ASCII bytes for canonical SORA accounts and route-local names.",
+            "Non-empty printable ASCII bytes, or an exact canonical I105 literal, for SORA accounts and route-local names.",
         ),
         SCCP_CODEC_EVM_ADDRESS20 => Some("Raw nonzero 20-byte EVM account addresses."),
         SCCP_CODEC_TRON_ADDRESS21 => {
@@ -1442,9 +1783,9 @@ pub fn sccp_payload_projection(payload: &SccpPayloadV1) -> Option<SccpPayloadPro
         )),
     }
 }
-/// Encode transparent public inputs in their fixed, platform-independent V1 layout.
-pub fn canonical_sccp_message_transparent_public_inputs_bytes(
-    public_inputs: &SccpMessageTransparentPublicInputsV1,
+/// Encode the six base public inputs in their fixed, platform-independent V1 layout.
+pub fn canonical_sccp_message_public_inputs_bytes(
+    public_inputs: &SccpMessagePublicInputsV1,
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + 32 + 32 + 4 + 32 + 8 + 32);
     push_u8(&mut out, public_inputs.version);
@@ -1457,14 +1798,9 @@ pub fn canonical_sccp_message_transparent_public_inputs_bytes(
     out
 }
 
-/// Encode an SCCP Merkle path, returning an empty vector when it exceeds V1 bounds.
-pub fn canonical_sccp_merkle_proof_bytes(proof: &SccpMerkleProofV1) -> Vec<u8> {
-    canonical_sccp_merkle_proof_bytes_checked(proof).unwrap_or_default()
-}
-
 /// Encode a bounded SCCP Merkle path in its canonical V1 byte layout.
 pub fn canonical_sccp_merkle_proof_bytes_checked(proof: &SccpMerkleProofV1) -> Option<Vec<u8>> {
-    if proof.steps.len() > SCCP_NEXUS_MAX_MERKLE_PROOF_STEPS_V1 {
+    if proof.steps.len() > SCCP_TAIRA_MAX_MERKLE_PROOF_STEPS_V1 {
         return None;
     }
     let mut out = Vec::new();
@@ -1476,17 +1812,12 @@ pub fn canonical_sccp_merkle_proof_bytes_checked(proof: &SccpMerkleProofV1) -> O
     Some(out)
 }
 
-/// Encode a Nexus SCCP bundle, returning an empty vector when its lengths overflow V1 bounds.
-pub fn canonical_nexus_sccp_message_bundle_bytes(bundle: &NexusSccpMessageProofV1) -> Vec<u8> {
-    canonical_nexus_sccp_message_bundle_bytes_checked(bundle).unwrap_or_default()
-}
-
-fn canonical_nexus_sccp_message_bundle_bytes_len_checked(
-    bundle: &NexusSccpMessageProofV1,
+fn canonical_taira_sccp_message_bundle_bytes_len_checked(
+    bundle: &TairaSccpMessageProofV1,
 ) -> Option<Vec<u8>> {
     let commitment = canonical_commitment_bytes(&bundle.commitment);
     let merkle_proof = canonical_sccp_merkle_proof_bytes_checked(&bundle.merkle_proof)?;
-    let payload = canonical_sccp_payload_bytes(&bundle.payload);
+    let payload = canonical_sccp_payload_bytes(&bundle.payload).ok()?;
 
     let mut out = Vec::new();
     push_u8(&mut out, bundle.version);
@@ -1498,14 +1829,14 @@ fn canonical_nexus_sccp_message_bundle_bytes_len_checked(
     Some(out)
 }
 
-/// Validate and encode one canonical, length-bounded Nexus SCCP message bundle.
-pub fn canonical_nexus_sccp_message_bundle_bytes_checked(
-    bundle: &NexusSccpMessageProofV1,
+/// Validate and encode one canonical, length-bounded Taira SCCP message bundle.
+pub fn canonical_taira_sccp_message_bundle_bytes_checked(
+    bundle: &TairaSccpMessageProofV1,
 ) -> Option<Vec<u8>> {
     if !verify_message_bundle_structure(bundle) {
         return None;
     }
-    canonical_nexus_sccp_message_bundle_bytes_len_checked(bundle)
+    canonical_taira_sccp_message_bundle_bytes_len_checked(bundle)
 }
 
 fn h256_be_ge(left: &H256, right: &H256) -> bool {
@@ -1551,21 +1882,23 @@ fn sccp_groth16_bn254_signal_word(label: &[u8], value: H256) -> H256 {
     h256_mod_bn254_scalar_field(keccak256_bytes(&payload))
 }
 
-/// Derive the ten BN254 field public signals consumed by SCCP Groth16 verifiers.
+/// Derive the eleven BN254 field public signals consumed by SCCP Groth16 verifiers.
 ///
 /// The output order matches `SccpGroth16Bn254MessageVerifier`: message id,
 /// payload hash, target-domain word, commitment root, finality-height word,
 /// finality block hash, source-domain word, statement hash, and destination
-/// binding hash, and immutable route-configuration hash. Each word is
+/// binding hash, immutable route-configuration hash, and governed SORA
+/// finality-anchor hash. Each word is
 /// `keccak256(abi.encode(keccak256(label), value)) mod Fr` encoded as a
 /// big-endian 32-byte BN254 scalar.
 pub fn sccp_groth16_bn254_public_signal_words(
-    public_inputs: &SccpMessageTransparentPublicInputsV1,
+    public_inputs: &SccpMessagePublicInputsV1,
     source_domain: u32,
     statement_hash: H256,
     destination_binding_hash: H256,
     route_configuration_hash: H256,
-) -> [H256; 10] {
+    sora_finality_anchor_hash: H256,
+) -> [H256; 11] {
     let public_input_words = sccp_evm_public_input_words(public_inputs);
     [
         sccp_groth16_bn254_signal_word(
@@ -1605,6 +1938,10 @@ pub fn sccp_groth16_bn254_public_signal_words(
             SCCP_GROTH16_BN254_SIGNAL_ROUTE_CONFIGURATION_HASH_V1,
             route_configuration_hash,
         ),
+        sccp_groth16_bn254_signal_word(
+            SCCP_GROTH16_BN254_SIGNAL_SORA_FINALITY_ANCHOR_HASH_V1,
+            sora_finality_anchor_hash,
+        ),
     ]
 }
 
@@ -1627,7 +1964,7 @@ fn abi_padded_bytes(value: &[u8]) -> Vec<u8> {
     out
 }
 
-fn sccp_evm_public_input_words(public_inputs: &SccpMessageTransparentPublicInputsV1) -> [H256; 6] {
+fn sccp_evm_public_input_words(public_inputs: &SccpMessagePublicInputsV1) -> [H256; 6] {
     [
         public_inputs.message_id,
         public_inputs.payload_hash,
@@ -1640,7 +1977,7 @@ fn sccp_evm_public_input_words(public_inputs: &SccpMessageTransparentPublicInput
 
 fn encode_sccp_finalize_from_taira_calldata_v1(
     proof_bytes: &[u8],
-    public_inputs: &SccpMessageTransparentPublicInputsV1,
+    public_inputs: &SccpMessagePublicInputsV1,
     statement_hash: H256,
     canonical_payload_bytes: &[u8],
 ) -> Option<Vec<u8>> {
@@ -1793,15 +2130,15 @@ pub fn sccp_groth16_bn254_verifying_key_is_well_formed_v1(
 
 /// Encode a valid SCCP Groth16 key exactly as Solidity `verifyingKeyHash()` does.
 ///
-/// The result is the concatenation of 36 ABI words: alpha G1, beta/gamma/delta
-/// G2 in contract limb order, then the eleven IC G1 points.
+/// The result is the concatenation of 38 ABI words: alpha G1, beta/gamma/delta
+/// G2 in contract limb order, then the twelve IC G1 points.
 pub fn canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
     verifying_key: &SccpGroth16Bn254VerifyingKeyV1,
 ) -> Option<Vec<u8>> {
     if !sccp_groth16_bn254_verifying_key_is_well_formed_v1(verifying_key) {
         return None;
     }
-    let mut out = Vec::with_capacity(36 * 32);
+    let mut out = Vec::with_capacity(38 * 32);
     out.extend_from_slice(&verifying_key.alpha1.x);
     out.extend_from_slice(&verifying_key.alpha1.y);
     for point in [
@@ -1832,9 +2169,10 @@ pub fn sccp_groth16_bn254_verifying_key_hash_v1(
 
 fn verify_sccp_groth16_bn254_pairing_equation_v1(
     proof: &SccpEvmGroth16Bn254ProofV1,
-    public_signals: &[H256; 10],
+    public_signals: &[H256; 11],
     verifying_key: &SccpGroth16Bn254VerifyingKeyV1,
 ) -> bool {
+    count_sccp_destination_groth16_pairing_v1();
     let Some(alpha1) = bn254_g1_affine(&verifying_key.alpha1) else {
         return false;
     };
@@ -1938,39 +2276,13 @@ pub fn encode_sccp_evm_groth16_bn254_proof_bytes(proof: &SccpEvmGroth16Bn254Proo
     out
 }
 
-/// Verify an SCCP Groth16 proof against an exact governed BN254 verification key.
-///
-/// This performs the same ten signal hashes and four-term pairing equation as
-/// `SccpGroth16Bn254MessageVerifier.sol`. The expected key hash must come from
-/// typed governed deployment state, never from proof-controlled metadata.
-pub fn verify_sccp_groth16_bn254_proof_v1(
-    public_inputs: &SccpMessageTransparentPublicInputsV1,
-    source_domain: u32,
-    statement_hash: H256,
-    destination_binding_hash: H256,
-    route_configuration_hash: H256,
+fn verify_sccp_groth16_bn254_proof_against_validated_request_v1(
+    validated: &ValidatedSccpGroth16Bn254ProofRequestV1<'_>,
     proof_bytes: &[u8],
-    verifying_key: &SccpGroth16Bn254VerifyingKeyV1,
-    expected_verifier_key_hash: H256,
 ) -> bool {
-    if public_inputs.version != 1
-        || source_domain != SCCP_DOMAIN_SORA
-        || public_inputs.target_domain == source_domain
-        || !h256_is_nonzero(&public_inputs.message_id)
-        || !h256_is_nonzero(&public_inputs.payload_hash)
-        || !h256_is_nonzero(&public_inputs.commitment_root)
-        || public_inputs.finality_height == 0
-        || !h256_is_nonzero(&public_inputs.finality_block_hash)
-        || !h256_is_nonzero(&statement_hash)
-        || !h256_is_nonzero(&destination_binding_hash)
-        || !h256_is_nonzero(&route_configuration_hash)
-        || destination_binding_hash == route_configuration_hash
-        || !h256_is_nonzero(&expected_verifier_key_hash)
-        || sccp_groth16_bn254_verifying_key_hash_v1(verifying_key)
-            != Some(expected_verifier_key_hash)
-    {
-        return false;
-    }
+    let request = validated.request;
+    let public_inputs = &request.public_inputs;
+    let source_domain = request.source_network.domain_id();
     let Some(proof) = decode_sccp_evm_groth16_bn254_proof_bytes(proof_bytes) else {
         return false;
     };
@@ -1982,20 +2294,37 @@ pub fn verify_sccp_groth16_bn254_proof_v1(
     {
         return false;
     }
-    let public_signals = sccp_groth16_bn254_public_signal_words(
-        public_inputs,
-        source_domain,
-        statement_hash,
-        destination_binding_hash,
-        route_configuration_hash,
-    );
-    verify_sccp_groth16_bn254_pairing_equation_v1(&proof, &public_signals, verifying_key)
+    verify_sccp_groth16_bn254_pairing_equation_v1(
+        &proof,
+        &validated.public_signal_words,
+        &request.verifying_key,
+    )
+}
+
+/// Verify an SCCP Groth16 proof against an exact governed BN254 prover request.
+///
+/// This performs the same eleven signal hashes and four-term pairing equation as
+/// `SccpGroth16Bn254MessageVerifier.sol`. The expected key hash must come from
+/// the request derived from typed governed deployment state, never from
+/// proof-controlled metadata. The semantic-profile hash is not a twelfth
+/// signal; it is nevertheless required here so all six governed hash roles
+/// receive the same nonzero, pairwise-distinct admission check as the
+/// destination verifier.
+pub fn verify_sccp_groth16_bn254_proof_v1(
+    request: &SccpGroth16Bn254ProofRequestV1,
+    proof_bytes: &[u8],
+) -> bool {
+    let Some(validated) = validate_sccp_groth16_bn254_proof_request_v1(request, request.backend)
+    else {
+        return false;
+    };
+    verify_sccp_groth16_bn254_proof_against_validated_request_v1(&validated, proof_bytes)
 }
 
 fn decode_canonical_sccp_merkle_proof_bytes(proof_bytes: &[u8]) -> Option<SccpMerkleProofV1> {
     let mut cursor = PayloadCursor::new(proof_bytes);
     let step_count = usize::try_from(cursor.take_u32()?).ok()?;
-    if step_count > SCCP_NEXUS_MAX_MERKLE_PROOF_STEPS_V1
+    if step_count > SCCP_TAIRA_MAX_MERKLE_PROOF_STEPS_V1
         || step_count > proof_bytes.len().saturating_sub(4) / 33
     {
         return None;
@@ -2028,9 +2357,63 @@ struct SccpCanonicalMessageBundleSummaryV1 {
     finality_proof: Vec<u8>,
 }
 
-fn decode_canonical_nexus_sccp_message_bundle_summary(
+struct SccpDecodedCanonicalMessageBundleV1 {
+    bundle: TairaSccpMessageProofV1,
+    canonical_payload_bytes: Vec<u8>,
+}
+
+#[derive(Clone, Copy)]
+struct SccpCanonicalMessageBundleBindingV1<'a> {
+    source_network: SccpNetworkV1,
+    target_network: SccpNetworkV1,
+    destination_binding_hash: H256,
+    route_configuration_hash: H256,
+    message_id: H256,
+    payload_hash: H256,
+    commitment_root: H256,
+    finality_proof: &'a [u8],
+}
+
+impl SccpCanonicalMessageBundleSummaryV1 {
+    fn binding(&self) -> SccpCanonicalMessageBundleBindingV1<'_> {
+        SccpCanonicalMessageBundleBindingV1 {
+            source_network: self.source_network,
+            target_network: self.target_network,
+            destination_binding_hash: self.destination_binding_hash,
+            route_configuration_hash: self.route_configuration_hash,
+            message_id: self.message_id,
+            payload_hash: self.payload_hash,
+            commitment_root: self.commitment_root,
+            finality_proof: &self.finality_proof,
+        }
+    }
+}
+
+fn decode_canonical_taira_sccp_message_bundle_summary(
     bundle_bytes: &[u8],
 ) -> Option<SccpCanonicalMessageBundleSummaryV1> {
+    let decoded = decode_canonical_taira_sccp_message_bundle_with_payload_v1(bundle_bytes)?;
+    let bundle = decoded.bundle;
+    Some(SccpCanonicalMessageBundleSummaryV1 {
+        source_network: bundle.commitment.context.lane.source,
+        target_network: bundle.commitment.context.lane.target,
+        destination_binding_hash: bundle.commitment.context.destination_binding_hash,
+        route_configuration_hash: bundle.commitment.context.route_configuration_hash,
+        canonical_payload_bytes: decoded.canonical_payload_bytes,
+        message_id: bundle.commitment.message_id,
+        payload_hash: bundle.commitment.payload_hash,
+        commitment_root: bundle.commitment_root,
+        finality_proof: bundle.finality_proof,
+    })
+}
+
+fn decode_canonical_taira_sccp_message_bundle_with_payload_v1(
+    bundle_bytes: &[u8],
+) -> Option<SccpDecodedCanonicalMessageBundleV1> {
+    count_sccp_destination_bundle_decode_v1();
+    if bundle_bytes.is_empty() || bundle_bytes.len() > SCCP_TAIRA_MAX_ENCODED_PROOF_BYTES_V1 {
+        return None;
+    }
     let mut cursor = PayloadCursor::new(bundle_bytes);
     if cursor.take_u8()? != 1 {
         return None;
@@ -2046,7 +2429,7 @@ fn decode_canonical_nexus_sccp_message_bundle_summary(
 
     let payload = decode_canonical_sccp_payload_bytes(&payload_bytes)?;
     if !verify_sccp_payload_structure(&payload)
-        || canonical_sccp_payload_bytes(&payload) != payload_bytes
+        || canonical_sccp_payload_bytes(&payload).ok()? != payload_bytes
     {
         return None;
     }
@@ -2060,30 +2443,44 @@ fn decode_canonical_nexus_sccp_message_bundle_summary(
         return None;
     }
 
-    Some(SccpCanonicalMessageBundleSummaryV1 {
-        source_network: commitment.context.lane.source,
-        target_network: commitment.context.lane.target,
-        destination_binding_hash: commitment.context.destination_binding_hash,
-        route_configuration_hash: commitment.context.route_configuration_hash,
+    Some(SccpDecodedCanonicalMessageBundleV1 {
+        bundle: TairaSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof,
+            payload,
+            finality_proof,
+        },
         canonical_payload_bytes: payload_bytes,
-        message_id: commitment.message_id,
-        payload_hash: commitment.payload_hash,
-        commitment_root,
-        finality_proof,
     })
 }
 
-fn sccp_proof_request_bundle_bytes_match_public_inputs(
-    public_inputs: &SccpMessageTransparentPublicInputsV1,
+/// Decode the compact canonical message-bundle byte layout embedded in one
+/// Groth16 prover request.
+///
+/// This is distinct from [`decode_taira_sccp_message_proof`], which decodes a
+/// top-level Norito-framed Torii artifact. The embedded request layout is
+/// length-delimited by the SCCP protocol itself and must never be guessed as a
+/// Norito frame.
+pub fn decode_canonical_taira_sccp_message_bundle_v1(
     bundle_bytes: &[u8],
+) -> Option<TairaSccpMessageProofV1> {
+    let decoded = decode_canonical_taira_sccp_message_bundle_with_payload_v1(bundle_bytes)?;
+    let finality = decode_taira_bridge_finality_proof(&decoded.bundle.finality_proof)?;
+    verify_message_bundle_structure_with_finality(&decoded.bundle, &finality)
+        .then_some(decoded.bundle)
+}
+
+fn sccp_proof_request_bundle_binding_matches_public_inputs_with_finality(
+    public_inputs: &SccpMessagePublicInputsV1,
+    bundle: SccpCanonicalMessageBundleBindingV1<'_>,
     source_network: SccpNetworkV1,
     target_network: SccpNetworkV1,
     destination_binding_hash: H256,
     route_configuration_hash: H256,
+    finality: &TairaBridgeFinalityProofV1,
 ) -> bool {
-    let Some(bundle) = decode_canonical_nexus_sccp_message_bundle_summary(bundle_bytes) else {
-        return false;
-    };
     if bundle.source_network != source_network
         || bundle.target_network != target_network
         || source_network.domain_id() != SCCP_DOMAIN_SORA
@@ -2096,11 +2493,7 @@ fn sccp_proof_request_bundle_bytes_match_public_inputs(
     {
         return false;
     }
-    let Some(finality) = decode_nexus_bridge_finality_proof(&bundle.finality_proof) else {
-        return false;
-    };
-    verify_nexus_bridge_finality_proof_structure(&finality)
-        && finality.commitment_root == bundle.commitment_root
+    finality.commitment_root == bundle.commitment_root
         && finality.height == public_inputs.finality_height
         && finality.block_hash == public_inputs.finality_block_hash
 }
@@ -2130,213 +2523,262 @@ fn sccp_destination_proof_backend_supports_network_v1(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn sccp_groth16_bn254_statement_hash_v1(
-    backend: BridgeSccpDestinationProofBackendV1,
-    source_network: SccpNetworkV1,
-    target_network: SccpNetworkV1,
-    public_inputs: &SccpMessageTransparentPublicInputsV1,
+    request: &SccpGroth16Bn254ProofRequestV1,
     canonical_payload_bytes: &[u8],
-    bundle_bytes: &[u8],
-    destination_binding_hash: H256,
-    route_configuration_hash: H256,
-    verifier_key_hash: H256,
 ) -> Option<H256> {
-    if source_network != SccpNetworkV1::SoraTaira
-        || !sccp_destination_proof_backend_supports_network_v1(backend, target_network)
-        || target_network.domain_id() != public_inputs.target_domain
+    if request.source_network != SccpNetworkV1::SoraTaira
+        || !sccp_destination_proof_backend_supports_network_v1(
+            request.backend,
+            request.target_network,
+        )
+        || request.target_network.domain_id() != request.public_inputs.target_domain
         || canonical_payload_bytes.is_empty()
-        || bundle_bytes.is_empty()
+        || request.bundle_bytes.is_empty()
         || [
-            destination_binding_hash,
-            route_configuration_hash,
-            verifier_key_hash,
+            request.destination_binding_hash,
+            request.route_configuration_hash,
+            request.verifier_key_hash,
+            request.semantic_proof_profile_hash,
+            request.sora_finality_anchor_hash,
         ]
         .iter()
         .any(|value| !h256_is_nonzero(value))
-        || destination_binding_hash == route_configuration_hash
-        || destination_binding_hash == verifier_key_hash
-        || route_configuration_hash == verifier_key_hash
+        || hash_roles_alias(&[
+            request.destination_binding_hash,
+            request.route_configuration_hash,
+            request.verifier_key_hash,
+            request.semantic_proof_profile_hash,
+            request.sora_finality_anchor_hash,
+        ])
     {
         return None;
     }
     let mut statement =
-        Vec::with_capacity(canonical_payload_bytes.len() + bundle_bytes.len() + 512);
+        Vec::with_capacity(canonical_payload_bytes.len() + request.bundle_bytes.len() + 512);
     push_u8(&mut statement, 1);
     push_u8(
         &mut statement,
-        sccp_destination_proof_backend_tag_v1(backend),
+        sccp_destination_proof_backend_tag_v1(request.backend),
     );
     push_vec_checked(
         &mut statement,
-        &canonical_sccp_network_bytes_v1(source_network),
+        &canonical_sccp_network_bytes_v1(request.source_network),
     )?;
     push_vec_checked(
         &mut statement,
-        &canonical_sccp_network_bytes_v1(target_network),
+        &canonical_sccp_network_bytes_v1(request.target_network),
     )?;
-    statement.extend_from_slice(&destination_binding_hash);
-    statement.extend_from_slice(&route_configuration_hash);
-    statement.extend_from_slice(&verifier_key_hash);
-    statement.extend_from_slice(&canonical_sccp_message_transparent_public_inputs_bytes(
-        public_inputs,
+    statement.extend_from_slice(&request.destination_binding_hash);
+    statement.extend_from_slice(&request.route_configuration_hash);
+    statement.extend_from_slice(&request.verifier_key_hash);
+    statement.extend_from_slice(&request.semantic_proof_profile_hash);
+    statement.extend_from_slice(&request.sora_finality_anchor_hash);
+    statement.extend_from_slice(&canonical_sccp_message_public_inputs_bytes(
+        &request.public_inputs,
     ));
     push_vec_checked(&mut statement, canonical_payload_bytes)?;
-    push_vec_checked(&mut statement, bundle_bytes)?;
+    push_vec_checked(&mut statement, &request.bundle_bytes)?;
     Some(prefixed_blake2b(
         SCCP_GROTH16_STATEMENT_PREFIX_V1,
         &statement,
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn sccp_groth16_bn254_proof_request_hash(
-    backend: BridgeSccpDestinationProofBackendV1,
-    source_network: SccpNetworkV1,
-    target_network: SccpNetworkV1,
-    public_inputs_bytes: &[u8],
+    request: &SccpGroth16Bn254ProofRequestV1,
     canonical_payload_bytes: &[u8],
-    bundle_bytes: &[u8],
-    statement_hash: H256,
-    destination_binding_hash: H256,
-    route_configuration_hash: H256,
-    verifier_key_hash: H256,
-    verifying_key_bytes: &[u8],
-    public_signal_words: &[H256; 10],
-) -> H256 {
+    public_signal_words: &[H256; 11],
+) -> Option<H256> {
+    let public_inputs_bytes = canonical_sccp_message_public_inputs_bytes(&request.public_inputs);
+    let semantic_proof_profile_bytes =
+        canonical_sccp_semantic_proof_profile_bytes_v1(request.semantic_proof_profile).ok()?;
+    let sora_finality_anchor_bytes =
+        canonical_sccp_sora_finality_anchor_bytes_v1(request.sora_finality_anchor).ok()?;
+    let verifying_key_bytes =
+        canonical_sccp_groth16_bn254_verifying_key_bytes_v1(&request.verifying_key)?;
     let mut preimage = Vec::with_capacity(
         public_inputs_bytes.len()
             + canonical_payload_bytes.len()
-            + bundle_bytes.len()
+            + request.bundle_bytes.len()
+            + semantic_proof_profile_bytes.len()
+            + sora_finality_anchor_bytes.len()
             + verifying_key_bytes.len()
             + 512,
     );
     push_u8(&mut preimage, 1);
     push_u8(
         &mut preimage,
-        sccp_destination_proof_backend_tag_v1(backend),
+        sccp_destination_proof_backend_tag_v1(request.backend),
     );
-    push_vec(
+    push_vec_checked(
         &mut preimage,
-        &canonical_sccp_network_bytes_v1(source_network),
-    );
-    push_vec(
+        &canonical_sccp_network_bytes_v1(request.source_network),
+    )?;
+    push_vec_checked(
         &mut preimage,
-        &canonical_sccp_network_bytes_v1(target_network),
-    );
-    push_vec(&mut preimage, public_inputs_bytes);
-    push_vec(&mut preimage, canonical_payload_bytes);
-    push_vec(&mut preimage, bundle_bytes);
-    preimage.extend_from_slice(&statement_hash);
-    preimage.extend_from_slice(&destination_binding_hash);
-    preimage.extend_from_slice(&route_configuration_hash);
-    preimage.extend_from_slice(&verifier_key_hash);
-    push_vec(&mut preimage, verifying_key_bytes);
+        &canonical_sccp_network_bytes_v1(request.target_network),
+    )?;
+    push_vec_checked(&mut preimage, &public_inputs_bytes)?;
+    push_vec_checked(&mut preimage, canonical_payload_bytes)?;
+    push_vec_checked(&mut preimage, &request.bundle_bytes)?;
+    push_vec_checked(&mut preimage, &semantic_proof_profile_bytes)?;
+    push_vec_checked(&mut preimage, &sora_finality_anchor_bytes)?;
+    preimage.extend_from_slice(&request.statement_hash);
+    preimage.extend_from_slice(&request.destination_binding_hash);
+    preimage.extend_from_slice(&request.route_configuration_hash);
+    preimage.extend_from_slice(&request.verifier_key_hash);
+    preimage.extend_from_slice(&request.semantic_proof_profile_hash);
+    preimage.extend_from_slice(&request.sora_finality_anchor_hash);
+    push_vec_checked(&mut preimage, &verifying_key_bytes)?;
     for word in public_signal_words {
         preimage.extend_from_slice(word);
     }
-    prefixed_blake2b(SCCP_GROTH16_PROOF_REQUEST_PREFIX_V1, &preimage)
+    Some(prefixed_blake2b(
+        SCCP_GROTH16_PROOF_REQUEST_PREFIX_V1,
+        &preimage,
+    ))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_sccp_groth16_bn254_proof_request(
+struct SccpGroth16Bn254ProofRequestBuildContextV1<'a> {
     backend: BridgeSccpDestinationProofBackendV1,
     source_network: SccpNetworkV1,
     target_network: SccpNetworkV1,
-    public_inputs: &SccpMessageTransparentPublicInputsV1,
-    canonical_payload_bytes: &[u8],
-    bundle_bytes: &[u8],
+    public_inputs: &'a SccpMessagePublicInputsV1,
+    canonical_payload_bytes: &'a [u8],
+    bundle_bytes: &'a [u8],
+    bundle_binding: SccpCanonicalMessageBundleBindingV1<'a>,
+    finality: &'a TairaBridgeFinalityProofV1,
     destination_binding_hash: H256,
     route_configuration_hash: H256,
-    verifying_key: &SccpGroth16Bn254VerifyingKeyV1,
+    verifying_key: &'a SccpGroth16Bn254VerifyingKeyV1,
     expected_verifier_key_hash: H256,
+    outbound_proof_policy: SccpOutboundProofPolicyV1,
+}
+
+fn sccp_groth16_bn254_build_context_is_valid_v1(
+    context: &SccpGroth16Bn254ProofRequestBuildContextV1<'_>,
+    semantic_proof_profile_hash: H256,
+    sora_finality_anchor_hash: H256,
+) -> bool {
+    context.source_network == SccpNetworkV1::SoraTaira
+        && sccp_destination_proof_backend_supports_network_v1(
+            context.backend,
+            context.target_network,
+        )
+        && context.public_inputs.target_domain == context.target_network.domain_id()
+        && sccp_groth16_proof_request_public_inputs_are_valid(
+            context.source_network,
+            context.target_network,
+            context.public_inputs,
+        )
+        && sccp_proof_request_bundle_binding_matches_public_inputs_with_finality(
+            context.public_inputs,
+            context.bundle_binding,
+            context.source_network,
+            context.target_network,
+            context.destination_binding_hash,
+            context.route_configuration_hash,
+            context.finality,
+        )
+        && payload_hash(context.canonical_payload_bytes) == context.public_inputs.payload_hash
+        && h256_is_nonzero(&context.expected_verifier_key_hash)
+        && sccp_groth16_bn254_verifying_key_hash_v1(context.verifying_key)
+            == Some(context.expected_verifier_key_hash)
+        && !hash_roles_alias(&[
+            context.destination_binding_hash,
+            context.route_configuration_hash,
+            context.expected_verifier_key_hash,
+            semantic_proof_profile_hash,
+            sora_finality_anchor_hash,
+        ])
+}
+
+fn build_sccp_groth16_bn254_proof_request(
+    context: &SccpGroth16Bn254ProofRequestBuildContextV1<'_>,
 ) -> Option<SccpGroth16Bn254ProofRequestV1> {
-    if source_network != SccpNetworkV1::SoraTaira
-        || !sccp_destination_proof_backend_supports_network_v1(backend, target_network)
-        || public_inputs.target_domain != target_network.domain_id()
-        || !sccp_groth16_proof_request_public_inputs_are_valid(
-            source_network,
-            target_network,
-            public_inputs,
-        )
-        || !sccp_proof_request_bundle_bytes_match_public_inputs(
-            public_inputs,
-            bundle_bytes,
-            source_network,
-            target_network,
-            destination_binding_hash,
-            route_configuration_hash,
-        )
-        || payload_hash(canonical_payload_bytes) != public_inputs.payload_hash
-        || !h256_is_nonzero(&expected_verifier_key_hash)
-        || sccp_groth16_bn254_verifying_key_hash_v1(verifying_key)
-            != Some(expected_verifier_key_hash)
-    {
+    context.outbound_proof_policy.validate().ok()?;
+    let semantic_proof_profile = context.outbound_proof_policy.semantic_profile;
+    let sora_finality_anchor = context.outbound_proof_policy.sora_finality_anchor;
+    let semantic_proof_profile_hash =
+        sccp_semantic_proof_profile_hash_v1(semantic_proof_profile).ok()?;
+    let sora_finality_anchor_hash = sccp_sora_finality_anchor_hash_v1(sora_finality_anchor).ok()?;
+    if !sccp_groth16_bn254_build_context_is_valid_v1(
+        context,
+        semantic_proof_profile_hash,
+        sora_finality_anchor_hash,
+    ) {
         return None;
     }
-    let statement_hash = sccp_groth16_bn254_statement_hash_v1(
-        backend,
-        source_network,
-        target_network,
-        public_inputs,
-        canonical_payload_bytes,
-        bundle_bytes,
-        destination_binding_hash,
-        route_configuration_hash,
-        expected_verifier_key_hash,
-    )?;
-    let public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
-    let public_signal_words = sccp_groth16_bn254_public_signal_words(
-        public_inputs,
-        source_network.domain_id(),
-        statement_hash,
-        destination_binding_hash,
-        route_configuration_hash,
-    );
-    let verifying_key_bytes = canonical_sccp_groth16_bn254_verifying_key_bytes_v1(verifying_key)?;
-    let request_hash = sccp_groth16_bn254_proof_request_hash(
-        backend,
-        source_network,
-        target_network,
-        &public_inputs_bytes,
-        canonical_payload_bytes,
-        bundle_bytes,
-        statement_hash,
-        destination_binding_hash,
-        route_configuration_hash,
-        expected_verifier_key_hash,
-        &verifying_key_bytes,
-        &public_signal_words,
-    );
-    Some(SccpGroth16Bn254ProofRequestV1 {
+    let mut request = SccpGroth16Bn254ProofRequestV1 {
         version: 1,
-        backend,
-        source_network,
-        target_network,
-        public_inputs: public_inputs.clone(),
-        verifying_key: *verifying_key,
-        verifier_key_hash: expected_verifier_key_hash,
-        bundle_bytes: bundle_bytes.to_vec(),
+        backend: context.backend,
+        source_network: context.source_network,
+        target_network: context.target_network,
+        public_inputs: *context.public_inputs,
+        verifying_key: *context.verifying_key,
+        verifier_key_hash: context.expected_verifier_key_hash,
+        semantic_proof_profile,
+        semantic_proof_profile_hash,
+        sora_finality_anchor,
+        sora_finality_anchor_hash,
+        bundle_bytes: context.bundle_bytes.to_vec(),
+        statement_hash: [0; 32],
+        destination_binding_hash: context.destination_binding_hash,
+        route_configuration_hash: context.route_configuration_hash,
+        request_hash: [0; 32],
+    };
+    let statement_hash =
+        sccp_groth16_bn254_statement_hash_v1(&request, context.canonical_payload_bytes)?;
+    if !sccp_groth16_bn254_request_hash_roles_are_distinct_v1(
         statement_hash,
-        destination_binding_hash,
-        route_configuration_hash,
-        request_hash,
-    })
+        context.destination_binding_hash,
+        context.route_configuration_hash,
+        context.expected_verifier_key_hash,
+        semantic_proof_profile_hash,
+        sora_finality_anchor_hash,
+    ) {
+        return None;
+    }
+    request.statement_hash = statement_hash;
+    let public_signal_words = sccp_groth16_bn254_public_signal_words(
+        context.public_inputs,
+        context.source_network.domain_id(),
+        statement_hash,
+        context.destination_binding_hash,
+        context.route_configuration_hash,
+        sora_finality_anchor_hash,
+    );
+    request.request_hash = sccp_groth16_bn254_proof_request_hash(
+        &request,
+        context.canonical_payload_bytes,
+        &public_signal_words,
+    )?;
+    Some(request)
 }
 
 fn sccp_governed_route_groth16_material_v1(
     governed_route: &SccpGovernedRouteV1,
-) -> Option<(SccpGroth16Bn254VerifyingKeyV1, H256)> {
-    let (verifying_key, verifier_key_hash) = match governed_route.destination {
-        SccpDestinationDeploymentV1::Evm(deployment) => {
-            (deployment.verifying_key, deployment.verifier_key_hash)
-        }
-        SccpDestinationDeploymentV1::Tron(deployment) => {
-            (deployment.verifying_key, deployment.verifier_key_hash)
-        }
+) -> Option<(
+    SccpGroth16Bn254VerifyingKeyV1,
+    H256,
+    SccpOutboundProofPolicyV1,
+)> {
+    let (verifying_key, verifier_key_hash, policy) = match governed_route.destination {
+        SccpDestinationDeploymentV1::Evm(deployment) => (
+            deployment.verifying_key,
+            deployment.verifier_key_hash,
+            deployment.outbound_proof_policy,
+        ),
+        SccpDestinationDeploymentV1::Tron(deployment) => (
+            deployment.verifying_key,
+            deployment.verifier_key_hash,
+            deployment.outbound_proof_policy,
+        ),
     };
-    (sccp_groth16_bn254_verifying_key_hash_v1(&verifying_key) == Some(verifier_key_hash))
-        .then_some((verifying_key, verifier_key_hash))
+    (sccp_groth16_bn254_verifying_key_hash_v1(&verifying_key) == Some(verifier_key_hash)
+        && policy.validate().is_ok())
+    .then_some((verifying_key, verifier_key_hash, policy))
 }
 
 /// Return whether a governed route carries a canonical, subgroup-checked
@@ -2346,7 +2788,7 @@ pub fn sccp_governed_route_groth16_key_is_valid_v1(governed_route: &SccpGoverned
 }
 
 fn sccp_governed_groth16_route_matches_bundle_v1(
-    bundle: &NexusSccpMessageProofV1,
+    bundle: &TairaSccpMessageProofV1,
     governed_route: &SccpGovernedRouteV1,
 ) -> bool {
     let route = governed_route;
@@ -2381,21 +2823,20 @@ fn sccp_governed_groth16_route_matches_bundle_v1(
 /// `governed_route` by the bundle's committed destination binding before this
 /// function is called.
 pub fn build_sccp_groth16_bn254_proof_request_from_governed_route_v1(
-    bundle: &NexusSccpMessageProofV1,
+    bundle: &TairaSccpMessageProofV1,
     governed_route: &SccpGovernedRouteV1,
 ) -> Option<SccpGroth16Bn254ProofRequestV1> {
-    if !verify_message_bundle_structure(bundle)
-        || verified_sccp_message_nexus_finality_proof_for_production(bundle).is_none()
-        || !sccp_governed_groth16_route_matches_bundle_v1(bundle, governed_route)
-    {
+    let finality =
+        verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(bundle)?;
+    if !sccp_governed_groth16_route_matches_bundle_v1(bundle, governed_route) {
         return None;
     }
-    let public_inputs = sccp_message_transparent_public_inputs(bundle)?;
-    let canonical_payload_bytes = canonical_sccp_payload_bytes(&bundle.payload);
-    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
+    let public_inputs = sccp_message_public_inputs(bundle)?;
+    let canonical_payload_bytes = canonical_sccp_payload_bytes(&bundle.payload).ok()?;
+    let bundle_bytes = canonical_taira_sccp_message_bundle_bytes_checked(bundle)?;
     let destination_binding_hash = governed_route.destination_binding_hash().ok()?;
     let route_configuration_hash = governed_route.route_configuration_hash().ok()?;
-    let (verifying_key, expected_verifier_key_hash) =
+    let (verifying_key, expected_verifier_key_hash, outbound_proof_policy) =
         sccp_governed_route_groth16_material_v1(governed_route)?;
     let backend = match governed_route.destination {
         SccpDestinationDeploymentV1::Evm(_) => BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
@@ -2403,122 +2844,191 @@ pub fn build_sccp_groth16_bn254_proof_request_from_governed_route_v1(
             BridgeSccpDestinationProofBackendV1::TronGroth16Bn254
         }
     };
-    build_sccp_groth16_bn254_proof_request(
+    build_sccp_groth16_bn254_proof_request(&SccpGroth16Bn254ProofRequestBuildContextV1 {
         backend,
-        governed_route.lane_id.target,
-        governed_route.lane_id.source,
-        &public_inputs,
-        &canonical_payload_bytes,
-        &bundle_bytes,
+        source_network: governed_route.lane_id.target,
+        target_network: governed_route.lane_id.source,
+        public_inputs: &public_inputs,
+        canonical_payload_bytes: &canonical_payload_bytes,
+        bundle_bytes: &bundle_bytes,
+        bundle_binding: SccpCanonicalMessageBundleBindingV1 {
+            source_network: bundle.commitment.context.lane.source,
+            target_network: bundle.commitment.context.lane.target,
+            destination_binding_hash: bundle.commitment.context.destination_binding_hash,
+            route_configuration_hash: bundle.commitment.context.route_configuration_hash,
+            message_id: bundle.commitment.message_id,
+            payload_hash: bundle.commitment.payload_hash,
+            commitment_root: bundle.commitment_root,
+            finality_proof: &bundle.finality_proof,
+        },
+        finality: &finality,
         destination_binding_hash,
         route_configuration_hash,
-        &verifying_key,
+        verifying_key: &verifying_key,
         expected_verifier_key_hash,
-    )
+        outbound_proof_policy,
+    })
 }
 
 /// Return whether a request is exactly the canonical request for a bundle and governed route.
 pub fn sccp_groth16_bn254_proof_request_matches_governed_route_v1(
     request: &SccpGroth16Bn254ProofRequestV1,
-    bundle: &NexusSccpMessageProofV1,
+    bundle: &TairaSccpMessageProofV1,
     governed_route: &SccpGovernedRouteV1,
 ) -> bool {
     build_sccp_groth16_bn254_proof_request_from_governed_route_v1(bundle, governed_route).as_ref()
         == Some(request)
 }
 
-fn sccp_groth16_bn254_proof_request_is_canonical(
+fn sccp_groth16_bn254_proof_request_header_is_canonical_v1(
     request: &SccpGroth16Bn254ProofRequestV1,
     expected_backend: BridgeSccpDestinationProofBackendV1,
 ) -> bool {
-    if request.version != 1
-        || request.backend != expected_backend
-        || !sccp_destination_proof_backend_supports_network_v1(
+    request.version == 1
+        && request.backend == expected_backend
+        && sccp_destination_proof_backend_supports_network_v1(
             request.backend,
             request.target_network,
         )
-        || !sccp_groth16_proof_request_public_inputs_are_valid(
+        && sccp_groth16_proof_request_public_inputs_are_valid(
             request.source_network,
             request.target_network,
             &request.public_inputs,
         )
-        || !h256_is_nonzero(&request.statement_hash)
-        || !h256_is_nonzero(&request.verifier_key_hash)
-        || !h256_is_nonzero(&request.destination_binding_hash)
-        || !h256_is_nonzero(&request.route_configuration_hash)
-        || request.destination_binding_hash == request.route_configuration_hash
-        || request.destination_binding_hash == request.verifier_key_hash
-        || request.route_configuration_hash == request.verifier_key_hash
-        || sccp_groth16_bn254_verifying_key_hash_v1(&request.verifying_key)
-            != Some(request.verifier_key_hash)
+        && h256_is_nonzero(&request.statement_hash)
+        && h256_is_nonzero(&request.verifier_key_hash)
+        && h256_is_nonzero(&request.destination_binding_hash)
+        && h256_is_nonzero(&request.route_configuration_hash)
+        && h256_is_nonzero(&request.semantic_proof_profile_hash)
+        && h256_is_nonzero(&request.sora_finality_anchor_hash)
+        && request.semantic_proof_profile.validate().is_ok()
+        && request.sora_finality_anchor.validate().is_ok()
+        && sccp_semantic_proof_profile_hash_v1(request.semantic_proof_profile).ok()
+            == Some(request.semantic_proof_profile_hash)
+        && sccp_sora_finality_anchor_hash_v1(request.sora_finality_anchor).ok()
+            == Some(request.sora_finality_anchor_hash)
+        && sccp_groth16_bn254_request_hash_roles_are_distinct_v1(
+            request.statement_hash,
+            request.destination_binding_hash,
+            request.route_configuration_hash,
+            request.verifier_key_hash,
+            request.semantic_proof_profile_hash,
+            request.sora_finality_anchor_hash,
+        )
+        && sccp_groth16_bn254_verifying_key_hash_v1(&request.verifying_key)
+            == Some(request.verifier_key_hash)
+}
+
+struct ValidatedSccpGroth16Bn254ProofRequestV1<'a> {
+    request: &'a SccpGroth16Bn254ProofRequestV1,
+    public_signal_words: [H256; 11],
+}
+
+fn validate_sccp_groth16_bn254_proof_request_with_bundle_v1<'a>(
+    request: &'a SccpGroth16Bn254ProofRequestV1,
+    expected_backend: BridgeSccpDestinationProofBackendV1,
+    bundle: SccpCanonicalMessageBundleBindingV1<'_>,
+    canonical_payload_bytes: &[u8],
+    finality: &TairaBridgeFinalityProofV1,
+) -> Option<ValidatedSccpGroth16Bn254ProofRequestV1<'a>> {
+    if !sccp_groth16_bn254_proof_request_header_is_canonical_v1(request, expected_backend)
+        || !sccp_proof_request_bundle_binding_matches_public_inputs_with_finality(
+            &request.public_inputs,
+            bundle,
+            request.source_network,
+            request.target_network,
+            request.destination_binding_hash,
+            request.route_configuration_hash,
+            finality,
+        )
     {
-        return false;
+        return None;
     }
-    let Some(bundle) = decode_canonical_nexus_sccp_message_bundle_summary(&request.bundle_bytes)
-    else {
-        return false;
-    };
-    if !sccp_proof_request_bundle_bytes_match_public_inputs(
-        &request.public_inputs,
-        &request.bundle_bytes,
-        request.source_network,
-        request.target_network,
-        request.destination_binding_hash,
-        request.route_configuration_hash,
-    ) {
-        return false;
-    }
-    let Some(statement_hash) = sccp_groth16_bn254_statement_hash_v1(
-        request.backend,
-        request.source_network,
-        request.target_network,
-        &request.public_inputs,
-        &bundle.canonical_payload_bytes,
-        &request.bundle_bytes,
-        request.destination_binding_hash,
-        request.route_configuration_hash,
-        request.verifier_key_hash,
-    ) else {
-        return false;
-    };
+    let statement_hash = sccp_groth16_bn254_statement_hash_v1(request, canonical_payload_bytes)?;
     if request.statement_hash != statement_hash {
-        return false;
+        return None;
     }
-    let public_inputs_bytes =
-        canonical_sccp_message_transparent_public_inputs_bytes(&request.public_inputs);
     let public_signal_words = sccp_groth16_bn254_public_signal_words(
         &request.public_inputs,
         request.source_network.domain_id(),
         request.statement_hash,
         request.destination_binding_hash,
         request.route_configuration_hash,
+        request.sora_finality_anchor_hash,
     );
-    let Some(verifying_key_bytes) =
-        canonical_sccp_groth16_bn254_verifying_key_bytes_v1(&request.verifying_key)
-    else {
-        return false;
-    };
-    request.request_hash
-        == sccp_groth16_bn254_proof_request_hash(
-            request.backend,
-            request.source_network,
-            request.target_network,
-            &public_inputs_bytes,
-            &bundle.canonical_payload_bytes,
-            &request.bundle_bytes,
-            request.statement_hash,
-            request.destination_binding_hash,
-            request.route_configuration_hash,
-            request.verifier_key_hash,
-            &verifying_key_bytes,
-            &public_signal_words,
-        )
+    if sccp_groth16_bn254_proof_request_hash(request, canonical_payload_bytes, &public_signal_words)
+        != Some(request.request_hash)
+    {
+        return None;
+    }
+    Some(ValidatedSccpGroth16Bn254ProofRequestV1 {
+        request,
+        public_signal_words,
+    })
+}
+
+fn validate_sccp_groth16_bn254_proof_request_with_decoder_v1<'a, F>(
+    request: &'a SccpGroth16Bn254ProofRequestV1,
+    expected_backend: BridgeSccpDestinationProofBackendV1,
+    decode_bundle: F,
+) -> Option<ValidatedSccpGroth16Bn254ProofRequestV1<'a>>
+where
+    F: FnOnce(&[u8]) -> Option<SccpCanonicalMessageBundleSummaryV1>,
+{
+    let bundle = decode_bundle(&request.bundle_bytes)?;
+    let finality = decode_taira_bridge_finality_proof(bundle.binding().finality_proof)?;
+    if !verify_taira_bridge_finality_proof_structure(&finality) {
+        return None;
+    }
+    validate_sccp_groth16_bn254_proof_request_with_bundle_v1(
+        request,
+        expected_backend,
+        bundle.binding(),
+        &bundle.canonical_payload_bytes,
+        &finality,
+    )
+}
+
+fn validate_sccp_groth16_bn254_proof_request_v1(
+    request: &SccpGroth16Bn254ProofRequestV1,
+    expected_backend: BridgeSccpDestinationProofBackendV1,
+) -> Option<ValidatedSccpGroth16Bn254ProofRequestV1<'_>> {
+    validate_sccp_groth16_bn254_proof_request_with_decoder_v1(
+        request,
+        expected_backend,
+        decode_canonical_taira_sccp_message_bundle_summary,
+    )
+}
+
+fn sccp_groth16_bn254_proof_request_is_canonical(
+    request: &SccpGroth16Bn254ProofRequestV1,
+    expected_backend: BridgeSccpDestinationProofBackendV1,
+) -> bool {
+    validate_sccp_groth16_bn254_proof_request_v1(request, expected_backend).is_some()
+}
+
+fn sccp_groth16_bn254_request_hash_roles_are_distinct_v1(
+    statement_hash: H256,
+    destination_binding_hash: H256,
+    route_configuration_hash: H256,
+    verifier_key_hash: H256,
+    semantic_proof_profile_hash: H256,
+    sora_finality_anchor_hash: H256,
+) -> bool {
+    hash_roles_are_distinct([
+        statement_hash,
+        destination_binding_hash,
+        route_configuration_hash,
+        verifier_key_hash,
+        semantic_proof_profile_hash,
+        sora_finality_anchor_hash,
+    ])
 }
 
 fn sccp_groth16_proof_request_public_inputs_are_valid(
     source_network: SccpNetworkV1,
     target_network: SccpNetworkV1,
-    public_inputs: &SccpMessageTransparentPublicInputsV1,
+    public_inputs: &SccpMessagePublicInputsV1,
 ) -> bool {
     public_inputs.version == 1
         && source_network == SccpNetworkV1::SoraTaira
@@ -2539,25 +3049,14 @@ fn sccp_groth16_bn254_proof_result_hash(request_hash: H256, proof_bytes: &[u8]) 
     prefixed_blake2b(SCCP_GROTH16_PROOF_RESULT_PREFIX_V1, &preimage)
 }
 
-fn wrap_sccp_groth16_bn254_proof_result(
+fn bind_sccp_groth16_bn254_proof_result_v1(
     proof_bytes: &[u8],
-    request: &SccpGroth16Bn254ProofRequestV1,
-    expected_backend: BridgeSccpDestinationProofBackendV1,
+    validated: &ValidatedSccpGroth16Bn254ProofRequestV1<'_>,
 ) -> Option<SccpGroth16Bn254ProofArtifactV1> {
-    if !sccp_groth16_bn254_proof_request_is_canonical(request, expected_backend)
-        || !verify_sccp_groth16_bn254_proof_v1(
-            &request.public_inputs,
-            request.source_network.domain_id(),
-            request.statement_hash,
-            request.destination_binding_hash,
-            request.route_configuration_hash,
-            proof_bytes,
-            &request.verifying_key,
-            request.verifier_key_hash,
-        )
-    {
+    if !verify_sccp_groth16_bn254_proof_against_validated_request_v1(validated, proof_bytes) {
         return None;
     }
+    let request = validated.request;
     Some(SccpGroth16Bn254ProofArtifactV1 {
         version: 1,
         request: request.clone(),
@@ -2568,6 +3067,15 @@ fn wrap_sccp_groth16_bn254_proof_result(
             result_hash: sccp_groth16_bn254_proof_result_hash(request.request_hash, proof_bytes),
         },
     })
+}
+
+fn wrap_sccp_groth16_bn254_proof_result(
+    proof_bytes: &[u8],
+    request: &SccpGroth16Bn254ProofRequestV1,
+    expected_backend: BridgeSccpDestinationProofBackendV1,
+) -> Option<SccpGroth16Bn254ProofArtifactV1> {
+    let validated = validate_sccp_groth16_bn254_proof_request_v1(request, expected_backend)?;
+    bind_sccp_groth16_bn254_proof_result_v1(proof_bytes, &validated)
 }
 
 /// Validate and bind raw EVM Groth16 proof bytes to their exact proving request.
@@ -2618,10 +3126,14 @@ fn sccp_groth16_bn254_proof_request_is_self_canonical(
 fn sccp_groth16_bn254_proof_result_is_structurally_valid(
     result: &SccpGroth16Bn254ProofResultV1,
 ) -> bool {
-    let Some(proof) = decode_sccp_evm_groth16_bn254_proof_bytes(&result.proof_bytes) else {
-        return false;
-    };
-    result.version == 1
+    decode_sccp_groth16_bn254_proof_result_v1(result).is_some()
+}
+
+fn decode_sccp_groth16_bn254_proof_result_v1(
+    result: &SccpGroth16Bn254ProofResultV1,
+) -> Option<SccpEvmGroth16Bn254ProofV1> {
+    let proof = decode_sccp_evm_groth16_bn254_proof_bytes(&result.proof_bytes)?;
+    (result.version == 1
         && h256_is_nonzero(&result.request_hash)
         && h256_is_nonzero(&result.result_hash)
         && proof.version == 1
@@ -2629,34 +3141,54 @@ fn sccp_groth16_bn254_proof_result_is_structurally_valid(
         && h256_is_nonzero(&proof.message_id)
         && h256_is_nonzero(&proof.commitment_root)
         && result.result_hash
-            == sccp_groth16_bn254_proof_result_hash(result.request_hash, &result.proof_bytes)
+            == sccp_groth16_bn254_proof_result_hash(result.request_hash, &result.proof_bytes))
+    .then_some(proof)
+}
+
+fn sccp_groth16_bn254_proof_artifact_is_self_canonical_with_decoder_v1<F>(
+    artifact: &SccpGroth16Bn254ProofArtifactV1,
+    decode_bundle: F,
+) -> bool
+where
+    F: FnOnce(&[u8]) -> Option<SccpCanonicalMessageBundleSummaryV1>,
+{
+    if artifact.version != 1 || artifact.result.request_hash != artifact.request.request_hash {
+        return false;
+    }
+    let Some(validated) = validate_sccp_groth16_bn254_proof_request_with_decoder_v1(
+        &artifact.request,
+        artifact.request.backend,
+        decode_bundle,
+    ) else {
+        return false;
+    };
+    let expected =
+        bind_sccp_groth16_bn254_proof_result_v1(&artifact.result.proof_bytes, &validated);
+    expected.as_ref() == Some(artifact)
 }
 
 fn sccp_groth16_bn254_proof_artifact_is_self_canonical(
     artifact: &SccpGroth16Bn254ProofArtifactV1,
 ) -> bool {
-    if artifact.version != 1
-        || !sccp_groth16_bn254_proof_request_is_self_canonical(&artifact.request)
-        || !sccp_groth16_bn254_proof_result_is_structurally_valid(&artifact.result)
-        || artifact.result.request_hash != artifact.request.request_hash
+    sccp_groth16_bn254_proof_artifact_is_self_canonical_with_decoder_v1(
+        artifact,
+        decode_canonical_taira_sccp_message_bundle_summary,
+    )
+}
+
+fn decode_canonical_sccp_groth16_bn254_norito_framing_v1<T>(bytes: &[u8]) -> Option<T>
+where
+    T: for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSerialize,
+{
+    if !preflight_uncompressed_norito_frame(bytes, SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1)
     {
-        return false;
+        return None;
     }
-    let expected = match artifact.request.backend {
-        BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254 => {
-            wrap_sccp_evm_groth16_bn254_proof_result(
-                &artifact.result.proof_bytes,
-                &artifact.request,
-            )
-        }
-        BridgeSccpDestinationProofBackendV1::TronGroth16Bn254 => {
-            wrap_sccp_tron_groth16_bn254_proof_result(
-                &artifact.result.proof_bytes,
-                &artifact.request,
-            )
-        }
-    };
-    expected.as_ref() == Some(artifact)
+    let decoded = norito::decode_from_bytes::<T>(bytes).ok()?;
+    if to_bytes(&decoded).ok()?.as_slice() != bytes {
+        return None;
+    }
+    Some(decoded)
 }
 
 fn decode_canonical_sccp_groth16_bn254_norito_v1<T>(
@@ -2666,15 +3198,8 @@ fn decode_canonical_sccp_groth16_bn254_norito_v1<T>(
 where
     T: for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSerialize,
 {
-    if !preflight_uncompressed_norito_frame(bytes, SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1)
-    {
-        return None;
-    }
-    let decoded = norito::decode_from_bytes::<T>(bytes).ok()?;
-    if !validate(&decoded) || to_bytes(&decoded).ok()?.as_slice() != bytes {
-        return None;
-    }
-    Some(decoded)
+    let decoded = decode_canonical_sccp_groth16_bn254_norito_framing_v1(bytes)?;
+    validate(&decoded).then_some(decoded)
 }
 
 fn decode_canonical_sccp_groth16_bn254_json_v1<T>(json: &str, validate: fn(&T) -> bool) -> Option<T>
@@ -2805,13 +3330,12 @@ pub fn bridge_sccp_destination_proof_v1(
     })
 }
 
-/// Decode a closed bridge destination-proof and require its outer backend to
-/// equal the canonical artifact's inner backend and target family.
-pub fn decode_bridge_sccp_destination_proof_v1(
+fn decode_bridge_sccp_destination_proof_framing_v1(
     proof: &BridgeSccpDestinationProofV1,
 ) -> Option<SccpGroth16Bn254ProofArtifactV1> {
+    count_sccp_destination_artifact_decode_v1();
     let artifact =
-        decode_canonical_sccp_groth16_bn254_proof_artifact_v1(proof.encoded_artifact.as_slice())?;
+        decode_canonical_sccp_groth16_bn254_norito_framing_v1(proof.encoded_artifact.as_slice())?;
     (sccp_groth16_artifact_bridge_backend_v1(&artifact) == Some(proof.backend)
         && proof.route_configuration_hash == artifact.request.route_configuration_hash
         && proof.is_well_formed_for(
@@ -2821,11 +3345,20 @@ pub fn decode_bridge_sccp_destination_proof_v1(
     .then_some(artifact)
 }
 
+/// Decode a closed bridge destination-proof and require its outer backend to
+/// equal the canonical artifact's inner backend and target family.
+pub fn decode_bridge_sccp_destination_proof_v1(
+    proof: &BridgeSccpDestinationProofV1,
+) -> Option<SccpGroth16Bn254ProofArtifactV1> {
+    let artifact = decode_bridge_sccp_destination_proof_framing_v1(proof)?;
+    sccp_groth16_bn254_proof_artifact_is_self_canonical(&artifact).then_some(artifact)
+}
+
 /// Return whether a submitted Groth16 artifact is exactly bound to the
 /// canonical request reconstructed from governed historical state.
 pub fn sccp_groth16_bn254_proof_artifact_matches_governed_route_v1(
     artifact: &SccpGroth16Bn254ProofArtifactV1,
-    bundle: &NexusSccpMessageProofV1,
+    bundle: &TairaSccpMessageProofV1,
     governed_route: &SccpGovernedRouteV1,
 ) -> bool {
     let Some(request) =
@@ -2847,24 +3380,12 @@ pub fn sccp_groth16_bn254_proof_artifact_matches_governed_route_v1(
     expected.as_ref() == Some(artifact)
 }
 
-/// Verify an artifact against governed historical state and derive the exact
-/// destination calldata package accepted by the governed deployment.
-fn build_sccp_verified_destination_call_from_groth16_artifact_v1(
-    bundle: &NexusSccpMessageProofV1,
+fn build_sccp_verified_destination_call_v1(
+    bundle: &TairaSccpMessageProofV1,
     artifact: &SccpGroth16Bn254ProofArtifactV1,
     governed_route: &SccpGovernedRouteV1,
+    canonical_payload_bytes: Vec<u8>,
 ) -> Option<SccpVerifiedDestinationCallV1> {
-    if !sccp_groth16_bn254_proof_artifact_matches_governed_route_v1(
-        artifact,
-        bundle,
-        governed_route,
-    ) {
-        return None;
-    }
-    let canonical_payload_bytes = canonical_sccp_payload_bytes(&bundle.payload);
-    if payload_hash(&canonical_payload_bytes) != artifact.request.public_inputs.payload_hash {
-        return None;
-    }
     let calldata = encode_sccp_finalize_from_taira_calldata_v1(
         &artifact.result.proof_bytes,
         &artifact.request.public_inputs,
@@ -2889,8 +3410,12 @@ fn build_sccp_verified_destination_call_from_groth16_artifact_v1(
         route_revision: transfer.route_revision,
         destination_binding_hash: artifact.request.destination_binding_hash,
         route_configuration_hash: artifact.request.route_configuration_hash,
+        semantic_proof_profile: artifact.request.semantic_proof_profile,
+        semantic_proof_profile_hash: artifact.request.semantic_proof_profile_hash,
+        sora_finality_anchor: artifact.request.sora_finality_anchor,
+        sora_finality_anchor_hash: artifact.request.sora_finality_anchor_hash,
         target,
-        public_inputs: artifact.request.public_inputs.clone(),
+        public_inputs: artifact.request.public_inputs,
         statement_hash: artifact.request.statement_hash,
         request_hash: artifact.request.request_hash,
         proof_bytes: artifact.result.proof_bytes.clone(),
@@ -2900,27 +3425,158 @@ fn build_sccp_verified_destination_call_from_groth16_artifact_v1(
     })
 }
 
-/// Verify one closed bridge SCCP destination proof against the exact bundle
-/// and historical governed route, then derive the canonical destination call.
-pub fn verify_sccp_destination_proof_v1(
+/// Decode one destination artifact, its canonical embedded SCCP bundle, and
+/// its Taira finality proof exactly once without evaluating a pairing or BLS
+/// aggregate.
+///
+/// The result is structurally and hash bound, but remains untrusted until it is
+/// resolved against historical governed route state by
+/// [`verify_parsed_sccp_destination_proof_v1`].
+pub fn parse_sccp_destination_proof_v1(
     proof: &BridgeSccpDestinationProofV1,
-    bundle: &NexusSccpMessageProofV1,
+) -> Option<SccpParsedDestinationProofV1> {
+    let artifact = decode_bridge_sccp_destination_proof_framing_v1(proof)?;
+    let decoded =
+        decode_canonical_taira_sccp_message_bundle_with_payload_v1(&artifact.request.bundle_bytes)?;
+    let bundle = decoded.bundle;
+    let finality = decode_taira_bridge_finality_proof(&bundle.finality_proof)?;
+    if !verify_message_bundle_structure_with_finality(&bundle, &finality) {
+        return None;
+    }
+    let binding = SccpCanonicalMessageBundleBindingV1 {
+        source_network: bundle.commitment.context.lane.source,
+        target_network: bundle.commitment.context.lane.target,
+        destination_binding_hash: bundle.commitment.context.destination_binding_hash,
+        route_configuration_hash: bundle.commitment.context.route_configuration_hash,
+        message_id: bundle.commitment.message_id,
+        payload_hash: bundle.commitment.payload_hash,
+        commitment_root: bundle.commitment_root,
+        finality_proof: &bundle.finality_proof,
+    };
+    let validated_request = validate_sccp_groth16_bn254_proof_request_with_bundle_v1(
+        &artifact.request,
+        proof.backend,
+        binding,
+        &decoded.canonical_payload_bytes,
+        &finality,
+    )?;
+    if artifact.version != 1
+        || artifact.result.request_hash != artifact.request.request_hash
+        || proof.route_configuration_hash != artifact.request.route_configuration_hash
+    {
+        return None;
+    }
+    let groth16_proof = decode_sccp_groth16_bn254_proof_result_v1(&artifact.result)?;
+    if groth16_proof.version != 1
+        || groth16_proof.message_id != artifact.request.public_inputs.message_id
+        || groth16_proof.source_domain != artifact.request.source_network.domain_id()
+        || groth16_proof.commitment_root != artifact.request.public_inputs.commitment_root
+        || encode_sccp_evm_groth16_bn254_proof_bytes(&groth16_proof) != artifact.result.proof_bytes
+    {
+        return None;
+    }
+    let public_signal_words = validated_request.public_signal_words;
+    Some(SccpParsedDestinationProofV1 {
+        artifact,
+        bundle,
+        finality,
+        canonical_payload_bytes: decoded.canonical_payload_bytes,
+        public_signal_words,
+        groth16_proof,
+    })
+}
+
+fn build_sccp_groth16_bn254_proof_request_from_parsed_v1(
+    parsed: &SccpParsedDestinationProofV1,
     governed_route: &SccpGovernedRouteV1,
-) -> Option<SccpVerifiedDestinationCallV1> {
-    let artifact = decode_bridge_sccp_destination_proof_v1(proof)?;
-    let route_backend = match governed_route.destination {
+) -> Option<SccpGroth16Bn254ProofRequestV1> {
+    if !sccp_governed_groth16_route_matches_bundle_v1(&parsed.bundle, governed_route) {
+        return None;
+    }
+    let request = &parsed.artifact.request;
+    let destination_binding_hash = governed_route.destination_binding_hash().ok()?;
+    let route_configuration_hash = governed_route.route_configuration_hash().ok()?;
+    let (verifying_key, expected_verifier_key_hash, outbound_proof_policy) =
+        sccp_governed_route_groth16_material_v1(governed_route)?;
+    let backend = match governed_route.destination {
         SccpDestinationDeploymentV1::Evm(_) => BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
         SccpDestinationDeploymentV1::Tron(_) => {
             BridgeSccpDestinationProofBackendV1::TronGroth16Bn254
         }
     };
-    if proof.backend != route_backend
-        || proof.route_configuration_hash != governed_route.route_configuration_hash().ok()?
-        || proof.route_configuration_hash != bundle.commitment.context.route_configuration_hash
+    build_sccp_groth16_bn254_proof_request(&SccpGroth16Bn254ProofRequestBuildContextV1 {
+        backend,
+        source_network: governed_route.lane_id.target,
+        target_network: governed_route.lane_id.source,
+        public_inputs: &request.public_inputs,
+        canonical_payload_bytes: &parsed.canonical_payload_bytes,
+        bundle_bytes: &request.bundle_bytes,
+        bundle_binding: SccpCanonicalMessageBundleBindingV1 {
+            source_network: parsed.bundle.commitment.context.lane.source,
+            target_network: parsed.bundle.commitment.context.lane.target,
+            destination_binding_hash: parsed.bundle.commitment.context.destination_binding_hash,
+            route_configuration_hash: parsed.bundle.commitment.context.route_configuration_hash,
+            message_id: parsed.bundle.commitment.message_id,
+            payload_hash: parsed.bundle.commitment.payload_hash,
+            commitment_root: parsed.bundle.commitment_root,
+            finality_proof: &parsed.bundle.finality_proof,
+        },
+        finality: &parsed.finality,
+        destination_binding_hash,
+        route_configuration_hash,
+        verifying_key: &verifying_key,
+        expected_verifier_key_hash,
+        outbound_proof_policy,
+    })
+}
+
+/// Bind one parsed artifact to the exact historical governed route, evaluate
+/// one Groth16 pairing, and derive the destination call without decoding or
+/// cryptographically re-verifying the submitted request. The opaque result
+/// deliberately defers BLS verification to Core's trusted local-QC check.
+pub fn verify_parsed_sccp_destination_proof_v1(
+    parsed: SccpParsedDestinationProofV1,
+    governed_route: &SccpGovernedRouteV1,
+) -> Option<SccpVerifiedDestinationContextV1> {
+    let expected_request =
+        build_sccp_groth16_bn254_proof_request_from_parsed_v1(&parsed, governed_route)?;
+    if parsed.artifact.request != expected_request
+        || !verify_sccp_groth16_bn254_pairing_equation_v1(
+            &parsed.groth16_proof,
+            &parsed.public_signal_words,
+            &parsed.artifact.request.verifying_key,
+        )
     {
         return None;
     }
-    build_sccp_verified_destination_call_from_groth16_artifact_v1(bundle, &artifact, governed_route)
+    let call = build_sccp_verified_destination_call_v1(
+        &parsed.bundle,
+        &parsed.artifact,
+        governed_route,
+        parsed.canonical_payload_bytes,
+    )?;
+    Some(SccpVerifiedDestinationContextV1 {
+        call,
+        finality: parsed.finality,
+    })
+}
+
+/// Verify one closed bridge SCCP destination proof against the exact bundle
+/// and historical governed route, then derive the canonical destination call.
+pub fn verify_sccp_destination_proof_v1(
+    proof: &BridgeSccpDestinationProofV1,
+    bundle: &TairaSccpMessageProofV1,
+    governed_route: &SccpGovernedRouteV1,
+) -> Option<SccpVerifiedDestinationCallV1> {
+    let parsed = parse_sccp_destination_proof_v1(proof)?;
+    if parsed.bundle() != bundle {
+        return None;
+    }
+    let verified = verify_parsed_sccp_destination_proof_v1(parsed, governed_route)?;
+    if !verify_taira_commit_qc_bls_aggregate(verified.finality()) {
+        return None;
+    }
+    Some(verified.into_call())
 }
 
 fn sccp_exact_xor_destination_route_id_v1(target_domain: u32) -> Option<&'static [u8]> {
@@ -2957,22 +3613,29 @@ fn sccp_payload_matches_exact_xor_destination_route_v1(
         && transfer.route_id == expected_route_id
 }
 
-/// Derive transparent-proof public inputs from one canonical SORA-origin bundle.
-pub fn sccp_message_transparent_public_inputs(
-    bundle: &NexusSccpMessageProofV1,
-) -> Option<SccpMessageTransparentPublicInputsV1> {
-    if !verify_message_bundle_structure(bundle) {
+/// Derive the six base public inputs from one canonical SORA-origin bundle.
+pub fn sccp_message_public_inputs(
+    bundle: &TairaSccpMessageProofV1,
+) -> Option<SccpMessagePublicInputsV1> {
+    let finality = decode_taira_bridge_finality_proof(&bundle.finality_proof)?;
+    sccp_message_public_inputs_with_finality(bundle, &finality)
+}
+
+fn sccp_message_public_inputs_with_finality(
+    bundle: &TairaSccpMessageProofV1,
+    finality: &TairaBridgeFinalityProofV1,
+) -> Option<SccpMessagePublicInputsV1> {
+    if !verify_message_bundle_structure_with_finality(bundle, finality) {
         return None;
     }
-    let (finality_height, finality_block_hash) = sccp_message_finality_public_inputs(bundle)?;
-    Some(SccpMessageTransparentPublicInputsV1 {
+    Some(SccpMessagePublicInputsV1 {
         version: 1,
         message_id: bundle.commitment.message_id,
         payload_hash: bundle.commitment.payload_hash,
         target_domain: bundle.commitment.context.lane.target.domain_id(),
         commitment_root: bundle.commitment_root,
-        finality_height,
-        finality_block_hash,
+        finality_height: finality.height,
+        finality_block_hash: finality.block_hash,
     })
 }
 fn decode_nonzero_fixed<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
@@ -2981,13 +3644,31 @@ fn decode_nonzero_fixed<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
 }
 
 fn canonical_sccp_text(bytes: &[u8]) -> Option<&str> {
-    if bytes.is_empty()
-        || bytes.len() > SCCP_MAX_CANONICAL_TEXT_BYTES_V1
-        || !bytes.iter().all(|byte| matches!(byte, 0x21..=0x7e))
-    {
+    if bytes.is_empty() || bytes.len() > SCCP_MAX_CANONICAL_TEXT_BYTES_V1 {
         return None;
     }
-    core::str::from_utf8(bytes).ok()
+    let value = core::str::from_utf8(bytes).ok()?;
+    if bytes.iter().all(|byte| matches!(byte, 0x21..=0x7e)) {
+        return Some(value);
+    }
+
+    // Canonical universal account identities use I105's complete base-105
+    // alphabet, which intentionally includes half-width kana. Accepting
+    // arbitrary Unicode here would make route and asset labels ambiguous, so
+    // the non-ASCII branch is closed to an exact, checksum-valid I105 literal.
+    let discriminant =
+        iroha_data_model::account::address::AccountAddress::i105_discriminant(value).ok()?;
+    let address = iroha_data_model::account::address::AccountAddress::parse_encoded(
+        value,
+        Some(discriminant),
+    )
+    .ok()?;
+    (address
+        .to_i105_for_discriminant(discriminant)
+        .ok()?
+        .as_str()
+        == value)
+        .then_some(value)
 }
 
 fn decode_tron_address21(bytes: &[u8]) -> Option<[u8; 21]> {
@@ -3043,18 +3724,33 @@ fn push_u128(out: &mut Vec<u8>, value: u128) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
-fn push_vec(out: &mut Vec<u8>, value: &[u8]) {
-    push_u32(
-        out,
-        u32::try_from(value.len()).expect("SCCP vector length fits into u32"),
-    );
-    out.extend_from_slice(value);
-}
-
 fn push_vec_checked(out: &mut Vec<u8>, value: &[u8]) -> Option<()> {
     push_u32_len_checked(out, value.len())?;
     out.extend_from_slice(value);
     Some(())
+}
+
+fn sccp_payload_field_len_v1(
+    field: &'static str,
+    actual: usize,
+) -> Result<u32, SccpCanonicalPayloadEncodingErrorV1> {
+    u32::try_from(actual).map_err(
+        |_| SccpCanonicalPayloadEncodingErrorV1::FieldLengthOverflow {
+            field,
+            actual,
+            maximum: u32::MAX,
+        },
+    )
+}
+
+fn push_sccp_payload_vec_v1(
+    out: &mut Vec<u8>,
+    field: &'static str,
+    value: &[u8],
+) -> Result<(), SccpCanonicalPayloadEncodingErrorV1> {
+    push_u32(out, sccp_payload_field_len_v1(field, value.len())?);
+    out.extend_from_slice(value);
+    Ok(())
 }
 
 fn protobuf_varint_len(mut value: u64) -> usize {
@@ -3088,7 +3784,14 @@ fn read_protobuf_varint_at(bytes: &[u8], cursor: &mut usize) -> Option<u64> {
 }
 
 /// Encode a transfer payload in its canonical length-prefixed V1 layout.
-pub fn canonical_transfer_payload_bytes(payload: &TransferPayloadV1) -> Vec<u8> {
+///
+/// # Errors
+///
+/// Returns [`SccpCanonicalPayloadEncodingErrorV1::FieldLengthOverflow`] when
+/// any variable-length field cannot be represented by the V1 `u32` prefix.
+pub fn canonical_transfer_payload_bytes(
+    payload: &TransferPayloadV1,
+) -> Result<Vec<u8>, SccpCanonicalPayloadEncodingErrorV1> {
     let mut out = Vec::new();
     push_u8(&mut out, payload.version);
     push_u32(&mut out, payload.source_domain);
@@ -3097,27 +3800,104 @@ pub fn canonical_transfer_payload_bytes(payload: &TransferPayloadV1) -> Vec<u8> 
     push_u32(&mut out, payload.route_revision);
     push_u32(&mut out, payload.asset_home_domain);
     push_u8(&mut out, payload.asset_id_codec);
-    push_vec(&mut out, &payload.asset_id);
+    push_sccp_payload_vec_v1(&mut out, "asset_id", &payload.asset_id)?;
     push_u128(&mut out, payload.amount);
     push_u8(&mut out, payload.sender_codec);
-    push_vec(&mut out, &payload.sender);
+    push_sccp_payload_vec_v1(&mut out, "sender", &payload.sender)?;
     push_u8(&mut out, payload.recipient_codec);
-    push_vec(&mut out, &payload.recipient);
+    push_sccp_payload_vec_v1(&mut out, "recipient", &payload.recipient)?;
     push_u8(&mut out, payload.route_id_codec);
-    push_vec(&mut out, &payload.route_id);
-    out
+    push_sccp_payload_vec_v1(&mut out, "route_id", &payload.route_id)?;
+    Ok(out)
 }
 
 /// Encode any closed SCCP payload with its stable V1 discriminant and canonical body.
-pub fn canonical_sccp_payload_bytes(payload: &SccpPayloadV1) -> Vec<u8> {
+///
+/// # Errors
+///
+/// Returns [`SccpCanonicalPayloadEncodingErrorV1::FieldLengthOverflow`] when
+/// any variable-length field cannot be represented by the V1 `u32` prefix.
+pub fn canonical_sccp_payload_bytes(
+    payload: &SccpPayloadV1,
+) -> Result<Vec<u8>, SccpCanonicalPayloadEncodingErrorV1> {
     let mut out = Vec::new();
     match payload {
         SccpPayloadV1::Transfer(payload) => {
             push_u8(&mut out, SccpPayloadV1::TRANSFER_DISCRIMINANT);
-            out.extend_from_slice(&canonical_transfer_payload_bytes(payload));
+            out.extend_from_slice(&canonical_transfer_payload_bytes(payload)?);
         }
     }
-    out
+    Ok(out)
+}
+
+#[cfg(test)]
+mod canonical_payload_encoding_tests {
+    use super::*;
+
+    fn transfer_fixture() -> TransferPayloadV1 {
+        TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_ETH,
+            nonce: 7,
+            route_revision: 1,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_CANONICAL_TEXT,
+            asset_id: b"xor".to_vec(),
+            amount: 11,
+            sender_codec: SCCP_CODEC_CANONICAL_TEXT,
+            sender: b"alice@taira".to_vec(),
+            recipient_codec: SCCP_CODEC_EVM_ADDRESS20,
+            recipient: vec![0x11; 20],
+            route_id_codec: SCCP_CODEC_CANONICAL_TEXT,
+            route_id: SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn canonical_payload_encoders_roundtrip_every_variable_field() {
+        let transfer = transfer_fixture();
+        let transfer_bytes = canonical_transfer_payload_bytes(&transfer)
+            .expect("bounded transfer payload must encode");
+        assert_eq!(
+            decode_canonical_transfer_payload_bytes(&transfer_bytes),
+            Some(transfer.clone())
+        );
+
+        let payload = SccpPayloadV1::Transfer(transfer);
+        let payload_bytes =
+            canonical_sccp_payload_bytes(&payload).expect("bounded SCCP payload must encode");
+        assert_eq!(
+            decode_canonical_sccp_payload_bytes(&payload_bytes),
+            Some(payload)
+        );
+    }
+
+    #[test]
+    fn canonical_payload_field_length_accepts_exact_u32_boundary() {
+        let boundary = usize::try_from(u32::MAX).expect("usize represents u32 lengths");
+        assert_eq!(
+            sccp_payload_field_len_v1("recipient", boundary),
+            Ok(u32::MAX)
+        );
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn canonical_payload_field_length_overflow_is_typed_and_never_panics() {
+        let actual = usize::try_from(u64::from(u32::MAX) + 1)
+            .expect("64-bit usize represents one byte beyond the SCCP V1 limit");
+        for field in ["asset_id", "sender", "recipient", "route_id"] {
+            assert_eq!(
+                sccp_payload_field_len_v1(field, actual),
+                Err(SccpCanonicalPayloadEncodingErrorV1::FieldLengthOverflow {
+                    field,
+                    actual,
+                    maximum: u32::MAX,
+                })
+            );
+        }
+    }
 }
 
 /// Decode one complete canonical transfer-payload body without accepting trailing bytes.
@@ -3211,6 +3991,13 @@ fn h256_is_nonzero(value: &H256) -> bool {
     value.iter().any(|byte| *byte != 0)
 }
 
+fn hash_roles_alias(values: &[H256]) -> bool {
+    values
+        .iter()
+        .enumerate()
+        .any(|(index, value)| values[index + 1..].contains(value))
+}
+
 fn secp256k1_recoverable_signature_s_is_low(signature: &[u8; 65]) -> bool {
     let mut s = [0u8; 32];
     s.copy_from_slice(&signature[32..64]);
@@ -3292,7 +4079,8 @@ pub fn hub_commitment_from_sccp_payload(
     }
     let lane_hash = sccp_lane_id_hash_v1(context.lane)?;
     let message_id = sccp_message_id(context.lane, payload)?;
-    let payload_hash = payload_hash(&canonical_sccp_payload_bytes(payload));
+    let canonical_payload = canonical_sccp_payload_bytes(payload).ok()?;
+    let payload_hash = payload_hash(&canonical_payload);
     if !hash_roles_are_distinct([
         lane_hash,
         context.destination_binding_hash,
@@ -3386,8 +4174,8 @@ pub fn decode_canonical_commitment_bytes(bytes: &[u8]) -> Option<SccpHubCommitme
 /// Derive the single V1 SCCP message identity for either lane direction.
 ///
 /// Exact source and target profiles are part of the preimage, preventing an
-/// otherwise identical payload from aliasing across mainnet, testnet, Nexus,
-/// or Taira. The governed destination binding is not part of this identity;
+/// otherwise identical payload from aliasing across external mainnet and
+/// testnet profiles. The governed destination binding is not part of this identity;
 /// replay protection therefore survives destination deployment rotation.
 /// The Keccak-256 input is `SCCP_LANE_MESSAGE_ID_PREFIX_V1 || 0x01 ||
 /// le_u32(lane_len) || canonical_lane || le_u32(payload_len) ||
@@ -3397,7 +4185,7 @@ pub fn sccp_message_id(lane: SccpLaneIdV1, payload: &SccpPayloadV1) -> Option<H2
         return None;
     }
     let lane_bytes = canonical_sccp_lane_id_bytes_v1(lane)?;
-    let payload_bytes = canonical_sccp_payload_bytes(payload);
+    let payload_bytes = canonical_sccp_payload_bytes(payload).ok()?;
     let mut preimage = Vec::with_capacity(1 + 8 + lane_bytes.len() + payload_bytes.len());
     push_u8(&mut preimage, 1);
     push_vec_checked(&mut preimage, &lane_bytes)?;
@@ -3541,11 +4329,11 @@ pub fn commitment_merkle_proof(
     Some(SccpMerkleProofV1 { steps })
 }
 
-/// Decode one canonical, size-bounded Nexus bridge-finality proof.
-pub fn decode_nexus_bridge_finality_proof(
+/// Decode one canonical, size-bounded Taira bridge-finality proof.
+pub fn decode_taira_bridge_finality_proof(
     proof_bytes: &[u8],
-) -> Option<NexusBridgeFinalityProofV1> {
-    decode_canonical_nexus_proof_artifact(proof_bytes)
+) -> Option<TairaBridgeFinalityProofV1> {
+    decode_canonical_taira_proof_artifact(proof_bytes)
 }
 
 fn hash_block_header_for_sccp_finality(header: &BlockHeader) -> H256 {
@@ -3554,7 +4342,7 @@ fn hash_block_header_for_sccp_finality(header: &BlockHeader) -> H256 {
     out
 }
 
-fn nexus_validator_set_hash_from_public_keys(public_keys: &[String]) -> Option<H256> {
+fn taira_validator_set_hash_from_public_keys(public_keys: &[String]) -> Option<H256> {
     let validator_set = public_keys
         .iter()
         .map(|key| {
@@ -3569,16 +4357,28 @@ fn nexus_validator_set_hash_from_public_keys(public_keys: &[String]) -> Option<H
     Some(out)
 }
 
-/// Decode one canonical, size-bounded Nexus SCCP message bundle.
-pub fn decode_nexus_sccp_message_proof(proof_bytes: &[u8]) -> Option<NexusSccpMessageProofV1> {
-    decode_canonical_nexus_proof_artifact(proof_bytes)
+fn taira_validator_public_key_texts_are_bounded_and_unique(public_keys: &[String]) -> bool {
+    if public_keys.is_empty() || public_keys.len() > SCCP_TAIRA_MAX_FINALITY_VALIDATORS_V1 {
+        return false;
+    }
+    let mut unique = BTreeSet::new();
+    public_keys.iter().all(|public_key| {
+        !public_key.is_empty()
+            && public_key.len() <= SCCP_TAIRA_MAX_PUBLIC_KEY_TEXT_BYTES_V1
+            && unique.insert(public_key.as_str())
+    })
 }
 
-fn decode_canonical_nexus_proof_artifact<T>(proof_bytes: &[u8]) -> Option<T>
+/// Decode one canonical, size-bounded Taira SCCP message bundle.
+pub fn decode_taira_sccp_message_proof(proof_bytes: &[u8]) -> Option<TairaSccpMessageProofV1> {
+    decode_canonical_taira_proof_artifact(proof_bytes)
+}
+
+fn decode_canonical_taira_proof_artifact<T>(proof_bytes: &[u8]) -> Option<T>
 where
     T: for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSerialize,
 {
-    if !preflight_uncompressed_norito_frame(proof_bytes, SCCP_NEXUS_MAX_ENCODED_PROOF_BYTES_V1) {
+    if !preflight_uncompressed_norito_frame(proof_bytes, SCCP_TAIRA_MAX_ENCODED_PROOF_BYTES_V1) {
         return None;
     }
     let artifact = norito::decode_from_bytes(proof_bytes).ok()?;
@@ -3601,19 +4401,16 @@ fn preflight_uncompressed_norito_frame(bytes: &[u8], maximum: usize) -> bool {
         .is_some_and(|declared| declared <= maximum as u64)
 }
 
-/// Verify the canonical structure and quorum-certificate binding of Nexus finality.
-pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityProofV1) -> bool {
+/// Verify the canonical structure and quorum-certificate binding of Taira finality.
+pub fn verify_taira_bridge_finality_proof_structure(proof: &TairaBridgeFinalityProofV1) -> bool {
     if proof.version != 1
-        || !matches!(
-            proof.chain_id.as_str(),
-            SCCP_NEXUS_FINALITY_CHAIN_ID_V1 | SCCP_TAIRA_FINALITY_CHAIN_ID_V1
-        )
+        || proof.chain_id != SCCP_TAIRA_FINALITY_CHAIN_ID_V1
         || proof.height == 0
         || proof.block_header_bytes.is_empty()
-        || proof.block_header_bytes.len() > SCCP_NEXUS_MAX_BLOCK_HEADER_BYTES_V1
+        || proof.block_header_bytes.len() > SCCP_TAIRA_MAX_BLOCK_HEADER_BYTES_V1
         || !preflight_uncompressed_norito_frame(
             &proof.block_header_bytes,
-            SCCP_NEXUS_MAX_BLOCK_HEADER_BYTES_V1,
+            SCCP_TAIRA_MAX_BLOCK_HEADER_BYTES_V1,
         )
     {
         return false;
@@ -3631,36 +4428,24 @@ pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityP
     }
     let qc = &proof.commit_qc;
     if qc.version != 1
-        || qc.phase != NexusConsensusPhaseV1::Commit
+        || qc.phase != TairaConsensusPhaseV1::Commit
         || qc.height != proof.height
         || qc.subject_block_hash != proof.block_hash
         || qc.mode_tag.is_empty()
-        || qc.mode_tag.len() > SCCP_NEXUS_MAX_CONSENSUS_MODE_TAG_BYTES_V1
+        || qc.mode_tag.len() > SCCP_TAIRA_MAX_CONSENSUS_MODE_TAG_BYTES_V1
         || !h256_is_nonzero(&qc.validator_set_hash)
         || qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
-        || qc.validator_public_keys.is_empty()
-        || qc.validator_public_keys.len() > SCCP_NEXUS_MAX_FINALITY_VALIDATORS_V1
+        || !taira_validator_public_key_texts_are_bounded_and_unique(&qc.validator_public_keys)
         || qc.validator_set_pops.len() != qc.validator_public_keys.len()
         || qc.bls_aggregate_signature.is_empty()
-        || qc.bls_aggregate_signature.len() > SCCP_NEXUS_MAX_BLS_PROOF_BYTES_V1
+        || qc.bls_aggregate_signature.len() > SCCP_TAIRA_MAX_BLS_PROOF_BYTES_V1
         || qc.bls_aggregate_signature.iter().all(|byte| *byte == 0)
     {
         return false;
     }
 
-    for (idx, public_key) in qc.validator_public_keys.iter().enumerate() {
-        if public_key.is_empty() || public_key.len() > SCCP_NEXUS_MAX_PUBLIC_KEY_TEXT_BYTES_V1 {
-            return false;
-        }
-        if qc.validator_public_keys[..idx]
-            .iter()
-            .any(|known| known == public_key)
-        {
-            return false;
-        }
-    }
     let Some(computed_validator_set_hash) =
-        nexus_validator_set_hash_from_public_keys(&qc.validator_public_keys)
+        taira_validator_set_hash_from_public_keys(&qc.validator_public_keys)
     else {
         return false;
     };
@@ -3668,7 +4453,7 @@ pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityP
         return false;
     }
     for pop in &qc.validator_set_pops {
-        if pop.is_empty() || pop.len() > SCCP_NEXUS_MAX_BLS_PROOF_BYTES_V1 {
+        if pop.is_empty() || pop.len() > SCCP_TAIRA_MAX_BLS_PROOF_BYTES_V1 {
             return false;
         }
     }
@@ -3681,32 +4466,31 @@ pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityP
         .is_some_and(|indices| !indices.is_empty())
 }
 
-/// Verify a Nexus finality proof's canonical header, validator set, PoPs, and commit signature.
-pub fn verify_nexus_bridge_finality_proof_cryptographic(
-    proof: &NexusBridgeFinalityProofV1,
+/// Verify a Taira finality proof's canonical header, validator set, `PoPs`, and commit signature.
+pub fn verify_taira_bridge_finality_proof_cryptographic(
+    proof: &TairaBridgeFinalityProofV1,
 ) -> bool {
-    if !verify_nexus_bridge_finality_proof_structure(proof) {
+    if !verify_taira_bridge_finality_proof_structure(proof) {
         return false;
     }
-    verify_nexus_commit_qc_bls_aggregate(proof)
+    verify_taira_commit_qc_bls_aggregate(proof)
 }
 
-#[cfg(feature = "bls")]
-const fn nexus_min_votes_for_len(len: usize) -> usize {
+const fn taira_min_votes_for_len(len: usize) -> usize {
     if len <= 3 {
         return len;
     }
     len.saturating_mul(2) / 3 + 1
 }
 
-#[cfg(feature = "bls")]
-fn verify_nexus_commit_qc_bls_aggregate(proof: &NexusBridgeFinalityProofV1) -> bool {
+fn verify_taira_commit_qc_bls_aggregate(proof: &TairaBridgeFinalityProofV1) -> bool {
+    count_sccp_destination_bls_verification_v1();
     let qc = &proof.commit_qc;
     let roster_len = qc.validator_public_keys.len();
     let Some(signer_indices) = signer_indices_from_bitmap(&qc.signers_bitmap, roster_len) else {
         return false;
     };
-    if signer_indices.len() < nexus_min_votes_for_len(roster_len) {
+    if signer_indices.len() < taira_min_votes_for_len(roster_len) {
         return false;
     }
 
@@ -3731,7 +4515,7 @@ fn verify_nexus_commit_qc_bls_aggregate(proof: &NexusBridgeFinalityProofV1) -> b
         }
     }
 
-    let message = nexus_commit_vote_preimage(&proof.chain_id, qc);
+    let message = taira_commit_vote_preimage(&proof.chain_id, qc);
     let signer_public_keys = signer_indices
         .iter()
         .map(|idx| public_keys.get(*idx))
@@ -3755,62 +4539,53 @@ fn verify_nexus_commit_qc_bls_aggregate(proof: &NexusBridgeFinalityProofV1) -> b
     .is_ok()
 }
 
-#[cfg(not(feature = "bls"))]
-fn verify_nexus_commit_qc_bls_aggregate(_proof: &NexusBridgeFinalityProofV1) -> bool {
-    false
-}
-
-/// Decode and structurally verify the Nexus finality proof for a SORA-origin message.
+/// Decode and structurally verify the Taira finality proof for a SORA-origin message.
 ///
 /// External-origin messages are deliberately rejected: first-release inbound
 /// admission accepts only the closed protocol-native proof API.
-pub fn verified_sccp_message_nexus_finality_proof(
-    bundle: &NexusSccpMessageProofV1,
-) -> Option<NexusBridgeFinalityProofV1> {
-    if !verify_message_bundle_structure(bundle) {
-        return None;
-    }
-    let finality_proof = decode_nexus_bridge_finality_proof(&bundle.finality_proof)?;
-    (verify_nexus_bridge_finality_proof_structure(&finality_proof)
-        && finality_proof.commitment_root == bundle.commitment_root)
-        .then_some(finality_proof)
+pub fn verified_sccp_message_taira_finality_proof(
+    bundle: &TairaSccpMessageProofV1,
+) -> Option<TairaBridgeFinalityProofV1> {
+    let finality_proof = decode_taira_bridge_finality_proof(&bundle.finality_proof)?;
+    verify_message_bundle_structure_with_finality(bundle, &finality_proof).then_some(finality_proof)
 }
 
-/// Decode and cryptographically verify Nexus finality for a SORA-origin message.
+/// Decode and cryptographically verify a proof-controlled Taira QC and roster.
 ///
-/// Builds without BLS support fail closed.
-pub fn verified_sccp_message_nexus_finality_proof_for_production(
-    bundle: &NexusSccpMessageProofV1,
-) -> Option<NexusBridgeFinalityProofV1> {
-    if !verify_message_bundle_structure(bundle) {
-        return None;
-    }
-    let finality_proof = decode_nexus_bridge_finality_proof(&bundle.finality_proof)?;
-    (verify_nexus_bridge_finality_proof_cryptographic(&finality_proof)
-        && finality_proof.commitment_root == bundle.commitment_root)
-        .then_some(finality_proof)
+/// This establishes internal cryptographic consistency only. The roster is
+/// carried by the proof, so callers MUST NOT treat this function as a trust
+/// anchor. Production destination proofs additionally bind an audited semantic
+/// circuit to a governed [`SccpSoraFinalityAnchorV1`]. BLS verification is a
+/// mandatory part of every build of this crate.
+pub fn verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(
+    bundle: &TairaSccpMessageProofV1,
+) -> Option<TairaBridgeFinalityProofV1> {
+    let finality_proof = decode_taira_bridge_finality_proof(&bundle.finality_proof)?;
+    (verify_message_bundle_structure_with_finality(bundle, &finality_proof)
+        && verify_taira_commit_qc_bls_aggregate(&finality_proof))
+    .then_some(finality_proof)
 }
 
-fn sccp_message_finality_public_inputs(bundle: &NexusSccpMessageProofV1) -> Option<(u64, H256)> {
+fn sccp_message_finality_public_inputs_with_finality(
+    bundle: &TairaSccpMessageProofV1,
+    proof: &TairaBridgeFinalityProofV1,
+) -> Option<(u64, H256)> {
     if sccp_message_source_domain(&bundle.payload) != SCCP_DOMAIN_SORA {
         return None;
     }
-    let proof = decode_nexus_bridge_finality_proof(&bundle.finality_proof)?;
-    let expected_chain_id = match bundle.commitment.context.lane.source {
-        SccpNetworkV1::SoraNexus => SCCP_NEXUS_FINALITY_CHAIN_ID_V1,
-        SccpNetworkV1::SoraTaira => SCCP_TAIRA_FINALITY_CHAIN_ID_V1,
-        _ => return None,
-    };
-    if !verify_nexus_bridge_finality_proof_structure(&proof)
+    if bundle.commitment.context.lane.source != SccpNetworkV1::SoraTaira {
+        return None;
+    }
+    if !verify_taira_bridge_finality_proof_structure(proof)
         || proof.commitment_root != bundle.commitment_root
-        || proof.chain_id != expected_chain_id
+        || proof.chain_id != SCCP_TAIRA_FINALITY_CHAIN_ID_V1
     {
         return None;
     }
     Some((proof.height, proof.block_hash))
 }
-/// Build the exact domain-separated commit-vote preimage signed by Nexus validators.
-pub fn nexus_commit_vote_preimage(chain_id: &str, certificate: &NexusCommitQcV1) -> Vec<u8> {
+/// Build the exact domain-separated commit-vote preimage signed by Taira validators.
+pub fn taira_commit_vote_preimage(chain_id: &str, certificate: &TairaCommitQcV1) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 * 4 + 8 * 6 + 3);
     let domain = iroha_consensus_domain(chain_id, "Vote", b"v1", &certificate.mode_tag);
     out.extend_from_slice(&domain);
@@ -3842,11 +4617,21 @@ pub fn nexus_commit_vote_preimage(chain_id: &str, certificate: &NexusCommitQcV1)
 /// External-origin bundles are intentionally outside this API. They must be
 /// admitted through `SccpNativeInboundMessageProofV1`, whose closed variant
 /// selects and verifies the corresponding protocol-native source proof.
-pub fn verify_message_bundle_structure(bundle: &NexusSccpMessageProofV1) -> bool {
+pub fn verify_message_bundle_structure(bundle: &TairaSccpMessageProofV1) -> bool {
+    let Some(finality) = decode_taira_bridge_finality_proof(&bundle.finality_proof) else {
+        return false;
+    };
+    verify_message_bundle_structure_with_finality(bundle, &finality)
+}
+
+fn verify_message_bundle_structure_with_finality(
+    bundle: &TairaSccpMessageProofV1,
+    finality: &TairaBridgeFinalityProofV1,
+) -> bool {
     if bundle.version != 1
         || bundle.commitment.version != 1
         || sccp_message_source_domain(&bundle.payload) != SCCP_DOMAIN_SORA
-        || bundle.merkle_proof.steps.len() > SCCP_NEXUS_MAX_MERKLE_PROOF_STEPS_V1
+        || bundle.merkle_proof.steps.len() > SCCP_TAIRA_MAX_MERKLE_PROOF_STEPS_V1
     {
         return false;
     }
@@ -3864,7 +4649,7 @@ pub fn verify_message_bundle_structure(bundle: &NexusSccpMessageProofV1) -> bool
     {
         return false;
     }
-    sccp_message_finality_public_inputs(bundle).is_some()
+    sccp_message_finality_public_inputs_with_finality(bundle, finality).is_some()
 }
 
 fn prefixed_keccak(prefix: &[u8], payload: &[u8]) -> H256 {
@@ -3965,9 +4750,9 @@ fn signer_indices_from_bitmap(bitmap: &[u8], roster_len: usize) -> Option<Vec<us
     Some(indices)
 }
 
-#[cfg(all(test, feature = "bls"))]
+#[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::OnceLock};
+    use std::{cell::Cell, num::NonZeroU64, sync::OnceLock};
 
     use halo2curves::{
         Coordinates, CurveAffine,
@@ -3975,7 +4760,7 @@ mod tests {
         group::{Curve, prime::PrimeCurveAffine},
     };
     use iroha_data_model::{
-        account::AccountId,
+        account::{AccountId, MultisigMember, MultisigPolicy},
         bridge::{
             BridgeProofPayload, BridgeSccpDestinationProofBackendV1, BridgeTransparentProof,
             SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
@@ -3994,7 +4779,7 @@ mod tests {
 
     struct OutboundFixture {
         route: SccpGovernedRouteV1,
-        bundle: NexusSccpMessageProofV1,
+        bundle: TairaSccpMessageProofV1,
         request: SccpGroth16Bn254ProofRequestV1,
         artifact: SccpGroth16Bn254ProofArtifactV1,
         bridge_proof: BridgeSccpDestinationProofV1,
@@ -4073,7 +4858,164 @@ mod tests {
                 signal_7: g1,
                 signal_8: g1,
                 signal_9: g1,
+                signal_10: g1,
             },
+        }
+    }
+
+    fn outbound_proof_policy() -> SccpOutboundProofPolicyV1 {
+        SccpOutboundProofPolicyV1 {
+            version: 1,
+            semantic_profile: SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(
+                SccpGroth16Bn254SemanticCircuitV1 {
+                    version: 1,
+                    circuit_commitment: [0x71; 32],
+                    witness_generator_commitment: [0x72; 32],
+                    public_signal_schema_hash: sccp_groth16_bn254_public_signal_schema_hash_v1(),
+                },
+            ),
+            sora_finality_anchor: SccpSoraFinalityAnchorV1 {
+                version: 1,
+                source_network: SccpNetworkV1::SoraTaira,
+                chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
+                checkpoint_height: 5,
+                checkpoint_block_hash: [0x73; 32],
+                validator_set_epoch: 1,
+                validator_set_hash: [0x74; 32],
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            },
+        }
+    }
+
+    #[test]
+    fn canonical_text_accepts_exact_i105_and_rejects_unicode_substitutions() {
+        let account = AccountId::new(
+            KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+                .expect("canonical-text account fixture key")
+                .public_key()
+                .clone(),
+        );
+        let canonical = account
+            .canonical_i105()
+            .expect("canonical-text account fixture has an I105 form");
+        assert!(
+            !canonical.is_ascii(),
+            "fixture must exercise I105's non-ASCII base-105 digits"
+        );
+        assert_eq!(
+            decode_sccp_normalized_codec_value(SCCP_CODEC_CANONICAL_TEXT, canonical.as_bytes()),
+            Some(SccpNormalizedCodecValueV1::CanonicalText {
+                value: canonical.clone(),
+            })
+        );
+        let test_literal = account
+            .to_account_address()
+            .and_then(|address| address.to_i105_for_discriminant(0x0171))
+            .expect("canonical-text account has a test-discriminant I105 form");
+        assert_eq!(
+            decode_sccp_normalized_codec_value(SCCP_CODEC_CANONICAL_TEXT, test_literal.as_bytes()),
+            Some(SccpNormalizedCodecValueV1::CanonicalText {
+                value: test_literal,
+            }),
+            "canonical SCCP text must preserve the literal's embedded discriminant"
+        );
+
+        let mut checksum_substitution = canonical.clone();
+        let final_digit = checksum_substitution
+            .pop()
+            .expect("I105 fixture has checksum digits");
+        checksum_substitution.push(if final_digit == '1' { '2' } else { '1' });
+        for invalid in [
+            checksum_substitution.as_bytes(),
+            "ｲ".as_bytes(),
+            b"two words".as_slice(),
+            b"line\nbreak".as_slice(),
+            b"invalid\xffutf8".as_slice(),
+        ] {
+            assert_eq!(
+                decode_sccp_normalized_codec_value(SCCP_CODEC_CANONICAL_TEXT, invalid),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn destination_contract_account_policy_is_closed_over_every_multisig_member() {
+        let key = |seed: u8, algorithm| {
+            KeyPair::try_from_seed(vec![seed; 32], algorithm)
+                .expect("destination-controller fixture key")
+                .public_key()
+                .clone()
+        };
+        let ed25519 = key(0x31, Algorithm::Ed25519);
+        let secp256k1 = key(0x32, Algorithm::Secp256k1);
+        let mldsa = key(0x33, Algorithm::MlDsa);
+
+        assert!(sccp_destination_contract_supports_account_v1(
+            &AccountId::new(ed25519.clone())
+        ));
+        assert!(sccp_destination_contract_supports_account_v1(
+            &AccountId::new(secp256k1.clone())
+        ));
+        assert!(!sccp_destination_contract_supports_account_v1(
+            &AccountId::new(mldsa.clone())
+        ));
+
+        let supported_multisig = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(ed25519.clone(), 1).expect("Ed25519 member"),
+                MultisigMember::new(secp256k1, 1).expect("secp256k1 member"),
+            ],
+        )
+        .expect("supported mixed-curve policy");
+        assert!(sccp_destination_contract_supports_account_v1(
+            &AccountId::new_multisig(supported_multisig)
+        ));
+
+        let unsupported_multisig = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(ed25519, 1).expect("Ed25519 member"),
+                MultisigMember::new(mldsa, 1).expect("ML-DSA member"),
+            ],
+        )
+        .expect("valid Rust policy with one unsupported destination member");
+        assert!(!sccp_destination_contract_supports_account_v1(
+            &AccountId::new_multisig(unsupported_multisig)
+        ));
+    }
+
+    #[test]
+    fn normalized_codec_json_is_closed_and_rejects_ambiguous_objects() {
+        let values = [
+            SccpNormalizedCodecValueV1::CanonicalText {
+                value: "route-v1".into(),
+            },
+            SccpNormalizedCodecValueV1::EvmAddress20 { bytes: [0x12; 20] },
+            SccpNormalizedCodecValueV1::TronAddress21 { bytes: [0x41; 21] },
+        ];
+        for value in values {
+            let json = norito::json::to_json(&value).expect("serialize normalized codec value");
+            let decoded = norito::json::from_json::<SccpNormalizedCodecValueV1>(&json)
+                .expect("deserialize canonical normalized codec value");
+            assert_eq!(decoded, value);
+        }
+
+        for hostile in [
+            r#"{"CanonicalText":{"value":"route-v1","extra":true}}"#,
+            r#"{"CanonicalText":{"value":"route-v1","value":"other"}}"#,
+            r#"{"CanonicalText":{}}"#,
+            r#"{"CanonicalText":{"value":"route-v1"},"EvmAddress20":{"bytes":"0x1212121212121212121212121212121212121212"}}"#,
+            r#"{"EvmAddress20":{"bytes":"1212121212121212121212121212121212121212"}}"#,
+            r#"{"EvmAddress20":{"bytes":"0x1212121212121212121212121212121212121212","extra":0}}"#,
+            r#"{"TronAddress21":{"bytes":"0x414141414141414141414141414141414141414141","unexpected":null}}"#,
+            r#"{"Unknown":{"value":"route-v1"}}"#,
+        ] {
+            assert!(
+                norito::json::from_json::<SccpNormalizedCodecValueV1>(hostile).is_err(),
+                "hostile normalized codec JSON must be rejected: {hostile}"
+            );
         }
     }
 
@@ -4087,6 +5029,7 @@ mod tests {
             verifying_key: key,
             verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&key)
                 .expect("valid repeated-generator key"),
+            outbound_proof_policy: outbound_proof_policy(),
             route_address: [0x51; 20],
             route_code_hash: [0x61; 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
@@ -4128,6 +5071,7 @@ mod tests {
             asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1.to_owned(),
             revision,
             activation,
+            inbound_finality_cutoff: None,
             source_identity: SccpSourceIdentityV1 {
                 lane: lane_id,
                 emitter: SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
@@ -4192,11 +5136,11 @@ mod tests {
             .iter()
             .map(|keypair| keypair.public_key().to_string())
             .collect::<Vec<_>>();
-        let validator_set_hash = nexus_validator_set_hash_from_public_keys(&validator_public_keys)
+        let validator_set_hash = taira_validator_set_hash_from_public_keys(&validator_public_keys)
             .expect("valid BLS validator roster");
-        let mut commit_qc = NexusCommitQcV1 {
+        let mut commit_qc = TairaCommitQcV1 {
             version: 1,
-            phase: NexusConsensusPhaseV1::Commit,
+            phase: TairaConsensusPhaseV1::Commit,
             height,
             view: 1,
             epoch: 1,
@@ -4219,7 +5163,7 @@ mod tests {
             signers_bitmap: vec![0b0000_0111],
             bls_aggregate_signature: Vec::new(),
         };
-        let message = nexus_commit_vote_preimage(&chain_id, &commit_qc);
+        let message = taira_commit_vote_preimage(&chain_id, &commit_qc);
         let signatures = keypairs
             .iter()
             .map(|keypair| {
@@ -4233,7 +5177,7 @@ mod tests {
         commit_qc.bls_aggregate_signature =
             iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
                 .expect("aggregate BLS commit votes");
-        to_bytes(&NexusBridgeFinalityProofV1 {
+        to_bytes(&TairaBridgeFinalityProofV1 {
             version: 1,
             chain_id,
             height,
@@ -4245,7 +5189,7 @@ mod tests {
         .expect("canonical finality proof")
     }
 
-    fn message_bundle(route: &SccpGovernedRouteV1) -> NexusSccpMessageProofV1 {
+    fn message_bundle(route: &SccpGovernedRouteV1) -> TairaSccpMessageProofV1 {
         let payload = transfer_payload(route.revision);
         let context = SccpOutboundMessageContextV1::new(
             SccpLaneIdV1 {
@@ -4262,7 +5206,7 @@ mod tests {
             hub_commitment_from_sccp_payload(context, &payload).expect("hub commitment");
         let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
-        let bundle = NexusSccpMessageProofV1 {
+        let bundle = TairaSccpMessageProofV1 {
             version: 1,
             commitment_root,
             commitment,
@@ -4271,17 +5215,37 @@ mod tests {
             finality_proof: signed_finality_proof(commitment_root, 31),
         };
         assert!(verify_message_bundle_structure(&bundle));
-        assert!(verified_sccp_message_nexus_finality_proof_for_production(&bundle).is_some());
+        assert!(
+            verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(&bundle)
+                .is_some()
+        );
         bundle
     }
 
     fn valid_proof(request: &SccpGroth16Bn254ProofRequestV1) -> Vec<u8> {
-        let signals = sccp_groth16_bn254_public_signal_words(
-            &request.public_inputs,
-            request.source_network.domain_id(),
+        valid_proof_for_hash_roles(
+            request,
             request.statement_hash,
             request.destination_binding_hash,
             request.route_configuration_hash,
+            request.sora_finality_anchor_hash,
+        )
+    }
+
+    fn valid_proof_for_hash_roles(
+        request: &SccpGroth16Bn254ProofRequestV1,
+        statement_hash: H256,
+        destination_binding_hash: H256,
+        route_configuration_hash: H256,
+        sora_finality_anchor_hash: H256,
+    ) -> Vec<u8> {
+        let signals = sccp_groth16_bn254_public_signal_words(
+            &request.public_inputs,
+            request.source_network.domain_id(),
+            statement_hash,
+            destination_binding_hash,
+            route_configuration_hash,
+            sora_finality_anchor_hash,
         );
         let mut scalar = Fr::from(3_u64);
         for signal in &signals {
@@ -4321,16 +5285,7 @@ mod tests {
                 build_sccp_groth16_bn254_proof_request_from_governed_route_v1(&bundle, &route)
                     .expect("canonical governed request");
             let proof_bytes = valid_proof(&request);
-            assert!(verify_sccp_groth16_bn254_proof_v1(
-                &request.public_inputs,
-                request.source_network.domain_id(),
-                request.statement_hash,
-                request.destination_binding_hash,
-                request.route_configuration_hash,
-                &proof_bytes,
-                &request.verifying_key,
-                request.verifier_key_hash,
-            ));
+            assert!(verify_sccp_groth16_bn254_proof_v1(&request, &proof_bytes,));
             let artifact = wrap_sccp_evm_groth16_bn254_proof_result(&proof_bytes, &request)
                 .expect("valid Groth16 artifact");
             let bridge_proof =
@@ -4355,15 +5310,16 @@ mod tests {
     #[test]
     fn exact_outbound_path_roundtrips_and_derives_canonical_calldata() {
         let fixture = fixture();
-        let payload_bytes = canonical_sccp_payload_bytes(&fixture.bundle.payload);
+        let payload_bytes = canonical_sccp_payload_bytes(&fixture.bundle.payload)
+            .expect("valid SCCP outbound fixture payload encodes");
         assert_eq!(
             decode_canonical_sccp_payload_bytes(&payload_bytes),
             Some(fixture.bundle.payload.clone())
         );
-        let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked(&fixture.bundle)
+        let bundle_bytes = canonical_taira_sccp_message_bundle_bytes_checked(&fixture.bundle)
             .expect("canonical bundle");
         assert_eq!(bundle_bytes, fixture.request.bundle_bytes);
-        assert!(decode_canonical_nexus_sccp_message_bundle_summary(&bundle_bytes).is_some());
+        assert!(decode_canonical_taira_sccp_message_bundle_summary(&bundle_bytes).is_some());
 
         let request_bytes = encode_canonical_sccp_groth16_bn254_proof_request_v1(&fixture.request)
             .expect("canonical request bytes");
@@ -4433,19 +5389,350 @@ mod tests {
     }
 
     #[test]
-    fn solidity_key_route_and_tenth_signal_vectors_match() {
+    fn artifact_admission_decodes_bundle_once_across_pairing_and_binding() {
+        let fixture = fixture();
+        let decode_calls = Cell::new(0usize);
+        assert!(
+            sccp_groth16_bn254_proof_artifact_is_self_canonical_with_decoder_v1(
+                &fixture.artifact,
+                |bundle_bytes| {
+                    decode_calls.set(decode_calls.get() + 1);
+                    decode_canonical_taira_sccp_message_bundle_summary(bundle_bytes)
+                },
+            )
+        );
+        assert_eq!(decode_calls.get(), 1);
+    }
+
+    #[test]
+    fn owned_destination_context_decodes_once_and_pairs_once() {
+        let fixture = fixture();
+        reset_sccp_destination_proof_work_counters_v1();
+
+        let parsed = parse_sccp_destination_proof_v1(&fixture.bridge_proof)
+            .expect("canonical destination artifact parses");
+        assert_eq!(
+            sccp_destination_proof_work_counters_v1(),
+            SccpDestinationProofWorkCountersV1 {
+                artifact_framing_decodes: 1,
+                bundle_decodes: 1,
+                groth16_pairings: 0,
+                bls_verifications: 0,
+            }
+        );
+
+        let verified = verify_parsed_sccp_destination_proof_v1(parsed, &fixture.route)
+            .expect("parsed artifact binds to governed route");
+        assert_eq!(verified.call().public_inputs, fixture.request.public_inputs);
+        assert_eq!(
+            verified.finality().height,
+            fixture.request.public_inputs.finality_height
+        );
+        assert_eq!(
+            sccp_destination_proof_work_counters_v1(),
+            SccpDestinationProofWorkCountersV1 {
+                artifact_framing_decodes: 1,
+                bundle_decodes: 1,
+                groth16_pairings: 1,
+                bls_verifications: 0,
+            },
+            "Core-bound verification must defer the one authoritative BLS check to local state"
+        );
+    }
+
+    #[test]
+    fn hostile_governed_binding_fails_before_pairing_or_bls() {
+        let fixture = fixture();
+        let parsed = parse_sccp_destination_proof_v1(&fixture.bridge_proof)
+            .expect("canonical destination artifact parses");
+        let hostile_route = governed_route(
+            SccpNetworkV1::EthereumSepolia,
+            fixture.route.revision,
+            SccpRouteActivationV1::Bidirectional,
+        );
+        reset_sccp_destination_proof_work_counters_v1();
+
+        assert!(
+            verify_parsed_sccp_destination_proof_v1(parsed, &hostile_route).is_none(),
+            "cross-profile governed route substitution must fail closed"
+        );
+        assert_eq!(
+            sccp_destination_proof_work_counters_v1(),
+            SccpDestinationProofWorkCountersV1::default(),
+            "state-binding rejection must precede every expensive proof operation"
+        );
+    }
+
+    #[test]
+    fn malformed_destination_framing_and_bundle_fail_before_crypto() {
+        let fixture = fixture();
+        let mut trailing_artifact = fixture.bridge_proof.clone();
+        trailing_artifact.encoded_artifact.push(0);
+        reset_sccp_destination_proof_work_counters_v1();
+        assert!(parse_sccp_destination_proof_v1(&trailing_artifact).is_none());
+        assert_eq!(
+            sccp_destination_proof_work_counters_v1(),
+            SccpDestinationProofWorkCountersV1 {
+                artifact_framing_decodes: 1,
+                bundle_decodes: 0,
+                groth16_pairings: 0,
+                bls_verifications: 0,
+            }
+        );
+
+        let mut malformed_bundle_artifact = fixture.artifact.clone();
+        malformed_bundle_artifact.request.bundle_bytes.push(0);
+        let malformed_bundle = BridgeSccpDestinationProofV1 {
+            backend: fixture.bridge_proof.backend,
+            route_configuration_hash: fixture.bridge_proof.route_configuration_hash,
+            encoded_artifact: to_bytes(&malformed_bundle_artifact)
+                .expect("adversarial artifact has canonical outer Norito framing"),
+        };
+        reset_sccp_destination_proof_work_counters_v1();
+        assert!(parse_sccp_destination_proof_v1(&malformed_bundle).is_none());
+        assert_eq!(
+            sccp_destination_proof_work_counters_v1(),
+            SccpDestinationProofWorkCountersV1 {
+                artifact_framing_decodes: 1,
+                bundle_decodes: 1,
+                groth16_pairings: 0,
+                bls_verifications: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn validated_request_context_reuses_precomputed_public_signals() {
+        let fixture = fixture();
+        let decode_calls = Cell::new(0usize);
+        let validated = validate_sccp_groth16_bn254_proof_request_with_decoder_v1(
+            &fixture.request,
+            fixture.request.backend,
+            |bundle_bytes| {
+                decode_calls.set(decode_calls.get() + 1);
+                decode_canonical_taira_sccp_message_bundle_summary(bundle_bytes)
+            },
+        )
+        .expect("canonical request context");
+        assert_eq!(decode_calls.get(), 1);
+        assert!(
+            verify_sccp_groth16_bn254_proof_against_validated_request_v1(
+                &validated,
+                &fixture.artifact.result.proof_bytes,
+            )
+        );
+        let rebound = bind_sccp_groth16_bn254_proof_result_v1(
+            &fixture.artifact.result.proof_bytes,
+            &validated,
+        )
+        .expect("pairing-verified artifact");
+        assert_eq!(rebound, fixture.artifact);
+        assert_eq!(decode_calls.get(), 1);
+    }
+
+    #[test]
+    fn request_statement_hash_is_separated_from_every_governed_hash_role() {
+        let base = &fixture().request;
+        let governed_roles = [
+            ("destination binding", base.destination_binding_hash),
+            ("route configuration", base.route_configuration_hash),
+            ("verifier key", base.verifier_key_hash),
+            ("semantic proof profile", base.semantic_proof_profile_hash),
+            ("SORA finality anchor", base.sora_finality_anchor_hash),
+        ];
+
+        for (role, role_hash) in governed_roles {
+            assert_ne!(base.statement_hash, role_hash, "fixture aliases {role}");
+            assert!(
+                !sccp_groth16_bn254_request_hash_roles_are_distinct_v1(
+                    role_hash,
+                    base.destination_binding_hash,
+                    base.route_configuration_hash,
+                    base.verifier_key_hash,
+                    base.semantic_proof_profile_hash,
+                    base.sora_finality_anchor_hash,
+                ),
+                "statement alias with {role} was not detected"
+            );
+            let mut candidate = base.clone();
+            candidate.statement_hash = role_hash;
+            assert_request_rejected(candidate);
+        }
+    }
+
+    #[test]
+    fn direct_verifier_rejects_every_hash_role_alias_with_a_matching_proof() {
+        let request = &fixture().request;
+        let role_names = [
+            "statement",
+            "destination binding",
+            "route configuration",
+            "verifier key",
+            "semantic proof profile",
+            "SORA finality anchor",
+        ];
+        let base_roles = [
+            request.statement_hash,
+            request.destination_binding_hash,
+            request.route_configuration_hash,
+            request.verifier_key_hash,
+            request.semantic_proof_profile_hash,
+            request.sora_finality_anchor_hash,
+        ];
+        assert!(hash_roles_are_distinct(base_roles));
+        let proof_bytes = valid_proof(request);
+        let mut zero_semantic_hash = request.clone();
+        zero_semantic_hash.semantic_proof_profile_hash = [0; 32];
+        assert!(
+            !verify_sccp_groth16_bn254_proof_v1(&zero_semantic_hash, &proof_bytes,),
+            "accepted a zero semantic-proof-profile hash"
+        );
+
+        for first in 0..base_roles.len() {
+            for second in first + 1..base_roles.len() {
+                let mut roles = base_roles;
+                if second == 3 {
+                    // Keep the governed verifier-key hash exact and alias the other role to it.
+                    roles[first] = roles[second];
+                } else {
+                    roles[second] = roles[first];
+                }
+                assert!(!hash_roles_are_distinct(roles));
+
+                let proof_bytes =
+                    valid_proof_for_hash_roles(request, roles[0], roles[1], roles[2], roles[5]);
+                let proof = decode_sccp_evm_groth16_bn254_proof_bytes(&proof_bytes)
+                    .expect("generated proof is canonical");
+                let signals = sccp_groth16_bn254_public_signal_words(
+                    &request.public_inputs,
+                    request.source_network.domain_id(),
+                    roles[0],
+                    roles[1],
+                    roles[2],
+                    roles[5],
+                );
+                assert!(
+                    verify_sccp_groth16_bn254_pairing_equation_v1(
+                        &proof,
+                        &signals,
+                        &request.verifying_key,
+                    ),
+                    "test proof does not match {} == {}",
+                    role_names[first],
+                    role_names[second]
+                );
+                assert!(
+                    {
+                        let mut aliased = request.clone();
+                        aliased.statement_hash = roles[0];
+                        aliased.destination_binding_hash = roles[1];
+                        aliased.route_configuration_hash = roles[2];
+                        aliased.verifier_key_hash = roles[3];
+                        aliased.semantic_proof_profile_hash = roles[4];
+                        aliased.sora_finality_anchor_hash = roles[5];
+                        !verify_sccp_groth16_bn254_proof_v1(&aliased, &proof_bytes)
+                    },
+                    "accepted {} == {}",
+                    role_names[first],
+                    role_names[second]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ten_signal_json_and_norito_verifying_keys_are_rejected() {
+        #[derive(norito::derive::NoritoSerialize)]
+        struct TenSignalIcV1 {
+            constant: SccpBn254G1PointV1,
+            signal_0: SccpBn254G1PointV1,
+            signal_1: SccpBn254G1PointV1,
+            signal_2: SccpBn254G1PointV1,
+            signal_3: SccpBn254G1PointV1,
+            signal_4: SccpBn254G1PointV1,
+            signal_5: SccpBn254G1PointV1,
+            signal_6: SccpBn254G1PointV1,
+            signal_7: SccpBn254G1PointV1,
+            signal_8: SccpBn254G1PointV1,
+            signal_9: SccpBn254G1PointV1,
+        }
+
+        #[derive(norito::derive::NoritoSerialize)]
+        struct TenSignalVerifyingKeyV1 {
+            version: u8,
+            alpha1: SccpBn254G1PointV1,
+            beta2: SccpBn254G2PointV1,
+            gamma2: SccpBn254G2PointV1,
+            delta2: SccpBn254G2PointV1,
+            ic: TenSignalIcV1,
+        }
+
+        let request = &fixture().request;
+        let mut request_json =
+            norito::json::to_value(request).expect("serialize canonical proof request");
+        let ic = request_json
+            .get_mut("verifying_key")
+            .and_then(norito::json::Value::as_object_mut)
+            .and_then(|key| key.get_mut("ic"))
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("proof request contains a typed IC object");
+        assert!(ic.remove("signal_10").is_some());
+        let ten_signal_json =
+            norito::json::to_json(&request_json).expect("serialize ten-signal request JSON");
+        assert!(
+            norito::json::from_json::<SccpGroth16Bn254ProofRequestV1>(&ten_signal_json).is_err()
+        );
+        assert!(
+            decode_canonical_sccp_groth16_bn254_proof_request_json_v1(&ten_signal_json).is_none()
+        );
+
+        let key = verifying_key();
+        let old_key = TenSignalVerifyingKeyV1 {
+            version: key.version,
+            alpha1: key.alpha1,
+            beta2: key.beta2,
+            gamma2: key.gamma2,
+            delta2: key.delta2,
+            ic: TenSignalIcV1 {
+                constant: key.ic.constant,
+                signal_0: key.ic.signal_0,
+                signal_1: key.ic.signal_1,
+                signal_2: key.ic.signal_2,
+                signal_3: key.ic.signal_3,
+                signal_4: key.ic.signal_4,
+                signal_5: key.ic.signal_5,
+                signal_6: key.ic.signal_6,
+                signal_7: key.ic.signal_7,
+                signal_8: key.ic.signal_8,
+                signal_9: key.ic.signal_9,
+            },
+        };
+        let old_key_bytes = to_bytes(&old_key).expect("encode old ten-signal Norito key");
+        assert!(
+            norito::decode_from_bytes::<SccpGroth16Bn254VerifyingKeyV1>(&old_key_bytes).is_err()
+        );
+        assert_eq!(
+            canonical_sccp_groth16_bn254_verifying_key_bytes_v1(&key)
+                .expect("canonical eleven-signal key")
+                .len(),
+            38 * 32
+        );
+    }
+
+    #[test]
+    fn solidity_key_route_and_eleventh_signal_vectors_match() {
         let key = verifying_key();
         assert!(sccp_groth16_bn254_verifying_key_is_well_formed_v1(&key));
         assert_eq!(
             canonical_sccp_groth16_bn254_verifying_key_bytes_v1(&key)
                 .expect("canonical key")
                 .len(),
-            36 * 32
+            38 * 32
         );
         assert_eq!(
             sccp_groth16_bn254_verifying_key_hash_v1(&key),
             Some(hex32(
-                "51f287450cb7bcc401e07ffe5d726f13aee45f6cce5cb0c8415794d4ba47c774"
+                "6923e63427820ab42cc16c3c2bc0eb4097577919bb3911ea50cbb4f20cebfddb"
             ))
         );
 
@@ -4456,6 +5743,7 @@ mod tests {
             verifier_code_hash: [0x41; 32],
             verifying_key: key,
             verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&key).unwrap(),
+            outbound_proof_policy: outbound_proof_policy(),
             route_address: [0x51; 20],
             route_code_hash: [0x61; 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
@@ -4478,7 +5766,7 @@ mod tests {
         .expect("TRON contract route config");
         assert_eq!(
             route_config,
-            hex32("6571ac200c92c7db53afa625984f3cbcc5d2d2490033812b4cbac84f3fa7cfc9")
+            hex32("3546ddb81c89ee998e9eaf7a517b6a59346f8dd28a4727de87dac33da4f04c5f")
         );
 
         let request = &fixture().request;
@@ -4488,8 +5776,9 @@ mod tests {
             request.statement_hash,
             request.destination_binding_hash,
             request.route_configuration_hash,
+            request.sora_finality_anchor_hash,
         );
-        assert_eq!(signals.len(), 10);
+        assert_eq!(signals.len(), 11);
         assert_eq!(
             signals[9],
             sccp_groth16_bn254_signal_word(
@@ -4504,6 +5793,22 @@ mod tests {
             sccp_groth16_bn254_signal_word(
                 SCCP_GROTH16_BN254_SIGNAL_ROUTE_CONFIGURATION_HASH_V1,
                 changed,
+            )
+        );
+        assert_eq!(
+            signals[10],
+            sccp_groth16_bn254_signal_word(
+                SCCP_GROTH16_BN254_SIGNAL_SORA_FINALITY_ANCHOR_HASH_V1,
+                request.sora_finality_anchor_hash,
+            )
+        );
+        let mut changed_anchor = request.sora_finality_anchor_hash;
+        changed_anchor[0] ^= 1;
+        assert_ne!(
+            signals[10],
+            sccp_groth16_bn254_signal_word(
+                SCCP_GROTH16_BN254_SIGNAL_SORA_FINALITY_ANCHOR_HASH_V1,
+                changed_anchor,
             )
         );
     }
@@ -4525,7 +5830,7 @@ mod tests {
         );
         reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
             .source_network =
-            SccpNetworkV1::SoraNexus);
+            SccpNetworkV1::SoraTaira);
         reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
             .target_network =
             SccpNetworkV1::EthereumSepolia);
@@ -4558,6 +5863,25 @@ mod tests {
             .y = word_u64(3));
         reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
             .verifier_key_hash[0] ^=
+            1);
+        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| {
+            let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(ref mut circuit) =
+                candidate.semantic_proof_profile;
+            circuit.circuit_commitment[0] ^= 1;
+        });
+        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
+            .semantic_proof_profile_hash[0] ^=
+            1);
+        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
+            .sora_finality_anchor
+            .checkpoint_height +=
+            1);
+        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
+            .sora_finality_anchor
+            .validator_set_hash[0] ^=
+            1);
+        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
+            .sora_finality_anchor_hash[0] ^=
             1);
         reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
             .bundle_bytes
@@ -4777,6 +6101,7 @@ mod tests {
         assert!(decode_bridge_sccp_destination_proof_v1(&outer).is_none());
 
         let generic = BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+            verifier_manifest_hash: [0x91; 32],
             proof: ProofBox::new("generic-transparent".to_owned(), vec![1, 2, 3]),
             recursion_depth: None,
         });
@@ -4810,8 +6135,13 @@ mod tests {
         payload.route_revision = 2;
         candidates.push(candidate);
         let mut candidate = fixture.bundle.clone();
-        let mut finality = decode_nexus_bridge_finality_proof(&candidate.finality_proof).unwrap();
+        let mut finality = decode_taira_bridge_finality_proof(&candidate.finality_proof).unwrap();
         finality.height += 1;
+        candidate.finality_proof = to_bytes(&finality).unwrap();
+        candidates.push(candidate);
+        let mut candidate = fixture.bundle.clone();
+        let mut finality = decode_taira_bridge_finality_proof(&candidate.finality_proof).unwrap();
+        finality.chain_id = "00000000-0000-0000-0000-000000000753".to_owned();
         candidate.finality_proof = to_bytes(&finality).unwrap();
         candidates.push(candidate);
         for candidate in candidates {
@@ -4835,13 +6165,39 @@ mod tests {
     }
 
     #[test]
+    fn taira_validator_text_uniqueness_is_bounded_at_the_full_roster_limit() {
+        let mut keys = (0..SCCP_TAIRA_MAX_FINALITY_VALIDATORS_V1)
+            .map(|index| format!("validator-{index:04}"))
+            .collect::<Vec<_>>();
+        assert!(taira_validator_public_key_texts_are_bounded_and_unique(
+            &keys
+        ));
+
+        keys[SCCP_TAIRA_MAX_FINALITY_VALIDATORS_V1 - 1] = keys[0].clone();
+        assert!(!taira_validator_public_key_texts_are_bounded_and_unique(
+            &keys
+        ));
+
+        keys.pop();
+        keys.push(String::new());
+        assert!(!taira_validator_public_key_texts_are_bounded_and_unique(
+            &keys
+        ));
+
+        let over_limit = vec!["validator".to_owned(); SCCP_TAIRA_MAX_FINALITY_VALIDATORS_V1 + 1];
+        assert!(!taira_validator_public_key_texts_are_bounded_and_unique(
+            &over_limit
+        ));
+    }
+
+    #[test]
     fn quorum_formula_matches_consensus_for_every_supported_roster() {
-        for roster_len in 1..=SCCP_NEXUS_MAX_FINALITY_VALIDATORS_V1 {
+        for roster_len in 1..=SCCP_TAIRA_MAX_FINALITY_VALIDATORS_V1 {
             let expected = roster_len.saturating_mul(2) / 3 + 1;
-            assert_eq!(nexus_min_votes_for_len(roster_len), expected);
+            assert_eq!(taira_min_votes_for_len(roster_len), expected);
             assert!(expected <= roster_len);
             if expected > 1 {
-                assert!((expected - 1) < nexus_min_votes_for_len(roster_len));
+                assert!((expected - 1) < taira_min_votes_for_len(roster_len));
             }
         }
     }

@@ -1,12 +1,12 @@
 // Demonstrates an opcode whose required header capability is derived by the
 // compiler. ABI v1, vector width, and cycle limits are build/runtime policy;
-// contract source cannot override them.
+// seiyaku source cannot override them.
 seiyaku MetaDemo {
-    // Contract initializer (run on deploy by the runtime)
+    // hajimari/始まり hook staged by the runtime at activation.
     hajimari() {
         // Emit a ZK opcode so capability inference is exercised. Vector width is
         // not a source-level option in V1.
-        let _digest = crypto::poseidon2(1, 2);
+        let _digest = crypto::poseidon2(left: 1, right: 2);
         let a = 1;
     }
 }

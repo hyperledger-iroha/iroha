@@ -80,6 +80,12 @@ or invalid PoPs, duplicate/out-of-range signers, invalid signatures, and
 unexpected epochs before counting quorum so light clients can reuse a single
 verifier.
 
+Cryptographic verification requires BLS support. SCCP builds without BLS do
+not downgrade to structural-only acceptance: proof-controlled SORA aggregate
+verification returns no success and BSC native finality reports
+`BlsUnavailable`. A structurally well-formed certificate is never a substitute
+for PoP and aggregate-signature verification.
+
 ## Reference verifier
 
 `BridgeFinalityVerifier` accepts an expected `chain_id` plus explicit trusted
@@ -112,4 +118,7 @@ bootstraps trust from the first observed proof.
   perform the same tuple check before signature verification and discard
   mismatched payloads.
 - Future work can add MMR/authority‑set commitment chains to reduce proof size
-  the commit certificate inside richer commitment envelopes.
+  and carry the commit certificate inside richer commitment envelopes. This is
+  a genuine future extension; SCCP V1 instead binds its typed Taira finality
+  anchor and verifies the referenced committed block/QC against local trusted
+  state.

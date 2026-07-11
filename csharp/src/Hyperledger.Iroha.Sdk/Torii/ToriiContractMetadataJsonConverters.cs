@@ -8,24 +8,7 @@ internal static class ToriiContractMetadataJson
 {
     internal static void ValidateContractCodeRecord(ToriiContractCodeRecord response, string context)
     {
-        ArgumentNullException.ThrowIfNull(response);
-        if (response.Manifest is null)
-        {
-            throw new JsonException($"{context}.manifest is required.");
-        }
-
-        ValidateContractManifestSummary(response.Manifest, $"{context}.manifest");
-    }
-
-    internal static void ValidateContractManifestSummary(ToriiContractManifestSummary? response, string context)
-    {
-        if (response is null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        ToriiSseEventJson.RequireExactSizedHex(response.CodeHash, $"{context}.code_hash", 32);
-        ToriiSseEventJson.RequireExactSizedHex(response.AbiHash, $"{context}.abi_hash", 32);
+        ToriiContractManifestJson.ValidateRecord(response, context);
     }
 
     internal static void ValidateContractCodeView(ToriiContractCodeView response, string context)
@@ -172,8 +155,8 @@ internal static class ToriiContractMetadataJson
             _ when TryMapCollectionField(paramName, nameof(ToriiContractViewAnalysis.Syscalls), "syscalls", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiContractCodeView.Entrypoints), "entrypoints", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiContractCodeView.Warnings), "warnings", out var mapped) => mapped,
-            nameof(ToriiContractManifestSummary.CodeHash) => "code_hash",
-            nameof(ToriiContractManifestSummary.AbiHash) => "abi_hash",
+            nameof(ToriiContractCodeRecord.CodeHash) => "code_hash",
+            nameof(ToriiContractCodeRecord.AbiHash) => "abi_hash",
             nameof(ToriiContractCodeRecord.Manifest) => "manifest",
             nameof(ToriiContractCodeView.DeclaredCodeHash) => "declared_code_hash",
             nameof(ToriiContractCodeView.CompilerFingerprint) => "compiler_fingerprint",
@@ -226,49 +209,11 @@ internal static class ToriiContractMetadataJson
         return false;
     }
 
-    internal static ToriiContractManifestSummary ReadContractManifestSummary(
-        ref Utf8JsonReader reader,
-        string context)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, context);
-        try
-        {
-            var response = new ToriiContractManifestSummary
-            {
-                CodeHash = ReadRequiredString(payload, "code_hash", $"{context}.code_hash"),
-                AbiHash = ReadRequiredString(payload, "abi_hash", $"{context}.abi_hash"),
-            };
-            ValidateContractManifestSummary(response, context);
-            return response;
-        }
-        catch (ArgumentException error) when (error.ParamName is not null)
-        {
-            throw DirectMetadataErrorToJsonException(error, context);
-        }
-    }
-
     internal static ToriiContractCodeRecord ReadContractCodeRecord(
         ref Utf8JsonReader reader,
         string context)
     {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, context);
-        try
-        {
-            var response = new ToriiContractCodeRecord
-            {
-                Manifest = ReadRequiredObject<ToriiContractManifestSummary>(
-                    payload,
-                    "manifest",
-                    $"{context}.manifest",
-                    "contract manifest summary"),
-            };
-            ValidateContractCodeRecord(response, context);
-            return response;
-        }
-        catch (ArgumentException error) when (error.ParamName is not null)
-        {
-            throw DirectMetadataErrorToJsonException(error, context);
-        }
+        return ToriiContractManifestJson.ReadRecord(ref reader, context);
     }
 
     internal static ToriiContractViewAccessHints ReadAccessHints(
@@ -525,27 +470,9 @@ internal static class ToriiContractMetadataJson
         }
     }
 
-    internal static void WriteContractManifestSummary(
-        Utf8JsonWriter writer,
-        ToriiContractManifestSummary value,
-        string context)
-    {
-        ValidateContractManifestSummary(value, context);
-
-        writer.WriteStartObject();
-        writer.WriteString("code_hash", value.CodeHash);
-        writer.WriteString("abi_hash", value.AbiHash);
-        writer.WriteEndObject();
-    }
-
     internal static void WriteContractCodeRecord(Utf8JsonWriter writer, ToriiContractCodeRecord value, string context)
     {
-        ValidateContractCodeRecord(value, context);
-
-        writer.WriteStartObject();
-        writer.WritePropertyName("manifest");
-        WriteContractManifestSummary(writer, value.Manifest, $"{context}.manifest");
-        writer.WriteEndObject();
+        ToriiContractManifestJson.WriteRecord(writer, value, context);
     }
 
     internal static void WriteAccessHints(Utf8JsonWriter writer, ToriiContractViewAccessHints value, string context)
@@ -1075,24 +1002,6 @@ internal static class ToriiContractMetadataJson
         {
             throw new JsonException($"{field} must not contain NUL characters.");
         }
-    }
-}
-
-internal sealed class ToriiContractManifestSummaryJsonConverter : JsonConverter<ToriiContractManifestSummary>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiContractManifestSummary Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        return ToriiContractMetadataJson.ReadContractManifestSummary(ref reader, "contract manifest summary");
-    }
-
-    public override void Write(Utf8JsonWriter writer, ToriiContractManifestSummary value, JsonSerializerOptions options)
-    {
-        ToriiContractMetadataJson.WriteContractManifestSummary(writer, value, "contract manifest summary");
     }
 }
 

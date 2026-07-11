@@ -41,6 +41,7 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Literal,
     Mapping,
     MutableMapping,
     Optional,
@@ -55,8 +56,10 @@ import requests
 from .sccp import (
     SccpBridgeSubmitResponse,
     SccpCapabilities,
-    SccpRegistry,
     SccpRecentMessages,
+    SccpRegistry,
+    SccpRegistryLimits,
+    SccpResourceLimits,
     normalize_bridge_message_submit_payload,
     normalize_bridge_proof_submit_payload,
     normalize_sccp_capabilities,
@@ -64,9 +67,126 @@ from .sccp import (
     normalize_sccp_proof_request,
     normalize_sccp_recent_messages,
     normalize_sccp_registry,
-    parse_sccp_json_object,
     parse_sccp_bridge_submit_response_json,
+    parse_sccp_json_object,
 )
+
+# SCCP response limits apply to bytes yielded by Requests after transfer
+# decoding. Content-Length remains an early rejection hint, never the sole
+# authority, because it may be missing, dishonest, or describe encoded bytes.
+_SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64 * 1024
+_SCCP_RECENT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+_SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024
+_SCCP_SUBMIT_RESPONSE_MAX_BYTES = _SCCP_JSON_RESPONSE_MAX_BYTES
+_SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
+_SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES = (
+    _SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024
+)
+_SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME = "iroha_sccp::TairaSccpMessageProofV1"
+_SCCP_PROOF_REQUEST_NORITO_TYPE_NAME = (
+    "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
+)
+_NORITO_HEADER_BYTES = 40
+_NORITO_MAX_HEADER_PADDING_BYTES = 64
+_NORITO_COMPACT_LEN_FLAG = 0x02
+_NORITO_PACKED_STRUCT_FLAG = 0x04
+_NORITO_FIELD_BITSET_FLAG = 0x20
+_NORITO_SUPPORTED_FLAGS_MASK = (
+    0x01
+    | _NORITO_COMPACT_LEN_FLAG
+    | _NORITO_PACKED_STRUCT_FLAG
+    | _NORITO_FIELD_BITSET_FLAG
+)
+_NORITO_CRC64_MASK = 0xFFFF_FFFF_FFFF_FFFF
+_NORITO_CRC64_REFLECTED_POLY = 0xC96C_5795_D787_0F42
+
+
+def _build_norito_crc64_table() -> Tuple[int, ...]:
+    table: List[int] = []
+    for value in range(256):
+        crc = value
+        for _ in range(8):
+            crc = (
+                (crc >> 1) ^ _NORITO_CRC64_REFLECTED_POLY
+                if crc & 1
+                else crc >> 1
+            )
+        table.append(crc)
+    return tuple(table)
+
+
+_NORITO_CRC64_TABLE = _build_norito_crc64_table()
+
+
+def _norito_crc64_xz(payload: bytes) -> int:
+    crc = _NORITO_CRC64_MASK
+    for byte in payload:
+        crc = _NORITO_CRC64_TABLE[(crc ^ byte) & 0xFF] ^ (crc >> 8)
+    return (crc ^ _NORITO_CRC64_MASK) & _NORITO_CRC64_MASK
+
+
+def _norito_schema_hash_for_type_name(type_name: str) -> bytes:
+    return hashlib.sha256(
+        b"norito:v1:type-name\0" + type_name.encode("utf-8")
+    ).digest()[:16]
+
+
+def _validate_sccp_norito_frame(
+    body: bytes, *, context: str, expected_type_name: str
+) -> None:
+    """Preflight one opaque SCCP response as a canonical uncompressed Norito frame."""
+
+    if len(body) < _NORITO_HEADER_BYTES:
+        raise ValueError(
+            f"{context} is shorter than the {_NORITO_HEADER_BYTES}-byte Norito header"
+        )
+    if body[:4] != b"NRT0":
+        raise ValueError(f"{context} is not an NRT0 frame")
+    major, minor = body[4], body[5]
+    if major != 0 or minor != 0:
+        raise ValueError(f"{context} uses unsupported NRT0 version {major}.{minor}")
+
+    schema_hash = body[6:22]
+    if schema_hash == b"\0" * 16:
+        raise ValueError(f"{context} uses the reserved all-zero schema hash")
+    expected_schema_hash = _norito_schema_hash_for_type_name(expected_type_name)
+    if schema_hash != expected_schema_hash:
+        raise ValueError(f"{context} schema hash did not match the expected type")
+    if body[22] != 0:
+        raise ValueError(f"{context} must use uncompressed Norito payload encoding")
+
+    payload_length = int.from_bytes(body[23:31], "little")
+    if payload_length == 0:
+        raise ValueError(f"{context} must contain a non-empty Norito payload")
+    expected_checksum = int.from_bytes(body[31:39], "little")
+    flags = body[39]
+    if flags & ~_NORITO_SUPPORTED_FLAGS_MASK:
+        raise ValueError(f"{context} uses unsupported Norito header flags 0x{flags:02x}")
+    required_bitset_flags = _NORITO_PACKED_STRUCT_FLAG | _NORITO_COMPACT_LEN_FLAG
+    if (
+        flags & _NORITO_FIELD_BITSET_FLAG
+        and flags & required_bitset_flags != required_bitset_flags
+    ):
+        raise ValueError(f"{context} uses an invalid Norito header flag combination")
+
+    padding_length = len(body) - _NORITO_HEADER_BYTES - payload_length
+    if padding_length < 0:
+        raise ValueError(f"{context} payload length exceeds the available frame bytes")
+    if padding_length > _NORITO_MAX_HEADER_PADDING_BYTES:
+        raise ValueError(
+            f"{context} exceeds the {_NORITO_MAX_HEADER_PADDING_BYTES}-byte "
+            "Norito header-padding bound"
+        )
+    payload_start = _NORITO_HEADER_BYTES + padding_length
+    if any(body[_NORITO_HEADER_BYTES:payload_start]):
+        raise ValueError(f"{context} contains non-zero alignment padding or trailing bytes")
+    payload_end = payload_start + payload_length
+    payload = body[payload_start:payload_end]
+    if len(payload) != payload_length or payload_end != len(body):
+        raise ValueError(f"{context} contains trailing bytes outside the declared payload")
+    if _norito_crc64_xz(payload) != expected_checksum:
+        raise ValueError(f"{context} CRC64 mismatch")
+
 
 BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 IROHA_POEM_KANA_HALFWIDTH = (
@@ -208,6 +328,43 @@ def _decode_i105_string(encoded: str) -> bytes:
     return canonical
 
 
+def _encode_i105_string(canonical: bytes, discriminant: int) -> str:
+    """Render decoded address bytes with the one canonical I105 sentinel."""
+
+    leading_zeroes = len(canonical) - len(canonical.lstrip(b"\x00"))
+    value = int.from_bytes(canonical, "big")
+    digits: List[int] = []
+    while value:
+        value, remainder = divmod(value, I105_BASE)
+        digits.append(remainder)
+    encoded_digits = [0] * leading_zeroes + list(reversed(digits))
+    if not encoded_digits:
+        encoded_digits = [0]
+
+    sentinel = next(
+        (
+            name
+            for name, known_discriminant in I105_SENTINEL_DISCRIMINANTS.items()
+            if known_discriminant == discriminant
+        ),
+        f"{I105_NUMERIC_SENTINEL_PREFIX}{discriminant}",
+    )
+    return sentinel + "".join(
+        I105_ALPHABET[digit]
+        for digit in (*encoded_digits, *_i105_checksum_digits(canonical))
+    )
+
+
+def _decode_canonical_i105_string(encoded: str) -> bytes:
+    """Parse an I105 literal and reject every non-canonical re-rendering."""
+
+    _, discriminant, _ = _parse_i105_sentinel_and_payload(encoded)
+    canonical = _decode_i105_string(encoded)
+    if _encode_i105_string(canonical, discriminant) != encoded:
+        raise ValueError("i105 address must use its exact canonical rendering")
+    return canonical
+
+
 @dataclass(frozen=True)
 class I105NetworkPrefix:
     """Network prefix decoded from a canonical I105 account/address literal."""
@@ -299,6 +456,8 @@ __all__ = [
     "NodeCryptoCapabilities",
     "NodeCapabilities",
     "SccpCapabilities",
+    "SccpRegistryLimits",
+    "SccpResourceLimits",
     "SccpRegistry",
     "SccpRecentMessages",
     "SccpBridgeSubmitResponse",
@@ -1059,6 +1218,54 @@ def _format_error_body(text: str) -> str:
     if reject_code:
         return f"{compact}; reject_code={reject_code}"
     return compact
+
+
+def _read_bounded_sccp_response_body(
+    response: requests.Response,
+    maximum_body_bytes: int,
+    context: str,
+) -> bytes:
+    """Drain one SCCP response through a strict actual-byte bound and close it."""
+
+    if (
+        isinstance(maximum_body_bytes, bool)
+        or not isinstance(maximum_body_bytes, int)
+        or maximum_body_bytes < 0
+    ):
+        raise ValueError(f"{context} response byte-size bound is invalid")
+
+    try:
+        raw_content_length = response.headers.get("Content-Length")
+        if raw_content_length is not None:
+            if not isinstance(raw_content_length, str) or re.fullmatch(
+                r"(?:0|[1-9][0-9]*)", raw_content_length
+            ) is None:
+                raise ValueError(
+                    f"{context} response Content-Length must be a canonical unsigned decimal integer"
+                )
+            maximum_literal = str(maximum_body_bytes)
+            if len(raw_content_length) > len(maximum_literal) or (
+                len(raw_content_length) == len(maximum_literal)
+                and raw_content_length > maximum_literal
+            ):
+                raise ValueError(
+                    f"{context} response exceeds its {maximum_body_bytes}-byte size bound"
+                )
+
+        body = bytearray()
+        for chunk in response.iter_content(chunk_size=8192, decode_unicode=False):
+            if not chunk:
+                continue
+            if not isinstance(chunk, (bytes, bytearray)):
+                raise TypeError(f"{context} response body yielded a non-byte chunk")
+            if len(chunk) > maximum_body_bytes - len(body):
+                raise ValueError(
+                    f"{context} response exceeds its {maximum_body_bytes}-byte size bound"
+                )
+            body.extend(chunk)
+        return bytes(body)
+    finally:
+        response.close()
 
 
 def canonical_request_message(
@@ -2995,7 +3202,7 @@ class ContractDeployContractReceipt:
     contract_alias: Optional[str]
     contract_address: Optional[str]
     previous_contract_address: Optional[str]
-    upgraded: bool
+    kaizen: bool
     dataspace: Optional[str]
     deploy_nonce: Optional[int]
     tx_hash_hex: Optional[str]
@@ -4106,37 +4313,59 @@ class ToriiClient:
     def get_sccp_capabilities(self) -> SccpCapabilities:
         """Fetch exact SCCP capability discovery (`GET /v1/sccp/capabilities`)."""
 
-        payload = self._get_sccp_json_object("/v1/sccp/capabilities", context="sccp capabilities")
+        payload = self._get_sccp_json_object(
+            "/v1/sccp/capabilities",
+            context="sccp capabilities",
+            maximum_body_bytes=_SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
+        )
         return normalize_sccp_capabilities(payload)
 
     def get_sccp_registry(self) -> SccpRegistry:
         """Fetch the authoritative typed SCCP registry (`GET /v1/sccp/registry`)."""
 
-        payload = self._get_sccp_json_object("/v1/sccp/registry", context="sccp registry")
+        payload = self._get_sccp_json_object(
+            "/v1/sccp/registry",
+            context="sccp registry",
+            maximum_body_bytes=_SCCP_JSON_RESPONSE_MAX_BYTES,
+        )
         return normalize_sccp_registry(payload)
 
     def get_sccp_message_bundle(
         self, message_id: str, *, format: str = "json"
     ) -> Union[Mapping[str, Any], bytes]:
-        """Fetch one state-derived message/finality bundle by canonical message id."""
+        """Fetch one state-derived message/finality bundle by canonical message id.
+
+        Native responses are preflighted as canonical uncompressed Norito frames bound to
+        ``TairaSccpMessageProofV1``. The frame remains opaque, so this lightweight client does
+        not independently bind the embedded message id to the request path.
+        """
 
         return self._get_sccp_typed_object(
             f"/v1/sccp/proofs/message/{self._sccp_message_id(message_id)}",
             format=format,
             context="sccp message bundle",
             normalize=normalize_sccp_message_bundle,
+            maximum_norito_body_bytes=_SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES,
+            expected_norito_type_name=_SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME,
         )
 
     def get_sccp_proof_request(
         self, message_id: str, *, format: str = "json"
     ) -> Union[Mapping[str, Any], bytes]:
-        """Fetch one query-free state-derived Groth16 request by canonical message id."""
+        """Fetch one query-free state-derived Groth16 request by canonical message id.
+
+        Native responses are preflighted as canonical uncompressed Norito frames bound to
+        ``SccpGroth16Bn254ProofRequestV1``. The frame remains opaque, so this lightweight client
+        does not independently bind the embedded message id to the request path.
+        """
 
         return self._get_sccp_typed_object(
             f"/v1/sccp/proof-requests/{self._sccp_message_id(message_id)}",
             format=format,
             context="sccp proof request",
             normalize=normalize_sccp_proof_request,
+            maximum_norito_body_bytes=_SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES,
+            expected_norito_type_name=_SCCP_PROOF_REQUEST_NORITO_TYPE_NAME,
         )
 
     def get_sccp_recent_messages(
@@ -4149,18 +4378,19 @@ class ToriiClient:
             if (
                 isinstance(from_height, bool)
                 or not isinstance(from_height, int)
-                or not 0 <= from_height <= 0xFFFF_FFFF_FFFF_FFFF
+                or not 1 <= from_height <= 0xFFFF_FFFF_FFFF_FFFF
             ):
-                raise ValueError("SCCP recent-message from_height must be a u64")
+                raise ValueError("SCCP recent-message from_height must be a positive u64")
             params_dict["from"] = str(from_height)
         if limit is not None:
-            if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 50:
-                raise ValueError("SCCP recent-message limit must be an integer in 0..50")
+            if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+                raise ValueError("SCCP recent-message limit must be an integer in 1..50")
             params_dict["limit"] = str(limit)
         payload = self._get_sccp_json_object(
             "/v1/sccp/messages/recent",
             context="sccp recent messages",
             params=params_dict or None,
+            maximum_body_bytes=_SCCP_RECENT_RESPONSE_MAX_BYTES,
         )
         return normalize_sccp_recent_messages(payload)
 
@@ -4170,9 +4400,14 @@ class ToriiClient:
         authority: str,
         destination_proof_b64: str,
         signature_b64: Optional[str] = None,
+        transaction_payload_b64: Optional[str] = None,
         creation_time_ms: Optional[int] = None,
     ) -> SccpBridgeSubmitResponse:
-        """Submit one exact SORA-origin proof (`POST /v1/bridge/proofs/submit`)."""
+        """Prepare or submit one exact SORA-origin proof.
+
+        Signed submission requires the byte-identical prepared transaction payload, its detached
+        signature, and the preparation response's creation timestamp.
+        """
 
         candidate: Dict[str, Any] = {
             "authority": authority,
@@ -4180,6 +4415,7 @@ class ToriiClient:
         }
         for key, value in (
             ("signature_b64", signature_b64),
+            ("transaction_payload_b64", transaction_payload_b64),
             ("creation_time_ms", creation_time_ms),
         ):
             if value is not None:
@@ -4197,9 +4433,14 @@ class ToriiClient:
         authority: str,
         native_proof_b64: str,
         signature_b64: Optional[str] = None,
+        transaction_payload_b64: Optional[str] = None,
         creation_time_ms: Optional[int] = None,
     ) -> SccpBridgeSubmitResponse:
-        """Submit one exact native inbound proof (`POST /v1/bridge/messages`)."""
+        """Prepare or submit one exact native inbound proof.
+
+        Signed submission requires the byte-identical prepared transaction payload, its detached
+        signature, and the preparation response's creation timestamp.
+        """
 
         candidate: Dict[str, Any] = {
             "authority": authority,
@@ -4207,6 +4448,7 @@ class ToriiClient:
         }
         for key, value in (
             ("signature_b64", signature_b64),
+            ("transaction_payload_b64", transaction_payload_b64),
             ("creation_time_ms", creation_time_ms),
         ):
             if value is not None:
@@ -4234,15 +4476,27 @@ class ToriiClient:
         *,
         context: str,
         params: Optional[Mapping[str, str]] = None,
+        maximum_body_bytes: int,
     ) -> Mapping[str, Any]:
         response = self._request(
-            "GET", path, params=params, headers={"Accept": "application/json"}
+            "GET",
+            path,
+            params=params,
+            headers={"Accept": "application/json"},
+            stream=True,
         )
-        self._expect_status(response, {200})
+        self._expect_status(
+            response,
+            {200},
+            maximum_body_bytes=maximum_body_bytes,
+            context=context,
+        )
         content_type = response.headers.get("Content-Type", "")
         if re.fullmatch(r"application/json(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
+            response.close()
             raise TypeError(f"{context} response must use application/json content type")
-        return parse_sccp_json_object(response.content, context)
+        body = _read_bounded_sccp_response_body(response, maximum_body_bytes, context)
+        return parse_sccp_json_object(body, context)
 
     def _get_sccp_typed_object(
         self,
@@ -4251,23 +4505,43 @@ class ToriiClient:
         format: str,
         context: str,
         normalize: Callable[[Any], Mapping[str, Any]],
+        maximum_norito_body_bytes: int,
+        expected_norito_type_name: str,
     ) -> Union[Mapping[str, Any], bytes]:
         if format not in {"json", "norito"}:
             raise ValueError("SCCP response format must be exactly `json` or `norito`")
         accept = "application/x-norito" if format == "norito" else "application/json"
-        response = self._request("GET", path, headers={"Accept": accept})
-        self._expect_status(response, {200})
+        maximum_body_bytes = (
+            maximum_norito_body_bytes
+            if format == "norito"
+            else _SCCP_JSON_RESPONSE_MAX_BYTES
+        )
+        response = self._request("GET", path, headers={"Accept": accept}, stream=True)
+        self._expect_status(
+            response,
+            {200},
+            maximum_body_bytes=maximum_body_bytes,
+            context=context,
+        )
         content_type = response.headers.get("Content-Type", "")
         if format == "norito":
             if re.fullmatch(r"application/x-norito(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
+                response.close()
                 raise TypeError(f"{context} response must use application/x-norito content type")
-            body = bytes(response.content)
-            if not body or len(body) > 16 * 1024 * 1024:
-                raise ValueError(f"{context} Norito body is outside its byte-size bound")
+            body = _read_bounded_sccp_response_body(
+                response, maximum_body_bytes, context
+            )
+            _validate_sccp_norito_frame(
+                body,
+                context=f"{context} response",
+                expected_type_name=expected_norito_type_name,
+            )
             return body
         if re.fullmatch(r"application/json(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
+            response.close()
             raise TypeError(f"{context} response must use application/json content type")
-        return normalize(parse_sccp_json_object(response.content, context))
+        body = _read_bounded_sccp_response_body(response, maximum_body_bytes, context)
+        return normalize(parse_sccp_json_object(body, context))
 
     def _submit_sccp_bridge(
         self,
@@ -4278,17 +4552,26 @@ class ToriiClient:
     ) -> SccpBridgeSubmitResponse:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        response = self._request("POST", path, headers=headers, data=data)
-        self._expect_status(response, {200})
+        response = self._request(
+            "POST", path, headers=headers, data=data, stream=True
+        )
+        self._expect_status(
+            response,
+            {200},
+            maximum_body_bytes=_SCCP_SUBMIT_RESPONSE_MAX_BYTES,
+            context=context,
+        )
         content_type = response.headers.get("Content-Type", "")
         if re.fullmatch(r"application/json(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
+            response.close()
             raise TypeError(f"{context} response must use application/json content type")
-        expectations = (
-            {"creation_time_ms": payload["creation_time_ms"]}
-            if "creation_time_ms" in payload
-            else None
+        expectations: Dict[str, Any] = {"submitted": "signature_b64" in payload}
+        if "creation_time_ms" in payload:
+            expectations["creation_time_ms"] = payload["creation_time_ms"]
+        body = _read_bounded_sccp_response_body(
+            response, _SCCP_SUBMIT_RESPONSE_MAX_BYTES, context
         )
-        return parse_sccp_bridge_submit_response_json(response.content, expectations)
+        return parse_sccp_bridge_submit_response_json(body, expectations)
 
     def get_runtime_abi_active(self) -> RuntimeAbiActive:
         """Fetch the active ABI version (`GET /v1/runtime/abi/active`)."""
@@ -5942,7 +6225,7 @@ class ToriiClient:
         code_hash: str,
         abi_hash: str,
         window: Optional[Tuple[int, int]] = None,
-        mode: Optional[str] = None,
+        mode: Optional[Literal["Zk", "Plain"]] = None,
         limits: Optional[Mapping[str, Any]] = None,
     ) -> GovernanceProposalDraft:
         """Draft a deploy-contract proposal via ``POST /v1/gov/proposals/deploy-contract``."""
@@ -5962,7 +6245,9 @@ class ToriiClient:
             payload["contract_alias"] = contract_alias
         if window is not None:
             payload["window"] = {"lower": int(window[0]), "upper": int(window[1])}
-        if mode:
+        if mode is not None:
+            if mode not in ("Zk", "Plain"):
+                raise ValueError("mode must be exactly 'Zk' or 'Plain'")
             payload["mode"] = mode
         if limits is not None:
             payload["limits"] = dict(limits)
@@ -6833,17 +7118,41 @@ class ToriiClient:
         params: Optional[Mapping[str, Any]] = None,
         headers: Optional[MutableMapping[str, str]] = None,
         data: Optional[bytes] = None,
+        stream: bool = False,
     ) -> requests.Response:
         url = f"{self._base_url}{path}"
-        response = self._session.request(method, url, params=params, headers=headers, data=data)
+        response = self._session.request(
+            method,
+            url,
+            params=params,
+            headers=headers,
+            data=data,
+            stream=stream,
+        )
         return response
 
     @staticmethod
-    def _expect_status(response: requests.Response, expected: Iterable[int]) -> None:
+    def _expect_status(
+        response: requests.Response,
+        expected: Iterable[int],
+        *,
+        maximum_body_bytes: Optional[int] = None,
+        context: str = "Torii",
+    ) -> None:
         expected_set = set(expected)
         if response.status_code in expected_set:
             return
-        message = _format_error_body(response.text)
+        if maximum_body_bytes is None:
+            message = _format_error_body(response.text)
+        else:
+            body = _read_bounded_sccp_response_body(
+                response, maximum_body_bytes, f"{context} error"
+            )
+            try:
+                text = body.decode("utf-8", "strict")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"{context} error response body must be strict UTF-8") from exc
+            message = _format_error_body(text)
         raise RuntimeError(
             f"unexpected status {response.status_code}; expected {sorted(expected_set)}; body={message}"
         )
@@ -10403,7 +10712,7 @@ class ToriiClient:
                 record.get("previous_contract_address"),
                 context=f"{context}.previous_contract_address",
             ),
-            upgraded=bool(record.get("upgraded")),
+            kaizen=bool(record.get("kaizen")),
             dataspace=ToriiClient._coerce_optional_string(
                 record.get("dataspace"),
                 context=f"{context}.dataspace",

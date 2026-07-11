@@ -5,7 +5,10 @@ use core::mem;
 use crate::{CliOutputFormat, RunContext};
 use eyre::{Result, eyre};
 use iroha::client::Client;
-use iroha_crypto::blake2::{Blake2b512, digest::Digest};
+use iroha_crypto::{
+    Hash,
+    blake2::{Blake2b512, digest::Digest},
+};
 use norito::json::Value;
 
 /// Print a JSON payload or a summary line, depending on CLI output mode.
@@ -29,6 +32,20 @@ pub fn print_with_summary<C: RunContext>(
 
 /// Normalize a 32-byte hex string.
 pub(super) fn canonicalize_hex32(input: &str) -> Result<String> {
+    if input.starts_with("hash:") {
+        let value = Value::String(input.to_owned());
+        let hash: Hash = norito::json::from_value(value)
+            .map_err(|_| eyre!("expected canonical checksummed Hash literal"))?;
+        let canonical = norito::json::to_value(&hash)
+            .map_err(|_| eyre!("failed to render canonical Hash literal"))?
+            .as_str()
+            .ok_or_else(|| eyre!("failed to render canonical Hash literal"))?
+            .to_owned();
+        if canonical != input {
+            return Err(eyre!("expected canonical checksummed Hash literal"));
+        }
+        return Ok(hex::encode(hash.as_ref()));
+    }
     let trimmed = input.trim();
     let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
         if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
@@ -148,6 +165,35 @@ mod tests {
         let scheme = "BLAKE2B32:11".to_string() + &"22".repeat(31);
         let canon2 = canonicalize_hex32(&scheme).expect("canonicalize with scheme");
         assert_eq!(canon2.len(), 64);
+
+        let hash = Hash::new(b"manifest hash literal");
+        let literal = norito::json::to_value(&hash)
+            .expect("serialize hash")
+            .as_str()
+            .expect("hash string")
+            .to_owned();
+        assert_eq!(
+            canonicalize_hex32(&literal).expect("canonical Hash literal"),
+            hex::encode(hash.as_ref())
+        );
+        let lowercase = literal.to_ascii_lowercase();
+        assert_ne!(lowercase, literal, "fixture must exercise canonical case");
+        let mut bad_checksum = literal.as_bytes().to_vec();
+        let last = bad_checksum.last_mut().expect("Hash literal checksum");
+        *last = if *last == b'0' { b'1' } else { b'0' };
+        let bad_checksum = String::from_utf8(bad_checksum).expect("ASCII Hash literal");
+        for invalid in [
+            lowercase,
+            bad_checksum,
+            format!(" {literal}"),
+            format!("{literal} "),
+            format!("HASH:{}", &literal[5..]),
+        ] {
+            assert!(
+                canonicalize_hex32(&invalid).is_err(),
+                "non-canonical Hash literal must fail: {invalid}"
+            );
+        }
     }
 
     #[test]

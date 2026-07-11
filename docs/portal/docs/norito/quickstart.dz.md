@@ -65,9 +65,9 @@ seiyaku Hello {
 
     kotoage fn write_detail() authorize("Admin") {
         ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
         );
     }
 
@@ -152,63 +152,3 @@ iroha --config defaults/client.toml \
 - ཁྱོད་རའི་གན་རྒྱ་ཚུ་ བསྐྱར་ལོག་འབད་བའི་སྐབས་ `npm run sync-norito-snippets` ལུ་ལག་ལེན་འཐབ།
   ཕབ་ལེན་འབད་བཏུབ་པའི་ ཤོག་འཛིན་ཚུ་ ལོག་བཟོ་ནིའི་ ལཱ་གི་ས་སྒོ་ཚུ་ ཡིག་ཆ་དང་ ཅ་ཆས་ཚུ་ སྡོད་གནས་སྦེ་ སྡོད་ནི།
   `crates/ivm/docs/examples/` འོག་ལུ་ཡོད་པའི་འབྱུང་ཁུངས་ཚུ་དང་གཅིག་ཁར་ མཉམ་འབྱུང་།
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```
-
-```kotodama
-seiyaku Hello {
-    hajimari() {
-        debug::info("Hello from hajimari");
-    }
-
-    kotoage fn write_detail() authorize("Admin") {
-        ledger::account::set_detail(
-            context::authority(),
-            Name::parse("example"),
-            Json::parse("{\"hello\":\"world\"}")
-        );
-    }
-
-    view fn healthy() -> bool {
-        return true;
-    }
-}
-```

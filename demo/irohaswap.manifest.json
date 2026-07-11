@@ -1,11 +1,11 @@
 {
-  "code_hash": "hash:8D1369A2096612CF3D58445160ECC9D891AD0DBBEB3259E4A889806D7B47EE19#54B4",
-  "abi_hash": "hash:BA1786031C3D0CDBD607DEBDAE1CC611A0807BF9CF49ED349A0632855724969F#FBDF",
-  "compiler_fingerprint": null,
-  "features_bitmap": 1,
+  "seiyaku_name": "IrohaSwap",
+  "code_hash": "hash:74D53B4909F369CF519C14FC52AB9224CE98DC4132E1FA2546E62300B23FEC77#49D6",
+  "abi_hash": "hash:05E6F898ECC5C88B11E2DD7F784F2C90E730B5D8A0825901FD2F35502AD8AD09#B33A",
+  "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
+  "features_bitmap": 0,
   "access_set_hints": {
     "read_keys": [
-      "*",
       "state:LpSupply",
       "state:PoolAccount",
       "state:PoolAssetA",
@@ -15,7 +15,6 @@
       "state:ReserveB"
     ],
     "write_keys": [
-      "*",
       "state:LpSupply",
       "state:PoolAccount",
       "state:PoolAssetA",
@@ -23,15 +22,115 @@
       "state:PoolLpAsset",
       "state:ReserveA",
       "state:ReserveB"
-    ]
+    ],
+    "dynamic_reads": [],
+    "dynamic_writes": []
   },
   "entrypoints": [
     {
       "name": "init_pool",
       "kind": {
-        "kind": "Public",
+        "kind": "Kotoage",
         "value": null
       },
+      "params": [
+        {
+          "name": "pool",
+          "type_name": "Name"
+        },
+        {
+          "name": "asset_a",
+          "type_name": "AssetDefinitionId"
+        },
+        {
+          "name": "asset_b",
+          "type_name": "AssetDefinitionId"
+        },
+        {
+          "name": "pool_account",
+          "type_name": "AccountId"
+        },
+        {
+          "name": "lp_asset",
+          "type_name": "AssetDefinitionId"
+        }
+      ],
+      "argument_schema": {
+        "fields": [
+          {
+            "name": "pool",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Name",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "asset_a",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AssetDefinitionId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "asset_b",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AssetDefinitionId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "pool_account",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AccountId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "lp_asset",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AssetDefinitionId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "return_type": null,
+      "return_schema": null,
       "permission": "Admin",
       "read_keys": [
         "state:PoolAssetA"
@@ -46,19 +145,95 @@
         "state:LpSupply"
       ],
       "access_hints_complete": true,
-      "access_hints_skipped": [
-        
-      ],
-      "triggers": [
-        
-      ]
+      "access_hints_skipped": [],
+      "triggers": []
     },
     {
       "name": "deposit_liquidity",
       "kind": {
-        "kind": "Public",
+        "kind": "Kotoage",
         "value": null
       },
+      "params": [
+        {
+          "name": "provider",
+          "type_name": "AccountId"
+        },
+        {
+          "name": "pool",
+          "type_name": "Name"
+        },
+        {
+          "name": "amount_a",
+          "type_name": "Amount"
+        },
+        {
+          "name": "amount_b",
+          "type_name": "Amount"
+        }
+      ],
+      "argument_schema": {
+        "fields": [
+          {
+            "name": "provider",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AccountId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "pool",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Name",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "amount_a",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Amount",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "amount_b",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Amount",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "return_type": null,
+      "return_schema": null,
       "permission": "Admin",
       "read_keys": [
         "state:PoolAssetA",
@@ -67,29 +242,85 @@
         "state:PoolLpAsset",
         "state:ReserveA",
         "state:ReserveB",
-        "state:LpSupply",
-        "*"
+        "state:LpSupply"
       ],
       "write_keys": [
         "state:ReserveA",
         "state:ReserveB",
-        "state:LpSupply",
-        "*"
+        "state:LpSupply"
       ],
       "access_hints_complete": true,
-      "access_hints_skipped": [
-        
-      ],
-      "triggers": [
-        
-      ]
+      "access_hints_skipped": [],
+      "triggers": []
     },
     {
       "name": "withdraw_liquidity",
       "kind": {
-        "kind": "Public",
+        "kind": "Kotoage",
         "value": null
       },
+      "params": [
+        {
+          "name": "provider",
+          "type_name": "AccountId"
+        },
+        {
+          "name": "pool",
+          "type_name": "Name"
+        },
+        {
+          "name": "lp_amount",
+          "type_name": "Amount"
+        }
+      ],
+      "argument_schema": {
+        "fields": [
+          {
+            "name": "provider",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AccountId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "pool",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Name",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "lp_amount",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Amount",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "return_type": null,
+      "return_schema": null,
       "permission": "Admin",
       "read_keys": [
         "state:PoolAssetA",
@@ -98,28 +329,130 @@
         "state:PoolLpAsset",
         "state:ReserveA",
         "state:ReserveB",
-        "state:LpSupply",
-        "*"
+        "state:LpSupply"
       ],
       "write_keys": [
         "state:ReserveA",
         "state:ReserveB",
-        "state:LpSupply",
-        "*"
+        "state:LpSupply"
       ],
       "access_hints_complete": true,
-      "access_hints_skipped": [
-        
-      ],
-      "triggers": [
-        
-      ]
+      "access_hints_skipped": [],
+      "triggers": []
     },
     {
       "name": "swap",
       "kind": {
-        "kind": "Public",
+        "kind": "Kotoage",
         "value": null
+      },
+      "params": [
+        {
+          "name": "trader",
+          "type_name": "AccountId"
+        },
+        {
+          "name": "pool",
+          "type_name": "Name"
+        },
+        {
+          "name": "input_asset",
+          "type_name": "AssetDefinitionId"
+        },
+        {
+          "name": "amount_in",
+          "type_name": "Amount"
+        },
+        {
+          "name": "min_output",
+          "type_name": "Amount"
+        }
+      ],
+      "argument_schema": {
+        "fields": [
+          {
+            "name": "trader",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AccountId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "pool",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Name",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "input_asset",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AssetDefinitionId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "amount_in",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Amount",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "min_output",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Amount",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "return_type": "Amount",
+      "return_schema": {
+        "nodes": [
+          {
+            "kind": "Leaf",
+            "value": {
+              "kind": "Amount",
+              "value": null
+            }
+          }
+        ]
       },
       "permission": "Admin",
       "read_keys": [
@@ -128,20 +461,117 @@
         "state:PoolAccount",
         "state:ReserveA",
         "state:ReserveB",
-        "*"
+        "state:PoolLpAsset"
       ],
       "write_keys": [
         "state:ReserveA",
-        "state:ReserveB",
-        "*"
+        "state:ReserveB"
       ],
       "access_hints_complete": true,
-      "access_hints_skipped": [
-        
-      ],
-      "triggers": [
-        
-      ]
+      "access_hints_skipped": [],
+      "triggers": []
+    }
+  ],
+  "states": [
+    {
+      "name": "PoolAssetA",
+      "type_name": "StateMap<Name, AssetDefinitionId>"
+    },
+    {
+      "name": "PoolAssetB",
+      "type_name": "StateMap<Name, AssetDefinitionId>"
+    },
+    {
+      "name": "PoolAccount",
+      "type_name": "StateMap<Name, AccountId>"
+    },
+    {
+      "name": "PoolLpAsset",
+      "type_name": "StateMap<Name, AssetDefinitionId>"
+    },
+    {
+      "name": "ReserveA",
+      "type_name": "StateMap<Name, Amount>"
+    },
+    {
+      "name": "ReserveB",
+      "type_name": "StateMap<Name, Amount>"
+    },
+    {
+      "name": "LpSupply",
+      "type_name": "StateMap<Name, Amount>"
+    }
+  ],
+  "error_codes": [
+    {
+      "namespace": "PoolError",
+      "name": "UnknownPool",
+      "code": 1
+    },
+    {
+      "namespace": "PoolError",
+      "name": "IdenticalAssets",
+      "code": 2
+    },
+    {
+      "namespace": "PoolError",
+      "name": "PoolAlreadyExists",
+      "code": 3
+    },
+    {
+      "namespace": "PoolError",
+      "name": "InvalidAssetAAmount",
+      "code": 4
+    },
+    {
+      "namespace": "PoolError",
+      "name": "InvalidAssetBAmount",
+      "code": 5
+    },
+    {
+      "namespace": "PoolError",
+      "name": "ZeroLiquidityMinted",
+      "code": 6
+    },
+    {
+      "namespace": "PoolError",
+      "name": "InvalidLiquidityAmount",
+      "code": 7
+    },
+    {
+      "namespace": "PoolError",
+      "name": "EmptyPool",
+      "code": 8
+    },
+    {
+      "namespace": "PoolError",
+      "name": "ZeroAssetAOutput",
+      "code": 9
+    },
+    {
+      "namespace": "PoolError",
+      "name": "ZeroAssetBOutput",
+      "code": 10
+    },
+    {
+      "namespace": "PoolError",
+      "name": "InvalidSwapAmount",
+      "code": 11
+    },
+    {
+      "namespace": "PoolError",
+      "name": "AssetNotInPool",
+      "code": 12
+    },
+    {
+      "namespace": "PoolError",
+      "name": "SlippageExceeded",
+      "code": 13
+    },
+    {
+      "namespace": "PoolError",
+      "name": "InsufficientOutput",
+      "code": 14
     }
   ],
   "kotoba": null,

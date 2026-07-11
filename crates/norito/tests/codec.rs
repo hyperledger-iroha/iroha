@@ -312,8 +312,8 @@ fn concrete_recursive_derive_roundtrip() {
         RecursiveExpression::Literal(77),
     ))));
     let bytes = value.encode();
-    let decoded = RecursiveExpression::decode_all(&mut &bytes[..])
-        .expect("recursive expression decode");
+    let decoded =
+        RecursiveExpression::decode_all(&mut &bytes[..]).expect("recursive expression decode");
     assert_eq!(value, decoded);
 }
 

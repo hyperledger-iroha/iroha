@@ -42,10 +42,17 @@ seiyaku RegisterAndMint {
         // interpretation depends on data model (example only)
         let mintable = 1;
         // 1 = mintable, 0 = fixed
-        ledger::asset::register(asset, symbol, qty, mintable);
+        ledger::asset::register(
+            asset_definition: asset,
+            name: symbol,
+            scale: qty,
+            mintable: mintable,
+        );
         // Mint 250 ROSE to Alice
-        let to = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-        ledger::asset::mint(to, asset, Amount::from_i64(250));
+        let to = AccountId::parse(
+            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        );
+        ledger::asset::mint(account: to, asset_definition: asset, amount: Amount::from_i64(250));
     }
 }
 ```

@@ -19,6 +19,7 @@ fn abi_v1_policy_allows_full_pointer_surface() {
         ProofBlob,
         SoracloudRequest,
         SoracloudResponse,
+        Amount,
     ] {
         assert!(ivm::is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty))
     }

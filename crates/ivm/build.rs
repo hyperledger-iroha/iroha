@@ -8,6 +8,7 @@ use std::{
 };
 
 fn main() {
+    println!("cargo:rerun-if-changed=spec/syscalls.toml");
     println!("cargo:rerun-if-env-changed=IVM_CUDA_NVCC");
     println!("cargo:rerun-if-env-changed=IVM_CUDA_GENCODE");
     println!("cargo:rerun-if-env-changed=IVM_CUDA_NVCC_EXTRA");
@@ -26,7 +27,145 @@ fn main() {
     {
         panic!("ivm cuda build failed: {err}");
     }
+    if let Err(err) = generate_syscall_signatures() {
+        panic!("ivm syscall signature generation failed: {err}");
+    }
     dump_dep_env();
+}
+
+fn generate_syscall_signatures() -> Result<(), Box<dyn Error>> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let specification = fs::read_to_string(manifest_dir.join("spec/syscalls.toml"))?;
+    let mut current_number = None;
+    let mut current_argument_count = None;
+    let mut signatures = Vec::new();
+    for line in specification.lines() {
+        if let Some(raw) = line
+            .strip_prefix("number = \"")
+            .and_then(|raw| raw.strip_suffix('"'))
+        {
+            let number = u32::from_str_radix(
+                raw.strip_prefix("0x")
+                    .ok_or("syscall number must use a 0x prefix")?,
+                16,
+            )?;
+            if current_number.replace(number).is_some() || current_argument_count.is_some() {
+                return Err("syscall number missing an args or ret declaration".into());
+            }
+            continue;
+        }
+        if let Some(arguments) = line.strip_prefix("args = \"") {
+            let number = current_number.ok_or("syscall args missing number")?;
+            if current_argument_count.is_some() {
+                return Err(format!("syscall {number:#x} has duplicate args declarations").into());
+            }
+            current_argument_count = Some(register_window_len(number, "args", arguments, false)?);
+            continue;
+        }
+        let Some(returns) = line.strip_prefix("ret = \"") else {
+            continue;
+        };
+        let number = current_number.take().ok_or("syscall ret missing number")?;
+        let argument_count = current_argument_count
+            .take()
+            .ok_or("syscall ret missing args declaration")?;
+        let return_count = register_window_len(number, "ret", returns, true)?;
+        signatures.push((number, argument_count, return_count));
+    }
+    if current_number.is_some() || current_argument_count.is_some() {
+        return Err("final syscall number missing an args or ret declaration".into());
+    }
+    signatures.sort_unstable();
+    if signatures.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err("duplicate syscall number in spec/syscalls.toml".into());
+    }
+
+    let mut generated = String::from(
+        "// Generated from spec/syscalls.toml; do not edit.\n\
+         /// Return the exact public input-register window for an ABI syscall.\n\
+         pub(crate) fn syscall_public_input_registers(number: u32) -> &'static [usize] {\n\
+             match number {\n",
+    );
+    for &(number, count, _) in &signatures {
+        generated.push_str(&format!("        {number:#08x} => SYSCALL_ARGS_{count},\n"));
+    }
+    generated.push_str(
+        "        _ => SYSCALL_ARGS_5,\n\
+         }\n\
+         }\n\
+         /// Return the exact public output-register window for an ABI syscall.\n\
+         pub(crate) fn syscall_public_output_registers(number: u32) -> &'static [usize] {\n\
+             match number {\n",
+    );
+    for (number, _, count) in signatures {
+        generated.push_str(&format!("        {number:#08x} => SYSCALL_ARGS_{count},\n"));
+    }
+    generated.push_str(
+        "        _ => SYSCALL_ARGS_0,\n\
+         }\n\
+         }\n",
+    );
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+    fs::write(out_dir.join("syscall_signatures.rs"), generated)?;
+    Ok(())
+}
+
+fn register_window_len(
+    number: u32,
+    field: &str,
+    declaration: &str,
+    implicit_r10: bool,
+) -> Result<usize, Box<dyn Error>> {
+    let mut registers = declared_registers(declaration)?;
+    let declaration = declaration.strip_suffix('"').unwrap_or(declaration);
+    if implicit_r10 && declaration != "-" && registers.is_empty() {
+        registers.push(10);
+    }
+    registers.sort_unstable();
+    registers.dedup();
+    if registers
+        .iter()
+        .enumerate()
+        .any(|(offset, &register)| register != 10 + offset)
+    {
+        return Err(format!(
+            "syscall {number:#x} {field} must use a contiguous V1 public register window starting at r10"
+        )
+        .into());
+    }
+    Ok(registers.len())
+}
+
+fn declared_registers(declaration: &str) -> Result<Vec<usize>, Box<dyn Error>> {
+    let bytes = declaration.as_bytes();
+    let mut registers = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        let starts_register = bytes[index] == b'r'
+            && bytes.get(index + 1).is_some_and(u8::is_ascii_digit)
+            && (index == 0
+                || (!bytes[index - 1].is_ascii_alphanumeric() && bytes[index - 1] != b'_'));
+        if !starts_register {
+            index += 1;
+            continue;
+        }
+
+        let start = index + 1;
+        let mut end = start;
+        while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+        }
+        let register = declaration[start..end].parse::<usize>()?;
+        if !(10..=14).contains(&register) {
+            return Err(format!(
+                "syscall register r{register} exceeds the V1 public window r10..r14"
+            )
+            .into());
+        }
+        registers.push(register);
+        index = end;
+    }
+    Ok(registers)
 }
 
 fn build_cuda_artifacts() -> Result<(), Box<dyn Error>> {

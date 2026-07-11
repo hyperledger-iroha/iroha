@@ -1142,8 +1142,8 @@ check_route_parity() {
   root_url="$(normalize_root_url "$root_url")"
   check_route_status "$label" GET "${root_url}/v1/sccp/capabilities" "200" \
     "SCCP capability discovery route"
-  check_route_status "$label" GET "${root_url}/v1/sccp/manifests" "200" \
-    "SCCP manifest discovery route"
+  check_route_status "$label" GET "${root_url}/v1/sccp/registry" "200" \
+    "SCCP typed registry discovery route"
   check_route_status "$label" GET "${root_url}/v1/zk/proofs/count" "200" \
     "ZK proof count route"
   check_route_status "$label" GET "${root_url}/v1/sumeragi/validator-sets" "200" \

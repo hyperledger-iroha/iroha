@@ -11,28 +11,55 @@ from pathlib import Path
 from sccp_release_common import (
     SccpReleaseError,
     canonical_json_file_bytes,
+    create_new_directory_at,
     ensure_new_output_parent,
     load_evidence_file,
     load_trust_policy,
     make_bundle_index,
+    open_direct_directory,
+    open_directory_at,
     public_error,
     readiness_summary,
     verify_evidence_artifacts,
+    verify_production_semantic_artifacts,
     verify_rust_lane_evidence,
     verify_rust_release_signatures,
-    write_new_file,
+    verify_rust_semantic_proofs,
+    write_new_file_at,
 )
 
 
-def _create_parent_directories(root: Path, relative: str) -> None:
-    current = root
-    for part in relative.split("/")[:-1]:
-        current = current / part
-        if current.exists():
-            if current.is_symlink() or not current.is_dir():
-                raise SccpReleaseError("bundle output path contains a non-directory component")
-            continue
-        current.mkdir(mode=0o755)
+def _write_relative_output(root_descriptor: int, relative: str, data: bytes) -> None:
+    """Write one already-validated path beneath a stable output-directory fd."""
+
+    parts = relative.split("/")
+    current = os.dup(root_descriptor)
+    try:
+        for part in parts[:-1]:
+            try:
+                os.mkdir(part, mode=0o755, dir_fd=current)
+            except FileExistsError:
+                pass
+            except (OSError, TypeError, NotImplementedError) as error:
+                raise SccpReleaseError(
+                    "bundle output parent could not be created safely"
+                ) from error
+            child = open_directory_at(
+                current,
+                part,
+                label="bundle output parent",
+            )
+            os.close(current)
+            current = child
+        write_new_file_at(
+            current,
+            parts[-1],
+            data,
+            label=f"bundle output {relative}",
+        )
+        os.fsync(current)
+    finally:
+        os.close(current)
 
 
 def build_bundle(
@@ -46,8 +73,16 @@ def build_bundle(
 ) -> dict[str, object]:
     """Validate inputs and publish one new fail-closed, never-overwritten bundle."""
 
+    # Reject an unsafe or already-existing destination before reading evidence
+    # or invoking the authenticated validator. Output-path safety is an
+    # independent precondition and must not be masked by a later input error.
+    parent = ensure_new_output_parent(output_dir)
     evidence, evidence_bytes = load_evidence_file(evidence_path, trust_policy)
-    verify_rust_release_signatures(
+    artifacts = verify_evidence_artifacts(evidence, artifact_root)
+    semantic_records = verify_production_semantic_artifacts(
+        evidence, artifacts, trust_policy
+    )
+    _, executable_hash = verify_rust_release_signatures(
         trust_policy_path=trust_policy_path,
         trust_policy=trust_policy,
         trust_policy_bytes=trust_policy_bytes,
@@ -61,7 +96,18 @@ def build_bundle(
             else "production"
         ),
     )
-    artifacts = verify_evidence_artifacts(evidence, artifact_root)
+    verify_rust_semantic_proofs(
+        evidence=evidence,
+        evidence_bytes=evidence_bytes,
+        artifact_root=artifact_root,
+        semantic_records=semantic_records,
+        trust_policy=trust_policy,
+        trust_policy_bytes=trust_policy_bytes,
+        trust_policy_path=trust_policy_path,
+        evidence_path=evidence_path,
+        validator_path=rust_validator,
+        expected_executable_hash=executable_hash,
+    )
     _, executable_hash = verify_rust_lane_evidence(
         evidence,
         artifact_root,
@@ -82,35 +128,46 @@ def build_bundle(
         trust_policy_bytes,
         executable_hash,
     )
-    parent = ensure_new_output_parent(output_dir)
+    parent_descriptor = open_direct_directory(parent, label="output parent")
     try:
-        output_dir.mkdir(mode=0o755)
-    except FileExistsError:
-        raise SccpReleaseError(
-            "output directory already exists; SCCP bundle creation never overwrites"
-        ) from None
-    except OSError as error:
-        raise SccpReleaseError("bundle output directory could not be reserved safely") from error
-    write_new_file(output_dir / "evidence.json", evidence_bytes)
-    for entry in evidence["artifacts"]:
-        relative = entry["path"]
-        _create_parent_directories(output_dir, relative)
-        write_new_file(output_dir.joinpath(*relative.split("/")), artifacts[relative])
-    # The index is the completion record and is deliberately written last. A
-    # crash leaves an incomplete reserved directory for explicit operator
-    # inspection; a verifier cannot mistake it for a bundle, a later build
-    # cannot overwrite it, and cleanup never risks following a swapped path.
-    write_new_file(output_dir / "bundle.json", canonical_json_file_bytes(index))
-    directory_fd = os.open(output_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(directory_fd)
+        output_descriptor = create_new_directory_at(
+            parent_descriptor,
+            output_dir.name,
+            label="output directory",
+        )
+        try:
+            _write_relative_output(output_descriptor, "evidence.json", evidence_bytes)
+            for entry in evidence["artifacts"]:
+                relative = entry["path"]
+                _write_relative_output(output_descriptor, relative, artifacts[relative])
+            # The index is the completion record and is deliberately written
+            # last. A crash leaves a reserved but unverifiable directory.
+            _write_relative_output(
+                output_descriptor,
+                "bundle.json",
+                canonical_json_file_bytes(index),
+            )
+            os.fsync(output_descriptor)
+            # Detect a parent-directory rename/swap before reporting success.
+            reopened = open_directory_at(
+                parent_descriptor,
+                output_dir.name,
+                label="completed output directory",
+            )
+            try:
+                expected = os.fstat(output_descriptor)
+                actual = os.fstat(reopened)
+                if (expected.st_dev, expected.st_ino) != (actual.st_dev, actual.st_ino):
+                    raise SccpReleaseError(
+                        "output directory changed while publishing the SCCP bundle"
+                    )
+            finally:
+                os.close(reopened)
+        finally:
+            os.close(output_descriptor)
+        os.fsync(parent_descriptor)
     finally:
-        os.close(directory_fd)
-    parent_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(parent_fd)
-    finally:
-        os.close(parent_fd)
+        os.close(parent_descriptor)
     return index
 
 

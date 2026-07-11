@@ -28,7 +28,6 @@ use crate::{
     diagnostic::DiagnosticBundle,
     linker::{ModuleBuildGraph, SourceGraphError, SourceLinkRequest},
     metadata::contract_code_hash,
-    semantic::TypedProgram,
     session::{CompileOutput, CompileRequest, CompilerSession},
 };
 
@@ -140,7 +139,7 @@ impl PublishLayout {
         let file_name = self
             .artifact
             .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new("contract.to"));
+            .unwrap_or_else(|| std::ffi::OsStr::new("seiyaku.to"));
         let record = parent
             .join(".fingerprints")
             .join(format!("{}.record", file_name.to_string_lossy()));
@@ -240,27 +239,10 @@ pub struct SourceBuildRequest {
     pub mode: PublishMode,
 }
 
-/// One already-linked typed-HIR build request.
-#[derive(Debug)]
-pub struct TypedBuildRequest {
-    /// Fully resolved typed-HIR program.
-    pub program: TypedProgram,
-    /// Complete content identity returned by [`crate::linker::ModuleBuildGraph`].
-    pub graph_fingerprint: Hash,
-    /// Logical root path used by sidecars.
-    pub source_name: String,
-    /// Build profile and output namespace.
-    pub profile: String,
-    /// Output layout.
-    pub layout: PublishLayout,
-    /// Write or verification policy.
-    pub mode: PublishMode,
-}
-
 /// One locked source-module graph built lazily after cache authentication.
 #[derive(Debug)]
 pub struct LinkedSourceBuildRequest {
-    /// Contract root, explicit imports, and locked transitive module sources.
+    /// Seiyaku root, explicit imports, and locked transitive module sources.
     pub graph: SourceLinkRequest,
     /// Logical root path used by diagnostics and sidecars.
     pub source_name: String,
@@ -334,31 +316,6 @@ impl BuildDriver {
                 source: &request.source,
                 source_name: Some(&request.source_name),
             })
-            .map_err(BuildError::Compile)?;
-        self.finish_build(
-            output,
-            &request.layout,
-            &input_fingerprint.to_string(),
-            request.mode,
-        )
-    }
-
-    /// Build one linked typed-HIR graph through the canonical compiler session.
-    pub fn build_typed(&self, request: TypedBuildRequest) -> Result<BuildOutcome, BuildError> {
-        validate_profile(&request.profile)?;
-        reject_layout_collisions(&request.layout, &request.source_name)?;
-        let input_fingerprint = self.input_fingerprint(
-            b"typed-graph",
-            &request.source_name,
-            &request.profile,
-            request.graph_fingerprint.as_ref(),
-        );
-        if let Some(fresh) = self.try_fresh(&request.layout, &input_fingerprint.to_string()) {
-            return Ok(fresh);
-        }
-        let output = self
-            .session
-            .build_typed_program(request.program, Some(&request.source_name))
             .map_err(BuildError::Compile)?;
         self.finish_build(
             output,

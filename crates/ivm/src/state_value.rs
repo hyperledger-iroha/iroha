@@ -7,11 +7,13 @@ use iroha_data_model::{
     soracloud::{SoracloudHostRequestEnvelopeV1, SoracloudHostResponseEnvelopeV1},
 };
 use iroha_primitives::{json::Json, numeric::Numeric};
+use ivm_abi::list::ListLayoutV1;
 use ivm_abi::state_value::{
     MAX_STATE_VALUE_RECORD_BYTES, MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS,
-    StateValueAtomV1, StateValueKindV1, StateValueRecordV1, StateValueSchemaV1,
-    StateValueWordKindV1, state_value_schema_hash_v1,
+    StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
+    state_value_schema_hash_v1,
 };
+use ivm_abi::sum::SumLayoutV1;
 use norito::{decode_from_bytes, to_bytes};
 
 use crate::{
@@ -62,11 +64,11 @@ fn load_expected_tlv<'a>(
     Ok((envelope, tlv))
 }
 
-fn decode_schema<'a>(
-    vm: &'a IVM,
+fn decode_schema(
+    vm: &IVM,
     address: u64,
     resolver: AddressResolver,
-) -> Result<(StateValueSchemaV1, &'a [u8]), VMError> {
+) -> Result<(StateValueSchemaV1, &[u8]), VMError> {
     let (_, tlv) = load_expected_tlv(vm, address, PointerType::NoritoBytes, resolver)?;
     if tlv.payload.len() > MAX_STATE_VALUE_SCHEMA_BYTES {
         return Err(VMError::NoritoInvalid);
@@ -87,7 +89,8 @@ fn decode_schema<'a>(
 fn pointer_type(kind: StateValueKindV1) -> Option<PointerType> {
     Some(match kind {
         StateValueKindV1::Int | StateValueKindV1::Bool => return None,
-        StateValueKindV1::U128 | StateValueKindV1::Amount => PointerType::NoritoBytes,
+        StateValueKindV1::U128 => PointerType::NoritoBytes,
+        StateValueKindV1::Amount => PointerType::Amount,
         StateValueKindV1::String | StateValueKindV1::Bytes => PointerType::Blob,
         StateValueKindV1::Json => PointerType::Json,
         StateValueKindV1::AccountId => PointerType::AccountId,
@@ -126,7 +129,8 @@ fn validate_pointer_payload(kind: StateValueKindV1, payload: &[u8]) -> Result<()
             }
         }
         StateValueKindV1::Amount => {
-            let _: Numeric = decode_canonical_norito(payload)?;
+            let value: Numeric = decode_canonical_norito(payload)?;
+            value.validate_amount().map_err(|_| VMError::DecodeError)?;
         }
         StateValueKindV1::String => {
             std::str::from_utf8(payload).map_err(|_| VMError::DecodeError)?;
@@ -190,7 +194,7 @@ fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, VMEr
 }
 
 fn table_words(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError> {
-    if count > MAX_STATE_VALUE_WORDS || address % 8 != 0 {
+    if count > MAX_STATE_VALUE_WORDS || !address.is_multiple_of(8) {
         return Err(VMError::NoritoInvalid);
     }
     let byte_len = count.checked_mul(8).ok_or(VMError::NoritoInvalid)?;
@@ -211,45 +215,447 @@ fn table_words(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError
         .collect())
 }
 
+fn skip_state_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> Result<(), VMError> {
+    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
+    *node_index = node_index.saturating_add(1);
+    match node {
+        StateValueNodeV1::Struct { fields, .. } => {
+            for _ in fields {
+                skip_state_node(nodes, node_index)?;
+            }
+        }
+        StateValueNodeV1::Tuple { arity } => {
+            for _ in 0..*arity {
+                skip_state_node(nodes, node_index)?;
+            }
+        }
+        StateValueNodeV1::Option => skip_state_node(nodes, node_index)?,
+        StateValueNodeV1::Result => {
+            skip_state_node(nodes, node_index)?;
+            skip_state_node(nodes, node_index)?;
+        }
+        StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => {}
+    }
+    Ok(())
+}
+
+fn state_node_word_count(
+    nodes: &[StateValueNodeV1],
+    node_index: &mut usize,
+) -> Result<usize, VMError> {
+    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
+    *node_index = node_index.saturating_add(1);
+    match node {
+        StateValueNodeV1::Struct { fields, .. } => {
+            let mut words = 0_usize;
+            for _ in fields {
+                words = words
+                    .checked_add(state_node_word_count(nodes, node_index)?)
+                    .ok_or(VMError::DecodeError)?;
+            }
+            Ok(words)
+        }
+        StateValueNodeV1::Tuple { arity } => {
+            let mut words = 0_usize;
+            for _ in 0..*arity {
+                words = words
+                    .checked_add(state_node_word_count(nodes, node_index)?)
+                    .ok_or(VMError::DecodeError)?;
+            }
+            Ok(words)
+        }
+        StateValueNodeV1::Option => {
+            state_node_word_count(nodes, node_index)?;
+            Ok(1)
+        }
+        StateValueNodeV1::Result => {
+            state_node_word_count(nodes, node_index)?;
+            state_node_word_count(nodes, node_index)?;
+            Ok(1)
+        }
+        StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => Ok(1),
+    }
+}
+
+fn validate_state_pointer_atom(
+    policy: ivm_abi::SyscallPolicy,
+    kind: StateValueKindV1,
+    envelope: &[u8],
+) -> Result<(), VMError> {
+    let expected = pointer_type(kind).ok_or(VMError::DecodeError)?;
+    let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
+    if tlv.type_id != expected
+        || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id)
+        || encode_tlv(tlv.type_id, tlv.payload)?.as_slice() != envelope
+    {
+        return Err(VMError::DecodeError);
+    }
+    validate_pointer_payload(kind, tlv.payload)
+}
+
+fn validate_state_atoms_recursive(
+    policy: ivm_abi::SyscallPolicy,
+    nodes: &[StateValueNodeV1],
+    atoms: &[StateValueAtomV1],
+    node_index: &mut usize,
+    atom_index: &mut usize,
+) -> Result<(), VMError> {
+    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
+    *node_index = node_index.saturating_add(1);
+    match node {
+        StateValueNodeV1::Struct { fields, .. } => {
+            for _ in fields {
+                validate_state_atoms_recursive(policy, nodes, atoms, node_index, atom_index)?;
+            }
+        }
+        StateValueNodeV1::Tuple { arity } => {
+            for _ in 0..*arity {
+                validate_state_atoms_recursive(policy, nodes, atoms, node_index, atom_index)?;
+            }
+        }
+        StateValueNodeV1::Option => {
+            let StateValueAtomV1::Tag(tag) = atoms.get(*atom_index).ok_or(VMError::DecodeError)?
+            else {
+                return Err(VMError::DecodeError);
+            };
+            *atom_index = atom_index.saturating_add(1);
+            if *tag {
+                validate_state_atoms_recursive(policy, nodes, atoms, node_index, atom_index)?;
+            } else {
+                skip_state_node(nodes, node_index)?;
+            }
+        }
+        StateValueNodeV1::Result => {
+            let StateValueAtomV1::Tag(tag) = atoms.get(*atom_index).ok_or(VMError::DecodeError)?
+            else {
+                return Err(VMError::DecodeError);
+            };
+            *atom_index = atom_index.saturating_add(1);
+            if *tag {
+                validate_state_atoms_recursive(policy, nodes, atoms, node_index, atom_index)?;
+                skip_state_node(nodes, node_index)?;
+            } else {
+                skip_state_node(nodes, node_index)?;
+                validate_state_atoms_recursive(policy, nodes, atoms, node_index, atom_index)?;
+            }
+        }
+        StateValueNodeV1::List { element, capacity } => {
+            let StateValueAtomV1::List(items) =
+                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
+            else {
+                return Err(VMError::DecodeError);
+            };
+            *atom_index = atom_index.saturating_add(1);
+            if items.len() > usize::from(*capacity) {
+                return Err(VMError::DecodeError);
+            }
+            for item in items {
+                let mut item_node = 0;
+                let mut item_atom = 0;
+                validate_state_atoms_recursive(
+                    policy,
+                    &element.nodes,
+                    item,
+                    &mut item_node,
+                    &mut item_atom,
+                )?;
+                if item_node != element.nodes.len() || item_atom != item.len() {
+                    return Err(VMError::DecodeError);
+                }
+            }
+        }
+        StateValueNodeV1::Leaf(StateValueKindV1::Int) => {
+            if !matches!(atoms.get(*atom_index), Some(StateValueAtomV1::Int(_))) {
+                return Err(VMError::DecodeError);
+            }
+            *atom_index = atom_index.saturating_add(1);
+        }
+        StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
+            if !matches!(atoms.get(*atom_index), Some(StateValueAtomV1::Bool(_))) {
+                return Err(VMError::DecodeError);
+            }
+            *atom_index = atom_index.saturating_add(1);
+        }
+        StateValueNodeV1::Leaf(kind) => {
+            let StateValueAtomV1::Pointer(envelope) =
+                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
+            else {
+                return Err(VMError::DecodeError);
+            };
+            validate_state_pointer_atom(policy, *kind, envelope)?;
+            *atom_index = atom_index.saturating_add(1);
+        }
+    }
+    Ok(())
+}
+
+fn validate_state_atom_stream(
+    policy: ivm_abi::SyscallPolicy,
+    schema: &StateValueSchemaV1,
+    atoms: &[StateValueAtomV1],
+) -> Result<(), VMError> {
+    if !schema.validate_atoms(atoms) {
+        return Err(VMError::DecodeError);
+    }
+    let mut node_index = 0;
+    let mut atom_index = 0;
+    validate_state_atoms_recursive(
+        policy,
+        &schema.nodes,
+        atoms,
+        &mut node_index,
+        &mut atom_index,
+    )?;
+    if node_index != schema.nodes.len() || atom_index != atoms.len() {
+        return Err(VMError::DecodeError);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct StateEncodeContext<'a> {
+    vm: &'a IVM,
+    resolver: AddressResolver,
+}
+
+impl StateEncodeContext<'_> {
+    fn resolve(self, pointer: u64) -> u64 {
+        (self.resolver)(self.vm, pointer)
+    }
+}
+
+fn encode_state_node(
+    nodes: &[StateValueNodeV1],
+    node_index: &mut usize,
+    words: &[u64],
+    word_index: &mut usize,
+    context: StateEncodeContext<'_>,
+    atoms: &mut Vec<StateValueAtomV1>,
+    pointer_bytes: &mut usize,
+) -> Result<(), VMError> {
+    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
+    *node_index = node_index.saturating_add(1);
+    match node {
+        StateValueNodeV1::Struct { fields, .. } => {
+            for _ in fields {
+                encode_state_node(
+                    nodes,
+                    node_index,
+                    words,
+                    word_index,
+                    context,
+                    atoms,
+                    pointer_bytes,
+                )?;
+            }
+        }
+        StateValueNodeV1::Tuple { arity } => {
+            for _ in 0..*arity {
+                encode_state_node(
+                    nodes,
+                    node_index,
+                    words,
+                    word_index,
+                    context,
+                    atoms,
+                    pointer_bytes,
+                )?;
+            }
+        }
+        StateValueNodeV1::Option => {
+            let pointer = *words.get(*word_index).ok_or(VMError::DecodeError)?;
+            *word_index = word_index.saturating_add(1);
+            if pointer == 0 {
+                return Err(VMError::DecodeError);
+            }
+            let mut child_end = *node_index;
+            let child_words = state_node_word_count(nodes, &mut child_end)?;
+            let layout =
+                SumLayoutV1::option(u64::try_from(child_words).map_err(|_| VMError::DecodeError)?)
+                    .map_err(|_| VMError::DecodeError)?;
+            let (tag, payload) =
+                crate::sum::read_words(context.vm, context.resolve(pointer), layout)?;
+            atoms.push(StateValueAtomV1::Tag(tag));
+            let mut active_word = 0;
+            if tag {
+                encode_state_node(
+                    nodes,
+                    node_index,
+                    &payload,
+                    &mut active_word,
+                    context,
+                    atoms,
+                    pointer_bytes,
+                )?;
+            } else {
+                skip_state_node(nodes, node_index)?;
+            }
+            if *node_index != child_end || active_word != payload.len() {
+                return Err(VMError::DecodeError);
+            }
+            *pointer_bytes = pointer_bytes.saturating_add(
+                usize::try_from(
+                    layout
+                        .allocation_bytes()
+                        .map_err(|_| VMError::DecodeError)?,
+                )
+                .unwrap_or(usize::MAX),
+            );
+        }
+        StateValueNodeV1::Result => {
+            let pointer = *words.get(*word_index).ok_or(VMError::DecodeError)?;
+            *word_index = word_index.saturating_add(1);
+            if pointer == 0 {
+                return Err(VMError::DecodeError);
+            }
+            let mut ok_end = *node_index;
+            let ok_words = state_node_word_count(nodes, &mut ok_end)?;
+            let mut err_end = ok_end;
+            let err_words = state_node_word_count(nodes, &mut err_end)?;
+            let layout = SumLayoutV1::try_new(
+                u64::try_from(err_words).map_err(|_| VMError::DecodeError)?,
+                u64::try_from(ok_words).map_err(|_| VMError::DecodeError)?,
+            )
+            .map_err(|_| VMError::DecodeError)?;
+            let (tag, payload) =
+                crate::sum::read_words(context.vm, context.resolve(pointer), layout)?;
+            atoms.push(StateValueAtomV1::Tag(tag));
+            let mut active_word = 0;
+            if tag {
+                encode_state_node(
+                    nodes,
+                    node_index,
+                    &payload,
+                    &mut active_word,
+                    context,
+                    atoms,
+                    pointer_bytes,
+                )?;
+                skip_state_node(nodes, node_index)?;
+            } else {
+                skip_state_node(nodes, node_index)?;
+                encode_state_node(
+                    nodes,
+                    node_index,
+                    &payload,
+                    &mut active_word,
+                    context,
+                    atoms,
+                    pointer_bytes,
+                )?;
+            }
+            if *node_index != err_end || active_word != payload.len() {
+                return Err(VMError::DecodeError);
+            }
+            *pointer_bytes = pointer_bytes.saturating_add(
+                usize::try_from(
+                    layout
+                        .allocation_bytes()
+                        .map_err(|_| VMError::DecodeError)?,
+                )
+                .unwrap_or(usize::MAX),
+            );
+        }
+        StateValueNodeV1::List { element, capacity } => {
+            let pointer = *words.get(*word_index).ok_or(VMError::DecodeError)?;
+            *word_index = word_index.saturating_add(1);
+            if pointer == 0 {
+                return Err(VMError::DecodeError);
+            }
+            let element_words = element.word_count().ok_or(VMError::DecodeError)?;
+            let layout = ListLayoutV1::try_new(
+                u64::from(*capacity),
+                u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
+            )
+            .map_err(|_| VMError::DecodeError)?;
+            let raw_items = crate::list::read_words(context.vm, context.resolve(pointer), layout)?;
+            let mut items = Vec::with_capacity(raw_items.len());
+            for words in raw_items {
+                let mut item = Vec::new();
+                let mut item_node = 0;
+                let mut item_word = 0;
+                encode_state_node(
+                    &element.nodes,
+                    &mut item_node,
+                    &words,
+                    &mut item_word,
+                    context,
+                    &mut item,
+                    pointer_bytes,
+                )?;
+                if item_node != element.nodes.len() || item_word != words.len() {
+                    return Err(VMError::DecodeError);
+                }
+                validate_state_atom_stream(context.vm.syscall_policy(), element, &item)?;
+                items.push(item);
+            }
+            *pointer_bytes = pointer_bytes.saturating_add(
+                usize::try_from(
+                    layout
+                        .allocation_bytes()
+                        .map_err(|_| VMError::DecodeError)?,
+                )
+                .unwrap_or(usize::MAX),
+            );
+            atoms.push(StateValueAtomV1::List(items));
+        }
+        StateValueNodeV1::Leaf(StateValueKindV1::Int) => {
+            let word = *words.get(*word_index).ok_or(VMError::DecodeError)?;
+            *word_index = word_index.saturating_add(1);
+            atoms.push(StateValueAtomV1::Int(word as i64));
+        }
+        StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
+            let word = *words.get(*word_index).ok_or(VMError::DecodeError)?;
+            *word_index = word_index.saturating_add(1);
+            let value = match word {
+                0 => false,
+                1 => true,
+                _ => return Err(VMError::DecodeError),
+            };
+            atoms.push(StateValueAtomV1::Bool(value));
+        }
+        StateValueNodeV1::Leaf(kind) => {
+            let pointer = *words.get(*word_index).ok_or(VMError::DecodeError)?;
+            *word_index = word_index.saturating_add(1);
+            if pointer == 0 {
+                return Err(VMError::DecodeError);
+            }
+            let expected = pointer_type(*kind).ok_or(VMError::DecodeError)?;
+            let (envelope, tlv) =
+                load_expected_tlv(context.vm, pointer, expected, context.resolver)?;
+            validate_pointer_payload(*kind, tlv.payload)?;
+            *pointer_bytes = pointer_bytes.saturating_add(envelope.len());
+            atoms.push(StateValueAtomV1::Pointer(envelope.to_vec()));
+        }
+    }
+    Ok(())
+}
+
 /// Encode the compiler word table selected by `r11`/`r12` using the schema in `r10`.
 pub(crate) fn encode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMError> {
     let (schema, schema_payload) = decode_schema(vm, vm.register(10), resolver)?;
-    let word_kinds = schema.word_kinds().ok_or(VMError::DecodeError)?;
     let count = usize::try_from(vm.register(12)).map_err(|_| VMError::NoritoInvalid)?;
-    if count != word_kinds.len() {
+    if count != schema.word_count().ok_or(VMError::DecodeError)? {
         return Err(VMError::DecodeError);
     }
     let words = table_words(vm, vm.register(11), count)?;
     let mut atoms = Vec::with_capacity(count);
     let mut pointer_bytes = 0_usize;
-    for (kind, word) in word_kinds.into_iter().zip(words) {
-        let atom = match kind {
-            StateValueWordKindV1::Tag => match word {
-                0 => StateValueAtomV1::Tag(false),
-                1 => StateValueAtomV1::Tag(true),
-                _ => return Err(VMError::DecodeError),
-            },
-            StateValueWordKindV1::Leaf(StateValueKindV1::Int) => StateValueAtomV1::Int(word as i64),
-            StateValueWordKindV1::Leaf(StateValueKindV1::Bool) => match word {
-                0 => StateValueAtomV1::Bool(false),
-                1 => StateValueAtomV1::Bool(true),
-                _ => return Err(VMError::DecodeError),
-            },
-            StateValueWordKindV1::Leaf(kind) => {
-                let expected = pointer_type(kind).ok_or(VMError::DecodeError)?;
-                if word == 0 {
-                    StateValueAtomV1::Null
-                } else {
-                    let (envelope, tlv) = load_expected_tlv(vm, word, expected, resolver)?;
-                    validate_pointer_payload(kind, tlv.payload)?;
-                    pointer_bytes = pointer_bytes.saturating_add(envelope.len());
-                    StateValueAtomV1::Pointer(envelope.to_vec())
-                }
-            }
-        };
-        atoms.push(atom);
-    }
-    if !schema.canonicalize_atoms(&mut atoms) {
+    let mut node_index = 0;
+    let mut word_index = 0;
+    encode_state_node(
+        &schema.nodes,
+        &mut node_index,
+        &words,
+        &mut word_index,
+        StateEncodeContext { vm, resolver },
+        &mut atoms,
+        &mut pointer_bytes,
+    )?;
+    if node_index != schema.nodes.len()
+        || word_index != words.len()
+        || !schema.validate_atoms(&atoms)
+    {
         return Err(VMError::DecodeError);
     }
     let record = StateValueRecordV1 {
@@ -275,15 +681,260 @@ pub(crate) fn encode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     Ok(actual)
 }
 
+enum PlannedStateWord {
+    Scalar(u64),
+    Pointer(Vec<u8>),
+    Sum {
+        layout: SumLayoutV1,
+        tag: u64,
+        active: Vec<PlannedStateWord>,
+    },
+    List {
+        layout: ListLayoutV1,
+        elements: Vec<Vec<PlannedStateWord>>,
+    },
+}
+
+fn plan_state_atoms(
+    nodes: &[StateValueNodeV1],
+    atoms: &[StateValueAtomV1],
+    node_index: &mut usize,
+    atom_index: &mut usize,
+    planned: &mut Vec<PlannedStateWord>,
+) -> Result<(), VMError> {
+    let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
+    *node_index = node_index.saturating_add(1);
+    match node {
+        StateValueNodeV1::Struct { fields, .. } => {
+            for _ in fields {
+                plan_state_atoms(nodes, atoms, node_index, atom_index, planned)?;
+            }
+        }
+        StateValueNodeV1::Tuple { arity } => {
+            for _ in 0..*arity {
+                plan_state_atoms(nodes, atoms, node_index, atom_index, planned)?;
+            }
+        }
+        StateValueNodeV1::Option => {
+            let StateValueAtomV1::Tag(tag) = atoms.get(*atom_index).ok_or(VMError::DecodeError)?
+            else {
+                return Err(VMError::DecodeError);
+            };
+            *atom_index = atom_index.saturating_add(1);
+            let mut child_end = *node_index;
+            let child_words = state_node_word_count(nodes, &mut child_end)?;
+            let mut active = Vec::with_capacity(child_words);
+            if *tag {
+                plan_state_atoms(nodes, atoms, node_index, atom_index, &mut active)?;
+            } else {
+                skip_state_node(nodes, node_index)?;
+            }
+            if *node_index != child_end || active.len() != if *tag { child_words } else { 0 } {
+                return Err(VMError::DecodeError);
+            }
+            let layout =
+                SumLayoutV1::option(u64::try_from(child_words).map_err(|_| VMError::DecodeError)?)
+                    .map_err(|_| VMError::DecodeError)?;
+            planned.push(PlannedStateWord::Sum {
+                layout,
+                tag: u64::from(*tag),
+                active,
+            });
+        }
+        StateValueNodeV1::Result => {
+            let StateValueAtomV1::Tag(tag) = atoms.get(*atom_index).ok_or(VMError::DecodeError)?
+            else {
+                return Err(VMError::DecodeError);
+            };
+            *atom_index = atom_index.saturating_add(1);
+            let mut ok_end = *node_index;
+            let ok_words = state_node_word_count(nodes, &mut ok_end)?;
+            let mut err_end = ok_end;
+            let err_words = state_node_word_count(nodes, &mut err_end)?;
+            let mut active = Vec::with_capacity(if *tag { ok_words } else { err_words });
+            if *tag {
+                plan_state_atoms(nodes, atoms, node_index, atom_index, &mut active)?;
+                skip_state_node(nodes, node_index)?;
+            } else {
+                skip_state_node(nodes, node_index)?;
+                plan_state_atoms(nodes, atoms, node_index, atom_index, &mut active)?;
+            }
+            let expected_words = if *tag { ok_words } else { err_words };
+            if *node_index != err_end || active.len() != expected_words {
+                return Err(VMError::DecodeError);
+            }
+            let layout = SumLayoutV1::try_new(
+                u64::try_from(err_words).map_err(|_| VMError::DecodeError)?,
+                u64::try_from(ok_words).map_err(|_| VMError::DecodeError)?,
+            )
+            .map_err(|_| VMError::DecodeError)?;
+            planned.push(PlannedStateWord::Sum {
+                layout,
+                tag: u64::from(*tag),
+                active,
+            });
+        }
+        StateValueNodeV1::List { element, capacity } => {
+            let StateValueAtomV1::List(items) =
+                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
+            else {
+                return Err(VMError::DecodeError);
+            };
+            *atom_index = atom_index.saturating_add(1);
+            let element_words = element.word_count().ok_or(VMError::DecodeError)?;
+            let layout = ListLayoutV1::try_new(
+                u64::from(*capacity),
+                u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
+            )
+            .map_err(|_| VMError::DecodeError)?;
+            let mut elements = Vec::with_capacity(items.len());
+            for item in items {
+                let mut item_node = 0;
+                let mut item_atom = 0;
+                let mut values = Vec::new();
+                plan_state_atoms(
+                    &element.nodes,
+                    item,
+                    &mut item_node,
+                    &mut item_atom,
+                    &mut values,
+                )?;
+                if item_node != element.nodes.len()
+                    || item_atom != item.len()
+                    || values.len() != element_words
+                {
+                    return Err(VMError::DecodeError);
+                }
+                elements.push(values);
+            }
+            planned.push(PlannedStateWord::List { layout, elements });
+        }
+        StateValueNodeV1::Leaf(StateValueKindV1::Int) => {
+            let StateValueAtomV1::Int(value) =
+                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
+            else {
+                return Err(VMError::DecodeError);
+            };
+            *atom_index = atom_index.saturating_add(1);
+            planned.push(PlannedStateWord::Scalar(*value as u64));
+        }
+        StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
+            let StateValueAtomV1::Bool(value) =
+                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
+            else {
+                return Err(VMError::DecodeError);
+            };
+            *atom_index = atom_index.saturating_add(1);
+            planned.push(PlannedStateWord::Scalar(u64::from(*value)));
+        }
+        StateValueNodeV1::Leaf(_) => {
+            let StateValueAtomV1::Pointer(envelope) =
+                atoms.get(*atom_index).ok_or(VMError::DecodeError)?
+            else {
+                return Err(VMError::DecodeError);
+            };
+            *atom_index = atom_index.saturating_add(1);
+            planned.push(PlannedStateWord::Pointer(envelope.clone()));
+        }
+    }
+    Ok(())
+}
+
+fn planned_state_bytes(value: &PlannedStateWord) -> usize {
+    match value {
+        PlannedStateWord::Scalar(_) => 0,
+        PlannedStateWord::Pointer(envelope) => envelope.len(),
+        PlannedStateWord::Sum { layout, active, .. } => {
+            active.iter().map(planned_state_bytes).fold(
+                layout
+                    .allocation_bytes()
+                    .ok()
+                    .and_then(|bytes| usize::try_from(bytes).ok())
+                    .unwrap_or(usize::MAX),
+                usize::saturating_add,
+            )
+        }
+        PlannedStateWord::List { layout, elements } => {
+            elements.iter().flatten().map(planned_state_bytes).fold(
+                layout
+                    .allocation_bytes()
+                    .ok()
+                    .and_then(|bytes| usize::try_from(bytes).ok())
+                    .unwrap_or(usize::MAX),
+                usize::saturating_add,
+            )
+        }
+    }
+}
+
+fn planned_state_allocation_shape(value: &PlannedStateWord, tlv_lengths: &mut Vec<usize>) -> usize {
+    match value {
+        PlannedStateWord::Scalar(_) => 0,
+        PlannedStateWord::Pointer(envelope) => {
+            tlv_lengths.push(envelope.len());
+            0
+        }
+        PlannedStateWord::Sum { layout, active, .. } => active.iter().fold(
+            layout
+                .allocation_bytes()
+                .ok()
+                .and_then(|bytes| usize::try_from(bytes).ok())
+                .unwrap_or(usize::MAX),
+            |bytes, value| bytes.saturating_add(planned_state_allocation_shape(value, tlv_lengths)),
+        ),
+        PlannedStateWord::List { layout, elements } => elements.iter().flatten().fold(
+            layout
+                .allocation_bytes()
+                .ok()
+                .and_then(|bytes| usize::try_from(bytes).ok())
+                .unwrap_or(usize::MAX),
+            |bytes, value| bytes.saturating_add(planned_state_allocation_shape(value, tlv_lengths)),
+        ),
+    }
+}
+
+fn materialize_state_word(vm: &mut IVM, value: PlannedStateWord) -> Result<u64, VMError> {
+    match value {
+        PlannedStateWord::Scalar(value) => Ok(value),
+        PlannedStateWord::Pointer(envelope) => vm.alloc_host_tlv(&envelope),
+        PlannedStateWord::Sum {
+            layout,
+            tag,
+            active,
+        } => {
+            let mut payload = Vec::with_capacity(active.len());
+            for value in active {
+                payload.push(materialize_state_word(vm, value)?);
+            }
+            crate::sum::allocate_words(vm, layout, tag, &payload)
+        }
+        PlannedStateWord::List { layout, elements } => {
+            let width =
+                usize::try_from(layout.element_words()).map_err(|_| VMError::DecodeError)?;
+            let mut words = Vec::with_capacity(elements.len());
+            for element in elements {
+                let mut item = Vec::with_capacity(width);
+                for value in element {
+                    item.push(materialize_state_word(vm, value)?);
+                }
+                if item.len() != width {
+                    return Err(VMError::DecodeError);
+                }
+                words.push(item);
+            }
+            crate::list::allocate_words(vm, layout, &words)
+        }
+    }
+}
+
 /// Decode the record in `r11`, returning an aligned Blob word table in `r10`.
 pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMError> {
     let (schema, schema_payload) = decode_schema(vm, vm.register(10), resolver)?;
-    let word_kinds = schema.word_kinds().ok_or(VMError::DecodeError)?;
     let record_pointer = vm.register(11);
     if record_pointer == 0 {
         // Missing durable values are not valid typed values. StateMap.get/remove
-        // branch on presence and construct an internal inactive placeholder; top-level
-        // Scalar/aggregate state must have been initialized by `hajimari`/`始まり`.
+        // branch on presence before typed decoding; top-level Scalar/aggregate
+        // state must have been initialized by `hajimari`/`始まり`.
         return Err(VMError::DecodeError);
     }
     let (_, tlv) = load_expected_tlv(vm, record_pointer, PointerType::NoritoBytes, resolver)?;
@@ -293,7 +944,6 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     let record: StateValueRecordV1 =
         decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
     if record.schema_hash != state_value_schema_hash_v1(schema_payload)
-        || record.atoms.len() != word_kinds.len()
         || !schema.validate_atoms(&record.atoms)
         || to_bytes(&record)
             .map_err(|_| VMError::DecodeError)?
@@ -302,45 +952,30 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     {
         return Err(VMError::DecodeError);
     }
+    validate_state_atom_stream(vm.syscall_policy(), &schema, &record.atoms)?;
     let atoms = record.atoms;
     let record_len = tlv.payload.len();
 
-    let mut planned = Vec::with_capacity(atoms.len());
-    let mut pointer_bytes = 0_usize;
-    for (kind, atom) in word_kinds.iter().copied().zip(atoms) {
-        match (kind, atom) {
-            (StateValueWordKindV1::Tag, StateValueAtomV1::Tag(value)) => {
-                planned.push(Ok(u64::from(value)))
-            }
-            (StateValueWordKindV1::Leaf(StateValueKindV1::Int), StateValueAtomV1::Int(value)) => {
-                planned.push(Ok(value as u64))
-            }
-            (StateValueWordKindV1::Leaf(StateValueKindV1::Bool), StateValueAtomV1::Bool(value)) => {
-                planned.push(Ok(u64::from(value)))
-            }
-            (StateValueWordKindV1::Leaf(kind), StateValueAtomV1::Null) if kind.is_pointer() => {
-                planned.push(Ok(0))
-            }
-            (StateValueWordKindV1::Leaf(kind), StateValueAtomV1::Pointer(envelope))
-                if kind.is_pointer() =>
-            {
-                let expected = pointer_type(kind).ok_or(VMError::DecodeError)?;
-                let tlv = pointer_abi::validate_tlv_bytes(&envelope)?;
-                if tlv.type_id != expected
-                    || !pointer_abi::is_type_allowed_for_policy(vm.syscall_policy(), tlv.type_id)
-                {
-                    return Err(VMError::DecodeError);
-                }
-                if encode_tlv(tlv.type_id, tlv.payload)?.as_slice() != envelope {
-                    return Err(VMError::DecodeError);
-                }
-                validate_pointer_payload(kind, tlv.payload)?;
-                pointer_bytes = pointer_bytes.saturating_add(envelope.len());
-                planned.push(Err(envelope));
-            }
-            _ => return Err(VMError::DecodeError),
-        }
+    let mut planned = Vec::new();
+    let mut node_index = 0;
+    let mut atom_index = 0;
+    plan_state_atoms(
+        &schema.nodes,
+        &atoms,
+        &mut node_index,
+        &mut atom_index,
+        &mut planned,
+    )?;
+    if node_index != schema.nodes.len()
+        || atom_index != atoms.len()
+        || planned.len() != schema.word_count().ok_or(VMError::DecodeError)?
+    {
+        return Err(VMError::DecodeError);
     }
+    let pointer_bytes = planned
+        .iter()
+        .map(planned_state_bytes)
+        .fold(0, usize::saturating_add);
 
     let table_payload_len = 1usize.saturating_add(planned.len().saturating_mul(8));
     let actual = gas(
@@ -353,12 +988,30 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     );
     preflight_reserved_syscall_gas(vm, actual)?;
 
+    let mut tlv_lengths = Vec::new();
+    let raw_heap_bytes = planned.iter().fold(0_usize, |bytes, value| {
+        bytes.saturating_add(planned_state_allocation_shape(value, &mut tlv_lengths))
+    });
+    tlv_lengths.push(
+        7_usize
+            .saturating_add(table_payload_len)
+            .saturating_add(Hash::LENGTH),
+    );
+    vm.preflight_host_tlv_allocations(&tlv_lengths)?;
+    let raw_heap_bytes = u64::try_from(raw_heap_bytes).map_err(|_| VMError::OutOfMemory)?;
+    if vm
+        .memory
+        .heap_allocated_len()
+        .checked_add(raw_heap_bytes)
+        .ok_or(VMError::OutOfMemory)?
+        > vm.memory.heap_limit()
+    {
+        return Err(VMError::OutOfMemory);
+    }
+
     let mut words = Vec::with_capacity(planned.len());
     for value in planned {
-        match value {
-            Ok(word) => words.push(word),
-            Err(envelope) => words.push(vm.alloc_host_tlv(&envelope)?),
-        }
+        words.push(materialize_state_word(vm, value)?);
     }
     let mut table = Vec::with_capacity(table_payload_len);
     table.push(0);
@@ -529,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_canonicalizes_inactive_payloads_and_rejects_null_active_pointers() {
+    fn encode_rejects_inactive_payload_words_and_null_active_pointers() {
         let option = StateValueSchemaV1 {
             nodes: vec![
                 StateValueNodeV1::Option,
@@ -538,21 +1191,33 @@ mod tests {
         };
         let mut vm = IVM::new(u64::MAX);
         let schema_pointer = install_schema(&mut vm, &option);
-        let table = vm.alloc_heap(16).expect("word table");
-        vm.store_u64(table, 0).expect("store absent tag");
-        vm.store_u64(table + 8, 99).expect("store hidden payload");
+        let option_layout = SumLayoutV1::option(1).expect("Option layout");
+        let forged = crate::sum::allocate_words(&mut vm, option_layout, 0, &[])
+            .expect("Option::none to forge");
+        vm.store_u64(forged + 8, 99)
+            .expect("store hidden inactive payload");
+        let table = vm.alloc_heap(8).expect("word table");
+        vm.store_u64(table, forged).expect("store Option handle");
         vm.set_register(10, schema_pointer);
         vm.set_register(11, table);
-        vm.set_register(12, 2);
-        encode_state_value(&mut vm, identity_address)
-            .expect("inactive payload must be canonicalized");
+        vm.set_register(12, 1);
+        assert_eq!(
+            encode_state_value(&mut vm, identity_address),
+            Err(VMError::DecodeError),
+            "an inactive payload word is not part of the V1 value"
+        );
+
+        let none = crate::sum::allocate_words(&mut vm, option_layout, 0, &[])
+            .expect("canonical Option::none");
+        vm.store_u64(table, none).expect("store canonical Option");
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 1);
+        encode_state_value(&mut vm, identity_address).expect("encode active-only None");
         let encoded = vm.validate_tlv(vm.register(10)).expect("encoded record");
         let record: StateValueRecordV1 =
-            decode_from_bytes(encoded.payload).expect("decode canonicalized record");
-        assert_eq!(
-            record.atoms,
-            vec![StateValueAtomV1::Tag(false), StateValueAtomV1::Int(0)]
-        );
+            decode_from_bytes(encoded.payload).expect("decode active-only record");
+        assert_eq!(record.atoms, vec![StateValueAtomV1::Tag(false)]);
 
         let text = StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::String)],
@@ -588,5 +1253,154 @@ mod tests {
             encode_state_value(&mut vm, identity_address),
             Err(VMError::DecodeError)
         );
+    }
+
+    #[test]
+    fn amount_list_roundtrips_as_one_canonical_sequence_handle() {
+        let element = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Amount)],
+        };
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::List {
+                element: Box::new(element),
+                capacity: 2,
+            }],
+        };
+        let amount_payload = to_bytes(&Numeric::new(125, 2)).expect("Amount payload");
+        let amount = encode_tlv(PointerType::Amount, &amount_payload).expect("Amount TLV");
+
+        let mut vm = IVM::new(u64::MAX);
+        let schema_pointer = install_schema(&mut vm, &schema);
+        let first_amount = vm.alloc_host_tlv(&amount).expect("install first Amount");
+        let second_amount = vm.alloc_host_tlv(&amount).expect("install second Amount");
+        let layout = ListLayoutV1::try_new(2, 1).expect("Amount list layout");
+        let list_pointer = crate::list::allocate_words(
+            &mut vm,
+            layout,
+            &[vec![first_amount], vec![second_amount]],
+        )
+        .expect("allocate contiguous Amount list");
+        let table = vm.alloc_heap(8).expect("word table");
+        vm.store_u64(table, list_pointer)
+            .expect("store list pointer");
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 1);
+        encode_state_value(&mut vm, identity_address).expect("encode list state");
+        let record_pointer = vm.register(10);
+
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, record_pointer);
+        decode_state_value(&mut vm, identity_address).expect("decode list state");
+        let table = vm.validate_tlv(vm.register(10)).expect("decoded table");
+        let list_pointer = u64::from_le_bytes(table.payload[1..9].try_into().expect("list word"));
+        let decoded =
+            crate::list::read_words(&vm, list_pointer, layout).expect("read decoded list");
+        assert_eq!(decoded.len(), 2);
+        for item in &decoded {
+            assert_eq!(item.len(), 1);
+            let amount = vm.validate_tlv(item[0]).expect("decoded Amount TLV");
+            assert_eq!(amount.type_id, PointerType::Amount);
+            let value: Numeric = decode_from_bytes(amount.payload).expect("decode Amount");
+            assert_eq!(value, Numeric::new(125, 2));
+        }
+
+        let overflow = crate::list::allocate_words(
+            &mut vm,
+            layout,
+            &[vec![first_amount], vec![second_amount]],
+        )
+        .expect("allocate list to forge");
+        vm.store_u64(overflow, 3)
+            .expect("forge length past capacity");
+        let overflow_table = vm.alloc_heap(8).expect("overflow word table");
+        vm.store_u64(overflow_table, overflow)
+            .expect("store overflow list pointer");
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, overflow_table);
+        vm.set_register(12, 1);
+        assert_eq!(
+            encode_state_value(&mut vm, identity_address),
+            Err(VMError::DecodeError)
+        );
+    }
+
+    #[test]
+    fn list_of_nested_option_results_roundtrips_active_only_handles() {
+        let element = StateValueSchemaV1 {
+            nodes: vec![
+                StateValueNodeV1::Option,
+                StateValueNodeV1::Result,
+                StateValueNodeV1::Leaf(StateValueKindV1::Amount),
+                StateValueNodeV1::Leaf(StateValueKindV1::Bool),
+            ],
+        };
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::List {
+                element: Box::new(element),
+                capacity: 3,
+            }],
+        };
+        let mut vm = IVM::new(u64::MAX);
+        let schema_pointer = install_schema(&mut vm, &schema);
+        let amount_payload = to_bytes(&Numeric::new(125, 2)).expect("Amount payload");
+        let amount = encode_tlv(PointerType::Amount, &amount_payload).expect("Amount TLV");
+        let amount = vm.alloc_host_tlv(&amount).expect("install Amount");
+        let result_layout = SumLayoutV1::try_new(1, 1).expect("Result layout");
+        let option_layout = SumLayoutV1::option(1).expect("Option layout");
+        let ok =
+            crate::sum::allocate_words(&mut vm, result_layout, 1, &[amount]).expect("Result::ok");
+        let some_ok =
+            crate::sum::allocate_words(&mut vm, option_layout, 1, &[ok]).expect("Option::some ok");
+        let err = crate::sum::allocate_words(&mut vm, result_layout, 0, &[1]).expect("Result::err");
+        let some_err = crate::sum::allocate_words(&mut vm, option_layout, 1, &[err])
+            .expect("Option::some err");
+        let none =
+            crate::sum::allocate_words(&mut vm, option_layout, 0, &[]).expect("Option::none");
+        let list_layout = ListLayoutV1::try_new(3, 1).expect("list layout");
+        let list = crate::list::allocate_words(
+            &mut vm,
+            list_layout,
+            &[vec![some_ok], vec![some_err], vec![none]],
+        )
+        .expect("allocate list");
+        let table = vm.alloc_heap(8).expect("word table");
+        vm.store_u64(table, list).expect("store list handle");
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 1);
+        encode_state_value(&mut vm, identity_address).expect("encode nested sums");
+        let record_pointer = vm.register(10);
+
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, record_pointer);
+        decode_state_value(&mut vm, identity_address).expect("decode nested sums");
+        let table = vm.validate_tlv(vm.register(10)).expect("decoded table");
+        let list = u64::from_le_bytes(table.payload[1..9].try_into().expect("list word"));
+        let list = crate::list::read_words(&vm, list, list_layout).expect("read list");
+        assert_eq!(list.len(), 3);
+
+        let (some, first) =
+            crate::sum::read_words(&vm, list[0][0], option_layout).expect("read first Option");
+        assert!(some);
+        let (ok, amount) =
+            crate::sum::read_words(&vm, first[0], result_layout).expect("read first Result");
+        assert!(ok);
+        let amount = vm.validate_tlv(amount[0]).expect("Amount TLV");
+        let amount: Numeric = decode_from_bytes(amount.payload).expect("decode Amount");
+        assert_eq!(amount, Numeric::new(125, 2));
+
+        let (some, second) =
+            crate::sum::read_words(&vm, list[1][0], option_layout).expect("read second Option");
+        assert!(some);
+        let (ok, error) =
+            crate::sum::read_words(&vm, second[0], result_layout).expect("read second Result");
+        assert!(!ok);
+        assert_eq!(error, vec![1]);
+
+        let (some, payload) =
+            crate::sum::read_words(&vm, list[2][0], option_layout).expect("read Option::none");
+        assert!(!some);
+        assert!(payload.is_empty());
     }
 }

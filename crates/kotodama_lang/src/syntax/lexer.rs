@@ -1,8 +1,8 @@
 //! Lossless, recovering Kotodama lexer.
 
 use crate::{
-    diagnostic::{Diagnostic, DiagnosticPhase, SourcePosition, SourceSpan},
-    lexer::{TokenKind, v1_keyword_kind},
+    diagnostic::{Diagnostic, DiagnosticFix, DiagnosticPhase, SourcePosition, SourceSpan},
+    lexer::{TokenKind, V1_PUNCTUATION_KINDS, v1_keyword_kind},
     source::{FrontendBudget, SourceFile, TextRange},
 };
 
@@ -27,7 +27,7 @@ fn diagnostic(
 ) -> Diagnostic {
     let start = source.line_column(range.start);
     let end = source.line_column(range.end);
-    Diagnostic::error(
+    let mut diagnostic = Diagnostic::error(
         code,
         DiagnosticPhase::Lex,
         message,
@@ -43,7 +43,80 @@ fn diagnostic(
             },
             byte_range: Some(range),
         }),
-    )
+    );
+    if let Some((span, replacement)) = amount_lexical_fix(source, code, range) {
+        diagnostic.fix = Some(DiagnosticFix { span, replacement });
+    }
+    diagnostic
+}
+
+fn amount_lexical_fix(
+    source: &SourceFile,
+    code: &str,
+    range: TextRange,
+) -> Option<(SourceSpan, String)> {
+    let spelling = source.slice(range)?;
+    match code {
+        "E_AMOUNT_SUFFIX_SEPARATED" => {
+            let tail = source.text().get(range.end as usize..)?;
+            let whitespace = tail.len() - tail.trim_start_matches(char::is_whitespace).len();
+            let suffix = tail.get(whitespace..)?;
+            if !suffix.starts_with("amt")
+                || suffix[3..]
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+            {
+                return None;
+            }
+            let fix_range = TextRange::new(
+                range.start,
+                range
+                    .end
+                    .saturating_add(u32::try_from(whitespace + 3).ok()?),
+            );
+            Some((
+                SourceSpan::from_range(source, fix_range),
+                format!("{spelling}amt"),
+            ))
+        }
+        "E_AMOUNT_SUFFIX" => {
+            if spelling.contains('.')
+                && spelling
+                    .chars()
+                    .last()
+                    .is_some_and(|character| character.is_ascii_digit() || character == '_')
+            {
+                return Some((
+                    SourceSpan::from_range(source, range),
+                    format!("{spelling}amt"),
+                ));
+            }
+            let suffix_start = spelling
+                .char_indices()
+                .find_map(|(index, character)| character.is_ascii_alphabetic().then_some(index))?;
+            let (number, suffix) = spelling.split_at(suffix_start);
+            if number.is_empty()
+                || !number
+                    .chars()
+                    .all(|character| character.is_ascii_digit() || matches!(character, '_' | '.'))
+                || !suffix
+                    .chars()
+                    .all(|character| character.is_ascii_alphabetic())
+            {
+                return None;
+            }
+            Some((
+                SourceSpan::from_range(source, range),
+                format!("{number}amt"),
+            ))
+        }
+        "E_AMOUNT_MALFORMED" if spelling.ends_with(".amt") => Some((
+            SourceSpan::from_range(source, range),
+            format!("{}0amt", spelling.trim_end_matches("amt")),
+        )),
+        _ => None,
+    }
 }
 
 fn keyword_kind(text: &str) -> SyntaxKind {
@@ -62,6 +135,7 @@ fn keyword_kind(text: &str) -> SyntaxKind {
         Some(TokenKind::Authorize) => SyntaxKind::KwAuthorize,
         Some(TokenKind::Trigger) => SyntaxKind::KwTrigger,
         Some(TokenKind::If) => SyntaxKind::KwIf,
+        Some(TokenKind::Match) => SyntaxKind::KwMatch,
         Some(TokenKind::Else) => SyntaxKind::KwElse,
         Some(TokenKind::For) => SyntaxKind::KwFor,
         Some(TokenKind::In) => SyntaxKind::KwIn,
@@ -81,6 +155,25 @@ fn keyword_kind(text: &str) -> SyntaxKind {
 struct Scanner<'source> {
     text: &'source str,
     pos: usize,
+}
+
+#[derive(Clone, Copy)]
+struct LexicalError {
+    code: &'static str,
+    message: &'static str,
+}
+
+impl LexicalError {
+    const fn new(code: &'static str, message: &'static str) -> Self {
+        Self { code, message }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ScannedNumber {
+    Integer,
+    Amount,
+    Invalid(LexicalError),
 }
 
 impl<'source> Scanner<'source> {
@@ -145,10 +238,10 @@ impl<'source> Scanner<'source> {
         }
     }
 
-    /// Scan an integer-looking token and report whether it contains a decimal
-    /// fraction, which is invalid in V1.
-    fn scan_number(&mut self) -> bool {
+    /// Scan an integer or exact decimal Amount token.
+    fn scan_number(&mut self) -> ScannedNumber {
         if self.starts_with("0x") || self.starts_with("0X") {
+            let start = self.pos;
             self.pos += 2;
             while self
                 .current()
@@ -156,9 +249,24 @@ impl<'source> Scanner<'source> {
             {
                 self.bump();
             }
-            return false;
+            if self.rest().starts_with("mt")
+                && self.text[start..]
+                    .split(|character: char| {
+                        !(character.is_ascii_alphanumeric() || character == '_')
+                    })
+                    .next()
+                    .is_some_and(|token| token.ends_with("amt"))
+            {
+                self.scan_identifier();
+                return ScannedNumber::Invalid(LexicalError::new(
+                    "E_AMOUNT_MALFORMED",
+                    "Amount literals use base-10 digits; hexadecimal Amount spelling is invalid",
+                ));
+            }
+            return ScannedNumber::Integer;
         }
         if self.starts_with("0b") || self.starts_with("0B") {
+            let start = self.pos;
             self.pos += 2;
             while self
                 .current()
@@ -166,7 +274,18 @@ impl<'source> Scanner<'source> {
             {
                 self.bump();
             }
-            return false;
+            if self.text[start..]
+                .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+                .next()
+                .is_some_and(|token| token.ends_with("amt"))
+            {
+                self.scan_identifier();
+                return ScannedNumber::Invalid(LexicalError::new(
+                    "E_AMOUNT_MALFORMED",
+                    "Amount literals use base-10 digits; binary Amount spelling is invalid",
+                ));
+            }
+            return ScannedNumber::Integer;
         }
         while self
             .current()
@@ -174,12 +293,21 @@ impl<'source> Scanner<'source> {
         {
             self.bump();
         }
-        if self.starts_with(".")
-            && self.rest()[1..]
-                .chars()
-                .next()
-                .is_some_and(|character| character.is_ascii_digit())
-        {
+
+        let mut has_fraction = false;
+        if self.starts_with(".") {
+            let after_dot = self.rest()[1..].chars().next();
+            if after_dot.is_some_and(|character| character.is_ascii_digit() || character == '_') {
+                has_fraction = true;
+            } else if self.rest()[1..].starts_with("amt") {
+                self.pos += 1 + "amt".len();
+                return ScannedNumber::Invalid(LexicalError::new(
+                    "E_AMOUNT_MALFORMED",
+                    "Amount literals require at least one fractional digit after `.`",
+                ));
+            }
+        }
+        if has_fraction {
             self.bump();
             while self
                 .current()
@@ -187,10 +315,67 @@ impl<'source> Scanner<'source> {
             {
                 self.bump();
             }
-            true
-        } else {
-            false
         }
+
+        if self.starts_with("amt") {
+            self.pos += "amt".len();
+            if self
+                .current()
+                .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+            {
+                self.scan_identifier();
+                return ScannedNumber::Invalid(LexicalError::new(
+                    "E_AMOUNT_SUFFIX",
+                    "the Amount suffix must be exactly lowercase `amt`",
+                ));
+            }
+            return ScannedNumber::Amount;
+        }
+
+        if self
+            .current()
+            .is_some_and(|character| character.is_ascii_alphabetic())
+        {
+            let suffix_start = self.pos;
+            self.scan_identifier();
+            let suffix = &self.text[suffix_start..self.pos];
+            let amount_like = has_fraction
+                || suffix.eq_ignore_ascii_case("amt")
+                || suffix.starts_with("am")
+                || suffix.ends_with("amt");
+            if amount_like {
+                return ScannedNumber::Invalid(LexicalError::new(
+                    "E_AMOUNT_SUFFIX",
+                    "the Amount suffix must be exactly lowercase `amt` and touch the digits",
+                ));
+            }
+            self.pos = suffix_start;
+        }
+
+        if has_fraction {
+            let rest = self.rest();
+            let trimmed = rest.trim_start_matches(char::is_whitespace);
+            let separated_suffix = trimmed.len() != rest.len()
+                && trimmed.starts_with("amt")
+                && !trimmed["amt".len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_');
+            return ScannedNumber::Invalid(LexicalError::new(
+                if separated_suffix {
+                    "E_AMOUNT_SUFFIX_SEPARATED"
+                } else {
+                    "E_AMOUNT_SUFFIX"
+                },
+                if separated_suffix {
+                    "the `amt` suffix must immediately follow the Amount digits"
+                } else {
+                    "decimal fractions require the adjacent lowercase `amt` suffix"
+                },
+            ));
+        }
+
+        ScannedNumber::Integer
     }
 
     fn scan_quoted(&mut self, prefix_bytes: usize) -> bool {
@@ -260,54 +445,18 @@ impl<'source> Scanner<'source> {
     }
 
     fn punctuation(&mut self) -> Option<SyntaxKind> {
-        for (spelling, kind) in [
-            ("+=", SyntaxKind::PlusEqual),
-            ("->", SyntaxKind::Arrow),
-            ("-=", SyntaxKind::MinusEqual),
-            ("*=", SyntaxKind::StarEqual),
-            ("/=", SyntaxKind::SlashEqual),
-            ("%=", SyntaxKind::PercentEqual),
-            ("!=", SyntaxKind::BangEqual),
-            ("==", SyntaxKind::EqualEqual),
-            ("<=", SyntaxKind::LessEqual),
-            (">=", SyntaxKind::GreaterEqual),
-            ("&&", SyntaxKind::AndAnd),
-            ("||", SyntaxKind::OrOr),
-            ("::", SyntaxKind::ColonColon),
-        ] {
+        for &(spelling, kind) in V1_PUNCTUATION_KINDS {
             if self.starts_with(spelling) {
                 self.pos += spelling.len();
                 return Some(kind);
             }
         }
-        let kind = match self.bump()? {
-            '+' => SyntaxKind::Plus,
-            '-' => SyntaxKind::Minus,
-            '*' => SyntaxKind::Star,
-            '/' => SyntaxKind::Slash,
-            '%' => SyntaxKind::Percent,
-            '!' => SyntaxKind::Bang,
-            '=' => SyntaxKind::Equal,
-            '<' => SyntaxKind::Less,
-            '>' => SyntaxKind::Greater,
-            '(' => SyntaxKind::LParen,
-            ')' => SyntaxKind::RParen,
-            '{' => SyntaxKind::LBrace,
-            '}' => SyntaxKind::RBrace,
-            '[' => SyntaxKind::LBracket,
-            ']' => SyntaxKind::RBracket,
-            ';' => SyntaxKind::Semicolon,
-            ',' => SyntaxKind::Comma,
-            ':' => SyntaxKind::Colon,
-            '.' => SyntaxKind::Dot,
-            '?' => SyntaxKind::Question,
-            '#' => SyntaxKind::Hash,
-            _ => return None,
-        };
-        Some(kind)
+        // Preserve the scanner's progress guarantee for invalid input.
+        self.bump();
+        None
     }
 
-    fn next_token(&mut self) -> (GreenToken, Option<&'static str>) {
+    fn next_token(&mut self) -> (GreenToken, Option<LexicalError>) {
         let start = self.pos;
         let Some(character) = self.current() else {
             return (
@@ -332,7 +481,7 @@ impl<'source> Scanner<'source> {
                 } else {
                     SyntaxKind::ErrorToken
                 },
-                (!terminated).then_some("unterminated block comment"),
+                (!terminated).then_some(LexicalError::new("K0100", "unterminated block comment")),
             )
         } else if let Some((is_bytes, content_start, hashes)) = self.raw_prefix() {
             let terminated = self.scan_raw(content_start, hashes);
@@ -346,7 +495,10 @@ impl<'source> Scanner<'source> {
                 } else {
                     SyntaxKind::ErrorToken
                 },
-                (!terminated).then_some("unterminated raw string literal"),
+                (!terminated).then_some(LexicalError::new(
+                    "K0100",
+                    "unterminated raw string literal",
+                )),
             )
         } else if self.starts_with("b\"") {
             let terminated = self.scan_quoted(1);
@@ -356,7 +508,10 @@ impl<'source> Scanner<'source> {
                 } else {
                     SyntaxKind::ErrorToken
                 },
-                (!terminated).then_some("unterminated byte string literal"),
+                (!terminated).then_some(LexicalError::new(
+                    "K0100",
+                    "unterminated byte string literal",
+                )),
             )
         } else if character == '"' {
             let terminated = self.scan_quoted(0);
@@ -366,7 +521,7 @@ impl<'source> Scanner<'source> {
                 } else {
                     SyntaxKind::ErrorToken
                 },
-                (!terminated).then_some("unterminated string literal"),
+                (!terminated).then_some(LexicalError::new("K0100", "unterminated string literal")),
             )
         } else if character.is_alphabetic() || character == '_' {
             self.scan_identifier();
@@ -375,23 +530,26 @@ impl<'source> Scanner<'source> {
             if kind == SyntaxKind::Ident && !text.is_ascii() {
                 (
                     SyntaxKind::ErrorToken,
-                    Some("non-ASCII identifier outside the branded Japanese keyword set"),
+                    Some(LexicalError::new(
+                        "K0100",
+                        "non-ASCII identifier outside the branded Japanese keyword set",
+                    )),
                 )
             } else {
                 (kind, None)
             }
         } else if character.is_ascii_digit() {
-            if self.scan_number() {
-                (
-                    SyntaxKind::ErrorToken,
-                    Some("decimal fractions are not part of Kotodama V1"),
-                )
-            } else {
-                (SyntaxKind::Number, None)
+            match self.scan_number() {
+                ScannedNumber::Integer => (SyntaxKind::Number, None),
+                ScannedNumber::Amount => (SyntaxKind::Amount, None),
+                ScannedNumber::Invalid(error) => (SyntaxKind::ErrorToken, Some(error)),
             }
         } else if self.starts_with("++") {
             self.pos += 2;
-            (SyntaxKind::ErrorToken, Some("invalid Kotodama V1 operator"))
+            (
+                SyntaxKind::ErrorToken,
+                Some(LexicalError::new("K0100", "invalid Kotodama V1 operator")),
+            )
         } else if let Some(kind) = self.punctuation() {
             (kind, None)
         } else {
@@ -399,11 +557,14 @@ impl<'source> Scanner<'source> {
             // reporting failure.
             (
                 SyntaxKind::ErrorToken,
-                Some(if character.is_ascii() {
-                    "invalid source character"
-                } else {
-                    "non-ASCII character outside a string or comment"
-                }),
+                Some(LexicalError::new(
+                    "K0100",
+                    if character.is_ascii() {
+                        "invalid source character"
+                    } else {
+                        "non-ASCII character outside a string or comment"
+                    },
+                )),
             )
         };
         let end = self.pos;
@@ -519,12 +680,12 @@ pub fn lex(source: &SourceFile, budget: FrontendBudget) -> Lexed {
             }
             _ => {}
         }
-        if let Some(message) = lexical_error {
+        if let Some(error) = lexical_error {
             record_diagnostic(
                 &mut diagnostics,
                 &mut omitted_diagnostics,
                 budget,
-                diagnostic(source, "K0100", message, token.range),
+                diagnostic(source, error.code, error.message, token.range),
             );
         }
         let end = token.kind == SyntaxKind::Eof;
@@ -544,6 +705,7 @@ pub fn lex(source: &SourceFile, budget: FrontendBudget) -> Lexed {
 mod tests {
     use super::lex;
     use crate::{
+        lexer::{V1_OPERATORS, V1_PUNCTUATION_KINDS},
         source::{FrontendBudget, SourceFile, SourceId},
         syntax::SyntaxKind,
     };
@@ -608,5 +770,84 @@ mod tests {
             assert!(!lexed.diagnostics.is_empty(), "{text} must be rejected");
             assert_eq!(lexed.tokens[0].kind, SyntaxKind::ErrorToken, "{text}");
         }
+    }
+
+    #[test]
+    fn normative_operator_table_drives_the_lossless_scanner() {
+        assert_eq!(V1_OPERATORS.len(), V1_PUNCTUATION_KINDS.len());
+        for &spelling in V1_OPERATORS {
+            let expected = V1_PUNCTUATION_KINDS
+                .iter()
+                .find_map(|(candidate, kind)| (*candidate == spelling).then_some(*kind))
+                .expect("every documented operator has a generated scanner kind");
+            let source = SourceFile::new(SourceId(0), "operator.ko", spelling);
+            let lexed = lex(&source, FrontendBudget::v1());
+            assert!(
+                lexed.diagnostics.is_empty(),
+                "{spelling}: {:?}",
+                lexed.diagnostics
+            );
+            assert_eq!(lexed.tokens[0].kind, expected, "{spelling}");
+            assert_eq!(source.slice(lexed.tokens[0].range), Some(spelling));
+            assert_eq!(lexed.tokens[1].kind, SyntaxKind::Eof, "{spelling}");
+        }
+    }
+
+    #[test]
+    fn amount_is_one_lossless_token_with_exact_range() {
+        let source = SourceFile::new(SourceId(0), "amount.ko", "  1.250_0amt // exact\n");
+        let lexed = lex(&source, FrontendBudget::v1());
+        assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
+        let amount = lexed
+            .tokens
+            .iter()
+            .find(|token| token.kind == SyntaxKind::Amount)
+            .expect("Amount token");
+        assert_eq!(source.slice(amount.range), Some("1.250_0amt"));
+        assert_eq!(amount.range.start, 2);
+        assert_eq!(amount.range.end, 12);
+    }
+
+    #[test]
+    fn amount_lexical_failures_have_dedicated_codes() {
+        for (spelling, code) in [
+            ("1.25", "E_AMOUNT_SUFFIX"),
+            ("1.25 amt", "E_AMOUNT_SUFFIX_SEPARATED"),
+            ("1.25am", "E_AMOUNT_SUFFIX"),
+            ("0x10amt", "E_AMOUNT_MALFORMED"),
+            ("1.amt", "E_AMOUNT_MALFORMED"),
+        ] {
+            let source = SourceFile::new(SourceId(0), "invalid-amount.ko", spelling);
+            let lexed = lex(&source, FrontendBudget::v1());
+            assert_eq!(lexed.diagnostics[0].code, code, "`{spelling}`");
+            assert_eq!(lexed.tokens[0].kind, SyntaxKind::ErrorToken, "`{spelling}`");
+        }
+    }
+
+    #[test]
+    fn amount_lexical_fixes_are_value_preserving_and_exactly_spanned() {
+        for (spelling, original, replacement) in [
+            ("1.25", "1.25", "1.25amt"),
+            ("1.25 amt", "1.25 amt", "1.25amt"),
+            ("1.25Amt", "1.25Amt", "1.25amt"),
+            ("1.amt", "1.amt", "1.0amt"),
+        ] {
+            let source = SourceFile::new(SourceId(0), "invalid-amount.ko", spelling);
+            let lexed = lex(&source, FrontendBudget::v1());
+            let fix = lexed.diagnostics[0]
+                .fix
+                .as_ref()
+                .expect("safe Amount spelling fix");
+            let range = fix.span.byte_range.expect("exact byte range");
+            assert_eq!(source.slice(range), Some(original), "`{spelling}`");
+            assert_eq!(fix.replacement, replacement, "`{spelling}`");
+        }
+
+        let source = SourceFile::new(SourceId(0), "ambiguous-amount.ko", "0x10amt");
+        let lexed = lex(&source, FrontendBudget::v1());
+        assert!(
+            lexed.diagnostics[0].fix.is_none(),
+            "the compiler must not guess whether hexadecimal text should become a decimal Amount"
+        );
     }
 }

@@ -8,8 +8,11 @@ use std::{
     sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError},
 };
 
-use iroha_core::sumeragi::consensus::{
-    PERMISSIONED_TAG, Phase, ValidatorIndex, Vote, default_chain_order_hash, vote_preimage,
+use iroha_core::sumeragi::{
+    consensus::{
+        PERMISSIONED_TAG, Phase, ValidatorIndex, Vote, default_chain_order_hash, vote_preimage,
+    },
+    network_topology::commit_quorum_from_len,
 };
 use iroha_core::{
     bridge::{
@@ -142,6 +145,26 @@ fn checked_bls_keypair() -> KeyPair {
         .expect("bridge finality proof fixture key generation should succeed")
 }
 
+fn deterministic_bls_validators(count: usize) -> Vec<KeyPair> {
+    (0..count)
+        .map(|index| {
+            let seed_byte = u8::try_from(index + 1).expect("quorum fixture index fits in u8");
+            KeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::BlsNormal)
+                .expect("deterministic bridge quorum validator key generation should succeed")
+        })
+        .collect()
+}
+
+fn validator_pops(validators: &[KeyPair]) -> Vec<Vec<u8>> {
+    validators
+        .iter()
+        .map(|validator| {
+            iroha_crypto::bls_normal_pop_prove(validator.private_key())
+                .expect("bridge quorum validator PoP generation should succeed")
+        })
+        .collect()
+}
+
 #[test]
 fn checked_bls_keypair_preserves_validator_algorithm() {
     assert_eq!(checked_bls_keypair().algorithm(), Algorithm::BlsNormal);
@@ -200,7 +223,23 @@ fn build_commit_qc(
     let signers: BTreeSet<_> = (0..peer_ids.len())
         .filter_map(|idx| ValidatorIndex::try_from(idx).ok())
         .collect();
-    let signers_bitmap = build_signers_bitmap(&signers, peer_ids.len());
+    build_commit_qc_for_signers(
+        chain_id, block_hash, height, view, epoch, peer_ids, keypairs, &signers,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_commit_qc_for_signers(
+    chain_id: &ChainId,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    peer_ids: &[PeerId],
+    keypairs: &[KeyPair],
+    signers: &BTreeSet<ValidatorIndex>,
+) -> Qc {
+    let signers_bitmap = build_signers_bitmap(signers, peer_ids.len());
     let aggregate_signature = aggregate_signature_for_signers(
         chain_id,
         PERMISSIONED_TAG,
@@ -209,7 +248,7 @@ fn build_commit_qc(
         height,
         view,
         epoch,
-        &signers,
+        signers,
         keypairs,
     );
     let validator_set = peer_ids.to_vec();
@@ -234,6 +273,118 @@ fn build_commit_qc(
             bls_aggregate_signature: aggregate_signature,
         },
     }
+}
+
+fn direct_finality_proof_for_signers(
+    validators: &[KeyPair],
+    validator_set_pops: &[Vec<u8>],
+    signers: &BTreeSet<ValidatorIndex>,
+) -> (BridgeFinalityProof, ChainId, HashOf<Vec<PeerId>>) {
+    assert_eq!(validators.len(), validator_set_pops.len());
+    let chain_id: ChainId = "iroha:bridge-quorum-policy"
+        .parse()
+        .expect("bridge quorum fixture chain id should parse");
+    let block_header = BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let block_hash = block_header.hash();
+    let validator_set: Vec<_> = validators
+        .iter()
+        .map(|validator| PeerId::new(validator.public_key().clone()))
+        .collect();
+    let validator_set_hash = HashOf::new(&validator_set);
+    let commit_qc = build_commit_qc_for_signers(
+        &chain_id,
+        block_hash,
+        1,
+        0,
+        0,
+        &validator_set,
+        validators,
+        signers,
+    );
+    (
+        BridgeFinalityProof {
+            height: 1,
+            chain_id: chain_id.clone(),
+            block_header,
+            block_hash,
+            commit_qc,
+            validator_set_pops: validator_set_pops.to_vec(),
+        },
+        chain_id,
+        validator_set_hash,
+    )
+}
+
+fn signer_prefix(count: usize) -> BTreeSet<ValidatorIndex> {
+    (0..count)
+        .map(|index| ValidatorIndex::try_from(index).expect("quorum fixture signer index fits"))
+        .collect()
+}
+
+const fn retired_bridge_quorum_from_len(len: usize) -> usize {
+    if len > 3 {
+        (len.saturating_sub(1) / 3) * 2 + 1
+    } else {
+        len
+    }
+}
+
+fn assert_proof_aggregate_signature_is_valid(
+    proof: &BridgeFinalityProof,
+    signers: &BTreeSet<ValidatorIndex>,
+) {
+    let certificate = &proof.commit_qc;
+    assert_eq!(
+        certificate.aggregate.signers_bitmap,
+        build_signers_bitmap(signers, certificate.validator_set.len()),
+        "fixture bitmap must name exactly the validators that signed"
+    );
+    let vote = Vote {
+        phase: certificate.phase,
+        block_hash: certificate.subject_block_hash,
+        parent_state_root: certificate.parent_state_root,
+        post_state_root: certificate.post_state_root,
+        height: certificate.height,
+        view: certificate.view,
+        epoch: certificate.epoch,
+        chain_order_hash: certificate.chain_order_hash,
+        rechain_seq: certificate.rechain_seq,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vote_preimage(&proof.chain_id, &certificate.mode_tag, &vote);
+    let public_keys: Vec<_> = signers
+        .iter()
+        .map(|signer| {
+            certificate.validator_set
+                [usize::try_from(*signer).expect("quorum fixture signer index fits")]
+            .public_key()
+        })
+        .collect();
+    let pops: Vec<_> = signers
+        .iter()
+        .map(|signer| {
+            proof.validator_set_pops
+                [usize::try_from(*signer).expect("quorum fixture signer index fits")]
+            .as_slice()
+        })
+        .collect();
+
+    iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        &preimage,
+        &certificate.aggregate.bls_aggregate_signature,
+        &public_keys,
+        &pops,
+    )
+    .expect("adversarial quorum fixture must carry a valid BLS aggregate signature");
 }
 
 fn seed_validator_pops(world: &mut World, validators: &[KeyPair]) {
@@ -1112,6 +1263,161 @@ fn verify_finality_proof_accepts_four_validator_quorum_subset() {
     let config = verification_config(&chain_id, Some(proof.height), Some(validator_set_hash));
 
     verify_finality_proof(&proof, &config).expect("quorum subset should verify");
+}
+
+#[test]
+fn verify_finality_quorum_matches_live_sumeragi_for_rosters_zero_through_64() {
+    const MAX_ROSTER_LEN: usize = 64;
+
+    let validators = deterministic_bls_validators(MAX_ROSTER_LEN);
+    let pops = validator_pops(&validators);
+    let no_signers = BTreeSet::new();
+    let (mut empty_proof, empty_chain_id, empty_validator_set_hash) =
+        direct_finality_proof_for_signers(&[], &[], &no_signers);
+    empty_proof.validator_set_pops.push(vec![0xA5]);
+    empty_proof.commit_qc.aggregate.signers_bitmap = vec![0xFF];
+    empty_proof.commit_qc.aggregate.bls_aggregate_signature = vec![0xA5];
+    let empty_config = verification_config(
+        &empty_chain_id,
+        Some(empty_proof.height),
+        Some(empty_validator_set_hash),
+    );
+    assert_eq!(commit_quorum_from_len(0), 0);
+    assert_eq!(
+        verify_finality_proof(&empty_proof, &empty_config),
+        Err(BridgeFinalityVerificationError::EmptyValidatorSet),
+        "an empty roster must be rejected before malformed PoPs, bitmap, or signature bytes"
+    );
+
+    let one_signer = signer_prefix(1);
+    for roster_len in 1..=MAX_ROSTER_LEN {
+        let (proof, chain_id, validator_set_hash) = direct_finality_proof_for_signers(
+            &validators[..roster_len],
+            &pops[..roster_len],
+            &one_signer,
+        );
+        assert_proof_aggregate_signature_is_valid(&proof, &one_signer);
+        let config = verification_config(&chain_id, Some(proof.height), Some(validator_set_hash));
+        let expected_required = commit_quorum_from_len(roster_len);
+
+        if expected_required == 1 {
+            verify_finality_proof(&proof, &config)
+                .expect("one valid signature must satisfy a one-validator roster");
+            continue;
+        }
+
+        assert_eq!(
+            verify_finality_proof(&proof, &config),
+            Err(BridgeFinalityVerificationError::InsufficientSignatures {
+                collected: 1,
+                required: expected_required,
+            }),
+            "bridge verifier quorum diverged from live Sumeragi for roster_len={roster_len}"
+        );
+    }
+}
+
+#[test]
+fn verify_finality_rejects_every_valid_aggregate_accepted_by_retired_weaker_quorum() {
+    const MAX_ROSTER_LEN: usize = 64;
+
+    let validators = deterministic_bls_validators(MAX_ROSTER_LEN);
+    let pops = validator_pops(&validators);
+    let mut divergent_roster_count = 0;
+
+    for roster_len in 1..=MAX_ROSTER_LEN {
+        let retired_required = retired_bridge_quorum_from_len(roster_len);
+        let required = commit_quorum_from_len(roster_len);
+        if retired_required == required {
+            continue;
+        }
+        divergent_roster_count += 1;
+        assert!(
+            retired_required < required,
+            "the retired bridge policy must never be stronger than live Sumeragi"
+        );
+
+        let signers = signer_prefix(retired_required);
+        let (proof, chain_id, validator_set_hash) = direct_finality_proof_for_signers(
+            &validators[..roster_len],
+            &pops[..roster_len],
+            &signers,
+        );
+        assert_proof_aggregate_signature_is_valid(&proof, &signers);
+        let config = verification_config(&chain_id, Some(proof.height), Some(validator_set_hash));
+
+        assert_eq!(
+            verify_finality_proof(&proof, &config),
+            Err(BridgeFinalityVerificationError::InsufficientSignatures {
+                collected: retired_required,
+                required,
+            }),
+            "valid aggregate at retired quorum must fail for roster_len={roster_len}"
+        );
+    }
+
+    assert_eq!(
+        divergent_roster_count, 40,
+        "the regression sweep must exercise every divergent roster size through 64"
+    );
+}
+
+#[test]
+fn verify_finality_enforces_exact_quorum_at_representative_boundaries() {
+    const MAX_ROSTER_LEN: usize = 64;
+    const BOUNDARIES: [usize; 13] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 31, 63, 64];
+
+    let validators = deterministic_bls_validators(MAX_ROSTER_LEN);
+    let pops = validator_pops(&validators);
+
+    for roster_len in BOUNDARIES {
+        let required = commit_quorum_from_len(roster_len);
+        let exact_signers = signer_prefix(required);
+        let (exact_proof, chain_id, validator_set_hash) = direct_finality_proof_for_signers(
+            &validators[..roster_len],
+            &pops[..roster_len],
+            &exact_signers,
+        );
+        let config = verification_config(
+            &chain_id,
+            Some(exact_proof.height),
+            Some(validator_set_hash),
+        );
+        verify_finality_proof(&exact_proof, &config).unwrap_or_else(|error| {
+            panic!("exact quorum failed for roster_len={roster_len}: {error}")
+        });
+
+        let below_signers = signer_prefix(required - 1);
+        let (mut below_proof, below_chain_id, below_validator_set_hash) =
+            direct_finality_proof_for_signers(
+                &validators[..roster_len],
+                &pops[..roster_len],
+                &below_signers,
+            );
+        if below_signers.is_empty() {
+            below_proof.commit_qc.aggregate.bls_aggregate_signature = exact_proof
+                .commit_qc
+                .aggregate
+                .bls_aggregate_signature
+                .clone();
+        } else {
+            assert_proof_aggregate_signature_is_valid(&below_proof, &below_signers);
+        }
+        let below_config = verification_config(
+            &below_chain_id,
+            Some(below_proof.height),
+            Some(below_validator_set_hash),
+        );
+
+        assert_eq!(
+            verify_finality_proof(&below_proof, &below_config),
+            Err(BridgeFinalityVerificationError::InsufficientSignatures {
+                collected: required - 1,
+                required,
+            }),
+            "threshold-minus-one proof must fail for roster_len={roster_len}"
+        );
+    }
 }
 
 #[test]

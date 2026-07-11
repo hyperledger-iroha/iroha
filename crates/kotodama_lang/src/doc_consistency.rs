@@ -3,8 +3,13 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use crate::{
+        builtins::{Builtin, BuiltinSurface},
         compiler::{Compiler, CompilerOptions},
-        lexer::{V1_KEYWORDS, V1_OPERATORS},
+        lexer::{
+            V1_KEYWORD_DOC_TABLE, V1_KEYWORD_EDITOR_PATTERN, V1_KEYWORDS, V1_OPERATOR_DOC_TABLE,
+            V1_OPERATOR_EDITOR_PATTERN,
+        },
+        semantic::{V1_LIST_MEMBER_NAMES, V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, V1_SUM_PATHS},
         session::{CompileRequest, CompilerSession},
     };
 
@@ -125,40 +130,54 @@ mod tests {
         matches[0]
     }
 
-    fn keyword_pattern() -> String {
-        format!(
-            "(?<![A-Za-z0-9_])(?:{})(?![A-Za-z0-9_])",
-            V1_KEYWORDS.join("|")
-        )
+    fn textmate_named_match<'a>(grammar: &'a norito::json::Value, name: &str) -> &'a str {
+        grammar
+            .pointer("/repository/numbers/patterns")
+            .and_then(norito::json::Value::as_array)
+            .expect("TextMate grammar omitted numeric patterns")
+            .iter()
+            .find(|pattern| pattern.get("name").and_then(norito::json::Value::as_str) == Some(name))
+            .and_then(|pattern| pattern.get("match"))
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or_else(|| panic!("TextMate grammar omitted matcher `{name}`"))
     }
 
-    fn regex_escape_literal(spelling: &str) -> String {
-        let mut escaped = String::with_capacity(spelling.len().saturating_mul(2));
-        for character in spelling.chars() {
-            if matches!(
-                character,
-                '\\' | '.' | '^' | '$' | '|' | '?' | '*' | '+' | '(' | ')' | '[' | ']' | '{' | '}'
-            ) {
-                escaped.push('\\');
-            }
-            escaped.push(character);
-        }
-        escaped
+    fn textmate_top_level_includes(grammar: &norito::json::Value) -> Vec<&str> {
+        grammar
+            .get("patterns")
+            .and_then(norito::json::Value::as_array)
+            .expect("TextMate grammar omitted top-level patterns")
+            .iter()
+            .filter_map(|pattern| pattern.get("include"))
+            .filter_map(norito::json::Value::as_str)
+            .collect()
     }
 
-    fn operator_pattern() -> String {
-        let mut spellings = V1_OPERATORS.to_vec();
-        spellings.sort_unstable_by(|left, right| {
-            right.len().cmp(&left.len()).then_with(|| left.cmp(right))
-        });
-        format!(
-            "(?:{})",
-            spellings
-                .into_iter()
-                .map(regex_escape_literal)
-                .collect::<Vec<_>>()
-                .join("|")
-        )
+    fn textmate_definition_matches(grammar: &norito::json::Value) -> Vec<&str> {
+        grammar
+            .pointer("/repository/definitions/patterns")
+            .and_then(norito::json::Value::as_array)
+            .expect("TextMate grammar omitted definition patterns")
+            .iter()
+            .filter_map(|pattern| pattern.get("match"))
+            .filter_map(norito::json::Value::as_str)
+            .collect()
+    }
+
+    fn alternation_pattern(paths: &[&str]) -> String {
+        format!(r"\b(?:{})\b", paths.join("|"))
+    }
+
+    fn generated_section<'a>(text: &'a str, name: &str) -> &'a str {
+        let start_marker = format!("<!-- BEGIN GENERATED: {name} -->\n");
+        let end_marker = format!("<!-- END GENERATED: {name} -->");
+        let (_, rest) = text
+            .split_once(&start_marker)
+            .unwrap_or_else(|| panic!("missing generated section `{name}`"));
+        let (section, _) = rest
+            .split_once(&end_marker)
+            .unwrap_or_else(|| panic!("unterminated generated section `{name}`"));
+        section
     }
 
     #[test]
@@ -214,31 +233,25 @@ mod tests {
         let textmate_value: norito::json::Value =
             norito::json::from_str(&textmate).expect("parse TextMate grammar JSON");
 
-        for keyword in V1_KEYWORDS {
-            assert!(
-                specification.contains(keyword),
-                "normative grammar omitted canonical keyword `{keyword}`"
-            );
-            assert!(
-                textmate.contains(keyword),
-                "TextMate grammar omitted canonical keyword `{keyword}`"
-            );
-        }
-        for operator in V1_OPERATORS {
-            assert!(
-                specification.contains(operator),
-                "normative grammar omitted canonical operator `{operator}`"
-            );
-        }
+        assert_eq!(
+            generated_section(&specification, "kotodama-v1-keywords"),
+            V1_KEYWORD_DOC_TABLE,
+            "the normative keyword table must be regenerated from grammar/v1.lex"
+        );
+        assert_eq!(
+            generated_section(&specification, "kotodama-v1-operators"),
+            V1_OPERATOR_DOC_TABLE,
+            "the normative operator table must be regenerated from grammar/v1.lex"
+        );
         assert_eq!(
             textmate_match(&textmate_value, "keywords"),
-            keyword_pattern(),
-            "TextMate keyword matcher must be generated exactly from V1_KEYWORDS"
+            V1_KEYWORD_EDITOR_PATTERN,
+            "TextMate keyword matcher must be generated from grammar/v1.lex"
         );
         assert_eq!(
             textmate_match(&textmate_value, "operators"),
-            operator_pattern(),
-            "TextMate operator matcher must be generated exactly from V1_OPERATORS"
+            V1_OPERATOR_EDITOR_PATTERN,
+            "TextMate operator matcher must be generated from grammar/v1.lex"
         );
         assert_eq!(
             textmate_match(&textmate_value, "builtins"),
@@ -250,10 +263,98 @@ mod tests {
             r"\b(?:fixture|test)\b",
             "TextMate attributes must expose only the supported test annotation surface"
         );
+
+        let top_level_includes = textmate_top_level_includes(&textmate_value);
+        for section in [
+            "#namedFields",
+            "#sumVariants",
+            "#roundingVariants",
+            "#jsonConstruction",
+            "#memberCalls",
+        ] {
+            assert_eq!(
+                top_level_includes
+                    .iter()
+                    .filter(|include| **include == section)
+                    .count(),
+                1,
+                "TextMate grammar must include V1 contextual section `{section}` exactly once"
+            );
+        }
+
+        assert_eq!(
+            textmate_match(&textmate_value, "namedFields"),
+            r"\b[A-Za-z_][A-Za-z0-9_]*\b(?=\s*:)",
+            "TextMate named-field highlighting drifted from named calls/struct literals"
+        );
+        assert_eq!(
+            textmate_match(&textmate_value, "sumVariants"),
+            alternation_pattern(V1_SUM_PATHS),
+            "TextMate sum paths drifted from the active-only Option/Result surface"
+        );
+        assert_eq!(
+            textmate_match(&textmate_value, "roundingVariants"),
+            alternation_pattern(V1_ROUNDING_PATHS),
+            "TextMate rounding paths drifted from the exact Amount surface"
+        );
+        assert_eq!(
+            textmate_match(&textmate_value, "jsonConstruction"),
+            r"\bjson\b(?=\s*[\{\[])",
+            "TextMate must treat `json` as contextual object/array construction syntax"
+        );
+
+        let mut member_names = V1_LIST_MEMBER_NAMES.to_vec();
+        member_names.push("div_round");
+        for &builtin in Builtin::ALL {
+            if !matches!(
+                builtin.surface(),
+                BuiltinSurface::MethodOnly | BuiltinSurface::FunctionOrMethod
+            ) {
+                continue;
+            }
+            let member_name = if builtin == Builtin::GetNumeric {
+                "get_amount"
+            } else {
+                builtin.name()
+            };
+            if !member_names.contains(&member_name) {
+                member_names.push(member_name);
+            }
+        }
+        assert_eq!(
+            textmate_match(&textmate_value, "memberCalls"),
+            format!(r"(?<=\.)(?:{})(?=\s*\()", member_names.join("|")),
+            "TextMate member calls drifted from bounded List, Amount, or typed JSON APIs"
+        );
+
+        let mut type_names = V1_SOURCE_TYPE_NAMES.to_vec();
+        type_names.push("Rounding");
+        assert_eq!(
+            textmate_match(&textmate_value, "types"),
+            alternation_pattern(&type_names),
+            "TextMate types drifted from the canonical V1 source surface"
+        );
+        assert_eq!(
+            textmate_named_match(&textmate_value, "constant.numeric.amount.decimal.kotodama"),
+            r"\b\d(?:[\d_]*\d)?(?:\.\d(?:[\d_]*\d)?)?amt\b",
+            "TextMate Amount literal highlighting drifted from the V1 suffix syntax"
+        );
+
+        let definition_matches = textmate_definition_matches(&textmate_value);
         for retired in ["contract", "entry", "init", "upgrade"] {
             assert!(
-                !textmate.contains(&format!("\\\\b{retired}")),
-                "TextMate grammar still accepts retired English declaration spelling `{retired}`"
+                definition_matches
+                    .iter()
+                    .all(|pattern| !pattern.contains(retired)),
+                "TextMate definition matchers still accept retired English declaration spelling `{retired}`"
+            );
+        }
+        for keyword in V1_KEYWORDS {
+            assert!(
+                !iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(
+                    keyword,
+                ),
+                "boundary-schema identifier validation drifted from grammar/v1.lex at `{keyword}`"
             );
         }
         for retired in [
@@ -292,6 +393,18 @@ mod tests {
             assert!(
                 !textmate_match(&textmate_value, "builtins").contains(retired),
                 "TextMate grammar still advertises retired raw or flat builtin `{retired}`"
+            );
+        }
+        for retired in [
+            "get_numeric",
+            "json_get_int",
+            "json_get_numeric",
+            "get_or_insert_default",
+            "has",
+        ] {
+            assert!(
+                !textmate_match(&textmate_value, "memberCalls").contains(retired),
+                "TextMate grammar still advertises retired method `{retired}`"
             );
         }
     }

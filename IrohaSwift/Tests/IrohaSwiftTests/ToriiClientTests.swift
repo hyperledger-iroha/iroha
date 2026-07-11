@@ -12997,7 +12997,7 @@ id: 88
 
     func testRegisterContractCodePostsJSON() {
         let expectation = expectation(description: "register contract")
-        let codeHash = String(repeating: "a", count: 64)
+        let codeHash = String(repeating: "b", count: 64)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/contracts/code")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -13010,7 +13010,10 @@ id: 88
             XCTAssertEqual(json["authority"] as? String, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
             XCTAssertEqual(json["private_key"] as? String, "ed25519:secret")
             let manifest = json["manifest"] as? [String: Any]
-            XCTAssertEqual(manifest?["code_hash"] as? String, codeHash)
+            XCTAssertEqual(
+                manifest?["code_hash"] as? String,
+                "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"
+            )
             let hints = manifest?["access_set_hints"] as? [String: Any]
             XCTAssertEqual(hints?["read_keys"] as? [String], ["account:alice#wonderland"])
             XCTAssertEqual(hints?["write_keys"] as? [String], ["asset:coin#wonderland"])
@@ -13098,12 +13101,12 @@ id: 88
     func testFetchContractManifestParsesResponse() {
         let expectation = expectation(description: "fetch manifest")
         let codeHash = String(repeating: "b", count: 64)
-        let abiHash = String(repeating: "c", count: 64)
+        let abiHash = String(repeating: "d", count: 64)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/contracts/code/\(codeHash)")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"manifest":{"code_hash":"\(codeHash)","abi_hash":"\(abiHash)","compiler_fingerprint":"rustc","features_bitmap":1,"access_set_hints":{"read_keys":["account:alice#wonderland"],"write_keys":[]}},"code_bytes":null}
+            {"manifest":{"seiyaku_name":null,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071","compiler_fingerprint":"rustc","features_bitmap":1,"access_set_hints":{"read_keys":["account:alice#wonderland"],"write_keys":[]},"entrypoints":null,"states":null,"error_codes":null},"code_hash":"\(codeHash)","abi_hash":"\(abiHash)"}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -13113,6 +13116,8 @@ id: 88
             case .success(let record):
                 XCTAssertEqual(record.manifest.codeHash, codeHash)
                 XCTAssertEqual(record.manifest.abiHash, abiHash)
+                XCTAssertEqual(record.codeHash, codeHash)
+                XCTAssertEqual(record.abiHash, abiHash)
                 XCTAssertEqual(record.manifest.accessSetHints?.readKeys, ["account:alice#wonderland"])
                 XCTAssertEqual(record.manifest.accessSetHints?.writeKeys ?? [], [])
             case .failure(let error):
@@ -13121,6 +13126,558 @@ id: 88
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
+    }
+
+    func testContractManifestRecordRejectsMismatchedHashConveniences() throws {
+        let manifest = #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071"}"#
+        let valid = "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "b", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}"
+        let record = try JSONDecoder().decode(
+            ToriiContractManifestRecord.self,
+            from: Data(valid.utf8)
+        )
+        XCTAssertEqual(record.codeHash, record.manifest.codeHash)
+        XCTAssertEqual(record.abiHash, record.manifest.abiHash)
+
+        let invalid = [
+            "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "d", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
+            "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "B", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
+            "{\"manifest\":\(manifest),\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
+            "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "b", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\",\"code_bytes\":null}",
+        ]
+        for payload in invalid {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiContractManifestRecord.self,
+                    from: Data(payload.utf8)
+                ),
+                "accepted inconsistent manifest response: \(payload)"
+            )
+        }
+    }
+
+    func testContractManifestPreservesExactV1InterfaceShape() throws {
+        let payload = """
+        {
+          "seiyaku_name":"Ledger",
+          "code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2",
+          "abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071",
+          "compiler_fingerprint":"kotodama_lang",
+          "features_bitmap":0,
+          "access_set_hints":{
+            "read_keys":["state:Balances"],
+            "write_keys":["state:Balances"],
+            "dynamic_reads":[{
+              "base_key":"state:Balances",
+              "key_type":"AccountId",
+              "bound_kind":"take",
+              "max_keys":64
+            }],
+            "dynamic_writes":[]
+          },
+          "entrypoints":[{
+            "name":"transfer",
+            "kind":{"kind":"Kotoage","value":null},
+            "params":[
+              {"name":"request","type_name":"struct Transfer"},
+              {"name":"tags","type_name":"List<Name, 64>"}
+            ],
+            "argument_schema":{"fields":[
+              {"name":"request","ty":{"nodes":[
+                {"kind":"Struct","value":{"name":"Transfer","fields":["amount","memo"]}},
+                {"kind":"Leaf","value":{"kind":"Amount","value":null}},
+                {"kind":"Option","value":null},
+                {"kind":"Leaf","value":{"kind":"String","value":null}}
+              ]}},
+              {"name":"tags","ty":{"nodes":[
+                {"kind":"List","value":{"capacity":64}},
+                {"kind":"Leaf","value":{"kind":"Name","value":null}}
+              ]}}
+            ]},
+            "return_type":"Result<(bool, u128), string>",
+            "return_schema":{"nodes":[
+              {"kind":"Result","value":null},
+              {"kind":"Tuple","value":2},
+              {"kind":"Leaf","value":{"kind":"Bool","value":null}},
+              {"kind":"Leaf","value":{"kind":"U128","value":null}},
+              {"kind":"Leaf","value":{"kind":"String","value":null}}
+            ]},
+            "permission":"TransferAsset",
+            "read_keys":["state:Balances"],
+            "write_keys":["state:Balances"],
+            "access_hints_complete":true,
+            "access_hints_skipped":[],
+            "triggers":[{
+              "id":"settle",
+              "repeats":{"Exactly":2},
+              "filter":"TlJUMAAAl9+YQQ4oJZjALRf6FAto0QAKAAAAAAAAANzCjydU9+jNAgIAAAAFBAAAAAA=",
+              "authority":null,
+              "metadata":{"purpose":"daily-settlement","round":7},
+              "callback":{"namespace":null,"entrypoint":"transfer"}
+            }]
+          }],
+          "states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount>"}],
+          "error_codes":[{
+            "namespace":"TransferError",
+            "name":"InsufficientFunds",
+            "code":1001
+          }],
+          "kotoba":[{
+            "msg_id":"transfer.denied",
+            "translations":[
+              {"lang":"en","text":"Transfer denied"},
+              {"lang":"ja","text":"送金は拒否されました"}
+            ]
+          }],
+          "provenance":{"signer":"ed25519:fixture","signature":"fixture-signature"}
+        }
+        """.data(using: .utf8)!
+
+        let manifest = try JSONDecoder().decode(ToriiContractManifest.self, from: payload)
+        XCTAssertEqual(manifest.seiyakuName, "Ledger")
+        XCTAssertEqual(manifest.codeHash, String(repeating: "b", count: 64))
+        XCTAssertEqual(manifest.abiHash, String(repeating: "d", count: 64))
+        XCTAssertEqual(manifest.accessSetHints?.dynamicReads.first?.maxKeys, 64)
+        let entrypoint = try XCTUnwrap(manifest.entrypoints?.first)
+        XCTAssertEqual(entrypoint.kind, .kotoage)
+        XCTAssertEqual(entrypoint.argumentSchema?.fields.first?.type.wordCount, 2)
+        XCTAssertEqual(entrypoint.argumentSchema?.fields.last?.type.wordCount, 1)
+        guard case let .list(listNode)? = entrypoint.argumentSchema?.fields.last?.type.nodes.first else {
+            return XCTFail("expected bounded list argument schema")
+        }
+        XCTAssertEqual(listNode.capacity, 64)
+        XCTAssertEqual(entrypoint.returnSchema?.wordCount, 1)
+        guard case let .leaf(returnLeaf)? = entrypoint.returnSchema?.nodes[2] else {
+            return XCTFail("expected bool return leaf")
+        }
+        XCTAssertEqual(returnLeaf, .bool)
+        XCTAssertEqual(entrypoint.triggers.first?.callback.entrypoint, "transfer")
+        XCTAssertEqual(entrypoint.triggers.first?.metadata["round"], .number(7))
+        XCTAssertEqual(manifest.states?.first?.typeName, "StateMap<AccountId, Amount>")
+        XCTAssertEqual(manifest.errorCodes?.first?.code, 1001)
+        XCTAssertEqual(manifest.kotoba?.first?.translations.last?.language, "ja")
+        XCTAssertEqual(manifest.provenance?.signer, "ed25519:fixture")
+
+        let encoded = try JSONEncoder().encode(manifest)
+        let object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(object["seiyaku_name"] as? String, "Ledger")
+        XCTAssertEqual(
+            object["code_hash"] as? String,
+            "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"
+        )
+        XCTAssertEqual(
+            object["abi_hash"] as? String,
+            "hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071"
+        )
+        let entrypoints = try XCTUnwrap(object["entrypoints"] as? [[String: Any]])
+        XCTAssertNotNil(entrypoints[0]["argument_schema"])
+        XCTAssertNotNil(entrypoints[0]["return_schema"])
+        XCTAssertEqual((entrypoints[0]["triggers"] as? [Any])?.count, 1)
+        XCTAssertEqual((object["states"] as? [Any])?.count, 1)
+        XCTAssertEqual((object["error_codes"] as? [Any])?.count, 1)
+        XCTAssertEqual((object["kotoba"] as? [Any])?.count, 1)
+        XCTAssertNotNil(object["provenance"] as? [String: Any])
+    }
+
+    func testEntrypointSchemaUsesOneFlatPreorderTapeAndExactReservedNames() throws {
+        func leaf(_ kind: String) -> String {
+            "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"\(kind)\",\"value\":null}}"
+        }
+        func structNode(_ name: String, _ fields: [String]) -> String {
+            let encodedFields = fields.map { "\"\($0)\"" }.joined(separator: ",")
+            return "{\"kind\":\"Struct\",\"value\":{\"name\":\"\(name)\",\"fields\":[\(encodedFields)]}}"
+        }
+        func decode(_ nodes: [String]) throws -> ToriiEntrypointValueTypeV1 {
+            let payload = "{\"nodes\":[\(nodes.joined(separator: ","))]}"
+            return try JSONDecoder().decode(
+                ToriiEntrypointValueTypeV1.self,
+                from: Data(payload.utf8)
+            )
+        }
+
+        let views: [(String, [String], [String])] = [
+            (
+                "AccountView",
+                ["id", "metadata"],
+                [leaf("AccountId"), leaf("Json")]
+            ),
+            (
+                "AssetView",
+                ["id", "amount"],
+                [leaf("AssetId"), leaf("Amount")]
+            ),
+            (
+                "AssetDefinitionView",
+                ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+                [
+                    leaf("AssetDefinitionId"),
+                    leaf("String"),
+                    #"{"kind":"Option","value":null}"#,
+                    leaf("String"),
+                    leaf("AccountId"),
+                    leaf("Amount"),
+                    leaf("Json"),
+                ]
+            ),
+            (
+                "DomainView",
+                ["id", "owned_by", "metadata"],
+                [leaf("DomainId"), leaf("AccountId"), leaf("Json")]
+            ),
+            (
+                "NftView",
+                ["id", "owned_by", "content"],
+                [leaf("NftId"), leaf("AccountId"), leaf("Json")]
+            ),
+        ]
+
+        for (name, fields, children) in views {
+            let viewNodes = [structNode(name, fields)] + children
+            let view = try decode(viewNodes)
+            XCTAssertEqual(view.canonicalTypeName, name)
+
+            let optional = try decode([#"{"kind":"Option","value":null}"#] + viewNodes)
+            XCTAssertEqual(optional.canonicalTypeName, "Option<\(name)>")
+
+            let pageNodes = [
+                structNode("QueryPage", ["items", "next_offset"]),
+                #"{"kind":"List","value":{"capacity":64}}"#,
+            ] + viewNodes + [
+                #"{"kind":"Option","value":null}"#,
+                leaf("Int"),
+            ]
+            let page = try decode(pageNodes)
+            XCTAssertEqual(page.canonicalTypeName, "QueryPage<\(name)>")
+            XCTAssertEqual(page.wordCount, 2)
+
+            let encoded = try JSONEncoder().encode(page)
+            let object = try XCTUnwrap(
+                try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+            )
+            let encodedNodes = try XCTUnwrap(object["nodes"] as? [[String: Any]])
+            let listPayload = try XCTUnwrap(encodedNodes[1]["value"] as? [String: Any])
+            XCTAssertEqual(listPayload["capacity"] as? Int, 64)
+            XCTAssertEqual(Set(listPayload.keys), ["capacity"])
+            XCTAssertEqual(
+                try JSONDecoder().decode(ToriiEntrypointValueTypeV1.self, from: encoded),
+                page
+            )
+        }
+
+        let pair = try decode([
+            structNode("Pair", ["left", "right"]),
+            leaf("Int"),
+            leaf("Bool"),
+        ])
+        XCTAssertEqual(pair.canonicalTypeName, "struct Pair")
+    }
+
+    func testEntrypointSchemaRejectsLegacyTruncatedDeepAndForgedTapes() throws {
+        func leaf(_ kind: String) -> String {
+            "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"\(kind)\",\"value\":null}}"
+        }
+        func structNode(_ name: String, _ fields: [String]) -> String {
+            let encodedFields = fields.map { "\"\($0)\"" }.joined(separator: ",")
+            return "{\"kind\":\"Struct\",\"value\":{\"name\":\"\(name)\",\"fields\":[\(encodedFields)]}}"
+        }
+        func decode(_ nodes: [String]) throws -> ToriiEntrypointValueTypeV1 {
+            let payload = "{\"nodes\":[\(nodes.joined(separator: ","))]}"
+            return try JSONDecoder().decode(
+                ToriiEntrypointValueTypeV1.self,
+                from: Data(payload.utf8)
+            )
+        }
+        func reject(_ nodes: [String], _ label: String) {
+            XCTAssertThrowsError(try decode(nodes), "accepted \(label)")
+        }
+
+        let views: [(String, [String], [String])] = [
+            ("AccountView", ["id", "metadata"], [leaf("AccountId"), leaf("Json")]),
+            ("AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Amount")]),
+            (
+                "AssetDefinitionView",
+                ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+                [
+                    leaf("AssetDefinitionId"),
+                    leaf("String"),
+                    #"{"kind":"Option","value":null}"#,
+                    leaf("String"),
+                    leaf("AccountId"),
+                    leaf("Amount"),
+                    leaf("Json"),
+                ]
+            ),
+            (
+                "DomainView",
+                ["id", "owned_by", "metadata"],
+                [leaf("DomainId"), leaf("AccountId"), leaf("Json")]
+            ),
+            (
+                "NftView",
+                ["id", "owned_by", "content"],
+                [leaf("NftId"), leaf("AccountId"), leaf("Json")]
+            ),
+        ]
+
+        for (name, fields, children) in views {
+            let validView = [structNode(name, fields)] + children
+            var wrongFields = fields
+            wrongFields[wrongFields.count - 1] = "forged"
+            reject(
+                [structNode(name, wrongFields)] + children,
+                "\(name) with forged fields"
+            )
+
+            var wrongLeaf = children
+            wrongLeaf[wrongLeaf.count - 1] = leaf("Blob")
+            reject(
+                [structNode(name, fields)] + wrongLeaf,
+                "\(name) with forged leaf kind"
+            )
+
+            let pagePrefix = [
+                structNode("QueryPage", ["items", "next_offset"]),
+                #"{"kind":"List","value":{"capacity":64}}"#,
+            ]
+            reject(
+                pagePrefix + validView + [
+                    #"{"kind":"Option","value":null}"#,
+                    leaf("String"),
+                ],
+                "QueryPage<\(name)> with non-i64 next_offset"
+            )
+            reject(
+                [
+                    structNode("QueryPage", ["items", "next_offset"]),
+                    #"{"kind":"List","value":{"capacity":32}}"#,
+                ] + validView + [
+                    #"{"kind":"Option","value":null}"#,
+                    leaf("Int"),
+                ],
+                "QueryPage<\(name)> with capacity below 64"
+            )
+        }
+
+        reject(
+            [
+                #"{"kind":"List","value":{"capacity":64,"element":{"nodes":[{"kind":"Leaf","value":{"kind":"Name","value":null}}]}}}"#,
+            ],
+            "retired nested list element"
+        )
+        reject([#"{"kind":"List","value":{"capacity":64}}"#], "truncated list tape")
+        reject([leaf("Bool"), leaf("Bool")], "extra root node")
+        reject(
+            [#"{"kind":"List","value":{"capacity":0}}"#, leaf("Int")],
+            "zero list capacity"
+        )
+        reject(
+            [#"{"kind":"List","value":{"capacity":65}}"#, leaf("Int")],
+            "list capacity above 64"
+        )
+
+        let forgedForEncoding = ToriiEntrypointValueTypeV1(nodes: [
+            .structType(
+                ToriiEntrypointStructTypeNodeV1(
+                    name: "AccountView",
+                    fields: ["id", "metadata"]
+                )
+            ),
+            .leaf(.accountId),
+            .leaf(.blob),
+        ])
+        XCTAssertThrowsError(try JSONEncoder().encode(forgedForEncoding))
+        XCTAssertThrowsError(
+            try JSONEncoder().encode(
+                ToriiEntrypointValueTypeV1(
+                    nodes: [.list(ToriiEntrypointListTypeNodeV1(capacity: 64))]
+                )
+            )
+        )
+
+        let atLimit = Array(
+            repeating: #"{"kind":"List","value":{"capacity":1}}"#,
+            count: 255
+        ) + [leaf("Int")]
+        XCTAssertEqual(try decode(atLimit).wordCount, 1)
+        reject(
+            Array(
+                repeating: #"{"kind":"List","value":{"capacity":1}}"#,
+                count: 256
+            ) + [leaf("Int")],
+            "schema depth and node budget overflow"
+        )
+    }
+
+    func testContractManifestRejectsNoncanonicalV1InterfaceShapes() throws {
+        let validLeaf = #"{"kind":"Leaf","value":{"kind":"Bool","value":null}}"#
+        var cases = [
+            #"{"seiyaku_name":" Ledger "}"#,
+            #"{"seiyaku_name":"seiyaku"}"#,
+            #"{"seiyaku_name":"match"}"#,
+            #"{"code_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}"#,
+            #"{"code_hash":"hash:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#ABA2"}"#,
+            #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#0000"}"#,
+            #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#aba2"}"#,
+            #"{"code_hash":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#0E5B"}"#,
+            #"{"provenance":"not-an-object"}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Public","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":"Kotoage"},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            "{\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[{\"name\":\"flag\",\"type_name\":\"bool\"}],\"argument_schema\":{\"fields\":[{\"name\":\"flag\",\"ty\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":1},\(validLeaf)]}}]},\"return_type\":null,\"return_schema\":null,\"permission\":null,\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}",
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":"bool","return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}},{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":["not-an-object"]}]}"#,
+            #"{"error_codes":[{"namespace":"Failure","name":"Denied","code":0}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"flag","type_name":"bool"}],"argument_schema":{"fields":[{"name":"different","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"tags","type_name":"List<Name, 64>"}],"argument_schema":{"fields":[{"name":"tags","ty":{"nodes":[{"kind":"List","value":{"capacity":65}},{"kind":"Leaf","value":{"kind":"Name","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+        ]
+        let wideLeaves = Array(repeating: validLeaf, count: 14).joined(separator: ",")
+        cases.append(
+            "{\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[],\"argument_schema\":null,\"return_type\":\"wide tuple\",\"return_schema\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":14},\(wideLeaves)]},\"permission\":null,\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}")
+
+        for payload in cases {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiContractManifest.self,
+                    from: Data(payload.utf8)
+                ),
+                "accepted noncanonical manifest payload: \(payload)"
+            )
+        }
+    }
+
+    func testContractManifestEnforcesStrictCrossFieldInvariants() throws {
+        let boolLeaf = #"{"kind":"Leaf","value":{"kind":"Bool","value":null}}"#
+        let boolSchema = "{\"fields\":[{\"name\":\"flag\",\"ty\":{\"nodes\":[\(boolLeaf)]}}]}"
+        let validFilter = "TlJUMAAAl9+YQQ4oJZjALRf6FAto0QAKAAAAAAAAANzCjydU9+jNAgIAAAAFBAAAAAA="
+
+        func descriptor(name: String = "run",
+                        kind: String = "Kotoage",
+                        params: String = "[]",
+                        argumentSchema: String = "null",
+                        returnType: String = "null",
+                        returnSchema: String = "null",
+                        permission: String = "\"Run\"",
+                        complete: String = "true",
+                        skipped: String = "[]",
+                        triggers: String = "[]") -> String {
+            """
+            {"name":"\(name)","kind":{"kind":"\(kind)","value":null},"params":\(params),"argument_schema":\(argumentSchema),"return_type":\(returnType),"return_schema":\(returnSchema),"permission":\(permission),"read_keys":[],"write_keys":[],"access_hints_complete":\(complete),"access_hints_skipped":\(skipped),"triggers":\(triggers)}
+            """
+        }
+
+        func manifest(_ entrypoints: [String]) -> String {
+            "{\"entrypoints\":[\(entrypoints.joined(separator: ","))]}"
+        }
+
+        func trigger(id: String = "tick", callback: String = "run") -> String {
+            """
+            {"id":"\(id)","repeats":{"Indefinitely":null},"filter":"\(validFilter)","authority":null,"metadata":{},"callback":{"namespace":null,"entrypoint":"\(callback)"}}
+            """
+        }
+
+        let invalid = [
+            #"{"unknown":true}"#,
+            #"{"features_bitmap":4}"#,
+            #"{"seiyaku_name":"Option"}"#,
+            #"{"seiyaku_name":"__kotodama_link_private"}"#,
+            #"{"seiyaku_name":"state_map_get"}"#,
+            #"{"states":[{"name":"Option","type_name":"bool"}]}"#,
+            #"{"error_codes":[{"namespace":"Option","name":"Denied","code":1}]}"#,
+            #"{"provenance":{"signer":"fixture","signature":"sig","unknown":true}}"#,
+            manifest([descriptor(permission: "null")]),
+            manifest([descriptor(name: "start", kind: "Hajimari", permission: "null")]),
+            manifest([descriptor(name: "始まり", kind: "Hajimari", permission: "\"Deploy\"")]),
+            manifest([descriptor(name: "hajimari", kind: "View", permission: "null")]),
+            manifest([descriptor(
+                params: #"[{"name":"flag","type_name":"i64"}]"#,
+                argumentSchema: boolSchema
+            )]),
+            manifest([descriptor(
+                returnType: "\"i64\"",
+                returnSchema: "{\"nodes\":[\(boolLeaf)]}"
+            )]),
+            manifest([descriptor(complete: "true", skipped: "[\"dynamic\"]")]),
+            manifest([descriptor(complete: "false", skipped: "[]")]),
+            manifest([descriptor(triggers: "[\(trigger(callback: "missing"))]")]),
+            manifest([
+                descriptor(name: "inspect", kind: "View", permission: "null"),
+                descriptor(triggers: "[\(trigger(callback: "inspect"))]"),
+            ]),
+            manifest([descriptor(triggers: "[\(trigger()),\(trigger())]")]),
+            manifest([descriptor(triggers: "[\(trigger().replacingOccurrences(of: #"{"Indefinitely":null}"#, with: #"{"kind":"Indefinitely","value":null}"#))]")]),
+            manifest([descriptor(triggers: "[\(trigger().replacingOccurrences(of: validFilter, with: "%%%"))]")]),
+            manifest([descriptor().replacingOccurrences(
+                of: #""triggers":[]"#,
+                with: #""triggers":[],"unknown":true"#
+            )]),
+        ]
+
+        for payload in invalid {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiContractManifest.self,
+                    from: Data(payload.utf8)
+                ),
+                "accepted inconsistent manifest payload: \(payload)"
+            )
+        }
+    }
+
+    func testContractManifestAcceptsRomanizedAndJapaneseLifecycleSelectors() throws {
+        let selectors = [
+            ("hajimari", "Hajimari"),
+            ("始まり", "Hajimari"),
+            ("kaizen", "Kaizen"),
+            ("改善", "Kaizen"),
+        ]
+        for (name, kind) in selectors {
+            let payload = """
+            {"entrypoints":[{"name":"\(name)","kind":{"kind":"\(kind)","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}
+            """
+            let manifest = try JSONDecoder().decode(
+                ToriiContractManifest.self,
+                from: Data(payload.utf8)
+            )
+            XCTAssertEqual(manifest.entrypoints?.first?.name, name)
+        }
+    }
+
+    func testContractManifestAcceptsOnlyBrandedV1EntrypointKinds() throws {
+        let cases: [(String, ToriiContractEntrypointKind)] = [
+            ("Kotoage", .kotoage),
+            ("View", .view),
+            ("Hajimari", .hajimari),
+            ("Kaizen", .kaizen),
+        ]
+        for (label, expected) in cases {
+            let payload = #"{"kind":"\#(label)","value":null}"#
+            XCTAssertEqual(
+                try JSONDecoder().decode(
+                    ToriiContractEntrypointKind.self,
+                    from: Data(payload.utf8)
+                ),
+                expected
+            )
+        }
+    }
+
+    func testContractManifestDecodesCheckedInCanonicalKotodamaManifests() throws {
+        let fixtures = [
+            ("authority_probe.manifest.json", "AuthorityProbe"),
+            ("irohaswap.manifest.json", "IrohaSwap"),
+            ("ivm_smoke.manifest.json", "SmokeTransfer"),
+            ("prediction_market.manifest.json", "PredictionMarket"),
+        ]
+        let demo = repositoryRootURL().appendingPathComponent("demo", isDirectory: true)
+        for (filename, expectedName) in fixtures {
+            let data = try Data(contentsOf: demo.appendingPathComponent(filename))
+            let manifest = try JSONDecoder().decode(ToriiContractManifest.self, from: data)
+            XCTAssertEqual(manifest.seiyakuName, expectedName)
+            XCTAssertEqual(manifest.codeHash?.count, 64)
+            XCTAssertEqual(manifest.abiHash?.count, 64)
+            XCTAssertFalse(manifest.entrypoints?.isEmpty ?? true)
+        }
     }
 
     func testDeployContractRejectsRemovedServerSideSigningFlow() async {
@@ -13170,19 +13727,19 @@ id: 88
         }
     }
 
-    func testDeployContractParsesUpgradeResponse() throws {
+    func testDeployContractParsesKaizenResponse() throws {
         let codeHash = String(repeating: "a", count: 64)
         let abiHash = String(repeating: "b", count: 64)
         let txHash = String(repeating: "c", count: 64)
         let payload = """
-        {"ok":true,"contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","previous_contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9","upgraded":true,"dataspace":"universal","deploy_nonce":7,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Queued","block_height":null,"rejection_reason":null},"summary":"Queued","diagnostics":[],"scope":"local","resolved_from":"queue"},"code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
+        {"ok":true,"contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","previous_contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9","kaizen":true,"dataspace":"universal","deploy_nonce":7,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Queued","block_height":null,"rejection_reason":null},"summary":"Queued","diagnostics":[],"scope":"local","resolved_from":"queue"},"code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
         """.data(using: .utf8)!
         let response = try JSONDecoder().decode(ToriiDeployContractResponse.self, from: payload)
         XCTAssertTrue(response.ok)
         XCTAssertEqual(response.contractAlias, "mint::universal")
         XCTAssertEqual(response.contractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
         XCTAssertEqual(response.previousContractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9")
-        XCTAssertTrue(response.upgraded)
+        XCTAssertTrue(response.kaizen)
         XCTAssertEqual(response.dataspace, "universal")
         XCTAssertEqual(response.deployNonce, 7)
         XCTAssertEqual(response.txHashHex, txHash)

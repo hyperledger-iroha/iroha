@@ -10,6 +10,13 @@ ABI policy
 - V1 (1): allows the canonical ABI surface listed here and in `abi_syscall_list()`; unknown numbers
   are rejected uniformly across all hosts. The list is kept sorted/deduplicated and the golden test
   fails if ordering or contents drift.
+- `abi_hash` commits to every sorted allowed syscall number, its canonical argument and return
+  signatures, its conservative host-access class, and every sorted allowed pointer-ABI type ID.
+  Display names and gas prices are not part of this digest. `ivm::gas::schedule_hash()` commits to
+  the canonical gas schedule independently.
+- Every allowed syscall must have exactly one explicit row in `spec/syscalls.toml`. Documentation
+  generation rejects missing, duplicate, or extra rows instead of inventing an ABI signature from
+  naming heuristics.
 - First release: ABI v1 is the only supported policy. `abi_version != 1` is rejected at admission,
   and runtime upgrades must keep `abi_version = 1` without expanding the syscall or pointer‑ABI surface.
 
@@ -93,9 +100,14 @@ Gas enforcement (CoreHost)
 - Soracloud runtime syscalls charge `G_soracloud + request bytes + response bytes`.
 - ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
 - GET_PUBLIC_INPUT charges a base plus a per-byte cost based on the returned TLV length.
-- `JSON_OBJECT` helper — Gas: `G_json_object + bytes`.
-- `JSON_GET_*` helpers and their direct variants — Gas: `G_json_get + bytes`.
-- `JSON_SET_I64`, `JSON_SET_ACCOUNT_ID`, and their direct variants — Gas: `G_json_set + bytes`.
+- `JSON_OBJECT` helper — Gas: `G_json + bytes`.
+- `JSON_GET_*` helpers and their direct variants return compiler-owned
+  `Option<T>` sum handles. Missing keys, non-object roots, and type/conversion
+  mismatches are `Option::none`; malformed TLVs remain VM errors. Gas: `G_json_get + input bytes + active payload + sum allocation`.
+- `JSON_BUILD` converts one compiler-emitted `JsonConstructionSchemaV1` and a
+  flattened word table into one canonical `Json` payload. Gas is charged by
+  schema bytes, source bytes, words, collection elements, and encoded bytes.
+- `JSON_SET_I64`, `JSON_SET_ACCOUNT_ID`, and their direct variants — Gas: `G_json + bytes`.
 - SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost. Pagination offsets add an extra per-item penalty for unsorted queries; for sorted queries, the per-item charge is based on all items scanned before pagination (so offsets are already included). Query materialization aborts with OutOfGas when the per-item budget is exhausted, and responses that exceed the per-byte budget are rejected before encoding when exact Norito sizing is available (otherwise after encoding).
 
 Lifecycle / Utility
@@ -133,7 +145,37 @@ Numeric helpers (Norito)
 - 0x6B..0x70 NUMERIC_{ADD,SUB,MUL,DIV,REM,NEG} — Args: `r10=&NoritoBytes(lhs)`, `r11=&NoritoBytes(rhs)` (NEG uses `r10` only) → `r10=&NoritoBytes(result)`. Inputs must be unsigned with scale = 0; SUB rejects underflow and NEG rejects non‑zero values. DIV/REM reject division by zero.
 - 0x71..0x76 NUMERIC_{EQ,NE,LT,LE,GT,GE} — Args: `r10=&NoritoBytes(lhs)`, `r11=&NoritoBytes(rhs)` → `r10=0/1` with the comparison result (inputs must be unsigned scale = 0).
 - Numeric helper gas is the fixed charge. Gas: G_numeric. Numeric operands are bounded by the canonical `Numeric` representation, so the first-release ABI keeps arithmetic pricing fixed and deterministic.
-- Kotodama numeric aliases (`fixed_u128`, `Amount`, `Balance`) lower to these syscalls for deterministic unsigned, scale‑0 arithmetic.
+- Kotodama `u128` lowers to these helpers for deterministic unsigned, scale-zero
+  arithmetic. `Amount` is a distinct pointer-ABI type and never uses these
+  integer helpers implicitly.
+
+Exact Amount helpers
+- 0x010040..0x010042 convert explicitly between non-negative `i64`/scale-zero
+  `u128` and `&Amount`; no mixed arithmetic conversion is implicit.
+- 0x010043..0x010045 implement checked addition, subtraction, and
+  multiplication. Underflow, a mantissa wider than 512 bits, or canonical
+  scale above 28 traps deterministically.
+- 0x010046 `AMOUNT_DIV_EXACT` accepts only an exact finite decimal result with
+  canonical scale at most 28. 0x010047 `AMOUNT_DIV_ROUND` takes an explicit
+  scale and `floor`, `ceil`, or `nearest_even` mode.
+- 0x010048..0x01004D compare canonical Amounts. Gas is based on deterministic
+  numeric limb work and encoded bytes; no floating point or hardware-dependent
+  reduction is used.
+- The symbolic schedule keys are Gas: `G_amount | G_amount_add | G_amount_sub | G_amount_mul | G_amount_div | G_amount_cmp`.
+
+Native JSON construction
+- 0x01004E `JSON_BUILD` takes
+  `r10=&NoritoBytes(JsonConstructionSchemaV1)`, `r11=aligned word table`, and
+  `r12=exact word count`, returning `r10=&Json`.
+- Native construction uses Gas: `G_json_build`; typed getters use Gas: `G_json_get`.
+- Object keys are canonicalized by lexical key order, duplicate keys and
+  malformed schemas are rejected, and nested `Option`/`List` handles are read
+  recursively. Booleans and in-range integers are JSON primitives; `Amount`
+  and `u128` values outside the JSON integer range are exact canonical decimal
+  strings; bytes are lowercase `0x` hex. No floating-point conversion occurs.
+- Products, `Result`, and resource handles are not accepted as implicit JSON
+  values. Typed getters materialize active payloads only and use
+  `JSON_GET_AMOUNT` for `Option<Amount>`; `JSON_GET_NUMERIC` is retired.
 
 Domains / Peers
 - 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain
@@ -162,16 +204,16 @@ Notes:
 Assets (FT)
 - 0x20 REGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_reg_asset
 - 0x21 UNREGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_unreg_asset
-- 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_mint
-- 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_burn
-- 0x24 TRANSFER_V1 — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)` → 0 — Gas: G_transfer. Batch-internal only; rejected outside an active FASTPQ batch.
+- 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount` → 0 — Gas: G_mint
+- 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount` → 0 — Gas: G_burn
+- 0x24 TRANSFER_V1 — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount` → 0 — Gas: G_transfer. Batch-internal only; rejected outside an active FASTPQ batch.
 
 NFTs
 - 0x25 NFT_MINT_ASSET — Args: `r10=&NftId, r11=&AccountId(owner)` → 0 — Gas: G_nft_mint_asset
 - 0x26 NFT_TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)` → 0 — Gas: G_nft_transfer_asset
 - 0x27 NFT_SET_METADATA — Args: `r10=&NftId, r11=&Name, r12=&Json` → 0 — Gas: G_nft_set_metadata
 - 0x28 NFT_BURN_ASSET — Args: `r10=&NftId` → 0 — Gas: G_nft_burn_asset
-- 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric), r14=&DataSpaceId` → 0 — Gas: G_transfer. Queues a transfer using the asset definition's balance-scope policy: global definitions use a global source balance, and dataspace-restricted definitions use `Dataspace(r14)`.
+- 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount, r14=&DataSpaceId` → 0 — Gas: G_transfer. Queues a transfer using the asset definition's balance-scope policy: global definitions use a global source balance, and dataspace-restricted definitions use `Dataspace(r14)`.
 
 Zero‑knowledge (verification/state‑read)
 - 0x60 ZK_VERIFY_TRANSFER — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
@@ -248,13 +290,15 @@ Smart‑contract helpers (Norito)
   - Uses trigger metadata `subscription_ref` to locate the subscription NFT, computes charges, updates subscription metadata (including `subscription_invoice`), and reschedules the billing trigger.
 - 0xA6 SUBSCRIPTION_RECORD_USAGE — Args: none → 0 — Gas: G_sub_usage
   - Parses `SubscriptionUsageDelta` from trigger args, increments usage counters, and updates subscription metadata.
-- 0xA9 CALL_CONTRACT — Args: `r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload)` → `r10=ptr (&NoritoBytes(return))` or `0` — Gas: G_call_contract + request bytes + return bytes + child gas
+- 0xA9 CALL_CONTRACT — Args: `r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&NoritoBytes(EntrypointArgumentRecordV1) or 0` → `r10=ptr (&NoritoBytes(EntrypointReturnRecordV1))` or `0` — Gas: G_call_contract + request bytes + return bytes + child gas
   - Executes the callee in a child VM. The parent escrows the available syscall gas and is charged the fixed request/return overhead plus all gas consumed by child instructions and child syscalls; unused escrow is refunded.
   - If the callee source declares `authorize("PermissionName")`, its manifest carries that caller-authorization requirement. The host checks the caller contract subject for the named direct or role-derived permission before launching the child VM; missing permission rejects the syscall with `PermissionDenied`.
 
 Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010000 QUERY_EXECUTE_NORITO — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr (&NoritoBytes(QueryResponse))` — Gas: G_scq
-- 0x010001..0x010008 provide dedicated read helpers for account, asset, asset definition, domain, NFT, named parameter, contract manifest, and contract instance reads. Account/asset/domain/manifest helpers route through the validated query engine; NFT, parameter, and contract-instance helpers read the attached state snapshot directly where no singular query type exists yet. All dedicated reads use the same singular query gas schedule.
+- 0x010001 CORE_QUERY_GET — Args: `r10=CoreQueryEntityTagV1`, `r11=&typed entity id` → `r10=Option<View>` sum handle. The active projection is flattened in declaration order and contains exact typed leaf TLVs.
+- 0x010002 CORE_QUERY_PAGE — Args: `r10=CoreQueryEntityTagV1`, `r11=offset:i64 bits`, `r12=limit:1..=64` → `r10=List<View,64>` handle, `r11=Option<i64>` sum handle. Pages preserve canonical ID order and expose a next offset only after a one-item lookahead proves another page exists.
+- 0x010006..0x010008 retain the canonical-Norito specialist reads for named parameters, contract manifests, and contract instances. Core and specialist reads use deterministic item/byte gas schedules.
 - `QUERY_GET_PARAMETER` accepts canonical system parameter names such as `block.max_transactions`, `transaction.max_instructions`, `smart_contract.fuel`, and exact custom parameter names.
 - 0x010020 SYSVAR_CHAIN_ID — Args: none → `ptr (&Blob(chain_id))` or `0` — Gas: G_sysvar + bytes
 - 0x010021 SYSVAR_BLOCK_HEIGHT — Args: none → `u64=height` — Gas: G_sysvar
@@ -262,15 +306,15 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010023 SYSVAR_AUTHORITY — Args: none → `ptr (&AccountId)` — Gas: G_get_auth + bytes
 - 0x010024 SYSVAR_CONTRACT_ADDRESS — Args: none → `ptr (&NoritoBytes(ContractAddress))` or `0` — Gas: G_sysvar + bytes
 - 0x010025 SYSVAR_ENTRYPOINT — Args: none → `ptr (&Blob(entrypoint))` or `0` — Gas: G_sysvar + bytes
-- 0x010026 DECODE_ARGUMENT_RECORD — Args: `r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1)` → `r10=&Blob(pad:u8 then [u64; word_count])` — Gas: G_argument_decode + record + schema + output. Validates the domain-separated schema hash, canonical flat atoms, inactive sum payloads, and every embedded typed pointer before returning naturally aligned declaration-ordered words. JSON-to-record conversion occurs only at Torii/CLI tooling boundaries.
+- 0x010026 DECODE_ARGUMENT_RECORD — Args: raw hosts use `r10=&NoritoBytes(EntrypointArgumentRecordV1)`; prepared contract calls use the exact host-issued `&NoritoBytes(domain-separated record binding)`; `r11=&NoritoBytes(EntrypointArgumentSchemaV1)` → `r10=&Blob(pad:u8 then [u64; word_count])` — Gas: G_argument_decode + record + schema + materialized output. Prepared calls first validate the trusted flat schema and derive its conservative maximum aggregate and pointer-allocation bound; that bound must be affordable before the untrusted canonical record is decoded. Raw syscall quoting authenticates neither payload: it uses only bounded record/schema envelope lengths and reserves the full HEAP before schema and record authentication. For prepared calls, the complete signed record remains host-owned and the guest sees only its domain-separated binding. Before any allocation, the host preflights the complete aligned TLV sequence plus raw aggregate storage. Pointer TLVs and the output word table prefer INPUT and spill into owned HEAP, while raw `List` and sum storage is always owned HEAP. The record limit is inclusive at 1 MiB. Raw hosts then validate the schema hash, canonical flat atoms, inactive sum payloads, and every embedded typed pointer. JSON-to-record conversion occurs only at Torii/CLI tooling boundaries.
 - 0x010030 STATE_KEYS — Args: `r10=&Name(prefix), r11=offset, r12=limit` (`0..=64`, where `0` returns an empty page) → `ptr (&NoritoBytes(Vec<Name>))`, `r11=total`, `r12=count` — Gas: G_state_keys + count + bytes
-  - Enumerates durable-state keys in canonical sorted order. In contract-runtime scope, internal storage prefixes are stripped before return, and staged tombstones are applied before pagination. Limits above 64 are rejected by every host.
+  - Enumerates durable-state keys in canonical sorted order. In contract-runtime scope, internal storage prefixes are stripped before return, and staged tombstones are applied before pagination. The ledger host seeks directly to the scoped ordered prefix and does not materialize unrelated global keys; its `count` gas component conservatively includes every textual-prefix candidate examined across persisted state and the transaction overlay. Limits above 64 are rejected by every host.
 - 0x010031 STATE_HAS — Args: `r10=&Name(path)` → `r10=present` — Gas: G_state_has
   - Tests durable-state key presence with the same scoped overlay, base-state, and tombstone resolution as `STATE_GET`.
 - 0x010032 STATE_LEN — Args: `r10=&Name(path)` → `r10=len`, `r11=found` — Gas: G_state_len + bytes
   - Returns the `NoritoBytes` payload length for present values, excluding the TLV envelope. Missing values return `len=0, found=0`.
 - 0x010033 STATE_COUNT — Args: `r10=&Name(prefix)` → `r10=total` — Gas: G_state_count + count
-  - Counts durable-state keys with the same canonical sorted prefix matching, scope stripping, overlay, and tombstone resolution as `STATE_KEYS`, without copying or returning the key list.
+  - Counts durable-state keys with the same canonical sorted prefix matching, scope stripping, overlay, and tombstone resolution as `STATE_KEYS`, without cloning or returning the key list. The ledger host charges for every ordered-range candidate examined, including candidates rejected by path-segment matching and overlay tombstones.
 - 0x010034 STATE_MAP_KEY_AT — Args: `r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index` → `ptr (&NoritoBytes(canonical key))` or `0` — Gas: G_path + bytes
   - Compiler-internal decoder for bounded `StateMap` iteration. It accepts at most 64 paths in a 1 MiB page, requires an exact `base/<lowercase hex>` child, and rejects malformed, non-canonical, or over-4-KiB keys.
 - 0x010035 STATE_VALUE_ENCODE — Args: `r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count` → `ptr (&NoritoBytes(StateValueRecordV1))` — Gas: G_state_value + schema + words + pointers + output
@@ -315,13 +359,13 @@ AXT host flow
 - Default and WSV hosts enforce descriptor membership, capability binding equality, budget checks, and proof presence before permitting commit.
 
 Native asset escrow
-- 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&NoritoBytes(Numeric)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
+- 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&Amount`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
 - 0xB9 ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `AcceptAssetEscrow` for the buyer authority.
 - 0xBA ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `MarkEscrowPaymentSent` for the accepted buyer.
 - 0xBB ESCROW_RELEASE — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `ReleaseAssetEscrow` for the seller authority after payment is marked.
 - 0xBC ESCROW_CANCEL — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `CancelAssetEscrow`; cancellation is rejected once payment is marked.
 - 0xBD ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenEscrowDispute` for the seller or accepted buyer.
-- 0xBE ESCROW_RESOLVE_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Numeric buyer_amount)`, `r12=&NoritoBytes(Numeric seller_amount)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `ResolveEscrowDispute`; core enforces `CanResolveEscrowDispute` and that the split sums to the held amount.
+- 0xBE ESCROW_RESOLVE_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&Amount(buyer_amount)`, `r12=&Amount(seller_amount)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `ResolveEscrowDispute`; core enforces `CanResolveEscrowDispute` and that the split sums to the held amount.
 - 0xAA ANONYMOUS_ESCROW_OPEN_OFFER — Args: `r10=&NoritoBytes(OpenAnonymousAssetEscrow)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow opening ISI.
 - 0xAB ANONYMOUS_ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `AcceptAnonymousAssetEscrow`.
 - 0xAC ANONYMOUS_ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `MarkAnonymousEscrowPaymentSent`.
@@ -353,7 +397,7 @@ Soracloud runtime host surface
   validation.
 
 ZK Helpers
-- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&NoritoBytes(Numeric))` — Gas: G_get_bal
+- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&Amount)` — Gas: G_get_bal
 - 0xFB USE_NULLIFIER — Args: `r10=nullifier:u64` → `u64=0` — Gas: G_use_null
 - 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig + bytes
 
@@ -419,7 +463,7 @@ node enforces that policy unconditionally.
 <!-- BEGIN GENERATED SYSCALLS -->
 | Number | Name | Args | Return | Gas |
 |---|---|---|---|---|
-| 0x00 | DEBUG_PRINT | - | - | asset:gas/G_debug@ivm.core/v2 |
+| 0x00 | DEBUG_PRINT | r10=value:u64 | - | asset:gas/G_debug@ivm.core/v2 |
 | 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v2 |
 | 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v2 |
 | 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v2 |
@@ -436,9 +480,9 @@ node enforces that policy unconditionally.
 | 0x1A | SET_ACCOUNT_DETAIL | r10=&AccountId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_set_detail@ivm.core/v2 + bytes(val) |
 | 0x20 | REGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_reg_asset@ivm.core/v2 |
 | 0x21 | UNREGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_unreg_asset@ivm.core/v2 |
-| 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_mint@ivm.core/v2 |
-| 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_burn@ivm.core/v2 |
-| 0x24 | TRANSFER_V1 | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric); batch-internal only | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
+| 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount | u64=0 | asset:gas/G_mint@ivm.core/v2 |
+| 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount | u64=0 | asset:gas/G_burn@ivm.core/v2 |
+| 0x24 | TRANSFER_V1 | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount; batch-internal only | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
 | 0x25 | NFT_MINT_ASSET | r10=&NftId, r11=&AccountId(owner) | u64=0 | asset:gas/G_nft_mint_asset@ivm.core/v2 |
 | 0x26 | NFT_TRANSFER_ASSET | r10=&AccountId(from), r11=&NftId, r12=&AccountId(to) | u64=0 | asset:gas/G_nft_transfer_asset@ivm.core/v2 |
 | 0x27 | NFT_SET_METADATA | r10=&NftId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_nft_set_metadata@ivm.core/v2 |
@@ -446,7 +490,7 @@ node enforces that policy unconditionally.
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
 | 0x2A | TRANSFER_V1_BATCH_END | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | r10=&NoritoBytes(TransferAssetBatch) | u64=0 | asset:gas/G_transfer@ivm.core/v2 per entry |
-| 0x2C | TRANSFER_ASSET_SCOPED | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric), r14=&DataSpaceId | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
+| 0x2C | TRANSFER_ASSET_SCOPED | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount, r14=&DataSpaceId | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
 | 0x30 | CREATE_ROLE | r10=&Name, r11=&Json(perms) | u64=0 | asset:gas/G_create_role@ivm.core/v2 |
 | 0x31 | DELETE_ROLE | r10=&Name | u64=0 | asset:gas/G_delete_role@ivm.core/v2 |
 | 0x32 | GRANT_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_role@ivm.core/v2 |
@@ -501,28 +545,28 @@ node enforces that policy unconditionally.
 | 0x75 | NUMERIC_GT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
 | 0x76 | NUMERIC_GE | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
 | 0x77 | TLV_LEN | r10=&Tlv | r10=payload_len:u64 | asset:gas/G_tlv_len@ivm.core/v2 + bytes |
-| 0x78 | JSON_GET_I64 | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x79 | JSON_GET_JSON | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x7A | JSON_GET_NAME | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x7B | JSON_GET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x7C | JSON_GET_NFT_ID | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x7D | JSON_GET_BLOB_HEX | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
+| 0x78 | JSON_GET_I64 | r10=&Json(object), r11=&Name(key) | r10=Option<i64> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x79 | JSON_GET_JSON | r10=&Json(object), r11=&Name(key) | r10=Option<Json> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x7A | JSON_GET_NAME | r10=&Json(object), r11=&Name(key) | r10=Option<Name> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x7B | JSON_GET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key) | r10=Option<AccountId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x7C | JSON_GET_NFT_ID | r10=&Json(object), r11=&Name(key) | r10=Option<NftId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x7D | JSON_GET_BLOB_HEX | r10=&Json(object), r11=&Name(key) | r10=Option<bytes> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x7E | VRF_EPOCH_SEED | r10=&NoritoBytes(VrfEpochSeedRequest) | r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64 | asset:gas/G_vote_get@ivm.core/v2 + bytes |
-| 0x7F | JSON_GET_NUMERIC | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x80 | JSON_GET_ASSET_DEFINITION_ID | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x81 | JSON_OBJECT | - | ptr (&Json({})) | asset:gas/G_json_object@ivm.core/v2 + bytes |
-| 0x82 | JSON_SET_I64 | r10=&Json(object), r11=&Name(key), r12=value:i64 | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 + bytes |
-| 0x83 | JSON_SET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key), r12=&AccountId | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 + bytes |
-| 0x84 | JSON_GET_I64_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x85 | JSON_GET_JSON_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x86 | JSON_GET_NAME_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x87 | JSON_GET_ACCOUNT_ID_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x88 | JSON_GET_NFT_ID_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x89 | JSON_GET_BLOB_HEX_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x8A | JSON_GET_NUMERIC_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x8B | JSON_GET_ASSET_DEFINITION_ID_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x8C | JSON_SET_I64_DIRECT | r10=&Json(object), r11=&Name(key), r12=value:i64 | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 + bytes |
-| 0x8D | JSON_SET_ACCOUNT_ID_DIRECT | r10=&Json(object), r11=&Name(key), r12=&AccountId | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 + bytes |
+| 0x7F | JSON_GET_AMOUNT | r10=&Json(object), r11=&Name(key) | r10=Option<Amount> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x80 | JSON_GET_ASSET_DEFINITION_ID | r10=&Json(object), r11=&Name(key) | r10=Option<AssetDefinitionId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x81 | JSON_OBJECT | - | r10=&Json(empty object) | asset:gas/G_json@ivm.core/v2 + encoded bytes |
+| 0x82 | JSON_SET_I64 | r10=&Json(object), r11=&Name(key), r12=value:i64 | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
+| 0x83 | JSON_SET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key), r12=&AccountId | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
+| 0x84 | JSON_GET_I64_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<i64> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x85 | JSON_GET_JSON_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<Json> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x86 | JSON_GET_NAME_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<Name> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x87 | JSON_GET_ACCOUNT_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<AccountId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x88 | JSON_GET_NFT_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<NftId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x89 | JSON_GET_BLOB_HEX_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<bytes> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x8A | JSON_GET_AMOUNT_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<Amount> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x8B | JSON_GET_ASSET_DEFINITION_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<AssetDefinitionId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x8C | JSON_SET_I64_DIRECT | r10=&Json(any validated region), r11=&Name(key), r12=value:i64 | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
+| 0x8D | JSON_SET_ACCOUNT_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key), r12=&AccountId | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
 | 0x8E | BUILD_PATH_KEY_NORITO_DIRECT | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&Name) | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x8F | SCHEMA_INFO_DIRECT | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | asset:gas/G_schema@ivm.core/v2 + bytes |
 | 0x90 | SM3_HASH | r10=&Blob(message) | r10=ptr (&Blob(digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
@@ -545,7 +589,7 @@ node enforces that policy unconditionally.
 | 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | u64=0 | asset:gas/G_sub_usage@ivm.core/v2 |
 | 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
 | 0xA8 | CURRENT_TIME_MS | - | r10=unix_time_ms:u64 | asset:gas/G_sysvar@ivm.core/v2 |
-| 0xA9 | CALL_CONTRACT | r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload) | r10=ptr (&NoritoBytes(return)) or 0 | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas |
+| 0xA9 | CALL_CONTRACT | r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&NoritoBytes(EntrypointArgumentRecordV1) or 0 | r10=ptr (&NoritoBytes(EntrypointReturnRecordV1)) or 0 | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas |
 | 0xAA | ANONYMOUS_ESCROW_OPEN_OFFER | r10=&NoritoBytes(OpenAnonymousAssetEscrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xAB | ANONYMOUS_ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xAC | ANONYMOUS_ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
@@ -557,13 +601,13 @@ node enforces that policy unconditionally.
 | 0xB2 | AXT_COMMIT | - | u64=0 | asset:gas/G_axt@ivm.core/v2 + entries |
 | 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 | u64=0/1 | asset:gas/G_verify@ivm.core/v2 + bytes |
 | 0xB4 | USE_ASSET_HANDLE | r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob? | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
-| 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&Amount, r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xB9 | ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBA | ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBB | ESCROW_RELEASE | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBC | ESCROW_CANCEL | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBD | ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
-| 0xBE | ESCROW_RESOLVE_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Numeric buyer_amount), r12=&NoritoBytes(Numeric seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xBE | ESCROW_RESOLVE_DISPUTE | r10=&Name(escrow), r11=&Amount(buyer_amount), r12=&Amount(seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBF | ANONYMOUS_ESCROW_RESOLVE_DISPUTE | r10=&NoritoBytes(ResolveAnonymousEscrowDispute) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xC0 | SORACLOUD_READ_COMMITTED_STATE | r10=&SoracloudRequest(ReadCommittedState) | r10=&SoracloudResponse(ReadCommittedState) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation | asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under SoracloudIvmHost) |
 | 0xC1 | SORACLOUD_EMIT_STATE_MUTATION | r10=&SoracloudRequest(EmitStateMutation) | r10=&SoracloudResponse(EmitStateMutation) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation | asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under SoracloudIvmHost) |
@@ -597,7 +641,7 @@ node enforces that policy unconditionally.
 | 0xF5 | GROW_HEAP | r10=bytes:u64 | u64=new_limit | asset:gas/G_grow_heap@ivm.core/v2 per page |
 | 0xF6 | VERIFY_PROOF | r10=&NoritoBytes(OpenVerifyEnvelope) | r10=0/1, r11=status:u64 | asset:gas/G_verify_proof@ivm.core/v2 + bytes |
 | 0xF7 | GET_MERKLE_PATH | r10=addr:u64, r11=out:u64, r12=root_out?:u64 | u64=len | asset:gas/G_mpath@ivm.core/v2 + len |
-| 0xF9 | GET_ACCOUNT_BALANCE | r10=&AccountId, r11=&AssetDefinitionId | ptr (&NoritoBytes(Numeric)) | asset:gas/G_get_bal@ivm.core/v2 |
+| 0xF9 | GET_ACCOUNT_BALANCE | r10=&AccountId, r11=&AssetDefinitionId | ptr (&Amount) | asset:gas/G_get_bal@ivm.core/v2 |
 | 0xFA | GET_MERKLE_COMPACT | r10=addr, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 | 0xFB | USE_NULLIFIER | r10=nullifier:u64 | u64=0 | asset:gas/G_use_null@ivm.core/v2 |
 | 0xFC | VERIFY_SIGNATURE | r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8 | r10=0/1 | asset:gas/G_verify_sig@ivm.core/v2 + bytes |
@@ -605,11 +649,8 @@ node enforces that policy unconditionally.
 | 0xFE | COMMIT_OUTPUT | - | u64=0 | asset:gas/G_commit@ivm.core/v2 |
 | 0xFF | GET_REGISTER_MERKLE_COMPACT | r10=reg, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 | 0x10000 | QUERY_EXECUTE_NORITO | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10001 | QUERY_GET_ACCOUNT | r10=&NoritoBytes(AccountId) | r10=ptr (&NoritoBytes(Account)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10002 | QUERY_GET_ASSET | r10=&NoritoBytes(AssetId) | r10=ptr (&NoritoBytes(Asset)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10003 | QUERY_GET_ASSET_DEFINITION | r10=&NoritoBytes(AssetDefinitionId) | r10=ptr (&NoritoBytes(AssetDefinition)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10004 | QUERY_GET_DOMAIN | r10=&NoritoBytes(DomainId) | r10=ptr (&NoritoBytes(Domain)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10005 | QUERY_GET_NFT | r10=&NoritoBytes(NftId) | r10=ptr (&NoritoBytes(Nft)) | asset:gas/G_scq@ivm.core/v2 |
+| 0x10001 | CORE_QUERY_GET | r10=CoreQueryEntityTagV1:u64, r11=&typed entity id | r10=Option<View> sum handle (typed leaf TLVs) | asset:gas/G_scq@ivm.core/v2 + query items + encoded bytes |
+| 0x10002 | CORE_QUERY_PAGE | r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64 | r10=List<View,64> handle, r11=Option<i64> sum handle | asset:gas/G_scq@ivm.core/v2 + offset + query items + encoded bytes |
 | 0x10006 | QUERY_GET_PARAMETER | r10=&NoritoBytes(Name) | r10=ptr (&NoritoBytes(Parameter)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10007 | QUERY_GET_CONTRACT_MANIFEST | r10=&NoritoBytes(ContractAddress | Hash) | r10=ptr (&NoritoBytes(ContractManifest)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10008 | QUERY_GET_CONTRACT_INSTANCE | r10=&NoritoBytes(ContractAddress | Name) | r10=ptr (&NoritoBytes(ContractInstance)) | asset:gas/G_scq@ivm.core/v2 |
@@ -627,6 +668,21 @@ node enforces that policy unconditionally.
 | 0x10034 | STATE_MAP_KEY_AT | r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index:u64 | r10=ptr (&NoritoBytes(canonical key)) or 0 | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x10035 | STATE_VALUE_ENCODE | r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count:u64 | r10=ptr (&NoritoBytes(StateValueRecordV1)) | asset:gas/G_state_value@ivm.core/v2 + schema + words + pointers + output |
 | 0x10036 | STATE_VALUE_DECODE | r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1) | r10=ptr (&Blob(pad:u8 then [u64; word_count])) | asset:gas/G_state_value@ivm.core/v2 + schema + record + pointers + output |
+| 0x10040 | AMOUNT_FROM_I64 | r10=value:i64 (nonnegative) | r10=ptr (&Amount) | asset:gas/G_amount@ivm.core/v2 by fixed 64-bit limb work + encoded bytes |
+| 0x10041 | AMOUNT_FROM_U128 | r10=&NoritoBytes(scale-zero u128 Numeric) | r10=ptr (&Amount) | asset:gas/G_amount@ivm.core/v2 by fixed 64-bit limb work + encoded bytes |
+| 0x10042 | AMOUNT_TO_I64 | r10=&Amount (scale zero, i64 range) | r10=value:i64 | asset:gas/G_amount@ivm.core/v2 by fixed 64-bit limb work |
+| 0x10043 | AMOUNT_ADD | r10=&Amount, r11=&Amount | r10=ptr (&Amount) | asset:gas/G_amount_add@ivm.core/v2 by aligned fixed 64-bit limb work + encoded bytes |
+| 0x10044 | AMOUNT_SUB | r10=&Amount, r11=&Amount | r10=ptr (&Amount); underflow traps | asset:gas/G_amount_sub@ivm.core/v2 by aligned fixed 64-bit limb work + encoded bytes |
+| 0x10045 | AMOUNT_MUL | r10=&Amount, r11=&Amount | r10=ptr (&Amount) | asset:gas/G_amount_mul@ivm.core/v2 by limb product + encoded bytes |
+| 0x10046 | AMOUNT_DIV_EXACT | r10=&Amount dividend, r11=&Amount divisor | r10=ptr (&Amount); non-finite or scale>28 result traps | asset:gas/G_amount_div@ivm.core/v2 by deterministic bounded limb work + encoded bytes |
+| 0x10047 | AMOUNT_DIV_ROUND | r10=&Amount dividend, r11=&Amount divisor, r12=scale:0..28, r13=rounding:0..2 | r10=ptr (&Amount) | asset:gas/G_amount_div@ivm.core/v2 by deterministic bounded limb work + encoded bytes |
+| 0x10048 | AMOUNT_EQ | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x10049 | AMOUNT_NE | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x1004A | AMOUNT_LT | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x1004B | AMOUNT_LE | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x1004C | AMOUNT_GT | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x1004D | AMOUNT_GE | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x1004E | JSON_BUILD | r10=&NoritoBytes(JsonConstructionSchemaV1), r11=word_table, r12=word_count | r10=&Json | asset:gas/G_json_build@ivm.core/v2 + schema bytes + source bytes + words + collection elements + encoded bytes |
 <!-- END GENERATED SYSCALLS -->
 
 

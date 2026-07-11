@@ -1,16 +1,36 @@
-// Constant-product asset swap using the strict English V1 surface.
+// Constant-product asset swap using the strict branded V1 surface.
 seiyaku KotodamaSwap {
     hajimari() {
         debug::info("initialized");
     }
 
-    kotoage fn swap(trader: AccountId, pool: AccountId, input_asset: AssetDefinitionId, output_asset: AssetDefinitionId, amount_in: Amount, reserve_in: Amount, reserve_out: Amount) -> Amount authorize("Admin") {
+    kotoage fn swap(
+        trader: AccountId,
+        pool: AccountId,
+        input_asset: AssetDefinitionId,
+        output_asset: AssetDefinitionId,
+        amount_in: Amount,
+        reserve_in: Amount,
+        reserve_out: Amount,
+    ) -> Amount authorize("Admin") {
         let fee_numerator = Amount::from_i64(997);
         let fee_denominator = Amount::from_i64(1000);
         let effective = (amount_in * fee_numerator) / fee_denominator;
         let out = (reserve_out * effective) / (reserve_in + effective);
-        ledger::asset::transfer(trader, pool, input_asset, amount_in, DataSpaceId::parse("0"));
-        ledger::asset::transfer(pool, trader, output_asset, out, DataSpaceId::parse("0"));
+        ledger::asset::transfer(
+            source: trader,
+            destination: pool,
+            asset_definition: input_asset,
+            amount: amount_in,
+            dataspace: DataSpaceId::parse("0"),
+        );
+        ledger::asset::transfer(
+            source: pool,
+            destination: trader,
+            asset_definition: output_asset,
+            amount: out,
+            dataspace: DataSpaceId::parse("0"),
+        );
         return out;
     }
 }

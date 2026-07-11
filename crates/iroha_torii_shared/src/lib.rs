@@ -89,8 +89,8 @@ pub mod uri {
     pub const MINISTRY_AGENDA_PROPOSAL_GET: &str = "/v1/ministry/agenda/proposals/{proposal_id}";
     /// Governance: create a proposal to deploy IVM bytecode (.to)
     pub const GOV_PROPOSE_DEPLOY: &str = "/v1/gov/proposals/deploy-contract";
-    /// Governance: create a proposal to publish an SCCP route manifest.
-    pub const GOV_PROPOSE_SCCP_ROUTE_MANIFEST: &str = "/v1/gov/proposals/sccp-route-manifest";
+    /// Draft one closed SCCP route-governance proposal.
+    pub const GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE: &str = "/v1/gov/proposals/sccp-route-governance";
     /// Governance: submit a ZK ballot (default mode)
     pub const GOV_BALLOT_ZK: &str = "/v1/gov/ballots/zk";
     /// Governance: submit a non-ZK quadratic ballot (optional mode)

@@ -27,6 +27,7 @@
 //! [`docs/opcodes.md`](../docs/opcodes.md).
 
 mod aes;
+mod amount;
 pub mod analysis;
 mod argument_record;
 pub mod axt;
@@ -52,11 +53,13 @@ pub mod instruction;
 pub mod iso20022;
 mod ivm;
 pub mod ivm_cache;
+pub mod json;
 /// VM-backed Kotodama test runner shared by developer tools.
 pub mod koto_test_driver;
 pub mod kotodama;
 pub mod kotodama_std;
 pub mod limits;
+pub mod list;
 mod memory;
 pub mod merkle_utils;
 mod metadata;
@@ -75,6 +78,7 @@ pub mod signature;
 pub mod simple_instruction;
 mod state_overlay;
 mod state_value;
+pub mod sum;
 pub mod syscalls;
 mod vector;
 pub mod zk;
@@ -102,8 +106,8 @@ pub use crate::field_dispatch::{clear_field_impl_for_tests, set_field_impl_for_t
 // Publicly expose gas schedule helper for tests and tooling.
 pub use crate::argument_record::{
     PreparedArgumentRecord, argument_record_decode_count, argument_record_from_json,
-    encode_argument_record_from_json, prepare_argument_record, reset_argument_record_decode_count,
-    validate_argument_record,
+    encode_argument_record_from_json, prepare_argument_record_with_gas_limit,
+    reset_argument_record_decode_count, validate_argument_record,
 };
 pub use crate::gas::{cost_of, cost_of_with_params};
 #[cfg(feature = "cuda")]
@@ -120,8 +124,9 @@ pub use crate::metadata::{
     CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK,
     CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1,
     EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
-    EmbeddedSourceMapEntryV1, EmbeddedStateFieldDescriptor, EmbeddedStateType,
-    MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX, contract_code_hash,
+    EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
+    EmbeddedStateType, MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
+    contract_code_hash,
 };
 pub use crate::prepared::PreparedContract;
 pub use crate::{
@@ -174,8 +179,13 @@ pub use crate::{
 pub use iroha_crypto::{MerkleProof, MerkleTree};
 /// Syscall policy determined by `ProgramMetadata.abi_version`.
 pub use ivm_abi::SyscallPolicy;
-/// Entrypoint argument schema encoded in contract metadata.
-pub use ivm_abi::entrypoint::EntrypointArgumentSchemaV1;
+/// Stable V1 typed core-query tags, projections, and bounded page records.
+pub use ivm_abi::core_query;
+/// Exact schemas and typed nested-return records encoded at public contract boundaries.
+pub use ivm_abi::entrypoint::{
+    EntrypointArgumentSchemaV1, EntrypointReturnRecordV1, EntrypointValueAtomV1,
+    EntrypointValueTypeV1,
+};
 
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 pub use crate::{

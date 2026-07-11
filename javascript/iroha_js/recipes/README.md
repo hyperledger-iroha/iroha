@@ -147,7 +147,7 @@ field.
   script also honours `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` and accepts private
   keys via `PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`.
 - Prints the Torii response including `contract_alias`, `contract_address`,
-  `previous_contract_address`, `upgraded`, `dataspace`, `tx_hash_hex`,
+  `previous_contract_address`, `kaizen`, `dataspace`, `tx_hash_hex`,
   `code_hash_hex`, and `abi_hash_hex` so CI jobs can archive evidence bundles
   alongside release artifacts.
 

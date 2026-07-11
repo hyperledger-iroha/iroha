@@ -155,7 +155,7 @@ pub enum BuiltinMode {
     ZkOnly,
     /// Available only to local test builds or `#[test]` functions.
     TestOnly,
-    /// Available only inside a `#[test]` function (never ordinary contract code).
+    /// Available only inside a `#[test]` function (never ordinary seiyaku code).
     TestFunctionOnly,
     /// Compiler/runtime implementation detail, not a V1 source API.
     CompilerInternal,
@@ -217,6 +217,8 @@ pub enum BuiltinLowering {
 /// such as `K`, `V`, and `same-as-arg0` are resolved by semantic analysis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuiltinSignature {
+    /// Ordered source parameter names used by named calls.
+    pub parameter_names: &'static [&'static str],
     /// Ordered parameter type descriptors.
     pub parameters: &'static [&'static str],
     /// Return type descriptor.
@@ -226,10 +228,46 @@ pub struct BuiltinSignature {
 impl BuiltinSignature {
     const fn new(parameters: &'static [&'static str], return_type: &'static str) -> Self {
         Self {
+            parameter_names: default_parameter_names(parameters.len()),
             parameters,
             return_type,
         }
     }
+
+    const fn with_names(mut self, parameter_names: &'static [&'static str]) -> Self {
+        self.parameter_names = parameter_names;
+        self
+    }
+}
+
+const fn default_parameter_names(arity: usize) -> &'static [&'static str] {
+    match arity {
+        0 => &[],
+        1 => &["value"],
+        2 => &["first", "second"],
+        3 => &["first", "second", "third"],
+        4 => &["first", "second", "third", "fourth"],
+        5 => &["first", "second", "third", "fourth", "fifth"],
+        6 => &["first", "second", "third", "fourth", "fifth", "sixth"],
+        7 => &[
+            "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+        ],
+        8 => &[
+            "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth",
+        ],
+        _ => &[],
+    }
+}
+
+/// Source argument policy attached to a builtin declaration.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BuiltinCallPolicy {
+    /// Positional or named arguments are admitted unless the semantic
+    /// repeated-type/effect policy requires names.
+    #[default]
+    Flexible,
+    /// Pagination calls always require explicit `offset` and `limit` names.
+    Pagination,
 }
 
 /// Canonical security and lowering metadata for one builtin.
@@ -255,6 +293,8 @@ pub struct BuiltinSpec {
     pub syscall: Option<u32>,
     /// Canonical parameter and return types.
     pub signature: BuiltinSignature,
+    /// Source argument policy.
+    pub call_policy: BuiltinCallPolicy,
 }
 
 /// Canonical Kotodama helper/builtin calls that are part of the current source
@@ -283,6 +323,11 @@ pub enum Builtin {
     QueryGetAssetDefinition,
     QueryGetDomain,
     QueryGetNft,
+    QueryPageAccounts,
+    QueryPageAssets,
+    QueryPageAssetDefinitions,
+    QueryPageDomains,
+    QueryPageNfts,
     QueryGetParameter,
     QueryGetContractManifest,
     QueryGetContractInstance,
@@ -290,7 +335,6 @@ pub enum Builtin {
     ExecuteQuery,
     ScExecuteSubmitBallot,
     ScExecuteUnshield,
-    CallContract,
     ResolveAccountAlias,
     SubscriptionBill,
     SubscriptionRecordUsage,
@@ -548,6 +592,11 @@ impl Builtin {
         Self::QueryGetAssetDefinition,
         Self::QueryGetDomain,
         Self::QueryGetNft,
+        Self::QueryPageAccounts,
+        Self::QueryPageAssets,
+        Self::QueryPageAssetDefinitions,
+        Self::QueryPageDomains,
+        Self::QueryPageNfts,
         Self::QueryGetParameter,
         Self::QueryGetContractManifest,
         Self::QueryGetContractInstance,
@@ -555,7 +604,6 @@ impl Builtin {
         Self::ExecuteQuery,
         Self::ScExecuteSubmitBallot,
         Self::ScExecuteUnshield,
-        Self::CallContract,
         Self::ResolveAccountAlias,
         Self::SubscriptionBill,
         Self::SubscriptionRecordUsage,
@@ -799,6 +847,11 @@ impl Builtin {
             "query_get_asset_definition" => Self::QueryGetAssetDefinition,
             "query_get_domain" => Self::QueryGetDomain,
             "query_get_nft" => Self::QueryGetNft,
+            "query_page_accounts" => Self::QueryPageAccounts,
+            "query_page_assets" => Self::QueryPageAssets,
+            "query_page_asset_definitions" => Self::QueryPageAssetDefinitions,
+            "query_page_domains" => Self::QueryPageDomains,
+            "query_page_nfts" => Self::QueryPageNfts,
             "query_get_parameter" => Self::QueryGetParameter,
             "query_get_contract_manifest" => Self::QueryGetContractManifest,
             "query_get_contract_instance" => Self::QueryGetContractInstance,
@@ -806,7 +859,6 @@ impl Builtin {
             "execute_query" => Self::ExecuteQuery,
             "sc_execute_submit_ballot" => Self::ScExecuteSubmitBallot,
             "sc_execute_unshield" => Self::ScExecuteUnshield,
-            "call_contract" => Self::CallContract,
             "resolve_account_alias" => Self::ResolveAccountAlias,
             "subscription_bill" => Self::SubscriptionBill,
             "subscription_record_usage" => Self::SubscriptionRecordUsage,
@@ -1047,6 +1099,11 @@ impl Builtin {
             Self::QueryGetAssetDefinition => "query_get_asset_definition",
             Self::QueryGetDomain => "query_get_domain",
             Self::QueryGetNft => "query_get_nft",
+            Self::QueryPageAccounts => "query_page_accounts",
+            Self::QueryPageAssets => "query_page_assets",
+            Self::QueryPageAssetDefinitions => "query_page_asset_definitions",
+            Self::QueryPageDomains => "query_page_domains",
+            Self::QueryPageNfts => "query_page_nfts",
             Self::QueryGetParameter => "query_get_parameter",
             Self::QueryGetContractManifest => "query_get_contract_manifest",
             Self::QueryGetContractInstance => "query_get_contract_instance",
@@ -1054,7 +1111,6 @@ impl Builtin {
             Self::ExecuteQuery => "execute_query",
             Self::ScExecuteSubmitBallot => "sc_execute_submit_ballot",
             Self::ScExecuteUnshield => "sc_execute_unshield",
-            Self::CallContract => "call_contract",
             Self::ResolveAccountAlias => "resolve_account_alias",
             Self::SubscriptionBill => "subscription_bill",
             Self::SubscriptionRecordUsage => "subscription_record_usage",
@@ -1322,11 +1378,15 @@ impl Builtin {
             Self::QueryGetAssetDefinition => "ledger::query::asset_definition",
             Self::QueryGetDomain => "ledger::query::domain",
             Self::QueryGetNft => "ledger::query::nft",
+            Self::QueryPageAccounts => "ledger::query::accounts",
+            Self::QueryPageAssets => "ledger::query::assets",
+            Self::QueryPageAssetDefinitions => "ledger::query::asset_definitions",
+            Self::QueryPageDomains => "ledger::query::domains",
+            Self::QueryPageNfts => "ledger::query::nfts",
             Self::QueryGetParameter => "ledger::query::parameter",
             Self::QueryGetContractManifest => "ledger::query::contract_manifest",
             Self::QueryGetContractInstance => "ledger::query::contract_instance",
             Self::RecordSccpMessage => "ledger::sccp::record",
-            Self::CallContract => "contract::call",
             Self::ResolveAccountAlias => "ledger::account::resolve_alias",
             Self::SubscriptionBill => "ledger::subscription::bill",
             Self::SubscriptionRecordUsage => "ledger::subscription::record_usage",
@@ -1400,11 +1460,11 @@ impl Builtin {
             Self::VerifyDsProof => "axt::verify_proof",
             Self::UseAssetHandle => "axt::use_asset_handle",
             Self::AxtCommit => "axt::commit",
-            Self::DeactivateContractInstance => "contract::deactivate_instance",
-            Self::RemoveSmartContractBytes => "contract::remove_code",
-            Self::RegisterSmartContractCode => "contract::register_code",
-            Self::RegisterSmartContractBytes => "contract::register_bytes",
-            Self::ActivateContractInstance => "contract::activate_instance",
+            Self::DeactivateContractInstance => "seiyaku::deactivate_instance",
+            Self::RemoveSmartContractBytes => "seiyaku::remove_code",
+            Self::RegisterSmartContractCode => "seiyaku::register_code",
+            Self::RegisterSmartContractBytes => "seiyaku::register_bytes",
+            Self::ActivateContractInstance => "seiyaku::activate_instance",
             Self::ScExecuteSubmitBallot => "ledger::governance::submit_ballot",
             Self::ScExecuteUnshield => "crypto::zk::submit_unshield",
             Self::ZkRootsGet => "crypto::zk::roots",
@@ -1572,10 +1632,9 @@ impl Builtin {
     /// Return the canonical effect classification for this builtin.
     pub const fn effects(self) -> BuiltinEffects {
         match self {
-            Self::RecordSccpMessage
-            | Self::ScExecuteSubmitBallot
-            | Self::ScExecuteUnshield
-            | Self::CallContract => BuiltinEffects::INSTRUCTION,
+            Self::RecordSccpMessage | Self::ScExecuteSubmitBallot | Self::ScExecuteUnshield => {
+                BuiltinEffects::INSTRUCTION
+            }
             Self::Ensure | Self::StateMapRemove | Self::StateSet | Self::StateDel => {
                 BuiltinEffects::DURABLE_STATE
             }
@@ -1694,6 +1753,11 @@ impl Builtin {
             | Self::QueryGetAssetDefinition
             | Self::QueryGetDomain
             | Self::QueryGetNft
+            | Self::QueryPageAccounts
+            | Self::QueryPageAssets
+            | Self::QueryPageAssetDefinitions
+            | Self::QueryPageDomains
+            | Self::QueryPageNfts
             | Self::QueryGetParameter
             | Self::QueryGetContractManifest
             | Self::QueryGetContractInstance
@@ -1708,8 +1772,7 @@ impl Builtin {
             | Self::ZkVoteVerifyBallot
             | Self::ZkVoteVerifyTally
             | Self::VrfEpochSeed => BuiltinAccess::LedgerRead,
-            Self::CallContract
-            | Self::RecordSccpMessage
+            Self::RecordSccpMessage
             | Self::TestInvokeEntrypoint
             | Self::TestInvokeEntrypointAs
             | Self::TestExpectRejectAs
@@ -1766,7 +1829,6 @@ impl Builtin {
             | Self::Alloc
             | Self::QueryExecuteNorito
             | Self::ExecuteQuery
-            | Self::CallContract
             | Self::DebugPrint
             | Self::DebugLog
             | Self::GrowHeap
@@ -1906,11 +1968,16 @@ impl Builtin {
             Self::StateLen => &[s::SYSCALL_STATE_LEN],
             Self::StateCount => &[s::SYSCALL_STATE_COUNT],
             Self::QueryExecuteNorito => &[s::SYSCALL_QUERY_EXECUTE_NORITO],
-            Self::QueryGetAccount => &[s::SYSCALL_QUERY_GET_ACCOUNT],
-            Self::QueryGetAsset => &[s::SYSCALL_QUERY_GET_ASSET],
-            Self::QueryGetAssetDefinition => &[s::SYSCALL_QUERY_GET_ASSET_DEFINITION],
-            Self::QueryGetDomain => &[s::SYSCALL_QUERY_GET_DOMAIN],
-            Self::QueryGetNft => &[s::SYSCALL_QUERY_GET_NFT],
+            Self::QueryGetAccount
+            | Self::QueryGetAsset
+            | Self::QueryGetAssetDefinition
+            | Self::QueryGetDomain
+            | Self::QueryGetNft => &[s::SYSCALL_CORE_QUERY_GET],
+            Self::QueryPageAccounts
+            | Self::QueryPageAssets
+            | Self::QueryPageAssetDefinitions
+            | Self::QueryPageDomains
+            | Self::QueryPageNfts => &[s::SYSCALL_CORE_QUERY_PAGE],
             Self::QueryGetParameter => &[s::SYSCALL_QUERY_GET_PARAMETER],
             Self::QueryGetContractManifest => &[s::SYSCALL_QUERY_GET_CONTRACT_MANIFEST],
             Self::QueryGetContractInstance => &[s::SYSCALL_QUERY_GET_CONTRACT_INSTANCE],
@@ -1918,7 +1985,6 @@ impl Builtin {
                 &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]
             }
             Self::ExecuteQuery => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY],
-            Self::CallContract => &[s::SYSCALL_CALL_CONTRACT],
             Self::ResolveAccountAlias => &[s::SYSCALL_RESOLVE_ACCOUNT_ALIAS],
             Self::SubscriptionBill => &[s::SYSCALL_SUBSCRIPTION_BILL],
             Self::SubscriptionRecordUsage => &[s::SYSCALL_SUBSCRIPTION_RECORD_USAGE],
@@ -2064,7 +2130,7 @@ impl Builtin {
             Self::JsonSetIntDirect => &[s::SYSCALL_JSON_SET_I64_DIRECT],
             Self::JsonSetAccountIdDirect => &[s::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT],
             Self::JsonGetIntDirect => &[s::SYSCALL_JSON_GET_I64_DIRECT],
-            Self::JsonGetNumericDirect => &[s::SYSCALL_JSON_GET_NUMERIC_DIRECT],
+            Self::JsonGetNumericDirect => &[s::SYSCALL_JSON_GET_AMOUNT_DIRECT],
             Self::JsonGetJsonDirect => &[s::SYSCALL_JSON_GET_JSON_DIRECT],
             Self::JsonGetNameDirect => &[s::SYSCALL_JSON_GET_NAME_DIRECT],
             Self::JsonGetAccountIdDirect => &[s::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT],
@@ -2123,7 +2189,7 @@ impl Builtin {
             | Self::Valcom
             | Self::SetVl => &[],
             Self::GetInt => &[s::SYSCALL_JSON_GET_I64],
-            Self::GetNumeric => &[s::SYSCALL_JSON_GET_NUMERIC],
+            Self::GetNumeric => &[s::SYSCALL_JSON_GET_AMOUNT],
             Self::GetJson => &[s::SYSCALL_JSON_GET_JSON],
             Self::GetName => &[s::SYSCALL_JSON_GET_NAME],
             Self::GetAccountId => &[s::SYSCALL_JSON_GET_ACCOUNT_ID],
@@ -2185,7 +2251,7 @@ impl Builtin {
     pub const fn signature(self) -> BuiltinSignature {
         use BuiltinSignature as S;
 
-        match self {
+        let signature = match self {
             Self::PointerConstructor(constructor) => {
                 S::new(&["string"], constructor.return_type_name())
             }
@@ -2208,11 +2274,20 @@ impl Builtin {
             | Self::ZkRootsGet
             | Self::ZkVoteGetTally
             | Self::VrfEpochSeed => S::new(&["bytes"], "bytes"),
-            Self::QueryGetAccount => S::new(&["AccountId|bytes"], "bytes"),
-            Self::QueryGetAsset => S::new(&["AssetId|bytes"], "bytes"),
-            Self::QueryGetAssetDefinition => S::new(&["AssetDefinitionId|bytes"], "bytes"),
-            Self::QueryGetDomain => S::new(&["DomainId|bytes"], "bytes"),
-            Self::QueryGetNft => S::new(&["NftId|bytes"], "bytes"),
+            Self::QueryGetAccount => S::new(&["AccountId"], "Option<AccountView>"),
+            Self::QueryGetAsset => S::new(&["AssetId"], "Option<AssetView>"),
+            Self::QueryGetAssetDefinition => {
+                S::new(&["AssetDefinitionId"], "Option<AssetDefinitionView>")
+            }
+            Self::QueryGetDomain => S::new(&["DomainId"], "Option<DomainView>"),
+            Self::QueryGetNft => S::new(&["NftId"], "Option<NftView>"),
+            Self::QueryPageAccounts => S::new(&["i64", "i64"], "QueryPage<AccountView>"),
+            Self::QueryPageAssets => S::new(&["i64", "i64"], "QueryPage<AssetView>"),
+            Self::QueryPageAssetDefinitions => {
+                S::new(&["i64", "i64"], "QueryPage<AssetDefinitionView>")
+            }
+            Self::QueryPageDomains => S::new(&["i64", "i64"], "QueryPage<DomainView>"),
+            Self::QueryPageNfts => S::new(&["i64", "i64"], "QueryPage<NftView>"),
             Self::QueryGetParameter | Self::QueryGetContractInstance => {
                 S::new(&["Name|bytes"], "bytes")
             }
@@ -2237,7 +2312,6 @@ impl Builtin {
                 S::new(&["bytes"], "()")
             }
             Self::ExecuteQuery => S::new(&["bytes"], "bytes"),
-            Self::CallContract => S::new(&["string|bytes", "string|bytes", "Json"], "bytes"),
             Self::ResolveAccountAlias => S::new(&["string|bytes"], "AccountId"),
             Self::SubscriptionBill | Self::SubscriptionRecordUsage => S::new(&[], "()"),
             Self::GetAccountBalance => S::new(&["AccountId", "AssetDefinitionId"], "Amount"),
@@ -2313,10 +2387,7 @@ impl Builtin {
             Self::CommitOutput | Self::CreateNftsForAllUsers => S::new(&[], "()"),
             Self::SetExecutionDepth => S::new(&["i64"], "()"),
             Self::TransferV1BatchBegin | Self::TransferV1BatchEnd => S::new(&[], "()"),
-            Self::TransferV1BatchApply => S::new(
-                &["AccountId", "AccountId", "AssetDefinitionId", "Amount"],
-                "()",
-            ),
+            Self::TransferV1BatchApply => S::new(&["bytes"], "()"),
             Self::TransferBatch => {
                 S::new(&["(AccountId,AccountId,AssetDefinitionId,Amount)..."], "()")
             }
@@ -2386,18 +2457,22 @@ impl Builtin {
             Self::DecodeInt => S::new(&["bytes"], "i64"),
             Self::EncodeJson => S::new(&["Json"], "bytes"),
             Self::DecodeJson => S::new(&["bytes"], "Json"),
-            Self::JsonGetIntDirect | Self::GetInt => S::new(&["Json", "Name"], "i64"),
-            Self::JsonGetNumericDirect | Self::GetNumeric => S::new(&["Json", "Name"], "Amount"),
-            Self::JsonGetJsonDirect | Self::GetJson => S::new(&["Json", "Name"], "Json"),
-            Self::JsonGetNameDirect | Self::GetName => S::new(&["Json", "Name"], "Name"),
+            Self::JsonGetIntDirect | Self::GetInt => S::new(&["Json", "Name"], "Option<i64>"),
+            Self::JsonGetNumericDirect | Self::GetNumeric => {
+                S::new(&["Json", "Name"], "Option<Amount>")
+            }
+            Self::JsonGetJsonDirect | Self::GetJson => S::new(&["Json", "Name"], "Option<Json>"),
+            Self::JsonGetNameDirect | Self::GetName => S::new(&["Json", "Name"], "Option<Name>"),
             Self::JsonGetAccountIdDirect | Self::GetAccountId => {
-                S::new(&["Json", "Name"], "AccountId")
+                S::new(&["Json", "Name"], "Option<AccountId>")
             }
             Self::JsonGetAssetDefinitionIdDirect | Self::GetAssetDefinitionId => {
-                S::new(&["Json", "Name"], "AssetDefinitionId")
+                S::new(&["Json", "Name"], "Option<AssetDefinitionId>")
             }
-            Self::JsonGetNftIdDirect | Self::GetNftId => S::new(&["Json", "Name"], "NftId"),
-            Self::JsonGetBlobHexDirect | Self::GetBlobHex => S::new(&["Json", "Name"], "bytes"),
+            Self::JsonGetNftIdDirect | Self::GetNftId => S::new(&["Json", "Name"], "Option<NftId>"),
+            Self::JsonGetBlobHexDirect | Self::GetBlobHex => {
+                S::new(&["Json", "Name"], "Option<bytes>")
+            }
             Self::BuildPathKeyNoritoDirect => S::new(&["Name", "bytes"], "Name"),
             Self::SchemaEncode | Self::SchemaEncodeDirect => S::new(&["Name", "Json"], "bytes"),
             Self::SchemaDecode | Self::SchemaDecodeDirect => S::new(&["Name", "bytes"], "Json"),
@@ -2441,6 +2516,209 @@ impl Builtin {
             Self::Authority | Self::SysvarAuthority => S::new(&[], "AccountId"),
             Self::CurrentTimeMs | Self::BlockHeight | Self::BlockTimeMs => S::new(&[], "i64"),
             Self::ChainId | Self::ContractAddress | Self::Entrypoint => S::new(&[], "bytes"),
+        };
+
+        match self {
+            Self::PointerConstructor(_) => signature.with_names(&["value"]),
+            Self::Contains => signature.with_names(&["map", "key"]),
+            Self::GetOrDefault | Self::GetOr | Self::Ensure => {
+                signature.with_names(&["map", "key", "default"])
+            }
+            Self::StateMapRemove => signature.with_names(&["map", "key"]),
+            Self::KeysTake2 | Self::ValuesTake2 | Self::KeysValuesTake2 => {
+                signature.with_names(&["map", "offset", "limit"])
+            }
+            Self::StateGet
+            | Self::StateDel
+            | Self::StateHas
+            | Self::StateLen
+            | Self::StateCount => signature.with_names(&["path"]),
+            Self::StateSet => signature.with_names(&["path", "value"]),
+            Self::StateKeys => signature.with_names(&["path", "offset", "limit"]),
+            Self::QueryGetAccount => signature.with_names(&["id"]),
+            Self::QueryGetAsset => signature.with_names(&["id"]),
+            Self::QueryGetAssetDefinition => signature.with_names(&["id"]),
+            Self::QueryGetDomain => signature.with_names(&["id"]),
+            Self::QueryGetNft => signature.with_names(&["id"]),
+            Self::QueryPageAccounts
+            | Self::QueryPageAssets
+            | Self::QueryPageAssetDefinitions
+            | Self::QueryPageDomains
+            | Self::QueryPageNfts => signature.with_names(&["offset", "limit"]),
+            Self::QueryGetParameter | Self::QueryGetContractInstance => {
+                signature.with_names(&["name"])
+            }
+            Self::QueryExecuteNorito | Self::QueryGetContractManifest | Self::ExecuteQuery => {
+                signature.with_names(&["query"])
+            }
+            Self::BuildSubmitBallotInline => signature.with_names(&[
+                "election_id",
+                "ciphertext",
+                "nullifier",
+                "backend",
+                "proof",
+                "verification_key",
+            ]),
+            Self::BuildUnshieldInline => signature.with_names(&[
+                "asset_definition",
+                "destination",
+                "amount",
+                "inputs",
+                "outputs",
+                "backend",
+                "proof",
+                "verification_key",
+            ]),
+            Self::ResolveAccountAlias => signature.with_names(&["alias"]),
+            Self::GetAccountBalance => signature.with_names(&["account", "asset_definition"]),
+            Self::GetPublicInput => signature.with_names(&["name"]),
+            Self::Assert => signature.with_names(&["condition", "message"]),
+            Self::Require => signature.with_names(&["condition", "error"]),
+            Self::AssertEq => signature.with_names(&["actual", "expected"]),
+            Self::TestInvokeEntrypoint => signature.with_names(&["entrypoint", "arguments"]),
+            Self::TestInvokeEntrypointAs | Self::TestExpectRejectAs => {
+                signature.with_names(&["actor", "entrypoint", "arguments"])
+            }
+            Self::TestActorAccount | Self::TestActorPublicKey => signature.with_names(&["actor"]),
+            Self::TestActorSign => signature.with_names(&["actor", "payload"]),
+            Self::SetAccountDetail => signature.with_names(&["account", "key", "value"]),
+            Self::MintAsset | Self::BurnAsset => {
+                signature.with_names(&["account", "asset_definition", "amount"])
+            }
+            Self::TransferAsset => signature.with_names(&[
+                "source",
+                "destination",
+                "asset_definition",
+                "amount",
+                "dataspace",
+            ]),
+            Self::NftMintAsset => signature.with_names(&["nft", "owner"]),
+            Self::NftSetMetadata => signature.with_names(&["nft", "key", "value"]),
+            Self::NftBurnAsset => signature.with_names(&["nft"]),
+            Self::NftTransferAsset => signature.with_names(&["source", "nft", "destination"]),
+            Self::RegisterDomain | Self::UnregisterDomain => signature.with_names(&["domain"]),
+            Self::TransferDomain => signature.with_names(&["source", "domain", "destination"]),
+            Self::RegisterAccount | Self::UnregisterAccount => signature.with_names(&["account"]),
+            Self::RegisterAsset => {
+                signature.with_names(&["asset_definition", "name", "scale", "mintable"])
+            }
+            Self::CreateNewAsset => {
+                signature.with_names(&["asset_definition", "name", "scale", "owner", "mintable"])
+            }
+            Self::UnregisterAsset => signature.with_names(&["asset_definition"]),
+            Self::SetTriggerEnabled => signature.with_names(&["trigger", "enabled"]),
+            Self::CreateRole => signature.with_names(&["role", "permissions"]),
+            Self::GrantRole | Self::RevokeRole => signature.with_names(&["account", "role"]),
+            Self::GrantPermission | Self::RevokePermission => {
+                signature.with_names(&["account", "permission"])
+            }
+            Self::EscrowOpenOffer => {
+                signature.with_names(&["offer", "asset_definition", "amount", "evidence"])
+            }
+            Self::EscrowOpenDispute | Self::AnonymousEscrowOpenDispute => {
+                signature.with_names(&["offer", "evidence"])
+            }
+            Self::EscrowResolveDispute => {
+                signature.with_names(&["offer", "buyer_amount", "seller_amount", "evidence"])
+            }
+            Self::TransferV1BatchApply => signature.with_names(&["batch"]),
+            Self::AxtTouch => signature.with_names(&["dataspace", "proof"]),
+            Self::VerifyDsProof => signature.with_names(&["dataspace", "proof"]),
+            Self::UseAssetHandle => signature.with_names(&["handle", "operation", "proof"]),
+            Self::VrfVerify => signature.with_names(&["message", "proof", "public_key", "variant"]),
+            Self::Sm2Verify => {
+                signature.with_names(&["message", "signature", "public_key", "distid"])
+            }
+            Self::VerifySignature => {
+                signature.with_names(&["message", "signature", "public_key", "scheme"])
+            }
+            Self::Sm4GcmSeal | Self::Sm4GcmOpen => {
+                signature.with_names(&["key", "nonce", "aad", "payload"])
+            }
+            Self::Sm4CcmSeal | Self::Sm4CcmOpen => {
+                signature.with_names(&["key", "nonce", "aad", "payload", "tag_length"])
+            }
+            Self::GetMerklePath => signature.with_names(&["address", "output", "root_output"]),
+            Self::GetMerkleCompact | Self::GetRegisterMerkleCompact => {
+                signature.with_names(&["address_or_register", "output", "max_depth", "root_output"])
+            }
+            Self::TlvEq => signature.with_names(&["left", "right"]),
+            Self::JsonSetInt | Self::JsonSetIntDirect => {
+                signature.with_names(&["object", "key", "value"])
+            }
+            Self::JsonSetAccountId | Self::JsonSetAccountIdDirect => {
+                signature.with_names(&["object", "key", "value"])
+            }
+            Self::JsonGetIntDirect
+            | Self::GetInt
+            | Self::JsonGetNumericDirect
+            | Self::GetNumeric
+            | Self::JsonGetJsonDirect
+            | Self::GetJson
+            | Self::JsonGetNameDirect
+            | Self::GetName
+            | Self::JsonGetAccountIdDirect
+            | Self::GetAccountId
+            | Self::JsonGetAssetDefinitionIdDirect
+            | Self::GetAssetDefinitionId
+            | Self::JsonGetNftIdDirect
+            | Self::GetNftId
+            | Self::JsonGetBlobHexDirect
+            | Self::GetBlobHex => signature.with_names(&["object", "key"]),
+            Self::NumericAdd
+            | Self::NumericSub
+            | Self::NumericMul
+            | Self::NumericDiv
+            | Self::NumericRem
+            | Self::NumericEq
+            | Self::NumericNe
+            | Self::NumericLt
+            | Self::NumericLe
+            | Self::NumericGt
+            | Self::NumericGe
+            | Self::NumericAddDirect
+            | Self::NumericSubDirect
+            | Self::NumericMulDirect
+            | Self::NumericDivDirect
+            | Self::NumericRemDirect
+            | Self::NumericEqDirect
+            | Self::NumericNeDirect
+            | Self::NumericLtDirect
+            | Self::NumericLeDirect
+            | Self::NumericGtDirect
+            | Self::NumericGeDirect
+            | Self::WrappingAdd
+            | Self::WrappingSub
+            | Self::WrappingMul
+            | Self::Min
+            | Self::Max
+            | Self::DivCeil
+            | Self::Gcd
+            | Self::Mean
+            | Self::Poseidon2
+            | Self::Valcom => signature.with_names(&["left", "right"]),
+            Self::Poseidon6 => signature.with_names(&["a", "b", "c", "d", "e", "f"]),
+            _ => signature,
+        }
+    }
+
+    /// Return the source argument policy attached to this builtin.
+    pub const fn call_policy(self) -> BuiltinCallPolicy {
+        if matches!(
+            self,
+            Self::KeysTake2
+                | Self::ValuesTake2
+                | Self::KeysValuesTake2
+                | Self::StateKeys
+                | Self::QueryPageAccounts
+                | Self::QueryPageAssets
+                | Self::QueryPageAssetDefinitions
+                | Self::QueryPageDomains
+                | Self::QueryPageNfts
+        ) {
+            BuiltinCallPolicy::Pagination
+        } else {
+            BuiltinCallPolicy::Flexible
         }
     }
 
@@ -2457,6 +2735,7 @@ impl Builtin {
             operation_syscalls: self.operation_syscalls(),
             syscall: self.syscall(),
             signature: self.signature(),
+            call_policy: self.call_policy(),
         }
     }
 
@@ -2491,8 +2770,8 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        Builtin, BuiltinAccess, BuiltinEffects, BuiltinGasClass, BuiltinLowering, BuiltinMode,
-        BuiltinSurface, PointerConstructor,
+        Builtin, BuiltinAccess, BuiltinCallPolicy, BuiltinEffects, BuiltinGasClass,
+        BuiltinLowering, BuiltinMode, BuiltinSurface, PointerConstructor,
     };
 
     #[test]
@@ -2517,7 +2796,6 @@ mod tests {
     #[test]
     fn raw_and_private_builtins_have_restricted_modes() {
         assert_eq!(Builtin::Alloc.mode(), BuiltinMode::CompilerInternal);
-        assert_eq!(Builtin::CallContract.mode(), BuiltinMode::CompilerInternal);
         assert_eq!(Builtin::DebugPrint.mode(), BuiltinMode::CompilerInternal);
         assert_eq!(Builtin::DebugLog.mode(), BuiltinMode::CompilerInternal);
         assert_eq!(
@@ -2564,7 +2842,6 @@ mod tests {
             Builtin::DecodeJson,
             Builtin::SchemaEncode,
             Builtin::SchemaDecode,
-            Builtin::CallContract,
             Builtin::DebugPrint,
             Builtin::DebugLog,
             Builtin::SetExecutionDepth,
@@ -2703,6 +2980,40 @@ mod tests {
     }
 
     #[test]
+    fn signatures_publish_named_call_metadata_without_arity_drift() {
+        for builtin in Builtin::ALL.iter().copied() {
+            let signature = builtin.signature();
+            assert_eq!(
+                signature.parameter_names.len(),
+                signature.parameters.len(),
+                "{builtin:?}"
+            );
+            let mut unique = std::collections::BTreeSet::new();
+            for name in signature.parameter_names {
+                assert!(!name.is_empty(), "{builtin:?}");
+                assert!(
+                    unique.insert(name),
+                    "duplicate parameter name on {builtin:?}"
+                );
+            }
+        }
+        assert_eq!(
+            Builtin::TransferAsset.signature().parameter_names,
+            &[
+                "source",
+                "destination",
+                "asset_definition",
+                "amount",
+                "dataspace"
+            ]
+        );
+        assert_eq!(
+            Builtin::StateKeys.call_policy(),
+            BuiltinCallPolicy::Pagination
+        );
+    }
+
+    #[test]
     fn escrow_open_offer_registry_matches_the_lowered_host_abi() {
         let spec = Builtin::EscrowOpenOffer.spec();
         assert_eq!(
@@ -2718,6 +3029,85 @@ mod tests {
             spec.syscall,
             Some(ivm_abi::syscalls::SYSCALL_ESCROW_OPEN_OFFER)
         );
+    }
+
+    #[test]
+    fn projected_core_query_registry_is_typed_and_pages_are_named_only() {
+        for (singular, plural, id, view) in [
+            (
+                Builtin::QueryGetAccount,
+                Builtin::QueryPageAccounts,
+                "AccountId",
+                "AccountView",
+            ),
+            (
+                Builtin::QueryGetAsset,
+                Builtin::QueryPageAssets,
+                "AssetId",
+                "AssetView",
+            ),
+            (
+                Builtin::QueryGetAssetDefinition,
+                Builtin::QueryPageAssetDefinitions,
+                "AssetDefinitionId",
+                "AssetDefinitionView",
+            ),
+            (
+                Builtin::QueryGetDomain,
+                Builtin::QueryPageDomains,
+                "DomainId",
+                "DomainView",
+            ),
+            (
+                Builtin::QueryGetNft,
+                Builtin::QueryPageNfts,
+                "NftId",
+                "NftView",
+            ),
+        ] {
+            assert_eq!(singular.signature().parameters, &[id]);
+            assert_eq!(singular.signature().return_type, format!("Option<{view}>"));
+            assert_eq!(
+                singular.operation_syscalls(),
+                &[ivm_abi::syscalls::SYSCALL_CORE_QUERY_GET]
+            );
+
+            assert_eq!(plural.signature().parameters, &["i64", "i64"]);
+            assert_eq!(plural.signature().parameter_names, &["offset", "limit"]);
+            assert_eq!(plural.signature().return_type, format!("QueryPage<{view}>"));
+            assert_eq!(plural.call_policy(), BuiltinCallPolicy::Pagination);
+            assert_eq!(
+                plural.operation_syscalls(),
+                &[ivm_abi::syscalls::SYSCALL_CORE_QUERY_PAGE]
+            );
+        }
+    }
+
+    #[test]
+    fn typed_json_getter_registry_returns_active_only_options() {
+        for (getter, direct, payload) in [
+            (Builtin::GetInt, Builtin::JsonGetIntDirect, "i64"),
+            (Builtin::GetNumeric, Builtin::JsonGetNumericDirect, "Amount"),
+            (Builtin::GetJson, Builtin::JsonGetJsonDirect, "Json"),
+            (Builtin::GetName, Builtin::JsonGetNameDirect, "Name"),
+            (
+                Builtin::GetAccountId,
+                Builtin::JsonGetAccountIdDirect,
+                "AccountId",
+            ),
+            (
+                Builtin::GetAssetDefinitionId,
+                Builtin::JsonGetAssetDefinitionIdDirect,
+                "AssetDefinitionId",
+            ),
+            (Builtin::GetNftId, Builtin::JsonGetNftIdDirect, "NftId"),
+            (Builtin::GetBlobHex, Builtin::JsonGetBlobHexDirect, "bytes"),
+        ] {
+            let expected = format!("Option<{payload}>");
+            assert_eq!(getter.signature().return_type, expected);
+            assert_eq!(direct.signature().return_type, expected);
+        }
+        assert_eq!(Builtin::GetNumeric.source_name(), "json::get_amount");
     }
 
     #[test]
@@ -2807,11 +3197,48 @@ mod tests {
     }
 
     #[test]
+    fn compiler_internal_seiyaku_lifecycle_names_are_branded_but_not_source_visible() {
+        for (builtin, branded, english) in [
+            (
+                Builtin::DeactivateContractInstance,
+                "seiyaku::deactivate_instance",
+                "contract::deactivate_instance",
+            ),
+            (
+                Builtin::RemoveSmartContractBytes,
+                "seiyaku::remove_code",
+                "contract::remove_code",
+            ),
+            (
+                Builtin::RegisterSmartContractCode,
+                "seiyaku::register_code",
+                "contract::register_code",
+            ),
+            (
+                Builtin::RegisterSmartContractBytes,
+                "seiyaku::register_bytes",
+                "contract::register_bytes",
+            ),
+            (
+                Builtin::ActivateContractInstance,
+                "seiyaku::activate_instance",
+                "contract::activate_instance",
+            ),
+        ] {
+            assert_eq!(builtin.source_name(), branded);
+            assert_eq!(builtin.surface(), BuiltinSurface::CompilerInternal);
+            assert_eq!(Builtin::from_source_name(branded), None, "{branded}");
+            assert_eq!(Builtin::from_source_name(english), None, "{english}");
+        }
+    }
+
+    #[test]
     fn forbidden_raw_surfaces_do_not_resolve() {
         for name in [
             "call",
             "call_contract",
             "contract::call",
+            "seiyaku::call",
             "execute_instruction",
             "execute_query",
             "query_execute_norito",

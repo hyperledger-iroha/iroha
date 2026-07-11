@@ -39,8 +39,8 @@ pub use crate::{
     big_numeric::{BigNumeric, BigNumericError},
     bigint::{BigInt, BigIntError, MAX_BITS as BIGINT_MAX_BITS},
     numeric::{
-        Numeric, NumericError, NumericSpec, NumericSpecError, NumericSpecParseError,
-        TryFromNumericError, numeric,
+        AmountError, AmountRoundingMode, Numeric, NumericError, NumericSpec, NumericSpecError,
+        NumericSpecParseError, TryFromNumericError, numeric,
     },
 };
 

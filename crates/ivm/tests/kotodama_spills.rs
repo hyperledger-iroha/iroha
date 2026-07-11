@@ -1,6 +1,7 @@
 //! Tests that exercise spilled temporaries and nested calls with spills.
 
 use ivm::{IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+mod common;
 
 #[test]
 fn many_locals_force_spills_and_compute() {
@@ -12,12 +13,13 @@ fn many_locals_force_spills_and_compute() {
         body.push_str(&format!("let a{} = a{} + 1;\n", i, i - 1));
     }
     body.push_str("return a39;\n");
-    let src = format!("seiyaku SpillChain {{ fn main() -> i64 {{\n{body}\n}} }}");
+    let src = format!("seiyaku SpillChain {{ view fn main() -> i64 {{\n{body}\n}} }}");
     let code = KotodamaCompiler::new()
         .compile_source(&src)
         .expect("compile spills");
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute spills");
     assert_eq!(vm.register(10), 39);
 }
@@ -28,7 +30,7 @@ fn literal_heavy_set_account_detail_compiles_under_spill_pressure() {
     let mut src = String::from("seiyaku SpillLiterals { kotoage fn main() authorize(\"Test\") {\n");
     for i in 0..COUNT {
         src.push_str(&format!(
-            "  ledger::account::set_detail(context::authority(), Name::parse(\"literal{i}\"), Json::parse(\"{{\\\"value\\\":{i}}}\"));\n"
+            "  ledger::account::set_detail(account: context::authority(), key: Name::parse(\"literal{i}\"), value: Json::parse(\"{{\\\"value\\\":{i}}}\"));\n"
         ));
     }
     src.push_str("}\n}\n");

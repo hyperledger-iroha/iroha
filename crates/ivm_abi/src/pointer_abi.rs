@@ -1,6 +1,7 @@
 //! Pointer-ABI TLV helpers and type table.
 //!
-//! Envelope layout (normally in INPUT, or in a loader-validated `LTLB` code literal):
+//! Envelope layout (in validated INPUT, allocated HEAP, or a loader-validated
+//! `LTLB` code literal):
 //! - type_id: u16 (BE)
 //! - version: u8
 //! - len: u32 (BE)
@@ -8,9 +9,14 @@
 //! - hash: [u8; 32] (Iroha Hash of payload)
 //!
 //! Validation rules:
-//! - Dynamic pointers validated through `Memory::validate_tlv` must lie wholly
-//!   within INPUT (no heap/stack). `LDLIT` code pointers are validated once at
-//!   program load and must name an exact envelope in the read-only literal data.
+//! - VM-level pointer validation accepts an envelope wholly within INPUT, the
+//!   allocated portion of owned HEAP, or an exact loader-validated literal
+//!   start in read-only code. Stack, OUTPUT, and unallocated heap capacity are
+//!   rejected even when their bytes resemble a valid envelope. The lower-level
+//!   `Memory::validate_tlv` helper remains INPUT-only; syscall paths use the
+//!   provenance-aware `IVM::validate_tlv` validator.
+//! - `LDLIT` code pointers are validated once at program load and must name an
+//!   exact envelope in the read-only literal data.
 //! - `version` currently must be 1.
 //! - `type_id` must be known in the table below.
 //! - Hash must match `iroha_crypto::Hash::new(payload)`.
@@ -47,6 +53,8 @@ pub enum PointerType {
     SoracloudRequest = 0x000E,
     /// Soracloud host response envelope.
     SoracloudResponse = 0x000F,
+    /// Canonical non-negative Kotodama `Amount` payload.
+    Amount = 0x0010,
     /// Test-only pointer type used to exercise policy failures.
     #[cfg(test)]
     TestOnly = 0x0FFE,
@@ -70,6 +78,7 @@ impl PointerType {
             0x000D => Some(Self::ProofBlob),
             0x000E => Some(Self::SoracloudRequest),
             0x000F => Some(Self::SoracloudResponse),
+            0x0010 => Some(Self::Amount),
             #[cfg(test)]
             0x0FFE => Some(Self::TestOnly),
             _ => None,
@@ -94,6 +103,7 @@ impl PointerType {
             Self::ProofBlob,
             Self::SoracloudRequest,
             Self::SoracloudResponse,
+            Self::Amount,
             #[cfg(test)]
             Self::TestOnly,
         ]
@@ -185,6 +195,7 @@ fn allowed_types_for_policy(policy: SyscallPolicy) -> &'static HashSet<PointerTy
             PointerType::ProofBlob,
             PointerType::SoracloudRequest,
             PointerType::SoracloudResponse,
+            PointerType::Amount,
         ])
     });
     let SyscallPolicy::AbiV1 = policy;
@@ -264,6 +275,7 @@ pub fn render_pointer_types_markdown_table() -> String {
             PointerType::SoracloudResponse as u16,
             PointerType::SoracloudResponse,
         ),
+        (PointerType::Amount as u16, PointerType::Amount),
     ];
     all.sort_by_key(|(id, _)| *id);
 

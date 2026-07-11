@@ -16,6 +16,7 @@ use ivm::{
     },
     syscalls,
 };
+mod common;
 
 fn parse_meta_offset(code: &[u8]) -> Result<(ProgramMetadata, usize), ivm::VMError> {
     ProgramMetadata::parse(code).map(|parsed| (parsed.metadata, parsed.code_offset))
@@ -101,9 +102,9 @@ fn lexer_accepts_v1_branded_keywords_in_both_scripts() {
     use ivm::kotodama::lexer::{TokenKind, lex};
     let seiyaku = lex("seiyaku Demo { }").expect("lex seiyaku");
     assert!(matches!(seiyaku[0].kind, TokenKind::Seiyaku));
-    let initializer = lex("hajimari() {}").expect("lex");
+    let hajimari = lex("hajimari() {}").expect("lex");
     assert!(
-        initializer
+        hajimari
             .iter()
             .any(|token| matches!(token.kind, TokenKind::Hajimari))
     );
@@ -316,17 +317,19 @@ fn assert_builtin_obeys_truthiness() {
     let compiler = test_compiler();
 
     let pass = compiler
-        .compile_source("seiyaku AssertTrue { fn main() { test::assert(true); } }")
+        .compile_source("seiyaku AssertTrue { view fn main() { test::assert(true); } }")
         .expect("compile passing assert");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&pass).expect("load passing assert");
+    common::select_kotodama_entrypoint(&mut vm, &pass, "main");
     vm.run().expect("test::assert(true) should not abort");
 
     let fail = compiler
-        .compile_source("seiyaku AssertFalse { fn main() { test::assert(false); } }")
+        .compile_source("seiyaku AssertFalse { view fn main() { test::assert(false); } }")
         .expect("compile failing assert");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&fail).expect("load failing assert");
+    common::select_kotodama_entrypoint(&mut vm, &fail, "main");
     let err = vm.run().expect_err("test::assert(false) should abort");
     assert!(matches!(err, ivm::VMError::AssertionFailed));
 }
@@ -357,8 +360,8 @@ fn pointer_constructors_compile() {
                 let alice = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
                 let bob = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
                 let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-                ledger::account::set_detail(context::authority(), Name::parse("cursor"), Json::parse("{\"query\":\"sc_dummy\",\"cursor\":1}"));
-                ledger::asset::transfer(alice, bob, asset, Amount::from_i64(1), DataSpaceId::parse("0"));
+                ledger::account::set_detail(account: context::authority(), key: Name::parse("cursor"), value: Json::parse("{\"query\":\"sc_dummy\",\"cursor\":1}"));
+                ledger::asset::transfer(source: alice, destination: bob, asset_definition: asset, amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
             }
         }
     "#;
@@ -372,13 +375,7 @@ fn public_function_without_authorization_rejected() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn run() {
-                ledger::asset::transfer(
-                    AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-                    AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-                    AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-                    Amount::from_i64(1),
-                    DataSpaceId::parse("0")
-                );
+                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
             }
         }
     "#;
@@ -451,13 +448,7 @@ fn public_function_with_permission_is_allowed() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn run() authorize("Admin") {
-                ledger::asset::transfer(
-                    AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-                    AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-                    AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-                    Amount::from_i64(1),
-                    DataSpaceId::parse("0")
-                );
+                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
             }
         }
     "#;
@@ -633,7 +624,7 @@ fn semantic_typed_pointers_and_authority() {
     let src = r#"
         seiyaku TypedPointers {
             kotoage fn f() authorize("Admin") {
-                ledger::account::set_detail(context::authority(), Name::parse("k"), Json::parse("1"));
+                ledger::account::set_detail(account: context::authority(), key: Name::parse("k"), value: Json::parse("1"));
             }
         }
     "#;
@@ -787,7 +778,7 @@ fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
 }
 
 #[test]
-fn compile_emits_typed_query_get_helpers() {
+fn compile_emits_core_query_get_helpers() {
     let src = r#"
       seiyaku Queries {
         view fn read() -> bytes {
@@ -806,13 +797,13 @@ fn compile_emits_typed_query_get_helpers() {
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
     for (name, syscall) in [
-        ("QUERY_GET_ACCOUNT", syscalls::SYSCALL_QUERY_GET_ACCOUNT),
+        ("CORE_QUERY_GET(account)", syscalls::SYSCALL_CORE_QUERY_GET),
         (
-            "QUERY_GET_ASSET_DEFINITION",
-            syscalls::SYSCALL_QUERY_GET_ASSET_DEFINITION,
+            "CORE_QUERY_GET(asset_definition)",
+            syscalls::SYSCALL_CORE_QUERY_GET,
         ),
-        ("QUERY_GET_DOMAIN", syscalls::SYSCALL_QUERY_GET_DOMAIN),
-        ("QUERY_GET_NFT", syscalls::SYSCALL_QUERY_GET_NFT),
+        ("CORE_QUERY_GET(domain)", syscalls::SYSCALL_CORE_QUERY_GET),
+        ("CORE_QUERY_GET(nft)", syscalls::SYSCALL_CORE_QUERY_GET),
         ("QUERY_GET_PARAMETER", syscalls::SYSCALL_QUERY_GET_PARAMETER),
         (
             "QUERY_GET_CONTRACT_MANIFEST",
@@ -847,7 +838,7 @@ fn manifest_includes_exact_access_hints_for_static_typed_query_get_helpers() {
     let src = format!(
         r#"
         seiyaku QueryHints {{
-          view fn read() -> bytes {{
+          view fn read() -> Option<NftView> {{
             let account = ledger::query::account(context::authority());
             let asset = ledger::query::asset(AssetId::parse("{asset}"));
             let definition = ledger::query::asset_definition(AssetDefinitionId::parse("{asset_definition}"));
@@ -1019,7 +1010,7 @@ fn compile_emits_state_introspection_helpers() {
         seiyaku StateIntrospection {
         fn f() {
             let prefix = Name::parse("Orders");
-            let keys = state::keys(prefix, 0, 2);
+            let keys = state::keys(path: prefix, offset: 0, limit: 2);
             let present = state::contains(prefix);
             let len = state::len(prefix);
             let count = state::count(prefix);
@@ -1051,7 +1042,7 @@ fn compile_emits_state_introspection_helpers() {
 #[test]
 fn semantic_rejects_state_introspection_helper_args() {
     let prog = parse(
-        r#"seiyaku C { fn f() { let _keys = state::keys(Name::parse("Orders"), 0, b"bad"); } }"#,
+        r#"seiyaku C { fn f() { let _keys = state::keys(path: Name::parse("Orders"), offset: 0, limit: b"bad"); } }"#,
     )
     .unwrap();
     let err = analyze(&prog).expect_err("expected state_keys type error");
@@ -1236,7 +1227,7 @@ fn state_allocations_do_not_clobber_params() {
 
 #[test]
 fn compile_builtin_create_nfts_and_set_detail() {
-    let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(context::authority(), Name::parse(\"cursor\"), Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";
+    let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";
     let code = test_compiler().compile_source(src).expect("compile failed");
     // Sanity: code contains at least three syscalls (order preserved)
     // Byte-pattern search for SCALL encodings (LE): [imm8, 0x00, 0x00, 0x60]
@@ -1276,8 +1267,8 @@ fn pointer_constructors_accept_string_variables() {
             let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
             let key = "cursor";
             let val = "{\"query\":\"sc_dummy\",\"cursor\":1}";
-            ledger::account::set_detail(AccountId::parse(aid), Name::parse(key), Json::parse(val));
-            ledger::domain::transfer(context::authority(), DomainId::parse(did), AccountId::parse(aid));
+            ledger::account::set_detail(account: AccountId::parse(aid), key: Name::parse(key), value: Json::parse(val));
+            ledger::domain::transfer(source: context::authority(), domain: DomainId::parse(did), destination: AccountId::parse(aid));
           }
         }
     "#;
@@ -1508,11 +1499,11 @@ fn semantic_type_enforcement_for_typed_syscalls() {
     use ivm::kotodama::parser::parse;
     // Wrong types should fail
     let bad = parse(
-        "module InvalidMint { fn f() { ledger::asset::mint(Name::parse(\"x\"), AssetDefinitionId::parse(\"62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"), Amount::from_i64(1)); } }",
+        "module InvalidMint { fn f() { ledger::asset::mint(account: Name::parse(\"x\"), asset_definition: AssetDefinitionId::parse(\"62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"), amount: Amount::from_i64(1)); } }",
     )
     .unwrap();
     assert!(analyze(&bad).is_err());
-    let bad2 = parse("module InvalidDetail { fn f() { ledger::account::set_detail(AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), Json::parse(\"1\"), Name::parse(\"k\")); } }").unwrap();
+    let bad2 = parse("module InvalidDetail { fn f() { ledger::account::set_detail(account: AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), key: Json::parse(\"1\"), value: Name::parse(\"k\")); } }").unwrap();
     assert!(analyze(&bad2).is_err());
 }
 
@@ -1586,7 +1577,7 @@ fn dynamic_state_map_range_is_rejected() {
 
 #[test]
 fn compile_typed_nft_syscalls() {
-    let src = "seiyaku NftCalls { kotoage fn main() authorize(\"ManageNfts\") { ledger::nft::mint(NftId::parse(\"n0$wonderland.universal\"), AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\")); ledger::nft::transfer(AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), NftId::parse(\"n0$wonderland.universal\"), AccountId::parse(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
+    let src = "seiyaku NftCalls { kotoage fn main() authorize(\"ManageNfts\") { ledger::nft::mint(NftId::parse(\"n0$wonderland.universal\"), AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\")); ledger::nft::transfer(source: AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), nft: NftId::parse(\"n0$wonderland.universal\"), destination: AccountId::parse(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile typed NFT");
@@ -1667,9 +1658,8 @@ fn manifest_includes_entrypoints_and_features() {
             }
 
             kotoage fn run() authorize("Admin") {
-                test::assert(true);
                 let current = counter;
-                let _digest = crypto::poseidon2(current, 1);
+                let _digest = crypto::poseidon2(left: current, right: 1);
                 if current > 0 {
                     debug::info("counter tick");
                 } else {
@@ -1692,13 +1682,13 @@ fn manifest_includes_entrypoints_and_features() {
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     assert_eq!(entrypoints.len(), 2);
     assert_eq!(entrypoints[0].name, "hajimari");
-    assert!(matches!(entrypoints[0].kind, EntryPointKind::Init));
+    assert!(matches!(entrypoints[0].kind, EntryPointKind::Hajimari));
     assert_eq!(entrypoints[0].permission, None);
     assert_eq!(entrypoints[0].read_keys, Vec::<String>::new());
     assert_eq!(entrypoints[0].write_keys, vec!["state:counter"]);
 
     assert_eq!(entrypoints[1].name, "run");
-    assert!(matches!(entrypoints[1].kind, EntryPointKind::Public));
+    assert!(matches!(entrypoints[1].kind, EntryPointKind::Kotoage));
     assert_eq!(entrypoints[1].permission.as_deref(), Some("Admin"));
     assert_eq!(entrypoints[1].read_keys, vec!["state:counter"]);
     assert_eq!(entrypoints[1].write_keys, Vec::<String>::new());
@@ -1750,8 +1740,8 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         kotoage fn main() authorize("MintAndBurn") {
             let acc = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
             let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-            ledger::asset::mint(acc, asset, Amount::from_i64(1));
-            ledger::asset::burn(acc, asset, Amount::from_i64(1));
+            ledger::asset::mint(account: acc, asset_definition: asset, amount: Amount::from_i64(1));
+            ledger::asset::burn(account: acc, asset_definition: asset, amount: Amount::from_i64(1));
         }
         }
     "#;
@@ -1802,9 +1792,9 @@ fn production_manifest_accepts_authority_placeholder_isi_access() {
         seiyaku AuthorityDomainTransfer {
         kotoage fn main() authorize("TransferDomain") {
             ledger::domain::transfer(
-                AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-                DomainId::parse("wonderland.universal"),
-                context::authority()
+                source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+                domain: DomainId::parse("wonderland.universal"),
+                destination: context::authority(),
             );
         }
         }
@@ -1851,7 +1841,7 @@ fn production_manifest_rejects_parameter_dependent_isi_access() {
     let src = r#"
         seiyaku Test {
             kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: Amount, space: DataSpaceId) authorize("Admin") {
-                ledger::asset::transfer(from, to, asset, amount, space);
+                ledger::asset::transfer(source: from, destination: to, asset_definition: asset, amount: amount, dataspace: space);
             }
         }
     "#;
@@ -1916,13 +1906,7 @@ fn canonical_host_calls_typecheck_and_removed_map_does_not() {
     let src = r#"
         seiyaku Transfer {
           kotoage fn f() authorize("Admin") {
-            ledger::asset::transfer(
-              AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-              AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-              AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-              Amount::from_i64(1),
-              DataSpaceId::parse("0")
-            );
+            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
           }
         }
     "#;
@@ -1939,13 +1923,7 @@ fn indirect_sensitive_calls_require_permission() {
     let src = r#"
         seiyaku Permission {
           fn helper() {
-            ledger::asset::transfer(
-              AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-              AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-              AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-              Amount::from_i64(1),
-              DataSpaceId::parse("0")
-            );
+            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
         }
 
         kotoage fn public_entry() {
@@ -2015,8 +1993,7 @@ fn build_options_control_header_and_source_meta_is_unavailable() {
     let src = r#"
 seiyaku MyC {
   hajimari() {
-    test::assert(true);
-    let _digest = crypto::poseidon2(1, 2);
+    let _digest = crypto::poseidon2(left: 1, right: 2);
     let a = 1;
   }
 }
@@ -2105,15 +2082,15 @@ seiyaku Branches {
 #[test]
 fn compile_poseidon2_and_assert_eq() {
     // poseidon2 computation
-    let src = "module Poseidon { fn f(a: i64, b: i64) { let h = crypto::poseidon2(a, b); } }";
+    let src = "module Poseidon { fn f(a: i64, b: i64) { let h = crypto::poseidon2(left: a, right: b); } }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
     assert!(!code.is_empty());
     let (meta, _) = parse_meta_offset(&code).unwrap();
     assert_ne!(meta.mode & 0x01, 0, "poseidon2 should enable ZK mode");
 
     // assert_eq succeeds without enabling ZK mode
-    let src = "module Assertions { fn g(a: i64, b: i64) { test::assert_eq(a, b); } }";
-    let code = Compiler::new().compile_source(src).expect("compile failed");
+    let src = "seiyaku Assertions { view fn g(a: i64, b: i64) { test::assert_eq(actual: a, expected: b); } }";
+    let code = test_compiler().compile_source(src).expect("compile failed");
 
     let (meta, _) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.mode & 0x01, 0);
@@ -2122,6 +2099,7 @@ fn compile_poseidon2_and_assert_eq() {
     vm.set_register(10, 1);
     vm.set_register(11, 1);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "g");
     vm.run().expect("assert_eq failed");
 
     // failing case
@@ -2129,13 +2107,14 @@ fn compile_poseidon2_and_assert_eq() {
     vm2.set_register(10, 1);
     vm2.set_register(11, 2);
     vm2.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm2, &code, "g");
     let res = vm2.run();
     assert!(matches!(res, Err(ivm::VMError::AssertionFailed)));
 }
 
 #[test]
 fn compile_pubkgen_and_valcom() {
-    let src = "module Commitments { fn f(a: i64, b: i64) -> (i64, i64) { let p = crypto::pubkgen(a); let c = crypto::valcom(a, b); return (p, c); } }";
+    let src = "module Commitments { fn f(a: i64, b: i64) -> (i64, i64) { let p = crypto::pubkgen(a); let c = crypto::valcom(left: a, right: b); return (p, c); } }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
 
     let (meta, _) = parse_meta_offset(&code).unwrap();
@@ -2164,7 +2143,7 @@ fn pubkgen_valcom_spills_are_handled() {
             let value = (i + 1) as i64;
             src.push_str(&format!("  let v{i} = {value};\n"));
         }
-        src.push_str("  let c = crypto::valcom(a, b);\n");
+        src.push_str("  let c = crypto::valcom(left: a, right: b);\n");
         src.push_str("  let p = crypto::pubkgen(c);\n");
         src.push_str("  var sum = 0;\n");
         for i in 0..count {
@@ -2234,7 +2213,7 @@ fn typed_json_access_spills_are_handled() {
         for i in 0..count {
             src.push_str(&format!("  sum = sum + v{i};\n"));
         }
-        src.push_str("  let val = json::get_i64(j, Name::parse(\"value\"));\n");
+        src.push_str("  let val = json::get_i64(j, Name::parse(\"value\")).unwrap_or(0);\n");
         src.push_str("  return sum + val;\n}\n}\n");
         src
     };
@@ -2302,8 +2281,8 @@ fn compile_and_run_poseidon_register_forms() {
     let src = r#"
 module PoseidonForms {
     fn main() -> (i64, i64) {
-        let pair = crypto::poseidon2(123456789, 987654321);
-        let sextet = crypto::poseidon6(3, 5, 8, 13, 21, 34);
+        let pair = crypto::poseidon2(left: 123456789, right: 987654321);
+        let sextet = crypto::poseidon6(a: 3, b: 5, c: 8, d: 13, e: 21, f: 34);
         return (pair, sextet);
     }
 }
@@ -2445,7 +2424,7 @@ fn parse_dai_clone() {
 #[test]
 fn parse_mint_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "module MintHelpers { fn f(a: AccountId, b: AssetDefinitionId, c: Amount) { ledger::asset::mint(a, b, c); } }";
+    let src = "module MintHelpers { fn f(a: AccountId, b: AssetDefinitionId, c: Amount) { ledger::asset::mint(account: a, asset_definition: b, amount: c); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2456,7 +2435,7 @@ fn parse_mint_asset_builtin() {
 #[test]
 fn parse_transfer_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "module TransferHelpers { fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: Amount, e: DataSpaceId) { ledger::asset::transfer(a, b, c, d, e); } }";
+    let src = "module TransferHelpers { fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: Amount, e: DataSpaceId) { ledger::asset::transfer(source: a, destination: b, asset_definition: c, amount: d, dataspace: e); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2515,7 +2494,7 @@ fn transfer_batch_requires_tuple_entries() {
 #[test]
 fn parse_burn_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "module BurnHelpers { fn f(a: AccountId, b: AssetDefinitionId, c: Amount) { ledger::asset::burn(a, b, c); } }";
+    let src = "module BurnHelpers { fn f(a: AccountId, b: AssetDefinitionId, c: Amount) { ledger::asset::burn(account: a, asset_definition: b, amount: c); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2529,12 +2508,7 @@ fn parse_register_asset_builtin() {
     let src = r#"
         module RegisterAssetHelpers {
             fn f() {
-                ledger::asset::register(
-                    AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-                    "X",
-                    1,
-                    0
-                );
+                ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "X", scale: 1, mintable: 0);
             }
         }
     "#;
@@ -2556,11 +2530,11 @@ fn parse_create_new_asset_builtin() {
         module CreateAssetHelpers {
             fn f() {
                 ledger::asset::create(
-                    AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-                    "X",
-                    1,
-                    AccountId::parse("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
-                    0
+                    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+                    name: "X",
+                    scale: 1,
+                    owner: AccountId::parse("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
+                    mintable: 0
                 );
             }
         }
@@ -2580,7 +2554,7 @@ fn parse_create_new_asset_builtin() {
 fn parse_register_asset_rejects_bare_name_literal() {
     let src = r#"
         module InvalidAssetRegistration {
-            fn f() { ledger::asset::register("x", "X", 1, 0); }
+            fn f() { ledger::asset::register(asset_definition: "x", name: "X", scale: 1, mintable: 0); }
         }
     "#;
     let prog = parse(src).expect("parse failed");
@@ -2777,7 +2751,7 @@ fn typed_vrf_syscalls_are_present() {
     let src = r#"
         module VrfVerification {
             fn main(input: bytes, public_key: bytes, proof: bytes, batch: bytes) {
-                let _out = crypto::vrf::verify(input, public_key, proof, 2);
+                let _out = crypto::vrf::verify(message: input, proof: public_key, public_key: proof, variant: 2);
                 let _batch = crypto::vrf::verify_batch(batch);
             }
         }
@@ -2868,7 +2842,7 @@ fn raw_axt_intrinsics_are_rejected() {
             axt::begin(desc);
             axt::touch(ds, norito_bytes("manifest"));
             axt::verify_proof(ds, proof);
-            axt::use_asset_handle(handle, norito_bytes("intent"), proof);
+            axt::use_asset_handle(handle: handle, operation: norito_bytes("intent"), proof: proof);
             axt::commit();
           }}
         }}

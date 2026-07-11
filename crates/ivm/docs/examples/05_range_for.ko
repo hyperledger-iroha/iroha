@@ -1,4 +1,4 @@
-// Compiler-proven bounded range loop within a contract.
+// Compiler-proven bounded range loop within a seiyaku.
 seiyaku RangeFor {
     kotoage fn sum_to(n: i64) -> i64 authorize("Entry") {
         var acc = 0;

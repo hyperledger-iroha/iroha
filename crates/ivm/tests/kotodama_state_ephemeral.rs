@@ -1,6 +1,7 @@
 //! Durable `StateMap` lowering tests, including struct-valued entries.
 
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+mod common;
 
 #[test]
 fn state_map_set_get_roundtrip() {
@@ -8,10 +9,10 @@ fn state_map_set_get_roundtrip() {
     let src = r#"
         seiyaku C {
             state M: StateMap<i64, i64>;
-            kotoage fn main() authorize("WriteState") {
+            kotoage fn main() -> i64 authorize("WriteState") {
                 M[1] = 7;
                 let x = M.get(1).unwrap_or(0);
-                test::assert_eq(x, 7);
+                return x;
             }
         }
     "#;
@@ -20,7 +21,9 @@ fn state_map_set_get_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&prog).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run().expect("state map roundtrip");
+    assert_eq!(vm.register(10), 7);
 }
 
 #[test]
@@ -30,10 +33,10 @@ fn state_map_with_struct_value_roundtrip() {
         seiyaku C {
             struct S { value: i64; }
             state values: StateMap<i64, S>;
-            kotoage fn main() authorize("WriteState") {
-                values[3] = S(9);
-                let y = values.get(3).unwrap_or(S(0)).value;
-                test::assert_eq(y, 9);
+            kotoage fn main() -> i64 authorize("WriteState") {
+                values[3] = S { value: 9 };
+                let y = values.get(3).unwrap_or(S { value: 0 }).value;
+                return y;
             }
         }
     "#;
@@ -44,5 +47,7 @@ fn state_map_with_struct_value_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&prog).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run().expect("state map struct roundtrip");
+    assert_eq!(vm.register(10), 9);
 }

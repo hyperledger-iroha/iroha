@@ -9,6 +9,7 @@ use ivm::{
     CoreHost, IVM, ProgramMetadata, host::DefaultHost, kotodama::compiler::Compiler,
     pointer_abi::PointerType,
 };
+use norito::json as njson;
 
 fn compile_and_run(source: &str) -> IVM {
     let code = Compiler::new()
@@ -30,6 +31,28 @@ fn compile_and_run(source: &str) -> IVM {
     vm.set_program_counter(entry_pc)
         .expect("select run entrypoint");
     vm.run().expect("run V1 contract");
+    vm
+}
+
+fn compile_and_run_with_default_host(source: &str) -> IVM {
+    let code = Compiler::new()
+        .compile_source(source)
+        .expect("compile V1 contract for the standalone host");
+    let parsed = ProgramMetadata::parse(&code).expect("parse V1 contract metadata");
+    let run = parsed
+        .contract_interface
+        .as_ref()
+        .expect("embedded contract interface")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == "run")
+        .expect("run entrypoint descriptor");
+    let entry_pc = u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + run.entry_pc;
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&code).expect("load V1 contract");
+    vm.set_program_counter(entry_pc)
+        .expect("select run entrypoint");
+    vm.run().expect("run V1 contract with DefaultHost");
     vm
 }
 
@@ -151,15 +174,15 @@ seiyaku AggregateStateAcceptance {
   state Values: StateMap<i64, Pair>;
 
   kotoage fn run() -> i64 authorize("WriteState") {
-    Values[7] = Pair(9, true);
+    Values[7] = Pair { count: 9, ready: true };
     let found = Values.get(7);
     require(found.is_some(), AggregateError::MissingValue);
-    let pair = found.unwrap_or(Pair(0, false));
+    let pair = found.unwrap_or(Pair { count: 0, ready: false });
     require(pair.count == 9, AggregateError::WrongCount);
     require(pair.ready, AggregateError::WrongFlag);
 
     let removed = Values.remove(7);
-    let old = removed.unwrap_or(Pair(0, false));
+    let old = removed.unwrap_or(Pair { count: 0, ready: false });
     require(old.count == 9, AggregateError::RemovalLostValue);
     require(Values.get(7).is_none(), AggregateError::RemovalDidNotDelete);
     return pair.count;
@@ -186,22 +209,22 @@ seiyaku AggregateSumAcceptance {
   struct Pair { count: i64, ready: bool }
 
   view fn run() -> i64 {
-    let some = option::some(Pair(7, true));
-    let from_some = some.unwrap_or(Pair(90, false));
+    let some: Option<Pair> = Option::some(Pair { count: 7, ready: true });
+    let from_some = some.unwrap_or(Pair { count: 90, ready: false });
     require(from_some.count == 7 && from_some.ready, AggregateSumError::SomeLost);
 
-    let none = option::none(Pair(0, false));
-    let from_none = none.unwrap_or(Pair(11, true));
+    let none: Option<Pair> = Option::none;
+    let from_none = none.unwrap_or(Pair { count: 11, ready: true });
     require(from_none.count == 11 && from_none.ready, AggregateSumError::NoneFallbackLost);
 
-    let ok = result::ok(Pair(13, true), Pair(0, false));
-    let from_ok = ok.unwrap_or(Pair(91, false));
+    let ok: Result<Pair, Pair> = Result::ok(Pair { count: 13, ready: true });
+    let from_ok = ok.unwrap_or(Pair { count: 91, ready: false });
     require(from_ok.count == 13 && from_ok.ready, AggregateSumError::OkLost);
 
-    let err = result::err(Pair(0, false), Pair(17, true));
-    let from_err = err.unwrap_or(Pair(19, true));
+    let err: Result<Pair, Pair> = Result::err(Pair { count: 17, ready: true });
+    let from_err = err.unwrap_or(Pair { count: 19, ready: true });
     require(from_err.count == 19 && from_err.ready, AggregateSumError::ErrFallbackLost);
-    let error_value = err.unwrap_err_or(Pair(92, false));
+    let error_value = err.unwrap_err_or(Pair { count: 92, ready: false });
     require(error_value.count == 17 && error_value.ready, AggregateSumError::ResultErrorLost);
     return from_some.count + from_none.count + from_ok.count + from_err.count + error_value.count;
   }
@@ -210,6 +233,116 @@ seiyaku AggregateSumAcceptance {
 
     let vm = compile_and_run(source);
     assert_eq!(vm.register(10), 67);
+}
+
+#[test]
+fn propagation_materializes_the_enclosing_sum_layout_on_failure() {
+    let result_source = r#"
+seiyaku ResultPropagationLayoutAcceptance {
+  fn source() -> Result<i64, bool> {
+    Result::err(true)
+  }
+
+  view fn run() -> Result<(i64, i64), bool> {
+    let value = source()?;
+    Result::ok((value, value))
+  }
+}
+"#;
+    let result_vm = compile_and_run(result_source);
+    let result_layout = ivm::sum::SumLayoutV1::try_new(1, 2).expect("Result layout");
+    assert_eq!(
+        ivm::sum::read_words(&result_vm, result_vm.register(10), result_layout),
+        Ok((false, vec![1])),
+        "the returned error must occupy the wider enclosing Result allocation"
+    );
+
+    let option_source = r#"
+seiyaku OptionPropagationLayoutAcceptance {
+  fn source() -> Option<i64> {
+    Option::none
+  }
+
+  view fn run() -> Option<(i64, i64)> {
+    let value = source()?;
+    Option::some((value, value))
+  }
+}
+"#;
+    let option_vm = compile_and_run(option_source);
+    let option_layout = ivm::sum::SumLayoutV1::option(2).expect("Option layout");
+    assert_eq!(
+        ivm::sum::read_words(&option_vm, option_vm.register(10), option_layout),
+        Ok((false, vec![])),
+        "the returned none must occupy the wider enclosing Option allocation"
+    );
+}
+
+#[test]
+fn native_json_executes_once_and_returns_canonical_recursive_values() {
+    let source = r#"
+seiyaku NativeJsonRuntimeAcceptance {
+  view fn run() -> Json {
+    let labels: List<string, 4> = ["primary", "secondary"];
+    var blobs: List<bytes, 2> = [];
+    blobs.try_push(b"\xaa");
+    blobs.try_push(b"\xbb");
+    let maybe: Option<Amount> = Option::some(1.25amt);
+    json {
+      z_bytes: b"\xab\x01",
+      maybe: maybe,
+      labels: labels,
+      blobs: blobs,
+      amount: 1.25amt,
+    }
+  }
+}
+"#;
+    let vm = compile_and_run(source);
+    let output = vm
+        .validate_tlv(vm.register(10))
+        .expect("native JSON result TLV");
+    assert_eq!(output.type_id, PointerType::Json);
+    let json: Json = norito::decode_from_bytes(output.payload).expect("decode native JSON result");
+    let value: njson::Value = json
+        .clone()
+        .try_into_any_norito()
+        .expect("convert native JSON result");
+    assert_eq!(
+        value,
+        norito::json!({
+            "amount": "1.25",
+            "blobs": ["0xaa", "0xbb"],
+            "labels": ["primary", "secondary"],
+            "maybe": "1.25",
+            "z_bytes": "0xab01",
+        })
+    );
+
+    let rendered = njson::to_string(&json).expect("render native JSON result");
+    let key_positions = ["amount", "blobs", "labels", "maybe", "z_bytes"].map(|key| {
+        rendered
+            .find(&format!("\"{key}\""))
+            .unwrap_or_else(|| panic!("missing canonical key `{key}` in {rendered}"))
+    });
+    assert!(
+        key_positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "object keys must be encoded in canonical lexical order: {rendered}"
+    );
+}
+
+#[test]
+fn native_json_and_typed_getters_execute_with_default_host() {
+    let source = r#"
+seiyaku DefaultHostNativeJsonAcceptance {
+  view fn run() -> i64 {
+    let payload: Json = json { value: 7 };
+    json::get_i64(payload, Name::parse("value")).unwrap_or(0)
+  }
+}
+"#;
+    let vm = compile_and_run_with_default_host(source);
+    assert_eq!(vm.register(10), 7);
 }
 
 #[test]
@@ -231,17 +364,17 @@ seiyaku StateRootAcceptance {
 
   hajimari() {
     Counter = 3;
-    Current = Pair(5, true);
-    Maybe = option::some(Pair(7, true));
-    Outcome = result::ok(Pair(11, true), Pair(0, false));
+    Current = Pair { count: 5, ready: true };
+    Maybe = Option::some(Pair { count: 7, ready: true });
+    Outcome = Result::ok(Pair { count: 11, ready: true });
   }
 
   kotoage fn run() -> i64 authorize("WriteState") {
     require(Counter == 3, StateRootError::ScalarLost);
     require(Current.count == 5 && Current.ready, StateRootError::StructLost);
-    let maybe = Maybe.unwrap_or(Pair(0, false));
+    let maybe = Maybe.unwrap_or(Pair { count: 0, ready: false });
     require(maybe.count == 7 && maybe.ready, StateRootError::OptionLost);
-    let outcome = Outcome.unwrap_or(Pair(0, false));
+    let outcome = Outcome.unwrap_or(Pair { count: 0, ready: false });
     require(outcome.count == 11 && outcome.ready, StateRootError::ResultLost);
     Counter = Counter + 1;
     return Counter + Current.count + maybe.count + outcome.count;
@@ -288,7 +421,7 @@ seiyaku ShortCircuitAcceptance {
   state Hits: StateMap<i64, i64>;
 
   fn bump(result: bool) -> bool {
-    let previous = Hits.get_or(0, 0);
+    let previous = Hits.get_or(key: 0, default: 0);
     Hits[0] = previous + 1;
     return result;
   }
@@ -303,7 +436,7 @@ seiyaku ShortCircuitAcceptance {
     require(true_or, LogicError::TrueOrChangedResult);
     require(true_and, LogicError::TrueAndChangedResult);
     require(false_or, LogicError::FalseOrChangedResult);
-    let count = Hits.get_or(0, 0);
+    let count = Hits.get_or(key: 0, default: 0);
     require(count == 2, LogicError::WrongSideEffectCount);
     return count;
   }

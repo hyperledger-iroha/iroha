@@ -54,8 +54,9 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
             name: entrypoint.name.clone(),
             kind: entrypoint.kind,
             params: entrypoint.params.clone(),
-            argument_schema: None,
+            argument_schema: entrypoint.argument_schema.clone(),
             return_type: entrypoint.return_type.clone(),
+            return_schema: entrypoint.return_schema.clone(),
             permission: entrypoint.permission.clone(),
             read_keys: entrypoint.read_keys.clone(),
             write_keys: entrypoint.write_keys.clone(),
@@ -66,7 +67,7 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
         })
         .collect();
     let interface = ivm::EmbeddedContractInterfaceV1 {
-        contract_name: "TestContract".to_owned(),
+        seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "contract-manifest-trigger-test".to_owned(),
         features_bitmap: 0,
         access_set_hints: None,
@@ -203,11 +204,12 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     };
     let entrypoint = EntrypointDescriptor {
         name: "run".to_string(),
-        kind: EntryPointKind::Public,
+        kind: EntryPointKind::Kotoage,
         params: Vec::new(),
         argument_schema: None,
         return_type: None,
-        permission: None,
+        return_schema: None,
+        permission: Some("CanEnactGovernance".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
         access_hints_complete: None,
@@ -284,6 +286,95 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
 }
 
 #[test]
+fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
+    let (state, authority, kp) = setup_state();
+    let foreign = AccountId::new(
+        KeyPair::try_random()
+            .expect("generate foreign trigger authority")
+            .public_key()
+            .clone(),
+    );
+    let contract_address = contract_address(&authority, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let register_perm: permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    Grant::account_permission(register_perm, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant CanRegisterSmartContractCode");
+
+    let trigger_id: TriggerId = "foreign_wake".parse().expect("trigger id");
+    let trigger = TriggerDescriptor {
+        id: trigger_id.clone(),
+        repeats: Repeats::Indefinitely,
+        filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::PreCommit)),
+        authority: Some(foreign.clone()),
+        metadata: Metadata::default(),
+        callback: TriggerCallback {
+            namespace: None,
+            entrypoint: "run".to_owned(),
+        },
+    };
+    let entrypoint = EntrypointDescriptor {
+        name: "run".to_owned(),
+        kind: EntryPointKind::Kotoage,
+        params: Vec::new(),
+        argument_schema: None,
+        return_type: None,
+        return_schema: None,
+        permission: Some("ExecuteForeignAuthorityProbe".to_owned()),
+        read_keys: Vec::new(),
+        write_keys: Vec::new(),
+        access_hints_complete: None,
+        access_hints_skipped: Vec::new(),
+        triggers: vec![trigger],
+    };
+    let (program, manifest) = contract_artifact(vec![entrypoint]);
+    let code_hash = manifest.code_hash.expect("manifest code hash");
+    RegisterSmartContractBytes {
+        code_hash,
+        code: program,
+    }
+    .execute(&authority, &mut stx)
+    .expect("register contract bytes");
+    RegisterSmartContractCode {
+        manifest: manifest.signed(&kp),
+    }
+    .execute(&authority, &mut stx)
+    .expect("register manifest");
+
+    let error = ActivateContractInstance {
+        contract_address: contract_address.clone(),
+        code_hash,
+    }
+    .execute(&authority, &mut stx)
+    .expect_err("manifest trigger must not impersonate a foreign account");
+    assert!(
+        error.to_string().contains(&format!(
+            "Missing CanRegisterTrigger{{authority: {foreign}}} permission"
+        )),
+        "unexpected foreign-authority error: {error}"
+    );
+    assert!(
+        stx.world
+            .triggers()
+            .time_triggers()
+            .get(&trigger_id)
+            .is_none(),
+        "unauthorized manifest trigger was registered"
+    );
+    assert!(
+        stx.world
+            .contract_instances()
+            .get(&contract_address)
+            .is_none(),
+        "failed activation bound a contract instance"
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes_them() {
     let (state, authority, kp) = setup_state();
@@ -346,11 +437,12 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
 
     let entrypoint = EntrypointDescriptor {
         name: "run".to_string(),
-        kind: EntryPointKind::Public,
+        kind: EntryPointKind::Kotoage,
         params: Vec::new(),
         argument_schema: None,
         return_type: None,
-        permission: None,
+        return_schema: None,
+        permission: Some("CanEnactGovernance".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
         access_hints_complete: None,
@@ -477,11 +569,12 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
 
     let target_entrypoint = EntrypointDescriptor {
         name: "run".to_string(),
-        kind: EntryPointKind::Public,
+        kind: EntryPointKind::Kotoage,
         params: Vec::new(),
         argument_schema: None,
         return_type: None,
-        permission: None,
+        return_schema: None,
+        permission: Some("CanEnactGovernance".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
         access_hints_complete: None,
@@ -532,11 +625,12 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     };
     let source_entrypoint = EntrypointDescriptor {
         name: "arm".to_string(),
-        kind: EntryPointKind::Public,
+        kind: EntryPointKind::Kotoage,
         params: Vec::new(),
         argument_schema: None,
         return_type: None,
-        permission: None,
+        return_schema: None,
+        permission: Some("CanEnactGovernance".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
         access_hints_complete: None,
@@ -630,11 +724,12 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     };
     let source_entrypoint = EntrypointDescriptor {
         name: "arm".to_string(),
-        kind: EntryPointKind::Public,
+        kind: EntryPointKind::Kotoage,
         params: Vec::new(),
         argument_schema: None,
         return_type: None,
-        permission: None,
+        return_schema: None,
+        permission: Some("CanEnactGovernance".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
         access_hints_complete: None,

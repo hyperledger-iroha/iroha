@@ -83,10 +83,15 @@ The following policy summary is generated from the implementation and should not
 ### ABI Hashes (generated)
 The following table is generated from the implementation and lists canonical `abi_hash` values for supported policies.
 
+The hash binds the sorted allowed syscall numbers, their canonical argument
+and return signatures, each syscall's conservative host-access class, and the
+sorted allowed pointer-ABI type IDs. Gas prices are deliberately excluded;
+`ivm::gas::schedule_hash()` commits to the canonical gas schedule separately.
+
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | d69058daf6b88f54cf9991d5e2847e8246968569b9f4214454fa9995c4238451 |
+| ABI v1 | b23c852dd485262beb79efd35cc9dfd69bd548a84239c77053b98a565839b7d3 |
 <!-- END GENERATED ABI HASHES -->
 
 - ABI v1 is the sole first-release policy. Its `LDLIT`, `JAL`, `JMP`, and
@@ -94,7 +99,8 @@ The following table is generated from the implementation and lists canonical `ab
   post-release encoding break requires an explicit protocol/ABI upgrade; it
   must not silently reinterpret ABI-v1 opcode space.
 - Syscall ranges are stable; unknown for the active `abi_version` yields `E_SCALL_UNKNOWN`.
-- Gas schedules are bound to the `version` and require golden vectors on change.
+- Gas schedules are committed independently by `ivm::gas::schedule_hash()` and
+  require golden vectors on change.
 
 Inspecting artifacts
 - Use `ivm_tool inspect <file.to>` for a stable view of header fields.

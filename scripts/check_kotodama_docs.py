@@ -35,11 +35,11 @@ SOURCE_LANGUAGES = frozenset({"ko", "kotodama"})
 SOURCE_DIRECTIVES = frozenset({"zk"})
 _OPENING_FENCE = re.compile(r"^( {0,3})(?P<fence>`{3,}|~{3,})(?P<info>[^\r\n]*)$")
 _SOURCE_UNIT = re.compile(
-    r"^\s*(?:seiyaku|誓約|module)\s+[A-Za-z_][A-Za-z0-9_]*\s*\{",
+    r"^\s*(?P<kind>seiyaku|誓約|module)\s+[A-Za-z_][A-Za-z0-9_]*\s*\{",
     re.MULTILINE,
 )
 _HEREDOC_SOURCE = re.compile(
-    r"^\s*cat\s+.*?\.ko\s*<<-?\s*(?P<quote>['\"]?)"
+    r"^\s*cat\s+.*?\.ko\s*<<(?P<strip_tabs>-)?\s*(?P<quote>['\"]?)"
     r"(?P<tag>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)\s*$"
 )
 
@@ -305,15 +305,24 @@ def extract_source_fences(document: Path, text: str) -> tuple[SourceFence, ...]:
         if opening is None:
             continue
         tag = opening.group("tag")
+        strip_tabs = opening.group("strip_tabs") is not None
         body_start = index + 1
         body_end = body_start
-        while body_end < len(lines) and lines[body_end].rstrip("\r\n") != tag:
+        while body_end < len(lines):
+            candidate = lines[body_end].rstrip("\r\n")
+            if strip_tabs:
+                candidate = candidate.lstrip("\t")
+            if candidate == tag:
+                break
             body_end += 1
         if body_end == len(lines):
             raise DocumentationCheckError(
                 f"{document}:{index + 1}: unterminated Kotodama heredoc {tag!r}"
             )
-        source = "".join(lines[body_start:body_end])
+        body_lines = lines[body_start:body_end]
+        source = "".join(
+            line.lstrip("\t") if strip_tabs else line for line in body_lines
+        )
         if not source.strip() or not _SOURCE_UNIT.search(source):
             raise DocumentationCheckError(
                 f"{document}:{index + 1}: *.ko heredoc does not contain one "
@@ -440,7 +449,14 @@ def resolve_koto(raw: str, root: Path) -> Path:
 def compile_source_fences(
     fences: Sequence[SourceFence], koto: Path, root: Path, timeout_seconds: float
 ) -> None:
-    """Compile each unique source and bind the result to every matching snippet."""
+    """Compile each unique source and bind the result to every matching snippet.
+
+    Reusable ``module`` units stop after the canonical frontend check because
+    they are not independently deployable. A ``seiyaku``/``誓約`` unit must
+    also complete code generation through ``koto build``. This prevents a
+    documentation fence from passing CI when its typed HIR is valid but its
+    executable lowering, assembler, or manifest generation is not.
+    """
 
     if timeout_seconds <= 0:
         raise DocumentationCheckError("timeout must be positive")
@@ -454,39 +470,62 @@ def compile_source_fences(
         for index, ((source, zk), occurrences) in enumerate(groups.items(), start=1):
             source_path = temporary_root / f"fence-{index:03d}.ko"
             source_path.write_text(source, encoding="utf-8")
-            command = [str(koto), "check"]
-            if zk:
-                command.append("--zk")
-            command.append(str(source_path))
-            try:
-                completed = subprocess.run(
-                    command,
-                    cwd=root,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_seconds,
+            source_unit = _SOURCE_UNIT.search(source)
+            if source_unit is not None and source_unit.group("kind") in {
+                "seiyaku",
+                "誓約",
+            }:
+                commands = [[
+                    str(koto),
+                    "build",
+                    "--profile",
+                    "docs",
+                    "--target-dir",
+                    str(temporary_root / "target"),
+                ]]
+            else:
+                commands = [[str(koto), "check"]]
+            source_failed = False
+            for command in commands:
+                if zk:
+                    command.append("--zk")
+                command.append(str(source_path))
+                try:
+                    completed = subprocess.run(
+                        command,
+                        cwd=root,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_seconds,
+                    )
+                except (OSError, subprocess.SubprocessError) as error:
+                    locations = ", ".join(item.location for item in occurrences)
+                    failures.append(
+                        f"{locations}: failed to execute koto: {error}"
+                    )
+                    source_failed = True
+                    break
+                if completed.returncode == 0:
+                    continue
+                output = "\n".join(
+                    part.rstrip()
+                    for part in (completed.stdout, completed.stderr)
+                    if part.strip()
                 )
-            except (OSError, subprocess.SubprocessError) as error:
-                locations = ", ".join(item.location for item in occurrences)
+                if not output:
+                    output = "koto produced no diagnostics"
+                locations = ", ".join(
+                    f"{item.location} (source starts at line {item.source_line})"
+                    for item in occurrences
+                )
                 failures.append(
-                    f"{locations}: failed to execute koto: {error}"
+                    f"{locations} failed `koto {command[1]}`:\n{output}"
                 )
+                source_failed = True
+                break
+            if source_failed:
                 continue
-            if completed.returncode == 0:
-                continue
-            output = "\n".join(
-                part.rstrip()
-                for part in (completed.stdout, completed.stderr)
-                if part.strip()
-            )
-            if not output:
-                output = "koto produced no diagnostics"
-            locations = ", ".join(
-                f"{item.location} (source starts at line {item.source_line})"
-                for item in occurrences
-            )
-            failures.append(f"{locations} failed `koto check`:\n{output}")
     if failures:
         raise DocumentationCheckError("\n\n".join(failures))
 

@@ -11,6 +11,10 @@ import {
 } from "../src/kotodamaCompiler/browser.js";
 import { compileKotodamaWithNativeBinding } from "../src/kotodamaCompiler/nativeBridge.js";
 import { blake2b256 } from "../src/blake2b.js";
+import {
+  KOTODAMA_V1_DECLARATION_RESERVED,
+  KOTODAMA_V1_KEYWORDS,
+} from "../src/kotodamaIdentifiers.js";
 
 const SERVICE_ARTIFACT = Uint8Array.from([1, 2, 3]);
 const CONTRACT_HASH_DOMAIN = new TextEncoder().encode("iroha:ivm:contract-artifact:v1\0");
@@ -19,19 +23,46 @@ const SERVICE_HASH_INPUT = new Uint8Array(
 );
 SERVICE_HASH_INPUT.set(CONTRACT_HASH_DOMAIN);
 SERVICE_HASH_INPUT.set(SERVICE_ARTIFACT, CONTRACT_HASH_DOMAIN.length);
+const SERVICE_CODE_HASH_BYTES = blake2b256(SERVICE_HASH_INPUT);
+SERVICE_CODE_HASH_BYTES[SERVICE_CODE_HASH_BYTES.length - 1] |= 1;
 const SERVICE_CODE_HASH = Array.from(
-  blake2b256(SERVICE_HASH_INPUT),
+  SERVICE_CODE_HASH_BYTES,
   (byte) => byte.toString(16).padStart(2, "0"),
 ).join("");
-const SERVICE_ABI_HASH = "22".repeat(32);
+const SERVICE_ABI_HASH = "23".repeat(32);
+
+function canonicalHashLiteral(hex) {
+  const body = hex.toUpperCase();
+  let crc = 0xffff;
+  const processByte = (byte) => {
+    crc ^= (byte & 0xff) << 8;
+    for (let index = 0; index < 8; index += 1) {
+      crc =
+        (crc & 0x8000) !== 0
+          ? ((crc << 1) ^ 0x1021) & 0xffff
+          : (crc << 1) & 0xffff;
+    }
+  };
+  for (const byte of new TextEncoder().encode(`hash:${body}`)) {
+    processByte(byte);
+  }
+  return `hash:${body}#${crc.toString(16).toUpperCase().padStart(4, "0")}`;
+}
 
 const SERVICE_OUTPUT = {
   artifactBytes: [...SERVICE_ARTIFACT],
   manifestJson: JSON.stringify({
+    seiyaku_name: "Demo",
     compiler_fingerprint: "kotodama_lang/test",
-    code_hash: `hash:${SERVICE_CODE_HASH.toUpperCase()}`,
-    abi_hash: `hash:${SERVICE_ABI_HASH.toUpperCase()}`,
-    entrypoints: [],
+    code_hash: canonicalHashLiteral(SERVICE_CODE_HASH),
+    abi_hash: canonicalHashLiteral(SERVICE_ABI_HASH),
+    entrypoints: [
+      {
+        name: "ping",
+        kind: { kind: "View", value: null },
+        permission: null,
+      },
+    ],
   }),
   codeHash: SERVICE_CODE_HASH,
   abiHash: SERVICE_ABI_HASH,
@@ -54,6 +85,42 @@ const SERVICE_SUCCESS = {
   output: SERVICE_OUTPUT,
   diagnosticsJson: null,
 };
+
+test("JavaScript identifier validation consumes the normative V1 keyword table", () => {
+  const grammar = readFileSync(
+    new URL("../../../crates/kotodama_lang/grammar/v1.lex", import.meta.url),
+    "utf8",
+  );
+  const keywords = grammar
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("keyword\t"))
+    .map((line) => line.split("\t")[1]);
+  assert.deepEqual(KOTODAMA_V1_KEYWORDS, keywords);
+  for (const retired of ["contract", "entry", "init", "upgrade"]) {
+    assert.equal(keywords.includes(retired), false);
+  }
+
+  const semantic = readFileSync(
+    new URL("../../../crates/kotodama_lang/src/semantic.rs", import.meta.url),
+    "utf8",
+  );
+  const typeTable = /pub const V1_SOURCE_TYPE_NAMES: &\[&str\] = &\[([\s\S]*?)\];/u.exec(
+    semantic,
+  );
+  assert.ok(typeTable, "semantic V1 source-type table is missing");
+  const typeNames = [...typeTable[1].matchAll(/"([A-Za-z_][A-Za-z0-9_]*)"/gu)].map(
+    (match) => match[1],
+  );
+  assert.deepEqual(KOTODAMA_V1_DECLARATION_RESERVED, [
+    ...typeNames,
+    "AxtDescriptor",
+    "AssetHandle",
+    "ProofBlob",
+    "SoracloudRequest",
+    "SoracloudResponse",
+    "state_map_get",
+  ]);
+});
 
 const SERVICE_DIAGNOSTICS = [
   {
@@ -183,6 +250,15 @@ test("TypeScript exposes only the bounded source-name and ZK request policy", ()
     declarations,
     /compile\(\s*source: string,\s*options\?: KotodamaCompilerRequestOptions,/u,
   );
+  assert.match(
+    declarations,
+    /kind: "Kotoage" \| "View" \| "Hajimari" \| "Kaizen";/u,
+  );
+  assert.doesNotMatch(
+    declarations,
+    /kind: "Public" \| "View" \| "Init" \| "Upgrade";/u,
+  );
+  assert.doesNotMatch(declarations, /kind:\s*\n\s*\| "public"/u);
 });
 
 test("Node delegates asynchronously to iroha_js_host exactly once", async () => {
@@ -214,6 +290,7 @@ test("Node delegates asynchronously to iroha_js_host exactly once", async () => 
   const result = await resultPromise;
   assert.equal(result.ok, true);
   assert.deepEqual([...result.output.artifactBytes], [1, 2, 3]);
+  assert.equal(result.output.manifest.entrypoints[0].kind.kind, "View");
   assert.deepEqual(
     calls,
     [{ source, sourceName: "contracts/demo.ko", zk: true }],
@@ -223,6 +300,159 @@ test("Node delegates asynchronously to iroha_js_host exactly once", async () => 
   await assert.rejects(
     compileKotodamaWithNativeBinding({}, source),
     /native binding is missing compileKotodama/,
+  );
+});
+
+test("compiler adapters reject retired English manifest entrypoint kinds", async () => {
+  for (const retired of ["Public", "public", "Init", "init", "Upgrade", "upgrade"]) {
+    const response = structuredClone(SERVICE_SUCCESS);
+    const manifest = JSON.parse(response.output.manifestJson);
+    manifest.entrypoints[0].kind.kind = retired;
+    response.output.manifestJson = JSON.stringify(manifest);
+    const native = {
+      async compileKotodama() {
+        return response;
+      },
+    };
+    await assert.rejects(
+      compileKotodamaWithNativeBinding(native, "seiyaku Demo {}"),
+      /must be Kotoage, View, Hajimari, or Kaizen/,
+    );
+  }
+});
+
+test("compiler adapters preserve branded selectors and reject forged manifest declarations", async () => {
+  const compileResponse = async (mutateManifest) => {
+    const response = structuredClone(SERVICE_SUCCESS);
+    const manifest = JSON.parse(response.output.manifestJson);
+    mutateManifest(manifest);
+    response.output.manifestJson = JSON.stringify(manifest);
+    return compileKotodamaWithNativeBinding(
+      { async compileKotodama() { return response; } },
+      "seiyaku Demo {}",
+    );
+  };
+
+  const branded = await compileResponse((manifest) => {
+    manifest.entrypoints = [
+      {
+        name: "始まり",
+        kind: { kind: "Hajimari", value: null },
+        permission: null,
+      },
+      {
+        name: "kaizen",
+        kind: { kind: "Kaizen", value: null },
+        permission: null,
+      },
+      {
+        name: "mutate",
+        kind: { kind: "Kotoage", value: null },
+        permission: "Mutate",
+      },
+    ];
+  });
+  assert.deepEqual(
+    branded.output.manifest.entrypoints.map((entrypoint) => entrypoint.name),
+    ["始まり", "kaizen", "mutate"],
+  );
+
+  for (const seiyakuName of [
+    "seiyaku",
+    "match",
+    "i64",
+    "state_map_get",
+    "__kotodama_link_forged",
+  ]) {
+    await assert.rejects(
+      compileResponse((manifest) => {
+        manifest.seiyaku_name = seiyakuName;
+      }),
+      /seiyaku_name must be a canonical V1 declaration identifier/u,
+    );
+  }
+  await assert.rejects(
+    compileResponse((manifest) => {
+      manifest.contract_name = manifest.seiyaku_name;
+    }),
+    /must use seiyaku_name; contract_name is not a V1 field/u,
+  );
+  await assert.rejects(
+    compileResponse((manifest) => {
+      manifest.entrypoints = [
+        { name: "init", kind: { kind: "Hajimari", value: null }, permission: null },
+      ];
+    }),
+    /kind does not match its branded lifecycle selector/u,
+  );
+  await assert.rejects(
+    compileResponse((manifest) => {
+      manifest.entrypoints = [
+        { name: "run", kind: { kind: "Kotoage", value: null }, permission: null },
+      ];
+    }),
+    /kotoage\/言挙げ.*missing caller authorization/u,
+  );
+  await assert.rejects(
+    compileResponse((manifest) => {
+      manifest.states = [
+        { name: "match", type_name: "i64" },
+      ];
+    }),
+    /state 0.name is not canonical/u,
+  );
+  await assert.rejects(
+    compileResponse((manifest) => {
+      manifest.error_codes = [
+        { namespace: "LedgerError", name: "Denied", code: 7 },
+        { namespace: "LedgerError", name: "Missing", code: 7 },
+      ];
+    }),
+    /duplicate error path or code/u,
+  );
+});
+
+test("compiler adapters require checksummed canonical manifest hash literals", async () => {
+  const compileManifestHash = (mutate) => {
+    const response = structuredClone(SERVICE_SUCCESS);
+    const manifest = JSON.parse(response.output.manifestJson);
+    mutate(manifest);
+    response.output.manifestJson = JSON.stringify(manifest);
+    return compileKotodamaWithNativeBinding(
+      { async compileKotodama() { return response; } },
+      "seiyaku Demo {}",
+    );
+  };
+
+  await assert.rejects(
+    compileManifestHash((manifest) => {
+      manifest.code_hash = manifest.code_hash.toLowerCase();
+    }),
+    /invalid or noncanonical manifest code_hash/u,
+  );
+  await assert.rejects(
+    compileManifestHash((manifest) => {
+      manifest.code_hash = `${manifest.code_hash.slice(0, -4)}0000`;
+    }),
+    /invalid manifest code_hash checksum/u,
+  );
+  await assert.rejects(
+    compileManifestHash((manifest) => {
+      manifest.abi_hash = `hash:${SERVICE_ABI_HASH.toUpperCase()}`;
+    }),
+    /invalid or noncanonical manifest abi_hash/u,
+  );
+  const evenMarker = structuredClone(SERVICE_SUCCESS);
+  const evenMarkerManifest = JSON.parse(evenMarker.output.manifestJson);
+  evenMarkerManifest.abi_hash = canonicalHashLiteral("22".repeat(32));
+  evenMarker.output.manifestJson = JSON.stringify(evenMarkerManifest);
+  evenMarker.output.abiHash = "22".repeat(32);
+  await assert.rejects(
+    compileKotodamaWithNativeBinding(
+      { async compileKotodama() { return evenMarker; } },
+      "seiyaku Demo {}",
+    ),
+    /invalid abiHash marker bit/u,
   );
 });
 

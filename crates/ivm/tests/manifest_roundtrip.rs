@@ -4,7 +4,7 @@ use iroha_data_model::smart_contract::manifest::{AccessSetHints, ContractManifes
 #[test]
 fn contract_manifest_roundtrip_norito() {
     let manifest = ContractManifest {
-        contract_name: None,
+        seiyaku_name: None,
         code_hash: Some(Hash::new(b"code-hash")),
         abi_hash: Some(Hash::new(b"abi-hash")),
         compiler_fingerprint: Some("kotodama-0.1.0".to_string()),

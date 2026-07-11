@@ -7,6 +7,7 @@ use ivm::{
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{MockWorldStateView, PermissionToken, WsvHost},
 };
+mod common;
 
 const TEST_ACCOUNT_LITERAL: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 const TEST_CALLER_PUBLIC_KEY: &str =
@@ -32,12 +33,12 @@ fn kotodama_create_and_grant_role_enables_mint() {
         seiyaku RoleBootstrap {
         kotoage fn main() authorize("ManageRoles") {
           // Bootstrap the asset definition used by the role permission.
-          ledger::asset::register(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "ROSE", 0, 1);
+          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", scale: 0, mintable: 1);
           // Create role with mint permission and grant it to the caller.
           ledger::role::create(Name::parse("minter"), Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           ledger::role::grant(context::authority(), Name::parse("minter"));
           // Mint using role permission
-          ledger::asset::mint(context::authority(), AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), Amount::from_i64(1));
+          ledger::asset::mint(account: context::authority(), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: Amount::from_i64(1));
         }
         }
     "#;
@@ -51,6 +52,7 @@ fn kotodama_create_and_grant_role_enables_mint() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("program should execute with role-created permissions");
 }
@@ -83,6 +85,7 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("grant_role should accept runtime account arguments");
 }
@@ -111,6 +114,7 @@ fn kotodama_grant_permission_accepts_runtime_account_argument() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("grant_permission should accept runtime account arguments");
 }
@@ -141,6 +145,7 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("runtime account arguments must survive intervening syscalls");
 }
@@ -149,9 +154,9 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
 fn kotodama_authority_matches_domainless_account_literal() {
     let src = r#"
         seiyaku AuthorityIdentity {
-        view fn main() {
+        view fn main() -> bool {
           let who = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-          test::assert(context::authority() == who, "authority should normalize to domainless subject");
+          return context::authority() == who;
         }
         }
     "#;
@@ -163,6 +168,8 @@ fn kotodama_authority_matches_domainless_account_literal() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("context::authority() should match the domainless account literal");
+    assert_eq!(vm.register(10), 1);
 }

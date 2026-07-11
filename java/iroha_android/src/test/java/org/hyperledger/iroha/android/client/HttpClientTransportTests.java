@@ -2597,7 +2597,7 @@ public final class HttpClientTransportTests {
                     + "\"contract_alias\":\"router::universal\","
                     + "\"contract_address\":\"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7\","
                     + "\"previous_contract_address\":null,"
-                    + "\"upgraded\":false,"
+                    + "\"kaizen\":false,"
                     + "\"dataspace\":\"router\","
                     + "\"deploy_nonce\":9,"
                     + "\"tx_hash_hex\":\""
@@ -2649,6 +2649,7 @@ public final class HttpClientTransportTests {
     assert "mock-bundle-digest".equals(parsed.bundleDigest()) : "Bundle digest mismatch";
     assert "router::universal".equals(parsed.contracts().get(0).contractAlias())
         : "Contract alias mismatch";
+    assert !parsed.contracts().get(0).kaizen() : "Kaizen status mismatch";
     assert "router".equals(parsed.contracts().get(0).dataspace()) : "Dataspace mismatch";
     assert Long.valueOf(9L).equals(parsed.contracts().get(0).deployNonce())
         : "Deploy nonce mismatch";

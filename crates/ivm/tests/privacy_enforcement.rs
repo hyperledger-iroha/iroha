@@ -1,5 +1,7 @@
 //! Privacy-tag enforcement tests for ZK execution.
 
+mod common;
+
 use iroha_crypto::Hash;
 use ivm::{
     IVM, Instruction, Memory, ProgramMetadata, VMError, encoding, host::DefaultHost, instruction,
@@ -49,6 +51,49 @@ fn branch_on_private_fails() {
         offset: 1,
     });
     assert!(matches!(res, Err(VMError::PrivacyViolation)));
+}
+
+#[test]
+fn escrow_and_merkle_host_boundaries_reject_private_secondary_arguments() {
+    for (syscall, private_register) in [
+        (syscalls::SYSCALL_ESCROW_OPEN_OFFER, 11),
+        (syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE, 12),
+        (syscalls::SYSCALL_GET_MERKLE_PATH, 11),
+    ] {
+        let mut vm = IVM::new(10_000);
+        vm.load_program(&raw_zk_program(&[scall(syscall)]))
+            .expect("load ZK syscall fixture");
+        vm.set_host(DefaultHost::new());
+        vm.set_register(private_register, 7);
+        vm.registers.set_tag(private_register, true);
+
+        assert_eq!(
+            vm.run(),
+            Err(VMError::PrivacyViolation),
+            "syscall {syscall:#x} accepted private r{private_register} across the public host boundary"
+        );
+    }
+}
+
+#[test]
+fn single_argument_anonymous_escrow_calls_ignore_unrelated_private_registers() {
+    for syscall in [
+        syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER,
+        syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
+    ] {
+        let mut vm = IVM::new(10_000);
+        vm.load_program(&raw_zk_program(&[scall(syscall)]))
+            .expect("load ZK syscall fixture");
+        vm.set_host(DefaultHost::new());
+        vm.set_register(11, 7);
+        vm.registers.set_tag(11, true);
+
+        assert_ne!(
+            vm.run(),
+            Err(VMError::PrivacyViolation),
+            "single-argument syscall {syscall:#x} treated unrelated private r11 as public input"
+        );
+    }
 }
 
 #[test]
@@ -395,6 +440,44 @@ fn valcom_declassifies_matching_private_operands() {
 
     assert_eq!(vm.register(3), pedersen_commit_truncated(7, 11));
     assert!(!vm.registers.tag(3));
+}
+
+#[test]
+fn compiled_secret_commitment_executes_end_to_end() {
+    let source = r#"
+        seiyaku Privacy {
+            kotoage fn commitment() -> i64 authorize("CreateCommitment") {
+                let value: Secret<i64> = crypto::private_input(0);
+                let blinding: Secret<i64> = crypto::private_input(1);
+                return crypto::valcom(left: value, right: blinding);
+            }
+        }
+    "#;
+    let artifact =
+        ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+            force_zk: true,
+            ..ivm::kotodama::compiler::CompilerOptions::default()
+        })
+        .compile_source(source)
+        .expect("compile a source-level Secret<T> commitment");
+    let metadata = ProgramMetadata::parse(&artifact).expect("parse compiled artifact");
+    assert_ne!(
+        metadata.mode & ivm::ivm_mode::ZK,
+        0,
+        "Secret<T> artifacts must bind ZK execution mode"
+    );
+
+    let mut vm = IVM::new(1_000_000);
+    vm.set_host(DefaultHost::with_private_inputs(vec![7, 11]));
+    vm.load_program(&artifact).expect("load compiled artifact");
+    common::select_kotodama_entrypoint(&mut vm, &artifact, "commitment");
+    vm.run().expect("execute approved commitment");
+
+    assert_eq!(vm.register(10), pedersen_commit_truncated(7, 11));
+    assert!(
+        !vm.registers.tag(10),
+        "the approved commitment must be the explicit declassification boundary"
+    );
 }
 
 #[test]

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity ^0.7.4;
+pragma solidity 0.8.24;
 
 import "./ISccpMessageVerifier.sol";
 import "./SccpExactTransferCodec.sol";
@@ -13,11 +13,33 @@ interface ITairaXorExactEvmToken {
 /**
  * @title TairaXorExactEvmSccpBridge
  * @dev Shared implementation for the concrete Ethereum and BSC XOR routes.
- * The constructor accepts only a closed SCCP network profile and verifies the
- * executing chain id. There is no owner, arbitrary digest submission, mutable
+ * The shared base validates an immutable token plus a closed SCCP network
+ * profile and verifies the executing chain id. Concrete production wrappers
+ * create the token in their own constructor expression, making token and route
+ * deployment atomic. There is no owner, arbitrary digest submission, mutable
  * route, configurable asset, signer committee, or proof bypass.
  */
 abstract contract TairaXorExactEvmSccpBridge {
+    struct VerifierPolicyV1 {
+        address verifierAddress;
+        bytes32 verifierCodeHash;
+        bytes32 verifierKeyHash;
+        bytes32 semanticProofProfileHash;
+        bytes32 soraFinalityAnchorHash;
+    }
+
+    struct RouteDeploymentV1 {
+        address tokenAddress;
+        bytes32 tokenCodeHash;
+        VerifierPolicyV1 verifierPolicy;
+        uint32 externalDomain;
+        uint8 networkProfile;
+        uint32 routeRevision;
+        uint256 externalChainId;
+        bytes32 sourceLaneHash;
+        bytes32 destinationLaneHash;
+    }
+
     uint32 internal constant DOMAIN_SORA = 0;
     uint32 internal constant DOMAIN_ETHEREUM = 1;
     uint32 internal constant DOMAIN_BSC = 2;
@@ -33,7 +55,6 @@ abstract contract TairaXorExactEvmSccpBridge {
     bytes32 private constant ROUTE_CONFIG_SEPARATOR =
         keccak256("sccp:concrete-route-config:v1");
     bytes32 private constant VERIFIER_BACKEND_HASH = keccak256("evm-groth16-bn254-v1");
-    bytes32 private constant PROOF_FAMILY_HASH = keccak256("stark-fri-v1");
     bytes32 private constant EMPTY_CODE_HASH = keccak256("");
 
     ITairaXorExactEvmToken public immutable token;
@@ -80,32 +101,38 @@ abstract contract TairaXorExactEvmSccpBridge {
         reentrancyState = 1;
     }
 
+    modifier onExpectedChain() {
+        require(_chainId() == externalChainId, "Wrong EVM chain id");
+        _;
+    }
+
     constructor(
         address tokenAddress,
-        address verifierAddress,
-        bytes32 expectedVerifierCodeHash,
-        bytes32 expectedVerifierKeyHash,
-        bytes32 expectedSemanticProofProfileHash,
-        bytes32 expectedSoraFinalityAnchorHash,
+        VerifierPolicyV1 memory configuredVerifierPolicy,
         uint32 configuredExternalDomain,
         uint8 configuredNetworkProfile,
         uint32 configuredRouteRevision
     ) {
-        require(tokenAddress != address(0) && verifierAddress != address(0), "Zero bridge address");
-        require(tokenAddress != verifierAddress, "Bridge roles must differ");
+        require(
+            tokenAddress != address(0) && configuredVerifierPolicy.verifierAddress != address(0),
+            "Zero bridge address"
+        );
+        require(tokenAddress != configuredVerifierPolicy.verifierAddress,
+            "Bridge roles must differ");
         require(_profileDomain(configuredNetworkProfile) == configuredExternalDomain,
             "Profile/domain mismatch");
         require(configuredRouteRevision != 0, "Route revision is required");
         require(
-            expectedSemanticProofProfileHash != bytes32(0),
+            configuredVerifierPolicy.semanticProofProfileHash != bytes32(0),
             "Semantic proof profile hash is required"
         );
         require(
-            expectedSoraFinalityAnchorHash != bytes32(0),
+            configuredVerifierPolicy.soraFinalityAnchorHash != bytes32(0),
             "SORA finality anchor hash is required"
         );
         require(
-            expectedSemanticProofProfileHash != expectedSoraFinalityAnchorHash,
+            configuredVerifierPolicy.semanticProofProfileHash !=
+                configuredVerifierPolicy.soraFinalityAnchorHash,
             "Semantic profile and finality anchor must differ"
         );
         uint256 expectedChainId = _profileChainId(configuredNetworkProfile);
@@ -116,22 +143,8 @@ abstract contract TairaXorExactEvmSccpBridge {
         bytes32 actualTokenCodeHash = _codeHash(tokenAddress);
         require(actualTokenCodeHash != bytes32(0) && actualTokenCodeHash != EMPTY_CODE_HASH,
             "Token contract is required");
-        bytes32 actualVerifierCodeHash = _validatedVerifierCodeHash(
-            verifierAddress,
-            expectedVerifierCodeHash,
-            expectedVerifierKeyHash,
-            expectedSemanticProofProfileHash,
-            expectedSoraFinalityAnchorHash
-        );
-        destinationBindingHash = _destinationBinding(
-            expectedChainId,
-            configuredExternalDomain,
-            verifierAddress,
-            actualVerifierCodeHash,
-            expectedVerifierKeyHash,
-            expectedSemanticProofProfileHash,
-            expectedSoraFinalityAnchorHash
-        );
+        _validateVerifierPolicy(configuredVerifierPolicy);
+        _requireDistinctDeploymentHashRoles(actualTokenCodeHash, configuredVerifierPolicy);
         bytes32 inboundLaneHash;
         bytes32 outboundLaneHash;
         {
@@ -145,41 +158,61 @@ abstract contract TairaXorExactEvmSccpBridge {
             );
         }
 
+        RouteDeploymentV1 memory deployment;
+        deployment.tokenAddress = tokenAddress;
+        deployment.tokenCodeHash = actualTokenCodeHash;
+        deployment.verifierPolicy = configuredVerifierPolicy;
+        deployment.externalDomain = configuredExternalDomain;
+        deployment.networkProfile = configuredNetworkProfile;
+        deployment.routeRevision = configuredRouteRevision;
+        deployment.externalChainId = expectedChainId;
+        deployment.sourceLaneHash = inboundLaneHash;
+        deployment.destinationLaneHash = outboundLaneHash;
+
         token = configuredToken;
-        verifier = ISccpMessageVerifier(verifierAddress);
+        verifier = ISccpMessageVerifier(configuredVerifierPolicy.verifierAddress);
         externalDomain = configuredExternalDomain;
         networkProfile = configuredNetworkProfile;
         routeRevision = configuredRouteRevision;
         externalChainId = expectedChainId;
         tokenCodeHash = actualTokenCodeHash;
-        verifierCodeHash = actualVerifierCodeHash;
-        verifierKeyHash = expectedVerifierKeyHash;
-        semanticProofProfileHash = expectedSemanticProofProfileHash;
-        soraFinalityAnchorHash = expectedSoraFinalityAnchorHash;
+        verifierCodeHash = configuredVerifierPolicy.verifierCodeHash;
+        verifierKeyHash = configuredVerifierPolicy.verifierKeyHash;
+        semanticProofProfileHash = configuredVerifierPolicy.semanticProofProfileHash;
+        soraFinalityAnchorHash = configuredVerifierPolicy.soraFinalityAnchorHash;
         sourceLaneHash = inboundLaneHash;
         destinationLaneHash = outboundLaneHash;
+        destinationBindingHash = _destinationBinding(deployment);
+        routeConfigHash = _routeConfigurationHash(deployment);
+    }
+
+    function _routeConfigurationHash(RouteDeploymentV1 memory deployment)
+        private
+        pure
+        returns (bytes32)
+    {
         bytes32 deploymentConfigHash = keccak256(abi.encode(
-            tokenAddress,
-            actualTokenCodeHash,
-            verifierAddress,
-            actualVerifierCodeHash,
-            expectedVerifierKeyHash,
-            expectedSemanticProofProfileHash,
-            expectedSoraFinalityAnchorHash
+            deployment.tokenAddress,
+            deployment.tokenCodeHash,
+            deployment.verifierPolicy.verifierAddress,
+            deployment.verifierPolicy.verifierCodeHash,
+            deployment.verifierPolicy.verifierKeyHash,
+            deployment.verifierPolicy.semanticProofProfileHash,
+            deployment.verifierPolicy.soraFinalityAnchorHash
         ));
         bytes32 assetRouteConfigHash = keccak256(abi.encode(
             keccak256(ASSET_ID),
-            keccak256(_routeIdForDomain(configuredExternalDomain)),
-            configuredRouteRevision,
+            keccak256(_routeIdForDomain(deployment.externalDomain)),
+            deployment.routeRevision,
             TAIRA_TO_TOKEN_SCALE
         ));
-        routeConfigHash = keccak256(abi.encode(
+        return keccak256(abi.encode(
             ROUTE_CONFIG_SEPARATOR,
-            configuredExternalDomain,
-            configuredNetworkProfile,
-            expectedChainId,
-            inboundLaneHash,
-            outboundLaneHash,
+            deployment.externalDomain,
+            deployment.networkProfile,
+            deployment.externalChainId,
+            deployment.sourceLaneHash,
+            deployment.destinationLaneHash,
             deploymentConfigHash,
             assetRouteConfigHash
         ));
@@ -188,11 +221,15 @@ abstract contract TairaXorExactEvmSccpBridge {
     /** Burn wrapped XOR and emit one exact external-EVM-to-Taira statement. */
     function transferToTaira(bytes calldata tairaRecipient, uint256 tokenAmount)
         external
+        onExpectedChain
         nonReentrant
         returns (bytes32 messageId)
     {
         bytes memory recipient = tairaRecipient;
-        require(SccpExactTransferCodec.isCanonicalText(recipient), "Noncanonical Taira recipient");
+        require(
+            SccpExactTransferCodec.isCanonicalTairaRecipient(recipient),
+            "Noncanonical Taira recipient"
+        );
         require(tokenAmount != 0 && tokenAmount % TAIRA_TO_TOKEN_SCALE == 0,
             "Amount is not aligned to Taira scale");
         uint256 tairaAmount = tokenAmount / TAIRA_TO_TOKEN_SCALE;
@@ -244,7 +281,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         bytes32[6] calldata publicInputs,
         bytes32 statementHash,
         bytes calldata canonicalPayloadBytes
-    ) external nonReentrant returns (bytes32 messageId) {
+    ) external onExpectedChain nonReentrant returns (bytes32 messageId) {
         require(statementHash != bytes32(0), "Statement hash is required");
         require(publicInputs[2] == bytes32(uint256(externalDomain)), "Unexpected target domain");
         require(_codeHash(address(token)) == tokenCodeHash, "Token code changed");
@@ -258,7 +295,10 @@ abstract contract TairaXorExactEvmSccpBridge {
             proofBytes, publicInputs, statementHash, expectedMessageId
         );
         require(!usedDestinationMessages[messageId], "Destination message already used");
-        require(tairaAmount <= uint256(-1) / TAIRA_TO_TOKEN_SCALE, "Token amount overflow");
+        require(
+            tairaAmount <= type(uint256).max / TAIRA_TO_TOKEN_SCALE,
+            "Token amount overflow"
+        );
         uint256 tokenAmount = tairaAmount * TAIRA_TO_TOKEN_SCALE;
 
         usedDestinationMessages[messageId] = true;
@@ -286,28 +326,23 @@ abstract contract TairaXorExactEvmSccpBridge {
         return _destinationMessageId(payload);
     }
 
-    function _destinationBinding(
-        uint256 chainId,
-        uint32 counterpartyDomain,
-        address verifierAddress,
-        bytes32 codeHash,
-        bytes32 keyHash,
-        bytes32 semanticProfileHash,
-        bytes32 finalityAnchorHash
-    ) private view returns (bytes32) {
+    function _destinationBinding(RouteDeploymentV1 memory deployment)
+        private
+        view
+        returns (bytes32)
+    {
         return keccak256(abi.encode(
             DESTINATION_BINDING_SEPARATOR,
             VERIFIER_BACKEND_HASH,
-            PROOF_FAMILY_HASH,
-            bytes32(chainId),
+            bytes32(deployment.externalChainId),
             uint256(DOMAIN_SORA),
-            uint256(counterpartyDomain),
-            verifierAddress,
+            uint256(deployment.externalDomain),
+            deployment.verifierPolicy.verifierAddress,
             address(this),
-            codeHash,
-            keyHash,
-            semanticProfileHash,
-            finalityAnchorHash
+            deployment.verifierPolicy.verifierCodeHash,
+            deployment.verifierPolicy.verifierKeyHash,
+            deployment.verifierPolicy.semanticProofProfileHash,
+            deployment.verifierPolicy.soraFinalityAnchorHash
         ));
     }
 
@@ -366,7 +401,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         require(amount != 0, "Zero amount");
         require(_readU8(payload, offset++) == CODEC_TEXT, "Wrong sender codec");
         (start, length, offset) = _readVec(payload, offset);
-        require(_canonicalTextRange(payload, start, length), "Noncanonical sender");
+        require(_canonicalTairaSenderRange(payload, start, length), "Noncanonical sender");
         require(_readU8(payload, offset++) == CODEC_EVM20, "Wrong recipient codec");
         (start, length, offset) = _readVec(payload, offset);
         require(length == 20, "Wrong recipient length");
@@ -412,26 +447,41 @@ abstract contract TairaXorExactEvmSccpBridge {
         revert("Unsupported EVM profile");
     }
 
-    function _validatedVerifierCodeHash(
-        address verifierAddress,
-        bytes32 expectedCodeHash,
-        bytes32 expectedKeyHash,
-        bytes32 expectedSemanticProfileHash,
-        bytes32 expectedFinalityAnchorHash
-    ) private view returns (bytes32 actualCodeHash) {
-        actualCodeHash = _codeHash(verifierAddress);
-        require(expectedCodeHash != bytes32(0) && actualCodeHash == expectedCodeHash
+    function _validateVerifierPolicy(VerifierPolicyV1 memory policy) private view {
+        bytes32 actualCodeHash = _codeHash(policy.verifierAddress);
+        require(policy.verifierCodeHash != bytes32(0)
+            && actualCodeHash == policy.verifierCodeHash
             && actualCodeHash != EMPTY_CODE_HASH, "Verifier code hash mismatch");
-        require(expectedKeyHash != bytes32(0)
-            && _verifyingKeyHash(verifierAddress) == expectedKeyHash,
+        require(policy.verifierKeyHash != bytes32(0)
+            && _verifyingKeyHash(policy.verifierAddress) == policy.verifierKeyHash,
             "Verifier key hash mismatch");
         require(
-            _semanticProofProfileHash(verifierAddress) == expectedSemanticProfileHash,
+            _semanticProofProfileHash(policy.verifierAddress) ==
+                policy.semanticProofProfileHash,
             "Semantic proof profile hash mismatch"
         );
         require(
-            _soraFinalityAnchorHash(verifierAddress) == expectedFinalityAnchorHash,
+            _soraFinalityAnchorHash(policy.verifierAddress) == policy.soraFinalityAnchorHash,
             "SORA finality anchor hash mismatch"
+        );
+    }
+
+    function _requireDistinctDeploymentHashRoles(
+        bytes32 configuredTokenCodeHash,
+        VerifierPolicyV1 memory policy
+    ) private pure {
+        require(
+            configuredTokenCodeHash != policy.verifierCodeHash
+                && configuredTokenCodeHash != policy.verifierKeyHash
+                && configuredTokenCodeHash != policy.semanticProofProfileHash
+                && configuredTokenCodeHash != policy.soraFinalityAnchorHash
+                && policy.verifierCodeHash != policy.verifierKeyHash
+                && policy.verifierCodeHash != policy.semanticProofProfileHash
+                && policy.verifierCodeHash != policy.soraFinalityAnchorHash
+                && policy.verifierKeyHash != policy.semanticProofProfileHash
+                && policy.verifierKeyHash != policy.soraFinalityAnchorHash
+                && policy.semanticProofProfileHash != policy.soraFinalityAnchorHash,
+            "Deployment hash roles must differ"
         );
     }
 
@@ -473,18 +523,13 @@ abstract contract TairaXorExactEvmSccpBridge {
         return true;
     }
 
-    function _canonicalTextRange(bytes memory value, uint256 start, uint256 length)
+    function _canonicalTairaSenderRange(bytes memory value, uint256 start, uint256 length)
         private pure returns (bool)
     {
-        if (length == 0 || length > 256) return false;
-        for (uint256 i = 0; i < length; i++) {
-            uint8 character = uint8(value[start + i]);
-            if (character < 0x21 || character > 0x7e) return false;
-        }
-        return true;
+        return SccpExactTransferCodec.isCanonicalTairaAccountRange(value, start, length);
     }
 
-    function _chainId() private pure returns (uint256 value) {
+    function _chainId() private view returns (uint256 value) {
         assembly { value := chainid() }
     }
 

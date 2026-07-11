@@ -14,18 +14,42 @@ seiyaku DexSimple {
     }
 
     // Perform a swap by moving tokens between trader and a pool account.
-    // In a full implementation, `pool_account` would be derived from contract state.
-    kotoage fn swap(trader: AccountId, pool_account: AccountId, input_asset: AssetDefinitionId, output_asset: AssetDefinitionId, amount_in: Amount, reserve_in: Amount, reserve_out: Amount) -> Amount authorize("Admin") {
-        let out = quote_sell(reserve_in, reserve_out, amount_in);
+    // In a full implementation, `pool_account` would be derived from seiyaku state.
+    kotoage fn swap(
+        trader: AccountId,
+        pool_account: AccountId,
+        input_asset: AssetDefinitionId,
+        output_asset: AssetDefinitionId,
+        amount_in: Amount,
+        reserve_in: Amount,
+        reserve_out: Amount,
+    ) -> Amount authorize("Admin") {
+        let out = quote_sell(
+            reserve_in: reserve_in,
+            reserve_out: reserve_out,
+            amount_in: amount_in,
+        );
         // move input from trader to pool, and output from pool to trader
-        ledger::asset::transfer(trader, pool_account, input_asset, amount_in, DataSpaceId::parse("0"));
-        ledger::asset::transfer(pool_account, trader, output_asset, out, DataSpaceId::parse("0"));
+        ledger::asset::transfer(
+            source: trader,
+            destination: pool_account,
+            asset_definition: input_asset,
+            amount: amount_in,
+            dataspace: DataSpaceId::parse("0"),
+        );
+        ledger::asset::transfer(
+            source: pool_account,
+            destination: trader,
+            asset_definition: output_asset,
+            amount: out,
+            dataspace: DataSpaceId::parse("0"),
+        );
         return out;
     }
 
     // Deterministic order id using a Poseidon hash of (trader, salt).
     kotoage fn order_id(trader: i64, salt: i64) -> i64 authorize("Entry") {
-        let h = crypto::poseidon2(trader, salt);
+        let h = crypto::poseidon2(left: trader, right: salt);
         return h;
     }
 }

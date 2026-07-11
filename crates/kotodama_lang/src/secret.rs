@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 
 use crate::{
-    ast::{FunctionKind, FunctionVisibility},
+    ast::FunctionKind,
     builtins::{Builtin, BuiltinAccess},
     semantic::{
         ExprKind, SemanticError, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem,
@@ -17,19 +17,20 @@ use crate::{
     },
 };
 
-fn error(code: &str, message: impl AsRef<str>) -> SemanticError {
+fn error(code: &'static str, message: impl Into<String>) -> SemanticError {
     SemanticError {
-        message: format!("{code}: {}", message.as_ref()),
+        code,
+        message: message.into(),
     }
 }
 
 /// Return whether a type contains confidential data, including through a
-/// tuple, map, or user-defined product type.
+/// tuple, list, map, or user-defined product type.
 pub(crate) fn type_contains_secret(ty: &Type) -> bool {
     match ty {
         Type::Secret(_) => true,
         Type::StateMap(key, value) => type_contains_secret(key) || type_contains_secret(value),
-        Type::Option(inner) => type_contains_secret(inner),
+        Type::Option(inner) | Type::List(inner, _) => type_contains_secret(inner),
         Type::Result(ok, err) => type_contains_secret(ok) || type_contains_secret(err),
         Type::Tuple(items) => items.iter().any(type_contains_secret),
         Type::Struct { fields, .. } => fields
@@ -85,7 +86,7 @@ pub(crate) fn reject_secret_state_value(expr: &TypedExpr) -> Result<(), Semantic
     if expression_contains_secret(expr) {
         return Err(error(
             "E_SECRET_STATE_WRITE",
-            "Secret<T> cannot be persisted in contract state",
+            "Secret<T> cannot be persisted in seiyaku state",
         ));
     }
     Ok(())
@@ -239,11 +240,7 @@ pub(crate) fn validate_program(
 }
 
 fn is_runtime_entrypoint(function: &TypedFunction) -> bool {
-    function.modifiers.visibility == FunctionVisibility::Public
-        || matches!(
-            function.modifiers.kind,
-            FunctionKind::View | FunctionKind::Init | FunctionKind::Upgrade
-        )
+    !matches!(function.modifiers.kind, FunctionKind::Private)
 }
 
 fn validate_function(
@@ -286,6 +283,15 @@ fn validate_block(
     for statement in &block.statements {
         validate_statement(statement, public_return, functions)?;
     }
+    if let Some(tail) = &block.tail {
+        validate_expr(tail, functions)?;
+        if public_return && type_contains_secret(&tail.ty) {
+            return Err(error(
+                "E_SECRET_PUBLIC_RETURN",
+                "a public tail expression cannot return Secret<T>; return an approved commitment or proof result",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -294,7 +300,7 @@ fn validate_statement(
     public_return: bool,
     functions: &HashSet<String>,
 ) -> Result<(), SemanticError> {
-    match statement {
+    match statement.kind() {
         TypedStatement::Let { value, .. } | TypedStatement::Expr(value) => {
             validate_expr(value, functions)
         }
@@ -316,6 +322,20 @@ fn validate_statement(
         } => {
             reject_secret_control_flow(cond)?;
             validate_expr(cond, functions)?;
+            validate_block(then_branch, public_return, functions)?;
+            if let Some(branch) = else_branch {
+                validate_block(branch, public_return, functions)?;
+            }
+            Ok(())
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            reject_secret_control_flow(value)?;
+            validate_expr(value, functions)?;
             validate_block(then_branch, public_return, functions)?;
             if let Some(branch) = else_branch {
                 validate_block(branch, public_return, functions)?;
@@ -367,7 +387,7 @@ fn validate_statement(
 }
 
 fn validate_expr(expr: &TypedExpr, functions: &HashSet<String>) -> Result<(), SemanticError> {
-    match &expr.expr {
+    match expr.kind() {
         ExprKind::Binary { left, right, .. } => {
             reject_secret_ordinary_operation(&[left, right])?;
             validate_expr(left, functions)?;
@@ -376,6 +396,13 @@ fn validate_expr(expr: &TypedExpr, functions: &HashSet<String>) -> Result<(), Se
         ExprKind::Unary { expr: inner, .. } | ExprKind::NumericCast { expr: inner } => {
             reject_secret_ordinary_operation(&[inner])?;
             validate_expr(inner, functions)
+        }
+        ExprKind::OptionSome { value }
+        | ExprKind::ResultOk { value }
+        | ExprKind::ResultErr { error: value } => validate_expr(value, functions),
+        ExprKind::Propagate { value } => {
+            reject_secret_control_flow(value)?;
+            validate_expr(value, functions)
         }
         ExprKind::Conditional {
             cond,
@@ -387,7 +414,36 @@ fn validate_expr(expr: &TypedExpr, functions: &HashSet<String>) -> Result<(), Se
             validate_expr(then_expr, functions)?;
             validate_expr(else_expr, functions)
         }
-        ExprKind::Call { name, args } => {
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            reject_secret_control_flow(condition)?;
+            validate_expr(condition, functions)?;
+            validate_block(then_branch, false, functions)?;
+            validate_block(else_branch, false, functions)
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            reject_secret_control_flow(value)?;
+            validate_expr(value, functions)?;
+            validate_block(then_branch, false, functions)?;
+            validate_block(else_branch, false, functions)
+        }
+        ExprKind::Match { value, arms } => {
+            reject_secret_control_flow(value)?;
+            validate_expr(value, functions)?;
+            for arm in arms {
+                validate_block(&arm.body, false, functions)?;
+            }
+            Ok(())
+        }
+        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
             for arg in args {
                 validate_expr(arg, functions)?;
             }
@@ -404,9 +460,41 @@ fn validate_expr(expr: &TypedExpr, functions: &HashSet<String>) -> Result<(), Se
                 ))
             }
         }
-        ExprKind::Tuple(items) => {
-            // Packing is allowed only because the tuple type recursively retains
+        ExprKind::Tuple(items) | ExprKind::List(items) => {
+            // Packing is allowed only because the aggregate type recursively retains
             // Secret<T>; all externally visible sinks inspect nested types.
+            for item in items {
+                validate_expr(item, functions)?;
+            }
+            Ok(())
+        }
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            validate_expr(source, functions)?;
+            validate_expr(expression, functions)?;
+            if let Some(condition) = condition {
+                reject_secret_control_flow(condition)?;
+                validate_expr(condition, functions)?;
+            }
+            Ok(())
+        }
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, value) in fields {
+                validate_expr(value, functions)?;
+            }
+            Ok(())
+        }
+        ExprKind::JsonObject(entries) => {
+            for (_, value) in entries {
+                validate_expr(value, functions)?;
+            }
+            Ok(())
+        }
+        ExprKind::JsonArray(items) => {
             for item in items {
                 validate_expr(item, functions)?;
             }
@@ -420,6 +508,8 @@ fn validate_expr(expr: &TypedExpr, functions: &HashSet<String>) -> Result<(), Se
         }
         ExprKind::Number(_)
         | ExprKind::Decimal(_)
+        | ExprKind::AmountLiteral { .. }
+        | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
@@ -431,13 +521,16 @@ fn expression_contains_secret(expr: &TypedExpr) -> bool {
     if type_contains_secret(&expr.ty) {
         return true;
     }
-    match &expr.expr {
+    match expr.kind() {
         ExprKind::Binary { left, right, .. } => {
             expression_contains_secret(left) || expression_contains_secret(right)
         }
-        ExprKind::Unary { expr, .. } | ExprKind::NumericCast { expr } => {
-            expression_contains_secret(expr)
-        }
+        ExprKind::Unary { expr, .. }
+        | ExprKind::NumericCast { expr }
+        | ExprKind::OptionSome { value: expr }
+        | ExprKind::ResultOk { value: expr }
+        | ExprKind::ResultErr { error: expr }
+        | ExprKind::Propagate { value: expr } => expression_contains_secret(expr),
         ExprKind::Conditional {
             cond,
             then_expr,
@@ -447,7 +540,30 @@ fn expression_contains_secret(expr: &TypedExpr) -> bool {
                 || expression_contains_secret(then_expr)
                 || expression_contains_secret(else_expr)
         }
-        ExprKind::Call { name, args } => {
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expression_contains_secret(condition)
+                || block_contains_secret(then_branch)
+                || block_contains_secret(else_branch)
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            expression_contains_secret(value)
+                || block_contains_secret(then_branch)
+                || block_contains_secret(else_branch)
+        }
+        ExprKind::Match { value, arms } => {
+            expression_contains_secret(value)
+                || arms.iter().any(|arm| block_contains_secret(&arm.body))
+        }
+        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
             match Builtin::from_name(name) {
                 // Approved cryptographic calls explicitly declassify to their
                 // public result type.
@@ -463,13 +579,34 @@ fn expression_contains_secret(expr: &TypedExpr) -> bool {
                 None => false,
             }
         }
-        ExprKind::Tuple(items) => items.iter().any(expression_contains_secret),
+        ExprKind::Tuple(items) | ExprKind::List(items) => {
+            items.iter().any(expression_contains_secret)
+        }
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            expression_contains_secret(source)
+                || expression_contains_secret(expression)
+                || condition.as_deref().is_some_and(expression_contains_secret)
+        }
+        ExprKind::StructLiteral { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| expression_contains_secret(value)),
+        ExprKind::JsonObject(entries) => entries
+            .iter()
+            .any(|(_, value)| expression_contains_secret(value)),
+        ExprKind::JsonArray(items) => items.iter().any(expression_contains_secret),
         ExprKind::Member { object, .. } => expression_contains_secret(object),
         ExprKind::Index { target, index } => {
             expression_contains_secret(target) || expression_contains_secret(index)
         }
         ExprKind::Number(_)
         | ExprKind::Decimal(_)
+        | ExprKind::AmountLiteral { .. }
+        | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
@@ -488,10 +625,14 @@ fn function_contains_secret(function: &TypedFunction) -> bool {
 
 fn block_contains_secret(block: &TypedBlock) -> bool {
     block.statements.iter().any(statement_contains_secret)
+        || block
+            .tail
+            .as_ref()
+            .is_some_and(|tail| expression_contains_secret(tail))
 }
 
 fn statement_contains_secret(statement: &TypedStatement) -> bool {
-    match statement {
+    match statement.kind() {
         TypedStatement::Let { value, .. } | TypedStatement::Expr(value) => {
             expression_contains_secret(value)
         }
@@ -503,6 +644,16 @@ fn statement_contains_secret(statement: &TypedStatement) -> bool {
             else_branch,
         } => {
             expression_contains_secret(cond)
+                || block_contains_secret(then_branch)
+                || else_branch.as_ref().is_some_and(block_contains_secret)
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            expression_contains_secret(value)
                 || block_contains_secret(then_branch)
                 || else_branch.as_ref().is_some_and(block_contains_secret)
         }
@@ -536,15 +687,14 @@ fn statement_contains_secret(statement: &TypedStatement) -> bool {
 mod tests {
     use crate::{
         parser::parse_test_fragment as parse,
-        semantic::{SemanticContext, analyze},
+        semantic::{SemanticContext, SemanticError, Type, analyze},
     };
 
-    fn analyze_error(source: &str) -> String {
+    fn analyze_error(source: &str) -> SemanticError {
         let program = parse(source).expect("secret-flow fixture should parse");
         SemanticContext::with_zk_enabled(true)
             .analyze(&program)
             .expect_err("secret-flow fixture should fail semantic analysis")
-            .message
     }
 
     #[test]
@@ -554,7 +704,7 @@ mod tests {
                 fn commitment() -> i64 {
                     let value: Secret<i64> = crypto::private_input(0);
                     let blinding: Secret<i64> = crypto::private_input(1);
-                    return crypto::valcom(value, blinding);
+                    return crypto::valcom(left: value, right: blinding);
                 }
             }
         "#;
@@ -568,10 +718,17 @@ mod tests {
     fn secret_requires_zk_build_configuration() {
         let program = parse("fn keep(value: Secret<i64>) -> Secret<i64> { return value; }")
             .expect("secret-flow fixture should parse");
-        let error = analyze(&program)
-            .expect_err("ZK-disabled secret type must fail")
-            .message;
-        assert!(error.contains("E_SECRET_REQUIRES_ZK"), "{error}");
+        let error = analyze(&program).expect_err("ZK-disabled secret type must fail");
+        assert_eq!(error.code, "E_SECRET_REQUIRES_ZK");
+    }
+
+    #[test]
+    fn secret_detection_recurses_through_lists() {
+        let ty = Type::List(
+            Box::new(Type::Option(Box::new(Type::Secret(Box::new(Type::Int))))),
+            1,
+        );
+        assert!(super::type_contains_secret(&ty));
     }
 
     #[test]
@@ -585,7 +742,7 @@ mod tests {
                 }
             "#,
         );
-        assert!(error.contains("E_SECRET_PUBLIC_RETURN"), "{error}");
+        assert_eq!(error.code, "E_SECRET_PUBLIC_RETURN");
     }
 
     #[test]
@@ -602,7 +759,7 @@ mod tests {
                 }
             "#,
         );
-        assert!(error.contains("E_SECRET_ARITHMETIC"), "{error}");
+        assert_eq!(error.code, "E_SECRET_ARITHMETIC");
     }
 
     #[test]
@@ -614,7 +771,7 @@ mod tests {
                 }
             "#,
         );
-        assert!(log_error.contains("E_SECRET_LOG"), "{log_error}");
+        assert_eq!(log_error.code, "E_SECRET_LOG");
 
         let host_error = analyze_error(
             r#"
@@ -623,10 +780,7 @@ mod tests {
                 }
             "#,
         );
-        assert!(
-            host_error.contains("E_SECRET_NULLIFIER_DISCLOSURE"),
-            "{host_error}"
-        );
+        assert_eq!(host_error.code, "E_SECRET_NULLIFIER_DISCLOSURE");
     }
 
     #[test]
@@ -639,7 +793,7 @@ mod tests {
                 }
             "#,
         );
-        assert!(key_error.contains("E_SECRET_STATE_KEY"), "{key_error}");
+        assert_eq!(key_error.code, "E_SECRET_STATE_KEY");
 
         let value_error = analyze_error(
             r#"
@@ -649,10 +803,7 @@ mod tests {
                 }
             "#,
         );
-        assert!(
-            value_error.contains("E_SECRET_STATE_WRITE"),
-            "{value_error}"
-        );
+        assert_eq!(value_error.code, "E_SECRET_STATE_WRITE");
     }
 
     #[test]
@@ -661,29 +812,35 @@ mod tests {
             r#"
                 seiyaku Privacy {
                     fn weak_commitment() -> i64 {
-                        return crypto::poseidon2(crypto::private_input(0), 7);
+                        return crypto::poseidon2(
+                            left: crypto::private_input(0),
+                            right: 7,
+                        );
                     }
                 }
             "#,
         );
-        assert!(error.contains("E_SECRET_MIXED_COMMITMENT"), "{error}");
+        assert_eq!(error.code, "E_SECRET_MIXED_COMMITMENT");
     }
 
     #[test]
     fn flat_crypto_spellings_are_rejected() {
         for call in [
-            "poseidon2(1, 2)",
-            "poseidon6(1, 2, 3, 4, 5, 6)",
+            "poseidon2(left: 1, right: 2)",
+            "poseidon6(a: 1, b: 2, c: 3, d: 4, e: 5, f: 6)",
             "pubkgen(1)",
-            "valcom(1, 2)",
+            "valcom(left: 1, right: 2)",
             "use_nullifier(1)",
         ] {
             let source = format!("seiyaku Privacy {{ fn rejected() {{ let _value = {call}; }} }}");
             let error = analyze_error(&source);
+            assert_eq!(error.code, "E_NON_CANONICAL_BUILTIN", "{call}");
             assert!(
-                error.contains("legacy or non-canonical builtin spelling")
-                    && error.contains("crypto::"),
-                "{call}: {error}"
+                error
+                    .message
+                    .contains("legacy or non-canonical builtin spelling")
+                    && error.message.contains("crypto::"),
+                "{call}: {error:?}"
             );
         }
     }

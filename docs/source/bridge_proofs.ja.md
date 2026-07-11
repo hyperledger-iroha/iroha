@@ -2,65 +2,90 @@
 lang: ja
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: f3f6049cbf3aa135e35e4cf06967993c11c1c571ca97dd11c469142dd620be77
-source_last_modified: "2025-12-11T23:36:13.998930+00:00"
-translation_last_reviewed: 2026-06-21
+source_hash: 465d8cf704022986b169ab93133517428f8cf2ffe01a498cbda458f4a5b2e69b
+source_last_modified: "2026-07-11"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# Bridge proofs
+> このページは翻訳した要約であり、完全な翻訳ではありません。ガバナンス、
+> API、proof の意味論、リリース要件については、
+> [英語の正規ページ](bridge_proofs.md)が厳密な規範文書です。
 
-Bridge proof の提出は標準の命令パス (`SubmitBridgeProof`) を通過し、検証済みステータスで proof registry に保存されます。現在のサーフェスは ICS 形式の Merkle proof と、保持期間の固定と manifest バインディングを持つ transparent-ZK payload をカバーします。
+# SCCP V1 bridge proof — 要約
 
-## SCCP ローンチ範囲
+## 初回リリースの範囲
 
-現在の SCCP surface は Ethereum、BSC、Solana、TON、TRON に限定されます。
-Retired runtime-network families outside that launch scope are not supported for now.
-SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
-この文は現在リリースのサポート境界であり、延期された SCCP ローンチ作業ではありません。
-That exclusion is intentional current-launch scope, not a hidden compatibility lane.
-Do not track that family as remaining SCCP launch work in this cycle.
-このネットワーク family 向けの relayer adapter、route manifest、proof fixture、public discovery route は、現在の SCCP ローンチ範囲には含まれません。
+SCCP V1 は初回リリース用の closed protocol です。外部 source として
+サポートするのは `ethereum-mainnet`、`bsc-mainnet`、`tron-mainnet` のみで、
+SORA 側の destination は `sora-taira` だけです。Solana、TON、custom network、
+その他の SORA destination はサポートせず、安全側に倒して拒否します。
 
-## 受け入れルール
+このリリースで `SubmitBridgeProof` が受理するのは、型付きの
+`NativeProtocol` proof と `SccpDestination` proof だけです。汎用 `Ics` または
+`TransparentZk` の提出は利用できず、権威ある on-chain verifier が実装される
+までは拒否されます。
 
-- 範囲は順序付き/非空であり、`zk.bridge_proof_max_range_len` を満たすこと (0 で上限無効)。
-- 省略可能な高さウィンドウは古い/未来の証明を拒否する: `zk.bridge_proof_max_past_age_blocks` と `zk.bridge_proof_max_future_drift_blocks` は proof を取り込むブロック高に対して評価される (0 でガード無効)。
-- 同一 backend に対する既存の proof と重複できない (pinned proof は保持され、重複をブロックする)。
-- Manifest hash は非ゼロであること。payload は `zk.max_proof_size_bytes` でサイズ上限。
-- ICS payload は設定された Merkle 深度上限に従い、宣言された hash 関数で経路検証する。transparent payload は非空の backend ラベルを宣言する必要がある。
-- Pinned proofs は保持期間の pruning 対象外。unpinned proofs は `zk.proof_history_cap`/grace/batch のグローバル設定を引き続き尊重する。
+## 型付き registry と replay 防止
 
-## Torii API サーフェス
+`SccpRegistryV1` は lane に固定された型付き append-only registry です。
+各 lane が保持できる履歴は route revision が最大 64 件、native trust anchor が
+最大 4,096 件です。履歴を暗黙に削除することはなく、上限に達した後の追加は
+state を変更せず atomic に拒否されます。
 
-- `GET /v1/zk/proofs` と `GET /v1/zk/proofs/count` は bridge 対応のフィルタを受け付ける:
-  - `bridge_only=true` は bridge proof のみを返す。
-  - `bridge_pinned_only=true` は pinned bridge proof に限定する。
-  - `bridge_start_from_height` / `bridge_end_until_height` は bridge の範囲ウィンドウを制限する。
-- `GET /v1/zk/proof/{backend}/{hash}` は bridge メタデータ (範囲、manifest hash、payload 要約) と proof id/status/VK bindings を返す。
-- payload bytes を含む Norito の完全な proof レコードは `GET /v1/proofs/{proof_id}` で引き続き取得可能 (ノード外検証向け)。
+Anchor interval は認証済みの consensus 進行座標で測定します。Ethereum は
+finalized beacon slot、BSC と TRON は finalized native block height を使用します。
+古い anchor は successor checkpoint の境界を含めて有効で、最後の current anchor
+は終端が開いています。Terminal route の finality cutoff は、historical anchor の
+successor checkpoint と厳密に一致しなければなりません。
 
-## Bridge receipt イベント
+永続 inbound record は event/source finality height と、検証済みの
+`anchor_interval_height` を別々に保持します。Lane と anchor hash を key とする
+永続 high-water index により、すでに受理した座標より低い successor checkpoint を
+governance が選ぶことはできません。Snapshot hydration は永続 record から index を
+再計算して完全一致を要求し、欠落、古い値、不正形式、裏付けのない値を拒否します。
+消費済み message id も replay 防止のため永続化されます。
 
-Bridge lane は `RecordBridgeReceipt` 命令で型付き receipt を発行します。この命令を実行すると `BridgeReceipt` payload が記録され、イベントストリームに `DataEvent::Bridge(BridgeEvent::Emitted)` が発行され、従来のログ専用 stub を置き換えます。CLI の `iroha bridge emit-receipt` helper は型付き命令を送信し、インデクサが決定論的に receipt を消費できるようにします。
+## Single-pass 検証と work limit
 
-## 外部検証スケッチ (ICS)
+Destination proof と native proof は一度だけ構造化して一度だけ binding し、重い
+暗号処理を始める前に deterministic work を予約します。Destination path は BN254
+pairing-product と local BLS finality をそれぞれ一度だけ検証します。Native path は
+canonical shortest-prefix を要求し、上限は BSC が 1,004 headers、TRON が 54
+headers です。
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
+`[zk.sccp]` は、proof count/bytes、native headers/bytes、Ethereum light-client
+updates、secp256k1 recoveries、BLS aggregate checks/key contributions、BN254
+pairing checks に対し、ゼロではない transaction 単位と block 単位の上限を課します。
+これらの admission limit は consensus-bound です。すべての validator が config file
+で同じ値を使う必要があり、environment variable による override はありません。
 
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+初回リリースのデフォルト上限は次のとおりです。
+
+| Work dimension | Transaction | Block |
+|---|---:|---:|
+| proofs | 1 | 4 |
+| canonical proof bytes | 8 MiB | 32 MiB |
+| BSC/TRON continuation headers | 1,004 | 4,016 |
+| Ethereum light-client updates | 128 | 512 |
+| framed native-finality bytes | 8 MiB | 32 MiB |
+| secp256k1 recoveries | 1,005 | 4,020 |
+| BLS aggregate checks | 1,004 | 4,016 |
+| BLS key/contribution work items | 131,713 | 526,852 |
+| BN254 pairing-product checks | 1 | 4 |
+
+1 proof が含められる canonical bytes は最大 8 MiB です。破棄または拒否された
+transaction の予約済み work が block に漏れることはありません。
+
+## Torii と HTTP の上限
+
+Torii は SCCP endpoint ごとに JSON body 上限を設け、body の読み取り、メモリ確保、
+暗号検証より前に適用します。上限を超える `Content-Length` または chunked body は
+HTTP `413` で拒否されます。Client も decode 後の HTTP response を固定上限内で
+読み取るため、`Content-Length` が欠落または虚偽でも上限を回避できません。
+
+JSON、base64、Norito の入力はすべて canonical でなければなりません。Unknown field、
+duplicate key、不一致の network/route/anchor、replay、work quota 超過、検証失敗は、
+state を部分的に変更せず拒否されます。

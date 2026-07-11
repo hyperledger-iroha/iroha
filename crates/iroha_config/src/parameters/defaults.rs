@@ -2811,6 +2811,59 @@ pub mod accel {
 /// Zero-knowledge subsystem defaults used by Torii and the host runtime.
 pub mod zk {
 
+    /// SCCP proof-admission and deterministic verifier-work defaults.
+    pub mod sccp {
+        use std::num::{NonZeroU32, NonZeroU64};
+
+        use nonzero_ext::nonzero;
+
+        /// Maximum closed SCCP proofs in one transaction.
+        pub const MAX_PROOFS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
+        /// Maximum closed SCCP proofs committed in one block.
+        pub const MAX_PROOFS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
+        /// Maximum canonical bytes retained for one closed SCCP bridge proof.
+        ///
+        /// This stays below the first-release 10 MiB transaction wire ceiling and leaves room for
+        /// the transaction envelope, signatures, and a same-transaction settlement receipt.
+        pub const MAX_PROOF_BYTES_PER_PROOF: NonZeroU64 = nonzero!(8_u64 * 1024 * 1024);
+        /// Maximum aggregate SCCP proof bytes in one transaction.
+        pub const MAX_PROOF_BYTES_PER_TRANSACTION: NonZeroU64 = MAX_PROOF_BYTES_PER_PROOF;
+        /// Maximum aggregate SCCP proof bytes committed in one block.
+        pub const MAX_PROOF_BYTES_PER_BLOCK: NonZeroU64 = nonzero!(32_u64 * 1024 * 1024);
+        /// Maximum native-finality continuation headers in one transaction.
+        pub const MAX_NATIVE_HEADERS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_004_u32);
+        /// Maximum native-finality continuation headers committed in one block.
+        pub const MAX_NATIVE_HEADERS_PER_BLOCK: NonZeroU32 = nonzero!(4_016_u32);
+        /// Maximum Ethereum light-client updates in one transaction.
+        pub const MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_TRANSACTION: NonZeroU32 = nonzero!(128_u32);
+        /// Maximum Ethereum light-client updates committed in one block.
+        pub const MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_BLOCK: NonZeroU32 = nonzero!(512_u32);
+        /// Maximum framed native-finality header bytes in one transaction.
+        pub const MAX_NATIVE_HEADER_BYTES_PER_TRANSACTION: NonZeroU64 =
+            nonzero!(8_u64 * 1024 * 1024);
+        /// Maximum framed native-finality header bytes committed in one block.
+        pub const MAX_NATIVE_HEADER_BYTES_PER_BLOCK: NonZeroU64 = nonzero!(32_u64 * 1024 * 1024);
+        /// Maximum secp256k1 recoveries in one transaction.
+        pub const MAX_SECP256K1_RECOVERIES_PER_TRANSACTION: NonZeroU32 = nonzero!(1_005_u32);
+        /// Maximum secp256k1 recoveries committed in one block.
+        pub const MAX_SECP256K1_RECOVERIES_PER_BLOCK: NonZeroU32 = nonzero!(4_020_u32);
+        /// Maximum BLS aggregate-signature checks in one transaction.
+        pub const MAX_BLS_AGGREGATE_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_004_u32);
+        /// Maximum BLS aggregate-signature checks committed in one block.
+        pub const MAX_BLS_AGGREGATE_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(4_016_u32);
+        /// Maximum BLS public-key contributions processed in one transaction.
+        ///
+        /// The exact Ethereum V1 worst case is one 513-key bootstrap plus 128 updates, each with
+        /// 513 next-committee keys and 512 aggregate participants: `513 + 128 * 1_025`.
+        pub const MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION: NonZeroU32 = nonzero!(131_713_u32);
+        /// Maximum BLS public-key contributions committed in one block.
+        pub const MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK: NonZeroU32 = nonzero!(526_852_u32);
+        /// Maximum BN254 Groth16 pairing-product checks in one transaction.
+        pub const MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
+        /// Maximum BN254 Groth16 pairing-product checks committed in one block.
+        pub const MAX_BN254_PAIRING_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
+    }
+
     /// FASTPQ prover defaults.
     pub mod fastpq {
         use std::num::NonZeroUsize;

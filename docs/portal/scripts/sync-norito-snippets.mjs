@@ -221,12 +221,16 @@ async function synchronizeTranslatedQuickstart(code) {
   );
 }
 
+function containsSeiyakuDeclaration(body, seiyakuName) {
+  return new RegExp(`(?:誓約|seiyaku)\\s+${seiyakuName}\\b`).test(body);
+}
+
 async function synchronizeSnippetCodeUnder(
   root,
   slug,
   code,
   skipCanonical,
-  contractName = null
+  seiyakuName = null
 ) {
   let entries;
   try {
@@ -244,7 +248,7 @@ async function synchronizeSnippetCodeUnder(
         slug,
         code,
         false,
-        contractName
+        seiyakuName
       );
       continue;
     }
@@ -260,12 +264,12 @@ async function synchronizeSnippetCodeUnder(
     const current = await readFile(filePath, 'utf8');
     const replacement = `\`\`\`kotodama\n${code.trim()}\n\`\`\``;
     let next;
-    if (contractName) {
+    if (seiyakuName) {
       let replaced = false;
       next = current.replace(
         /```(text|kotodama|sh|bash)\n([\s\S]*?)\n```/g,
         (fence, language, body) => {
-          if (new RegExp(`(?:誓約|contract)\\s+${contractName}\\b`).test(body)) {
+          if (containsSeiyakuDeclaration(body, seiyakuName)) {
             if (!replaced) {
               replaced = true;
               if (language === 'sh' || language === 'bash') {
@@ -476,4 +480,10 @@ async function writeManifest(filePath, entries) {
   await writeFile(filePath, payload, 'utf8');
 }
 
-export {MANIFEST_VERSION, TEMPLATE_REVISION, formatLedgerSection, formatSdkGuideSection};
+export {
+  MANIFEST_VERSION,
+  TEMPLATE_REVISION,
+  containsSeiyakuDeclaration,
+  formatLedgerSection,
+  formatSdkGuideSection
+};

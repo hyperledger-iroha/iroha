@@ -1542,7 +1542,7 @@ def test_deploy_contract_bundle_reads_code_file_and_waits(tmp_path) -> None:
                             "name": "contract",
                             "contract_alias": "contract::is",
                             "contract_address": "addr",
-                            "upgraded": False,
+                            "kaizen": False,
                             "tx_hash_hex": tx_hash,
                             "code_hash_hex": "b" * 64,
                             "abi_hash_hex": "c" * 64,
