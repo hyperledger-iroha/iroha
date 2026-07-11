@@ -629,7 +629,6 @@ mod tests {
 
     #[test]
     fn registry_rejects_duplicate_and_corrupt_entries_fail_closed() {
-        let envelope = fixture_envelope();
         let policy = fixture_policy();
         let duplicates = TempDir::new().expect("temp directory");
         write_fixture(duplicates.path(), "a.to");
@@ -650,7 +649,6 @@ mod tests {
 
     #[test]
     fn registry_rejects_unknown_nonregular_and_oversized_entries() {
-        let envelope = fixture_envelope();
         let policy = fixture_policy();
 
         let unknown = TempDir::new().expect("temp directory");
@@ -689,7 +687,6 @@ mod tests {
     fn registry_rejects_symlinked_envelope() {
         use std::os::unix::fs::symlink;
 
-        let envelope = fixture_envelope();
         let policy = fixture_policy();
         let temp = TempDir::new().expect("temp directory");
         let target = temp.path().join("target.bin");
@@ -715,7 +712,6 @@ mod tests {
 
     #[test]
     fn registry_bounds_entry_count_before_decoding() {
-        let envelope = fixture_envelope();
         let policy = fixture_policy();
         let temp = TempDir::new().expect("temp directory");
         for index in 0..=MAX_ADMISSION_ENVELOPES {
