@@ -288,9 +288,9 @@ fn decimal_literal_rejects_int_annotation() {
     .expect("parse decimal literal");
     let err = analyze(&prog).expect_err("expected decimal literal type error");
     assert!(
-        err.message.contains("scale=0"),
+        err.message().contains("scale=0"),
         "unexpected error message: {}",
-        err.message
+        err.message()
     );
 }
 
@@ -488,9 +488,9 @@ fn parse_for_each_map_and_builtins() {
     // Bare map iteration is rejected by the semantic phase; callers must bound it.
     let err = analyze(&prog).expect_err("expected unbounded iteration error");
     assert!(
-        err.message.contains(".take"),
+        err.message().contains(".take"),
         "error hint should mention the canonical bounded helper: {}",
-        err.message
+        err.message()
     );
 }
 
@@ -726,9 +726,9 @@ fn semantic_rejects_extended_sysvar_helper_args() {
         .unwrap();
     let err = analyze(&prog).expect_err("expected sysvar arity error");
     assert!(
-        err.message.contains("chain_id expects no arguments"),
+        err.message().contains("chain_id expects no arguments"),
         "unexpected error: {}",
-        err.message
+        err.message()
     );
 }
 
@@ -761,9 +761,9 @@ fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
             .unwrap();
     let err = analyze(&prog).expect_err("expected query payload type error");
     assert!(
-        err.message.contains("query_execute_norito"),
+        err.message().contains("query_execute_norito"),
         "unexpected error: {}",
-        err.message
+        err.message()
     );
 
     let prog =
@@ -771,9 +771,9 @@ fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
             .unwrap();
     let err = analyze(&prog).expect_err("expected sysvar arity error");
     assert!(
-        err.message.contains("sysvar_authority"),
+        err.message().contains("sysvar_authority"),
         "unexpected error: {}",
-        err.message
+        err.message()
     );
 }
 
@@ -886,9 +886,9 @@ fn semantic_rejects_typed_query_get_helper_args() {
             .unwrap();
     let err = analyze(&prog).expect_err("expected account query key type error");
     assert!(
-        err.message.contains("ledger::query::account"),
+        err.message().contains("ledger::query::account"),
         "unexpected error: {}",
-        err.message
+        err.message()
     );
 
     let prog = parse(
@@ -897,9 +897,9 @@ fn semantic_rejects_typed_query_get_helper_args() {
     .unwrap();
     let err = analyze(&prog).expect_err("expected contract instance query key type error");
     assert!(
-        err.message.contains("ledger::query::contract_instance"),
+        err.message().contains("ledger::query::contract_instance"),
         "unexpected error: {}",
-        err.message
+        err.message()
     );
 }
 
@@ -997,10 +997,10 @@ fn semantic_rejects_zk_vrf_read_helper_args() {
             .unwrap();
     let err = analyze(&prog).expect_err("expected vrf seed payload type error");
     assert!(
-        err.message
+        err.message()
             .contains("crypto::vrf::epoch_seed expects (bytes) VrfEpochSeedRequest"),
         "unexpected error: {}",
-        err.message
+        err.message()
     );
 }
 
@@ -1047,10 +1047,10 @@ fn semantic_rejects_state_introspection_helper_args() {
     .unwrap();
     let err = analyze(&prog).expect_err("expected state_keys type error");
     assert!(
-        err.message
+        err.message()
             .contains("state_keys expects (Name, int offset, int limit)"),
         "unexpected error: {}",
-        err.message
+        err.message()
     );
 }
 
@@ -1093,9 +1093,9 @@ fn semantic_rejects_extended_hash_non_bytes_arg() {
         parse(r#"module InvalidHash { fn f() { let digest = crypto::keccak256(1); } }"#).unwrap();
     let err = analyze(&prog).expect_err("expected type error");
     assert!(
-        err.message.contains("crypto::keccak256 expects (bytes)"),
+        err.message().contains("crypto::keccak256 expects (bytes)"),
         "unexpected error: {}",
-        err.message
+        err.message()
     );
 }
 
@@ -1143,7 +1143,7 @@ fn for_each_map_mutation_is_rejected() {
     "#;
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).expect_err("should reject mutation during iteration");
-    assert!(err.message.contains("E_ITER_MUTATION"));
+    assert!(err.message().contains("E_ITER_MUTATION"));
 }
 
 #[test]
@@ -1174,10 +1174,10 @@ fn semantic_type_error() {
     let prog = parse(src).expect("parse failed");
     let err = analyze(&prog).unwrap_err();
     assert!(
-        err.message
+        err.message()
             .contains("operator Add is not defined for int and string"),
         "{}",
-        err.message
+        err.message()
     );
 }
 
@@ -1387,7 +1387,7 @@ fn invalid_numeric_on_struct_reports_error() {
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message.contains("unknown field '0' on struct A"));
+    assert!(err.message().contains("unknown field '0' on struct A"));
 }
 
 #[test]
@@ -1399,7 +1399,7 @@ fn invalid_named_on_tuple_reports_error() {
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message.contains("unknown field 'a' on tuple"));
+    assert!(err.message().contains("unknown field 'a' on tuple"));
 }
 
 #[test]
@@ -1411,7 +1411,7 @@ fn invalid_numeric_tuple_index_reports_error() {
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message.contains("tuple index 3 out of bounds"));
+    assert!(err.message().contains("tuple index 3 out of bounds"));
 }
 
 #[test]
@@ -1425,7 +1425,7 @@ fn tuple_index_on_non_tuple_reports_type() {
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
     assert!(
-        err.message
+        err.message()
             .contains("tuple index on non-tuple type struct A")
     );
 }
@@ -1439,7 +1439,7 @@ fn tuple_index_on_non_tuple_int_reports_type() {
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message.contains("tuple index on non-tuple type int"));
+    assert!(err.message().contains("tuple index on non-tuple type int"));
 }
 
 #[test]
@@ -1453,7 +1453,7 @@ fn unknown_field_on_struct_reports_available_fields() {
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
     assert!(
-        err.message
+        err.message()
             .contains("unknown field 'z' on struct A (available: x, y)")
     );
 }
@@ -1467,7 +1467,7 @@ fn invalid_named_on_non_struct_reports_error() {
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message.contains("unknown field 'foo' on type int"));
+    assert!(err.message().contains("unknown field 'foo' on type int"));
 }
 
 #[test]
@@ -1480,7 +1480,10 @@ fn invalid_indexing_on_non_map_reports_error() {
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message.contains("indexing not supported on this type"));
+    assert!(
+        err.message()
+            .contains("indexing not supported on this type")
+    );
 }
 
 #[test]
@@ -1525,7 +1528,7 @@ fn range_end_less_than_start_rejected() {
     "#;
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).expect_err("expected end<start rejection");
-    assert!(err.message.contains("end >= start"));
+    assert!(err.message().contains("end >= start"));
 }
 
 #[test]
@@ -1538,7 +1541,7 @@ fn range_non_integer_args_rejected() {
     "#;
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).expect_err("expected non-integer rejection");
-    assert!(err.message.contains("range(start, end)"));
+    assert!(err.message().contains("range(start, end)"));
 }
 
 #[test]
@@ -2238,7 +2241,12 @@ fn typed_json_access_spills_are_handled() {
         for bb in &func.blocks {
             for ins in &bb.instrs {
                 match ins {
-                    Instr::JsonGetInt { dest, json, key } => {
+                    Instr::JsonGetNumeric {
+                        dest,
+                        json,
+                        key,
+                        kind: ivm::kotodama::ir::WideNumericKind::Int,
+                    } => {
                         if is_spilled(dest) || is_spilled(json) || is_spilled(key) {
                             saw_spill = true;
                         }
@@ -2569,7 +2577,7 @@ fn parse_register_asset_rejects_bare_name_literal() {
     let prog = parse(src).expect("parse failed");
     let err = analyze(&prog).expect_err("bare asset names should be rejected");
     assert!(
-        err.message.contains("AssetDefinitionId"),
+        err.message().contains("AssetDefinitionId"),
         "unexpected semantic error: {err:?}"
     );
 }
@@ -2650,7 +2658,10 @@ fn in_memory_map_methods_are_rejected() {
     "#;
     let prog = parse(src).expect("parse map methods");
     let error = analyze(&prog).expect_err("in-memory Map methods must be rejected");
-    assert!(error.message.contains("Map"), "unexpected error: {error:?}");
+    assert!(
+        error.message().contains("Map"),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]
@@ -2691,7 +2702,10 @@ fn ephemeral_keys_take2_helper_is_rejected() {
     "#;
     let prog = parse(src).expect("parse keys_take2");
     let error = analyze(&prog).expect_err("ephemeral map helpers must be rejected");
-    assert!(error.message.contains("Map"), "unexpected error: {error:?}");
+    assert!(
+        error.message().contains("Map"),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]
@@ -2707,7 +2721,10 @@ fn ephemeral_keys_values_take2_helper_is_rejected() {
     "#;
     let prog = parse(src).expect("parse keys_values_take2");
     let error = analyze(&prog).expect_err("ephemeral map helpers must be rejected");
-    assert!(error.message.contains("Map"), "unexpected error: {error:?}");
+    assert!(
+        error.message().contains("Map"),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]
@@ -2874,5 +2891,5 @@ fn semantic_return_mismatch_unit() {
     let src = "module ReturnMismatch { fn f() -> () { return 1; } }";
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).unwrap_err();
-    assert!(err.message.contains("return type mismatch"));
+    assert!(err.message().contains("return type mismatch"));
 }

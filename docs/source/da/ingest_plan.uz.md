@@ -52,7 +52,7 @@ Foydali yuk - Norito kodli `DaIngestRequest`. Javoblardan foydalanish
 | 500 ichki xato | Kutilmagan xatolik (jirga qayd + ogohlantirish). |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ to'plam xesh. Majburiyatlar ro'yxati/tasdiqlash yakuniy nuqtalari bir xil to'pla
 isbotni faol siyosat to'plamiga bog'lash uchun qo'shimcha safar kerak emas.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

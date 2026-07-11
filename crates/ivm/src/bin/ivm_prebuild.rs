@@ -359,6 +359,48 @@ mod tests {
     }
 
     #[test]
+    fn mint_sample_rejects_tampered_literal_bytes_and_descriptors() {
+        let program = build_program_mint_rose_for_authority();
+        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse mint fixture metadata");
+        let literal = parsed
+            .literal_section
+            .expect("mint fixture has indexed literals");
+        assert_eq!(literal.count, 2);
+
+        let asset_payload_len = u32::from_be_bytes(
+            program[literal.data_start + 3..literal.data_start + 7]
+                .try_into()
+                .expect("asset payload length bytes"),
+        ) as usize;
+        let amount_start = literal
+            .data_start
+            .checked_add(7 + asset_payload_len + iroha_crypto::Hash::LENGTH)
+            .expect("amount literal offset fits");
+        assert!(amount_start < literal.data_end);
+
+        let mut corrupted_payload = program.clone();
+        corrupted_payload[amount_start + 7] ^= 1;
+        assert!(
+            ivm::IVM::new(u64::MAX)
+                .load_program(&corrupted_payload)
+                .is_err(),
+            "literal payload substitution must invalidate the authenticated table"
+        );
+
+        let mut duplicate_descriptor = program;
+        let first_descriptor =
+            duplicate_descriptor[literal.entries_start..literal.entries_start + 8].to_vec();
+        duplicate_descriptor[literal.entries_start + 8..literal.entries_start + 16]
+            .copy_from_slice(&first_descriptor);
+        assert!(
+            ivm::IVM::new(u64::MAX)
+                .load_program(&duplicate_descriptor)
+                .is_err(),
+            "duplicate or reordered literal targets must fail admission"
+        );
+    }
+
+    #[test]
     fn sample_manifest_includes_threshold_escrow() {
         assert!(prebuilt_sample_names().contains(&"threshold_escrow"));
     }

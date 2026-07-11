@@ -15,6 +15,19 @@ public final class KagemushaRecursiveSpendProver {
   public static final int RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION =
       RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION;
   public static final int TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15;
+  public static final int PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;
+  public static final String PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA =
+      "kagemusha.offline.recursive_spend.artifact_manifest.v3";
+  public static final String PASTA_CYCLE_V3_MODE = "recursive_spend_v2";
+  public static final String PASTA_CYCLE_V3_PROOF_BACKEND =
+      "halo2/ipa-pasta-cycle-v1";
+  public static final String PASTA_CYCLE_V3_TRANSCRIPT_PROFILE =
+      "kagemusha-pasta-cycle-poseidon-v1";
+  public static final String PASTA_CYCLE_V3_TRANSITION_CIRCUIT_ID =
+      "kagemusha-recursive-spend-transition-eq-v1";
+  public static final String PASTA_CYCLE_V3_STATE_CIRCUIT_ID =
+      "kagemusha-recursive-spend-state-ep-v1";
+  public static final int PASTA_CYCLE_V3_MAX_PROOF_BYTES = 4_096;
   public static final String RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
       "kagemusha-recursive-aggregation-v1";
   public static final String RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
@@ -26,7 +39,8 @@ public final class KagemushaRecursiveSpendProver {
       "kagemusha-recursive-spend-lineage-append-v1";
   public static final int COMPACT_TOKEN_MAX_HOPS = 64;
   public static final int RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64;
-  public static final boolean RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true;
+  /** Reserved-lineage transition proofs remain fail-closed until the verifier is wired. */
+  public static final boolean RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = false;
   public static final int RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1;
   public static final int RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
   public static final int RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;
@@ -72,10 +86,12 @@ public final class KagemushaRecursiveSpendProver {
       };
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
   private static final boolean TOP_UP_NATIVE_AVAILABLE = loadTopUpBridge();
+  private static final boolean PASTA_CYCLE_V3_ARTIFACT_INGEST_AVAILABLE =
+      loadPastaCycleV3ArtifactIngestBridge();
+  private static final boolean PASTA_CYCLE_V3_BACKEND_AVAILABLE = loadPastaCycleV3Backend();
 
   public enum Mode {
-    RECURSIVE_COMPACT_V1("recursive_compact_v1"),
-    RECURSIVE_SPEND_V1("recursive_spend_v1");
+    RECURSIVE_SPEND_V2("recursive_spend_v2");
 
     private final String wireName;
 
@@ -98,17 +114,48 @@ public final class KagemushaRecursiveSpendProver {
     return TOP_UP_NATIVE_AVAILABLE;
   }
 
-  public static Mode preferredMode() {
-    return preferredMode(
-        KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable(), NATIVE_AVAILABLE);
+  /** Exact ABI-18/V3 proof capability; legacy ABI-6 symbol availability is insufficient. */
+  public static boolean isPastaCycleV3BackendAvailable() {
+    return PASTA_CYCLE_V3_BACKEND_AVAILABLE;
   }
 
-  public static Mode preferredMode(
-      final boolean recursiveCompactAvailable, final boolean recursiveSpendAvailable) {
-    if (recursiveCompactAvailable) {
-      return Mode.RECURSIVE_COMPACT_V1;
+  /** Exact ABI-18 streaming artifact-ingest surface; independent of proof-backend readiness. */
+  public static boolean isPastaCycleV3ArtifactIngestAvailable() {
+    return PASTA_CYCLE_V3_ARTIFACT_INGEST_AVAILABLE;
+  }
+
+  public static Mode preferredMode() {
+    return preferredMode(PASTA_CYCLE_V3_BACKEND_AVAILABLE);
+  }
+
+  public static Mode preferredMode(final boolean pastaCycleV3BackendAvailable) {
+    return pastaCycleV3BackendAvailable ? Mode.RECURSIVE_SPEND_V2 : null;
+  }
+
+  /** Begin one manifest-bound, bounded streaming ingest session for a complete KRV3 package. */
+  public static PastaCycleV3ArtifactIngest beginPastaCycleV3ArtifactIngest(
+      final byte[] manifestNorito,
+      final byte[] manifestSha256,
+      final byte[] artifactSha256) {
+    requireNative(PASTA_CYCLE_V3_ARTIFACT_INGEST_AVAILABLE);
+    requireArtifactInput(manifestNorito, "manifestNorito", false);
+    requireArtifactInput(manifestSha256, "manifestSha256", true);
+    requireArtifactInput(artifactSha256, "artifactSha256", true);
+    final long handle = nativeArtifactBeginV3(manifestNorito, manifestSha256, artifactSha256);
+    if (handle <= 0) {
+      throw new IllegalStateException("native Kagemusha V3 artifact ingest returned no handle");
     }
-    return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : null;
+    return new PastaCycleV3ArtifactIngest(handle);
+  }
+
+  private static void requireArtifactInput(
+      final byte[] bytes, final String name, final boolean digest) {
+    if (bytes == null || bytes.length == 0) {
+      throw new IllegalArgumentException(name + " must not be empty");
+    }
+    if (digest && bytes.length != 32) {
+      throw new IllegalArgumentException(name + " must be exactly 32 bytes");
+    }
   }
 
   public static boolean canRedeemWitnessless(final String circuitId, final int hopCount) {
@@ -879,6 +926,32 @@ public final class KagemushaRecursiveSpendProver {
             TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
   }
 
+  private static boolean loadPastaCycleV3Backend() {
+    return NATIVE_AVAILABLE
+        && detectNativeAvailability(
+            () -> {},
+            KagemushaRecursiveSpendProver::nativeBridgeAbiVersion,
+            KagemushaRecursiveSpendProver::nativePastaCycleV3BackendAvailable,
+            PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+  }
+
+  private static boolean loadPastaCycleV3ArtifactIngestBridge() {
+    if (!NATIVE_AVAILABLE) {
+      return false;
+    }
+    try {
+      if (nativeBridgeAbiVersion() != PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
+        return false;
+      }
+      nativeArtifactBeginV3(new byte[] {0}, new byte[32], new byte[32]);
+      return false;
+    } catch (final IllegalArgumentException expected) {
+      return true;
+    } catch (final UnsatisfiedLinkError | RuntimeException unavailable) {
+      return false;
+    }
+  }
+
   private static boolean probeRequiredNativeSymbols() {
     final byte[] probe = MALFORMED_NATIVE_PROBE_ARCHIVE;
     boolean available = true;
@@ -984,6 +1057,17 @@ public final class KagemushaRecursiveSpendProver {
 
   private static native int nativeBridgeAbiVersion();
 
+  private static native boolean nativePastaCycleV3BackendAvailable();
+
+  private static native long nativeArtifactBeginV3(
+      byte[] manifestNorito, byte[] manifestSha256, byte[] artifactSha256);
+
+  private static native void nativeArtifactWriteV3(long handle, byte[] chunk);
+
+  private static native void nativeArtifactFinalizeV3(long handle);
+
+  private static native void nativeArtifactCancelV3(long handle);
+
   private static native byte[] nativeInitSpend(byte[] requestArchive);
 
   private static native byte[] nativeTopUpInstruction(byte[] requestArchive);
@@ -1010,6 +1094,51 @@ public final class KagemushaRecursiveSpendProver {
 
   private static native byte[] nativeBuildPreviousProofOpenEnvelopesArchive(
       byte[] previousBundleArchive);
+
+  /** Owns a native KRV3 spool until the caller closes it. */
+  public static final class PastaCycleV3ArtifactIngest implements AutoCloseable {
+    private long handle;
+    private boolean finalized;
+
+    private PastaCycleV3ArtifactIngest(final long handle) {
+      this.handle = handle;
+    }
+
+    public synchronized void write(final byte[] chunk) {
+      requireOpen(false);
+      requireArtifactInput(chunk, "chunk", false);
+      nativeArtifactWriteV3(handle, chunk);
+    }
+
+    public synchronized void finish() {
+      requireOpen(false);
+      nativeArtifactFinalizeV3(handle);
+      finalized = true;
+    }
+
+    public synchronized boolean isFinalized() {
+      return finalized;
+    }
+
+    @Override
+    public synchronized void close() {
+      if (handle == 0) {
+        return;
+      }
+      final long current = handle;
+      handle = 0;
+      nativeArtifactCancelV3(current);
+    }
+
+    private void requireOpen(final boolean allowFinalized) {
+      if (handle == 0) {
+        throw new IllegalStateException("Kagemusha V3 artifact ingest is closed");
+      }
+      if (finalized && !allowFinalized) {
+        throw new IllegalStateException("Kagemusha V3 artifact ingest is already finalized");
+      }
+    }
+  }
 
   /** Portable Reserved-lineage verifier/proving key artifact package. */
   public static final class LineageKeyArtifacts {

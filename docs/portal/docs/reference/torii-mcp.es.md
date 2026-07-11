@@ -97,7 +97,6 @@ Torii reenvía encabezados entrantes relacionados con la autenticación para el 
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 Los clientes también pueden proporcionar encabezados por llamada adicionales a través de `arguments.headers`.
 Se ignoran `content-length`, `host` e `connection` de `arguments.headers`.

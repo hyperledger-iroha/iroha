@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
 
@@ -51,8 +51,9 @@ Proof builder သည် canonical block နှင့် ၎င်း၏ sidecar 
 ပဋိပက္ခဖြစ်ခြင်း သို့မဟုတ် မစစ်ဆေးနိုင်ခြင်းကို fail closed လုပ်ပြီး availability ကို နောက်ဆုံးပေါ်
 in-memory history window ဖြင့် မကန့်သတ်ပါ။
 
-Stateless verifier သည် version၊ chain၊ height၊ header hash၊ context၊ subject နှင့် CommitQC ကို
-အတိအကျ ကိုက်ညီစေပြီး artifact ထဲရှိ PoP အားလုံးကို စစ်ဆေးသည်။ Signer index များသည် တင်းကျပ်စွာ
+Stateless verifier သည် version၊ chain၊ height၊ header hash၊ header ၏ canonical predecessor နှင့်
+view၊ context၊ subject နှင့် CommitQC ကို အတိအကျ ကိုက်ညီစေပြီး artifact ထဲရှိ PoP အားလုံးကို
+စစ်ဆေးသည်။ Signer index များသည် တင်းကျပ်စွာ
 တိုးလာပြီး range အတွင်းရှိရမည်။ CommitQC သည် validator count နှင့် voting power quorum နှစ်ခုလုံးကို
 ဖြည့်ဆည်းရမည်ဖြစ်ပြီး အတိအကျ Sumeragi v2 vote preimage ပေါ်ရှိ BLS aggregate signature သည် valid
 ဖြစ်ရမည်။
@@ -74,9 +75,7 @@ artifact အထိ immediate successor တစ်ခုချင်းကို �
 ## Bundle နှင့် API
 
 `BridgeFinalityBundle` သည် အတိအကျ `{ commitment, finality_proof }` ဖြစ်သည်။ Commitment သည်
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }` ဖြစ်သည်။ Optional MMR field များသည် commitments သာဖြစ်ပြီး
-finality သို့မဟုတ် inclusion proof မဟုတ်ပါ။
+`{ chain_id, height_context_id, block_height, block_hash }` ဖြစ်သည်။
 
 - `GET /v1/bridge/finality/{height}` သည် `BridgeFinalityProof` ကို ပြန်ပေးသည်။
 - `GET /v1/bridge/finality/bundle/{height}` သည် `BridgeFinalityBundle` ကို ပြန်ပေးသည်။

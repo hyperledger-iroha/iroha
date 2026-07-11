@@ -24,6 +24,7 @@ enum class NumericV1ErrorCode {
     CHECKSUM_MISMATCH,
     TRUNCATED_ENVELOPE,
     UNKNOWN_TYPE,
+    TYPE_NOT_ALLOWED,
     WRONG_TYPE,
     INVALID_ENVELOPE_VERSION,
     OVERSIZED_LENGTH,
@@ -201,7 +202,7 @@ private enum class NumericKind(
 ) {
     INT("07c039457363b9e1d36bbd31d93dec4a".hexBytes(), 0x0011, false),
     DECIMAL("ba2ffed52e4d8ee16f17efefe1828524".hexBytes(), 0x0012, true),
-    QUANTITY("e4769984c81ce0e8b678f2eb06274ee3".hexBytes(), 0x0010, true),
+    QUANTITY("e4769984c81ce0e8b678f2eb06274ee3".hexBytes(), 0x0013, true),
 }
 
 /** Canonical schema-bound frames and pointer envelopes for Kotodama V1 numerics. */
@@ -386,7 +387,10 @@ object NumericV1Codec {
         }
         val header = ByteBuffer.wrap(envelope).order(ByteOrder.BIG_ENDIAN)
         val pointerType = header.short.toInt() and 0xFFFF
-        val knownAllowedType = pointerType in 0x0001..0x0012
+        if (pointerType == 0x0010) {
+            fail(NumericV1ErrorCode.TYPE_NOT_ALLOWED, "retired Amount pointer type is permanently reserved")
+        }
+        val knownAllowedType = pointerType in 0x0001..0x000F || pointerType in 0x0011..0x0013
         if (!knownAllowedType) fail(NumericV1ErrorCode.UNKNOWN_TYPE, "unknown pointer type")
         if (pointerType != kind.pointerType) fail(NumericV1ErrorCode.WRONG_TYPE, "pointer type does not match")
         if ((header.get().toInt() and 0xFF) != 1) {

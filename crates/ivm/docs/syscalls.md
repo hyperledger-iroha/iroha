@@ -155,21 +155,27 @@ Exact numeric helpers
   and `0x010140..0x01014F` implement nominal non-negative `quantity`
   operations. The generated table below is the signature source of truth.
 - Numeric operands are schema-bound, uncompressed Norito frames in pointer
-  types `Quantity=0x0010`, `Int=0x0011`, and `Decimal=0x0012`. Pointer ID
-  `0x0013` is unassigned and rejected as unknown.
+  types `Int=0x0011`, `Decimal=0x0012`, and `Quantity=0x0013`. Pointer ID
+  `0x0010` is the permanently retired pre-release `Amount` ID and is rejected
+  as disallowed; `0x0014` is unassigned and rejected as unknown.
 - The domain is `-2^511..=2^511-1`; decimal and quantity scale is `0..=28`.
   Exact division distinguishes division by zero, repeating expansion, and a
   terminating result whose minimum scale exceeds 28. Rounded operations name
-  exactly one of `floor` (tag 0), `ceil` (tag 1), or `nearest_even` (tag 2).
-- Numeric syscalls use quote-free staged gas:
-  `16 + input_envelope_bytes + output_envelope_bytes + 4 * logical_limb_work`.
+  exactly one of `toward_zero` (tag 0), `away_from_zero` (tag 1), `floor`
+  (tag 2), `ceil` (tag 3), `nearest_even` (tag 4), `nearest_away` (tag 5), or
+  `nearest_toward_zero` (tag 6).
+- Numeric syscalls use Gas: `G_numeric_staged`
+  (`asset:gas/G_numeric_staged@ivm.core/v2`) and quote-free staged gas:
+  `16 + input_envelope_bytes + input_hash_frame_bytes + output_envelope_bytes
+  + 2 * output_frame_bytes + 4 * logical_limb_work` (formula version 3).
   The entry weight covers dispatch, staged bookkeeping, and at most four
   bounded control-register checks. Each logical base-`2^64` work cell receives
   four units for operand access, arithmetic/carry or quotient trial, result
   access, and deterministic loop control; multiplication and division formulas
   enumerate every cell they perform. `cargo bench -p ivm --bench
   gas_calibration` pins work denominators for 1..=8 input limbs, 10-limb scale
-  alignment, and 16-limb products. Release calibration requires a 25% safety
+  alignment, 16-limb products, and minimum/maximum authenticated envelope
+  pipelines. Release calibration requires a 25% safety
   margin on every supported baseline tier; failure changes the gas formula
   version/hash rather than selecting hardware-dependent semantics.
 
@@ -496,9 +502,9 @@ node enforces that policy unconditionally.
 | 0x1A | SET_ACCOUNT_DETAIL | r10=&AccountId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_set_detail@ivm.core/v2 + bytes(val) |
 | 0x20 | REGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_reg_asset@ivm.core/v2 |
 | 0x21 | UNREGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_unreg_asset@ivm.core/v2 |
-| 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount | u64=0 | asset:gas/G_mint@ivm.core/v2 |
-| 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount | u64=0 | asset:gas/G_burn@ivm.core/v2 |
-| 0x24 | TRANSFER_V1 | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount; batch-internal only | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
+| 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity | u64=0 | asset:gas/G_mint@ivm.core/v2 |
+| 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity | u64=0 | asset:gas/G_burn@ivm.core/v2 |
+| 0x24 | TRANSFER_V1 | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity; batch-internal only | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
 | 0x25 | NFT_MINT_ASSET | r10=&NftId, r11=&AccountId(owner) | u64=0 | asset:gas/G_nft_mint_asset@ivm.core/v2 |
 | 0x26 | NFT_TRANSFER_ASSET | r10=&AccountId(from), r11=&NftId, r12=&AccountId(to) | u64=0 | asset:gas/G_nft_transfer_asset@ivm.core/v2 |
 | 0x27 | NFT_SET_METADATA | r10=&NftId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_nft_set_metadata@ivm.core/v2 |
@@ -506,7 +512,7 @@ node enforces that policy unconditionally.
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
 | 0x2A | TRANSFER_V1_BATCH_END | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | r10=&NoritoBytes(TransferAssetBatch) | u64=0 | asset:gas/G_transfer@ivm.core/v2 per entry |
-| 0x2C | TRANSFER_ASSET_SCOPED | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount, r14=&DataSpaceId | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
+| 0x2C | TRANSFER_ASSET_SCOPED | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity, r14=&DataSpaceId | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
 | 0x30 | CREATE_ROLE | r10=&Name, r11=&Json(perms) | u64=0 | asset:gas/G_create_role@ivm.core/v2 |
 | 0x31 | DELETE_ROLE | r10=&Name | u64=0 | asset:gas/G_delete_role@ivm.core/v2 |
 | 0x32 | GRANT_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_role@ivm.core/v2 |
@@ -545,41 +551,23 @@ node enforces that policy unconditionally.
 | 0x65 | ZK_VOTE_GET_TALLY | r10=&NoritoBytes(VoteGetTallyRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_vote_get@ivm.core/v2 + bytes |
 | 0x66 | VRF_VERIFY | r10=&NoritoBytes(VrfVerifyRequest) | r10=ptr (&Blob(32-byte output)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
 | 0x67 | VRF_VERIFY_BATCH | r10=&NoritoBytes(VrfVerifyBatchRequest) | r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
-| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | configured V1 proof + public-input-unit + encoded request/response byte schedule |
-| 0x69 | NUMERIC_FROM_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x6A | NUMERIC_TO_INT | r10=&NoritoBytes(Numeric) | r10=value:i64 | asset:gas/G_numeric@ivm.core/v2 |
-| 0x6B | NUMERIC_ADD | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x6C | NUMERIC_SUB | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x6D | NUMERIC_MUL | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x6E | NUMERIC_DIV | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x6F | NUMERIC_REM | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x70 | NUMERIC_NEG | r10=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x71 | NUMERIC_EQ | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x72 | NUMERIC_NE | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x73 | NUMERIC_LT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x74 | NUMERIC_LE | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x75 | NUMERIC_GT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
-| 0x76 | NUMERIC_GE | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
+| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | 250,000 per proof + 5 per encoded byte + bounded per-proof archive/status bytes |
 | 0x77 | TLV_LEN | r10=&Tlv | r10=payload_len:u64 | asset:gas/G_tlv_len@ivm.core/v2 + bytes |
-| 0x78 | JSON_GET_I64 | r10=&Json(object), r11=&Name(key) | r10=Option<i64> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x79 | JSON_GET_JSON | r10=&Json(object), r11=&Name(key) | r10=Option<Json> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x7A | JSON_GET_NAME | r10=&Json(object), r11=&Name(key) | r10=Option<Name> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x7B | JSON_GET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key) | r10=Option<AccountId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x7C | JSON_GET_NFT_ID | r10=&Json(object), r11=&Name(key) | r10=Option<NftId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x7D | JSON_GET_BLOB_HEX | r10=&Json(object), r11=&Name(key) | r10=Option<bytes> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x7E | VRF_EPOCH_SEED | r10=&NoritoBytes(VrfEpochSeedRequest) | r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64 | asset:gas/G_vote_get@ivm.core/v2 + bytes |
-| 0x7F | JSON_GET_AMOUNT | r10=&Json(object), r11=&Name(key) | r10=Option<Amount> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x80 | JSON_GET_ASSET_DEFINITION_ID | r10=&Json(object), r11=&Name(key) | r10=Option<AssetDefinitionId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x81 | JSON_OBJECT | - | r10=&Json(empty object) | asset:gas/G_json@ivm.core/v2 + encoded bytes |
 | 0x82 | JSON_SET_I64 | r10=&Json(object), r11=&Name(key), r12=value:i64 | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
 | 0x83 | JSON_SET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key), r12=&AccountId | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
-| 0x84 | JSON_GET_I64_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<i64> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x85 | JSON_GET_JSON_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<Json> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x86 | JSON_GET_NAME_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<Name> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x87 | JSON_GET_ACCOUNT_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<AccountId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x88 | JSON_GET_NFT_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<NftId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x89 | JSON_GET_BLOB_HEX_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<bytes> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
-| 0x8A | JSON_GET_AMOUNT_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<Amount> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x8B | JSON_GET_ASSET_DEFINITION_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<AssetDefinitionId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x8C | JSON_SET_I64_DIRECT | r10=&Json(any validated region), r11=&Name(key), r12=value:i64 | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
 | 0x8D | JSON_SET_ACCOUNT_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key), r12=&AccountId | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
@@ -617,13 +605,13 @@ node enforces that policy unconditionally.
 | 0xB2 | AXT_COMMIT | - | u64=0 | asset:gas/G_axt@ivm.core/v2 + entries |
 | 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 | u64=0/1 | asset:gas/G_verify@ivm.core/v2 + bytes |
 | 0xB4 | USE_ASSET_HANDLE | r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob? | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
-| 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&Amount, r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&Quantity, r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xB9 | ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBA | ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBB | ESCROW_RELEASE | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBC | ESCROW_CANCEL | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBD | ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
-| 0xBE | ESCROW_RESOLVE_DISPUTE | r10=&Name(escrow), r11=&Amount(buyer_amount), r12=&Amount(seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xBE | ESCROW_RESOLVE_DISPUTE | r10=&Name(escrow), r11=&Quantity(buyer_amount), r12=&Quantity(seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBF | ANONYMOUS_ESCROW_RESOLVE_DISPUTE | r10=&NoritoBytes(ResolveAnonymousEscrowDispute) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xC0 | SORACLOUD_READ_COMMITTED_STATE | r10=&SoracloudRequest(ReadCommittedState) | r10=&SoracloudResponse(ReadCommittedState) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation | asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under SoracloudIvmHost) |
 | 0xC1 | SORACLOUD_EMIT_STATE_MUTATION | r10=&SoracloudRequest(EmitStateMutation) | r10=&SoracloudResponse(EmitStateMutation) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation | asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under SoracloudIvmHost) |
@@ -637,19 +625,6 @@ node enforces that policy unconditionally.
 | 0xC9 | SORACLOUD_READ_SECRET_ENVELOPE | r10=&SoracloudRequest(ReadSecretEnvelope) | r10=&SoracloudResponse(ReadSecretEnvelope) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation | asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under SoracloudIvmHost) |
 | 0xD0 | SCHEMA_ENCODE_DIRECT | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes) | asset:gas/G_schema@ivm.core/v2 + bytes |
 | 0xD1 | SCHEMA_DECODE_DIRECT | r10=&Name(schema), r11=&NoritoBytes | ptr (&Json) | asset:gas/G_schema@ivm.core/v2 + bytes |
-| 0xD2 | NUMERIC_TO_INT_DIRECT | r10=&NoritoBytes(Numeric) | r10=value:i64 | asset:gas/G_numeric@ivm.core/v2 |
-| 0xD3 | NUMERIC_ADD_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0xD4 | NUMERIC_SUB_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0xD5 | NUMERIC_MUL_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0xD6 | NUMERIC_DIV_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0xD7 | NUMERIC_REM_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0xD8 | NUMERIC_NEG_DIRECT | r10=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
-| 0xD9 | NUMERIC_EQ_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
-| 0xDA | NUMERIC_NE_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
-| 0xDB | NUMERIC_LT_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
-| 0xDC | NUMERIC_LE_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
-| 0xDD | NUMERIC_GT_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
-| 0xDE | NUMERIC_GE_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
 | 0xE0 | INPUT_PUBLISH_TLV | r10=&Blob(TLV) | ptr (r10) | asset:gas/G_input_publish@ivm.core/v2 + bytes |
 | 0xF0 | ALLOC | r10=bytes:u64 | ptr (r10) | asset:gas/G_alloc@ivm.core/v2 + bytes |
 | 0xF1 | GET_PUBLIC_INPUT | r10=&Name | ptr (&Tlv) | asset:gas/G_get_pub@ivm.core/v2 + bytes |
@@ -657,7 +632,7 @@ node enforces that policy unconditionally.
 | 0xF5 | GROW_HEAP | r10=bytes:u64 | u64=new_limit | asset:gas/G_grow_heap@ivm.core/v2 per page |
 | 0xF6 | VERIFY_PROOF | r10=&NoritoBytes(OpenVerifyEnvelope) | r10=0/1, r11=status:u64 | asset:gas/G_verify_proof@ivm.core/v2 + bytes |
 | 0xF7 | GET_MERKLE_PATH | r10=addr:u64, r11=out:u64, r12=root_out?:u64 | u64=len | asset:gas/G_mpath@ivm.core/v2 + len |
-| 0xF9 | GET_ACCOUNT_BALANCE | r10=&AccountId, r11=&AssetDefinitionId | ptr (&Amount) | asset:gas/G_get_bal@ivm.core/v2 |
+| 0xF9 | GET_ACCOUNT_BALANCE | r10=&AccountId, r11=&AssetDefinitionId | ptr (&Quantity) | asset:gas/G_get_bal@ivm.core/v2 |
 | 0xFA | GET_MERKLE_COMPACT | r10=addr, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 | 0xFB | USE_NULLIFIER | r10=nullifier:u64 | u64=0 | asset:gas/G_use_null@ivm.core/v2 |
 | 0xFC | VERIFY_SIGNATURE | r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8 | r10=0/1 | asset:gas/G_verify_sig@ivm.core/v2 + bytes |
@@ -684,21 +659,65 @@ node enforces that policy unconditionally.
 | 0x10034 | STATE_MAP_KEY_AT | r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index:u64 | r10=ptr (&NoritoBytes(canonical key)) or 0 | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x10035 | STATE_VALUE_ENCODE | r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count:u64 | r10=ptr (&NoritoBytes(StateValueRecordV1)) | asset:gas/G_state_value@ivm.core/v2 + schema + words + pointers + output |
 | 0x10036 | STATE_VALUE_DECODE | r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1) | r10=ptr (&Blob(pad:u8 then [u64; word_count])) | asset:gas/G_state_value@ivm.core/v2 + schema + record + pointers + output |
-| 0x10040 | AMOUNT_FROM_I64 | r10=value:i64 (nonnegative) | r10=ptr (&Amount) | asset:gas/G_amount@ivm.core/v2 by fixed 64-bit limb work + encoded bytes |
-| 0x10041 | AMOUNT_FROM_U128 | r10=&NoritoBytes(scale-zero u128 Numeric) | r10=ptr (&Amount) | asset:gas/G_amount@ivm.core/v2 by fixed 64-bit limb work + encoded bytes |
-| 0x10042 | AMOUNT_TO_I64 | r10=&Amount (scale zero, i64 range) | r10=value:i64 | asset:gas/G_amount@ivm.core/v2 by fixed 64-bit limb work |
-| 0x10043 | AMOUNT_ADD | r10=&Amount, r11=&Amount | r10=ptr (&Amount) | asset:gas/G_amount_add@ivm.core/v2 by aligned fixed 64-bit limb work + encoded bytes |
-| 0x10044 | AMOUNT_SUB | r10=&Amount, r11=&Amount | r10=ptr (&Amount); underflow traps | asset:gas/G_amount_sub@ivm.core/v2 by aligned fixed 64-bit limb work + encoded bytes |
-| 0x10045 | AMOUNT_MUL | r10=&Amount, r11=&Amount | r10=ptr (&Amount) | asset:gas/G_amount_mul@ivm.core/v2 by limb product + encoded bytes |
-| 0x10046 | AMOUNT_DIV_EXACT | r10=&Amount dividend, r11=&Amount divisor | r10=ptr (&Amount); non-finite or scale>28 result traps | asset:gas/G_amount_div@ivm.core/v2 by deterministic bounded limb work + encoded bytes |
-| 0x10047 | AMOUNT_DIV_ROUND | r10=&Amount dividend, r11=&Amount divisor, r12=scale:0..28, r13=rounding:0..2 | r10=ptr (&Amount) | asset:gas/G_amount_div@ivm.core/v2 by deterministic bounded limb work + encoded bytes |
-| 0x10048 | AMOUNT_EQ | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
-| 0x10049 | AMOUNT_NE | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
-| 0x1004A | AMOUNT_LT | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
-| 0x1004B | AMOUNT_LE | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
-| 0x1004C | AMOUNT_GT | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
-| 0x1004D | AMOUNT_GE | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
 | 0x1004E | JSON_BUILD | r10=&NoritoBytes(JsonConstructionSchemaV1), r11=word_table, r12=word_count | r10=&Json | asset:gas/G_json_build@ivm.core/v2 + schema bytes + source bytes + words + collection elements + encoded bytes |
+| 0x10100 | INT_FROM_I64 | r10=value:i64 | r10=&Int, r11=status:0 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10101 | INT_FROM_U64 | r10=value:u64 | r10=&Int, r11=status:0 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10102 | INT_TRY_TO_I64 | r10=&Int | r10=value:i64-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10103 | INT_TRY_TO_U64 | r10=&Int | r10=value:u64-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10104 | INT_NEG | r10=&Int, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10105 | INT_ADD | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10106 | INT_SUB | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10107 | INT_MUL | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10108 | INT_DIV | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10109 | INT_REM | r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1010A | INT_EQ | r10=&Int, r11=&Int | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1010B | INT_NE | r10=&Int, r11=&Int | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1010C | INT_LT | r10=&Int, r11=&Int | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1010D | INT_LE | r10=&Int, r11=&Int | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1010E | INT_GT | r10=&Int, r11=&Int | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1010F | INT_GE | r10=&Int, r11=&Int | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10110 | INT_WRAP_NEG | r10=&Int | r10=&Int | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10111 | INT_WRAP_ADD | r10=&Int, r11=&Int | r10=&Int | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10112 | INT_WRAP_SUB | r10=&Int, r11=&Int | r10=&Int | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10113 | INT_WRAP_MUL | r10=&Int, r11=&Int | r10=&Int | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10120 | DECIMAL_FROM_INT | r10=&Int | r10=&Decimal | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10121 | DECIMAL_NEG | r10=&Decimal, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Decimal-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10122 | DECIMAL_ADD | r10=&Decimal, r11=&Decimal, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Decimal-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10123 | DECIMAL_SUB | r10=&Decimal, r11=&Decimal, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Decimal-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10124 | DECIMAL_MUL | r10=&Decimal, r11=&Decimal, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Decimal-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10125 | DECIMAL_DIV_EXACT | r10=&Decimal, r11=&Decimal, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Decimal-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10126 | DECIMAL_DIV_ROUND | r10=&Decimal, r11=&Decimal, r12=&Int(scale:0..28), r13=RoundingModeV1, r14=failure_mode:0..1 | r10=&Decimal-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10127 | DECIMAL_EQ | r10=&Decimal, r11=&Decimal | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10128 | DECIMAL_NE | r10=&Decimal, r11=&Decimal | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10129 | DECIMAL_LT | r10=&Decimal, r11=&Decimal | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1012A | DECIMAL_LE | r10=&Decimal, r11=&Decimal | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1012B | DECIMAL_GT | r10=&Decimal, r11=&Decimal | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1012C | DECIMAL_GE | r10=&Decimal, r11=&Decimal | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1012D | DECIMAL_TRY_TO_INT_EXACT | r10=&Decimal | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1012E | DECIMAL_TO_INT_TRUNC | r10=&Decimal | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1012F | DECIMAL_TO_INT_ROUND | r10=&Decimal, r11=reserved:0, r12=reserved:0, r13=RoundingModeV1 | r10=&Int-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10140 | QUANTITY_TRY_FROM_INT | r10=&Int | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10141 | QUANTITY_TRY_FROM_DECIMAL | r10=&Decimal | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10142 | QUANTITY_TO_DECIMAL | r10=&Quantity | r10=&Decimal | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10143 | QUANTITY_ADD | r10=&Quantity, r11=&Quantity, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10144 | QUANTITY_SUB | r10=&Quantity, r11=&Quantity, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10145 | QUANTITY_MUL_DECIMAL | r10=&Quantity, r11=&Decimal, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10146 | QUANTITY_DIV_DECIMAL_EXACT | r10=&Quantity, r11=&Decimal, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10147 | QUANTITY_DIV_DECIMAL_ROUND | r10=&Quantity, r11=&Decimal, r12=&Int(scale:0..28), r13=RoundingModeV1, r14=failure_mode:0..1 | r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10148 | QUANTITY_RATIO_EXACT | r10=&Quantity, r11=&Quantity, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1 | r10=&Decimal-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10149 | QUANTITY_RATIO_ROUND | r10=&Quantity, r11=&Quantity, r12=&Int(scale:0..28), r13=RoundingModeV1, r14=failure_mode:0..1 | r10=&Decimal-or-zero, r11=NumericFaultV1-or-zero | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1014A | QUANTITY_EQ | r10=&Quantity, r11=&Quantity | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1014B | QUANTITY_NE | r10=&Quantity, r11=&Quantity | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1014C | QUANTITY_LT | r10=&Quantity, r11=&Quantity | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1014D | QUANTITY_LE | r10=&Quantity, r11=&Quantity | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1014E | QUANTITY_GT | r10=&Quantity, r11=&Quantity | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x1014F | QUANTITY_GE | r10=&Quantity, r11=&Quantity | r10=0/1 | asset:gas/G_numeric_staged@ivm.core/v2 |
+| 0x10160 | JSON_GET_INT | r10=&Json(object), r11=&Name(key) | r10=Option<&Int> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x10161 | JSON_GET_DECIMAL | r10=&Json(object), r11=&Name(key) | r10=Option<&Decimal> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x10162 | JSON_GET_QUANTITY | r10=&Json(object), r11=&Name(key) | r10=Option<&Quantity> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x10163 | JSON_GET_INT_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Int> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x10164 | JSON_GET_DECIMAL_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Decimal> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x10165 | JSON_GET_QUANTITY_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Quantity> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 <!-- END GENERATED SYSCALLS -->
 
 

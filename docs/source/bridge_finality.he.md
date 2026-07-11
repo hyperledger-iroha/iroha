@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 ---
 
 <div dir="rtl">
@@ -51,7 +51,8 @@ id, ה-CommitQC של האב מאמת אותו לפני שיוכל לאשר את 
 היסטוריות מתוך ה-world state הנוכחי והמשתנה. sidecar חסר, פגום, סותר או בלתי ניתן
 לאימות גורם לכשל סגור; הזמינות אינה מוגבלת לחלון היסטוריה עדכני בזיכרון.
 
-המאמת חסר-המצב מתאים במדויק גרסה, שרשרת, גובה, hash של header, הקשר, subject ו-CommitQC,
+המאמת חסר-המצב מתאים במדויק גרסה, שרשרת, גובה, hash של header,
+ה-predecessor הקנוני ו-view, הקשר, subject ו-CommitQC,
 ומאמת את כל ה-PoP המוטמעים ב-artifact. אינדקסי החותמים חייבים להיות עולים בהחלט ובטווח;
 ה-CommitQC חייב לעמוד בשני ספי quorum — מספר validators וכוח הצבעה — וחתימת ה-BLS
 המצטברת על ה-Sumeragi v2 vote preimage המדויק חייבת להיות תקפה.
@@ -73,9 +74,7 @@ SCCP משתמש באותו `BridgeFinalityProof`. אין להסתפק בחתימ
 ## Bundle ו-API
 
 `BridgeFinalityBundle` מכיל בדיוק `{ commitment, finality_proof }`. ה-commitment הוא
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }`. שדות MMR אופציונליים הם commitments בלבד; הם אינם
-סופיות ואינם הוכחת הכללה.
+`{ chain_id, height_context_id, block_height, block_hash }`.
 
 - `GET /v1/bridge/finality/{height}` מחזיר `BridgeFinalityProof`;
 - `GET /v1/bridge/finality/bundle/{height}` מחזיר `BridgeFinalityBundle`.

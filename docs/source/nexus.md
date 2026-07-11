@@ -359,10 +359,9 @@ Configuration and Determinism
   Lifecycle effects publish only with the committed block, replay identically
   on every peer, reconcile lane storage before state publication, and refresh
   queue routing after publication. A block accepts at most one lifecycle
-  transition. The former `POST /v1/nexus/lifecycle` node-local mutation route
-  is retained only to return `403 local_lane_lifecycle_disabled`; it never
-  mutates state. Submit the signed transaction through the normal transaction
-  endpoint instead.
+  transition. There is no node-local HTTP mutation route: `POST /v1/nexus/lifecycle`
+  is unregistered and resolves as a wrong method on the read-only resource.
+  Submit the signed transaction through the normal transaction endpoint instead.
 - **Status discovery:** `GET /v1/nexus/lifecycle` is a read-only, access-policy
   checked endpoint that negotiates JSON or native Norito. Its versioned response
   contains `nexus_enabled`, the exact canonical `lane_count`/`lanes`, and the

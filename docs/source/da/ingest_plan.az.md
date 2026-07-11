@@ -52,7 +52,7 @@ Yük yükü Norito kodlu `DaIngestRequest`-dir. Cavablardan istifadə
 | 500 Daxili xəta | Gözlənilməz uğursuzluq (daxil edilmiş + xəbərdarlıq). |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ paket hash. Öhdəlik siyahısı/sübut son nöqtələri SDK-lar üçün eyni pa
 sübutu aktiv siyasət dəstinə bağlamaq üçün əlavə gediş-gəlişə ehtiyac yoxdur.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

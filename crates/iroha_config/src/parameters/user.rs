@@ -53,53 +53,6 @@ type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct ApiVersionLabel {
-    major: u16,
-    minor: u16,
-}
-
-impl ApiVersionLabel {
-    fn parse(raw: &str) -> Option<Self> {
-        let trimmed = raw.trim().trim_start_matches('v');
-        let mut parts = trimmed.split('.');
-        let major = parts.next()?.parse::<u16>().ok()?;
-        let minor = parts.next().unwrap_or("0").parse::<u16>().ok()?;
-        if parts.next().is_some() {
-            return None;
-        }
-        Some(Self { major, minor })
-    }
-
-    fn render(&self) -> String {
-        format!("{}.{}", self.major, self.minor)
-    }
-}
-
-fn normalize_version_list(raw: Vec<String>, field: &str) -> Vec<ApiVersionLabel> {
-    let mut versions = Vec::new();
-    let mut invalid = Vec::new();
-    for label in raw {
-        match ApiVersionLabel::parse(&label) {
-            Some(parsed) => versions.push(parsed),
-            None => invalid.push(label),
-        }
-    }
-    if !invalid.is_empty() {
-        panic!(
-            "invalid semantic version(s) in `{}`: {}; expected labels like `1.0` or `v1.1`",
-            field,
-            invalid.join(", ")
-        );
-    }
-    if versions.is_empty() {
-        panic!("`{field}` must contain at least one semantic version (major.minor)");
-    }
-    versions.sort();
-    versions.dedup();
-    versions
-}
-
 fn normalize_jdg_signature_schemes(raw: Vec<String>) -> BTreeSet<JdgSignatureScheme> {
     let mut schemes = BTreeSet::new();
     let mut invalid = Vec::new();
@@ -12741,6 +12694,25 @@ impl NexusFees {
                 return None;
             }
         };
+        for (field, value) in [
+            ("base_fee", &self.base_fee),
+            ("per_byte_fee", &self.per_byte_fee),
+            ("per_instruction_fee", &self.per_instruction_fee),
+            ("per_gas_unit_fee", &self.per_gas_unit_fee),
+            ("sponsor_max_fee", &self.sponsor_max_fee),
+            (
+                "sponsor_verified_balance_safety_floor",
+                &self.sponsor_verified_balance_safety_floor,
+            ),
+        ] {
+            if value.mantissa().is_negative() {
+                emitter.emit(
+                    Report::new(ParseError::InvalidNexusConfig)
+                        .attach(format!("nexus.fees.{field} must be non-negative")),
+                );
+                return None;
+            }
+        }
         if self.fee_sink_account_id.trim().is_empty() {
             emitter.emit(
                 Report::new(ParseError::InvalidNexusConfig)
@@ -12968,6 +12940,43 @@ mod nexus_asset_selector_tests {
         let mut emitter = Emitter::new();
         assert!(cfg.parse(&mut emitter).is_none());
         assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn nexus_fees_parse_rejects_negative_numeric_fields() {
+        let negative = Numeric::new(-1_i32, 0);
+        let cases = [
+            NexusFees {
+                base_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                per_byte_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                per_instruction_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                per_gas_unit_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                sponsor_max_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                sponsor_verified_balance_safety_floor: negative,
+                ..NexusFees::default()
+            },
+        ];
+
+        for cfg in cases {
+            let mut emitter = Emitter::new();
+            assert!(cfg.parse(&mut emitter).is_none());
+            assert!(emitter.into_result().is_err());
+        }
     }
 }
 
@@ -15937,17 +15946,6 @@ pub struct Torii {
     /// Listening address for the public Torii API.
     #[config(env = "API_ADDRESS")]
     pub address: WithOrigin<SocketAddr>,
-    /// Supported Torii API versions (semantic `major.minor`, oldest → newest).
-    #[config(default = "defaults::torii::api_supported_versions()")]
-    pub api_versions: Vec<String>,
-    /// Default Torii API version assumed when the header is omitted.
-    #[config(default = "defaults::torii::api_default_version()")]
-    pub api_version_default: String,
-    /// Minimum Torii API version required for proof/staking/fee endpoints.
-    #[config(default = "defaults::torii::api_min_proof_version()")]
-    pub api_min_proof_version: String,
-    /// Optional unix timestamp when the oldest supported API version sunsets.
-    pub api_version_sunset_unix: Option<u64>,
     /// Maximum HTTP payload size accepted by the API.
     #[config(default = "defaults::torii::MAX_CONTENT_LEN")]
     pub max_content_len: Bytes<u64>,
@@ -16670,56 +16668,6 @@ impl Torii {
     }
 
     fn parse(self, emitter: &mut Emitter<ParseError>) -> (actual::Torii, actual::LiveQueryStore) {
-        let configured_versions = if self.api_versions.is_empty() {
-            super::defaults::torii::api_supported_versions()
-        } else {
-            self.api_versions.clone()
-        };
-        let supported_versions = normalize_version_list(configured_versions, "torii.api_versions");
-        let default_version = ApiVersionLabel::parse(&self.api_version_default).unwrap_or_else(|| {
-            panic!(
-                "invalid `torii.api_version_default` `{}`; expected a semantic version like `1.0`",
-                self.api_version_default
-            )
-        });
-        let min_proof_version =
-            ApiVersionLabel::parse(&self.api_min_proof_version).unwrap_or_else(|| {
-                panic!(
-                    "invalid `torii.api_min_proof_version` `{}`; expected a semantic version like `1.0`",
-                    self.api_min_proof_version
-                )
-            });
-        let newest_supported = *supported_versions
-            .last()
-            .expect("torii.api_versions contains at least one entry");
-        if !supported_versions.contains(&default_version) {
-            panic!(
-                "`torii.api_version_default` (`{}`) must be listed in `torii.api_versions`",
-                self.api_version_default
-            );
-        }
-        if !supported_versions.contains(&min_proof_version) {
-            panic!(
-                "`torii.api_min_proof_version` (`{}`) must be listed in `torii.api_versions`",
-                self.api_min_proof_version
-            );
-        }
-        if min_proof_version > newest_supported {
-            panic!(
-                "`torii.api_min_proof_version` (`{}`) exceeds the newest supported version `{}`",
-                self.api_min_proof_version,
-                newest_supported.render()
-            );
-        }
-        let api_versions: Vec<String> = supported_versions
-            .iter()
-            .map(ApiVersionLabel::render)
-            .collect();
-        let api_version_default = default_version.render();
-        let api_min_proof_version = min_proof_version.render();
-        let api_version_sunset_unix = self
-            .api_version_sunset_unix
-            .or(super::defaults::torii::API_SUNSET_UNIX);
         let rbc_sampling = self.build_rbc_sampling();
         let default_list_limit = std::num::NonZeroU32::new(self.app_api_default_list_limit.max(1))
             .unwrap_or(nonzero!(1_u32));
@@ -16754,10 +16702,6 @@ impl Torii {
         );
         let torii = actual::Torii {
             address: self.address,
-            api_versions,
-            api_version_default,
-            api_min_proof_version,
-            api_version_sunset_unix,
             max_content_len: self.max_content_len,
             data_dir: self.data_dir,
             receipt_signer,

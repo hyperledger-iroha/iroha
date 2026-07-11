@@ -2402,7 +2402,8 @@ mod tests {
             .finality_artifact
             .commit_qc
             .aggregate_signature[0] ^= 0x80;
-        let mut verifier = BridgeFinalityVerifier::with_context(context.chain_id, context.id());
+        let mut verifier =
+            BridgeFinalityVerifier::with_context(context.chain_id.clone(), context.id());
 
         assert!(matches!(
             verifier.verify(&fixture.proof),

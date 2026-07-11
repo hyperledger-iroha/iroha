@@ -116,8 +116,7 @@ fn checked_int_div_rem(
     ))
 }
 
-fn wrap_int_result(result: Result<BigInt, BigIntError>) -> Result<BigInt, BigIntError> {
-    let value = result?;
+fn wrap_int_result(value: BigInt) -> Result<BigInt, BigIntError> {
     let source = value.to_twos_bytes();
     let extension = if value.is_negative() { 0xff } else { 0x00 };
     let mut low = vec![extension; MAX_MANTISSA_BYTES];
@@ -189,19 +188,30 @@ fn observe_work(vm: &mut IVM, step: NumericWorkStep) -> Result<(), VMError> {
         NumericWorkStep::CanonicalityProbe { .. } => SyscallMeteringPhase::CanonicalValidation,
         NumericWorkStep::Normalize { .. } => SyscallMeteringPhase::Normalization,
         NumericWorkStep::ScaleByPowerOfTen { .. }
+        | NumericWorkStep::Materialize { .. }
         | NumericWorkStep::Negate { .. }
         | NumericWorkStep::Add { .. }
         | NumericWorkStep::Subtract { .. }
         | NumericWorkStep::Multiply { .. }
         | NumericWorkStep::ExactDivisionAttempt { .. }
+        | NumericWorkStep::DivisionClassificationPrepare { .. }
         | NumericWorkStep::DivisionClassification { .. }
-        | NumericWorkStep::RoundedDivision { .. } => SyscallMeteringPhase::Arithmetic,
+        | NumericWorkStep::RoundedDivision { .. }
+        | NumericWorkStep::Finalize { .. } => SyscallMeteringPhase::Arithmetic,
     };
     vm.charge_syscall_stage(phase, numeric_gas::work_step_gas(step)?)
 }
 
 fn limb_count(value: &BigInt) -> u64 {
     numeric_gas::limbs_for_bits(u64::try_from(value.bit_len()).unwrap_or(u64::MAX))
+}
+
+fn twos_limb_count(value: &BigInt) -> Result<u64, VMError> {
+    let magnitude_bits = u64::try_from(value.bit_len()).map_err(|_| VMError::GasCostOverflow)?;
+    let conservative_signed_bits = magnitude_bits
+        .checked_add(1)
+        .ok_or(VMError::GasCostOverflow)?;
+    Ok(numeric_gas::limbs_for_bits(conservative_signed_bits))
 }
 
 fn charge_limb_work(vm: &mut IVM, work: u64) -> Result<(), VMError> {
@@ -215,21 +225,57 @@ fn charge_unary(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
     charge_limb_work(vm, limb_count(value))
 }
 
+fn charge_checked_unary(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
+    charge_limb_work(vm, numeric_gas::checked_int_unary_work(limb_count(value))?)
+}
+
 fn charge_additive(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
     charge_limb_work(vm, limb_count(lhs).max(limb_count(rhs)))
 }
 
-fn charge_multiplication(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
+fn charge_checked_additive(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
     charge_limb_work(
         vm,
-        numeric_gas::multiplication_work(limb_count(lhs), limb_count(rhs))?,
+        numeric_gas::checked_int_additive_work(limb_count(lhs), limb_count(rhs))?,
     )
 }
 
-fn charge_division(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
+fn charge_wrapping_additive(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
     charge_limb_work(
         vm,
-        numeric_gas::quotient_remainder_work(limb_count(lhs), limb_count(rhs))?,
+        numeric_gas::wrapping_additive_work(limb_count(lhs), limb_count(rhs))?,
+    )
+}
+
+fn charge_checked_multiplication(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
+    charge_limb_work(
+        vm,
+        numeric_gas::checked_int_multiplication_work(limb_count(lhs), limb_count(rhs))?,
+    )
+}
+
+fn charge_wrapping_multiplication(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
+    charge_limb_work(
+        vm,
+        numeric_gas::wrapping_multiplication_work(limb_count(lhs), limb_count(rhs))?,
+    )
+}
+
+fn charge_checked_division(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
+    charge_limb_work(
+        vm,
+        numeric_gas::checked_int_division_work(limb_count(lhs), limb_count(rhs))?,
+    )
+}
+
+fn charge_wrapping_unary(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
+    charge_limb_work(vm, numeric_gas::wrapping_unary_work(limb_count(value))?)
+}
+
+fn charge_wrapping_reduction(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
+    charge_limb_work(
+        vm,
+        numeric_gas::wrapping_reduction_work(twos_limb_count(value)?)?,
     )
 }
 
@@ -347,7 +393,7 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         syscalls::SYSCALL_INT_NEG => {
             let value = decode_int_register(vm, 10)?;
             let mode = failure_mode(vm, &[11, 12, 13])?;
-            charge_unary(vm, &value)?;
+            charge_checked_unary(vm, &value)?;
             if let Some(result) =
                 resolve_bigint_failure(vm, mode, checked_int_result(value.checked_neg()))?
             {
@@ -358,7 +404,7 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
             let lhs = decode_int_register(vm, 10)?;
             let rhs = decode_int_register(vm, 11)?;
             let mode = failure_mode(vm, &[12, 13])?;
-            charge_additive(vm, &lhs, &rhs)?;
+            charge_checked_additive(vm, &lhs, &rhs)?;
             let result = if number == syscalls::SYSCALL_INT_ADD {
                 lhs.checked_add(&rhs)
             } else {
@@ -372,7 +418,7 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
             let lhs = decode_int_register(vm, 10)?;
             let rhs = decode_int_register(vm, 11)?;
             let mode = failure_mode(vm, &[12, 13])?;
-            charge_multiplication(vm, &lhs, &rhs)?;
+            charge_checked_multiplication(vm, &lhs, &rhs)?;
             if let Some(result) =
                 resolve_bigint_failure(vm, mode, checked_int_result(lhs.checked_mul(&rhs)))?
             {
@@ -390,7 +436,7 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                     return Ok(0);
                 }
             }
-            charge_division(vm, &lhs, &rhs)?;
+            charge_checked_division(vm, &lhs, &rhs)?;
             if let Some((quotient, remainder)) =
                 resolve_bigint_failure(vm, mode, checked_int_div_rem(lhs.checked_div_rem(&rhs)))?
             {
@@ -418,30 +464,40 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         }
         syscalls::SYSCALL_INT_WRAP_NEG => {
             let value = decode_int_register(vm, 10)?;
-            charge_unary(vm, &value)?;
-            let result = wrap_int_result(value.checked_neg())
+            charge_wrapping_unary(vm, &value)?;
+            let intermediate = value
+                .checked_neg()
                 .expect("a 512-bit operand negation fits the generic bigint domain");
+            charge_wrapping_reduction(vm, &intermediate)?;
+            let result = wrap_int_result(intermediate)
+                .expect("a 512-bit operand reduction fits the generic bigint domain");
             publish_int(vm, &result)?;
         }
         syscalls::SYSCALL_INT_WRAP_ADD | syscalls::SYSCALL_INT_WRAP_SUB => {
             let lhs = decode_int_register(vm, 10)?;
             let rhs = decode_int_register(vm, 11)?;
-            charge_additive(vm, &lhs, &rhs)?;
-            let result = if number == syscalls::SYSCALL_INT_WRAP_ADD {
+            charge_wrapping_additive(vm, &lhs, &rhs)?;
+            let intermediate = if number == syscalls::SYSCALL_INT_WRAP_ADD {
                 lhs.checked_add(&rhs)
             } else {
                 lhs.checked_sub(&rhs)
-            };
-            let result = wrap_int_result(result)
+            }
+            .expect("512-bit add/sub intermediates fit the generic bigint domain");
+            charge_wrapping_reduction(vm, &intermediate)?;
+            let result = wrap_int_result(intermediate)
                 .expect("512-bit add/sub intermediates fit the generic bigint domain");
             publish_int(vm, &result)?;
         }
         syscalls::SYSCALL_INT_WRAP_MUL => {
             let lhs = decode_int_register(vm, 10)?;
             let rhs = decode_int_register(vm, 11)?;
-            charge_multiplication(vm, &lhs, &rhs)?;
-            let result = wrap_int_result(lhs.checked_mul(&rhs))
+            charge_wrapping_multiplication(vm, &lhs, &rhs)?;
+            let intermediate = lhs
+                .checked_mul(&rhs)
                 .expect("512-bit multiplication intermediates fit the generic bigint domain");
+            charge_wrapping_reduction(vm, &intermediate)?;
+            let result = wrap_int_result(intermediate)
+                .expect("512-bit multiplication reduction fits the generic bigint domain");
             publish_int(vm, &result)?;
         }
         syscalls::SYSCALL_DECIMAL_FROM_INT => {

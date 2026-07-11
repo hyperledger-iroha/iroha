@@ -80,7 +80,7 @@ snapshot through the SoraFS-scoped reputation API:
 - `GET /v1/sorafs/reputation/events/stream?since=N&limit=N`: stream
   `reputation_snapshot` server-sent events. Torii emits the optional backlog
   selected by `since`/`limit` before waiting for live snapshot publications.
-- `GET /ws/reputation?since=N&limit=N`: upgrade to a WebSocket that emits
+- `GET /v1/sorafs/reputation/events/ws?since=N&limit=N`: upgrade to a WebSocket that emits
   `reputation_snapshot` JSON text frames for the same backlog and live
   publications. If a client falls behind, Torii sends an `event = "lagged"`
   frame so the client can resynchronize through the REST event list.

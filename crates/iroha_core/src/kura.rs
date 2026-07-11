@@ -59,6 +59,7 @@ use iroha_data_model::{
         decode_framed_signed_block,
     },
     consensus::{Qc, ValidatorSetCheckpoint},
+    isi::offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
     merge::{
         MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
         MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch,
@@ -66,7 +67,10 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleParameterV1},
     peer::PeerId,
-    transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    transaction::{
+        Executable,
+        signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    },
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
@@ -409,6 +413,7 @@ type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
 type BlockHeightIndex = BTreeMap<HashOf<BlockHeader>, NonZeroUsize>;
 type TransactionEntrypointHeights = BTreeMap<HashOf<TransactionEntrypoint>, BTreeSet<NonZeroUsize>>;
 type TransactionHashHeights = BTreeMap<HashOf<SignedTransaction>, BTreeSet<NonZeroUsize>>;
+type OfflineOperationHeights = BTreeMap<(AccountId, [u8; 32]), BTreeSet<NonZeroUsize>>;
 type TransactionAuthorityHeights = BTreeMap<AccountId, BTreeSet<NonZeroUsize>>;
 type TransactionTimestampHeights = BTreeMap<u64, BTreeSet<NonZeroUsize>>;
 type TransactionResultStatusHeights = BTreeMap<bool, BTreeSet<NonZeroUsize>>;
@@ -572,6 +577,7 @@ struct TransactionEntrypointIndex {
     indexed_heights: BTreeSet<NonZeroUsize>,
     heights_by_entrypoint: TransactionEntrypointHeights,
     heights_by_transaction: TransactionHashHeights,
+    heights_by_offline_operation_id: OfflineOperationHeights,
     heights_by_authority: TransactionAuthorityHeights,
     heights_by_timestamp_ms: TransactionTimestampHeights,
     heights_by_result_status: TransactionResultStatusHeights,
@@ -584,6 +590,7 @@ impl TransactionEntrypointIndex {
             indexed_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
             heights_by_transaction: BTreeMap::new(),
+            heights_by_offline_operation_id: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
@@ -625,6 +632,73 @@ pub(crate) struct CommitManifest {
     post_state_root: Option<Hash>,
     wsv_checkpoint_hash: Hash,
     commit_qc_hash: Option<Hash>,
+}
+
+/// Known immutable Kagemusha top-up finality sidecar formats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum KagemushaTopUpFinalitySidecarFormat {
+    /// Canonical bounded block-local top-up tree and Commit-QC binding.
+    #[codec(index = 1)]
+    Current,
+}
+
+/// One canonical Kagemusha top-up anchor and its block-local Merkle path.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct KagemushaTopUpFinalityLeaf {
+    /// Top-up operation identifier (the bytes following witness key tag `0xD1`).
+    pub operation_id: [u8; 32],
+    /// Digest of the complete on-chain top-up anchor.
+    pub anchor_digest: [u8; 32],
+    /// Zero-based position in canonical operation-id order.
+    pub leaf_index: u32,
+    /// Number of real leaves in the block-local tree.
+    pub leaf_count: u32,
+    /// Merkle siblings from leaf level to root.
+    pub siblings: Vec<Hash>,
+}
+
+/// Immutable Kura record used to serve a finalized Kagemusha top-up proof.
+///
+/// The sidecar intentionally retains only the bounded top-up subtree, the
+/// ordinary-write root needed to reconstruct the consensus post-state root,
+/// and the exact Commit QC. Unrelated execution-witness values are not copied.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct KagemushaTopUpFinalitySidecar {
+    /// Schema/evolution discriminator.
+    pub format: KagemushaTopUpFinalitySidecarFormat,
+    /// Numeric format version, bound independently from the enum codec index.
+    pub version: u16,
+    /// Canonical block height.
+    pub height: u64,
+    /// Canonical block hash.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Root of all non-Kagemusha writes in the execution witness.
+    pub ordinary_writes_root: Hash,
+    /// Root of the canonical bounded top-up tree.
+    pub topup_anchor_root: Hash,
+    /// Consensus post-state root certified by `commit_qc`.
+    pub post_state_root: Hash,
+    /// Exact Commit QC which finalized this block and post-state root.
+    pub commit_qc: Qc,
+    /// Canonically sorted top-up leaves and their exact paths.
+    pub leaves: Vec<KagemushaTopUpFinalityLeaf>,
+}
+
+impl KagemushaTopUpFinalitySidecar {
+    /// Current numeric sidecar version.
+    pub const VERSION: u16 = 1;
+
+    /// Return the proof leaf for an exact operation id.
+    #[must_use]
+    pub fn leaf_for_operation(
+        &self,
+        operation_id: &[u8; 32],
+    ) -> Option<&KagemushaTopUpFinalityLeaf> {
+        self.leaves
+            .binary_search_by_key(operation_id, |leaf| leaf.operation_id)
+            .ok()
+            .and_then(|index| self.leaves.get(index))
+    }
 }
 
 impl CommitManifest {
@@ -1293,6 +1367,7 @@ impl Kura {
             indexed_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
             heights_by_transaction: BTreeMap::new(),
+            heights_by_offline_operation_id: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
@@ -1329,6 +1404,9 @@ impl Kura {
                 .insert(height);
         }
         let entrypoints = block.entrypoints_cloned().collect::<Vec<_>>();
+        for entrypoint in &entrypoints {
+            Self::insert_offline_operation_id_heights(index, height, entrypoint);
+        }
         for hash in crate::state::committed_transaction_hashes_for_entrypoints(&entrypoints) {
             index
                 .heights_by_transaction
@@ -1356,6 +1434,43 @@ impl Kura {
             index
                 .heights_by_result_status
                 .entry(result.as_ref().is_ok())
+                .or_default()
+                .insert(height);
+        }
+    }
+
+    fn insert_offline_operation_id_heights(
+        index: &mut TransactionEntrypointIndex,
+        height: NonZeroUsize,
+        entrypoint: &TransactionEntrypoint,
+    ) {
+        let transaction = match entrypoint {
+            TransactionEntrypoint::External(transaction) => transaction,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::PrivateKaigi(_)
+            | TransactionEntrypoint::Time(_) => return,
+        };
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return;
+        };
+        let transaction_authority = transaction.authority();
+        for instruction in instructions.iter() {
+            let any = instruction.as_any();
+            let operation_id = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV2>()
+            {
+                top_up.request.authorization.operation_id
+            } else if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV2>() {
+                redeem.request.authorization.operation_id
+            } else {
+                continue;
+            };
+            if operation_id == [0; 32] {
+                continue;
+            }
+            index
+                .heights_by_offline_operation_id
+                .entry((transaction_authority.clone(), operation_id))
                 .or_default()
                 .insert(height);
         }
@@ -1424,6 +1539,7 @@ impl Kura {
     ) {
         for execution in &batch.lanes {
             for entrypoint in &execution.entrypoints {
+                Self::insert_offline_operation_id_heights(index, height, entrypoint);
                 index
                     .heights_by_entrypoint
                     .entry(entrypoint.hash())
@@ -1473,6 +1589,10 @@ impl Kura {
             heights.remove(&height);
             !heights.is_empty()
         });
+        index.heights_by_offline_operation_id.retain(|_, heights| {
+            heights.remove(&height);
+            !heights.is_empty()
+        });
         index.heights_by_authority.retain(|_, heights| {
             heights.remove(&height);
             !heights.is_empty()
@@ -1493,6 +1613,7 @@ impl Kura {
         height: usize,
         block: &SignedBlock,
         chain_len: usize,
+        merge_entry: Option<&MergeLedgerEntry>,
     ) {
         let Some(height) = NonZeroUsize::new(height) else {
             return;
@@ -1500,17 +1621,10 @@ impl Kura {
         let mut index = self.transaction_entrypoint_index.lock();
         Self::remove_transaction_entrypoint_height(&mut index, height);
         Self::insert_transaction_entrypoint_heights(&mut index, height, block);
+        if let Some(batch) = merge_entry.and_then(|entry| entry.execution_batch.as_ref()) {
+            Self::insert_merge_execution_index_heights(&mut index, height, batch);
+        }
         index.complete = index.indexed_heights.len() == chain_len;
-    }
-
-    fn set_merge_transaction_index_entry(&self, height: usize, entry: &MergeLedgerEntry) {
-        let (Some(height), Some(batch)) =
-            (NonZeroUsize::new(height), entry.execution_batch.as_ref())
-        else {
-            return;
-        };
-        let mut index = self.transaction_entrypoint_index.lock();
-        Self::insert_merge_execution_index_heights(&mut index, height, batch);
     }
 
     fn truncate_transaction_heights<K: Ord>(
@@ -1530,6 +1644,7 @@ impl Kura {
             .retain(|indexed_height| indexed_height.get() <= keep);
         Self::truncate_transaction_heights(&mut index.heights_by_entrypoint, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_transaction, keep);
+        Self::truncate_transaction_heights(&mut index.heights_by_offline_operation_id, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_authority, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_timestamp_ms, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_result_status, keep);
@@ -2785,25 +2900,50 @@ impl Kura {
         Ok(())
     }
 
-    /// Restore snapshot lane storage through the durable geometry journal.
+    /// Reject legacy snapshot lane restore without retained-lineage evidence.
     ///
-    /// Unlike [`Self::restore_lane_segments`], this recovery path never creates
-    /// an empty active dynamic-lane segment. It first rolls retained filesystem
-    /// transitions forward or backward to the snapshot-authoritative catalog,
-    /// then verifies the incarnation marker for every active segment.
+    /// This entry point is retained for source compatibility, but its arguments
+    /// identify only active lanes. They cannot authenticate retired incarnation
+    /// history, so production recovery must use the exact-lineage restore path.
     ///
     /// # Errors
-    /// Returns an [`Error`] if the journal is corrupt, its transition history
-    /// cannot reach the authoritative catalog, an active dynamic segment is
-    /// missing, or a path/marker does not match the restored incarnation.
+    /// Always returns an [`Error`] because the exact retained-lineage commitment
+    /// is absent from this legacy signature.
     pub fn restore_lane_segments_with_geometry(
         &self,
         lane_config: &LaneConfig,
         incarnations: &BTreeMap<LaneId, Hash>,
         activation_heights: &BTreeMap<LaneId, u64>,
     ) -> Result<()> {
-        self.recover_lane_geometry_journal(lane_config, incarnations, activation_heights)?;
+        let _ = (lane_config, incarnations, activation_heights);
+        Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "exact retained lane-incarnation lineage is required for geometry restore",
+            ),
+            self.lane_geometry_journal_path(),
+        ))
+    }
 
+    /// Restore snapshot lane storage against an exact retained-lineage commitment.
+    pub(crate) fn restore_lane_segments_with_geometry_and_lineage_root(
+        &self,
+        lane_config: &LaneConfig,
+        incarnations: &BTreeMap<LaneId, Hash>,
+        activation_heights: &BTreeMap<LaneId, u64>,
+        lineage_root: Hash,
+    ) -> Result<()> {
+        self.recover_lane_geometry_journal_with_lineage_root(
+            lane_config,
+            incarnations,
+            activation_heights,
+            lineage_root,
+        )?;
+
+        self.finish_restored_lane_segments_with_geometry(lane_config)
+    }
+
+    fn finish_restored_lane_segments_with_geometry(&self, lane_config: &LaneConfig) -> Result<()> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
@@ -3568,7 +3708,7 @@ impl Kura {
         }
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(usize::try_from(metadata.len())?)?;
-        file.by_ref()
+        Read::by_ref(&mut file)
             .take(u64::try_from(byte_limit.saturating_add(1))?)
             .read_to_end(&mut bytes)
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
@@ -3799,9 +3939,10 @@ impl Kura {
         Ok(())
     }
 
-    fn validate_merge_carrier_record(
+    fn validate_merge_carrier_record_against_block(
         &self,
         record: MergeLedgerCarrierRecord,
+        block: &SignedBlock,
     ) -> Result<MergeLedgerEntry> {
         let persisted = self
             .read_merge_carrier_path(&self.merge_carrier_path(record.block_height))?
@@ -3825,13 +3966,7 @@ impl Kura {
                 record.entry_hash, record.block_height
             )));
         }
-        let block = self.get_block(height).ok_or_else(|| {
-            Error::MergeCarrierConflict(format!(
-                "carrier block {} body is unavailable; compact merge reference cannot be revalidated",
-                record.block_height
-            ))
-        })?;
-        let reference = Self::block_merge_reference(&block).ok_or_else(|| {
+        let reference = Self::block_merge_reference(block).ok_or_else(|| {
             Error::MergeCarrierConflict(format!(
                 "carrier block {} no longer contains a compact merge reference",
                 record.block_height
@@ -3871,6 +4006,58 @@ impl Kura {
         Ok(entry)
     }
 
+    fn validate_merge_carrier_record(
+        &self,
+        record: MergeLedgerCarrierRecord,
+    ) -> Result<MergeLedgerEntry> {
+        let height = NonZeroUsize::new(usize::try_from(record.block_height)?)
+            .ok_or_else(|| Error::MergeCarrierConflict("carrier height is zero".to_owned()))?;
+        let block = self.get_block(height).ok_or_else(|| {
+            Error::MergeCarrierConflict(format!(
+                "carrier block {} body is unavailable; compact merge reference cannot be revalidated",
+                record.block_height
+            ))
+        })?;
+        self.validate_merge_carrier_record_against_block(record, block.as_ref())
+    }
+
+    fn merge_carrier_record_for_block(
+        &self,
+        block_height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Result<Option<MergeLedgerCarrierRecord>> {
+        let record = {
+            let _guard = self.merge_carrier_lock.lock();
+            let _ = self.merge_carrier_records_unlocked()?;
+            self.merge_carrier_index
+                .lock()
+                .by_height
+                .get(&block_height)
+                .copied()
+        };
+        match record {
+            None => Ok(None),
+            Some(record) if record.block_hash == block_hash => Ok(Some(record)),
+            Some(record) => Err(Error::MergeCarrierConflict(format!(
+                "carrier record for block {} binds hash {} instead of canonical hash {}",
+                block_height, record.block_hash, block_hash
+            ))),
+        }
+    }
+
+    fn merge_entry_for_loaded_carrier(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        let Some(record) =
+            self.merge_carrier_record_for_block(block.header().height().get(), block.hash())?
+        else {
+            return Ok(None);
+        };
+        self.validate_merge_carrier_record_against_block(record, block)
+            .map(Some)
+    }
+
     /// Resolve the exact canonical carrier for a committed merge entry hash.
     ///
     /// # Errors
@@ -3904,31 +4091,29 @@ impl Kura {
         block_height: u64,
         block_hash: HashOf<BlockHeader>,
     ) -> Result<Option<MergeLedgerEntry>> {
-        let record = {
-            let _guard = self.merge_carrier_lock.lock();
-            let _ = self.merge_carrier_records_unlocked()?;
-            self.merge_carrier_index
-                .lock()
-                .by_height
-                .get(&block_height)
-                .copied()
-        };
-        let Some(record) = record.filter(|record| record.block_hash == block_hash) else {
+        let Some(record) = self.merge_carrier_record_for_block(block_height, block_hash)? else {
             return Ok(None);
         };
         let entry = self.validate_merge_carrier_record(record)?;
         Ok(Some(entry))
     }
 
-    /// Resolve a complete execution entry carried by an exact global block.
-    pub(crate) fn merge_execution_entry_for_carrier(
+    /// Resolve the complete committed merge entry carried at a canonical block height.
+    ///
+    /// The lookup is index-backed and validates the sparse carrier record, canonical
+    /// block hash, compact block reference, and full merge-log entry before returning.
+    ///
+    /// # Errors
+    /// Returns an error when the canonical carrier metadata or full merge entry is
+    /// unavailable, malformed, or inconsistent with the block log.
+    pub fn get_merge_entry_by_carrier_height(
         &self,
-        block_height: u64,
-        block_hash: HashOf<BlockHeader>,
+        block_height: NonZeroUsize,
     ) -> Result<Option<MergeLedgerEntry>> {
-        Ok(self
-            .merge_entry_for_carrier(block_height, block_hash)?
-            .filter(|entry| entry.execution_batch.is_some()))
+        let Some(block_hash) = self.get_block_hash(block_height) else {
+            return Ok(None);
+        };
+        self.merge_entry_for_carrier(u64::try_from(block_height.get())?, block_hash)
     }
 
     /// Return every globally carried execution entry in sparse carrier order.
@@ -4008,7 +4193,12 @@ impl Kura {
                 )));
             }
             self.append_committed_merge_entry_for_block_if_missing(&block, &entry)?;
-            self.set_merge_transaction_index_entry(height.get(), &entry);
+            self.set_transaction_entrypoint_index_entry(
+                height.get(),
+                &block,
+                block_count,
+                Some(&entry),
+            );
             self.remove_pending_certified_merge_entry(reference.entry_hash)?;
         }
         Ok(())
@@ -5219,6 +5409,28 @@ impl Kura {
         })
     }
 
+    /// Resolve the earliest block height containing an issuer-bound offline operation.
+    ///
+    /// The outer `None` means the in-memory transaction index is partial. An inner `None`
+    /// means the complete index contains no operation with both the requested outer transaction
+    /// authority and signed operation identifier. Binding the lookup to the outer authority keeps
+    /// a rejected transaction from another authority from shadowing a Torii-issued operation.
+    /// Returning only the earliest height bounds request-time work even if invalid historical data
+    /// reused an identifier within one issuer namespace.
+    pub fn get_earliest_block_height_by_offline_operation_id(
+        &self,
+        issuer: &AccountId,
+        operation_id: [u8; 32],
+    ) -> Option<Option<NonZeroUsize>> {
+        let index = self.transaction_entrypoint_index.lock();
+        index.complete.then(|| {
+            index
+                .heights_by_offline_operation_id
+                .get(&(issuer.clone(), operation_id))
+                .and_then(|heights| heights.first().copied())
+        })
+    }
+
     /// Resolve block heights containing committed transactions with the given authority.
     ///
     /// Returns `None` when the in-memory transaction index is known to be partial.
@@ -5471,11 +5683,41 @@ impl Kura {
         }
 
         let block_arc = Arc::new(block);
-        self.set_transaction_entrypoint_index_entry(
-            block_index.saturating_add(1),
-            block_arc.as_ref(),
-            chain_len,
-        );
+        let carrier_height = block_index.saturating_add(1);
+        let merge_entry = if Self::block_merge_reference(&block_arc).is_some() {
+            match self.merge_entry_for_loaded_carrier(block_arc.as_ref()) {
+                Ok(Some(entry)) => Some(entry),
+                Ok(None) => {
+                    error!(
+                        carrier_height,
+                        ?expected_hash,
+                        "Loaded merge carrier block has no committed merge entry; preserving the existing transaction index"
+                    );
+                    None
+                }
+                Err(error) => {
+                    error!(
+                        ?error,
+                        carrier_height,
+                        ?expected_hash,
+                        "Failed to resolve merge entry for a loaded carrier block; preserving the existing transaction index"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let merge_index_available =
+            Self::block_merge_reference(&block_arc).is_none() || merge_entry.is_some();
+        if merge_index_available {
+            self.set_transaction_entrypoint_index_entry(
+                carrier_height,
+                block_arc.as_ref(),
+                chain_len,
+                merge_entry.as_ref(),
+            );
+        }
 
         if should_cache {
             let mut data = self.block_data.lock();
@@ -5603,6 +5845,127 @@ impl Kura {
         Self::v2_finality_artifact_path_for(&self.active_blocks_dir.lock(), height)
     }
 
+    fn v2_finality_cache_hit(
+        &self,
+        height: u64,
+        artifact_hash: HashOf<V2FinalityArtifact>,
+        metadata: &std::fs::Metadata,
+    ) -> bool {
+        let mut cache = self.v2_finality_verification_cache.lock();
+        let hit = cache.iter().position(|entry| {
+            entry.height == height
+                && entry.artifact_hash == artifact_hash
+                && Self::sidecar_file_metadata_unchanged(&entry.metadata, metadata)
+        });
+        let Some(position) = hit else {
+            cache.retain(|entry| entry.height != height);
+            return false;
+        };
+        let entry = cache
+            .remove(position)
+            .expect("located v2 finality cache entry exists");
+        cache.push_back(entry);
+        true
+    }
+
+    fn remember_verified_v2_finality(
+        &self,
+        height: u64,
+        artifact_hash: HashOf<V2FinalityArtifact>,
+        metadata: std::fs::Metadata,
+    ) {
+        let mut cache = self.v2_finality_verification_cache.lock();
+        cache.retain(|entry| entry.height != height);
+        while cache.len() >= V2_FINALITY_VERIFICATION_CACHE_CAPACITY {
+            cache.pop_front();
+        }
+        cache.push_back(VerifiedV2FinalityCacheEntry {
+            height,
+            artifact_hash,
+            metadata,
+        });
+    }
+
+    fn verify_v2_finality_crypto(&self, artifact: &V2FinalityArtifact) -> Result<()> {
+        #[cfg(test)]
+        self.v2_finality_crypto_verifications
+            .fetch_add(1, Ordering::Relaxed);
+        artifact.verify()?;
+        Ok(())
+    }
+
+    fn verify_v2_finality_artifact_at(
+        &self,
+        path: &Path,
+        artifact: &V2FinalityArtifact,
+    ) -> Result<()> {
+        let directory = self.v2_finality_artifact_dir();
+        let metadata = self
+            .regular_sidecar_metadata(path, &directory)?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "v2 finality sidecar disappeared before verification",
+                    ),
+                    path.to_path_buf(),
+                )
+            })?;
+        let artifact_hash = HashOf::new(artifact);
+        if self.v2_finality_cache_hit(artifact.height, artifact_hash, &metadata) {
+            return Ok(());
+        }
+
+        self.verify_v2_finality_crypto(artifact)?;
+        let after = self
+            .regular_sidecar_metadata(path, &directory)?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "v2 finality sidecar disappeared after verification",
+                    ),
+                    path.to_path_buf(),
+                )
+            })?;
+        if !Self::sidecar_file_metadata_unchanged(&metadata, &after) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "v2 finality sidecar changed during cryptographic verification",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        self.remember_verified_v2_finality(artifact.height, artifact_hash, after);
+        Ok(())
+    }
+
+    fn cache_newly_verified_v2_finality(
+        &self,
+        path: &Path,
+        artifact: &V2FinalityArtifact,
+    ) -> Result<()> {
+        let directory = self.v2_finality_artifact_dir();
+        let metadata = self
+            .regular_sidecar_metadata(path, &directory)?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "new v2 finality sidecar is missing after durable rename",
+                    ),
+                    path.to_path_buf(),
+                )
+            })?;
+        self.remember_verified_v2_finality(
+            artifact.height,
+            HashOf::new(artifact),
+            metadata,
+        );
+        Ok(())
+    }
+
     /// Return the chain-scoped root for consensus-v2 journals and transport stores.
     ///
     /// The returned directory is adjacent to Kura's canonical block and finality
@@ -5643,7 +6006,26 @@ impl Kura {
             .get_block(block_height)
             .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
         artifact.validate_for_header(&canonical_block.header())?;
-        artifact.verify()?;
+
+        let dir = self.v2_finality_artifact_dir();
+        let path = dir.join(format!("{height:020}.norito"));
+        if let Some(existing) = self.decode_v2_finality_artifact_at(&path)? {
+            existing.validate_for_header(&canonical_block.header())?;
+            self.verify_v2_finality_artifact_at(&path, &existing)?;
+            if existing != *artifact {
+                return Err(Error::ConflictingV2FinalityArtifact { height });
+            }
+            return Ok(v2_commit_receipt(&existing));
+        }
+
+        let bytes = artifact.encode();
+        if bytes.len() > MAX_V2_FINALITY_ARTIFACT_BYTES {
+            return Err(Error::V2FinalityArtifactTooLarge {
+                actual: bytes.len(),
+                max: MAX_V2_FINALITY_ARTIFACT_BYTES,
+            });
+        }
+        self.verify_v2_finality_crypto(artifact)?;
         #[cfg(test)]
         if self
             .fail_next_v2_finality_write
@@ -5655,28 +6037,12 @@ impl Kura {
             ));
         }
 
-        let dir = self.v2_finality_artifact_dir();
         create_dir_all_with_context(&dir)?;
         if let Some(parent) = dir.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
-
-        let path = dir.join(format!("{height:020}.norito"));
-        if let Some(existing) = self.decode_v2_finality_artifact_at(&path)? {
-            existing.verify()?;
-            if existing != *artifact {
-                return Err(Error::ConflictingV2FinalityArtifact { height });
-            }
-            return Ok(v2_commit_receipt(&existing));
-        }
-        let bytes = artifact.encode();
-        if bytes.len() > MAX_V2_FINALITY_ARTIFACT_BYTES {
-            return Err(Error::V2FinalityArtifactTooLarge {
-                actual: bytes.len(),
-                max: MAX_V2_FINALITY_ARTIFACT_BYTES,
-            });
-        }
         self.write_atomic_synced(&path, &bytes)?;
+        self.cache_newly_verified_v2_finality(&path, artifact)?;
         Ok(v2_commit_receipt(artifact))
     }
 
@@ -5693,7 +6059,7 @@ impl Kura {
             .map_err(Error::NoritoFrame)
     }
 
-    /// Read and structurally validate a v2 finality artifact for a durable block.
+    /// Read and cryptographically validate a v2 finality artifact for a durable block.
     ///
     /// A missing final path returns `Ok(None)`. Incomplete temporary files left
     /// before the atomic rename are ignored. A malformed final path or an
@@ -5701,15 +6067,15 @@ impl Kura {
     ///
     /// # Errors
     ///
-    /// Returns an error if decoding or structural validation fails, the height
-    /// is zero or absent from the durable chain, or the canonical hash differs.
+    /// Returns an error if decoding, header association, proof-of-possession,
+    /// or CommitQC verification fails, the height is zero or absent from the
+    /// durable chain, or the canonical header differs.
     pub fn v2_finality_artifact(&self, height: u64) -> Result<Option<V2FinalityArtifact>> {
         let _sidecar_guard = self.sidecar_lock.lock();
         let path = self.v2_finality_artifact_path(height);
         let Some(artifact) = self.decode_v2_finality_artifact_at(&path)? else {
             return Ok(None);
         };
-        artifact.verify()?;
 
         let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?) else {
             return Err(Error::NoritoFrame(norito::core::Error::Message(
@@ -5733,6 +6099,7 @@ impl Kura {
             });
         }
         artifact.validate_for_header(&canonical_block.header())?;
+        self.verify_v2_finality_artifact_at(&path, &artifact)?;
         Ok(Some(artifact))
     }
 
@@ -6490,12 +6857,16 @@ impl Kura {
                 self.ensure_durable_block_at_height(actual_height, block_hash)?;
                 self.persist_lane_payload_ownership_artifacts_for_block(block)?;
                 self.set_block_height_index_entry(actual_height_usize, block_hash);
-                self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
                 if let Some(entry) = merge_entry {
                     self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                    self.set_merge_transaction_index_entry(actual_height_usize, entry);
                     self.remove_pending_certified_merge_entry(entry.canonical_hash())?;
                 }
+                self.set_transaction_entrypoint_index_entry(
+                    actual_height_usize,
+                    block,
+                    chain_len,
+                    merge_entry,
+                );
                 debug!(
                     height = actual_height,
                     ?block_hash,
@@ -6526,12 +6897,16 @@ impl Kura {
                 batch.commit();
             }
             self.set_block_height_index_entry(actual_height_usize, block_hash);
-            self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
             if let Some(entry) = merge_entry {
                 self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                self.set_merge_transaction_index_entry(actual_height_usize, entry);
                 self.remove_pending_certified_merge_entry(entry.canonical_hash())?;
             }
+            self.set_transaction_entrypoint_index_entry(
+                actual_height_usize,
+                block,
+                chain_len,
+                merge_entry,
+            );
             debug!(
                 height = actual_height,
                 ?block_hash,
@@ -6614,10 +6989,12 @@ impl Kura {
         );
         let new_len = block_data.len();
         self.set_block_height_index_entry(actual_height_usize, block_hash);
-        self.set_transaction_entrypoint_index_entry(actual_height_usize, block, new_len);
-        if let Some(entry) = merge_entry {
-            self.set_merge_transaction_index_entry(actual_height_usize, entry);
-        }
+        self.set_transaction_entrypoint_index_entry(
+            actual_height_usize,
+            block,
+            new_len,
+            merge_entry,
+        );
         drop(block_data);
         self.append_debug_block_dump(block);
 
@@ -7649,7 +8026,7 @@ impl Kura {
                 self.ensure_durable_block_at_height(height, block_hash)?;
                 self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
                 self.set_block_height_index_entry(height_usize, block_hash);
-                self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
+                self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
                 return Ok(());
             }
         }
@@ -7667,7 +8044,7 @@ impl Kura {
             self.ensure_durable_block_at_height(height, block_hash)?;
             self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
             self.set_block_height_index_entry(height_usize, block_hash);
-            self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
+            self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
             return Ok(());
         }
 
@@ -7679,7 +8056,7 @@ impl Kura {
         Self::drop_persisted_blocks(&mut data, height_usize, self.blocks_in_memory.get());
         let chain_len = data.len();
         self.set_block_height_index_entry(height_usize, block_hash);
-        self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
+        self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
         drop(data);
         self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
         self.prune_wsv_checkpoints_above(height.saturating_sub(1))?;
@@ -8998,31 +9375,6 @@ impl AutonomousLaneMergeBundleV1 {
     /// Exact producer-authenticated executable payload.
     pub(crate) const fn executable_payload(&self) -> &LaneExecutablePayloadV1 {
         &self.autonomous.executable_payload
-    }
-
-    /// Peers cryptographically committed to holding or producing the payload.
-    pub(crate) fn availability_holders(&self) -> Vec<PeerId> {
-        let mut holders = BTreeSet::from([self.autonomous.executable_payload.producer.clone()]);
-        if let Some(deliver) = &self.autonomous.availability_certificate {
-            for (byte_index, byte) in deliver
-                .certificate
-                .signers_bitmap
-                .iter()
-                .copied()
-                .enumerate()
-            {
-                for bit in 0..8 {
-                    if byte & (1_u8 << bit) == 0 {
-                        continue;
-                    }
-                    if let Some(peer) = deliver.certificate.validator_set.get(byte_index * 8 + bit)
-                    {
-                        holders.insert(peer.clone());
-                    }
-                }
-            }
-        }
-        holders.into_iter().collect()
     }
 }
 
@@ -13001,20 +13353,30 @@ impl Kura {
     ) -> bool {
         let descriptor = &proposal.descriptor;
         let previous_height = descriptor.previous_lane_block_height;
-        if previous_height == 0 {
-            return true;
+        if descriptor.lane_block_height == 1 {
+            return previous_height == 0
+                && descriptor.previous_lane_block_descriptor_hash.is_none();
+        }
+        if previous_height == 0
+            || previous_height.checked_add(1) != Some(descriptor.lane_block_height)
+        {
+            return false;
         }
         let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {
-            return true;
+            return false;
         };
         let Some(receipt) =
             self.read_lane_block_application_receipt(descriptor.lane_id, previous_height)
         else {
             return false;
         };
-        receipt.proposal.descriptor.dataspace_id == descriptor.dataspace_id
-            && receipt.proposal.descriptor.lane_block_height == previous_height
-            && receipt.proposal.descriptor.descriptor_hash == previous_descriptor_hash
+        let predecessor = &receipt.proposal.descriptor;
+        predecessor.lane_id == descriptor.lane_id
+            && predecessor.dataspace_id == descriptor.dataspace_id
+            && predecessor.lane_incarnation == descriptor.lane_incarnation
+            && predecessor.lane_block_height == previous_height
+            && predecessor.proposal_height < descriptor.proposal_height
+            && predecessor.descriptor_hash == previous_descriptor_hash
             && self.lane_block_application_receipt_available(&receipt.proposal)
     }
 
@@ -18394,10 +18756,14 @@ mod tests {
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
+        asset::{AssetDefinitionId, AssetId},
         block::{
             BlockExecutionContextBundle, BlockHeader, CertifiedMergeLedgerReference,
             ExternalExecutionContext,
-            consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, SumeragiLanePayloadOwnership},
+            consensus::{
+                CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
+                LaneBlockQcV1, SumeragiLanePayloadOwnership,
+            },
             consensus_v2::{
                 BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
                 GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
@@ -18408,7 +18774,15 @@ mod tests {
         domain::{Domain, DomainId},
         isi::{Log, Upgrade},
         merge::MergeQuorumCertificate,
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
+        nexus::{
+            DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile,
+            LaneVisibility,
+        },
+        offline::{
+            KagemushaRecursiveSpendTopUpRequestV2, KagemushaRequestAuthorizationV2,
+            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+            KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
+        },
         peer::PeerId,
         prelude::{Executor, IvmBytecode},
         transaction::{
@@ -18429,6 +18803,9 @@ mod tests {
     use super::*;
     use crate::{
         block::{BlockBuilder, ValidBlock},
+        governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+        },
         prelude::{AcceptedTransaction, StateReadOnly, World},
         query::store::LiveQueryStore,
         smartcontracts::Registrable,
@@ -18438,6 +18815,209 @@ mod tests {
             network_topology::Topology,
         },
     };
+
+    fn offline_top_up_entrypoint_for_index(
+        request_operation_id: [u8; 32],
+        authorization_operation_id: [u8; 32],
+    ) -> TransactionEntrypoint {
+        offline_top_up_entrypoint_for_index_with_outer_authority(
+            request_operation_id,
+            authorization_operation_id,
+            &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+        )
+    }
+
+    fn offline_top_up_entrypoint_for_index_with_outer_authority(
+        request_operation_id: [u8; 32],
+        authorization_operation_id: [u8; 32],
+        outer_authority: &KeyPair,
+    ) -> TransactionEntrypoint {
+        let chain_id = ChainId::from("kura-offline-operation-index");
+        let domain_id = DomainId::try_new("offline", "index").expect("fixture domain id");
+        let definition = AssetDefinitionId::new(
+            domain_id,
+            "cash".parse().expect("fixture asset definition name"),
+        );
+        let amount = KagemushaScaledAmountV2 {
+            atomic_units: 7,
+            scale: 0,
+        };
+        let request = KagemushaRecursiveSpendTopUpRequestV2 {
+            asset: AssetId::new(definition.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone()),
+            amount,
+            current_note: KagemushaSpendableNoteDescriptorV2 {
+                chain_id: chain_id.clone(),
+                asset: definition.clone(),
+                note_commitment: [0x31; 32],
+                spend_nullifier: [0x32; 32],
+                amount,
+            },
+            record_bundle: KagemushaVerifiedFoldRecordBundle {
+                bundle: KagemushaVerifiedFoldBundle {
+                    chain_id,
+                    asset: definition,
+                    steps: Vec::new(),
+                },
+                verifier_records: Vec::new(),
+            },
+            pallas_open_envelopes_archive: Vec::new(),
+            artifact_generation: "kura-operation-index-fixture".to_owned(),
+            operation_id: request_operation_id,
+            authorization: KagemushaRequestAuthorizationV2 {
+                authority: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                device_id: "kura-operation-index-device".to_owned(),
+                operation_id: authorization_operation_id,
+                issued_at_ms: 1,
+                expires_at_ms: u64::MAX,
+                nonce: [0x33; 32],
+                payload_digest: [0x34; 32],
+                app_attest_evidence_sha256: None,
+                app_attest_evidence: None,
+                signature: Signature::new(
+                    SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                    b"kura offline operation index fixture",
+                ),
+            },
+        };
+        let outer_authority_id = AccountId::new(outer_authority.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            ChainId::from("kura-offline-operation-index"),
+            outer_authority_id,
+        )
+        .with_instructions([TopUpKagemushaRecursiveV2::new(request)])
+        .sign(outer_authority.private_key());
+        TransactionEntrypoint::External(transaction)
+    }
+
+    fn merge_entry_with_indexed_entrypoint(entrypoint: TransactionEntrypoint) -> MergeLedgerEntry {
+        let entrypoint_hashes = vec![Hash::from(entrypoint.hash())];
+        let results = vec![TransactionResult::from(Ok(DataTriggerSequence::default()))];
+        let result_hashes = results
+            .iter()
+            .map(|result| Hash::from(result.hash()))
+            .collect::<Vec<_>>();
+        let validator_set = Vec::<PeerId>::new();
+        let lane_incarnation = Hash::new(b"kura-index-refresh-lane-incarnation");
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation,
+            proposal_height: 2,
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::new(b"kura-index-refresh-subject"),
+            payload_ownership_hash: Hash::new(b"kura-index-refresh-ownership"),
+            rbc_instance_hash: Hash::new(b"kura-index-refresh-rbc"),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: entrypoint_hashes.clone(),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 0,
+            min_quorum: 0,
+            qc_mode_tag: "kura-index-refresh-test".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        let lane_qc = |phase| LaneBlockQcV1 {
+            body: proposal.vote_body(phase),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+            payload_availability_qc: None,
+        };
+        let prepare_qc = lane_qc(CertPhase::Prepare);
+        let commit_qc = lane_qc(CertPhase::Commit);
+        let settlement_commitment = LaneBlockCommitment {
+            block_height: 1,
+            lane_id: LaneId::SINGLE,
+            lane_incarnation,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            tx_count: 0,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let execution = MergeLaneExecution {
+            source_bundle: vec![1],
+            source_bundle_hash: Hash::new(b"kura-index-refresh-source"),
+            proposal: proposal.clone(),
+            origin_proposal: proposal,
+            prepare_qc,
+            commit_qc,
+            signer_proofs: Vec::new(),
+            autonomous_chain_id_hash: Hash::new(b"kura-index-refresh-chain"),
+            autonomous_epoch: 0,
+            autonomous_payload_hash: Hash::new(b"kura-index-refresh-payload"),
+            entrypoint_hashes,
+            entrypoints: vec![entrypoint],
+            reservation_keys: vec![vec![1]],
+            routing_plans: vec![vec![2]],
+            native_amx_receipts: vec![None],
+            result_hashes,
+            results,
+            settlement_hash: iroha_data_model::nexus::compute_settlement_hash(
+                &settlement_commitment,
+            )
+            .expect("fixture settlement hashes canonically"),
+            settlement_commitment,
+        };
+        let lanes = vec![execution];
+        let entrypoint_merkle_root = crate::merge::merge_execution_entrypoint_merkle_root(&lanes)
+            .expect("fixture has an entrypoint");
+        let result_merkle_root =
+            crate::merge::merge_execution_result_merkle_root(&lanes).expect("fixture has a result");
+        let base_state_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"kura-index-refresh-base-state"));
+        let write_set_root = Hash::new(b"kura-index-refresh-write-set");
+        let mut batch = MergeExecutionBatch {
+            version: 1,
+            base_state_height: 1,
+            base_state_hash,
+            application_block_header: BlockHeader::new(
+                nonzero!(2_u64),
+                Some(HashOf::from_untyped_unchecked(Hash::new(
+                    b"kura-index-refresh-parent",
+                ))),
+                None,
+                None,
+                1,
+                0,
+            ),
+            execution_root: crate::merge::merge_execution_root(&lanes),
+            lanes,
+            entrypoint_count: 1,
+            entrypoint_merkle_root,
+            result_merkle_root,
+            application_write_set_root: Hash::new(b"kura-index-refresh-application-write-set"),
+            write_set_root,
+            expected_post_state_hash: crate::merge::merge_expected_post_state_hash(
+                1,
+                base_state_hash,
+                write_set_root,
+            ),
+            batch_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
+        let mut entry = sample_merge_entry(1);
+        entry.execution_batch = Some(batch);
+        entry
+    }
 
     fn v2_finality_artifact_for_block(block: &SignedBlock) -> V2FinalityArtifact {
         let mut keypairs = (0..4)
@@ -18600,6 +19180,71 @@ mod tests {
                 .with_extension("norito.tmp")
                 .exists(),
             "successful atomic write must not leave a temporary artifact"
+        );
+    }
+
+    #[test]
+    fn v2_finality_crypto_cache_is_bounded_to_an_exact_immutable_sidecar_identity() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            0
+        );
+
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("persist and verify finality artifact");
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            1
+        );
+        for _ in 0..8 {
+            assert_eq!(
+                kura.v2_finality_artifact(artifact.height)
+                    .expect("cached finality read"),
+                Some(artifact.clone())
+            );
+        }
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("idempotent store reuses verified immutable identity");
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            1,
+            "unchanged immutable bytes must receive one cryptographic pass total"
+        );
+
+        let path = kura.v2_finality_artifact_path(artifact.height);
+        let mut forged = artifact.clone();
+        forged.commit_qc.aggregate_signature[0] ^= 0x80;
+        std::fs::write(&path, forged.encode()).expect("substitute forged sidecar bytes");
+        assert!(matches!(
+            kura.v2_finality_artifact(artifact.height),
+            Err(Error::V2FinalityCryptography(_))
+        ));
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            2,
+            "replacement identity must invalidate the successful cache entry"
+        );
+
+        std::fs::write(&path, artifact.encode()).expect("restore exact valid sidecar bytes");
+        assert_eq!(
+            kura.v2_finality_artifact(artifact.height)
+                .expect("reverify restored sidecar"),
+            Some(artifact)
+        );
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            3,
+            "restored bytes require a fresh successful cryptographic pass"
         );
     }
 
@@ -20104,8 +20749,18 @@ mod tests {
         let parent = blocks.next();
         let mut entry1 = sample_merge_entry(1);
         let block1 = next_merge_carrier(&mut blocks, &mut entry1);
+        let block1_height = NonZeroUsize::new(
+            usize::try_from(block1.header().height().get()).expect("carrier height fits usize"),
+        )
+        .expect("carrier height is non-zero");
+        let block1_hash = block1.hash();
         let mut entry2 = sample_merge_entry(2);
         let block2 = next_merge_carrier(&mut blocks, &mut entry2);
+        let block2_height = NonZeroUsize::new(
+            usize::try_from(block2.header().height().get()).expect("carrier height fits usize"),
+        )
+        .expect("carrier height is non-zero");
+        let block2_hash = block2.hash();
         kura.store_block(parent).expect("store carrier parent");
         kura.store_block_with_merge_entry(block1, &entry1)
             .expect("store block+entry1");
@@ -20123,6 +20778,20 @@ mod tests {
             2,
             "merge log should survive with paired blocks"
         );
+        for (height, hash, expected) in [
+            (block1_height, block1_hash, &entry1),
+            (block2_height, block2_hash, &entry2),
+        ] {
+            let block = kura_reloaded
+                .get_block(height)
+                .expect("reloaded merge carrier body");
+            assert_eq!(block.hash(), hash);
+            let resolved = kura_reloaded
+                .get_merge_entry_by_carrier_height(height)
+                .expect("validate reloaded merge carrier")
+                .expect("merge entry at carrier height");
+            assert_eq!(resolved.canonical_hash(), expected.canonical_hash());
+        }
     }
 
     #[test]
@@ -20289,7 +20958,84 @@ mod tests {
             .expect("store block with merge entry");
 
         assert_eq!(kura.blocks_count(), 2);
+        kura.block_data.lock()[1].1 = None;
+        assert_eq!(
+            kura.get_merge_entry_by_carrier_height(nonzero!(2_usize))
+                .expect("resolve exact canonical carrier after a block-cache miss"),
+            Some(expected.clone())
+        );
         assert_eq!(kura.merge_ledger_snapshot(), vec![expected]);
+    }
+
+    #[test]
+    fn corrupted_merge_carrier_fails_closed_after_block_cache_miss() {
+        #[derive(Clone, Copy)]
+        enum Corruption {
+            BlockHash,
+            EntryHash,
+            Epoch,
+        }
+
+        for (corruption, label) in [
+            (Corruption::BlockHash, "block hash"),
+            (Corruption::EntryHash, "entry hash"),
+            (Corruption::Epoch, "epoch"),
+        ] {
+            let kura = Kura::blank_kura_for_testing();
+            let mut blocks = DummyBlocks::new();
+            let parent = blocks.next();
+            let mut entry = sample_merge_entry(1);
+            let block = next_merge_carrier(&mut blocks, &mut entry);
+            let height = NonZeroUsize::new(
+                usize::try_from(block.header().height().get()).expect("carrier height fits usize"),
+            )
+            .expect("carrier height is non-zero");
+
+            kura.store_block(parent).expect("store carrier parent");
+            kura.store_block_with_merge_entry(block, &entry)
+                .expect("store block with merge entry");
+
+            let mut record = kura
+                .merge_carrier_for_entry(entry.canonical_hash())
+                .expect("load canonical carrier index")
+                .expect("canonical carrier record");
+            match corruption {
+                Corruption::BlockHash => {
+                    record.block_hash = HashOf::from_untyped_unchecked(Hash::new(
+                        b"adversarial merge carrier block hash",
+                    ));
+                }
+                Corruption::EntryHash => {
+                    record.entry_hash = HashOf::from_untyped_unchecked(Hash::new(
+                        b"adversarial merge carrier entry hash",
+                    ));
+                }
+                Corruption::Epoch => record.epoch_id = record.epoch_id.saturating_add(1),
+            }
+            let path = kura.merge_carrier_path(record.block_height);
+            let corrupted_bytes = norito::to_bytes(&record).expect("encode corrupt carrier record");
+            std::fs::write(&path, &corrupted_bytes).expect("persist corrupt carrier fixture");
+            *kura.merge_carrier_index.lock() = MergeCarrierIndex::default();
+            kura.block_data.lock()[height.get() - 1].1 = None;
+
+            let error = kura
+                .get_merge_entry_by_carrier_height(height)
+                .expect_err("corrupt carrier must fail closed");
+            assert!(
+                matches!(error, Error::MergeCarrierConflict(_)),
+                "{label} corruption returned the wrong error: {error}"
+            );
+            assert_eq!(
+                std::fs::read(&path).expect("reread corrupt carrier fixture"),
+                corrupted_bytes,
+                "{label} corruption must not be repaired or rewritten during lookup"
+            );
+            assert_eq!(
+                kura.merge_ledger_snapshot(),
+                vec![entry],
+                "{label} corruption must not mutate the committed merge log"
+            );
+        }
     }
 
     #[test]
@@ -20306,6 +21052,14 @@ mod tests {
             .expect("store block and original merge entry");
         kura.truncate_merge_log_to_len(0)
             .expect("simulate missing merge log after durable carrier publication");
+        kura.block_data.lock()[1].1 = None;
+        let error = kura
+            .get_merge_entry_by_carrier_height(nonzero!(2_usize))
+            .expect_err("a carrier with no merge-log frame must fail closed");
+        assert!(
+            matches!(error, Error::MergeCarrierConflict(_)),
+            "missing merge-log frame returned the wrong error: {error}"
+        );
         kura.store_block_with_merge_entry(block.clone(), &entry)
             .expect("backfill merge entry");
         kura.store_block_with_merge_entry(block, &entry)
@@ -22264,6 +23018,189 @@ mod tests {
     }
 
     #[test]
+    fn offline_operation_index_distinguishes_missing_partial_and_earliest_height() {
+        let kura = Kura::blank_kura_for_testing();
+        let operation_id = [0xA5; 32];
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
+            Some(None),
+            "an empty complete index reports a definite miss"
+        );
+
+        {
+            let mut index = kura.transaction_entrypoint_index.lock();
+            index.heights_by_offline_operation_id.insert(
+                (SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id),
+                BTreeSet::from([nonzero!(3_usize), nonzero!(1_usize)]),
+            );
+            index.indexed_heights =
+                BTreeSet::from([nonzero!(1_usize), nonzero!(2_usize), nonzero!(3_usize)]);
+        }
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
+            Some(Some(nonzero!(1_usize)))
+        );
+
+        kura.truncate_transaction_entrypoint_index(2);
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
+            Some(Some(nonzero!(1_usize))),
+            "truncation retains the earliest surviving occurrence"
+        );
+
+        kura.transaction_entrypoint_index.lock().complete = false;
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
+            None,
+            "a partial index must not turn an unknown result into a miss"
+        );
+    }
+
+    #[test]
+    fn offline_operation_index_extracts_authorized_ids_and_ignores_zero_or_unrelated_entries() {
+        let operation_id = [0xA6; 32];
+        let top_level_mismatch = [0xA7; 32];
+        let entrypoint = offline_top_up_entrypoint_for_index(top_level_mismatch, operation_id);
+        let mut index = TransactionEntrypointIndex::complete_empty();
+
+        Kura::insert_offline_operation_id_heights(&mut index, nonzero!(3_usize), &entrypoint);
+        Kura::insert_offline_operation_id_heights(&mut index, nonzero!(1_usize), &entrypoint);
+        let operation_key = (SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id);
+        assert_eq!(
+            index.heights_by_offline_operation_id.get(&operation_key),
+            Some(&BTreeSet::from([nonzero!(1_usize), nonzero!(3_usize)])),
+            "the signed authorization id is the canonical retry identity"
+        );
+        assert!(
+            !index
+                .heights_by_offline_operation_id
+                .contains_key(&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), top_level_mismatch)),
+            "a malformed duplicate top-level id must not create a second lookup identity"
+        );
+
+        let zero = offline_top_up_entrypoint_for_index([0; 32], [0; 32]);
+        Kura::insert_offline_operation_id_heights(&mut index, nonzero!(2_usize), &zero);
+        assert!(
+            !index
+                .heights_by_offline_operation_id
+                .contains_key(&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), [0; 32]))
+        );
+
+        let unrelated = TransactionBuilder::new(
+            ChainId::from("kura-offline-operation-index"),
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        )
+        .with_instructions([Log::new(Level::INFO, "unrelated".to_owned())])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        Kura::insert_offline_operation_id_heights(
+            &mut index,
+            nonzero!(2_usize),
+            &TransactionEntrypoint::External(unrelated),
+        );
+        assert_eq!(index.heights_by_offline_operation_id.len(), 1);
+
+        Kura::remove_transaction_entrypoint_height(&mut index, nonzero!(1_usize));
+        assert_eq!(
+            index
+                .heights_by_offline_operation_id
+                .get(&operation_key)
+                .and_then(|heights| heights.first().copied()),
+            Some(nonzero!(3_usize))
+        );
+        Kura::remove_transaction_entrypoint_height(&mut index, nonzero!(3_usize));
+        assert!(index.heights_by_offline_operation_id.is_empty());
+    }
+
+    #[test]
+    fn offline_operation_index_cannot_be_shadowed_by_another_outer_authority() {
+        let operation_id = [0xA7; 32];
+        let front_runner = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("derive unauthorized offline front-run fixture key");
+        let front_runner_id = AccountId::new(front_runner.public_key().clone());
+        let rejected_front_run = offline_top_up_entrypoint_for_index_with_outer_authority(
+            operation_id,
+            operation_id,
+            &front_runner,
+        );
+        let issuer_submission = offline_top_up_entrypoint_for_index(operation_id, operation_id);
+        let mut index = TransactionEntrypointIndex::complete_empty();
+
+        // The first transaction carries the observed signed request but uses an outer
+        // authority that is not the configured Torii issuer, so execution can reject it.
+        // Its earlier height must not shadow the later canonical issuer submission.
+        Kura::insert_offline_operation_id_heights(
+            &mut index,
+            nonzero!(1_usize),
+            &rejected_front_run,
+        );
+        Kura::insert_offline_operation_id_heights(
+            &mut index,
+            nonzero!(2_usize),
+            &issuer_submission,
+        );
+        index.indexed_heights = BTreeSet::from([nonzero!(1_usize), nonzero!(2_usize)]);
+
+        let kura = Kura::blank_kura_for_testing();
+        *kura.transaction_entrypoint_index.lock() = index;
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
+            Some(Some(nonzero!(2_usize))),
+            "the configured issuer lookup must skip an earlier foreign-authority transaction"
+        );
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(&front_runner_id, operation_id,),
+            Some(Some(nonzero!(1_usize))),
+            "the foreign transaction remains isolated in its own authority namespace"
+        );
+    }
+
+    #[test]
+    fn transaction_index_refresh_reapplies_merge_side_entries_atomically() {
+        let kura = Kura::blank_kura_for_testing();
+        let operation_id = [0xA8; 32];
+        let merge_entry = merge_entry_with_indexed_entrypoint(offline_top_up_entrypoint_for_index(
+            operation_id,
+            operation_id,
+        ));
+        let block = DummyBlocks::new().next();
+
+        for _ in 0..2 {
+            kura.set_transaction_entrypoint_index_entry(1, &block, 1, Some(&merge_entry));
+            assert_eq!(
+                kura.get_earliest_block_height_by_offline_operation_id(
+                    &SAMPLE_GENESIS_ACCOUNT_ID,
+                    operation_id,
+                ),
+                Some(Some(nonzero!(1_usize))),
+                "ordinary-index refresh must not discard an operation carried by the merge sidecar"
+            );
+            let index = kura.transaction_entrypoint_index.lock();
+            assert!(index.complete);
+            assert_eq!(
+                index.heights_by_offline_operation_id
+                    [&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id)],
+                BTreeSet::from([nonzero!(1_usize)]),
+                "repeated refreshes must remain idempotent"
+            );
+        }
+    }
+
+    #[test]
     fn drop_persisted_blocks_keeps_genesis_and_recent_blocks() {
         let mut generator = DummyBlocks::new();
         let mut block_data: BlockData = (0..4)
@@ -22324,7 +23261,10 @@ mod tests {
     #[test]
     fn get_block_returns_none_when_data_missing() {
         let temp_dir = TempDir::new().unwrap();
-        populate_store(&temp_dir, 2);
+        // Keep a genesis block and one cached tail block around the non-cached block under test.
+        // Otherwise `get_block` correctly serves the requested block from memory after the data
+        // file is removed, and the test never exercises its missing-disk-data path.
+        populate_store(&temp_dir, 3);
 
         let (kura, _) = Kura::new(
             &Config {
@@ -22334,7 +23274,7 @@ mod tests {
                 ),
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-                blocks_in_memory: BLOCKS_IN_MEMORY,
+                blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
                     iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -22356,7 +23296,7 @@ mod tests {
         std::fs::remove_file(&data_path).unwrap();
 
         assert!(
-            kura.get_block(nonzero!(1_usize)).is_none(),
+            kura.get_block(nonzero!(2_usize)).is_none(),
             "expected missing block to yield None"
         );
     }
@@ -23982,6 +24922,29 @@ mod tests {
             Arc::clone(&kura),
             live_query_store,
         );
+        let genesis_validator = ManifestValidatorBinding {
+            validator: genesis_id.clone(),
+            peer_id: PeerId::new(genesis_key_pair.public_key().clone()),
+            torii_url: None,
+        };
+        let lane_manifest = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "default".to_owned(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("genesis".to_owned()),
+            manifest_path: Some(temp_dir.path().join("lane-0-manifest.json")),
+            governance_rules: Some(GovernanceRules {
+                validators: vec![genesis_id.clone()],
+                validator_bindings: vec![genesis_validator],
+                ..GovernanceRules::default()
+            }),
+            privacy_commitments: Vec::new(),
+        };
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
+            BTreeMap::from([(LaneId::SINGLE, lane_manifest)]),
+        )));
 
         let genesis =
             GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
@@ -26167,7 +27130,41 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_predecessor_receipt_allows_compatibility_anchor_without_descriptor() {
+    fn first_lane_block_requires_the_canonical_zero_predecessor() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let block = dummy_block_with_lane_payload_ownership(lane_id, lane_entry.dataspace_id, 1);
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+
+        assert!(
+            kura.lane_block_predecessor_application_receipt_available(&proposal),
+            "lane-local height one must use the canonical zero/None predecessor"
+        );
+
+        let mut malformed = proposal;
+        malformed.descriptor.previous_lane_block_descriptor_hash =
+            Some(Hash::new(b"unexpected height-one predecessor"));
+        malformed.descriptor.descriptor_hash = malformed.descriptor.computed_descriptor_hash();
+        malformed.proposal_hash = malformed.computed_proposal_hash();
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&malformed),
+            "lane-local height one must reject any predecessor descriptor"
+        );
+    }
+
+    #[test]
+    fn lane_block_predecessor_receipt_rejects_missing_non_genesis_descriptor() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
@@ -26179,30 +27176,22 @@ mod tests {
             lane_entry.dataspace_id,
             lane_block_height,
         );
-        let mut ownership = block
+        let ownership = block
             .execution_context()
             .expect("execution context")
             .lane_payload_ownerships
             .first()
             .expect("lane ownership")
             .clone();
-        ownership.previous_lane_block_descriptor_hash = None;
-        let replay_hashes = ownership
-            .compute_replay_hashes()
-            .expect("compatibility anchor replay hashes compute");
-        ownership.subject_hash = replay_hashes.subject_hash;
-        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
-        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
-        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
-        ownership
-            .validate_replay_material()
-            .expect("compatibility anchor ownership remains replayable");
-        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let mut proposal = lane_block_proposal_from_ownership(&ownership);
+        proposal.descriptor.previous_lane_block_descriptor_hash = None;
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+        proposal.proposal_hash = proposal.computed_proposal_hash();
 
         let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
         assert!(
-            kura.lane_block_predecessor_application_receipt_available(&proposal),
-            "a missing predecessor descriptor marks the first executable segment for a lane incarnation"
+            !kura.lane_block_predecessor_application_receipt_available(&proposal),
+            "a missing non-genesis predecessor descriptor must never bypass lane continuity"
         );
     }
 
@@ -26306,6 +27295,53 @@ mod tests {
             )
             .is_some(),
             "clean successor preflight should be exposed after canonical predecessor application"
+        );
+
+        let canonical_proposal_for = |mut ownership: SumeragiLanePayloadOwnership| {
+            let replay_hashes = ownership
+                .compute_replay_hashes()
+                .expect("adversarial successor fixture remains internally canonical");
+            ownership.subject_hash = replay_hashes.subject_hash;
+            ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+            ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+            ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+            lane_block_proposal_from_ownership(&ownership)
+        };
+
+        let mut wrong_hash = successor_ownership.clone();
+        wrong_hash.previous_lane_block_descriptor_hash =
+            Some(Hash::new(b"wrong predecessor descriptor"));
+        let wrong_hash_proposal = canonical_proposal_for(wrong_hash);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&wrong_hash_proposal),
+            "a different declared predecessor descriptor must not authorize a successor"
+        );
+
+        let mut non_increasing_global_height = successor_ownership.clone();
+        non_increasing_global_height.proposal_height = predecessor_ownership.proposal_height;
+        let non_increasing_global_height_proposal =
+            canonical_proposal_for(non_increasing_global_height);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(
+                &non_increasing_global_height_proposal
+            ),
+            "a predecessor must be anchored at an earlier global proposal height"
+        );
+
+        let mut wrong_dataspace = successor_ownership.clone();
+        wrong_dataspace.dataspace_id = DataSpaceId::new(dataspace_id.as_u64().saturating_add(1));
+        let wrong_dataspace_proposal = canonical_proposal_for(wrong_dataspace);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&wrong_dataspace_proposal),
+            "a predecessor receipt from another dataspace must not authorize a successor"
+        );
+
+        let mut wrong_incarnation = successor_ownership;
+        wrong_incarnation.lane_incarnation = Hash::new(b"different successor lane incarnation");
+        let wrong_incarnation_proposal = canonical_proposal_for(wrong_incarnation);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&wrong_incarnation_proposal),
+            "a predecessor receipt from another lane incarnation must not authorize a successor"
         );
     }
 

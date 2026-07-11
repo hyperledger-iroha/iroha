@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
 
@@ -51,8 +51,9 @@ o'zgaruvchan joriy world state-dan qayta tiklamaydi. Yo'qolgan, buzilgan, ziddiy
 tekshirilmaydigan sidecar yopiq tarzda rad etiladi; mavjudlik yaqin in-memory tarix oynasi
 bilan cheklanmaydi.
 
-Stateless tekshiruvchi version, chain, height, header hash, context, subject va CommitQC-ni
-aniq moslashtiradi hamda artefaktdagi barcha PoP-larni tekshiradi. Imzolovchi indekslar
+Stateless tekshiruvchi version, chain, height, header hash, header-ning canonical predecessor-i
+va view-i, context, subject va CommitQC-ni aniq moslashtiradi hamda artefaktdagi barcha
+PoP-larni tekshiradi. Imzolovchi indekslar
 qat'iy o'suvchi va diapazonda bo'lishi kerak. CommitQC ham validator soni, ham ovoz kuchi
 quorumini bajarishi, aniq Sumeragi v2 vote preimage ustidagi BLS aggregate signature esa
 to'g'ri bo'lishi shart.
@@ -75,9 +76,7 @@ xabar artefaktigacha har bir bevosita successor tekshirilishi kerak.
 ## Bundle va API
 
 `BridgeFinalityBundle` aynan `{ commitment, finality_proof }` ko'rinishida. Commitment:
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }`. Optional MMR maydonlari faqat commitment bo'lib,
-yakuniylik yoki inclusion proof emas.
+`{ chain_id, height_context_id, block_height, block_hash }`.
 
 - `GET /v1/bridge/finality/{height}` `BridgeFinalityProof` qaytaradi;
 - `GET /v1/bridge/finality/bundle/{height}` `BridgeFinalityBundle` qaytaradi.

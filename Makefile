@@ -139,6 +139,7 @@ examples-inspect: examples-run
 
 docs-syscalls:
 	@python3 scripts/gen_syscall_doc.py > docs/source/ivm_syscalls_generated.md
+	@python3 scripts/gen_syscall_doc.py --sync-localized
 	@echo "Generated docs/source/ivm_syscalls_generated.md"
 
 docs-da-threat-model:

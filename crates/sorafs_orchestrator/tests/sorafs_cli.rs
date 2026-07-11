@@ -5,7 +5,6 @@ use std::{
     convert::TryInto,
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use assert_cmd::{Command as AssertCommand, cargo::cargo_bin_cmd};
@@ -37,13 +36,13 @@ use sorafs_car::{
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GovernanceDagBlockV1,
     GovernanceDagHeadV1, GovernanceProofs, GovernanceSignatureAlgorithm, ManifestBuilder,
-    ManifestV1, ManualPorChallengeV1, POR_CHALLENGE_STATUS_VERSION_V1,
-    POR_WEEKLY_REPORT_VERSION_V1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
-    PorProviderSummaryV1, PorReportIsoWeek, PorSlashingEventV1, PorWeeklyReportV1,
-    REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
-    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-    ReputationSnapshotV1, ReputationWeightsV1, StorageClass, StreamTokenBodyV1, StreamTokenV1,
-    XorAmount, build_reputation_snapshot, validate_governance_dag_head_against_chain_v1,
+    ManifestV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
+    PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
+    PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+    REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1, ReputationProviderMetricsV1,
+    ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1, StorageClass,
+    StreamTokenBodyV1, StreamTokenV1, XorAmount, build_reputation_snapshot,
+    validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
 
@@ -202,34 +201,6 @@ fn council_signed_governance_proofs() -> GovernanceProofs {
             signature: vec![0x24; 64],
         }],
     }
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
-struct TestChallengeAuthScopeV1 {
-    manifest_digest: [u8; 32],
-    #[norito(default)]
-    providers: Vec<[u8; 32]>,
-    #[norito(default)]
-    max_requests: u16,
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
-struct TestChallengeAuthTokenV1 {
-    version: u8,
-    token_id: String,
-    operator_account: String,
-    expires_at: u64,
-    #[norito(default)]
-    scopes: Vec<TestChallengeAuthScopeV1>,
-    #[norito(default)]
-    justification: Option<String>,
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
-struct TestManualPorTriggerRequestV1 {
-    version: u8,
-    challenge: ManualPorChallengeV1,
-    auth_token: TestChallengeAuthTokenV1,
 }
 
 #[test]
@@ -468,57 +439,24 @@ fn por_status_outputs_json() {
 }
 
 #[test]
-fn por_trigger_posts_manual_challenge() {
-    let server = MockServer::start();
-    let manifest_digest = [0x41; 32];
-    let provider_id = [0x52; 32];
-    let expires_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock ok")
-        .as_secs()
-        + 3_600;
-    let token = TestChallengeAuthTokenV1 {
-        version: 1,
-        token_id: "token-1".to_string(),
-        operator_account: "council@governance.dataspace".to_string(),
-        expires_at,
-        scopes: vec![TestChallengeAuthScopeV1 {
-            manifest_digest,
-            providers: vec![provider_id],
-            max_requests: 1,
-        }],
-        justification: Some("incident probe".to_string()),
-    };
-    let token_bytes = to_bytes(&token).expect("encode token");
-    let tempdir = tempdir().expect("tempdir");
-    let token_path = tempdir.path().join("auth_token.to");
-    fs::write(&token_path, &token_bytes).expect("write token");
-
-    let trigger_mock = server.mock(|when, then| {
-        when.method(POST)
-            .path("/v1/sorafs/por/trigger")
-            .header("content-type", "application/x-norito");
-        then.status(202)
-            .header("content-type", "application/json")
-            .body(r#"{"challenge_id":"cafebabe"}"#);
-    });
-
-    let manifest_hex = hex_encode(manifest_digest);
-    let provider_hex = hex_encode(provider_id);
+fn unsupported_por_command_is_absent_from_the_first_release_cli() {
     sorafs_cli_cmd()
         .arg("por")
         .arg("trigger")
-        .arg(format!("--torii-url={}", server.base_url()))
-        .arg(format!("--manifest={manifest_hex}"))
-        .arg(format!("--provider={provider_hex}"))
-        .arg("--reason=incident_probe")
-        .arg(format!("--auth-token={}", token_path.display()))
-        .arg("--samples=48")
-        .arg("--deadline-secs=900")
         .assert()
-        .success();
+        .failure();
 
-    trigger_mock.assert();
+    let output = sorafs_cli_cmd()
+        .arg("por")
+        .arg("--help")
+        .output()
+        .expect("run PoR help");
+    let rendered = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!rendered.contains("por trigger"));
 }
 
 #[test]
@@ -1441,7 +1379,7 @@ fn deploy_posts_register_payload_with_content_length_and_pins_peers() {
             .body(r#"{"status":"stored"}"#);
     });
     let gateway = primary.mock(|when, then| {
-        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+/$");
+        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
 
@@ -1551,7 +1489,7 @@ fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant()
             .body(r#"{"status":"stored"}"#);
     });
     let gateway = primary.mock(|when, then| {
-        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+/$");
+        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
 
@@ -1611,7 +1549,7 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
             .body(r#"{"status":"stored"}"#);
     });
     primary.mock(|when, then| {
-        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+/$");
+        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
 
@@ -1693,7 +1631,7 @@ fn deploy_uses_transaction_fallback_when_pin_register_route_unavailable() {
             .body(r#"{"status":"stored"}"#);
     });
     primary.mock(|when, then| {
-        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+/$");
+        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
 
@@ -1751,7 +1689,7 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
             .body(r#"{"status":"stored"}"#);
     });
     primary.mock(|when, then| {
-        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+/$");
+        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body("xyz");
     });
 
@@ -1834,7 +1772,7 @@ fn deploy_failed_peer_exits_nonzero_and_writes_receipt_details() {
             .body(r#"{"error":"disk full"}"#);
     });
     primary.mock(|when, then| {
-        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+/$");
+        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
 

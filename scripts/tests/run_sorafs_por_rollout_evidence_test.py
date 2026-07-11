@@ -121,10 +121,6 @@ def test_dry_run_prints_complete_por_rollout_plan(tmp_path: Path, capsys) -> Non
         in plan["evidence_contract"]["validator_replay"]["required_payload_fields"]
     )
     assert (
-        "manual_trigger_route_state"
-        in plan["evidence_contract"]["reporting_archive"]["required_payload_fields"]
-    )
-    assert (
         "archive_backend"
         in plan["evidence_contract"]["reporting_archive"]["required_payload_fields"]
     )

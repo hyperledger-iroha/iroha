@@ -135,8 +135,6 @@ fn main() -> Result<()> {
         key_pair,
         basic_auth: None,
         torii_api_url: args.torii_url,
-        torii_api_version: config::default_torii_api_version(),
-        torii_api_min_proof_version: config::DEFAULT_TORII_API_MIN_PROOF_VERSION.to_owned(),
         torii_request_timeout: config::DEFAULT_TORII_REQUEST_TIMEOUT,
         transaction_ttl: Duration::from_secs(900),
         transaction_status_timeout: Duration::from_secs(args.status_timeout_secs),

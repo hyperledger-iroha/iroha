@@ -2188,25 +2188,25 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(1),
-    manifest.proof_circuit_ids.reserved_lineage_append,
+    manifest.proof_circuit_ids.recursive_aggregation,
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(63),
-    manifest.proof_circuit_ids.reserved_lineage_append,
+    manifest.proof_circuit_ids.recursive_aggregation,
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(64),
     manifest.proof_circuit_ids.recursive_aggregation,
   );
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(0), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(63), true);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(63), false);
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(64), false);
   assert.equal(
     canRedeemKagemushaRecursiveSpendWitnessless(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
       2,
     ),
-    true,
+    false,
   );
   assert.equal(
     canRedeemKagemushaRecursiveSpendWitnessless(
@@ -3311,23 +3311,24 @@ test("Kagemusha recursive spend typed encoders write request schemas and compact
     Buffer.concat([Buffer.from([aggregationOutputSelector.length]), aggregationOutputSelector]),
   );
 
-  const appendWithArtifactsPayload = assertKagemushaArchiveSchema(
-    encodeKagemushaRecursiveSpendAppendRequest({
-      previousBundle: sharedRecursiveSpendArchive("init_bundle"),
-      recordBundle,
-      pallasOpenEnvelopes,
-      currentNote: note,
-      outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
-      previousLineageVerifierRecord: verifierRecord,
-      previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(),
-      lineageKeyArtifacts: appendLineageKeyArtifacts,
-    }),
-    KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME,
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendArchive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord: verifierRecord,
+        previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(),
+        lineageKeyArtifacts: appendLineageKeyArtifacts,
+      }),
+    kagemushaRequestCodecError(
+      "field",
+      "outputProofCircuitId",
+      /cannot prove selected output circuit at previous hop count/,
+    ),
   );
-  const appendWithArtifactsFields = kagemushaReadAllFields(appendWithArtifactsPayload);
-  assert.equal(appendWithArtifactsFields.length, 10);
-  assert.ok(kagemushaReadOptionSome(appendWithArtifactsFields[7]).length > 0);
-  assert.ok(kagemushaReadOptionSome(appendWithArtifactsFields[8]).length > 0);
 
   const verifyPayload = assertKagemushaArchiveSchema(
     encodeKagemushaRecursiveSpendVerifyRequest({
@@ -3374,13 +3375,14 @@ test("Kagemusha recursive spend typed encoders write request schemas and compact
       recipient: recursiveSpendRecipient(),
       publicAmount: "7",
       redeemProof: syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x66),
+      lineageWitness: sharedRecursiveSpendArchive("lineage_witness_from_init_result"),
       lineageVerifierRecord: verifierRecord,
     }),
     KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME,
   );
   const exactRedeemFields = kagemushaReadAllFields(exactRedeemPayload);
   assert.equal(exactRedeemFields.length, 9);
-  kagemushaReadOptionNone(exactRedeemFields[4]);
+  assert.equal(exactRedeemFields[4][0], 1);
   kagemushaReadOptionNone(exactRedeemFields[5]);
   assert.equal(exactRedeemFields[6][0], 1);
   kagemushaReadOptionNone(exactRedeemFields[7]);
@@ -3392,6 +3394,7 @@ test("Kagemusha recursive spend typed encoders write request schemas and compact
       recipient: recursiveSpendRecipient(),
       publicAmount: "7",
       redeemProof: syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x67),
+      lineageWitness: sharedRecursiveSpendArchive("lineage_witness_from_init_result"),
       lineageVerifierRecords: [verifierRecord],
     }),
     KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME,
@@ -4245,7 +4248,11 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         lineageVerifierKey: Buffer.from("vk"),
         lineageProvingKeyArchive: syntheticKagemushaArchive("test::Key", 0x76),
       }),
-    kagemushaRequestCodecError("field", "previousProofOpenEnvelopes", null),
+    kagemushaRequestCodecError(
+      "field",
+      "outputProofCircuitId",
+      /cannot prove selected output circuit at previous hop count/,
+    ),
   );
   for (const transcriptLabel of malformedPallasTranscriptLabels) {
     assert.throws(
@@ -4262,11 +4269,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
           }),
           lineageKeyArtifacts: appendLineageKeyArtifacts,
         }),
-      kagemushaRequestCodecError(
-        "archive",
-        "previousProofOpenEnvelopes[0]",
-        /transcript_label is invalid/,
-      ),
+      kagemushaRequestCodecError("field", "outputProofCircuitId", null),
     );
   }
   for (const { metadataField, options, expectedMessage = null } of malformedPallasMetadataPayloads) {
@@ -4282,11 +4285,8 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
           previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(1, options),
           lineageKeyArtifacts: appendLineageKeyArtifacts,
         }),
-      (error) =>
-        error?.kind === "archive" &&
-        error.field === `previousProofOpenEnvelopes[0].${metadataField}` &&
-        (expectedMessage == null || expectedMessage.test(error.message)),
-      `accepted stale fixed-array previous-proof Pallas metadata payload for ${metadataField}`,
+      kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+      `parsed unavailable lineage append metadata ${metadataField}: ${expectedMessage}`,
     );
   }
   for (const { options, previousField, message } of malformedPallasSequencePayloads) {
@@ -4302,8 +4302,8 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
           previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(1, options),
           lineageKeyArtifacts: appendLineageKeyArtifacts,
         }),
-      kagemushaRequestCodecError("archive", previousField, message),
-      `accepted raw count-prefix-only previous-proof Pallas sequence payload for ${previousField}`,
+      kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+      `parsed unavailable lineage append sequence ${previousField}: ${message}`,
     );
   }
   assert.throws(
@@ -4318,11 +4318,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(2),
         lineageKeyArtifacts: appendLineageKeyArtifacts,
       }),
-    kagemushaRequestCodecError(
-      "archive",
-      "previousProofOpenEnvelopes",
-      /requires exactly 1 envelope\(s\)/,
-    ),
+    kagemushaRequestCodecError("field", "outputProofCircuitId", null),
   );
   assert.throws(
     () =>
@@ -4336,7 +4332,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         previousProofOpenEnvelopes,
         lineageKeyArtifacts: initLineageKeyArtifacts,
       }),
-    kagemushaRequestCodecError("field", "lineageKeyArtifacts", null),
+    kagemushaRequestCodecError("field", "outputProofCircuitId", null),
   );
   assert.throws(
     () =>
@@ -4351,11 +4347,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         lineageKeyArtifacts: appendLineageKeyArtifacts,
         lineageVerifierKey: Buffer.from("vk"),
       }),
-    kagemushaRequestCodecError(
-      "field",
-      "lineageKeyArtifacts",
-      /must not be combined with raw key fields/,
-    ),
+    kagemushaRequestCodecError("field", "outputProofCircuitId", null),
   );
   assert.throws(
     () =>
@@ -4370,7 +4362,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         lineageVerifierKey: appendLineageVerifierKey,
         lineageProvingKeyArchive: initLineageProvingKeyArchive,
       }),
-    kagemushaRequestCodecError("field", "lineageKeyArtifacts", /lineageKeyArtifacts:/),
+    kagemushaRequestCodecError("field", "outputProofCircuitId", null),
   );
   for (const lineageKeyFields of [
     { lineageKeyArtifacts: appendLineageKeyArtifacts },
@@ -4528,6 +4520,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recipient: "alice@wonderland",
         publicAmount: "7",
         redeemProof: syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x78),
+        lineageWitness: sharedRecursiveSpendArchive("lineage_witness_from_init_result"),
         lineageVerifierRecord: verifierRecord,
       }),
     kagemushaRequestCodecError("field", "recipient", /canonical I105 account form/),
@@ -5691,7 +5684,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   );
   assert.equal(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS, 64);
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1, 64);
-  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1, true);
+  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1, false);
   assert.equal(KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1, 1);
   assert.equal(KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES, 8 * 1024 * 1024);
   assert.equal(KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES, 128);
@@ -6462,14 +6455,14 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canRedeemKagemushaRecursiveSpendWitnessless(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
       2,
     ),
-    true,
+    false,
   );
   assert.equal(
     requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
@@ -6518,33 +6511,54 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       true,
     );
   }
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(0), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(1), true);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(63), true);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(64), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(1.5), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(-1), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.MAX_SAFE_INTEGER), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.NaN), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.POSITIVE_INFINITY), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.NEGATIVE_INFINITY), false);
+  for (const circuitId of [
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+  ]) {
+    for (const hopCount of [1, 2, 63, 64]) {
+      assert.equal(canRedeemKagemushaRecursiveSpendWitnessless(circuitId, hopCount), false);
+      assert.equal(
+        requiresKagemushaRecursiveSpendLineageWitnessForRedeem(circuitId, hopCount),
+        true,
+        `${circuitId} hop ${hopCount} must require a record-backed lineage witness`,
+      );
+    }
+  }
+  for (const hopCount of [
+    Number.NEGATIVE_INFINITY,
+    -1,
+    0,
+    1,
+    2,
+    63,
+    64,
+    Number.MAX_SAFE_INTEGER,
+    Number.POSITIVE_INFINITY,
+    Number.NaN,
+    1.5,
+    1n,
+    new Number(1),
+    true,
+    false,
+    "1",
+  ]) {
+    assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(hopCount), false);
+  }
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(1n), false);
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(new Number(1)), false);
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(true), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(false), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage("1"), false);
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(1),
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(63),
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(64),
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-    "preferred append selector falls back at the witnessless hop cap",
+    "the semantic append circuit remains preferred while lineage transition verification is unavailable",
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(0),
@@ -6591,7 +6605,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -6672,7 +6686,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(

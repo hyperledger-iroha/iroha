@@ -2456,7 +2456,7 @@ test("getIsoMessageStatus fetches status JSON and validates input", async () => 
   const payload = await client.getIsoMessageStatus("MSG999", {
     signal: controller.signal,
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/iso20022/status/MSG999`);
+  assert.equal(captured.url, `${BASE_URL}/v1/iso20022/messages/MSG999`);
   assert.equal(captured.init.method, "GET");
   assert.equal(captured.init.headers.Accept, "application/json");
   assert.strictEqual(captured.init.signal, controller.signal);
@@ -6476,44 +6476,6 @@ test("submitSorafsUptimeObservation rejects unsupported input fields", async () 
   );
 });
 
-test("recordSorafsPorChallenge normalizes base64 payloads", async () => {
-  let captured = null;
-  const challenge = Buffer.from("por-challenge");
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: { status: "accepted" },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.recordSorafsPorChallenge({ challenge });
-  assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/capacity/por-challenge`);
-  const parsed = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(parsed.challenge_b64, challenge.toString("base64"));
-  assert.deepEqual(result, { status: "accepted" });
-});
-
-test("recordSorafsPorChallenge rejects unsupported input fields", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { status: "accepted" },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () =>
-      client.recordSorafsPorChallenge({
-        challenge: Buffer.from("hello"),
-        memo: "nope",
-      }),
-    /recordSorafsPorChallenge input contains unsupported fields: memo/,
-  );
-});
-
 test("recordSorafsPorProof rejects unsupported input fields", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
@@ -6552,41 +6514,14 @@ test("recordSorafsPorVerdict rejects unsupported input fields", async () => {
   );
 });
 
-test("submitSorafsPorObservation posts probe results", async () => {
-  let captured = null;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: { status: "success", success: true },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.submitSorafsPorObservation({ success: true });
-  assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/capacity/por`);
-  const parsed = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(parsed.success, true);
-  assert.deepEqual(result, { status: "success", success: true });
-});
-
-test("submitSorafsPorObservation rejects unsupported input fields", async () => {
+test("unsupported PoR helpers are absent from the first-release client", () => {
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { status: "success", success: true },
-        headers: { "content-type": "application/json" },
-      }),
+    fetchImpl: async () => {
+      throw new Error("fetch must not run");
+    },
   });
-  await assert.rejects(
-    () =>
-      client.submitSorafsPorObservation({
-        success: true,
-        details: "invalid",
-      }),
-    /submitSorafsPorObservation input contains unsupported fields: details/,
-  );
+  assert.equal(client.recordSorafsPorChallenge, undefined);
+  assert.equal(client.submitSorafsPorObservation, undefined);
 });
 
 const invalidSorafsSignalCases = [
@@ -6599,15 +6534,6 @@ const invalidSorafsSignalCases = [
         signal: "invalid",
       }),
     path: "submitSorafsUptimeObservation.options.signal",
-  },
-  {
-    label: "recordSorafsPorChallenge",
-    invoke: (client) =>
-      client.recordSorafsPorChallenge({
-        challenge: Buffer.from("challenge"),
-        signal: "invalid",
-      }),
-    path: "recordSorafsPorChallenge.options.signal",
   },
   {
     label: "recordSorafsPorProof",
@@ -6626,15 +6552,6 @@ const invalidSorafsSignalCases = [
         signal: "invalid",
       }),
     path: "recordSorafsPorVerdict.options.signal",
-  },
-  {
-    label: "submitSorafsPorObservation",
-    invoke: (client) =>
-      client.submitSorafsPorObservation({
-        success: true,
-        signal: "invalid",
-      }),
-    path: "submitSorafsPorObservation.options.signal",
   },
 ];
 
@@ -7276,7 +7193,7 @@ test("submitIsoMessage supports pacs.009 wait flow and reuses signals", async ()
         headers: { "content-type": "application/json" },
       });
     }
-    if (url === "/v1/iso20022/status/flow-009") {
+    if (url === "/v1/iso20022/messages/flow-009") {
       return createResponse({
         status: 200,
         jsonData: createIsoStatusPayload({
@@ -7310,7 +7227,7 @@ test("submitIsoMessage supports pacs.009 wait flow and reuses signals", async ()
   assert.equal(calls[0].init.signal, controller.signal);
   assert.equal(calls[0].init.retryProfile, "iso-flow");
   assert.equal(calls[0].init.headers["Content-Type"], "application/pacs009+xml");
-  assert.equal(calls[1].url, "/v1/iso20022/status/flow-009");
+  assert.equal(calls[1].url, "/v1/iso20022/messages/flow-009");
   assert.equal(calls[1].init.signal, controller.signal);
   assert.equal(calls[1].init.retryProfile, "iso-flow");
   assert.equal(status.status, "Accepted");
@@ -7333,7 +7250,7 @@ test("submitIsoMessage resolves accepted status without transaction hash when re
         headers: { "content-type": "application/json" },
       });
     }
-    if (url === "/v1/iso20022/status/accept-no-tx") {
+    if (url === "/v1/iso20022/messages/accept-no-tx") {
       return createResponse({
         status: 200,
         jsonData: createIsoStatusPayload({
@@ -7368,7 +7285,7 @@ test("submitIsoMessage resolves accepted status without transaction hash when re
 
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, "/v1/iso20022/pacs008");
-  assert.equal(calls[1].url, "/v1/iso20022/status/accept-no-tx");
+  assert.equal(calls[1].url, "/v1/iso20022/messages/accept-no-tx");
   assert.equal(status.status, "Accepted");
   assert.equal(status.transaction_hash, null);
 });
@@ -7390,7 +7307,7 @@ test("submitIsoPacs008AndWait reuses signal and retryProfile for polling", async
         headers: { "content-type": "application/json" },
       });
     }
-    if (url === "/v1/iso20022/status/reuse-008") {
+    if (url === "/v1/iso20022/messages/reuse-008") {
       return createResponse({
         status: 200,
         jsonData: createIsoStatusPayload({
@@ -7414,7 +7331,7 @@ test("submitIsoPacs008AndWait reuses signal and retryProfile for polling", async
   assert.equal(calls[0].url, "/v1/iso20022/pacs008");
   assert.equal(calls[0].init.signal, controller.signal);
   assert.equal(calls[0].init.retryProfile, "iso-wait");
-  assert.equal(calls[1].url, "/v1/iso20022/status/reuse-008");
+  assert.equal(calls[1].url, "/v1/iso20022/messages/reuse-008");
   assert.equal(calls[1].init.signal, controller.signal);
   assert.equal(calls[1].init.retryProfile, "iso-wait");
   assert.equal(status.status, "Accepted");
@@ -7439,7 +7356,7 @@ test("getIsoMessageStatus fetches status payload", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const status = await client.getIsoMessageStatus("msg-2");
-  assert.equal(requestedUrl, `${BASE_URL}/v1/iso20022/status/msg-2`);
+  assert.equal(requestedUrl, `${BASE_URL}/v1/iso20022/messages/msg-2`);
   assert.deepEqual(status, payload);
 });
 
@@ -7503,7 +7420,7 @@ test("waitForIsoMessageStatus polls until a transaction hash arrives", async () 
   ];
   let calls = 0;
   const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/iso20022/status/msg-2`);
+    assert.equal(url, `${BASE_URL}/v1/iso20022/messages/msg-2`);
     const payload = responses[Math.min(calls, responses.length - 1)];
     calls += 1;
     return createResponse({
@@ -7857,7 +7774,7 @@ test("submitIsoPacs008AndWait submits payload then waits for completion", async 
         headers: { "content-type": "application/json" },
       });
     }
-    if (url === `${BASE_URL}/v1/iso20022/status/msg-submit`) {
+    if (url === `${BASE_URL}/v1/iso20022/messages/msg-submit`) {
       return createResponse({
         status: 200,
         jsonData: {
@@ -7953,7 +7870,7 @@ test("submitIsoPacs009AndWait submits payload then waits for completion", async 
         headers: { "content-type": "application/json" },
       });
     }
-    if (url === `${BASE_URL}/v1/iso20022/status/msg-pacs009`) {
+    if (url === `${BASE_URL}/v1/iso20022/messages/msg-pacs009`) {
       return createResponse({
         status: 200,
         jsonData: {
@@ -11184,7 +11101,7 @@ test("getSumeragiQc fetches QC snapshot", async () => {
 test("getSumeragiCommitQc fetches commit QC record", async () => {
   const hashHex = "aa".repeat(32);
   const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/sumeragi/commit_qc/${hashHex}`);
+    assert.equal(url, `${BASE_URL}/v1/sumeragi/commit-qcs/${hashHex}`);
     assert.equal(init.headers.Accept, "application/json");
     return createResponse({
       status: 200,
@@ -11254,7 +11171,7 @@ test("getSumeragiPhases fetches latency metrics", async () => {
 
 test("getSumeragiBlsKeys returns network map", async () => {
   const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/sumeragi/bls_keys`);
+    assert.equal(url, `${BASE_URL}/v1/sumeragi/bls-keys`);
     assert.equal(init.headers.Accept, "application/json");
     return createResponse({
       status: 200,
@@ -17670,7 +17587,7 @@ test("streamEvents yields parsed SSE payloads", async () => {
       url,
       `${BASE_URL}/v1/events/sse?filter=${encodeURIComponent('{"Pipeline":{"Block":{}}}')}`,
     );
-    assert.equal(init.headers["Last-Event-ID"], "resume-id");
+    assert.equal(init.headers["Last-Event-ID"], undefined);
     return createSseResponse([
       "id: block-1\n",
       "event: pipeline.block\n",
@@ -17681,7 +17598,6 @@ test("streamEvents yields parsed SSE payloads", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const iterator = client.streamEvents({
     filter: { Pipeline: { Block: {} } },
-    lastEventId: "resume-id",
   });
   const first = await iterator.next();
   assert.equal(first.done, false);
@@ -17896,7 +17812,7 @@ test("streamContractEvents encodes selector params", async () => {
     assert.equal(parsed.searchParams.get("event_kind"), "route_swap");
     assert.equal(parsed.searchParams.get("authority"), FIXTURE_ALICE_ID);
     assert.equal(parsed.searchParams.get("asset_id"), "xor#universal");
-    assert.equal(init.headers["Last-Event-ID"], "resume-contract");
+    assert.equal(init.headers["Last-Event-ID"], undefined);
     return createSseResponse([
       "id: tx1:0\n",
       "event: contract_event\n",
@@ -17910,7 +17826,6 @@ test("streamContractEvents encodes selector params", async () => {
     contractAlias: "dlmm_router",
     eventKind: "route_swap",
     assetId: "xor#universal",
-    lastEventId: "resume-contract",
   });
   const first = await iterator.next();
   assert.equal(first.done, false);
@@ -17995,9 +17910,24 @@ test("streamEvents enforces option shapes", () => {
     /streamEvents options must be an object/,
   );
   assert.throws(
-    () => client.streamEvents({ lastEventId: "" }),
-    /streamEvents\.lastEventId must not be empty/,
+    () => client.streamEvents({ lastEventId: "retired-resume-token" }),
+    /streamEvents options contains unsupported fields: lastEventId/,
   );
+});
+
+test("canonical contract SSE rejects the unsupported resume option before fetch", () => {
+  let calls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("should not fetch");
+    },
+  });
+  assert.throws(
+    () => client.streamContractEvents({ lastEventId: "retired-resume-token" }),
+    /streamContractEvents options contains unsupported fields: lastEventId/,
+  );
+  assert.equal(calls, 0);
 });
 
 test("streamEvents rejects unsupported options", () => {
@@ -21330,7 +21260,7 @@ test("getMultisigProposal resolves by instructions hash", async () => {
     multisigAccountAlias: "cbdc@banka",
     instructionsHash: "e".repeat(64),
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/lookup`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     instructions_hash: "e".repeat(64),
@@ -23779,136 +23709,352 @@ test("queryTriggers rejects unsupported option keys", async () => {
   assert.equal(fetchCalled, false);
 });
 
-function canonicalOfflineReadinessPayload(overrides = {}) {
+const OFFLINE_OPERATION_BYTES = Array.from({ length: 32 }, () => 0x11);
+const OFFLINE_OPERATION_ID = "11".repeat(32);
+const OFFLINE_TRANSACTION_HASH = "22".repeat(32);
+const OFFLINE_EVALUATED_BLOCK_HASH = "33".repeat(32);
+const OFFLINE_STATUS_URI = `/v1/offline/operations/${OFFLINE_OPERATION_ID}`;
+const OFFLINE_ASSET_DEFINITION_ID = "xor#sora";
+const OFFLINE_ASSET_ID = "xor##alice";
+
+function offlineReadinessPayload(overrides = {}) {
   return {
-    offline_telemetry: true,
-    offline_kagemusha_recursive_compact_available: true,
-    offline_kagemusha_recursive_compact_mode: "recursive_compact_v1",
-    offline_kagemusha_recursive_compact_required_native_bridge_abi_version: 7,
-    offline_kagemusha_recursive_compact_circuit_id: "kagemusha-recursive-compact-v1",
-    offline_kagemusha_recursive_compact_artifacts_available: false,
+    asset_definition_id: OFFLINE_ASSET_DEFINITION_ID,
+    evaluated_block_height: 42,
+    evaluated_block_hash: OFFLINE_EVALUATED_BLOCK_HASH,
+    ready: true,
+    blockers: [],
     ...overrides,
   };
 }
 
-const OFFLINE_READINESS_REMOVED_ABI7_FIELDS = [
-  "offline_kagemusha_abi7",
-  "offline_kagemusha_abi7_mode",
-  "offline_kagemusha_abi7_bridge_abi_version",
-  "offline_kagemusha_abi7_circuit_id",
-  "offline_kagemusha_abi7_artifacts",
-];
+function offlineTopUpRequest(overrides = {}) {
+  return {
+    asset: OFFLINE_ASSET_ID,
+    amount: { atomic_units: 9_007_199_254_740_993n, scale: 4 },
+    current_note: { version: 2 },
+    record_bundle: { version: 2 },
+    pallas_open_envelopes_archive: [1, 2, 3],
+    artifact_generation: "generation-1",
+    operation_id: [...OFFLINE_OPERATION_BYTES],
+    authorization: { operation_id: [...OFFLINE_OPERATION_BYTES] },
+    ...overrides,
+  };
+}
 
-test("getOfflineReadiness fetches canonical readiness payload", async () => {
-  let capturedRequest = null;
-  const readiness = canonicalOfflineReadinessPayload();
+function offlineRedeemRequest(overrides = {}) {
+  return {
+    bundle: { version: 2 },
+    recipient: FIXTURE_ALICE_ID,
+    amount: { atomic_units: 7n, scale: 0 },
+    redeem_proof: { version: 1 },
+    redemption: { version: 2 },
+    lineage_verifier_record: { id: "lineage-vk" },
+    block_height: 41n,
+    operation_id: [...OFFLINE_OPERATION_BYTES],
+    authorization: { operation_id: [...OFFLINE_OPERATION_BYTES] },
+    ...overrides,
+  };
+}
+
+function offlineOperationReference(overrides = {}) {
+  return {
+    operation_id: OFFLINE_OPERATION_ID,
+    kind: { kind: "top_up", value: null },
+    state: { state: "pending", value: null },
+    transaction_hash: OFFLINE_TRANSACTION_HASH,
+    status_uri: OFFLINE_STATUS_URI,
+    submitted_at_ms: 1_725_000_000_123,
+    ...overrides,
+  };
+}
+
+test("getOfflineReadiness sends the required exact asset selector and parses blockers", async () => {
+  let capturedRequest;
+  const payload = offlineReadinessPayload({
+    ready: false,
+    blockers: [{ code: "proof_backend_unavailable", message: "Proof backend unavailable" }],
+  });
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url, init = {}) => {
       capturedRequest = { url, init };
       return createResponse({
         status: 200,
-        jsonData: readiness,
+        jsonData: payload,
         headers: { "content-type": "application/json" },
       });
     },
   });
 
-  const response = await client.getOfflineReadiness();
-
-  assert.ok(capturedRequest, "request not captured");
-  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/readiness`);
+  const response = await client.getOfflineReadiness(OFFLINE_ASSET_DEFINITION_ID);
+  const url = new URL(capturedRequest.url);
+  assert.equal(url.pathname, "/v1/offline/readiness");
+  assert.equal(url.searchParams.get("asset_definition_id"), OFFLINE_ASSET_DEFINITION_ID);
   assert.equal(capturedRequest.init.method, "GET");
   assert.equal(capturedRequest.init.headers.Accept, "application/json");
-  assert.deepEqual(response, readiness);
-  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_note"), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_one_use_keys"), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_recursive_note_proof"), false);
+  assert.deepEqual(response, payload);
 });
 
-test("getOfflineReadiness rejects noncanonical ABI versions", async () => {
-  const cases = [
-    [
-      "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-      0,
-      /offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer/,
-    ],
-    [
-      "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-      "007",
-      /offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string/,
-    ],
-    [
-      "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-      "2147483648",
-      /offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range/,
-    ],
-    [
-      "offline_kagemusha_recursive_compact_available",
-      1,
-      /offline readiness response\.offline_kagemusha_recursive_compact_available must be boolean/,
-    ],
-    [
-      "offline_kagemusha_recursive_compact_circuit_id",
-      "kagemusha-recursive-compact-v1 ",
-      /offline readiness response\.offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace/,
-    ],
-  ];
-
-  for (const [field, value, pattern] of cases) {
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () =>
-        createResponse({
-          status: 200,
-          jsonData: canonicalOfflineReadinessPayload({ [field]: value }),
-          headers: { "content-type": "application/json" },
-        }),
-    });
-    await assert.rejects(
-      () => client.getOfflineReadiness(),
-      pattern,
-      `${field}=${String(value)} should be rejected`,
-    );
-  }
-});
-
-test("getOfflineReadiness rejects removed ABI-7 readiness fields", async () => {
-  for (const field of OFFLINE_READINESS_REMOVED_ABI7_FIELDS) {
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () =>
-        createResponse({
-          status: 200,
-          jsonData: canonicalOfflineReadinessPayload({ [field]: true }),
-          headers: { "content-type": "application/json" },
-        }),
-    });
-    await assert.rejects(
-      () => client.getOfflineReadiness(),
-      new RegExp(`offline readiness response\\.${field} is not supported; use offline_kagemusha_recursive_compact_\\*`),
-    );
-  }
-});
-
-test("getOfflineReadiness rejects payload missing recursive compact family", async () => {
+test("getOfflineReadiness parses a full-range u64 without rounding", async () => {
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          offline_note: true,
-          offline_one_use_keys: true,
-          offline_recursive_note_proof: true,
-          offline_fountain_qr: true,
-          offline_sync_optional: true,
-          offline_telemetry: true,
-        },
-        headers: { "content-type": "application/json" },
-      }),
+    fetchImpl: async () => createResponse({
+      status: 200,
+      textBody: `{"asset_definition_id":"${OFFLINE_ASSET_DEFINITION_ID}",`
+        + `"evaluated_block_height":18446744073709551615,"evaluated_block_hash":"${OFFLINE_EVALUATED_BLOCK_HASH}",`
+        + '"ready":true,"blockers":[]}',
+      headers: { "content-type": "application/json" },
+    }),
   });
 
-  await assert.rejects(
-    () => client.getOfflineReadiness(),
-    /offline readiness response\.offline_kagemusha_recursive_compact_available must be boolean/,
+  const response = await client.getOfflineReadiness(OFFLINE_ASSET_DEFINITION_ID);
+  assert.equal(response.evaluated_block_height, (1n << 64n) - 1n);
+});
+
+test("getOfflineReadiness rejects invalid selectors and contradictory snapshots", async () => {
+  let fetchCount = 0;
+  const noFetchClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCount += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  for (const asset of [undefined, "", ` ${OFFLINE_ASSET_DEFINITION_ID}`, `${OFFLINE_ASSET_DEFINITION_ID} `]) {
+    await assert.rejects(() => noFetchClient.getOfflineReadiness(asset), /assetDefinitionId/);
+  }
+  assert.equal(fetchCount, 0);
+
+  for (const payload of [
+    offlineReadinessPayload({ asset_definition_id: "different-asset" }),
+    offlineReadinessPayload({ ready: true, blockers: [{ code: "not_ready", message: "no" }] }),
+    offlineReadinessPayload({ ready: false, blockers: [] }),
+    offlineReadinessPayload({ evaluated_block_height: -1 }),
+    offlineReadinessPayload({ evaluated_block_hash: undefined }),
+    offlineReadinessPayload({ evaluated_block_hash: "33" }),
+    offlineReadinessPayload({ evaluated_block_hash: "AB".repeat(32) }),
+    offlineReadinessPayload({ blockers: [{ code: "NOT-CANONICAL", message: "no" }] }),
+    offlineReadinessPayload({ ready: false, blockers: [{ code: "not_ready", message: "" }] }),
+    offlineReadinessPayload({ ready: false, blockers: [{ code: "not_ready", message: " leading" }] }),
+    offlineReadinessPayload({ ready: false, blockers: [{ code: "not_ready", message: "line\nbreak" }] }),
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    await assert.rejects(() => client.getOfflineReadiness(OFFLINE_ASSET_DEFINITION_ID));
+  }
+
+  const unknownStrippingClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: offlineReadinessPayload({ unknown_member: "ignored" }),
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const stripped = await unknownStrippingClient.getOfflineReadiness(
+    OFFLINE_ASSET_DEFINITION_ID,
   );
+  assert.equal(Object.hasOwn(stripped, "unknown_member"), false);
+
+  const wrongMediaTypeClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: offlineReadinessPayload(),
+      headers: { "content-type": "text/plain" },
+    }),
+  });
+  await assert.rejects(
+    () => wrongMediaTypeClient.getOfflineReadiness(OFFLINE_ASSET_DEFINITION_ID),
+    /Content-Type application\/json/,
+  );
+});
+
+test("submitOfflineTopUp sends direct JSON and derives Idempotency-Key from signed bytes", async () => {
+  let capturedRequest;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      capturedRequest = { url, init };
+      return createResponse({
+        status: 202,
+        jsonData: offlineOperationReference(),
+        headers: { "content-type": "application/json", location: OFFLINE_STATUS_URI },
+      });
+    },
+  });
+
+  const reference = await client.submitOfflineTopUp(offlineTopUpRequest());
+  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/top-up`);
+  assert.equal(capturedRequest.init.method, "POST");
+  assert.equal(capturedRequest.init.headers["Content-Type"], "application/json");
+  assert.equal(capturedRequest.init.headers.Accept, "application/json");
+  assert.equal(capturedRequest.init.headers["Idempotency-Key"], OFFLINE_OPERATION_ID);
+  assert.match(capturedRequest.init.body, /"atomic_units":9007199254740993/u);
+  assert.doesNotMatch(capturedRequest.init.body, /base64|request_archive|norito_payload/iu);
+  assert.deepEqual(reference, offlineOperationReference());
+});
+
+test("submitOfflineRedeem uses the one final route and typed redeem reference", async () => {
+  let capturedRequest;
+  const redeemReference = offlineOperationReference({ kind: { kind: "redeem", value: null } });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      capturedRequest = { url, init };
+      return createResponse({
+        status: 202,
+        jsonData: redeemReference,
+        headers: { "content-type": "application/json", Location: OFFLINE_STATUS_URI },
+      });
+    },
+  });
+
+  assert.deepEqual(await client.submitOfflineRedeem(offlineRedeemRequest()), redeemReference);
+  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/redeem`);
+  assert.equal(capturedRequest.init.headers["Idempotency-Key"], OFFLINE_OPERATION_ID);
+  assert.match(capturedRequest.init.body, /"block_height":41/u);
+});
+
+test("offline command validation rejects malformed and conflicting operation IDs before fetch", async () => {
+  let fetchCount = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCount += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  const sparse = [...OFFLINE_OPERATION_BYTES];
+  delete sparse[3];
+  const cyclic = offlineTopUpRequest();
+  cyclic.current_note.self = cyclic.current_note;
+  const cases = [
+    { request_archive: "whole-payload-wrapper" },
+    offlineTopUpRequest({ operation_id: new Uint8Array(OFFLINE_OPERATION_BYTES) }),
+    offlineTopUpRequest({ operation_id: OFFLINE_OPERATION_BYTES.slice(1) }),
+    offlineTopUpRequest({ operation_id: Array(32).fill(0) }),
+    offlineTopUpRequest({ operation_id: sparse }),
+    offlineTopUpRequest({ operation_id: [...OFFLINE_OPERATION_BYTES.slice(0, 31), 256] }),
+    offlineTopUpRequest({ authorization: { operation_id: Array(32).fill(0x12) } }),
+    cyclic,
+  ];
+  for (const request of cases) {
+    await assert.rejects(() => client.submitOfflineTopUp(request));
+  }
+  await assert.rejects(
+    () => client.submitOfflineRedeem(offlineRedeemRequest({ block_height: -1 })),
+    /block_height/,
+  );
+  assert.equal(fetchCount, 0);
+});
+
+test("offline 202 references are cross-checked against command, status URI, and Location", async () => {
+  const cases = [
+    [offlineOperationReference({ operation_id: "33".repeat(32) }), OFFLINE_STATUS_URI],
+    [offlineOperationReference({ kind: { kind: "redeem", value: null } }), OFFLINE_STATUS_URI],
+    [offlineOperationReference({ status_uri: "/v1/offline/operations/legacy" }), OFFLINE_STATUS_URI],
+    [offlineOperationReference({ submitted_at_ms: -1 }), OFFLINE_STATUS_URI],
+    [offlineOperationReference(), "/v1/offline/operations/" + "44".repeat(32)],
+    [offlineOperationReference(), null],
+  ];
+  for (const [payload, location] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 202,
+        jsonData: payload,
+        headers: { "content-type": "application/json", ...(location ? { location } : {}) },
+      }),
+    });
+    await assert.rejects(() => client.submitOfflineTopUp(offlineTopUpRequest()));
+  }
+});
+
+test("getOfflineOperationStatus parses all three tagged states", async () => {
+  const statuses = [
+    {
+      state: "pending",
+      value: {
+        operation_id: OFFLINE_OPERATION_ID,
+        kind: { kind: "top_up", value: null },
+        transaction_hash: OFFLINE_TRANSACTION_HASH,
+        submitted_at_ms: 10,
+      },
+    },
+    {
+      state: "applied",
+      value: {
+        operation_id: OFFLINE_OPERATION_ID,
+        result: {
+          kind: "top_up",
+          result: {
+            transaction_hash: OFFLINE_TRANSACTION_HASH,
+            finalized_block_height: 12,
+            server_time_ms: 13,
+            anchor: { version: 2 },
+          },
+        },
+      },
+    },
+    {
+      state: "rejected",
+      value: {
+        operation_id: OFFLINE_OPERATION_ID,
+        kind: { kind: "redeem", value: null },
+        transaction_hash: OFFLINE_TRANSACTION_HASH,
+        error: { code: "offline_operation_rejected", message: "rejected", details: { layer: "torii" } },
+      },
+    },
+  ];
+  for (const expected of statuses) {
+    let capturedUrl;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async (url) => {
+        capturedUrl = url;
+        return createResponse({
+          status: 200,
+          jsonData: expected,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    assert.deepEqual(await client.getOfflineOperationStatus(OFFLINE_OPERATION_ID), expected);
+    assert.equal(capturedUrl, `${BASE_URL}${OFFLINE_STATUS_URI}`);
+  }
+});
+
+test("offline status validation rejects noncanonical paths and adversarial envelopes", async () => {
+  let fetchCount = 0;
+  const noFetchClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCount += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  for (const operationId of ["AB".repeat(32), "00".repeat(32), "11", `${OFFLINE_OPERATION_ID}/extra`]) {
+    await assert.rejects(() => noFetchClient.getOfflineOperationStatus(operationId));
+  }
+  assert.equal(fetchCount, 0);
+
+  const invalidStatuses = [
+    { state: "unknown", value: { operation_id: OFFLINE_OPERATION_ID } },
+    { state: "pending", value: { operation_id: "33".repeat(32), kind: { kind: "top_up" }, transaction_hash: OFFLINE_TRANSACTION_HASH, submitted_at_ms: 1 } },
+    { state: "pending", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "top_up", value: {} }, transaction_hash: OFFLINE_TRANSACTION_HASH, submitted_at_ms: 1 } },
+    { state: "pending", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "top_up" }, transaction_hash: "AB".repeat(32), submitted_at_ms: 1 } },
+    { state: "applied", value: { operation_id: OFFLINE_OPERATION_ID, result: { kind: "redeem", result: { transaction_hash: OFFLINE_TRANSACTION_HASH, finalized_block_height: 1, server_time_ms: 2, anchor: {} } } } },
+    { state: "rejected", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "redeem" }, transaction_hash: OFFLINE_TRANSACTION_HASH, error: { code: "INVALID-CODE", message: "no" } } },
+    { state: "rejected", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "redeem" }, transaction_hash: OFFLINE_TRANSACTION_HASH, error: { code: "rejected", message: "" } } },
+    { state: "rejected", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "redeem" }, transaction_hash: OFFLINE_TRANSACTION_HASH, error: { code: "rejected", message: " leading" } } },
+    { state: "rejected", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "redeem" }, transaction_hash: OFFLINE_TRANSACTION_HASH, error: { code: "rejected", message: "line\nbreak" } } },
+  ];
+  for (const payload of invalidStatuses) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    await assert.rejects(() => client.getOfflineOperationStatus(OFFLINE_OPERATION_ID));
+  }
 });
 
 test("deleteTrigger tolerates missing records", async () => {

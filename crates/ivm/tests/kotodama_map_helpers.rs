@@ -97,7 +97,7 @@ fn semantic_ensure_pointer_requires_explicit_default() {
     let prog = parse(src).expect("parse pointer map without default");
     let err = analyze(&prog).expect_err("pointer-valued ensure should require default");
     assert!(
-        err.message
+        err.message()
             .contains("requires an explicit default for pointer-valued maps")
     );
 }
@@ -112,7 +112,7 @@ fn semantic_ensure_non_int_requires_explicit_default() {
     "#;
     let prog = parse(src).expect("parse bool map without default");
     let err = analyze(&prog).expect_err("non-int map should require explicit default");
-    assert!(err.message.contains("auto-default is only available"));
+    assert!(err.message().contains("auto-default is only available"));
 }
 
 #[test]

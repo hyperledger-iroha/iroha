@@ -1210,7 +1210,6 @@ impl DevDoctorArgs {
             "profile_known": true,
             "client_config": (client_config_path.map(|path| path.display().to_string())),
             "torii_url": (effective_config.torii_api_url.to_string()),
-            "torii_api_version": (effective_config.torii_api_version.clone()),
             "default_gas_limit": (default_gas_limit),
             "fee_asset_id": (profile.fee_asset_id.as_deref()),
             "signer_account": (effective_config.account.to_string()),
@@ -2167,8 +2166,7 @@ fn dev_sample_payload_json(entrypoint: &norito::json::Value) -> Result<String> {
 
 fn dev_sample_value_for_type(type_name: &str) -> norito::json::Value {
     match type_name {
-        "i64" => norito::json!(0_i64),
-        "u128" | "Amount" => norito::json!("0"),
+        "int" | "decimal" | "quantity" => norito::json!("0"),
         "bool" => norito::json!(false),
         "string" => norito::json!(""),
         "bytes" => norito::json!("0x"),
@@ -3278,7 +3276,8 @@ where
 enum LocalContractSchemaType {
     Unit,
     Int,
-    Numeric,
+    Decimal,
+    Quantity,
     Bool,
     String,
     Json,
@@ -3912,7 +3911,8 @@ fn parse_local_contract_schema_type(raw: &str) -> Result<LocalContractSchemaType
     }
     match trimmed {
         "int" => Ok(LocalContractSchemaType::Int),
-        "fixed_u128" | "Amount" | "Balance" => Ok(LocalContractSchemaType::Numeric),
+        "decimal" => Ok(LocalContractSchemaType::Decimal),
+        "quantity" => Ok(LocalContractSchemaType::Quantity),
         "bool" => Ok(LocalContractSchemaType::Bool),
         "string" => Ok(LocalContractSchemaType::String),
         "Json" => Ok(LocalContractSchemaType::Json),
@@ -3932,15 +3932,15 @@ fn parse_local_contract_schema_type(raw: &str) -> Result<LocalContractSchemaType
     }
 }
 
-fn validate_local_numeric_json_value(value: &norito::json::Value) -> bool {
-    match value {
-        norito::json::Value::String(raw) => {
-            raw.parse::<iroha_primitives::numeric::Numeric>().is_ok()
-        }
-        norito::json::Value::Number(norito::json::native::Number::I64(_))
-        | norito::json::Value::Number(norito::json::native::Number::U64(_)) => true,
-        _ => false,
-    }
+fn validate_local_exact_json_string<T>(value: &norito::json::Value) -> bool
+where
+    T: FromStr + ToString,
+{
+    let norito::json::Value::String(raw) = value else {
+        return false;
+    };
+    raw.parse::<T>()
+        .is_ok_and(|parsed| parsed.to_string() == *raw)
 }
 
 fn validate_local_contract_value(
@@ -3950,12 +3950,15 @@ fn validate_local_contract_value(
 ) -> Result<()> {
     let ok = match schema {
         LocalContractSchemaType::Unit => matches!(value, norito::json::Value::Null),
-        LocalContractSchemaType::Int => matches!(
-            value,
-            norito::json::Value::Number(norito::json::native::Number::I64(_))
-                | norito::json::Value::Number(norito::json::native::Number::U64(_))
-        ),
-        LocalContractSchemaType::Numeric => validate_local_numeric_json_value(value),
+        LocalContractSchemaType::Int => {
+            validate_local_exact_json_string::<iroha_primitives::bigint::BigInt>(value)
+        }
+        LocalContractSchemaType::Decimal => {
+            validate_local_exact_json_string::<iroha_primitives::numeric::Numeric>(value)
+        }
+        LocalContractSchemaType::Quantity => {
+            validate_local_exact_json_string::<iroha_primitives::numeric::Quantity>(value)
+        }
         LocalContractSchemaType::Bool => matches!(value, norito::json::Value::Bool(_)),
         LocalContractSchemaType::String => matches!(value, norito::json::Value::String(_)),
         LocalContractSchemaType::Json => true,
@@ -4080,6 +4083,27 @@ mod tests {
         AccountId::new(fixture_key_pair(seed).public_key().clone())
     }
 
+    fn encode_int_state_value(value: i64) -> Vec<u8> {
+        use ivm::state_value::{
+            StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
+            StateValueSchemaV1, state_value_schema_hash_v1,
+        };
+
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
+        };
+        let schema_bytes = norito::to_bytes(&schema).expect("encode state int schema");
+        let envelope = ivm::numeric_tlv::encode_int(
+            &iroha_primitives::bigint::BigInt::from_i128(i128::from(value)),
+        )
+        .expect("encode canonical state int pointer");
+        norito::to_bytes(&StateValueRecordV1 {
+            schema_hash: state_value_schema_hash_v1(&schema_bytes),
+            atoms: vec![StateValueAtomV1::Pointer(envelope)],
+        })
+        .expect("encode state int record")
+    }
+
     fn minimal_program() -> Vec<u8> {
         let meta = ivm::ProgramMetadata {
             max_cycles: 1,
@@ -4093,7 +4117,7 @@ mod tests {
     fn minimal_view_contract_program() -> Vec<u8> {
         let source = r#"
             seiyaku Demo {
-                view fn inspect() -> i64 {
+                view fn inspect() -> int {
                     return 7;
                 }
             }
@@ -4422,8 +4446,8 @@ mod tests {
             &contract_path,
             r#"
                 seiyaku Greeter {
-                    hajimari(value: i64) {}
-                    view fn status() -> i64 { return 7; }
+                    hajimari(int value) {}
+                    view fn status() -> int { return 7; }
                 }
             "#,
         )
@@ -4447,7 +4471,7 @@ mod tests {
                 contract = "demo.greeter"
                 entrypoint = "hajimari"
                 gas_limit = 1000
-                payload = { value = 7 }
+                payload = { value = "7" }
             "#,
         )
         .expect("write manifest");
@@ -4536,9 +4560,9 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    state Counter: i64;
-                    hajimari(value: i64) { Counter = value; }
-                    view fn status() -> i64 { return Counter; }
+                    state int Counter;
+                    hajimari(int value) { Counter = value; }
+                    view fn status() -> int { return Counter; }
                 }
             "#,
         )
@@ -4650,7 +4674,7 @@ mod tests {
         assert!(schema.contains("demo.greeter"));
         assert!(schema.contains("### hajimari"));
         assert!(schema.contains("- Kind: `hajimari`"));
-        assert!(schema.contains("\"value\": 0"));
+        assert!(schema.contains("\"value\": \"0\""));
     }
 
     #[test]
@@ -4662,7 +4686,7 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    view fn status(unused: i64) -> i64 { return 7; }
+                    view fn status(int unused) -> int { return 7; }
                 }
             "#,
         )
@@ -4900,9 +4924,9 @@ mod tests {
 
     #[test]
     fn dev_schema_samples_use_only_v1_canonical_scalar_types() {
-        assert_eq!(dev_sample_value_for_type("i64"), norito::json!(0_i64));
-        assert_eq!(dev_sample_value_for_type("u128"), norito::json!("0"));
-        assert_eq!(dev_sample_value_for_type("Amount"), norito::json!("0"));
+        assert_eq!(dev_sample_value_for_type("int"), norito::json!("0"));
+        assert_eq!(dev_sample_value_for_type("decimal"), norito::json!("0"));
+        assert_eq!(dev_sample_value_for_type("quantity"), norito::json!("0"));
         assert_eq!(dev_sample_value_for_type("bool"), norito::json!(false));
         assert_eq!(dev_sample_value_for_type("string"), norito::json!(""));
         assert_eq!(dev_sample_value_for_type("bytes"), norito::json!("0x"));
@@ -4911,7 +4935,7 @@ mod tests {
             norito::json!(0_u64)
         );
 
-        for retired in ["int", "Balance", "FixedU128", "Blob"] {
+        for retired in ["i64", "u128", "Amount", "Balance", "FixedU128", "Blob"] {
             assert_eq!(
                 dev_sample_value_for_type(retired),
                 norito::json!("sample"),
@@ -4932,7 +4956,7 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    view fn status(value: i64) -> i64 { return value; }
+                    view fn status(int value) -> int { return value; }
                 }
             "#,
         )
@@ -4958,8 +4982,8 @@ mod tests {
                 id = "status"
                 contract = "demo.greeter"
                 entrypoint = "status"
-                payload = { value = 7 }
-                expected_result = 7
+                payload = { value = "7" }
+                expected_result = "7"
             "#,
         )
         .expect("write manifest");
@@ -4978,14 +5002,14 @@ mod tests {
                 .as_ref()
                 .and_then(norito::json::Value::as_object)
                 .and_then(|object| object.get("value"))
-                .and_then(norito::json::Value::as_i64),
-            Some(7)
+                .and_then(norito::json::Value::as_str),
+            Some("7")
         );
         assert_eq!(
             case.expected_result
                 .as_ref()
-                .and_then(norito::json::Value::as_i64),
-            Some(7)
+                .and_then(norito::json::Value::as_str),
+            Some("7")
         );
     }
 
@@ -4995,15 +5019,15 @@ mod tests {
         let program = compile_contract_program(
             r#"
             seiyaku Demo {
-                kotoage fn submit(amount: i64, recipient: AccountId) -> i64 authorize("Submit") {
+                kotoage fn submit(int amount, recipient: AccountId) -> int authorize("Submit") {
                     return amount;
                 }
 
-                kotoage fn upload(owner: AccountId, tag: Name, payload: bytes) -> i64 authorize("Upload") {
+                kotoage fn upload(owner: AccountId, tag: Name, payload: bytes) -> int authorize("Upload") {
                     return codec::tlv_len(payload);
                 }
 
-                view fn ping() -> i64 {
+                view fn ping() -> int {
                     return 1;
                 }
             }
@@ -5038,7 +5062,7 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        let wrong_type = norito::json!({ "amount": "7", "recipient": (account.clone()) });
+        let wrong_type = norito::json!({ "amount": 7, "recipient": (account.clone()) });
         let err = normalize_local_contract_payload(&submit, Some(&wrong_type))
             .expect_err("wrong amount type fails");
         assert!(
@@ -5047,7 +5071,7 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        let extra = norito::json!({ "amount": 7, "recipient": (account), "extra": 1 });
+        let extra = norito::json!({ "amount": "7", "recipient": (account), "extra": 1 });
         let err = normalize_local_contract_payload(&submit, Some(&extra))
             .expect_err("unexpected field fails");
         assert!(
@@ -5106,7 +5130,7 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    view fn status(value: i64) -> i64 { return value; }
+                    view fn status(int value) -> int { return value; }
                 }
             "#,
         )
@@ -5132,7 +5156,7 @@ mod tests {
                 id = "status_with_extra_field"
                 contract = "demo.greeter"
                 entrypoint = "status"
-                payload = { value = 7, unexpected = 9 }
+                payload = { value = "7", unexpected = 9 }
             "#,
         )
         .expect("write manifest");
@@ -5163,7 +5187,7 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    view fn status(value: i64) -> i64 { return value; }
+                    view fn status(int value) -> int { return value; }
                 }
             "#,
         )
@@ -5215,7 +5239,7 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    view fn status(value: i64) -> i64 { return value; }
+                    view fn status(int value) -> int { return value; }
                 }
             "#,
         )
@@ -5279,7 +5303,7 @@ mod tests {
                 contract = "demo.greeter"
                 mode = "stream"
                 entrypoint = "status"
-                payload = { value = 7 }
+                payload = { value = "7" }
             "#,
         )
         .expect("rewrite manifest");
@@ -5338,9 +5362,9 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    state Counter: i64;
-                    hajimari(value: i64) { Counter = value; }
-                    view fn status() -> i64 { return Counter; }
+                    state int Counter;
+                    hajimari(int value) { Counter = value; }
+                    view fn status() -> int { return Counter; }
                 }
             "#,
         )
@@ -5603,8 +5627,8 @@ mod tests {
             Some(true)
         );
         assert_eq!(
-            output.get("result").and_then(norito::json::Value::as_i64),
-            Some(7)
+            output.get("result").and_then(norito::json::Value::as_str),
+            Some("7")
         );
         assert_eq!(
             output
@@ -5624,7 +5648,7 @@ mod tests {
         let source_path = dir.path().join("debug_view_with_path.ko");
         let source = r#"
             seiyaku Demo {
-                view fn inspect() -> i64 {
+                view fn inspect() -> int {
                     return 7;
                 }
             }
@@ -5682,7 +5706,7 @@ mod tests {
         let override_path = dir.path().join("override.ko");
         let source = r#"
             seiyaku Demo {
-                view fn inspect() -> i64 {
+                view fn inspect() -> int {
                     return 7;
                 }
             }
@@ -5692,7 +5716,7 @@ mod tests {
             &override_path,
             r#"
                 seiyaku Demo {
-                    view fn inspect() -> i64 {
+                    view fn inspect() -> int {
                         return 99;
                     }
                 }
@@ -5744,10 +5768,10 @@ mod tests {
         let mut ctx = TestContext::new(authority);
         let source = r#"
             seiyaku Demo {
-                state counter: i64;
+                state int counter;
                 hajimari() { counter = 0; }
 
-                kotoage fn bump() -> i64 authorize("Admin") {
+                kotoage fn bump() -> int authorize("Admin") {
                     counter = counter + 1;
                     ledger::domain::register(DomainId::parse("debugcall.universal"));
                     return counter;
@@ -5758,7 +5782,7 @@ mod tests {
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
         let durable_state_json = format!(
             r#"{{"counter":"0x{}"}}"#,
-            hex::encode(norito::to_bytes(&41_i64).expect("encode state"))
+            hex::encode(encode_int_state_value(41))
         );
         let args = DebugCallArgs {
             authority: None,
@@ -5783,8 +5807,8 @@ mod tests {
             Some(true)
         );
         assert_eq!(
-            output.get("result").and_then(norito::json::Value::as_i64),
-            Some(42)
+            output.get("result").and_then(norito::json::Value::as_str),
+            Some("42")
         );
         assert_eq!(
             output
@@ -5852,10 +5876,10 @@ mod tests {
         let mut ctx = TestContext::new(authority.clone());
         let source = r#"
             seiyaku Demo {
-                state counter: i64;
+                state int counter;
                 hajimari() { counter = 0; }
 
-                kotoage fn bump(amount: i64) -> i64 authorize("Admin") {
+                kotoage fn bump(int amount) -> int authorize("Admin") {
                     ledger::domain::register(DomainId::parse("debugparity.universal"));
                     counter = amount;
                     return counter;
@@ -5864,7 +5888,7 @@ mod tests {
         "#;
         let program = compile_contract_program(source);
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-        let payload_json = r#"{"amount":7}"#.to_owned();
+        let payload_json = r#"{"amount":"7"}"#.to_owned();
         let args = DebugCallArgs {
             authority: None,
             code_file: None,
@@ -5936,8 +5960,8 @@ mod tests {
             Some(&expected_durable_json)
         );
         assert_eq!(
-            output.get("result").and_then(norito::json::Value::as_i64),
-            Some(7)
+            output.get("result").and_then(norito::json::Value::as_str),
+            Some("7")
         );
     }
 
@@ -6131,9 +6155,6 @@ mod tests {
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
-                torii_api_version: iroha::config::default_torii_api_version(),
-                torii_api_min_proof_version: iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
-                    .to_string(),
                 torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
                 transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
                 transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,

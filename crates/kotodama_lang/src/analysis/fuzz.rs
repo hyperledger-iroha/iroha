@@ -886,9 +886,13 @@ mod tests {
             }
         "#,
         );
+        assert_eq!(report.cases_executed, 0);
         assert!(
-            report.findings.iter().any(|f| f.code == "fuzz-skip-call"),
-            "expected skip-call finding, got {report:?}"
+            report
+                .findings
+                .iter()
+                .any(|finding| { matches!(finding.code, "fuzz-skip-call" | "fuzz-skip-feature") }),
+            "unsupported host-call fixtures must be skipped deterministically: {report:?}"
         );
     }
 }

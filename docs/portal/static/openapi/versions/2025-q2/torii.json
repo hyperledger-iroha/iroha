@@ -331,7 +331,7 @@
         ]
       }
     },
-    "/v1/aliases/resolve_index": {
+    "/v1/aliases/resolve-index": {
       "post": {
         "description": "Returns the alias string and account identifier registered under the provided index.",
         "operationId": "aliasResolveIndex",

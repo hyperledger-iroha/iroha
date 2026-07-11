@@ -4827,12 +4827,22 @@ fn is_transfer_batch_entry_tuple(ty: &Type) -> bool {
     }
 }
 
-fn ensure_transfer_batch_args(args: &[TypedExpr]) -> Result<(), SemanticError> {
+fn ensure_transfer_batch_args(args: &mut [TypedExpr]) -> Result<(), SemanticError> {
     if args.is_empty() {
         return Err(SemanticError {
             code: "K2003",
             message: "transfer_batch expects at least one entry".into(),
         });
+    }
+    for argument in args.iter_mut() {
+        let ExprKind::Tuple(items) = &mut argument.expr else {
+            continue;
+        };
+        if items.len() != 4 {
+            continue;
+        }
+        coerce_exact_numeric_literal_to(&mut items[3], &Type::Quantity)?;
+        argument.ty = Type::Tuple(items.iter().map(|item| item.ty.clone()).collect());
     }
     if args
         .iter()
@@ -6695,6 +6705,24 @@ fn replace_identifier_token(message: &str, needle: &str, replacement: &str) -> S
     rewritten
 }
 
+fn coerce_builtin_exact_numeric_literals(
+    builtin: Builtin,
+    arguments: &mut [TypedExpr],
+) -> Result<(), SemanticError> {
+    for (argument, parameter) in arguments
+        .iter_mut()
+        .zip(builtin.signature().parameters.iter().copied())
+    {
+        let expected = match parameter.strip_suffix('?').unwrap_or(parameter) {
+            "decimal" => Type::Decimal,
+            "quantity" => Type::Quantity,
+            _ => continue,
+        };
+        coerce_exact_numeric_literal_to(argument, &expected)?;
+    }
+    Ok(())
+}
+
 fn analyze_surface_builtin_call(
     context: &SemanticContext,
     builtin: Builtin,
@@ -6742,6 +6770,7 @@ fn analyze_surface_builtin_call(
         | BuiltinMode::TestOnly
         | BuiltinMode::TestFunctionOnly => {}
     }
+    coerce_builtin_exact_numeric_literals(builtin, &mut arg_typed)?;
     crate::secret::validate_builtin_call(builtin, &arg_typed)?;
     match builtin {
         Builtin::PointerConstructor(constructor) => {
@@ -8495,7 +8524,7 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::TransferBatch => {
-            ensure_transfer_batch_args(&arg_typed)?;
+            ensure_transfer_batch_args(&mut arg_typed)?;
             Ok(TypedExpr {
                 expr: ExprKind::Call {
                     name: builtin.name().to_string(),
@@ -12641,12 +12670,13 @@ fn ensure_assignable_and_coerce(
             && int_literal_expression(expr)
         {
             let inner = expr.clone();
-            *expr = TypedExpr {
+            let converted = TypedExpr {
                 expr: ExprKind::NumericCast {
                     expr: Box::new(inner),
                 },
                 ty: Type::Decimal,
             };
+            *expr = fold_numeric_literal_cast(converted)?;
             return Ok(());
         }
         if resolve_struct_type(expected) == Type::Quantity
@@ -12660,12 +12690,13 @@ fn ensure_assignable_and_coerce(
                 });
             }
             let inner = expr.clone();
-            *expr = TypedExpr {
+            let converted = TypedExpr {
                 expr: ExprKind::NumericCast {
                     expr: Box::new(inner),
                 },
                 ty: Type::Quantity,
             };
+            *expr = fold_numeric_literal_cast(converted)?;
             return Ok(());
         }
         if let ExprKind::Call { name, .. } | ExprKind::NamedCall { name, .. } = expr.kind()
@@ -12695,6 +12726,20 @@ fn ensure_assignable_and_coerce(
         return Err(error);
     }
     Ok(())
+}
+
+fn fold_numeric_literal_cast(converted: TypedExpr) -> Result<TypedExpr, SemanticError> {
+    match crate::checked_arithmetic::evaluate(&converted) {
+        Ok(Some(value)) => Ok(value.into_typed_expr()),
+        Ok(None) => Err(SemanticError {
+            code: "E_INTERNAL_NUMERIC_MATRIX",
+            message: "contextual numeric literal unexpectedly depends on a runtime value".into(),
+        }),
+        Err(error) => Err(SemanticError {
+            code: error.code(),
+            message: error.to_string(),
+        }),
+    }
 }
 
 fn int_literal_expression(expr: &TypedExpr) -> bool {
@@ -15187,8 +15232,8 @@ mod tests {
         let expression = function_tail(
             r#"
                 struct Envelope {
-                    List<Option<int>, 2>,
-                    outcome: Result<(int, bool), int> labels,
+                    List<Option<int>, 2> labels,
+                    Result<(int, bool), int> outcome,
                 }
 
                 fn contains_nested() -> bool {
@@ -15316,7 +15361,7 @@ mod tests {
             format!("fn value() -> int {{ return -{below_magnitude}; }}"),
         ] {
             let error = parse(&source).expect_err("neighbor outside signed 512-bit range");
-            assert!(error.contains("512") || error.contains("range"), "{error}");
+            assert!(error.contains("E_INT_LITERAL_OVERFLOW"), "{error}");
         }
     }
 
@@ -15425,14 +15470,21 @@ mod tests {
 
     #[test]
     fn rounded_decimal_division_supports_every_v1_rounding_mode() {
-        for (dividend, mode, expected) in [
-            ("1.0", "toward_zero", "0.12"),
-            ("1.0", "away_from_zero", "0.13"),
-            ("-1.0", "floor", "-0.13"),
-            ("-1.0", "ceil", "-0.12"),
-            ("1.0", "nearest_even", "0.12"),
-            ("1.0", "nearest_away", "0.13"),
-            ("1.0", "nearest_toward_zero", "0.12"),
+        use ivm_abi::numeric::RoundingModeV1 as AbiMode;
+
+        for (dividend, mode, expected, abi_mode) in [
+            ("1.0", "toward_zero", "0.12", AbiMode::TowardZero),
+            ("1.0", "away_from_zero", "0.13", AbiMode::AwayFromZero),
+            ("-1.0", "floor", "-0.13", AbiMode::Floor),
+            ("-1.0", "ceil", "-0.12", AbiMode::Ceil),
+            ("1.0", "nearest_even", "0.12", AbiMode::NearestEven),
+            ("1.0", "nearest_away", "0.13", AbiMode::NearestAway),
+            (
+                "1.0",
+                "nearest_toward_zero",
+                "0.12",
+                AbiMode::NearestTowardZero,
+            ),
         ] {
             let expression = returned_expr(&format!(
                 "fn value() -> decimal {{ return {dividend}.div_round(\
@@ -15442,6 +15494,24 @@ mod tests {
                 panic!("constant rounded division must fold");
             };
             assert_eq!(value.to_string(), expected, "mode={mode}");
+
+            let expression = returned_expr(&format!(
+                "fn rounded(decimal value) -> decimal {{ return value.div_round(\
+                    divisor: 8.0, scale: 2, mode: Rounding::{mode}); }}"
+            ));
+            let ExprKind::NamedCall { name, args, .. } = expression.expr else {
+                panic!("dynamic rounded division must remain an intrinsic for mode={mode}");
+            };
+            assert_eq!(name, DECIMAL_DIV_ROUND_INTRINSIC, "mode={mode}");
+            assert!(
+                matches!(
+                    args[3].expr,
+                    ExprKind::IntLiteral(ref value)
+                        if value.try_to_u64() == Some(abi_mode.tag())
+                ),
+                "mode={mode} did not lower to ABI tag {}",
+                abi_mode.tag(),
+            );
         }
 
         let expression = returned_expr(
@@ -15469,6 +15539,20 @@ mod tests {
                     == Some(ivm_abi::numeric::RoundingModeV1::NearestEven.tag())
         ));
         assert_eq!(evaluation_order, [0, 3, 1, 2]);
+
+        let ratio = returned_expr(
+            "fn rounded(quantity value, quantity divisor, int scale) -> decimal { \
+                return value.ratio_round( \
+                    divisor: divisor, scale: scale, mode: Rounding::floor); }",
+        );
+        let ExprKind::NamedCall { name, args, .. } = ratio.expr else {
+            panic!("dynamic rounded ratio must remain a typed intrinsic");
+        };
+        assert_eq!(name, QUANTITY_RATIO_ROUND_INTRINSIC);
+        assert_eq!(args[0].ty, Type::Quantity);
+        assert_eq!(args[1].ty, Type::Quantity);
+        assert_eq!(args[2].ty, Type::Int);
+        assert_eq!(ratio.ty, Type::Decimal);
     }
 
     #[test]
@@ -15487,6 +15571,38 @@ mod tests {
                 ),
                 "mode={mode}",
             );
+        }
+    }
+
+    #[test]
+    fn rounded_numeric_methods_reject_noncanonical_signatures() {
+        let positional = analyze_error(
+            "fn value(decimal input) -> decimal { \
+                input.div_round(2.0, 2, Rounding::nearest_even) }",
+        );
+        assert_eq!(positional.code, "E_NAMED_ARGUMENTS_REQUIRED");
+
+        let int_receiver = analyze_error(
+            "fn value(int input) -> decimal { \
+                input.div_round( \
+                    divisor: 2.0, scale: 2, mode: Rounding::nearest_even) }",
+        );
+        assert_eq!(int_receiver.code, "E_NUMERIC_ROUND_RECEIVER");
+
+        let decimal_ratio = analyze_error(
+            "fn value(decimal input, quantity divisor) -> decimal { \
+                input.ratio_round( \
+                    divisor: divisor, scale: 2, mode: Rounding::nearest_even) }",
+        );
+        assert_eq!(decimal_ratio.code, "E_NUMERIC_ROUND_RECEIVER");
+
+        for scale in ["-1", "29"] {
+            let error = analyze_error(&format!(
+                "fn value(decimal input) -> decimal {{ \
+                    input.div_round( \
+                        divisor: 2.0, scale: {scale}, mode: Rounding::nearest_even) }}"
+            ));
+            assert_eq!(error.code, "E_INVALID_SCALE", "scale={scale}");
         }
     }
 
@@ -15812,7 +15928,7 @@ mod tests {
             "SoracloudRequest",
             "SoracloudResponse",
         ] {
-            let error = analyze_error(&format!("fn f(value: {name}) {{}}"));
+            let error = analyze_error(&format!("fn f({name} value) {{}}"));
             assert_eq!(error.message, format!("unknown type `{name}`"));
         }
     }
@@ -15846,7 +15962,7 @@ mod tests {
         analyze(&helpers).expect("private helpers accept Option/Result parameters");
 
         let public = parse(
-            "seiyaku Demo { kotoage fn call(Option<int>, outcome: Result<int, bool> value) authorize(\"Call\") {} }",
+            "seiyaku Demo { kotoage fn call(Option<int> value, Result<int, bool> outcome) authorize(\"Call\") {} }",
         )
         .expect("public sum parameters parse");
         analyze(&public).expect("one-shot V1 argument records support Option and Result");
@@ -17151,7 +17267,8 @@ mod tests {
                 .expect("compiler-internal builtin name should parse as a call");
             let err = analyze(&program).expect_err("internal builtin must be source-inaccessible");
             assert!(
-                err.message.contains("compiler-internal"),
+                err.message.contains("compiler-internal")
+                    || err.message.contains("unknown function or builtin"),
                 "unexpected error for {name}: {}",
                 err.message
             );

@@ -35,15 +35,6 @@ pub struct Root {
     /// Torii API URL.
     #[config(env = "TORII_URL")]
     pub torii_url: WithOrigin<Url>,
-    /// Torii API version label (semantic `major.minor`).
-    #[config(
-        env = "TORII_API_VERSION",
-        default = "defaults::torii::api_default_version()"
-    )]
-    pub torii_api_version: WithOrigin<String>,
-    /// Minimum Torii API version required for proof/staking/fee endpoints.
-    #[config(default = "defaults::torii::api_min_proof_version()")]
-    pub torii_api_min_proof_version: WithOrigin<String>,
     /// Optional HTTP Basic Auth credentials.
     pub basic_auth: Option<BasicAuth>,
     /// Timeout for Torii HTTP requests.
@@ -83,12 +74,6 @@ pub enum ParseError {
     UnsupportedUrlScheme {
         /// Scheme part of the provided URL.
         scheme: String,
-    },
-    /// Invalid Torii API version label.
-    #[error("Invalid Torii API version: `{value}`")]
-    InvalidToriiApiVersion {
-        /// Raw label supplied by the user or env.
-        value: String,
     },
     /// Invalid `SoraFS` anonymity rollout policy label.
     #[error("Invalid `SoraFS` anonymity policy label: `{value}`")]
@@ -158,8 +143,6 @@ impl Root {
         let Self {
             chain: chain_id,
             torii_url,
-            torii_api_version,
-            torii_api_min_proof_version,
             basic_auth,
             torii_request_timeout_ms,
             account:
@@ -226,71 +209,6 @@ impl Root {
             }
             url
         };
-        let (torii_api_version, torii_api_version_origin) = torii_api_version.into_tuple();
-        let torii_api_version = match super::parse_api_version_label(&torii_api_version) {
-            Ok(label) => label,
-            Err(reason) => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidToriiApiVersion {
-                        value: torii_api_version.clone(),
-                    })
-                    .attach(ConfigValueAndOrigin::new(
-                        torii_api_version.clone(),
-                        torii_api_version_origin,
-                    ))
-                    .attach(format!(
-                        "Torii API versions must use `major.minor` labels: {reason}"
-                    )),
-                );
-                super::DEFAULT_TORII_API_VERSION.to_string()
-            }
-        };
-        let (torii_api_min_proof_version, torii_api_min_proof_version_origin) =
-            torii_api_min_proof_version.into_tuple();
-        let torii_api_min_proof_version =
-            match super::parse_api_version_label(&torii_api_min_proof_version) {
-                Ok(label) => label,
-                Err(reason) => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidToriiApiVersion {
-                            value: torii_api_min_proof_version.clone(),
-                        })
-                        .attach(ConfigValueAndOrigin::new(
-                            torii_api_min_proof_version.clone(),
-                            torii_api_min_proof_version_origin.clone(),
-                        ))
-                        .attach(format!(
-                            "Torii API versions must use `major.minor` labels: {reason}"
-                        )),
-                    );
-                    torii_api_version.clone()
-                }
-            };
-        let version_key = |label: &str| -> Option<(u16, u16)> {
-            let mut parts = label.split('.');
-            let major = parts.next()?.parse::<u16>().ok()?;
-            let minor = parts.next()?.parse::<u16>().ok()?;
-            Some((major, minor))
-        };
-        if let (Some(min_tuple), Some(default_tuple)) = (
-            version_key(&torii_api_min_proof_version),
-            version_key(&torii_api_version),
-        ) && min_tuple > default_tuple
-        {
-            emitter.emit(
-                Report::new(ParseError::InvalidToriiApiVersion {
-                    value: torii_api_min_proof_version.clone(),
-                })
-                .attach(ConfigValueAndOrigin::new(
-                    torii_api_min_proof_version.clone(),
-                    torii_api_min_proof_version_origin,
-                ))
-                .attach(format!(
-                    "torii_api_min_proof_version `{torii_api_min_proof_version}` must not exceed torii_api_version `{torii_api_version}`",
-                )),
-            );
-        }
-
         let chain_discriminant = match profile.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(profile_name) => {
                 if let Some(profile) = network_profile(profile_name) {
@@ -410,8 +328,6 @@ impl Root {
             account_chain_discriminant: chain_discriminant.into_value(),
             key_pair: key_pair.unwrap(),
             torii_api_url,
-            torii_api_version,
-            torii_api_min_proof_version,
             basic_auth,
             torii_request_timeout: torii_request_timeout_ms.into_value().get(),
             transaction_ttl: tx_ttl.into_value().get(),
@@ -584,10 +500,6 @@ mod tests {
             chain: ChainId::from_str("test-chain").expect("chain id"),
             torii_url: WithOrigin::inline(
                 Url::parse("http://127.0.0.1:8080/torii").expect("valid torii url"),
-            ),
-            torii_api_version: WithOrigin::inline(defaults::torii::api_default_version()),
-            torii_api_min_proof_version: WithOrigin::inline(
-                defaults::torii::api_min_proof_version(),
             ),
             basic_auth: None,
             torii_request_timeout_ms: WithOrigin::inline(DurationMs::from(

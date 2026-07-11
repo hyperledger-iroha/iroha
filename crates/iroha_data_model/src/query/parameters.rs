@@ -21,7 +21,7 @@ pub const MAX_FETCH_SIZE: NonZeroU64 = nonzero!(10_000_u64);
 
 pub use self::model::*;
 
-/// Unique id of a query
+/// Opaque server-generated identifier of a stored query.
 pub type QueryId = String;
 
 #[model]
@@ -29,6 +29,10 @@ mod model {
     use super::*;
 
     /// Forward-only (a.k.a non-scrollable) cursor
+    ///
+    /// The server binds a stored cursor to the authority that started the query.
+    /// A continuation request must be signed by that same authority; unknown,
+    /// expired, and foreign cursor identifiers are reported identically.
     #[derive(Debug, Clone, PartialEq, Eq, Getters, Encode, Decode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -36,8 +40,9 @@ mod model {
     )]
     #[getset(get = "pub")]
     pub struct ForwardCursor {
-        /// Unique ID of query. When provided in a query the query will look up if there
-        /// is was already a query with a matching ID and resume returning result batches
+        /// Opaque 256-bit query ID encoded as canonical lowercase hexadecimal.
+        /// The value identifies process-local server state and must not be parsed,
+        /// synthesized, or treated as portable across Torii instances.
         pub query: QueryId,
         /// Pointer to the next element in the result set
         pub cursor: NonZeroU64,

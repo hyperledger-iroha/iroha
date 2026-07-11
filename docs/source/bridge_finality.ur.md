@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 ---
 
 <div dir="rtl">
@@ -52,8 +52,9 @@ world state سے تاریخی PoP یا certificates دوبارہ نہیں بنا
 verification sidecar fail closed ہوتا ہے؛ دستیابی حالیہ in-memory history window تک محدود
 نہیں۔
 
-stateless verifier version، chain، height، header hash، context، subject اور CommitQC کو
-عین match کرتا اور artifact کے تمام PoP verify کرتا ہے۔ signer indices سختی سے بڑھتے ہوئے
+stateless verifier version، chain، height، header hash، header کے canonical predecessor اور
+view، context، subject اور CommitQC کو عین match کرتا اور artifact کے تمام PoP verify کرتا ہے۔
+signer indices سختی سے بڑھتے ہوئے
 اور range میں ہوں؛ CommitQC validator count اور voting power دونوں quorum پورے کرے، اور
 عین Sumeragi v2 vote preimage پر BLS aggregate signature درست ہو۔
 
@@ -74,9 +75,7 @@ SCCP یہی `BridgeFinalityProof` استعمال کرتا ہے۔ message کے د
 ## Bundle اور API
 
 `BridgeFinalityBundle` عین `{ commitment, finality_proof }` ہے۔ commitment یہ ہے:
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }`۔ optional MMR fields صرف commitments ہیں؛ یہ finality یا
-inclusion proof نہیں۔
+`{ chain_id, height_context_id, block_height, block_hash }`۔
 
 - `GET /v1/bridge/finality/{height}`، `BridgeFinalityProof` واپس کرتا ہے؛
 - `GET /v1/bridge/finality/bundle/{height}`، `BridgeFinalityBundle` واپس کرتا ہے۔

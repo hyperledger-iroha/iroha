@@ -1,156 +1,48 @@
 use std::{
-    num::NonZeroUsize,
-    str::FromStr,
-    sync::Arc,
+    collections::BTreeMap,
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use axum::{body::Bytes, http::HeaderMap, response::Response as AxResponse};
-use base64::{
-    Engine as _,
-    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
-};
+use axum::{http::HeaderMap, response::Response as AxResponse};
 use iroha_config::parameters::actual;
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
+use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
-    asset::{AssetDefinitionId, AssetId},
     isi::{
         InstructionBox,
-        offline::{
-            RedeemKagemushaRecursive, RedeemKagemushaRecursiveV2, TopUpKagemushaRecursive,
-            TopUpKagemushaRecursiveV2,
-        },
+        offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
     },
     name::Name,
-    offline::{
-        KagemushaRecursiveSpendRedeemRequestV1, KagemushaRecursiveSpendRedeemRequestV2,
-        KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRecursiveSpendTopUpRequestV1,
-        KagemushaRecursiveSpendTopUpRequestV2, OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
-        OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
+    offline::KagemushaRecursiveSpendTopUpAnchorV2,
+    transaction::{
+        Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
+        error::TransactionRejectionReason, signed::TransactionResult,
     },
-    proof::{ProofBox, VerifyingKeyId},
-    transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_primitives::numeric::Numeric;
+use iroha_torii_shared::offline_api::{
+    OfflineOperationKind, OfflineOperationReference, OfflineOperationResult, OfflineOperationState,
+    OfflineOperationStatus, OfflineRedeemRequest, OfflineRedeemResult, OfflineTopUpRequest,
+    OfflineTopUpResult,
+};
 use mv::storage::StorageReadOnly;
-use norito::json::{self, Map, Value};
-use p256::PublicKey as P256PublicKey;
-use sha2::{Digest as _, Sha256};
+use tokio::sync::watch;
 
-use crate::{AppState, Error, SharedAppState, app_auth, json_ok, routing};
+use crate::{AppState, Error, SharedAppState, app_auth, routing};
 
-const ENDPOINT_KEYS_REFILL: &str = "v1/offline/v2/keys/refill";
-const ENDPOINT_NOTES_ISSUE: &str = "v1/offline/v2/notes/issue";
-const ENDPOINT_KAGEMUSHA_TOPUP: &str = "v1/offline/v2/kagemusha/topup";
-const ENDPOINT_NOTES_REDEEM: &str = "v1/offline/v2/notes/redeem";
-const ENDPOINT_AUDIT: &str = "v1/offline/v2/audit";
-const PATH_KEYS_REFILL: &str = "/v1/offline/v2/keys/refill";
-const PATH_NOTES_ISSUE: &str = "/v1/offline/v2/notes/issue";
-const PATH_KAGEMUSHA_TOPUP: &str = "/v1/offline/v2/kagemusha/topup";
-const PATH_NOTES_REDEEM: &str = "/v1/offline/v2/notes/redeem";
-const OFFLINE_V2_P256_UNCOMPRESSED_PUBLIC_KEY_LEN: usize = 65;
-const OFFLINE_V2_KEY_CERTIFICATE_SIGNATURE_PLACEHOLDER: [u8; 64] = [0xA6; 64];
-const ATTESTATION_RECEIPT_FIELDS: &[&str] = &[
-    "version",
-    "platform",
-    "account_id",
-    "device_id",
-    "offline_public_key_base64",
-    "assertion_public_key_base64",
-    "assertion_scheme",
-    "assertion_key_algorithm",
-    "assertion_usage_count_limit",
-    "attestation_key_id",
-    "hardware_one_use",
-    "attestation_report_hash_hex",
-    "issued_at_ms",
-    "expires_at_ms",
-    "signature_base64",
-];
-const KEY_CERTIFICATE_FIELDS: &[&str] = &[
-    "version",
-    "platform",
-    "key_id",
-    "device_id",
-    "account_id",
-    "public_key",
-    "assertion_scheme",
-    "assertion_key_algorithm",
-    "assertion_public_key",
-    "assertion_usage_count_limit",
-    "one_use",
-    "issued_at_ms",
-    "expires_at_ms",
-    "app_attest_public_key_base64",
-    "ios_team_id",
-    "ios_bundle_id",
-    "ios_environment",
-    "issuer_signature_base64",
-    "issuer_signature_payload_base64",
-];
-const REDEMPTION_NORITO_FIELDS: &[&str] = &["norito_base64"];
-const REDEMPTION_FIELDS: &[&str] = &[
-    "source_note_commitment",
-    "input_nullifiers",
-    "sender_key_certificate",
-    "recipient_account_id",
-    "asset_definition_id",
-    "amount",
-    "recursive_proof",
-];
-
-fn offline_v2_key_certificate_signature_placeholder() -> Signature {
-    Signature::try_from_bytes(&OFFLINE_V2_KEY_CERTIFICATE_SIGNATURE_PLACEHOLDER)
-        .expect("Offline Notes V2 key-certificate placeholder signature is non-empty and nonzero")
-}
-const RECURSIVE_PROOF_FIELDS: &[&str] = &[
-    "backend",
-    "verifier_key_id",
-    "public_inputs_hash_hex",
-    "proof_bytes_base64",
-];
-const LINEAGE_STATE_FIELDS: &[&str] = &[
-    "lineage_id",
-    "account_id",
-    "device_id",
-    "offline_public_key",
-    "asset_definition_id",
-    "balance",
-    "locked_balance",
-    "server_revision",
-    "server_state_hash",
-    "pending_local_revision",
-    "authorization",
-    "issuer_signature_base64",
-];
-const LINEAGE_AUTHORIZATION_FIELDS: &[&str] = &[
-    "authorization_id",
-    "lineage_id",
-    "account_id",
-    "verdict_id",
-    "max_balance",
-    "max_tx_value",
-    "issued_at_ms",
-    "refresh_at_ms",
-    "expires_at_ms",
-    "device_binding",
-    "key_certificate",
-    "issuer_signature_base64",
-];
-
+const PATH_OFFLINE_TOP_UP: &str = iroha_torii_shared::uri::OFFLINE_TOP_UP;
+const PATH_OFFLINE_REDEEM: &str = iroha_torii_shared::uri::OFFLINE_REDEEM;
+const OFFLINE_OPERATION_RETENTION_AFTER_EXPIRY_MS: u64 = 24 * 60 * 60 * 1_000;
 #[derive(Debug, Clone)]
 pub(crate) struct OfflineV2IssuerRuntime {
     authority: AccountId,
     key_pair: KeyPair,
-    attestation_verifier_public_key: PublicKey,
-    max_balance: Numeric,
     max_tx_value: Numeric,
-    certificate_ttl: Duration,
-    authorization_refresh: Duration,
-    authorization_ttl: Duration,
+    operations: Arc<RwLock<BTreeMap<[u8; 32], OfflineOperationRecord>>>,
+    in_flight: Arc<Mutex<BTreeMap<[u8; 32], InFlightSubmission>>>,
 }
 
 impl OfflineV2IssuerRuntime {
@@ -158,24 +50,10 @@ impl OfflineV2IssuerRuntime {
         Self {
             authority: config.authority,
             key_pair: config.key_pair,
-            attestation_verifier_public_key: config.attestation_verifier_public_key,
-            max_balance: config.max_balance,
             max_tx_value: config.max_tx_value,
-            certificate_ttl: config.certificate_ttl,
-            authorization_refresh: config.authorization_refresh,
-            authorization_ttl: config.authorization_ttl,
+            operations: Arc::new(RwLock::new(BTreeMap::new())),
+            in_flight: Arc::new(Mutex::new(BTreeMap::new())),
         }
-    }
-
-    fn sign_bytes(&self, payload: &[u8], context: &'static str) -> Result<Signature, Error> {
-        Signature::try_new(self.key_pair.private_key(), payload)
-            .map_err(|source| offline_v2_signing_error(context, source))
-    }
-
-    fn sign_json_base64(&self, payload: &Value, context: &'static str) -> Result<String, Error> {
-        let bytes = json::to_vec(payload)
-            .map_err(|source| Error::SerializationFailure { context, source })?;
-        Ok(BASE64_STANDARD.encode(self.sign_bytes(&bytes, context)?.payload()))
     }
 
     fn sign_transaction(
@@ -189,177 +67,90 @@ impl OfflineV2IssuerRuntime {
     }
 }
 
-struct ParsedOfflineRequest {
-    value: Value,
-    account_id: AccountId,
-    account_literal: String,
-    operation_id: String,
-    device_id: String,
-    offline_public_key: String,
-    asset_id: AssetId,
-    asset_definition_id: AssetDefinitionId,
-    asset_definition_literal: String,
-    device_binding: Value,
+#[derive(Debug)]
+struct InFlightSubmission {
+    request: OfflineOperationRequestOwned,
+    token: Arc<()>,
+    updates: watch::Sender<SubmissionOutcome>,
 }
 
-struct VerifiedDeviceAttestation {
-    platform: String,
-    key_id: String,
-    public_key: Vec<u8>,
-    public_key_base64: String,
-    assertion_scheme: String,
-    assertion_key_algorithm: String,
-    assertion_public_key: Vec<u8>,
-    assertion_public_key_base64: String,
-    assertion_usage_count_limit: Option<u32>,
+#[derive(Debug, Clone)]
+enum SubmissionOutcome {
+    Pending,
+    Accepted(OfflineOperationRecord),
+    Retry,
 }
 
-struct VerifiedLineageState {
-    balance: Numeric,
-    revision: u64,
+enum SubmissionClaim {
+    Accepted(OfflineOperationRecord),
+    Leader(SubmissionLeader),
+    Follower(watch::Receiver<SubmissionOutcome>),
 }
 
-enum LineageKeyPolicy {
-    MatchRequest,
-    PreserveSignedState,
+struct SubmissionLeader {
+    issuer: Arc<OfflineV2IssuerRuntime>,
+    operation_id: [u8; 32],
+    token: Arc<()>,
+    request: OfflineOperationRequestOwned,
+    updates: watch::Sender<SubmissionOutcome>,
+    active: bool,
 }
 
-pub(crate) async fn handle_key_refill(
+pub(crate) async fn handle_top_up(
     app: SharedAppState,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
     headers: &HeaderMap,
-    body: Bytes,
+    topup_request: OfflineTopUpRequest,
 ) -> Result<AxResponse, Error> {
-    let issuer = require_issuer(&app)?;
-    let parsed = parse_and_authorize(
-        app.as_ref(),
-        method,
-        uri,
-        headers,
-        body.as_ref(),
-        ENDPOINT_KEYS_REFILL,
-    )?;
-    let now_ms = now_ms();
-    let attestation = verify_device_attestation(&issuer, &parsed, now_ms)?;
-    let existing_lineage_id = optional_exact_protocol_string(
-        &parsed.value,
-        "existing_lineage_id",
-        "OFFLINE_V2_MISSING_FIELD",
-        "Offline Notes V2 request",
-    )?
-    .map(ToOwned::to_owned);
-    let lineage_state = existing_lineage_id
-        .as_deref()
-        .map(|lineage_id| verify_existing_lineage_state(&issuer, &parsed, lineage_id, now_ms))
-        .transpose()?;
-    let lineage_id = existing_lineage_id.unwrap_or_else(|| {
-        offline_v2_identifier(
-            "lineage",
-            &format!(
-                "{}:{}:{}",
-                parsed.account_literal, parsed.device_id, parsed.offline_public_key
-            ),
-        )
-    });
-    let certificate = build_key_certificate(&issuer, &parsed, &attestation, now_ms)?;
-    let balance = lineage_state
-        .as_ref()
-        .map(|state| state.balance.to_string())
-        .unwrap_or_else(|| "0".to_string());
-    let revision = lineage_state
-        .as_ref()
-        .map(|state| state.revision)
-        .unwrap_or(0)
-        .checked_add(if lineage_state.is_some() { 1 } else { 0 })
-        .ok_or_else(|| {
-            validation(
-                "OFFLINE_V2_LINEAGE_REVISION_OVERFLOW",
-                "Offline Notes V2 lineage revision overflowed.",
-            )
-        })?;
-    let lineage_state = build_lineage_state(
-        &issuer,
-        &parsed,
-        &lineage_id,
-        &balance,
-        "0",
-        revision,
-        now_ms,
-        Some(certificate.clone()),
-    )?;
-
-    json_ok(json_object(vec![
-        ("operation_id", string_value(parsed.operation_id)),
-        ("lineage_state", lineage_state),
-        ("key_certificate", certificate.clone()),
-        ("key_certificates", Value::Array(vec![certificate])),
-    ]))
-}
-
-pub(crate) async fn handle_notes_issue(
-    app: SharedAppState,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-    headers: &HeaderMap,
-    body: Bytes,
-) -> Result<AxResponse, Error> {
-    let _issuer = require_issuer(&app)?;
-    let _parsed = parse_and_authorize(
-        app.as_ref(),
-        method,
-        uri,
-        headers,
-        body.as_ref(),
-        ENDPOINT_NOTES_ISSUE,
-    )?;
-    Err(validation(
-        "OFFLINE_V2_ISSUE_RETIRED",
-        "Classic Offline Notes V2 issuance is retired; submit Kagemusha top-up requests to /v1/offline/v2/kagemusha/topup.",
-    ))
-}
-
-pub(crate) async fn handle_kagemusha_topup(
-    app: SharedAppState,
-    _method: &axum::http::Method,
-    _uri: &axum::http::Uri,
-    headers: &HeaderMap,
-    body: Bytes,
-) -> Result<AxResponse, Error> {
-    let issuer = require_issuer(&app)?;
     reject_x_iroha_auth_headers(headers)?;
-    let topup_request = parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendTopUpRequestV2>(
-        body.as_ref(),
-        "topup_request_norito_base64",
-        "KagemushaRecursiveSpendTopUpRequestV2",
-    )?;
+    require_idempotency_key(headers, topup_request.authorization.operation_id)?;
     topup_request.validate_public_binding().map_err(|source| {
         validation_owned(
-            "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
-            format!("Kagemusha V2 top-up request is invalid: {source}"),
+            "offline_top_up_invalid",
+            format!("Offline top-up request is invalid: {source}"),
         )
     })?;
+    let requested = OfflineOperationRequest::TopUp(&topup_request);
+    let issuer = require_issuer(&app)?;
+    let submission = loop {
+        if let Some(response) = find_existing_offline_operation(&app, &issuer, requested)? {
+            return Ok(response);
+        }
+        match issuer.claim_submission(requested)? {
+            SubmissionClaim::Accepted(record) => {
+                return offline_operation_reference_for_record(&record);
+            }
+            SubmissionClaim::Leader(submission) => break submission,
+            SubmissionClaim::Follower(receiver) => {
+                match wait_for_submission_outcome(receiver).await {
+                    SubmissionOutcome::Accepted(record) => {
+                        return offline_operation_reference_for_record(&record);
+                    }
+                    SubmissionOutcome::Retry | SubmissionOutcome::Pending => continue,
+                }
+            }
+        }
+    };
     validate_kagemusha_v2_topup_snapshot(&app, &topup_request)?;
-    if topup_request.init_request.amount.public_numeric() > issuer.max_tx_value.clone() {
+    if topup_request.amount.public_numeric() > issuer.max_tx_value.clone() {
         return Err(validation(
-            "OFFLINE_AMOUNT_EXCEEDS_LIMIT",
-            "Offline Kagemusha top-up amount exceeds issuer policy.",
+            "offline_amount_exceeds_limit",
+            "Offline top-up amount exceeds issuer policy.",
         ));
     }
-    if let Some(anchor) =
-        optional_finalized_kagemusha_v2_anchor(&app, topup_request.authorization.operation_id)?
-    {
-        ensure_kagemusha_v2_topup_anchor_matches_request(&anchor, &topup_request)?;
-        let finality = finalized_kagemusha_v2_topup_anchor_finality(&app, &anchor)?;
-        return kagemusha_v2_terminal_response(finality, Some(anchor));
-    }
-
     let instruction = TopUpKagemushaRecursiveV2::new(topup_request.clone());
-    let tx = issuer.sign_transaction(
+    let mut transaction =
         TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
-            .with_instructions([InstructionBox::from(instruction)]),
-        "offline_v2_kagemusha_recursive_topup_v2_transaction",
-    )?;
+            .with_instructions([InstructionBox::from(instruction)]);
+    transaction.set_creation_time(Duration::from_millis(
+        topup_request.authorization.issued_at_ms,
+    ));
+    transaction.set_ttl(Duration::from_millis(
+        topup_request
+            .authorization
+            .expires_at_ms
+            .saturating_sub(topup_request.authorization.issued_at_ms),
+    ));
+    let tx = issuer.sign_transaction(transaction, "offline_top_up_transaction")?;
     let tx_hash = tx.hash();
     routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -367,57 +158,66 @@ pub(crate) async fn handle_kagemusha_topup(
         app.state.clone(),
         tx,
         app.telemetry.clone(),
-        PATH_KAGEMUSHA_TOPUP,
+        PATH_OFFLINE_TOP_UP,
     )
     .await?;
-    let finality =
-        wait_for_kagemusha_v2_finality(&app, tx_hash, topup_request.authorization.operation_id)
-            .await?;
-    let anchor =
-        load_finalized_kagemusha_v2_anchor(&app, topup_request.authorization.operation_id)?;
-    ensure_kagemusha_v2_topup_anchor_matches_request(&anchor, &topup_request)?;
-    kagemusha_v2_terminal_response(finality, Some(anchor))
+    let record = submission.accept(tx_hash);
+    offline_operation_reference_for_record(&record)
 }
 
-pub(crate) async fn handle_notes_redeem(
+pub(crate) async fn handle_redeem(
     app: SharedAppState,
-    _method: &axum::http::Method,
-    _uri: &axum::http::Uri,
     headers: &HeaderMap,
-    body: Bytes,
+    redeem_request: OfflineRedeemRequest,
 ) -> Result<AxResponse, Error> {
-    let issuer = require_issuer(&app)?;
     reject_x_iroha_auth_headers(headers)?;
-    let redeem_request = parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>(
-        body.as_ref(),
-        "redeem_request_norito_base64",
-        "KagemushaRecursiveSpendRedeemRequestV2",
-    )?;
+    require_idempotency_key(headers, redeem_request.authorization.operation_id)?;
     redeem_request.validate_public_binding().map_err(|source| {
         validation_owned(
-            "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
-            format!("Kagemusha V2 redemption request is invalid: {source}"),
+            "offline_redeem_invalid",
+            format!("Offline redemption request is invalid: {source}"),
         )
     })?;
+    let requested = OfflineOperationRequest::Redeem(&redeem_request);
+    let issuer = require_issuer(&app)?;
+    let submission = loop {
+        if let Some(response) = find_existing_offline_operation(&app, &issuer, requested)? {
+            return Ok(response);
+        }
+        match issuer.claim_submission(requested)? {
+            SubmissionClaim::Accepted(record) => {
+                return offline_operation_reference_for_record(&record);
+            }
+            SubmissionClaim::Leader(submission) => break submission,
+            SubmissionClaim::Follower(receiver) => {
+                match wait_for_submission_outcome(receiver).await {
+                    SubmissionOutcome::Accepted(record) => {
+                        return offline_operation_reference_for_record(&record);
+                    }
+                    SubmissionOutcome::Retry | SubmissionOutcome::Pending => continue,
+                }
+            }
+        }
+    };
     validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;
     if redeem_request.amount.public_numeric() > issuer.max_tx_value.clone() {
         return Err(validation(
-            "OFFLINE_AMOUNT_EXCEEDS_LIMIT",
-            "Offline Kagemusha redeem amount exceeds issuer policy.",
+            "offline_amount_exceeds_limit",
+            "Offline redemption amount exceeds issuer policy.",
         ));
     }
-    if let Some(finality) =
-        load_kagemusha_v2_redeem_operation_receipt(&app, &redeem_request.authorization)?
-    {
-        return kagemusha_v2_terminal_response(finality, None);
-    }
-    let operation_id = redeem_request.authorization.operation_id;
-    let instruction = RedeemKagemushaRecursiveV2::new(redeem_request);
-    let tx = issuer.sign_transaction(
+    let authorization = redeem_request.authorization.clone();
+    let instruction = RedeemKagemushaRecursiveV2::new(redeem_request.clone());
+    let mut transaction =
         TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
-            .with_instructions([InstructionBox::from(instruction)]),
-        "offline_v2_kagemusha_recursive_redeem_v2_transaction",
-    )?;
+            .with_instructions([InstructionBox::from(instruction)]);
+    transaction.set_creation_time(Duration::from_millis(authorization.issued_at_ms));
+    transaction.set_ttl(Duration::from_millis(
+        authorization
+            .expires_at_ms
+            .saturating_sub(authorization.issued_at_ms),
+    ));
+    let tx = issuer.sign_transaction(transaction, "offline_redeem_transaction")?;
     let tx_hash = tx.hash();
     routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -425,236 +225,11 @@ pub(crate) async fn handle_notes_redeem(
         app.state.clone(),
         tx,
         app.telemetry.clone(),
-        PATH_NOTES_REDEEM,
+        PATH_OFFLINE_REDEEM,
     )
     .await?;
-    let finality = wait_for_kagemusha_v2_finality(&app, tx_hash, operation_id).await?;
-    kagemusha_v2_terminal_response(finality, None)
-}
-
-async fn handle_kagemusha_recursive_notes_redeem(
-    app: SharedAppState,
-    issuer: &OfflineV2IssuerRuntime,
-    parsed: ParsedOfflineRequest,
-) -> Result<AxResponse, Error> {
-    let redeem_request = parse_kagemusha_recursive_redeem_request(&parsed, app.chain_id.as_ref())?;
-    let amount = Numeric::new(redeem_request.public_amount, 0);
-    if amount > issuer.max_tx_value.clone() {
-        return Err(validation(
-            "OFFLINE_AMOUNT_EXCEEDS_LIMIT",
-            "Offline Kagemusha redeem amount exceeds issuer policy.",
-        ));
-    }
-    let source_note_commitment = Hash::prehashed(
-        redeem_request
-            .bundle
-            .accumulator
-            .current_note
-            .note_commitment,
-    )
-    .to_string();
-    let input_nullifiers = redeem_request
-        .bundle
-        .accumulator
-        .redeem_nullifiers()
-        .map_err(|source| {
-            validation_owned(
-                "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
-                format!("Offline Kagemusha redeem nullifier set is invalid: {source}"),
-            )
-        })?
-        .into_iter()
-        .map(|nullifier| Hash::prehashed(nullifier).to_string())
-        .collect::<Vec<_>>();
-    let public_inputs_hash = redeem_request
-        .bundle
-        .recursive_proof
-        .public_inputs_hash
-        .to_string();
-    let amount_string = amount.to_string();
-
-    let instruction = RedeemKagemushaRecursive::new_with_lineage_witness_and_change(
-        redeem_request.bundle,
-        redeem_request.recipient,
-        redeem_request.public_amount,
-        redeem_request.redeem_proof,
-        redeem_request.lineage_witness,
-        redeem_request.change_output,
-    );
-    let tx = issuer.sign_transaction(
-        TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
-            .with_instructions([InstructionBox::from(instruction)]),
-        "offline_v2_kagemusha_recursive_redeem_transaction",
-    )?;
-    let tx_hash = tx.hash().to_string();
-    routing::handle_transaction_with_metrics(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        tx,
-        app.telemetry.clone(),
-        PATH_NOTES_REDEEM,
-    )
-    .await?;
-
-    let now_ms = now_ms();
-    let settlement = build_redeem_settlement(
-        issuer,
-        &parsed,
-        &amount_string,
-        &source_note_commitment,
-        &input_nullifiers,
-        &public_inputs_hash,
-        &tx_hash,
-        now_ms,
-    )?;
-
-    json_ok(json_object(vec![
-        ("operation_id", string_value(parsed.operation_id)),
-        ("settlement", settlement),
-        ("chain_tx_hash", string_value(tx_hash)),
-        (
-            "source_note_commitment",
-            string_value(source_note_commitment),
-        ),
-        (
-            "input_nullifiers",
-            Value::Array(input_nullifiers.into_iter().map(string_value).collect()),
-        ),
-        ("public_inputs_hash", string_value(public_inputs_hash)),
-    ]))
-}
-
-pub(crate) async fn handle_audit(
-    app: SharedAppState,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-    headers: &HeaderMap,
-    body: Bytes,
-) -> Result<AxResponse, Error> {
-    let _issuer = require_issuer(&app)?;
-    let parsed = parse_and_authorize(
-        app.as_ref(),
-        method,
-        uri,
-        headers,
-        body.as_ref(),
-        ENDPOINT_AUDIT,
-    )?;
-    let accepted_receipt_ids = accepted_audit_receipt_ids(&parsed.value)?;
-    json_ok(json_object(vec![
-        ("operation_id", string_value(parsed.operation_id)),
-        ("accepted_receipt_ids", Value::Array(accepted_receipt_ids)),
-    ]))
-}
-
-fn accepted_audit_receipt_ids(value: &Value) -> Result<Vec<Value>, Error> {
-    let Some(receipts) = value.get("receipts") else {
-        return Ok(Vec::new());
-    };
-    let Some(items) = receipts.as_array() else {
-        return Err(validation(
-            "OFFLINE_V2_AUDIT_RECEIPT_INVALID",
-            "Offline Notes V2 audit receipts must be an array.",
-        ));
-    };
-    let mut accepted = Vec::new();
-    for item in items {
-        if !item.is_object() {
-            return Err(validation(
-                "OFFLINE_V2_AUDIT_RECEIPT_INVALID",
-                "Offline Notes V2 audit receipt entries must be objects.",
-            ));
-        }
-        if let Some(id) = optional_exact_protocol_string(
-            item,
-            "id",
-            "OFFLINE_V2_AUDIT_RECEIPT_INVALID",
-            "Offline Notes V2 audit receipt",
-        )? {
-            accepted.push(string_value(id));
-            continue;
-        }
-        if let Some(id) = optional_exact_protocol_string(
-            item,
-            "receipt_id",
-            "OFFLINE_V2_AUDIT_RECEIPT_INVALID",
-            "Offline Notes V2 audit receipt",
-        )? {
-            accepted.push(string_value(id));
-        }
-    }
-    Ok(accepted)
-}
-
-fn parse_strict_kagemusha_v2_archive<T>(
-    body: &[u8],
-    field: &'static str,
-    archive_type: &'static str,
-) -> Result<T, Error>
-where
-    T: norito::core::NoritoSerialize,
-    for<'de> T: norito::core::NoritoDeserialize<'de>,
-{
-    let value: Value = json::from_slice(body).map_err(|err| {
-        validation_owned(
-            "OFFLINE_V2_INVALID_JSON",
-            format!("Kagemusha V2 request body is not valid JSON: {err}"),
-        )
-    })?;
-    let object = value.as_object().ok_or_else(|| {
-        validation(
-            "OFFLINE_V2_INVALID_BODY",
-            "Kagemusha V2 request body must be a JSON object.",
-        )
-    })?;
-    if object.len() != 1 || !object.contains_key(field) {
-        return Err(validation_owned(
-            "OFFLINE_V2_INVALID_BODY",
-            format!("Kagemusha V2 request body must contain exactly `{{{field}}}`."),
-        ));
-    }
-    let encoded = object.get(field).and_then(Value::as_str).ok_or_else(|| {
-        validation_owned(
-            "OFFLINE_V2_INVALID_BODY",
-            format!("Kagemusha V2 `{field}` must be a non-empty string."),
-        )
-    })?;
-    if encoded.is_empty() || encoded.trim() != encoded {
-        return Err(validation_owned(
-            "OFFLINE_V2_INVALID_BODY",
-            format!("Kagemusha V2 `{field}` must be non-empty with no surrounding whitespace."),
-        ));
-    }
-    let bytes = BASE64_STANDARD.decode(encoded).map_err(|_| {
-        validation_owned(
-            "OFFLINE_V2_INVALID_ARCHIVE",
-            format!("Kagemusha V2 `{field}` is not canonical standard base64."),
-        )
-    })?;
-    if BASE64_STANDARD.encode(&bytes) != encoded {
-        return Err(validation_owned(
-            "OFFLINE_V2_INVALID_ARCHIVE",
-            format!("Kagemusha V2 `{field}` is not canonical standard base64."),
-        ));
-    }
-    let decoded: T = norito::decode_from_bytes(&bytes).map_err(|err| {
-        validation_owned(
-            "OFFLINE_V2_INVALID_ARCHIVE",
-            format!("Kagemusha V2 `{field}` is not a canonical {archive_type} archive: {err}"),
-        )
-    })?;
-    let canonical = norito::to_bytes(&decoded).map_err(|err| Error::SerializationFailure {
-        context: "offline_v2_canonical_archive",
-        source: err.into(),
-    })?;
-    if canonical != bytes {
-        return Err(validation_owned(
-            "OFFLINE_V2_INVALID_ARCHIVE",
-            format!("Kagemusha V2 `{field}` does not round-trip to identical canonical Norito."),
-        ));
-    }
-    Ok(decoded)
+    let record = submission.accept(tx_hash);
+    offline_operation_reference_for_record(&record)
 }
 
 fn kagemusha_v2_snapshot_time_ms(app: &SharedAppState) -> u64 {
@@ -665,18 +240,13 @@ fn kagemusha_v2_snapshot_time_ms(app: &SharedAppState) -> u64 {
 
 fn validate_kagemusha_v2_topup_snapshot(
     app: &SharedAppState,
-    request: &KagemushaRecursiveSpendTopUpRequestV2,
+    request: &OfflineTopUpRequest,
 ) -> Result<(), Error> {
-    if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
-        return Err(Error::AppServiceUnavailable {
-            code: "OFFLINE_KAGEMUSHA_V2_NOT_READY",
-            message: "Kagemusha V2 proving and verification APIs are not ready.".to_owned(),
-        });
-    }
-    if request.init_request.current_note.chain_id != *app.chain_id {
+    ensure_kagemusha_v2_backend_available()?;
+    if request.current_note.chain_id != *app.chain_id {
         return Err(validation(
-            "OFFLINE_KAGEMUSHA_WRONG_CHAIN",
-            "Kagemusha V2 top-up request targets a different chain.",
+            "offline_wrong_chain",
+            "Offline top-up request targets a different chain.",
         ));
     }
     let world = app.state.world_view();
@@ -684,46 +254,41 @@ fn validate_kagemusha_v2_topup_snapshot(
         .asset_definition(request.asset.definition())
         .map_err(|_| {
             validation(
-                "OFFLINE_KAGEMUSHA_ASSET_NOT_FOUND",
-                "Kagemusha V2 top-up asset definition is not registered.",
+                "offline_asset_not_found",
+                "Offline top-up asset definition is not registered.",
             )
         })?;
     let live_scale = definition.spec().scale().ok_or_else(|| {
         validation(
-            "OFFLINE_KAGEMUSHA_SCALE_INVALID",
-            "Kagemusha V2 requires a fixed live asset scale.",
+            "offline_asset_scale_invalid",
+            "Offline payments require a fixed live asset scale.",
         )
     })?;
-    if request.init_request.amount.scale != live_scale {
+    if request.amount.scale != live_scale {
         return Err(validation(
-            "OFFLINE_KAGEMUSHA_SCALE_MISMATCH",
-            "Kagemusha V2 top-up amount scale differs from the live asset scale.",
+            "offline_asset_scale_mismatch",
+            "Offline top-up amount scale differs from the live asset scale.",
         ));
     }
     request
         .validate_authorization_at(kagemusha_v2_snapshot_time_ms(app))
         .map_err(|err| {
             validation_owned(
-                "OFFLINE_KAGEMUSHA_AUTHORIZATION_INVALID",
-                format!("Kagemusha V2 top-up authorization is not live at chain time: {err}"),
+                "offline_authorization_invalid",
+                format!("Offline top-up authorization is not live at chain time: {err}"),
             )
         })
 }
 
 fn validate_kagemusha_v2_redeem_snapshot(
     app: &SharedAppState,
-    request: &KagemushaRecursiveSpendRedeemRequestV2,
+    request: &OfflineRedeemRequest,
 ) -> Result<(), Error> {
-    if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
-        return Err(Error::AppServiceUnavailable {
-            code: "OFFLINE_KAGEMUSHA_V2_NOT_READY",
-            message: "Kagemusha V2 proving and verification APIs are not ready.".to_owned(),
-        });
-    }
+    ensure_kagemusha_v2_backend_available()?;
     if request.bundle.statement.chain_id != *app.chain_id {
         return Err(validation(
-            "OFFLINE_KAGEMUSHA_WRONG_CHAIN",
-            "Kagemusha V2 redemption request targets a different chain.",
+            "offline_wrong_chain",
+            "Offline redemption request targets a different chain.",
         ));
     }
     let world = app.state.world_view();
@@ -731,409 +296,992 @@ fn validate_kagemusha_v2_redeem_snapshot(
         .asset_definition(&request.bundle.statement.asset)
         .map_err(|_| {
             validation(
-                "OFFLINE_KAGEMUSHA_ASSET_NOT_FOUND",
-                "Kagemusha V2 redemption asset definition is not registered.",
+                "offline_asset_not_found",
+                "Offline redemption asset definition is not registered.",
             )
         })?;
     let live_scale = definition.spec().scale().ok_or_else(|| {
         validation(
-            "OFFLINE_KAGEMUSHA_SCALE_INVALID",
-            "Kagemusha V2 requires a fixed live asset scale.",
+            "offline_asset_scale_invalid",
+            "Offline payments require a fixed live asset scale.",
         )
     })?;
     if request.amount.scale != live_scale || request.bundle.statement.asset_scale != live_scale {
         return Err(validation(
-            "OFFLINE_KAGEMUSHA_SCALE_MISMATCH",
-            "Kagemusha V2 redemption scale differs from the live asset scale.",
+            "offline_asset_scale_mismatch",
+            "Offline redemption scale differs from the live asset scale.",
         ));
     }
     request
         .validate_authorization_at(kagemusha_v2_snapshot_time_ms(app))
         .map_err(|err| {
             validation_owned(
-                "OFFLINE_KAGEMUSHA_AUTHORIZATION_INVALID",
-                format!("Kagemusha V2 redemption authorization is not live at chain time: {err}"),
+                "offline_authorization_invalid",
+                format!("Offline redemption authorization is not live at chain time: {err}"),
             )
         })
+}
+
+fn ensure_kagemusha_v2_backend_available() -> Result<(), Error> {
+    if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+        return Ok(());
+    }
+    Err(Error::AppServiceUnavailable {
+        code: "offline_not_ready",
+        message: "Offline proof generation and verification are not ready.".to_owned(),
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KagemushaV2OperationKind {
+    TopUp,
+    Redeem,
+}
+
+impl From<KagemushaV2OperationKind> for OfflineOperationKind {
+    fn from(value: KagemushaV2OperationKind) -> Self {
+        match value {
+            KagemushaV2OperationKind::TopUp => Self::TopUp,
+            KagemushaV2OperationKind::Redeem => Self::Redeem,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OfflineOperationRequest<TopUp, Redeem> {
+    TopUp(TopUp),
+    Redeem(Redeem),
+}
+
+type OfflineOperationRequestOwned =
+    OfflineOperationRequest<Box<OfflineTopUpRequest>, Box<OfflineRedeemRequest>>;
+type OfflineOperationRequestRef<'a> =
+    OfflineOperationRequest<&'a OfflineTopUpRequest, &'a OfflineRedeemRequest>;
+
+impl<TopUp, Redeem> OfflineOperationRequest<TopUp, Redeem> {
+    const fn kind(&self) -> KagemushaV2OperationKind {
+        match self {
+            Self::TopUp(_) => KagemushaV2OperationKind::TopUp,
+            Self::Redeem(_) => KagemushaV2OperationKind::Redeem,
+        }
+    }
+}
+
+impl<'a> OfflineOperationRequestRef<'a> {
+    fn authorization(self) -> &'a iroha_data_model::offline::KagemushaRequestAuthorizationV2 {
+        match self {
+            Self::TopUp(request) => &request.authorization,
+            Self::Redeem(request) => &request.authorization,
+        }
+    }
+
+    fn into_owned(self) -> OfflineOperationRequestOwned {
+        match self {
+            Self::TopUp(request) => OfflineOperationRequest::TopUp(Box::new(request.clone())),
+            Self::Redeem(request) => OfflineOperationRequest::Redeem(Box::new(request.clone())),
+        }
+    }
+}
+
+impl OfflineOperationRequestOwned {
+    fn as_ref(&self) -> OfflineOperationRequestRef<'_> {
+        match self {
+            Self::TopUp(request) => OfflineOperationRequest::TopUp(request.as_ref()),
+            Self::Redeem(request) => OfflineOperationRequest::Redeem(request.as_ref()),
+        }
+    }
+
+    fn authorization(&self) -> &iroha_data_model::offline::KagemushaRequestAuthorizationV2 {
+        match self {
+            Self::TopUp(request) => &request.authorization,
+            Self::Redeem(request) => &request.authorization,
+        }
+    }
+}
+
+fn ensure_same_offline_request<TopUp: PartialEq, Redeem: PartialEq>(
+    existing: &OfflineOperationRequest<TopUp, Redeem>,
+    requested: &OfflineOperationRequest<TopUp, Redeem>,
+) -> Result<(), Error> {
+    if existing == requested {
+        return Ok(());
+    }
+    Err(Error::AppConflict {
+        code: "operation_id_conflict",
+        message: "Offline operation id is already bound to a different request.".to_owned(),
+    })
+}
+
+#[derive(Debug, Clone)]
+struct OfflineOperationRecord {
+    request: OfflineOperationRequestOwned,
+    transaction_hash: HashOf<SignedTransaction>,
+    submitted_at_ms: u64,
+}
+
+fn require_idempotency_key(headers: &HeaderMap, operation_id: [u8; 32]) -> Result<(), Error> {
+    if operation_id == [0; 32] {
+        return Err(Error::AppQueryValidation {
+            code: "operation_id_invalid",
+            message: "The signed offline operation id must be non-zero.".to_owned(),
+        });
+    }
+    let expected = hex::encode(operation_id);
+    let mut values = headers.get_all("idempotency-key").iter();
+    let Some(raw) = values.next() else {
+        return Err(Error::AppQueryValidation {
+            code: "idempotency_key_missing",
+            message: "Offline commands require Idempotency-Key equal to the signed operation id."
+                .to_owned(),
+        });
+    };
+    if values.next().is_some() {
+        return Err(Error::AppQueryValidation {
+            code: "idempotency_key_invalid",
+            message: "Offline commands require exactly one Idempotency-Key header.".to_owned(),
+        });
+    }
+    let actual = raw.to_str().map_err(|_| Error::AppQueryValidation {
+        code: "idempotency_key_invalid",
+        message: "Idempotency-Key must be lowercase hexadecimal ASCII.".to_owned(),
+    })?;
+    if actual.len() != 64
+        || actual.bytes().any(|byte| !byte.is_ascii_hexdigit())
+        || actual.bytes().any(|byte| byte.is_ascii_uppercase())
+    {
+        return Err(Error::AppQueryValidation {
+            code: "idempotency_key_invalid",
+            message: "Idempotency-Key must be exactly 64 lowercase hexadecimal characters."
+                .to_owned(),
+        });
+    }
+    if actual != expected {
+        return Err(Error::AppConflict {
+            code: "idempotency_key_conflict",
+            message: "Idempotency-Key does not match the signed operation id.".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+impl OfflineV2IssuerRuntime {
+    fn claim_submission(
+        self: &Arc<Self>,
+        request: OfflineOperationRequestRef<'_>,
+    ) -> Result<SubmissionClaim, Error> {
+        let operation_id = request.authorization().operation_id;
+
+        // The admitted-operation registry and in-flight table are checked in
+        // one fixed lock order. This closes the gap between a caller's chain
+        // lookup and its in-flight claim: a leader that finishes in that gap is
+        // observed here as either still in flight or already admitted, never as
+        // permission to submit the same operation again.
+        let mut operations = self.operations.write().map_err(|_| {
+            Error::Query(ValidationFail::InternalError(
+                "offline operation registry lock is poisoned".to_owned(),
+            ))
+        })?;
+        let now_ms = now_ms();
+        operations.retain(|_, stored| {
+            offline_operation_is_retained(stored.request.authorization().expires_at_ms, now_ms)
+        });
+        if let Some(existing) = operations.get(&operation_id) {
+            ensure_same_offline_request(&existing.request.as_ref(), &request)?;
+            return Ok(SubmissionClaim::Accepted(existing.clone()));
+        }
+
+        let mut in_flight = self.in_flight.lock().map_err(|_| {
+            Error::Query(ValidationFail::InternalError(
+                "offline submission coordinator lock is poisoned".to_owned(),
+            ))
+        })?;
+        if let Some(existing) = in_flight.get(&operation_id) {
+            ensure_same_offline_request(&existing.request.as_ref(), &request)?;
+            return Ok(SubmissionClaim::Follower(existing.updates.subscribe()));
+        }
+
+        let token = Arc::new(());
+        let (updates, _) = watch::channel(SubmissionOutcome::Pending);
+        let request = request.into_owned();
+        in_flight.insert(
+            operation_id,
+            InFlightSubmission {
+                request: request.clone(),
+                token: Arc::clone(&token),
+                updates: updates.clone(),
+            },
+        );
+        Ok(SubmissionClaim::Leader(SubmissionLeader {
+            issuer: Arc::clone(self),
+            operation_id,
+            token,
+            request,
+            updates,
+            active: true,
+        }))
+    }
+
+    fn record_admitted_operation(
+        &self,
+        record: OfflineOperationRecord,
+    ) -> Result<OfflineOperationRecord, Error> {
+        let request = record.request.as_ref();
+        let operation_id = request.authorization().operation_id;
+        let mut operations = self.operations.write().map_err(|_| {
+            Error::Query(ValidationFail::InternalError(
+                "offline operation registry lock is poisoned".to_owned(),
+            ))
+        })?;
+        let now_ms = now_ms();
+        operations.retain(|_, stored| {
+            offline_operation_is_retained(stored.request.authorization().expires_at_ms, now_ms)
+        });
+        if let Some(existing) = operations.get(&operation_id) {
+            ensure_same_offline_request(&existing.request.as_ref(), &request)?;
+            return Ok(existing.clone());
+        }
+        operations.insert(operation_id, record.clone());
+        Ok(record)
+    }
+}
+
+impl SubmissionLeader {
+    fn accept(mut self, transaction_hash: HashOf<SignedTransaction>) -> OfflineOperationRecord {
+        let record = OfflineOperationRecord {
+            submitted_at_ms: self.request.authorization().issued_at_ms,
+            request: self.request.clone(),
+            transaction_hash,
+        };
+        let admitted = match self.issuer.record_admitted_operation(record.clone()) {
+            Ok(admitted) => admitted,
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    operation_id = %hex::encode(self.operation_id),
+                    "accepted offline operation could not be cached"
+                );
+                record
+            }
+        };
+        self.finish(SubmissionOutcome::Accepted(admitted.clone()));
+        admitted
+    }
+
+    fn finish(&mut self, outcome: SubmissionOutcome) {
+        if !self.active {
+            return;
+        }
+        if let Ok(mut in_flight) = self.issuer.in_flight.lock()
+            && in_flight
+                .get(&self.operation_id)
+                .is_some_and(|entry| Arc::ptr_eq(&entry.token, &self.token))
+        {
+            in_flight.remove(&self.operation_id);
+        }
+        let _ = self.updates.send_replace(outcome);
+        self.active = false;
+    }
+}
+
+impl Drop for SubmissionLeader {
+    fn drop(&mut self) {
+        self.finish(SubmissionOutcome::Retry);
+    }
+}
+
+async fn wait_for_submission_outcome(
+    mut receiver: watch::Receiver<SubmissionOutcome>,
+) -> SubmissionOutcome {
+    loop {
+        let outcome = receiver.borrow().clone();
+        if !matches!(outcome, SubmissionOutcome::Pending) {
+            return outcome;
+        }
+        if receiver.changed().await.is_err() {
+            return SubmissionOutcome::Retry;
+        }
+    }
+}
+
+fn offline_operation_is_retained(expires_at_ms: u64, now_ms: u64) -> bool {
+    expires_at_ms.saturating_add(OFFLINE_OPERATION_RETENTION_AFTER_EXPIRY_MS) >= now_ms
+}
+
+fn find_admitted_offline_operation(
+    issuer: &OfflineV2IssuerRuntime,
+    request: OfflineOperationRequestRef<'_>,
+) -> Result<Option<OfflineOperationRecord>, Error> {
+    let mut operations = issuer.operations.write().map_err(|_| {
+        Error::Query(ValidationFail::InternalError(
+            "offline operation registry lock is poisoned".to_owned(),
+        ))
+    })?;
+    let now_ms = now_ms();
+    operations.retain(|_, record| {
+        offline_operation_is_retained(record.request.authorization().expires_at_ms, now_ms)
+    });
+    let operation_id = request.authorization().operation_id;
+    let Some(existing) = operations.get(&operation_id) else {
+        return Ok(None);
+    };
+    ensure_same_offline_request(&existing.request.as_ref(), &request)?;
+    Ok(Some(existing.clone()))
+}
+
+fn offline_operation_status_uri(operation_id: [u8; 32]) -> String {
+    format!("/v1/offline/operations/{}", hex::encode(operation_id))
+}
+
+fn offline_operation_reference_response(
+    operation_id: [u8; 32],
+    kind: OfflineOperationKind,
+    transaction_hash: String,
+    submitted_at_ms: u64,
+) -> Result<AxResponse, Error> {
+    let status_uri = offline_operation_status_uri(operation_id);
+    let payload = OfflineOperationReference {
+        operation_id: hex::encode(operation_id),
+        kind,
+        state: OfflineOperationState::Pending,
+        transaction_hash,
+        status_uri: status_uri.clone(),
+        submitted_at_ms,
+    };
+    let mut response = crate::utils::respond_with_status_and_format(
+        axum::http::StatusCode::ACCEPTED,
+        payload,
+        crate::utils::current_response_format(),
+    );
+    if let Ok(location) = axum::http::HeaderValue::from_str(&status_uri) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::LOCATION, location);
+    }
+    response.headers_mut().insert(
+        axum::http::header::RETRY_AFTER,
+        axum::http::HeaderValue::from_static("1"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+fn offline_operation_reference_for_record(
+    record: &OfflineOperationRecord,
+) -> Result<AxResponse, Error> {
+    offline_operation_reference_response(
+        record.request.authorization().operation_id,
+        record.request.kind().into(),
+        record.transaction_hash.to_string(),
+        record.submitted_at_ms,
+    )
+}
+
+fn parse_operation_id(raw: &str) -> Result<[u8; 32], Error> {
+    if raw.len() != 64
+        || raw.bytes().any(|byte| !byte.is_ascii_hexdigit())
+        || raw.bytes().any(|byte| byte.is_ascii_uppercase())
+    {
+        return Err(Error::AppQueryValidation {
+            code: "operation_id_invalid",
+            message: "Offline operation id must be exactly 64 lowercase hexadecimal characters."
+                .to_owned(),
+        });
+    }
+    let bytes = hex::decode(raw).map_err(|_| Error::AppQueryValidation {
+        code: "operation_id_invalid",
+        message: "Offline operation id is not valid hexadecimal.".to_owned(),
+    })?;
+    let operation_id: [u8; 32] = bytes.try_into().map_err(|_| Error::AppQueryValidation {
+        code: "operation_id_invalid",
+        message: "Offline operation id must decode to 32 bytes.".to_owned(),
+    })?;
+    if operation_id == [0; 32] {
+        return Err(Error::AppQueryValidation {
+            code: "operation_id_invalid",
+            message: "Offline operation id must be non-zero.".to_owned(),
+        });
+    }
+    Ok(operation_id)
+}
+
+fn offline_operation_record_in_transaction(
+    transaction: &SignedTransaction,
+    issuer_authority: &AccountId,
+    operation_id: [u8; 32],
+) -> Option<OfflineOperationRecord> {
+    if operation_id == [0; 32] || transaction.authority() != issuer_authority {
+        return None;
+    }
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return None;
+    };
+    for instruction in instructions.iter() {
+        let any = instruction.as_any();
+        let candidate = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV2>() {
+            Some(OfflineOperationRequest::TopUp(&top_up.request))
+        } else if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV2>() {
+            Some(OfflineOperationRequest::Redeem(&redeem.request))
+        } else {
+            None
+        };
+        let Some(request) = candidate else {
+            continue;
+        };
+        let authorization = request.authorization();
+        if authorization.operation_id == operation_id {
+            return Some(OfflineOperationRecord {
+                request: request.into_owned(),
+                transaction_hash: transaction.hash(),
+                submitted_at_ms: authorization.issued_at_ms,
+            });
+        }
+    }
+    None
+}
+
+fn signed_transaction_for_entrypoint(
+    entrypoint: &TransactionEntrypoint,
+) -> Option<&SignedTransaction> {
+    match entrypoint {
+        TransactionEntrypoint::External(transaction) => Some(transaction),
+        TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
+        TransactionEntrypoint::SealedCommitment(_)
+        | TransactionEntrypoint::PrivateKaigi(_)
+        | TransactionEntrypoint::Time(_) => None,
+    }
+}
+
+fn terminal_offline_operation_in_transaction(
+    transaction: &SignedTransaction,
+    result: &TransactionResult,
+    issuer_authority: &AccountId,
+    operation_id: [u8; 32],
+    finalized_block_height: u64,
+    server_time_ms: u64,
+) -> Option<(OfflineOperationRecord, KagemushaV2CommittedFinality)> {
+    let record =
+        offline_operation_record_in_transaction(transaction, issuer_authority, operation_id)?;
+    let transaction_hash = record.transaction_hash.to_string();
+    Some((
+        record,
+        kagemusha_v2_committed_finality(
+            operation_id,
+            transaction_hash,
+            finalized_block_height,
+            server_time_ms,
+            result
+                .0
+                .as_ref()
+                .err()
+                .map(|reason| kagemusha_v2_rejection_detail(Some(reason))),
+        ),
+    ))
+}
+
+fn find_pending_offline_operation_by_id(
+    app: &SharedAppState,
+    issuer_authority: &AccountId,
+    operation_id: [u8; 32],
+) -> Option<OfflineOperationRecord> {
+    let state = app.state.view();
+    for accepted in app.queue.all_transactions(&state) {
+        let Some(transaction) = accepted.external() else {
+            continue;
+        };
+        if let Some(record) =
+            offline_operation_record_in_transaction(transaction, issuer_authority, operation_id)
+        {
+            return Some(record);
+        }
+    }
+    None
+}
+
+fn find_existing_offline_operation(
+    app: &SharedAppState,
+    issuer: &OfflineV2IssuerRuntime,
+    requested: OfflineOperationRequestRef<'_>,
+) -> Result<Option<AxResponse>, Error> {
+    if let Some(existing) = find_admitted_offline_operation(issuer, requested)? {
+        return offline_operation_reference_for_record(&existing).map(Some);
+    }
+
+    let authorization = requested.authorization();
+    if let Some(existing) =
+        find_pending_offline_operation_by_id(app, &issuer.authority, authorization.operation_id)
+    {
+        ensure_same_offline_request(&existing.request.as_ref(), &requested)?;
+        return offline_operation_reference_response(
+            authorization.operation_id,
+            existing.request.kind().into(),
+            existing.transaction_hash.to_string(),
+            existing.submitted_at_ms,
+        )
+        .map(Some);
+    }
+
+    let Some(finality) = find_committed_kagemusha_v2_operation(app, issuer, requested)? else {
+        return Ok(None);
+    };
+    offline_operation_reference_response(
+        authorization.operation_id,
+        requested.kind().into(),
+        finality.transaction_hash,
+        authorization.issued_at_ms,
+    )
+    .map(Some)
+}
+
+fn find_terminal_offline_operation_by_id(
+    app: &SharedAppState,
+    issuer_authority: &AccountId,
+    operation_id: [u8; 32],
+) -> Result<Option<(OfflineOperationRecord, KagemushaV2CommittedFinality)>, Error> {
+    let indexed_height = app
+        .kura
+        .get_earliest_block_height_by_offline_operation_id(issuer_authority, operation_id)
+        .ok_or_else(|| Error::AppServiceUnavailable {
+            code: "offline_operation_index_unavailable",
+            message: "The offline operation index is still being reconstructed.".to_owned(),
+        })?;
+    let Some(height) = indexed_height else {
+        return Ok(None);
+    };
+    let block = app
+        .kura
+        .get_block(height)
+        .ok_or_else(|| Error::AppServiceUnavailable {
+            code: "offline_operation_history_unavailable",
+            message: "The indexed offline operation block body is not locally available."
+                .to_owned(),
+        })?;
+    let block_ref = block.as_ref();
+    let finalized_block_height = u64::try_from(height.get()).unwrap_or(u64::MAX);
+    let server_time_ms =
+        u64::try_from(block_ref.header().creation_time().as_millis()).unwrap_or(u64::MAX);
+    for (_, entrypoint, result) in block_ref.entrypoint_results() {
+        let Some(transaction) = signed_transaction_for_entrypoint(&entrypoint) else {
+            continue;
+        };
+        if let Some(terminal) = terminal_offline_operation_in_transaction(
+            transaction,
+            result,
+            issuer_authority,
+            operation_id,
+            finalized_block_height,
+            server_time_ms,
+        ) {
+            return Ok(Some(terminal));
+        }
+    }
+
+    let merge_entry = app
+        .kura
+        .get_merge_entry_by_carrier_height(height)
+        .map_err(|error| {
+            iroha_logger::warn!(
+                ?error,
+                operation_id = %hex::encode(operation_id),
+                indexed_height = height.get(),
+                "failed to resolve indexed offline operation merge carrier"
+            );
+            Error::AppServiceUnavailable {
+                code: "offline_operation_history_unavailable",
+                message: "The indexed offline operation merge entry is not locally available."
+                    .to_owned(),
+            }
+        })?;
+    if let Some(batch) = merge_entry.and_then(|entry| entry.execution_batch) {
+        for execution in batch.lanes {
+            if execution.entrypoints.len() != execution.results.len() {
+                return Err(Error::AppServiceUnavailable {
+                    code: "offline_operation_index_inconsistent",
+                    message: "The indexed offline merge execution has misaligned results."
+                        .to_owned(),
+                });
+            }
+            for (entrypoint, result) in execution.entrypoints.iter().zip(&execution.results) {
+                let Some(transaction) = signed_transaction_for_entrypoint(entrypoint) else {
+                    continue;
+                };
+                if let Some(terminal) = terminal_offline_operation_in_transaction(
+                    transaction,
+                    result,
+                    issuer_authority,
+                    operation_id,
+                    finalized_block_height,
+                    server_time_ms,
+                ) {
+                    return Ok(Some(terminal));
+                }
+            }
+        }
+    }
+    Err(Error::AppServiceUnavailable {
+        code: "offline_operation_index_inconsistent",
+        message: "The offline operation index does not match its canonical block body.".to_owned(),
+    })
+}
+
+fn offline_operation_status_response(
+    app: &SharedAppState,
+    issuer: &OfflineV2IssuerRuntime,
+    record: &OfflineOperationRecord,
+    committed: Option<&KagemushaV2CommittedFinality>,
+) -> Result<AxResponse, Error> {
+    let operation_id = record.request.authorization().operation_id;
+    let kind = record.request.kind();
+    let operation_id_hex = hex::encode(operation_id);
+    let applied = |finalized_block_height: u64, server_time_ms: u64| {
+        if finalized_block_height == 0 || server_time_ms == 0 {
+            return Err(offline_operation_index_inconsistent(
+                "An applied offline operation requires a committed height and block timestamp.",
+            ));
+        }
+        let result = match kind {
+            KagemushaV2OperationKind::TopUp => {
+                let anchor = load_finalized_kagemusha_v2_anchor(app, operation_id)?;
+                let OfflineOperationRequest::TopUp(request) = &record.request else {
+                    unreachable!("the operation kind was derived from the same typed request")
+                };
+                ensure_kagemusha_v2_topup_anchor_matches_request(&anchor, request)?;
+                ensure_kagemusha_v2_anchor_finality_binding(
+                    anchor.topup_operation_id,
+                    anchor.finalized_tx_hash,
+                    anchor.finalized_height,
+                    operation_id,
+                    &record.transaction_hash,
+                    finalized_block_height,
+                )?;
+                OfflineOperationResult::TopUp(OfflineTopUpResult {
+                    transaction_hash: record.transaction_hash.to_string(),
+                    finalized_block_height,
+                    server_time_ms,
+                    anchor,
+                })
+            }
+            KagemushaV2OperationKind::Redeem => {
+                OfflineOperationResult::Redeem(OfflineRedeemResult {
+                    transaction_hash: record.transaction_hash.to_string(),
+                    finalized_block_height,
+                    server_time_ms,
+                })
+            }
+        };
+        Ok::<_, Error>(OfflineOperationStatus::Applied {
+            operation_id: operation_id_hex.clone(),
+            result,
+        })
+    };
+    let rejected = |message: String| OfflineOperationStatus::Rejected {
+        operation_id: operation_id_hex.clone(),
+        kind: kind.into(),
+        transaction_hash: record.transaction_hash.to_string(),
+        error: iroha_torii_shared::ErrorEnvelope::new(
+            "offline_operation_rejected",
+            canonical_offline_rejection_message(message),
+        ),
+    };
+    let status = if let Some(finality) = committed {
+        ensure_kagemusha_v2_terminal_finality_matches_record(record, finality)?;
+        match &finality.outcome {
+            KagemushaV2TerminalOutcome::Applied => {
+                applied(finality.finalized_block_height, finality.server_time_ms)?
+            }
+            KagemushaV2TerminalOutcome::Rejected(message) => rejected(message.clone()),
+        }
+    } else if let Some((entry, _)) =
+        crate::pipeline_status_local_entry(app, &record.transaction_hash)
+    {
+        match entry.kind {
+            crate::PipelineStatusKind::Applied => {
+                let Some((committed_record, finality)) =
+                    find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
+                else {
+                    return Err(offline_operation_index_inconsistent(
+                        "The applied offline operation is absent from the canonical operation index.",
+                    ));
+                };
+                ensure_same_offline_request(
+                    &committed_record.request.as_ref(),
+                    &record.request.as_ref(),
+                )?;
+                return offline_operation_status_response(
+                    app,
+                    issuer,
+                    &committed_record,
+                    Some(&finality),
+                );
+            }
+            crate::PipelineStatusKind::Rejected | crate::PipelineStatusKind::Expired => {
+                rejected(kagemusha_v2_rejection_detail(entry.rejection.as_ref()))
+            }
+            _ => OfflineOperationStatus::Pending {
+                operation_id: operation_id_hex.clone(),
+                kind: kind.into(),
+                transaction_hash: record.transaction_hash.to_string(),
+                submitted_at_ms: record.submitted_at_ms,
+            },
+        }
+    } else if let Some((committed_record, finality)) =
+        find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
+    {
+        ensure_same_offline_request(&committed_record.request.as_ref(), &record.request.as_ref())?;
+        return offline_operation_status_response(app, issuer, &committed_record, Some(&finality));
+    } else {
+        OfflineOperationStatus::Pending {
+            operation_id: operation_id_hex.clone(),
+            kind: kind.into(),
+            transaction_hash: record.transaction_hash.to_string(),
+            submitted_at_ms: record.submitted_at_ms,
+        }
+    };
+    let pending = matches!(status, OfflineOperationStatus::Pending { .. });
+    let mut response =
+        crate::utils::respond_with_format(status, crate::utils::current_response_format());
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    if pending {
+        response.headers_mut().insert(
+            axum::http::header::RETRY_AFTER,
+            axum::http::HeaderValue::from_static("1"),
+        );
+    }
+    Ok(response)
+}
+
+pub(crate) fn handle_operation_status(
+    app: &SharedAppState,
+    operation_id: &str,
+) -> Result<AxResponse, Error> {
+    let operation_id = parse_operation_id(operation_id)?;
+    let issuer = require_issuer(app)?;
+    let record = issuer
+        .operations
+        .read()
+        .map_err(|_| {
+            Error::Query(ValidationFail::InternalError(
+                "offline operation registry lock is poisoned".to_owned(),
+            ))
+        })?
+        .get(&operation_id)
+        .cloned();
+    if let Some(record) = record {
+        return offline_operation_status_response(app, &issuer, &record, None);
+    }
+    if let Some(record) = find_pending_offline_operation_by_id(app, &issuer.authority, operation_id)
+    {
+        return offline_operation_status_response(app, &issuer, &record, None);
+    }
+    if let Some((record, finality)) =
+        find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
+    {
+        return offline_operation_status_response(app, &issuer, &record, Some(&finality));
+    }
+    Err(Error::AppNotFound {
+        code: "offline_operation_not_found",
+        message: "Offline operation is unknown on this Torii node.".to_owned(),
+    })
 }
 
 #[derive(Debug, Clone)]
 struct KagemushaV2CommittedFinality {
     operation_id: [u8; 32],
-    transaction_hash: [u8; 32],
+    transaction_hash: String,
     finalized_block_height: u64,
-    status: &'static str,
+    outcome: KagemushaV2TerminalOutcome,
     server_time_ms: u64,
 }
 
-fn kagemusha_v2_finality_incomplete(message: impl Into<String>) -> Error {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum KagemushaV2TerminalOutcome {
+    Applied,
+    Rejected(String),
+}
+
+fn kagemusha_v2_applied_finality(
+    operation_id: [u8; 32],
+    transaction_hash: String,
+    finalized_block_height: u64,
+    server_time_ms: u64,
+) -> KagemushaV2CommittedFinality {
+    kagemusha_v2_committed_finality(
+        operation_id,
+        transaction_hash,
+        finalized_block_height,
+        server_time_ms,
+        None,
+    )
+}
+
+fn kagemusha_v2_committed_finality(
+    operation_id: [u8; 32],
+    transaction_hash: String,
+    finalized_block_height: u64,
+    server_time_ms: u64,
+    rejection: Option<String>,
+) -> KagemushaV2CommittedFinality {
+    KagemushaV2CommittedFinality {
+        operation_id,
+        transaction_hash,
+        finalized_block_height,
+        outcome: rejection.map_or(KagemushaV2TerminalOutcome::Applied, |message| {
+            KagemushaV2TerminalOutcome::Rejected(canonical_offline_rejection_message(message))
+        }),
+        server_time_ms,
+    }
+}
+
+fn kagemusha_v2_rejection_detail(rejection: Option<&TransactionRejectionReason>) -> String {
+    canonical_offline_rejection_message(
+        rejection.map_or_else(|| "no rejection reason".to_owned(), ToString::to_string),
+    )
+}
+
+fn canonical_offline_rejection_message(message: String) -> String {
+    if crate::utils::is_valid_error_message(&message) {
+        message
+    } else {
+        "The offline operation was rejected.".to_owned()
+    }
+}
+
+fn offline_operation_index_inconsistent(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
-        code: "OFFLINE_KAGEMUSHA_FINALITY_INCOMPLETE",
+        code: "offline_operation_index_inconsistent",
         message: message.into(),
     }
 }
 
-fn load_kagemusha_v2_redeem_operation_receipt(
-    _app: &SharedAppState,
-    authorization: &iroha_data_model::offline::KagemushaRequestAuthorizationV2,
-) -> Result<Option<KagemushaV2CommittedFinality>, Error> {
-    Err(Error::AppServiceUnavailable {
-        code: "OFFLINE_KAGEMUSHA_REDEEM_RECEIPT_UNAVAILABLE",
-        message: format!(
-            "Kagemusha V2 redemption operation {} has no canonical atomic operation receipt; redemption remains disabled until receipt persistence is implemented.",
-            hex::encode(authorization.operation_id)
-        ),
-    })
-}
-
-fn resolve_kagemusha_v2_terminal_status<F>(
-    entry: &crate::PipelineStatusEntry,
-    operation_id: [u8; 32],
-    transaction_hash: [u8; 32],
-    block_time_at: F,
-) -> Result<Option<KagemushaV2CommittedFinality>, Error>
-where
-    F: FnOnce(NonZeroUsize) -> Option<u64>,
-{
-    match entry.kind {
-        crate::PipelineStatusKind::Applied => {
-            let height = entry.block_height.ok_or_else(|| {
-                kagemusha_v2_finality_incomplete(
-                    "Applied Kagemusha V2 transaction has no committed block height.",
-                )
-            })?;
-            let height_u64 = height.get();
-            let height_nz = usize::try_from(height_u64)
-                .ok()
-                .and_then(NonZeroUsize::new)
-                .ok_or_else(|| {
-                    kagemusha_v2_finality_incomplete(format!(
-                        "Applied Kagemusha V2 transaction block height {height_u64} is not addressable."
-                    ))
-                })?;
-            let server_time_ms = block_time_at(height_nz)
-                .filter(|time| *time > 0)
-                .ok_or_else(|| {
-                    kagemusha_v2_finality_incomplete(format!(
-                        "Applied Kagemusha V2 transaction block {height_u64} is unavailable or has no positive timestamp."
-                    ))
-                })?;
-            Ok(Some(KagemushaV2CommittedFinality {
-                operation_id,
-                transaction_hash,
-                finalized_block_height: height_u64,
-                status: "Applied",
-                server_time_ms,
-            }))
-        }
-        crate::PipelineStatusKind::Rejected | crate::PipelineStatusKind::Expired => {
-            let rejection = entry
-                .rejection
-                .as_ref()
-                .map_or_else(|| "no rejection reason".to_owned(), ToString::to_string);
-            Err(validation_owned(
-                "OFFLINE_KAGEMUSHA_TRANSACTION_REJECTED",
-                format!(
-                    "Kagemusha V2 transaction reached terminal status {}: {}",
-                    entry.kind.as_str(),
-                    rejection
-                ),
-            ))
-        }
-        crate::PipelineStatusKind::Queued
-        | crate::PipelineStatusKind::Approved
-        | crate::PipelineStatusKind::Committed => Ok(None),
+fn ensure_kagemusha_v2_terminal_finality_matches_record(
+    record: &OfflineOperationRecord,
+    finality: &KagemushaV2CommittedFinality,
+) -> Result<(), Error> {
+    if finality.operation_id != record.request.authorization().operation_id
+        || finality.transaction_hash != record.transaction_hash.to_string()
+        || finality.finalized_block_height == 0
+        || finality.server_time_ms == 0
+    {
+        return Err(offline_operation_index_inconsistent(
+            "The terminal offline operation identity, transaction, height, or timestamp is incomplete.",
+        ));
     }
+    Ok(())
 }
 
-async fn wait_for_kagemusha_v2_finality(
+fn find_committed_kagemusha_v2_operation(
     app: &SharedAppState,
-    transaction_hash: HashOf<SignedTransaction>,
-    operation_id: [u8; 32],
-) -> Result<KagemushaV2CommittedFinality, Error> {
-    let started = tokio::time::Instant::now();
-    let timeout = Duration::from_secs(30);
-    loop {
-        if let Some((entry, _)) =
-            crate::pipeline_status_terminal_or_state_entry(app, &transaction_hash)
-        {
-            let finality = resolve_kagemusha_v2_terminal_status(
-                &entry,
-                operation_id,
-                *transaction_hash.as_ref(),
-                |height| {
-                    app.kura.get_block(height).map(|block| {
-                        u64::try_from(block.header().creation_time().as_millis())
-                            .unwrap_or(u64::MAX)
-                    })
-                },
-            )?;
-            if let Some(finality) = finality {
-                return Ok(finality);
-            }
-        }
-        if started.elapsed() >= timeout {
-            return Err(Error::AppServiceUnavailable {
-                code: "OFFLINE_KAGEMUSHA_FINALITY_TIMEOUT",
-                message: "Timed out waiting for Kagemusha V2 terminal finality.".to_owned(),
-            });
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    issuer: &OfflineV2IssuerRuntime,
+    requested: OfflineOperationRequestRef<'_>,
+) -> Result<Option<KagemushaV2CommittedFinality>, Error> {
+    let authorization = requested.authorization();
+    let Some((record, finality)) =
+        find_terminal_offline_operation_by_id(app, &issuer.authority, authorization.operation_id)?
+    else {
+        return Ok(None);
+    };
+    ensure_same_offline_request(&record.request.as_ref(), &requested)?;
+    Ok(Some(finality))
 }
 
 fn kagemusha_v2_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
     format!("kagemusha_v2_topup_anchor_{}", hex::encode(operation_id))
         .parse()
         .map_err(|err| {
-            validation_owned(
-                "OFFLINE_KAGEMUSHA_ANCHOR_INVALID",
-                format!("Failed to derive Kagemusha V2 anchor key: {err}"),
-            )
+            offline_operation_index_inconsistent(format!(
+                "Failed to derive the finalized top-up anchor key: {err}"
+            ))
         })
 }
 
 fn ensure_kagemusha_v2_topup_anchor_matches_request(
     anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
-    request: &KagemushaRecursiveSpendTopUpRequestV2,
+    request: &OfflineTopUpRequest,
 ) -> Result<(), Error> {
-    if anchor.chain_id != request.init_request.current_note.chain_id
+    if anchor.chain_id != request.current_note.chain_id
         || anchor.payer != request.authorization.authority
         || anchor.asset != request.asset
-        || anchor.asset_scale != request.init_request.amount.scale
-        || anchor.amount != request.init_request.amount
-        || anchor.current_note != request.init_request.current_note
+        || anchor.asset_scale != request.amount.scale
+        || anchor.amount != request.amount
+        || anchor.current_note != request.current_note
         || anchor.topup_operation_id != request.authorization.operation_id
-        || anchor.topup_operation_id != request.init_request.operation_id
-        || anchor.artifact_generation != request.init_request.lineage_artifact.generation
+        || anchor.topup_operation_id != request.operation_id
+        || anchor.artifact_generation != request.artifact_generation
     {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_ANCHOR_MISMATCH",
-            "Finalized Kagemusha V2 top-up anchor does not match the signed request.",
+        return Err(offline_operation_index_inconsistent(
+            "The finalized top-up anchor does not match the admitted signed request.",
         ));
     }
     Ok(())
-}
-
-fn optional_finalized_kagemusha_v2_anchor(
-    app: &SharedAppState,
-    operation_id: [u8; 32],
-) -> Result<Option<KagemushaRecursiveSpendTopUpAnchorV2>, Error> {
-    let key = kagemusha_v2_anchor_state_key(operation_id)?;
-    let world = app.state.world_view();
-    let Some(archive) = world.smart_contract_state().get(&key) else {
-        return Ok(None);
-    };
-    let anchor: KagemushaRecursiveSpendTopUpAnchorV2 =
-        norito::decode_from_bytes(archive).map_err(|err| {
-            validation_owned(
-                "OFFLINE_KAGEMUSHA_ANCHOR_INVALID",
-                format!("Finalized Kagemusha V2 top-up anchor is invalid: {err}"),
-            )
-        })?;
-    anchor.validate_public_binding().map_err(|err| {
-        validation_owned(
-            "OFFLINE_KAGEMUSHA_ANCHOR_INVALID",
-            format!("Finalized Kagemusha V2 top-up anchor failed validation: {err}"),
-        )
-    })?;
-    let canonical = norito::to_bytes(&anchor).map_err(|source| Error::SerializationFailure {
-        context: "offline_v2_topup_anchor_canonical_reencode",
-        source: source.into(),
-    })?;
-    if anchor.topup_operation_id != operation_id || canonical.as_slice() != archive.as_slice() {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_ANCHOR_INVALID",
-            "Finalized Kagemusha V2 top-up anchor has a mismatched operation id or non-canonical encoding.",
-        ));
-    }
-    Ok(Some(anchor))
-}
-
-fn load_finalized_kagemusha_v2_anchor(
-    app: &SharedAppState,
-    operation_id: [u8; 32],
-) -> Result<KagemushaRecursiveSpendTopUpAnchorV2, Error> {
-    optional_finalized_kagemusha_v2_anchor(app, operation_id)?.ok_or_else(|| {
-        validation(
-            "OFFLINE_KAGEMUSHA_ANCHOR_MISSING",
-            "Finalized Kagemusha V2 top-up anchor is missing from chain state.",
-        )
-    })
-}
-
-fn finalized_kagemusha_v2_topup_anchor_finality(
-    app: &SharedAppState,
-    anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
-) -> Result<KagemushaV2CommittedFinality, Error> {
-    let transaction_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
-        anchor.finalized_tx_hash,
-    ));
-    if transaction_hash.as_ref() != &anchor.finalized_tx_hash {
-        return Err(kagemusha_v2_finality_incomplete(
-            "Finalized Kagemusha V2 top-up anchor contains a non-canonical transaction hash.",
-        ));
-    }
-    let indexed_height = app
-        .state
-        .committed_transaction_height(&transaction_hash)
-        .ok_or_else(|| {
-            kagemusha_v2_finality_incomplete(
-                "Finalized Kagemusha V2 top-up transaction is absent from the committed index.",
-            )
-        })?;
-    let indexed_height_u64 = u64::try_from(indexed_height.get()).map_err(|_| {
-        kagemusha_v2_finality_incomplete(
-            "Finalized Kagemusha V2 top-up transaction height is not representable.",
-        )
-    })?;
-    if indexed_height_u64 != anchor.finalized_height {
-        return Err(kagemusha_v2_finality_incomplete(
-            "Finalized Kagemusha V2 top-up anchor height differs from the transaction index.",
-        ));
-    }
-    let block = app.kura.get_block(indexed_height).ok_or_else(|| {
-        kagemusha_v2_finality_incomplete(
-            "Finalized Kagemusha V2 top-up block is unavailable from Kura.",
-        )
-    })?;
-    let block_ref = block.as_ref();
-    let mut transaction_applied = false;
-    for (index, entrypoint, result) in block_ref.entrypoint_results() {
-        if index >= block_ref.external_entrypoint_count() {
-            break;
-        }
-        let entrypoint_hash =
-            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()));
-        if entrypoint_hash != transaction_hash {
-            continue;
-        }
-        if result.0.is_err() {
-            return Err(kagemusha_v2_finality_incomplete(
-                "Finalized Kagemusha V2 top-up anchor references a rejected transaction.",
-            ));
-        }
-        transaction_applied = true;
-        break;
-    }
-    if !transaction_applied {
-        return Err(kagemusha_v2_finality_incomplete(
-            "Finalized Kagemusha V2 top-up transaction is absent from its indexed block.",
-        ));
-    }
-    let server_time_ms = u64::try_from(block_ref.header().creation_time().as_millis())
-        .ok()
-        .filter(|time| *time > 0)
-        .ok_or_else(|| {
-            kagemusha_v2_finality_incomplete(
-                "Finalized Kagemusha V2 top-up block has no positive timestamp.",
-            )
-        })?;
-    Ok(KagemushaV2CommittedFinality {
-        operation_id: anchor.topup_operation_id,
-        transaction_hash: anchor.finalized_tx_hash,
-        finalized_block_height: anchor.finalized_height,
-        status: "Applied",
-        server_time_ms,
-    })
-}
-
-#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
-struct KagemushaV2TerminalFinalityResponse {
-    version: u16,
-    operation_id: String,
-    transaction_hash: String,
-    finalized_block_height: u64,
-    status: String,
-    server_time_ms: u64,
-    topup_anchor_norito_base64: Option<String>,
-    topup_anchor_digest_hex: Option<String>,
-}
-
-fn kagemusha_v2_terminal_response(
-    finality: KagemushaV2CommittedFinality,
-    anchor: Option<KagemushaRecursiveSpendTopUpAnchorV2>,
-) -> Result<AxResponse, Error> {
-    let response = kagemusha_v2_terminal_payload(finality, anchor)?;
-    let value = json::to_value(&response).map_err(|source| Error::SerializationFailure {
-        context: "offline_v2_terminal_finality_response",
-        source,
-    })?;
-    json_ok(value)
 }
 
 fn ensure_kagemusha_v2_anchor_finality_binding(
     anchor_operation_id: [u8; 32],
     anchor_transaction_hash: [u8; 32],
     anchor_height: u64,
-    finality: &KagemushaV2CommittedFinality,
+    operation_id: [u8; 32],
+    transaction_hash: &HashOf<SignedTransaction>,
+    finalized_block_height: u64,
 ) -> Result<(), Error> {
-    if anchor_operation_id != finality.operation_id
-        || anchor_transaction_hash != finality.transaction_hash
-        || anchor_height != finality.finalized_block_height
+    if anchor_operation_id != operation_id
+        || anchor_transaction_hash.as_slice() != transaction_hash.as_ref()
+        || anchor_height != finalized_block_height
+        || finalized_block_height == 0
     {
-        return Err(kagemusha_v2_finality_incomplete(
-            "Kagemusha V2 top-up anchor operation, transaction, or height differs from terminal finality.",
+        return Err(offline_operation_index_inconsistent(
+            "The top-up anchor operation, transaction, or height differs from terminal finality.",
         ));
     }
     Ok(())
 }
 
-fn kagemusha_v2_terminal_payload(
-    finality: KagemushaV2CommittedFinality,
-    anchor: Option<KagemushaRecursiveSpendTopUpAnchorV2>,
-) -> Result<KagemushaV2TerminalFinalityResponse, Error> {
-    if finality.operation_id == [0; 32]
-        || finality.transaction_hash == [0; 32]
-        || finality.finalized_block_height == 0
-        || finality.server_time_ms == 0
-        || finality.status != "Applied"
-    {
-        return Err(kagemusha_v2_finality_incomplete(
-            "Kagemusha V2 terminal response requires non-zero operation, transaction, height, and time fields with Applied status.",
+fn load_finalized_kagemusha_v2_anchor(
+    app: &SharedAppState,
+    operation_id: [u8; 32],
+) -> Result<KagemushaRecursiveSpendTopUpAnchorV2, Error> {
+    let key = kagemusha_v2_anchor_state_key(operation_id)?;
+    let world = app.state.world_view();
+    let archive = world.smart_contract_state().get(&key).ok_or_else(|| {
+        offline_operation_index_inconsistent(
+            "The finalized top-up anchor is missing from canonical chain state.",
+        )
+    })?;
+    let anchor: KagemushaRecursiveSpendTopUpAnchorV2 =
+        norito::decode_from_bytes(archive).map_err(|err| {
+            offline_operation_index_inconsistent(format!(
+                "The finalized top-up anchor is invalid: {err}"
+            ))
+        })?;
+    anchor.validate_public_binding().map_err(|err| {
+        offline_operation_index_inconsistent(format!(
+            "The finalized top-up anchor failed validation: {err}"
+        ))
+    })?;
+    let canonical = norito::to_bytes(&anchor).map_err(|err| {
+        offline_operation_index_inconsistent(format!(
+            "The finalized top-up anchor could not be canonically re-encoded: {err}"
+        ))
+    })?;
+    if anchor.topup_operation_id != operation_id || canonical.as_slice() != archive.as_slice() {
+        return Err(offline_operation_index_inconsistent(
+            "The finalized top-up anchor has a mismatched operation id or non-canonical encoding.",
         ));
     }
-    if let Some(anchor) = &anchor {
-        ensure_kagemusha_v2_anchor_finality_binding(
-            anchor.topup_operation_id,
-            anchor.finalized_tx_hash,
-            anchor.finalized_height,
-            &finality,
-        )?;
-    }
-    let anchor_archive = anchor
-        .as_ref()
-        .map(norito::to_bytes)
-        .transpose()
-        .map_err(|source| Error::SerializationFailure {
-            context: "offline_v2_topup_anchor_response",
-            source: source.into(),
-        })?;
-    Ok(KagemushaV2TerminalFinalityResponse {
-        version: 2,
-        operation_id: hex::encode(finality.operation_id),
-        transaction_hash: hex::encode(finality.transaction_hash),
-        finalized_block_height: finality.finalized_block_height,
-        status: finality.status.to_owned(),
-        server_time_ms: finality.server_time_ms,
-        topup_anchor_norito_base64: anchor_archive.map(|bytes| BASE64_STANDARD.encode(bytes)),
-        topup_anchor_digest_hex: anchor.map(|anchor| hex::encode(anchor.anchor_digest)),
-    })
+    Ok(anchor)
 }
 
 fn require_issuer(app: &AppState) -> Result<Arc<OfflineV2IssuerRuntime>, Error> {
     app.offline_v2_issuer
         .clone()
         .ok_or_else(|| Error::AppServiceUnavailable {
-            code: "OFFLINE_V2_ISSUER_DISABLED",
-            message: "Offline Notes V2 issuer is not configured on this Torii node.".to_string(),
+            code: "offline_service_unavailable",
+            message: "Offline operation signing is not configured on this Torii node.".to_owned(),
         })
-}
-
-fn offline_v2_signing_error(context: &'static str, source: iroha_crypto::Error) -> Error {
-    Error::Query(ValidationFail::InternalError(format!(
-        "Offline Notes V2 issuer failed to sign {context}: {source}"
-    )))
 }
 
 fn offline_v2_transaction_signing_error(
@@ -1141,193 +1289,8 @@ fn offline_v2_transaction_signing_error(
     source: impl std::fmt::Display,
 ) -> Error {
     Error::Query(ValidationFail::InternalError(format!(
-        "Offline Notes V2 issuer failed to sign {context}: {source}"
+        "Offline operation signer failed to sign {context}: {source}"
     )))
-}
-
-fn parse_and_authorize(
-    app: &AppState,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-    headers: &HeaderMap,
-    body: &[u8],
-    endpoint: &'static str,
-) -> Result<ParsedOfflineRequest, Error> {
-    reject_x_iroha_auth_headers(headers)?;
-    let value: Value = json::from_slice(body).map_err(|err| {
-        validation_owned(
-            "OFFLINE_V2_INVALID_JSON",
-            format!("Offline Notes V2 request body is not valid JSON: {err}"),
-        )
-    })?;
-    let (body_auth, unsigned_body) = extract_body_auth(&value)?;
-    let account_literal = required_exact_protocol_string(
-        &value,
-        "account_id",
-        "OFFLINE_V2_MISSING_FIELD",
-        "Offline Notes V2 request",
-    )?
-    .to_string();
-    let (account_id, canonical_account) = routing::parse_account_literal_with_state(
-        &app.state,
-        &account_literal,
-        &app.telemetry,
-        endpoint,
-    )
-    .map_err(|err| {
-        validation_owned(
-            "OFFLINE_V2_INVALID_ACCOUNT",
-            format!("Invalid Offline Notes V2 account_id: {}", err.reason()),
-        )
-    })?;
-    let body_auth_result = app_auth::verify_canonical_body_request(
-        &app.state,
-        body_auth,
-        method,
-        uri,
-        &unsigned_body,
-        Some(&account_id),
-    );
-    match body_auth_result {
-        Ok(_) => {}
-        Err(primary_err) => {
-            let retry_result = match unsigned_body_without_server_attestation_receipt(&value)? {
-                Some(unsigned_body) => app_auth::verify_canonical_body_request(
-                    &app.state,
-                    body_auth,
-                    method,
-                    uri,
-                    &unsigned_body,
-                    Some(&account_id),
-                )
-                .map(|_| ()),
-                None => Err(primary_err),
-            };
-            retry_result.map_err(|err| Error::AppForbidden {
-                code: "OFFLINE_V2_SIGNATURE_INVALID",
-                message: app_auth_error_message(err),
-            })?;
-        }
-    }
-
-    let device_id = required_exact_protocol_string(
-        &value,
-        "device_id",
-        "OFFLINE_V2_MISSING_FIELD",
-        "Offline Notes V2 request",
-    )?
-    .to_string();
-    if let Some(header_device_id) = optional_exact_header_string(headers, "X-Device-Id")? {
-        if header_device_id != device_id {
-            return Err(validation(
-                "OFFLINE_V2_DEVICE_MISMATCH",
-                "Offline Notes V2 device_id does not match X-Device-Id.",
-            ));
-        }
-    }
-    let device_binding = value.get("device_binding").cloned().ok_or_else(|| {
-        validation(
-            "OFFLINE_V2_DEVICE_BINDING_REQUIRED",
-            "device_binding is required.",
-        )
-    })?;
-    if optional_exact_protocol_string(
-        &device_binding,
-        "device_id",
-        "OFFLINE_V2_INVALID_DEVICE_BINDING",
-        "Offline Notes V2 device_binding",
-    )?
-    .is_some_and(|binding_device| binding_device != device_id)
-    {
-        return Err(validation(
-            "OFFLINE_V2_DEVICE_BINDING_MISMATCH",
-            "device_binding.device_id does not match device_id.",
-        ));
-    }
-    let offline_public_key = optional_exact_protocol_string(
-        &value,
-        "offline_public_key",
-        "OFFLINE_V2_MISSING_FIELD",
-        "Offline Notes V2 request",
-    )?
-    .map(ToOwned::to_owned)
-    .map(Ok)
-    .unwrap_or_else(|| {
-        required_exact_protocol_string(
-            &device_binding,
-            "offline_public_key",
-            "OFFLINE_V2_MISSING_FIELD",
-            "Offline Notes V2 device_binding",
-        )
-        .map(ToOwned::to_owned)
-    })?;
-    if optional_exact_protocol_string(
-        &device_binding,
-        "offline_public_key",
-        "OFFLINE_V2_INVALID_DEVICE_BINDING",
-        "Offline Notes V2 device_binding",
-    )?
-    .is_some_and(|binding_key| binding_key != offline_public_key)
-    {
-        return Err(validation(
-            "OFFLINE_V2_DEVICE_BINDING_KEY_MISMATCH",
-            "device_binding.offline_public_key does not match offline_public_key.",
-        ));
-    }
-    let asset_literal = required_exact_protocol_string(
-        &value,
-        "asset_definition_id",
-        "OFFLINE_V2_MISSING_FIELD",
-        "Offline Notes V2 request",
-    )?
-    .to_string();
-    let world = app.state.world_view();
-    let now = routing::asset_alias_observation_time_ms(app.state.as_ref());
-    let asset_definition_id =
-        routing::resolve_asset_definition_selector(&world, &asset_literal, now).map_err(|_| {
-            validation_owned(
-                "OFFLINE_V2_INVALID_ASSET",
-                format!("Unknown or invalid asset_definition_id `{asset_literal}`."),
-            )
-        })?;
-    let asset_id = resolve_offline_issue_asset_id(&world, &account_id, &asset_definition_id);
-    let operation_id = required_exact_protocol_string(
-        &value,
-        "operation_id",
-        "OFFLINE_V2_MISSING_FIELD",
-        "Offline Notes V2 request",
-    )?
-    .to_string();
-
-    Ok(ParsedOfflineRequest {
-        value,
-        account_id,
-        account_literal: canonical_account,
-        operation_id,
-        device_id,
-        offline_public_key,
-        asset_id,
-        asset_definition_id,
-        asset_definition_literal: asset_literal,
-        device_binding,
-    })
-}
-
-fn resolve_offline_issue_asset_id(
-    world: &impl WorldReadOnly,
-    account_id: &AccountId,
-    asset_definition_id: &AssetDefinitionId,
-) -> AssetId {
-    let mut account_assets = world
-        .assets_in_account_by_definition_iter(account_id, asset_definition_id)
-        .map(|asset| asset.id().clone());
-    let Some(first) = account_assets.next() else {
-        return AssetId::new(asset_definition_id.clone(), account_id.clone());
-    };
-    if account_assets.next().is_some() {
-        return AssetId::new(asset_definition_id.clone(), account_id.clone());
-    }
-    first
 }
 
 fn reject_x_iroha_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
@@ -1340,2441 +1303,12 @@ fn reject_x_iroha_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
     ] {
         if headers.contains_key(name) {
             return Err(Error::AppForbidden {
-                code: "OFFLINE_V2_HEADER_AUTH_REJECTED",
-                message: "Offline Notes V2 issuer requests must put account_id, timestamp_ms, nonce, and signature_base64 or witness_base64 in the JSON body; X-Iroha canonical auth headers are not accepted.".to_string(),
+                code: "offline_auth_header_unsupported",
+                message: "Offline commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.".to_owned(),
             });
         }
     }
     Ok(())
-}
-
-fn extract_body_auth(
-    value: &Value,
-) -> Result<(app_auth::CanonicalRequestBodyAuth<'_>, Vec<u8>), Error> {
-    let account_id = required_exact_protocol_string(
-        value,
-        "account_id",
-        "OFFLINE_V2_MISSING_FIELD",
-        "Offline Notes V2 request",
-    )?;
-    let timestamp_ms =
-        required_u64_with_code(value, "timestamp_ms", "OFFLINE_V2_SIGNATURE_REQUIRED")?;
-    let nonce = required_exact_protocol_string(
-        value,
-        "nonce",
-        "OFFLINE_V2_MISSING_FIELD",
-        "Offline Notes V2 request",
-    )?;
-    let signature_base64 = optional_body_auth_proof_string(value, "signature_base64")?;
-    let witness_base64 = optional_body_auth_proof_string(value, "witness_base64")?;
-    let proof = match (signature_base64, witness_base64) {
-        (Some(signature), None) => app_auth::CanonicalRequestBodyProof::SignatureBase64(signature),
-        (None, Some(witness)) => app_auth::CanonicalRequestBodyProof::WitnessBase64(witness),
-        (None, None) => {
-            return Err(Error::AppForbidden {
-                code: "OFFLINE_V2_SIGNATURE_REQUIRED",
-                message: "Offline Notes V2 issuer requests require exactly one body proof field: signature_base64 or witness_base64.".to_string(),
-            });
-        }
-        (Some(_), Some(_)) => {
-            return Err(Error::AppForbidden {
-                code: "OFFLINE_V2_SIGNATURE_INVALID",
-                message: "Offline Notes V2 issuer requests must not include both signature_base64 and witness_base64.".to_string(),
-            });
-        }
-    };
-    let mut unsigned = value.clone();
-    let Value::Object(map) = &mut unsigned else {
-        return Err(validation(
-            "OFFLINE_V2_INVALID_JSON",
-            "Offline Notes V2 request body must be a JSON object.",
-        ));
-    };
-    map.remove("signature_base64");
-    map.remove("witness_base64");
-    let unsigned_body = json::to_vec(&unsigned).map_err(|source| Error::SerializationFailure {
-        context: "offline_v2_body_auth_unsigned_json",
-        source,
-    })?;
-
-    Ok((
-        app_auth::CanonicalRequestBodyAuth {
-            account_id,
-            timestamp_ms,
-            nonce,
-            proof,
-        },
-        unsigned_body,
-    ))
-}
-
-fn unsigned_body_without_server_attestation_receipt(
-    value: &Value,
-) -> Result<Option<Vec<u8>>, Error> {
-    let mut unsigned = value.clone();
-    let Value::Object(map) = &mut unsigned else {
-        return Err(validation(
-            "OFFLINE_V2_INVALID_JSON",
-            "Offline Notes V2 request body must be a JSON object.",
-        ));
-    };
-    map.remove("signature_base64");
-    map.remove("witness_base64");
-
-    let Some(Value::Object(device_binding)) = map.get_mut("device_binding") else {
-        return Ok(None);
-    };
-    if device_binding.remove("attestation_receipt").is_none() {
-        return Ok(None);
-    }
-
-    let unsigned_body = json::to_vec(&unsigned).map_err(|source| Error::SerializationFailure {
-        context: "offline_v2_body_auth_unsigned_json_without_server_attestation_receipt",
-        source,
-    })?;
-    Ok(Some(unsigned_body))
-}
-
-fn optional_body_auth_proof_string<'a>(
-    value: &'a Value,
-    field: &'static str,
-) -> Result<Option<&'a str>, Error> {
-    let Some(raw) = value.get(field) else {
-        return Ok(None);
-    };
-    let Some(raw) = raw.as_str() else {
-        return Err(Error::AppForbidden {
-            code: "OFFLINE_V2_SIGNATURE_INVALID",
-            message: format!("Offline Notes V2 body proof field `{field}` must be a string."),
-        });
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(Error::AppForbidden {
-            code: "OFFLINE_V2_SIGNATURE_INVALID",
-            message: format!("Offline Notes V2 body proof field `{field}` must not be empty."),
-        });
-    }
-    if raw != trimmed {
-        return Err(Error::AppForbidden {
-            code: "OFFLINE_V2_SIGNATURE_INVALID",
-            message: format!(
-                "Offline Notes V2 body proof field `{field}` must not include leading or trailing whitespace."
-            ),
-        });
-    }
-    Ok(Some(raw))
-}
-
-fn optional_exact_header_string<'a>(
-    headers: &'a HeaderMap,
-    name: &'static str,
-) -> Result<Option<&'a str>, Error> {
-    let Some(value) = headers.get(name) else {
-        return Ok(None);
-    };
-    let value = value.to_str().map_err(|_| {
-        validation_owned(
-            "OFFLINE_V2_INVALID_HEADER",
-            format!("Offline Notes V2 header `{name}` must be valid UTF-8."),
-        )
-    })?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(validation_owned(
-            "OFFLINE_V2_INVALID_HEADER",
-            format!("Offline Notes V2 header `{name}` must not be empty when present."),
-        ));
-    }
-    if value != trimmed {
-        return Err(validation_owned(
-            "OFFLINE_V2_INVALID_HEADER",
-            format!(
-                "Offline Notes V2 header `{name}` must not include leading or trailing whitespace."
-            ),
-        ));
-    }
-    Ok(Some(value))
-}
-
-fn app_auth_error_message(error: Error) -> String {
-    match error {
-        Error::Query(ValidationFail::NotPermitted(message)) => message,
-        other => other.to_string(),
-    }
-}
-
-fn verify_device_attestation(
-    issuer: &OfflineV2IssuerRuntime,
-    request: &ParsedOfflineRequest,
-    now_ms: u64,
-) -> Result<VerifiedDeviceAttestation, Error> {
-    let receipt = request
-        .device_binding
-        .get("attestation_receipt")
-        .ok_or_else(|| {
-            validation(
-                "OFFLINE_V2_ATTESTATION_RECEIPT_REQUIRED",
-                "device_binding.attestation_receipt is required.",
-            )
-        })?;
-    let receipt_object = value_object_ref(receipt, "OFFLINE_V2_INVALID_ATTESTATION_RECEIPT")?;
-    ensure_json_object_fields(
-        receipt_object,
-        ATTESTATION_RECEIPT_FIELDS,
-        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-        "Offline Notes V2 attestation receipt",
-    )?;
-    let signature = required_exact_protocol_string(
-        receipt,
-        "signature_base64",
-        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-        "Offline Notes V2 attestation receipt",
-    )?;
-    let mut unsigned_object = receipt_object.clone();
-    unsigned_object.remove("signature_base64");
-    let unsigned = Value::Object(unsigned_object);
-    verify_json_signature(
-        &issuer.attestation_verifier_public_key,
-        &unsigned,
-        signature,
-        "offline_v2_attestation_receipt",
-        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-        "Offline Notes V2 attestation receipt signature is invalid.",
-    )?;
-
-    let version = required_u64(receipt, "version")?;
-    if version != 1 {
-        return Err(validation(
-            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-            "Offline Notes V2 attestation receipt version is unsupported.",
-        ));
-    }
-    if required_exact_protocol_string(
-        receipt,
-        "account_id",
-        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-        "Offline Notes V2 attestation receipt",
-    )? != request.account_literal
-    {
-        return Err(validation(
-            "OFFLINE_V2_ATTESTATION_ACCOUNT_MISMATCH",
-            "Offline Notes V2 attestation receipt account_id does not match request account_id.",
-        ));
-    }
-    if required_exact_protocol_string(
-        receipt,
-        "device_id",
-        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-        "Offline Notes V2 attestation receipt",
-    )? != request.device_id
-    {
-        return Err(validation(
-            "OFFLINE_V2_ATTESTATION_DEVICE_MISMATCH",
-            "Offline Notes V2 attestation receipt device_id does not match request device_id.",
-        ));
-    }
-    if !required_bool(receipt, "hardware_one_use")? {
-        return Err(validation(
-            "OFFLINE_V2_ATTESTATION_NOT_ONE_USE",
-            "Offline Notes V2 attestation receipt does not certify hardware one-use semantics.",
-        ));
-    }
-    let device_binding_usage_limit = assertion_usage_limit(request)?;
-    let receipt_usage_limit = signed_assertion_usage_limit(receipt)?;
-    if device_binding_usage_limit.is_some_and(|limit| limit != 1) {
-        return Err(validation(
-            "OFFLINE_V2_INVALID_ASSERTION_USAGE_LIMIT",
-            "Offline Notes V2 assertion_usage_count_limit must be one when present.",
-        ));
-    }
-    if device_binding_usage_limit != receipt_usage_limit {
-        return Err(validation(
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-            "Offline Notes V2 device_binding.assertion_usage_count_limit does not match attestation receipt.",
-        ));
-    }
-    let issued_at = required_u64(receipt, "issued_at_ms")?;
-    let expires_at = required_u64(receipt, "expires_at_ms")?;
-    if issued_at > now_ms || expires_at <= now_ms || issued_at >= expires_at {
-        return Err(validation(
-            "OFFLINE_V2_ATTESTATION_RECEIPT_EXPIRED",
-            "Offline Notes V2 attestation receipt is not currently valid.",
-        ));
-    }
-
-    let request_public_key = decode_note_public_key(&request.offline_public_key)?;
-    let public_key_base64 = required_exact_protocol_string(
-        receipt,
-        "offline_public_key_base64",
-        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-        "Offline Notes V2 attestation receipt",
-    )?;
-    let public_key = decode_canonical_base64(
-        public_key_base64,
-        "offline_public_key_base64",
-        "OFFLINE_V2_INVALID_NOTE_PUBLIC_KEY",
-    )?;
-    if public_key.len() != 32 || public_key != request_public_key {
-        return Err(validation(
-            "OFFLINE_V2_ATTESTATION_KEY_MISMATCH",
-            "Offline Notes V2 attestation receipt note key does not match request offline_public_key.",
-        ));
-    }
-
-    let assertion_public_key_base64 = required_exact_protocol_string(
-        receipt,
-        "assertion_public_key_base64",
-        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-        "Offline Notes V2 attestation receipt",
-    )?;
-    let assertion_public_key = decode_canonical_base64(
-        assertion_public_key_base64,
-        "assertion_public_key_base64",
-        "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
-    )?;
-    if assertion_public_key.is_empty() {
-        return Err(validation(
-            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
-            "Offline Notes V2 assertion public key must not be empty.",
-        ));
-    }
-    reject_retired_assertion_public_key_aliases(request)?;
-    verify_optional_assertion_public_key(request, &assertion_public_key)?;
-
-    let attestation_report_hash = required_exact_protocol_string(
-        receipt,
-        "attestation_report_hash_hex",
-        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-        "Offline Notes V2 attestation receipt",
-    )?;
-    let report_hash_bytes = hex::decode(attestation_report_hash).map_err(|_| {
-        validation(
-            "OFFLINE_V2_INVALID_ATTESTATION_REPORT_HASH",
-            "Offline Notes V2 attestation_report_hash_hex must be hex.",
-        )
-    })?;
-    if report_hash_bytes.len() != Hash::LENGTH {
-        return Err(validation(
-            "OFFLINE_V2_INVALID_ATTESTATION_REPORT_HASH",
-            "Offline Notes V2 attestation_report_hash_hex must encode 32 bytes.",
-        ));
-    }
-    if let Some(report) = optional_exact_protocol_string(
-        &request.device_binding,
-        "attestation_report_base64",
-        "OFFLINE_V2_INVALID_ATTESTATION_REPORT",
-        "Offline Notes V2 device_binding",
-    )? {
-        let report_bytes = decode_base64_material(report).ok_or_else(|| {
-            validation(
-                "OFFLINE_V2_INVALID_ATTESTATION_REPORT",
-                "Offline Notes V2 attestation_report_base64 must be base64.",
-            )
-        })?;
-        if !sha256_hex(&report_bytes).eq_ignore_ascii_case(attestation_report_hash) {
-            return Err(validation(
-                "OFFLINE_V2_ATTESTATION_REPORT_MISMATCH",
-                "Offline Notes V2 attestation report hash does not match receipt.",
-            ));
-        }
-    }
-
-    let platform = required_exact_protocol_string(
-        receipt,
-        "platform",
-        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-        "Offline Notes V2 attestation receipt",
-    )?
-    .to_string();
-    verify_attestation_platform_binding(request, &platform)?;
-    let assertion_scheme = required_exact_protocol_string(
-        receipt,
-        "assertion_scheme",
-        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-        "Offline Notes V2 attestation receipt",
-    )?
-    .to_string();
-    verify_optional_attestation_binding(
-        request,
-        "assertion_scheme",
-        &assertion_scheme,
-        "Offline Notes V2 device_binding.assertion_scheme does not match attestation receipt.",
-    )?;
-    let assertion_key_algorithm = required_exact_protocol_string(
-        receipt,
-        "assertion_key_algorithm",
-        "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-        "Offline Notes V2 attestation receipt",
-    )?
-    .to_string();
-    verify_optional_attestation_binding(
-        request,
-        "assertion_key_algorithm",
-        &assertion_key_algorithm,
-        "Offline Notes V2 device_binding.assertion_key_algorithm does not match attestation receipt.",
-    )?;
-    verify_attestation_receipt_profile(
-        &platform,
-        &assertion_scheme,
-        &assertion_key_algorithm,
-        receipt_usage_limit,
-    )?;
-    validate_p256_assertion_public_key(&assertion_public_key)?;
-
-    Ok(VerifiedDeviceAttestation {
-        platform,
-        key_id: required_exact_protocol_string(
-            receipt,
-            "attestation_key_id",
-            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-            "Offline Notes V2 attestation receipt",
-        )?
-        .to_string(),
-        public_key,
-        public_key_base64: BASE64_STANDARD.encode(&request_public_key),
-        assertion_scheme,
-        assertion_key_algorithm,
-        assertion_public_key_base64: BASE64_STANDARD.encode(&assertion_public_key),
-        assertion_public_key,
-        assertion_usage_count_limit: receipt_usage_limit,
-    })
-}
-
-fn verify_attestation_receipt_profile(
-    platform: &str,
-    assertion_scheme: &str,
-    assertion_key_algorithm: &str,
-    usage_limit: Option<u32>,
-) -> Result<(), Error> {
-    match platform {
-        "ios-appattest" => {
-            if assertion_scheme == "apple-appattest-counter-v1"
-                && assertion_key_algorithm == "app-attest-p256"
-                && usage_limit.is_none()
-            {
-                Ok(())
-            } else {
-                Err(validation(
-                    "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-                    "Offline Notes V2 canonical iOS App Attest receipt uses an unsupported assertion profile.",
-                ))
-            }
-        }
-        "android-keymint" => {
-            if assertion_scheme == "android-keymint-ecdsa-p256-usage-limit-v1"
-                && assertion_key_algorithm == "ecdsa-p256-sha256"
-                && usage_limit == Some(1)
-            {
-                Ok(())
-            } else {
-                Err(validation(
-                    "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-                    "Offline Notes V2 Android KeyMint receipt must use the canonical one-use P-256 profile.",
-                ))
-            }
-        }
-        _ => Err(validation(
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-            "Offline Notes V2 attestation receipt platform is unsupported.",
-        )),
-    }
-}
-
-fn validate_p256_assertion_public_key(public_key: &[u8]) -> Result<(), Error> {
-    if public_key.len() != OFFLINE_V2_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
-        || public_key.first() != Some(&0x04)
-    {
-        return Err(validation(
-            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
-            "Offline Notes V2 assertion public key must be an uncompressed P-256 SEC1 key.",
-        ));
-    }
-    if p256_public_key_has_zero_coordinate_material(public_key) {
-        return Err(validation(
-            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
-            "Offline Notes V2 assertion public key must be a valid uncompressed P-256 SEC1 point.",
-        ));
-    }
-    P256PublicKey::from_sec1_bytes(public_key)
-        .map(|_| ())
-        .map_err(|_| {
-            validation(
-                "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
-                "Offline Notes V2 assertion public key must be a valid uncompressed P-256 SEC1 point.",
-            )
-        })
-}
-
-fn p256_public_key_has_zero_coordinate_material(public_key: &[u8]) -> bool {
-    public_key.len() == OFFLINE_V2_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
-        && public_key.first() == Some(&0x04)
-        && public_key[1..].iter().all(|byte| *byte == 0)
-}
-
-fn verify_lineage_state(
-    issuer: &OfflineV2IssuerRuntime,
-    request: &ParsedOfflineRequest,
-    expected_lineage_id: &str,
-    now_ms: u64,
-) -> Result<VerifiedLineageState, Error> {
-    verify_lineage_state_with_key_policy(
-        issuer,
-        request,
-        expected_lineage_id,
-        now_ms,
-        LineageKeyPolicy::MatchRequest,
-    )
-}
-
-fn verify_existing_lineage_state(
-    issuer: &OfflineV2IssuerRuntime,
-    request: &ParsedOfflineRequest,
-    expected_lineage_id: &str,
-    now_ms: u64,
-) -> Result<VerifiedLineageState, Error> {
-    verify_lineage_state_with_key_policy(
-        issuer,
-        request,
-        expected_lineage_id,
-        now_ms,
-        LineageKeyPolicy::PreserveSignedState,
-    )
-}
-
-fn verify_lineage_state_with_key_policy(
-    issuer: &OfflineV2IssuerRuntime,
-    request: &ParsedOfflineRequest,
-    expected_lineage_id: &str,
-    now_ms: u64,
-    key_policy: LineageKeyPolicy,
-) -> Result<VerifiedLineageState, Error> {
-    let state = request.value.get("lineage_state").ok_or_else(|| {
-        validation(
-            "OFFLINE_V2_LINEAGE_STATE_REQUIRED",
-            "Signed Offline Notes V2 lineage_state is required.",
-        )
-    })?;
-    let state_object = value_object_ref(state, "OFFLINE_V2_INVALID_LINEAGE_STATE")?;
-    ensure_json_object_fields(
-        state_object,
-        LINEAGE_STATE_FIELDS,
-        "OFFLINE_V2_INVALID_LINEAGE_STATE",
-        "Offline Notes V2 lineage_state",
-    )?;
-
-    let lineage_id = required_exact_protocol_string(
-        state,
-        "lineage_id",
-        "OFFLINE_V2_INVALID_LINEAGE_STATE",
-        "Offline Notes V2 lineage_state",
-    )?;
-    if lineage_id != expected_lineage_id {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_MISMATCH",
-            "Offline Notes V2 lineage_state.lineage_id does not match lineage_id.",
-        ));
-    }
-    if required_exact_protocol_string(
-        state,
-        "account_id",
-        "OFFLINE_V2_INVALID_LINEAGE_STATE",
-        "Offline Notes V2 lineage_state",
-    )? != request.account_literal
-    {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_ACCOUNT_MISMATCH",
-            "Offline Notes V2 lineage_state.account_id does not match account_id.",
-        ));
-    }
-    if required_exact_protocol_string(
-        state,
-        "device_id",
-        "OFFLINE_V2_INVALID_LINEAGE_STATE",
-        "Offline Notes V2 lineage_state",
-    )? != request.device_id
-    {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_DEVICE_MISMATCH",
-            "Offline Notes V2 lineage_state.device_id does not match device_id.",
-        ));
-    }
-    let state_offline_public_key = required_exact_protocol_string(
-        state,
-        "offline_public_key",
-        "OFFLINE_V2_INVALID_LINEAGE_STATE",
-        "Offline Notes V2 lineage_state",
-    )?;
-    if matches!(key_policy, LineageKeyPolicy::MatchRequest)
-        && state_offline_public_key != request.offline_public_key
-    {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_KEY_MISMATCH",
-            "Offline Notes V2 lineage_state.offline_public_key does not match offline_public_key.",
-        ));
-    }
-    if required_exact_protocol_string(
-        state,
-        "asset_definition_id",
-        "OFFLINE_V2_INVALID_LINEAGE_STATE",
-        "Offline Notes V2 lineage_state",
-    )? != request.asset_definition_literal
-    {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_ASSET_MISMATCH",
-            "Offline Notes V2 lineage_state.asset_definition_id does not match asset_definition_id.",
-        ));
-    }
-
-    let balance = parse_amount(
-        required_exact_protocol_string(
-            state,
-            "balance",
-            "OFFLINE_V2_INVALID_LINEAGE_STATE",
-            "Offline Notes V2 lineage_state",
-        )?,
-        "lineage_state.balance",
-    )?;
-    let locked_balance = parse_amount(
-        required_exact_protocol_string(
-            state,
-            "locked_balance",
-            "OFFLINE_V2_INVALID_LINEAGE_STATE",
-            "Offline Notes V2 lineage_state",
-        )?,
-        "lineage_state.locked_balance",
-    )?;
-    if locked_balance != Numeric::zero() {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_LOCKED_BALANCE_UNSUPPORTED",
-            "Offline Notes V2 issuer does not accept non-zero locked_balance.",
-        ));
-    }
-    let revision = required_u64(state, "server_revision")?;
-    if required_u64(state, "pending_local_revision")? != revision {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_REVISION_MISMATCH",
-            "Offline Notes V2 lineage_state revision fields do not match.",
-        ));
-    }
-    let expected_hash = lineage_state_hash(
-        &request.account_literal,
-        lineage_id,
-        &request.device_id,
-        state_offline_public_key,
-        &request.asset_definition_literal,
-        &balance.to_string(),
-        &locked_balance.to_string(),
-        revision,
-    )?;
-    if required_exact_protocol_string(
-        state,
-        "server_state_hash",
-        "OFFLINE_V2_INVALID_LINEAGE_STATE",
-        "Offline Notes V2 lineage_state",
-    )? != expected_hash
-    {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_STATE_HASH_MISMATCH",
-            "Offline Notes V2 lineage_state hash is invalid.",
-        ));
-    }
-
-    let authorization = state.get("authorization").ok_or_else(|| {
-        validation(
-            "OFFLINE_V2_LINEAGE_AUTHORIZATION_REQUIRED",
-            "Offline Notes V2 lineage_state.authorization is required.",
-        )
-    })?;
-    let authorization_object =
-        value_object_ref(authorization, "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION")?;
-    ensure_json_object_fields(
-        authorization_object,
-        LINEAGE_AUTHORIZATION_FIELDS,
-        "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-        "Offline Notes V2 lineage authorization",
-    )?;
-    let authorization_id = required_exact_protocol_string(
-        authorization,
-        "authorization_id",
-        "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-        "Offline Notes V2 lineage authorization",
-    )?;
-    if required_exact_protocol_string(
-        authorization,
-        "account_id",
-        "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-        "Offline Notes V2 lineage authorization",
-    )? != request.account_literal
-        || required_exact_protocol_string(
-            authorization,
-            "lineage_id",
-            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-            "Offline Notes V2 lineage authorization",
-        )? != lineage_id
-    {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_AUTHORIZATION_MISMATCH",
-            "Offline Notes V2 lineage authorization does not match lineage state.",
-        ));
-    }
-    if required_exact_protocol_string(
-        authorization,
-        "max_balance",
-        "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-        "Offline Notes V2 lineage authorization",
-    )? != issuer.max_balance.to_string()
-        || required_exact_protocol_string(
-            authorization,
-            "max_tx_value",
-            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-            "Offline Notes V2 lineage authorization",
-        )? != issuer.max_tx_value.to_string()
-    {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_AUTHORIZATION_POLICY_MISMATCH",
-            "Offline Notes V2 lineage authorization no longer matches issuer policy.",
-        ));
-    }
-    let auth_issued_at = required_u64(authorization, "issued_at_ms")?;
-    let auth_refresh_at = required_u64(authorization, "refresh_at_ms")?;
-    let auth_expires_at = required_u64(authorization, "expires_at_ms")?;
-    if auth_issued_at > now_ms || auth_expires_at <= now_ms || auth_issued_at >= auth_expires_at {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_AUTHORIZATION_EXPIRED",
-            "Offline Notes V2 lineage authorization is not currently valid.",
-        ));
-    }
-    let auth_device_binding = authorization
-        .get("device_binding")
-        .cloned()
-        .ok_or_else(|| {
-            validation(
-                "OFFLINE_V2_LINEAGE_AUTHORIZATION_DEVICE_BINDING_REQUIRED",
-                "Offline Notes V2 lineage authorization device_binding is required.",
-            )
-        })?;
-    if optional_exact_protocol_string(
-        &auth_device_binding,
-        "device_id",
-        "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-        "Offline Notes V2 lineage authorization device_binding",
-    )?
-    .is_some_and(|device_id| device_id != request.device_id)
-        || optional_exact_protocol_string(
-            &auth_device_binding,
-            "offline_public_key",
-            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-            "Offline Notes V2 lineage authorization device_binding",
-        )?
-        .is_some_and(|key| key != state_offline_public_key)
-    {
-        return Err(validation(
-            "OFFLINE_V2_LINEAGE_AUTHORIZATION_DEVICE_MISMATCH",
-            "Offline Notes V2 lineage authorization device binding does not match request.",
-        ));
-    }
-    let auth_unsigned = authorization_unsigned_payload(
-        &request.account_literal,
-        authorization_id,
-        lineage_id,
-        required_exact_protocol_string(
-            authorization,
-            "verdict_id",
-            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-            "Offline Notes V2 lineage authorization",
-        )?,
-        &issuer.max_balance.to_string(),
-        &issuer.max_tx_value.to_string(),
-        auth_issued_at,
-        auth_refresh_at,
-        auth_expires_at,
-        auth_device_binding,
-    );
-    verify_json_signature(
-        issuer.key_pair.public_key(),
-        &auth_unsigned,
-        required_exact_protocol_string(
-            authorization,
-            "issuer_signature_base64",
-            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-            "Offline Notes V2 lineage authorization",
-        )?,
-        "offline_v2_authorization",
-        "OFFLINE_V2_LINEAGE_AUTHORIZATION_SIGNATURE_INVALID",
-        "Offline Notes V2 lineage authorization signature is invalid.",
-    )?;
-
-    let state_unsigned = lineage_state_unsigned_payload(
-        &request.account_literal,
-        lineage_id,
-        &request.device_id,
-        state_offline_public_key,
-        &request.asset_definition_literal,
-        &balance.to_string(),
-        &locked_balance.to_string(),
-        revision,
-        authorization_id,
-    )?;
-    verify_json_signature(
-        issuer.key_pair.public_key(),
-        &state_unsigned,
-        required_exact_protocol_string(
-            state,
-            "issuer_signature_base64",
-            "OFFLINE_V2_INVALID_LINEAGE_STATE",
-            "Offline Notes V2 lineage_state",
-        )?,
-        "offline_v2_lineage_state",
-        "OFFLINE_V2_LINEAGE_STATE_SIGNATURE_INVALID",
-        "Offline Notes V2 lineage state signature is invalid.",
-    )?;
-
-    Ok(VerifiedLineageState { balance, revision })
-}
-
-fn build_lineage_state(
-    issuer: &OfflineV2IssuerRuntime,
-    request: &ParsedOfflineRequest,
-    lineage_id: &str,
-    balance: &str,
-    locked_balance: &str,
-    revision: u64,
-    now_ms: u64,
-    key_certificate: Option<Value>,
-) -> Result<Value, Error> {
-    let authorization =
-        build_authorization(issuer, request, lineage_id, now_ms, key_certificate.clone())?;
-    let unsigned = lineage_state_unsigned_payload(
-        &request.account_literal,
-        lineage_id,
-        &request.device_id,
-        &request.offline_public_key,
-        &request.asset_definition_literal,
-        balance,
-        locked_balance,
-        revision,
-        authorization
-            .get("authorization_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-    )?;
-    let state_hash = lineage_state_hash(
-        &request.account_literal,
-        lineage_id,
-        &request.device_id,
-        &request.offline_public_key,
-        &request.asset_definition_literal,
-        balance,
-        locked_balance,
-        revision,
-    )?;
-    let signature = issuer.sign_json_base64(&unsigned, "offline_v2_lineage_state")?;
-    Ok(json_object(vec![
-        ("lineage_id", string_value(lineage_id)),
-        ("account_id", string_value(&request.account_literal)),
-        ("device_id", string_value(&request.device_id)),
-        (
-            "offline_public_key",
-            string_value(&request.offline_public_key),
-        ),
-        (
-            "asset_definition_id",
-            string_value(&request.asset_definition_literal),
-        ),
-        ("balance", string_value(balance)),
-        ("locked_balance", string_value(locked_balance)),
-        ("server_revision", number_value(revision)),
-        ("server_state_hash", string_value(state_hash)),
-        ("pending_local_revision", number_value(revision)),
-        ("authorization", authorization),
-        ("issuer_signature_base64", string_value(signature)),
-    ]))
-}
-
-fn build_authorization(
-    issuer: &OfflineV2IssuerRuntime,
-    request: &ParsedOfflineRequest,
-    lineage_id: &str,
-    now_ms: u64,
-    key_certificate: Option<Value>,
-) -> Result<Value, Error> {
-    let authorization_id = offline_v2_identifier(
-        "auth",
-        &format!(
-            "{}:{}:{}",
-            request.account_literal, lineage_id, request.device_id
-        ),
-    );
-    let verdict_id = offline_v2_identifier(
-        "verdict",
-        &format!(
-            "{}:{}:{}",
-            request.account_literal, request.device_id, now_ms
-        ),
-    );
-    let refresh_at = now_ms.saturating_add(duration_ms(issuer.authorization_refresh));
-    let expires_at = now_ms.saturating_add(duration_ms(issuer.authorization_ttl));
-    let unsigned = authorization_unsigned_payload(
-        &request.account_literal,
-        &authorization_id,
-        lineage_id,
-        &verdict_id,
-        &issuer.max_balance.to_string(),
-        &issuer.max_tx_value.to_string(),
-        now_ms,
-        refresh_at,
-        expires_at,
-        request.device_binding.clone(),
-    );
-    let signature = issuer.sign_json_base64(&unsigned, "offline_v2_authorization")?;
-    let mut entries = vec![
-        ("authorization_id", string_value(&authorization_id)),
-        ("lineage_id", string_value(lineage_id)),
-        ("account_id", string_value(&request.account_literal)),
-        ("verdict_id", string_value(&verdict_id)),
-        ("max_balance", string_value(issuer.max_balance.to_string())),
-        (
-            "max_tx_value",
-            string_value(issuer.max_tx_value.to_string()),
-        ),
-        ("issued_at_ms", number_value(now_ms)),
-        ("refresh_at_ms", number_value(refresh_at)),
-        ("expires_at_ms", number_value(expires_at)),
-        ("device_binding", request.device_binding.clone()),
-    ];
-    if let Some(certificate) = key_certificate {
-        entries.push(("key_certificate", certificate));
-    }
-    entries.push(("issuer_signature_base64", string_value(signature)));
-    Ok(json_object(entries))
-}
-
-fn build_key_certificate(
-    issuer: &OfflineV2IssuerRuntime,
-    request: &ParsedOfflineRequest,
-    attestation: &VerifiedDeviceAttestation,
-    now_ms: u64,
-) -> Result<Value, Error> {
-    let chain = build_chain_certificate(issuer, request, attestation)?;
-    let signing_bytes = chain
-        .signing_bytes()
-        .map_err(|source| Error::SerializationFailure {
-            context: "offline_v2_key_certificate_payload",
-            source: source.into(),
-        })?;
-    let signature = chain.issuer_signature.payload();
-    let expires_at = now_ms.saturating_add(duration_ms(issuer.certificate_ttl));
-    Ok(json_object(vec![
-        (
-            "version",
-            number_value(u64::from(OFFLINE_NOTE_KEY_CERTIFICATE_VERSION)),
-        ),
-        ("platform", string_value(&attestation.platform)),
-        ("key_id", string_value(&attestation.key_id)),
-        ("device_id", string_value(&request.device_id)),
-        ("account_id", string_value(&request.account_literal)),
-        ("public_key", string_value(&attestation.public_key_base64)),
-        (
-            "assertion_scheme",
-            string_value(&attestation.assertion_scheme),
-        ),
-        (
-            "assertion_key_algorithm",
-            string_value(&attestation.assertion_key_algorithm),
-        ),
-        (
-            "assertion_public_key",
-            string_value(&attestation.assertion_public_key_base64),
-        ),
-        (
-            "assertion_usage_count_limit",
-            attestation
-                .assertion_usage_count_limit
-                .map(|value| number_value(u64::from(value)))
-                .unwrap_or(Value::Null),
-        ),
-        ("one_use", Value::Bool(true)),
-        ("issued_at_ms", number_value(now_ms)),
-        ("expires_at_ms", number_value(expires_at)),
-        (
-            "app_attest_public_key_base64",
-            string_value(&attestation.assertion_public_key_base64),
-        ),
-        (
-            "ios_team_id",
-            optional_exact_protocol_string(
-                &request.device_binding,
-                "ios_team_id",
-                "OFFLINE_V2_INVALID_DEVICE_BINDING",
-                "Offline Notes V2 device_binding",
-            )?
-            .map(string_value)
-            .unwrap_or(Value::Null),
-        ),
-        (
-            "ios_bundle_id",
-            optional_exact_protocol_string(
-                &request.device_binding,
-                "ios_bundle_id",
-                "OFFLINE_V2_INVALID_DEVICE_BINDING",
-                "Offline Notes V2 device_binding",
-            )?
-            .map(string_value)
-            .unwrap_or(Value::Null),
-        ),
-        (
-            "ios_environment",
-            optional_exact_protocol_string(
-                &request.device_binding,
-                "ios_environment",
-                "OFFLINE_V2_INVALID_DEVICE_BINDING",
-                "Offline Notes V2 device_binding",
-            )?
-            .map(string_value)
-            .unwrap_or(Value::Null),
-        ),
-        (
-            "issuer_signature_base64",
-            string_value(BASE64_STANDARD.encode(signature)),
-        ),
-        (
-            "issuer_signature_payload_base64",
-            string_value(BASE64_STANDARD.encode(signing_bytes)),
-        ),
-    ]))
-}
-
-fn build_chain_certificate(
-    issuer: &OfflineV2IssuerRuntime,
-    request: &ParsedOfflineRequest,
-    attestation: &VerifiedDeviceAttestation,
-) -> Result<OfflineNoteKeyCertificate, Error> {
-    let mut certificate = OfflineNoteKeyCertificate {
-        version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
-        platform: attestation.platform.clone(),
-        key_id: attestation.key_id.clone(),
-        device_id: request.device_id.clone(),
-        account_id: request.account_id.clone(),
-        public_key: attestation.public_key.clone(),
-        assertion_scheme: attestation.assertion_scheme.clone(),
-        assertion_key_algorithm: attestation.assertion_key_algorithm.clone(),
-        assertion_public_key: attestation.assertion_public_key.clone(),
-        assertion_usage_count_limit: attestation.assertion_usage_count_limit,
-        one_use: true,
-        issuer_signature: offline_v2_key_certificate_signature_placeholder(),
-    };
-    let signing_bytes =
-        certificate
-            .signing_bytes()
-            .map_err(|source| Error::SerializationFailure {
-                context: "offline_v2_key_certificate_payload",
-                source: source.into(),
-            })?;
-    certificate.issuer_signature =
-        issuer.sign_bytes(&signing_bytes, "offline_v2_key_certificate")?;
-    Ok(certificate)
-}
-
-fn parse_redemption(request: &ParsedOfflineRequest) -> Result<OfflineNoteRedeem, Error> {
-    let value = request.value.get("redemption").ok_or_else(|| {
-        validation(
-            "OFFLINE_REDEMPTION_PROOF_REQUIRED",
-            "Offline Notes V2 redemption requires a recursive proof payload.",
-        )
-    })?;
-    let redemption_object = value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
-    let redemption = if value.get("norito_base64").is_some() {
-        ensure_json_object_fields(
-            redemption_object,
-            REDEMPTION_NORITO_FIELDS,
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 Norito redemption",
-        )?;
-        let encoded = required_exact_protocol_string(
-            value,
-            "norito_base64",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 Norito redemption",
-        )?;
-        let bytes = decode_canonical_base64(
-            encoded,
-            "redemption.norito_base64",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-        )?;
-        norito::decode_from_bytes::<OfflineNoteRedeem>(&bytes).map_err(|err| {
-            validation_owned(
-                "OFFLINE_V2_REDEMPTION_INVALID",
-                format!("Offline Notes V2 redemption.norito_base64 is not canonical Norito: {err}"),
-            )
-        })?
-    } else {
-        parse_redemption_object(value, request)?
-    };
-    validate_redemption_matches_request(&redemption, request)?;
-    Ok(redemption)
-}
-
-fn has_kagemusha_redeem_payload(value: &Value) -> bool {
-    value.get("redeem_request_norito_base64").is_some()
-        || value.get("compact_payment_token_norito_base64").is_some()
-        || value
-            .get("projection_verifier_record_norito_base64")
-            .is_some()
-}
-
-fn parse_kagemusha_recursive_redeem_request(
-    request: &ParsedOfflineRequest,
-    chain_id: &iroha_data_model::ChainId,
-) -> Result<KagemushaRecursiveSpendRedeemRequestV1, Error> {
-    reject_kagemusha_retired_redeem_fields(&request.value)?;
-    let encoded = required_kagemusha_redeem_archive_string(&request.value)?;
-    reject_kagemusha_auxiliary_redeem_fields(&request.value)?;
-    let bytes = decode_canonical_base64(
-        encoded,
-        "redeem_request_norito_base64",
-        "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
-    )?;
-    let redeem_request =
-        norito::decode_from_bytes::<KagemushaRecursiveSpendRedeemRequestV1>(&bytes).map_err(
-            |source| {
-                validation_owned(
-                    "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
-                    format!(
-                        "Offline Kagemusha redeem_request_norito_base64 is not a KagemushaRecursiveSpendRedeemRequestV1 archive: {source}"
-                    ),
-                )
-            },
-        )?;
-    validate_kagemusha_recursive_redeem_request(&redeem_request, request, chain_id)?;
-    Ok(redeem_request)
-}
-
-fn parse_kagemusha_recursive_topup_request(
-    request: &ParsedOfflineRequest,
-    chain_id: &iroha_data_model::ChainId,
-) -> Result<KagemushaRecursiveSpendTopUpRequestV1, Error> {
-    reject_kagemusha_retired_topup_fields(&request.value)?;
-    let encoded = required_kagemusha_topup_archive_string(&request.value)?;
-    let bytes = decode_canonical_base64(
-        encoded,
-        "topup_request_norito_base64",
-        "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
-    )?;
-    let topup_request =
-        norito::decode_from_bytes::<KagemushaRecursiveSpendTopUpRequestV1>(&bytes).map_err(
-            |source| {
-                validation_owned(
-                    "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
-                    format!(
-                        "Offline Kagemusha topup_request_norito_base64 is not a KagemushaRecursiveSpendTopUpRequestV1 archive: {source}"
-                    ),
-                )
-            },
-        )?;
-    topup_request.validate_public_binding().map_err(|source| {
-        validation_owned(
-            "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
-            format!("Offline Kagemusha top-up request is not chain-admissible: {source}"),
-        )
-    })?;
-    if topup_request.init_request.record_bundle.bundle.chain_id != *chain_id {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_TOPUP_CHAIN_MISMATCH",
-            "Offline Kagemusha top-up chain id does not match this Torii instance.",
-        ));
-    }
-    if topup_request.asset.definition() != &request.asset_definition_id {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_TOPUP_ASSET_MISMATCH",
-            "Offline Kagemusha top-up asset does not match the request asset definition.",
-        ));
-    }
-    if topup_request.asset.account() != &request.account_id {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_TOPUP_ACCOUNT_MISMATCH",
-            "Offline Kagemusha top-up payer does not match the authenticated account.",
-        ));
-    }
-    Ok(topup_request)
-}
-
-fn validate_kagemusha_recursive_redeem_request(
-    redeem_request: &KagemushaRecursiveSpendRedeemRequestV1,
-    request: &ParsedOfflineRequest,
-    chain_id: &iroha_data_model::ChainId,
-) -> Result<(), Error> {
-    redeem_request.validate_public_binding().map_err(|source| {
-        validation_owned(
-            "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
-            format!("Offline Kagemusha recursive redeem request is not chain-admissible: {source}"),
-        )
-    })?;
-    if &redeem_request.recipient != &request.account_id {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_REDEEM_ACCOUNT_MISMATCH",
-            "Offline Kagemusha redeem recipient does not match the authenticated account.",
-        ));
-    }
-    if &redeem_request.bundle.accumulator.chain_id != chain_id {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH",
-            "Offline Kagemusha redeem chain id does not match this Torii instance.",
-        ));
-    }
-    if redeem_request.bundle.accumulator.asset != request.asset_definition_id {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_REDEEM_ASSET_MISMATCH",
-            "Offline Kagemusha redeem asset does not match the request asset definition.",
-        ));
-    }
-    let amount = Numeric::new(redeem_request.public_amount, 0);
-    if let Some(request_amount) = optional_kagemusha_echo_string(
-        &request.value,
-        "amount",
-        "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH",
-        "Offline Kagemusha redeem amount must be a canonical non-empty string when provided.",
-    )? {
-        let request_amount = parse_kagemusha_amount_echo(request_amount)?;
-        if request_amount != amount {
-            return Err(validation(
-                "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH",
-                "Offline Kagemusha redeem amount does not match the redeem request archive.",
-            ));
-        }
-    }
-    if let Some(source_note_commitment) = optional_kagemusha_echo_string(
-        &request.value,
-        "source_note_commitment",
-        "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH",
-        "Offline Kagemusha redeem source note commitment must be a canonical non-empty string when provided.",
-    )? {
-        let expected = Hash::prehashed(
-            redeem_request
-                .bundle
-                .accumulator
-                .current_note
-                .note_commitment,
-        )
-        .to_string();
-        if source_note_commitment != expected {
-            return Err(validation(
-                "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH",
-                "Offline Kagemusha redeem source note commitment does not match the archive.",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn required_kagemusha_redeem_archive_string(value: &Value) -> Result<&str, Error> {
-    let Some(raw_value) = value.get("redeem_request_norito_base64") else {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_REDEEM_REQUEST_REQUIRED",
-            "Offline Kagemusha recursive redemption requires redeem_request_norito_base64.",
-        ));
-    };
-    let Some(encoded) = raw_value.as_str() else {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
-            "Offline Kagemusha redeem_request_norito_base64 must be a canonical base64 string.",
-        ));
-    };
-    if encoded.trim().is_empty() {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_REDEEM_REQUEST_REQUIRED",
-            "Offline Kagemusha recursive redemption requires redeem_request_norito_base64.",
-        ));
-    }
-    if encoded != encoded.trim() {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
-            "Offline Kagemusha redeem_request_norito_base64 must not contain surrounding whitespace.",
-        ));
-    }
-    Ok(encoded)
-}
-
-fn required_kagemusha_topup_archive_string(value: &Value) -> Result<&str, Error> {
-    let Some(raw_value) = value.get("topup_request_norito_base64") else {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_TOPUP_REQUEST_REQUIRED",
-            "Offline Kagemusha top-up requires topup_request_norito_base64.",
-        ));
-    };
-    let Some(encoded) = raw_value.as_str() else {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
-            "Offline Kagemusha topup_request_norito_base64 must be a canonical base64 string.",
-        ));
-    };
-    if encoded.trim().is_empty() {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_TOPUP_REQUEST_REQUIRED",
-            "Offline Kagemusha top-up requires topup_request_norito_base64.",
-        ));
-    }
-    if encoded != encoded.trim() {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
-            "Offline Kagemusha topup_request_norito_base64 must not contain surrounding whitespace.",
-        ));
-    }
-    Ok(encoded)
-}
-
-fn optional_kagemusha_echo_string<'a>(
-    value: &'a Value,
-    field: &'static str,
-    code: &'static str,
-    message: &'static str,
-) -> Result<Option<&'a str>, Error> {
-    let Some(raw_value) = value.get(field) else {
-        return Ok(None);
-    };
-    let Some(raw) = raw_value.as_str() else {
-        return Err(validation(code, message));
-    };
-    if raw.trim().is_empty() || raw != raw.trim() {
-        return Err(validation(code, message));
-    }
-    Ok(Some(raw))
-}
-
-fn parse_kagemusha_amount_echo(raw: &str) -> Result<Numeric, Error> {
-    let parsed = parse_positive_amount(raw, "amount")?;
-    if parsed.to_string() != raw {
-        return Err(validation(
-            "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH",
-            "Offline Kagemusha redeem amount must use canonical Numeric text.",
-        ));
-    }
-    Ok(parsed)
-}
-
-fn reject_kagemusha_retired_redeem_fields(value: &Value) -> Result<(), Error> {
-    for field in [
-        "redemption",
-        "input_nullifiers",
-        "sender_key_certificate",
-        "recursive_proof",
-    ] {
-        if value.get(field).is_some() {
-            return Err(validation_owned(
-                "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
-                format!(
-                    "Offline Kagemusha recursive redemption must not include retired Offline Note V2 field `{field}`."
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn reject_kagemusha_retired_topup_fields(value: &Value) -> Result<(), Error> {
-    for field in [
-        "lineage_id",
-        "lineage_state",
-        "authorization",
-        "note_commitment",
-        "redemption",
-        "redeem_request_norito_base64",
-        "compact_payment_token_norito_base64",
-        "projection_verifier_record_norito_base64",
-        "init_request_norito_base64",
-        "topup_init_request_norito_base64",
-        "amount",
-    ] {
-        if value.get(field).is_some() {
-            return Err(validation_owned(
-                "OFFLINE_KAGEMUSHA_TOPUP_RETIRED_FIELD",
-                format!(
-                    "Offline Kagemusha top-up must not include retired or noncanonical field `{field}`."
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn reject_kagemusha_auxiliary_redeem_fields(value: &Value) -> Result<(), Error> {
-    for field in [
-        "compact_payment_token_norito_base64",
-        "projection_verifier_record_norito_base64",
-    ] {
-        if value.get(field).is_some() {
-            return Err(validation_owned(
-                "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
-                format!(
-                    "Offline Kagemusha recursive redemption must not include ignored auxiliary field `{field}` with redeem_request_norito_base64."
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn parse_redemption_object(
-    value: &Value,
-    request: &ParsedOfflineRequest,
-) -> Result<OfflineNoteRedeem, Error> {
-    let redemption_object = value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
-    ensure_json_object_fields(
-        redemption_object,
-        REDEMPTION_FIELDS,
-        "OFFLINE_V2_REDEMPTION_INVALID",
-        "Offline Notes V2 redemption",
-    )?;
-    let source_note_commitment = parse_hash_field(value, "source_note_commitment")?;
-    let input_nullifiers = required_string_array(value, "input_nullifiers")?
-        .into_iter()
-        .map(|raw| parse_hash_literal(raw, "input_nullifiers"))
-        .collect::<Result<Vec<_>, _>>()?;
-    let certificate = value.get("sender_key_certificate").ok_or_else(|| {
-        validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 redemption.sender_key_certificate is required.",
-        )
-    })?;
-    let sender_key_certificate = parse_key_certificate(certificate)?;
-    let recipient = parse_redemption_recipient(value, request)?;
-    let asset = parse_redemption_asset(value, &recipient, request)?;
-    let amount = parse_positive_amount(required_string(value, "amount")?, "redemption.amount")?;
-    let recursive_proof =
-        parse_recursive_proof(value.get("recursive_proof").ok_or_else(|| {
-            validation(
-                "OFFLINE_V2_REDEMPTION_INVALID",
-                "Offline Notes V2 redemption.recursive_proof is required.",
-            )
-        })?)?;
-    Ok(OfflineNoteRedeem {
-        source_note_commitment,
-        input_nullifiers,
-        sender_key_certificate,
-        recipient,
-        asset,
-        amount,
-        recursive_proof,
-    })
-}
-
-fn parse_redemption_recipient(
-    value: &Value,
-    request: &ParsedOfflineRequest,
-) -> Result<AccountId, Error> {
-    let Some(recipient_literal) = optional_exact_protocol_string(
-        value,
-        "recipient_account_id",
-        "OFFLINE_V2_REDEMPTION_INVALID",
-        "Offline Notes V2 redemption",
-    )?
-    else {
-        return Ok(request.account_id.clone());
-    };
-    if recipient_literal == request.account_literal {
-        return Ok(request.account_id.clone());
-    }
-    let parsed = AccountId::parse_encoded(recipient_literal).map_err(|err| {
-        validation_owned(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            format!("Offline Notes V2 redemption recipient_account_id is invalid: {err}"),
-        )
-    })?;
-    Ok(parsed.account_id().clone())
-}
-
-fn parse_redemption_asset(
-    value: &Value,
-    recipient: &AccountId,
-    request: &ParsedOfflineRequest,
-) -> Result<AssetId, Error> {
-    let definition = if let Some(asset_literal) = optional_exact_protocol_string(
-        value,
-        "asset_definition_id",
-        "OFFLINE_V2_REDEMPTION_INVALID",
-        "Offline Notes V2 redemption",
-    )? {
-        if asset_literal == request.asset_definition_literal {
-            request.asset_definition_id.clone()
-        } else {
-            AssetDefinitionId::from_str(asset_literal).map_err(|err| {
-                validation_owned(
-                    "OFFLINE_V2_REDEMPTION_INVALID",
-                    format!("Offline Notes V2 redemption asset_definition_id is invalid: {err}"),
-                )
-            })?
-        }
-    } else {
-        request.asset_definition_id.clone()
-    };
-    Ok(AssetId::new(definition, recipient.clone()))
-}
-
-fn validate_redemption_matches_request(
-    redemption: &OfflineNoteRedeem,
-    request: &ParsedOfflineRequest,
-) -> Result<(), Error> {
-    validate_redemption_certificate(&redemption.sender_key_certificate)?;
-    if redemption.recipient != request.account_id {
-        return Err(validation(
-            "OFFLINE_V2_REDEMPTION_ACCOUNT_MISMATCH",
-            "Offline Notes V2 redemption recipient does not match the authenticated account.",
-        ));
-    }
-    if redemption.asset.account() != &request.account_id
-        || redemption.asset.definition() != &request.asset_definition_id
-    {
-        return Err(validation(
-            "OFFLINE_V2_REDEMPTION_ASSET_MISMATCH",
-            "Offline Notes V2 redemption asset does not match the request account and asset definition.",
-        ));
-    }
-    if redemption.input_nullifiers.is_empty() || redemption.input_nullifiers.len() > 4 {
-        return Err(validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 redemption requires 1 to 4 input nullifiers.",
-        ));
-    }
-    if redemption.amount <= Numeric::zero() {
-        return Err(validation(
-            "OFFLINE_V2_INVALID_AMOUNT",
-            "Offline Notes V2 redemption amount must be greater than zero.",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_redemption_certificate(certificate: &OfflineNoteKeyCertificate) -> Result<(), Error> {
-    if certificate.version != OFFLINE_NOTE_KEY_CERTIFICATE_VERSION {
-        return Err(validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate model version is not chain-admissible.",
-        ));
-    }
-    if !certificate.one_use {
-        return Err(validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate must be one-use.",
-        ));
-    }
-    if certificate
-        .assertion_usage_count_limit
-        .is_some_and(|limit| limit != 1)
-    {
-        return Err(validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate hardware usage limit must be one when present.",
-        ));
-    }
-    verify_attestation_receipt_profile(
-        &certificate.platform,
-        &certificate.assertion_scheme,
-        &certificate.assertion_key_algorithm,
-        certificate.assertion_usage_count_limit,
-    )
-    .map_err(|_| {
-        validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate uses an unsupported hardware assertion profile.",
-        )
-    })?;
-    validate_p256_assertion_public_key(&certificate.assertion_public_key).map_err(|_| {
-        validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate assertion_public_key is not a valid uncompressed P-256 SEC1 point.",
-        )
-    })?;
-    Ok(())
-}
-
-fn parse_key_certificate(value: &Value) -> Result<OfflineNoteKeyCertificate, Error> {
-    let certificate_object = value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
-    ensure_json_object_fields(
-        certificate_object,
-        KEY_CERTIFICATE_FIELDS,
-        "OFFLINE_V2_REDEMPTION_INVALID",
-        "Offline Notes V2 key certificate",
-    )?;
-    let version = required_u64(value, "version")?;
-    let version = u16::try_from(version).map_err(|_| {
-        validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate version exceeds u16.",
-        )
-    })?;
-    if version != OFFLINE_NOTE_KEY_CERTIFICATE_VERSION {
-        return Err(validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate version is unsupported.",
-        ));
-    }
-    let account_literal = required_exact_protocol_string(
-        value,
-        "account_id",
-        "OFFLINE_V2_REDEMPTION_INVALID",
-        "Offline Notes V2 key certificate",
-    )?;
-    let parsed_account = AccountId::parse_encoded(account_literal).map_err(|err| {
-        validation_owned(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            format!("Offline Notes V2 key certificate account_id is invalid: {err}"),
-        )
-    })?;
-    let account_id = parsed_account.account_id().clone();
-    let assertion_usage_count_limit = match value.get("assertion_usage_count_limit") {
-        None | Some(Value::Null) => None,
-        Some(raw) => {
-            let value = raw.as_u64().ok_or_else(|| {
-                validation(
-                    "OFFLINE_V2_REDEMPTION_INVALID",
-                    "Offline Notes V2 assertion_usage_count_limit must be null or an unsigned integer.",
-                )
-            })?;
-            Some(u32::try_from(value).map_err(|_| {
-                validation(
-                    "OFFLINE_V2_REDEMPTION_INVALID",
-                    "Offline Notes V2 assertion_usage_count_limit exceeds u32.",
-                )
-            })?)
-        }
-    };
-    let issuer_signature = decode_signature_base64(
-        required_exact_protocol_string(
-            value,
-            "issuer_signature_base64",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate",
-        )?,
-        "OFFLINE_V2_REDEMPTION_INVALID",
-        "Offline Notes V2 issuer_signature_base64 is invalid.",
-    )?;
-    let certificate = OfflineNoteKeyCertificate {
-        version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
-        platform: required_exact_protocol_string(
-            value,
-            "platform",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate",
-        )?
-        .to_string(),
-        key_id: required_exact_protocol_string(
-            value,
-            "key_id",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate",
-        )?
-        .to_string(),
-        device_id: required_exact_protocol_string(
-            value,
-            "device_id",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate",
-        )?
-        .to_string(),
-        account_id,
-        public_key: decode_canonical_base64(
-            required_exact_protocol_string(
-                value,
-                "public_key",
-                "OFFLINE_V2_REDEMPTION_INVALID",
-                "Offline Notes V2 key certificate",
-            )?,
-            "public_key",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-        )?,
-        assertion_scheme: required_exact_protocol_string(
-            value,
-            "assertion_scheme",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate",
-        )?
-        .to_string(),
-        assertion_key_algorithm: required_exact_protocol_string(
-            value,
-            "assertion_key_algorithm",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate",
-        )?
-        .to_string(),
-        assertion_public_key: decode_canonical_base64(
-            required_exact_protocol_string(
-                value,
-                "assertion_public_key",
-                "OFFLINE_V2_REDEMPTION_INVALID",
-                "Offline Notes V2 key certificate",
-            )?,
-            "assertion_public_key",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-        )?,
-        assertion_usage_count_limit,
-        one_use: required_bool(value, "one_use")?,
-        issuer_signature,
-    };
-    if certificate.public_key.len() != 32 {
-        return Err(validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate public_key must encode 32 bytes.",
-        ));
-    }
-    if certificate.assertion_public_key.is_empty() {
-        return Err(validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 key certificate assertion_public_key must not be empty.",
-        ));
-    }
-    Ok(certificate)
-}
-
-fn parse_recursive_proof(value: &Value) -> Result<OfflineNoteRecursiveProof, Error> {
-    let proof_object = value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
-    ensure_json_object_fields(
-        proof_object,
-        RECURSIVE_PROOF_FIELDS,
-        "OFFLINE_V2_REDEMPTION_INVALID",
-        "Offline Notes V2 recursive proof",
-    )?;
-    let backend = parse_recursive_proof_backend(value)?;
-    let verifier_key_name = required_exact_protocol_string(
-        value,
-        "verifier_key_id",
-        "OFFLINE_V2_REDEMPTION_INVALID",
-        "Offline Notes V2 recursive proof",
-    )?;
-    let verifier_key_id = VerifyingKeyId::new(backend, verifier_key_name);
-    let public_inputs_hash = parse_hash_field(value, "public_inputs_hash_hex")?;
-    let proof_bytes = decode_canonical_base64(
-        required_exact_protocol_string(
-            value,
-            "proof_bytes_base64",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 recursive proof",
-        )?,
-        "proof_bytes_base64",
-        "OFFLINE_V2_REDEMPTION_INVALID",
-    )?;
-    if proof_bytes.is_empty() {
-        return Err(validation(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 recursive proof bytes must not be empty.",
-        ));
-    }
-    Ok(OfflineNoteRecursiveProof {
-        verifier_key_id,
-        public_inputs_hash,
-        proof: ProofBox::new(backend.to_string(), proof_bytes),
-    })
-}
-
-fn parse_recursive_proof_backend(value: &Value) -> Result<&str, Error> {
-    required_exact_protocol_string(
-        value,
-        "backend",
-        "OFFLINE_V2_REDEMPTION_INVALID",
-        "Offline Notes V2 recursive proof",
-    )
-}
-
-fn parse_hash_field(value: &Value, field: &'static str) -> Result<Hash, Error> {
-    parse_hash_literal(
-        required_exact_protocol_string(
-            value,
-            field,
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            "Offline Notes V2 hash field",
-        )?,
-        field,
-    )
-}
-
-fn parse_hash_literal(raw: &str, field: &'static str) -> Result<Hash, Error> {
-    Hash::from_str(raw).map_err(|err| {
-        validation_owned(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            format!("Offline Notes V2 {field} must be a 32-byte hash hex string: {err}"),
-        )
-    })
-}
-
-fn required_string_array<'a>(value: &'a Value, field: &'static str) -> Result<Vec<&'a str>, Error> {
-    let items = value.get(field).and_then(Value::as_array).ok_or_else(|| {
-        validation_owned(
-            "OFFLINE_V2_REDEMPTION_INVALID",
-            format!("Offline Notes V2 field `{field}` must be a string array."),
-        )
-    })?;
-    items
-        .iter()
-        .map(|item| {
-            let raw = item.as_str().ok_or_else(|| {
-                validation_owned(
-                    "OFFLINE_V2_REDEMPTION_INVALID",
-                    format!("Offline Notes V2 field `{field}` must contain only strings."),
-                )
-            })?;
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Err(validation_owned(
-                    "OFFLINE_V2_REDEMPTION_INVALID",
-                    format!("Offline Notes V2 field `{field}` must contain only non-empty strings."),
-                ));
-            }
-            if raw != trimmed {
-                return Err(validation_owned(
-                    "OFFLINE_V2_REDEMPTION_INVALID",
-                    format!("Offline Notes V2 field `{field}` strings must not include leading or trailing whitespace."),
-                ));
-            }
-            Ok(raw)
-        })
-        .collect()
-}
-
-fn decode_signature_base64(
-    raw: &str,
-    code: &'static str,
-    message: &'static str,
-) -> Result<Signature, Error> {
-    let bytes = decode_canonical_base64(raw, "signature_base64", code)?;
-    if bytes.len() != 64 {
-        return Err(validation(code, message));
-    }
-    checked_ed25519_signature_from_bytes(&bytes).map_err(|_| validation(code, message))
-}
-
-fn decode_signature_base64_for_public_key(
-    raw: &str,
-    public_key: &PublicKey,
-    code: &'static str,
-    message: &'static str,
-) -> Result<Signature, Error> {
-    let bytes = decode_canonical_base64(raw, "signature_base64", code)?;
-    match public_key.try_algorithm() {
-        Ok(Algorithm::Ed25519) => {
-            checked_ed25519_signature_from_bytes(&bytes).map_err(|_| validation(code, message))
-        }
-        Ok(Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(&bytes).map_err(|_| validation(code, message))
-        }
-        _ => Signature::try_from_bytes(&bytes).map_err(|_| validation(code, message)),
-    }
-}
-
-fn checked_ed25519_signature_from_bytes(signature: &[u8]) -> Result<Signature, ()> {
-    iroha_crypto::ed25519_parse_signature(signature).map_err(|_| ())
-}
-
-fn build_settlement(
-    issuer: &OfflineV2IssuerRuntime,
-    request: &ParsedOfflineRequest,
-    kind: &str,
-    pre_balance: &str,
-    post_balance: &str,
-    amount: String,
-    entry_hash: &str,
-    chain_tx_hash: &str,
-    now_ms: u64,
-) -> Result<Value, Error> {
-    let unsigned = json_object(vec![
-        ("operation_id", string_value(&request.operation_id)),
-        ("kind", string_value(kind)),
-        ("account_id", string_value(&request.account_literal)),
-        ("device_id", string_value(&request.device_id)),
-        (
-            "asset_definition_id",
-            string_value(&request.asset_definition_literal),
-        ),
-        ("amount", string_value(amount)),
-        ("pre_balance", string_value(pre_balance)),
-        ("post_balance", string_value(post_balance)),
-        ("entry_hash", string_value(entry_hash)),
-        ("chain_tx_hash", string_value(chain_tx_hash)),
-        ("block_height", number_value(0)),
-        ("issued_at_ms", number_value(now_ms)),
-    ]);
-    let signature = issuer.sign_json_base64(&unsigned, "offline_v2_settlement")?;
-    let mut map = value_object(unsigned)?;
-    map.insert(
-        "issuer_signature_base64".to_string(),
-        string_value(signature),
-    );
-    Ok(Value::Object(map))
-}
-
-fn build_redeem_settlement(
-    issuer: &OfflineV2IssuerRuntime,
-    request: &ParsedOfflineRequest,
-    amount: &str,
-    source_note_commitment: &str,
-    input_nullifiers: &[String],
-    public_inputs_hash: &str,
-    chain_tx_hash: &str,
-    now_ms: u64,
-) -> Result<Value, Error> {
-    let unsigned = json_object(vec![
-        ("operation_id", string_value(&request.operation_id)),
-        ("kind", string_value("redeem")),
-        ("account_id", string_value(&request.account_literal)),
-        ("device_id", string_value(&request.device_id)),
-        (
-            "asset_definition_id",
-            string_value(&request.asset_definition_literal),
-        ),
-        (
-            "amount",
-            string_value(parse_amount(amount, "amount")?.to_string()),
-        ),
-        (
-            "source_note_commitment",
-            string_value(source_note_commitment),
-        ),
-        (
-            "input_nullifiers",
-            Value::Array(input_nullifiers.iter().cloned().map(string_value).collect()),
-        ),
-        ("public_inputs_hash", string_value(public_inputs_hash)),
-        ("chain_tx_hash", string_value(chain_tx_hash)),
-        ("block_height", number_value(0)),
-        ("issued_at_ms", number_value(now_ms)),
-    ]);
-    let signature = issuer.sign_json_base64(&unsigned, "offline_v2_redeem_settlement")?;
-    let mut map = value_object(unsigned)?;
-    map.insert(
-        "issuer_signature_base64".to_string(),
-        string_value(signature),
-    );
-    Ok(Value::Object(map))
-}
-
-fn authorization_unsigned_payload(
-    account_id: &str,
-    authorization_id: &str,
-    lineage_id: &str,
-    verdict_id: &str,
-    max_balance: &str,
-    max_tx_value: &str,
-    issued_at: u64,
-    refresh_at: u64,
-    expires_at: u64,
-    device_binding: Value,
-) -> Value {
-    json_object(vec![
-        ("account_id", string_value(account_id)),
-        ("authorization_id", string_value(authorization_id)),
-        ("expires_at_ms", number_value(expires_at)),
-        ("issued_at_ms", number_value(issued_at)),
-        ("max_balance", string_value(max_balance)),
-        ("max_tx_value", string_value(max_tx_value)),
-        ("refresh_at_ms", number_value(refresh_at)),
-        ("lineage_id", string_value(lineage_id)),
-        ("verdict_id", string_value(verdict_id)),
-        ("device_binding", device_binding),
-    ])
-}
-
-fn lineage_state_unsigned_payload(
-    account_id: &str,
-    lineage_id: &str,
-    device_id: &str,
-    offline_public_key: &str,
-    asset_definition_id: &str,
-    balance: &str,
-    locked_balance: &str,
-    revision: u64,
-    authorization_id: &str,
-) -> Result<Value, Error> {
-    Ok(json_object(vec![
-        ("account_id", string_value(account_id)),
-        ("authorization_id", string_value(authorization_id)),
-        ("asset_definition_id", string_value(asset_definition_id)),
-        (
-            "balance",
-            string_value(parse_amount(balance, "balance")?.to_string()),
-        ),
-        ("device_id", string_value(device_id)),
-        ("offline_public_key", string_value(offline_public_key)),
-        ("pending_local_revision", number_value(revision)),
-        (
-            "locked_balance",
-            string_value(parse_amount(locked_balance, "locked_balance")?.to_string()),
-        ),
-        ("lineage_id", string_value(lineage_id)),
-        ("server_revision", number_value(revision)),
-        (
-            "server_state_hash",
-            string_value(lineage_state_hash(
-                account_id,
-                lineage_id,
-                device_id,
-                offline_public_key,
-                asset_definition_id,
-                balance,
-                locked_balance,
-                revision,
-            )?),
-        ),
-    ]))
-}
-
-fn lineage_state_hash(
-    account_id: &str,
-    lineage_id: &str,
-    device_id: &str,
-    offline_public_key: &str,
-    asset_definition_id: &str,
-    balance: &str,
-    locked_balance: &str,
-    revision: u64,
-) -> Result<String, Error> {
-    let payload = json_object(vec![
-        ("account_id", string_value(account_id)),
-        ("asset_definition_id", string_value(asset_definition_id)),
-        (
-            "balance",
-            string_value(parse_amount(balance, "balance")?.to_string()),
-        ),
-        ("device_id", string_value(device_id)),
-        ("offline_public_key", string_value(offline_public_key)),
-        (
-            "locked_balance",
-            string_value(parse_amount(locked_balance, "locked_balance")?.to_string()),
-        ),
-        ("lineage_id", string_value(lineage_id)),
-        ("server_revision", number_value(revision)),
-    ]);
-    Ok(sha256_json_hex(&payload, "offline_v2_lineage_state_hash")?)
-}
-
-fn settlement_entry_hash(
-    operation_id: &str,
-    lineage_id: &str,
-    account_id: &str,
-    device_id: &str,
-    offline_public_key: &str,
-    asset_definition_id: &str,
-    amount: &str,
-    pre_balance: &str,
-    post_balance: &str,
-    revision: u64,
-) -> Result<String, Error> {
-    let payload = json_object(vec![
-        (
-            "domain",
-            string_value("pk-retail-wallet-ios:offline-v2:settlement-entry"),
-        ),
-        ("account_id", string_value(account_id)),
-        (
-            "amount",
-            string_value(parse_amount(amount, "amount")?.to_string()),
-        ),
-        ("asset_definition_id", string_value(asset_definition_id)),
-        ("device_id", string_value(device_id)),
-        ("operation_id", string_value(operation_id)),
-        ("offline_public_key", string_value(offline_public_key)),
-        ("lineage_id", string_value(lineage_id)),
-        (
-            "pre_balance",
-            string_value(parse_amount(pre_balance, "pre_balance")?.to_string()),
-        ),
-        (
-            "post_balance",
-            string_value(parse_amount(post_balance, "post_balance")?.to_string()),
-        ),
-        ("local_revision", number_value(revision)),
-    ]);
-    sha256_json_hex(&payload, "offline_v2_settlement_entry")
-}
-
-fn required_string<'a>(value: &'a Value, field: &'static str) -> Result<&'a str, Error> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            validation_owned(
-                "OFFLINE_V2_MISSING_FIELD",
-                format!("Offline Notes V2 field `{field}` is required."),
-            )
-        })
-}
-
-fn required_exact_protocol_string<'a>(
-    value: &'a Value,
-    field: &'static str,
-    code: &'static str,
-    label: &'static str,
-) -> Result<&'a str, Error> {
-    let raw = value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| validation_owned(code, format!("{label} field `{field}` is required.")))?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(validation_owned(
-            code,
-            format!("{label} field `{field}` must not be empty."),
-        ));
-    }
-    if raw != trimmed {
-        return Err(validation_owned(
-            code,
-            format!("{label} field `{field}` must not include leading or trailing whitespace."),
-        ));
-    }
-    Ok(raw)
-}
-
-fn optional_exact_protocol_string<'a>(
-    value: &'a Value,
-    field: &'static str,
-    code: &'static str,
-    label: &'static str,
-) -> Result<Option<&'a str>, Error> {
-    let Some(raw) = value.get(field) else {
-        return Ok(None);
-    };
-    if matches!(raw, Value::Null) {
-        return Ok(None);
-    }
-    let raw = raw.as_str().ok_or_else(|| {
-        validation_owned(
-            code,
-            format!("{label} field `{field}` must be a string when present."),
-        )
-    })?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(validation_owned(
-            code,
-            format!("{label} field `{field}` must not be empty when present."),
-        ));
-    }
-    if raw != trimmed {
-        return Err(validation_owned(
-            code,
-            format!("{label} field `{field}` must not include leading or trailing whitespace."),
-        ));
-    }
-    Ok(Some(raw))
-}
-
-fn required_u64(value: &Value, field: &'static str) -> Result<u64, Error> {
-    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
-        validation_owned(
-            "OFFLINE_V2_MISSING_FIELD",
-            format!("Offline Notes V2 numeric field `{field}` is required."),
-        )
-    })
-}
-
-fn required_u64_with_code(
-    value: &Value,
-    field: &'static str,
-    code: &'static str,
-) -> Result<u64, Error> {
-    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
-        validation_owned(
-            code,
-            format!("Offline Notes V2 numeric field `{field}` is required."),
-        )
-    })
-}
-
-fn required_bool(value: &Value, field: &'static str) -> Result<bool, Error> {
-    value.get(field).and_then(Value::as_bool).ok_or_else(|| {
-        validation_owned(
-            "OFFLINE_V2_MISSING_FIELD",
-            format!("Offline Notes V2 boolean field `{field}` is required."),
-        )
-    })
-}
-
-fn optional_string<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-fn parse_amount(raw: &str, field: &'static str) -> Result<Numeric, Error> {
-    Numeric::from_str(raw.trim()).map_err(|err| {
-        validation_owned(
-            "OFFLINE_V2_INVALID_AMOUNT",
-            format!("Invalid Offline Notes V2 {field}: {err}"),
-        )
-    })
-}
-
-fn parse_positive_amount(raw: &str, field: &'static str) -> Result<Numeric, Error> {
-    let amount = parse_amount(raw, field)?;
-    if amount <= Numeric::zero() {
-        return Err(validation_owned(
-            "OFFLINE_V2_INVALID_AMOUNT",
-            format!("Offline Notes V2 {field} must be greater than zero."),
-        ));
-    }
-    Ok(amount)
-}
-
-fn assertion_usage_limit(request: &ParsedOfflineRequest) -> Result<Option<u32>, Error> {
-    let Some(value) = request.device_binding.get("assertion_usage_count_limit") else {
-        return Ok(None);
-    };
-    let raw = value.as_u64().ok_or_else(|| {
-        validation(
-            "OFFLINE_V2_INVALID_ASSERTION_USAGE_LIMIT",
-            "assertion_usage_count_limit must be an unsigned integer.",
-        )
-    })?;
-    u32::try_from(raw).map(Some).map_err(|_| {
-        validation(
-            "OFFLINE_V2_INVALID_ASSERTION_USAGE_LIMIT",
-            "assertion_usage_count_limit exceeds u32.",
-        )
-    })
-}
-
-fn signed_assertion_usage_limit(receipt: &Value) -> Result<Option<u32>, Error> {
-    let Some(value) = receipt.get("assertion_usage_count_limit") else {
-        return Ok(None);
-    };
-    let raw = value.as_u64().ok_or_else(|| {
-        validation(
-            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-            "Offline Notes V2 attestation receipt assertion_usage_count_limit must be an unsigned integer.",
-        )
-    })?;
-    u32::try_from(raw).map(Some).map_err(|_| {
-        validation(
-            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-            "Offline Notes V2 attestation receipt assertion_usage_count_limit exceeds u32.",
-        )
-    })
-}
-
-fn decode_note_public_key(raw: &str) -> Result<Vec<u8>, Error> {
-    let public_key = decode_key_material(raw).ok_or_else(|| {
-        validation(
-            "OFFLINE_V2_INVALID_NOTE_PUBLIC_KEY",
-            "offline_public_key must be hex/base64 encoded key bytes.",
-        )
-    })?;
-    if public_key.len() != 32 {
-        return Err(validation(
-            "OFFLINE_V2_INVALID_NOTE_PUBLIC_KEY",
-            "offline_public_key must encode a 32-byte Ed25519 public key.",
-        ));
-    }
-    Ok(public_key)
-}
-
-fn decode_key_material(raw: &str) -> Option<Vec<u8>> {
-    let value = raw.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if value.len() % 2 == 0 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        if let Ok(bytes) = hex::decode(value) {
-            return Some(bytes);
-        }
-    }
-    decode_base64_material(value)
-}
-
-fn decode_base64_material(raw: &str) -> Option<Vec<u8>> {
-    BASE64_STANDARD
-        .decode(raw)
-        .ok()
-        .or_else(|| URL_SAFE_NO_PAD.decode(raw).ok())
-}
-
-fn decode_canonical_base64(
-    raw: &str,
-    field: &'static str,
-    code: &'static str,
-) -> Result<Vec<u8>, Error> {
-    let bytes = BASE64_STANDARD.decode(raw).map_err(|_| {
-        validation_owned(
-            code,
-            format!("Offline Notes V2 {field} must be standard base64."),
-        )
-    })?;
-    if BASE64_STANDARD.encode(&bytes) != raw {
-        return Err(validation_owned(
-            code,
-            format!("Offline Notes V2 {field} must use canonical standard base64."),
-        ));
-    }
-    Ok(bytes)
-}
-
-fn verify_optional_assertion_public_key(
-    request: &ParsedOfflineRequest,
-    expected: &[u8],
-) -> Result<(), Error> {
-    if let Some(raw) = optional_exact_protocol_string(
-        &request.device_binding,
-        "assertion_public_key",
-        "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
-        "Offline Notes V2 device_binding",
-    )? {
-        let bytes = decode_key_material(raw)
-            .filter(|bytes| !bytes.is_empty())
-            .ok_or_else(|| {
-                validation(
-                    "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
-                    "Offline Notes V2 assertion public key must be hex/base64 key bytes.",
-                )
-            })?;
-        if bytes != expected {
-            return Err(validation(
-                "OFFLINE_V2_ASSERTION_PUBLIC_KEY_MISMATCH",
-                "Offline Notes V2 assertion public key does not match attestation receipt.",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn reject_retired_assertion_public_key_aliases(
-    request: &ParsedOfflineRequest,
-) -> Result<(), Error> {
-    for field in ["app_attest_public_key_base64", "device_public_key"] {
-        if request.device_binding.get(field).is_some() {
-            return Err(validation_owned(
-                "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
-                format!(
-                    "Offline Notes V2 device_binding retired assertion public key alias `{field}` is not accepted."
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn verify_optional_attestation_binding(
-    request: &ParsedOfflineRequest,
-    field: &'static str,
-    expected: &str,
-    message: &'static str,
-) -> Result<(), Error> {
-    if let Some(actual) = optional_exact_protocol_string(
-        &request.device_binding,
-        field,
-        "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-        "Offline Notes V2 device_binding",
-    )? && actual != expected
-    {
-        return Err(validation(
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-            message,
-        ));
-    }
-    Ok(())
-}
-
-fn verify_attestation_platform_binding(
-    request: &ParsedOfflineRequest,
-    expected: &str,
-) -> Result<(), Error> {
-    let actual = required_exact_protocol_string(
-        &request.device_binding,
-        "platform",
-        "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-        "Offline Notes V2 device_binding",
-    )?;
-    if request_binding_attestation_profile(actual) != Some(expected) {
-        return Err(validation(
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-            "Offline Notes V2 device_binding.platform does not match attestation receipt.",
-        ));
-    }
-    Ok(())
-}
-
-fn request_binding_attestation_profile(platform: &str) -> Option<&'static str> {
-    match platform {
-        "ios" => Some("ios-appattest"),
-        "android" => Some("android-keymint"),
-        _ => None,
-    }
-}
-
-fn json_object(entries: Vec<(&str, Value)>) -> Value {
-    Value::Object(
-        entries
-            .into_iter()
-            .map(|(key, value)| (key.to_string(), value))
-            .collect::<Map>(),
-    )
-}
-
-fn value_object(value: Value) -> Result<Map, Error> {
-    match value {
-        Value::Object(map) => Ok(map),
-        _ => Err(Error::SerializationFailure {
-            context: "offline_v2_json_object",
-            source: json::Error::Message("expected JSON object".to_string()),
-        }),
-    }
-}
-
-fn value_object_ref<'a>(value: &'a Value, code: &'static str) -> Result<&'a Map, Error> {
-    match value {
-        Value::Object(map) => Ok(map),
-        _ => Err(validation(
-            code,
-            "Offline Notes V2 field must be a JSON object.",
-        )),
-    }
-}
-
-fn ensure_json_object_fields(
-    object: &Map,
-    allowed: &[&str],
-    code: &'static str,
-    label: &'static str,
-) -> Result<(), Error> {
-    if let Some(field) = object
-        .keys()
-        .find(|field| !allowed.contains(&field.as_str()))
-    {
-        return Err(validation_owned(
-            code,
-            format!("{label} contains unsupported field `{field}`."),
-        ));
-    }
-    Ok(())
-}
-
-fn verify_json_signature(
-    public_key: &PublicKey,
-    payload: &Value,
-    signature_base64: &str,
-    context: &'static str,
-    code: &'static str,
-    message: &'static str,
-) -> Result<(), Error> {
-    let bytes =
-        json::to_vec(payload).map_err(|source| Error::SerializationFailure { context, source })?;
-    let signature =
-        decode_signature_base64_for_public_key(signature_base64, public_key, code, message)?;
-    signature
-        .verify(public_key, &bytes)
-        .map_err(|_| validation(code, message))
-}
-
-fn string_value(value: impl Into<String>) -> Value {
-    Value::String(value.into())
-}
-
-fn number_value(value: u64) -> Value {
-    json::to_value(&value).unwrap_or(Value::Null)
-}
-
-fn duration_ms(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn now_ms() -> u64 {
@@ -3784,22 +1318,8 @@ fn now_ms() -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
-}
-
-fn sha256_json_hex(value: &Value, context: &'static str) -> Result<String, Error> {
-    let bytes =
-        json::to_vec(value).map_err(|source| Error::SerializationFailure { context, source })?;
-    Ok(sha256_hex(&bytes))
-}
-
-fn offline_v2_identifier(prefix: &str, value: &str) -> String {
-    format!("{prefix}-{}", sha256_hex(value.as_bytes()))
-}
-
 fn validation(code: &'static str, message: &'static str) -> Error {
-    validation_owned(code, message.to_string())
+    validation_owned(code, message.to_owned())
 }
 
 fn validation_owned(code: &'static str, message: String) -> Error {
@@ -3808,4104 +1328,903 @@ fn validation_owned(code: &'static str, message: String) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use axum::http::{HeaderMap, Method, Uri};
-    use iroha_core::prelude::World;
-    use iroha_crypto::Algorithm;
+    use std::{sync::Barrier, time::Duration};
+
+    use axum::response::IntoResponse as _;
+    use iroha_crypto::{Algorithm, Hash, Signature};
     use iroha_data_model::{
-        Registrable,
-        account::Account,
-        asset::{Asset, AssetBalanceScope, AssetDefinition},
-        domain::{Domain, DomainId},
-        nexus::DataSpaceId,
-        offline::{KagemushaRecursiveSpendInitRequestV1, KagemushaRequestAuthorizationV2},
+        ChainId,
+        asset::{AssetDefinitionId, AssetId},
+        domain::DomainId,
+        offline::{
+            KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
+            KagemushaSpendableNoteDescriptorV2, KagemushaVerifiedFoldBundle,
+            KagemushaVerifiedFoldRecordBundle,
+        },
+        trigger::DataTriggerSequence,
     };
 
-    const NOW_MS: u64 = 1_700_000_000_000;
-    const REPORT_BYTES: &[u8] = b"offline-v2-platform-attestation";
+    use super::*;
 
-    fn sample_p256_assertion_key() -> Vec<u8> {
-        hex::decode(concat!(
-            "04",
-            "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
-            "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",
-        ))
-        .expect("sample P-256 base point decodes")
-    }
-
-    fn alternate_p256_assertion_key() -> Vec<u8> {
-        hex::decode(concat!(
-            "04",
-            "7cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc47669978",
-            "07775510db8ed040293d9ac69f7430dbba7dade63ce982299e04b79d227873d1",
-        ))
-        .expect("alternate P-256 point decodes")
-    }
-
-    fn off_curve_p256_assertion_key() -> Vec<u8> {
-        let mut key = vec![0; 65];
-        key[0] = 0x04;
-        key
-    }
-
-    fn checked_seed_keypair_with_algorithm(seed: u8, algorithm: Algorithm) -> KeyPair {
-        KeyPair::try_from_seed(vec![seed; 32], algorithm)
-            .expect("generate checked offline v2 issuer fixture keypair")
-    }
-
-    fn checked_seed_keypair(seed: u8) -> KeyPair {
-        checked_seed_keypair_with_algorithm(seed, Algorithm::Ed25519)
-    }
-
-    fn checked_signature(key_pair: &KeyPair, message: &[u8]) -> Signature {
-        Signature::try_new(key_pair.private_key(), message)
-            .expect("sign checked offline v2 issuer fixture")
-    }
-
-    fn sample_kagemusha_v2_finality(
-        operation_id: [u8; 32],
-        transaction_hash: [u8; 32],
-    ) -> KagemushaV2CommittedFinality {
-        KagemushaV2CommittedFinality {
-            operation_id,
-            transaction_hash,
-            finalized_block_height: 42,
-            status: "Applied",
-            server_time_ms: NOW_MS,
-        }
-    }
-
-    fn signed_kagemusha_v2_authorization(
-        key_pair: &KeyPair,
-        issued_at_ms: u64,
-        expires_at_ms: u64,
-    ) -> KagemushaRequestAuthorizationV2 {
-        let mut authorization = KagemushaRequestAuthorizationV2 {
+    fn submission_test_issuer() -> Arc<OfflineV2IssuerRuntime> {
+        let key_pair = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
+            .expect("derive offline submission coordinator fixture key");
+        Arc::new(OfflineV2IssuerRuntime {
             authority: AccountId::new(key_pair.public_key().clone()),
-            device_id: "refreshable-device".to_owned(),
-            operation_id: [0x31; 32],
-            issued_at_ms,
-            expires_at_ms,
-            nonce: [0x42; 32],
-            payload_digest: [0x53; 32],
-            app_attest_evidence_sha256: None,
-            app_attest_evidence: None,
-            signature: checked_signature(key_pair, b"placeholder"),
-        };
-        authorization.signature = checked_signature(
             key_pair,
-            &authorization
-                .signing_bytes()
-                .expect("authorization signing bytes"),
+            max_tx_value: Numeric::new(1_000, 0),
+            operations: Arc::new(RwLock::new(BTreeMap::new())),
+            in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+        })
+    }
+
+    fn submission_test_request(operation_seed: u8) -> OfflineTopUpRequest {
+        let key_pair = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
+            .expect("derive offline submission request fixture key");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let chain_id: ChainId = "offline-submission-coordinator"
+            .parse()
+            .expect("fixture chain id");
+        let domain_id = DomainId::try_new("offline", "universal").expect("fixture domain id");
+        let definition = AssetDefinitionId::new(
+            domain_id,
+            "coordinator".parse().expect("fixture asset name"),
         );
-        authorization
-    }
-
-    #[test]
-    fn newly_applied_kagemusha_v2_redeem_response_preserves_operation_id() {
-        let operation_id = [0x31; 32];
-        let transaction_hash = [0x73; 32];
-        let response = kagemusha_v2_terminal_payload(
-            sample_kagemusha_v2_finality(operation_id, transaction_hash),
-            None,
-        )
-        .expect("newly applied redeem response");
-
-        assert_eq!(response.operation_id, hex::encode(operation_id));
-        assert_eq!(response.transaction_hash, hex::encode(transaction_hash));
-        assert_eq!(response.finalized_block_height, 42);
-        assert_eq!(response.server_time_ms, NOW_MS);
-        assert!(response.topup_anchor_norito_base64.is_none());
-        assert!(response.topup_anchor_digest_hex.is_none());
-    }
-
-    #[test]
-    fn replayed_kagemusha_v2_redeem_response_preserves_operation_id() {
-        let operation_id = [0x52; 32];
-        let transaction_hash = [0x75; 32];
-        let response = kagemusha_v2_terminal_payload(
-            sample_kagemusha_v2_finality(operation_id, transaction_hash),
-            None,
-        )
-        .expect("replayed redeem response");
-
-        assert_eq!(response.operation_id, hex::encode(operation_id));
-        assert_eq!(response.transaction_hash, hex::encode(transaction_hash));
-        assert!(response.topup_anchor_norito_base64.is_none());
-        assert!(response.topup_anchor_digest_hex.is_none());
-    }
-
-    #[test]
-    fn kagemusha_v2_terminal_response_rejects_zero_or_non_applied_finality() {
-        let valid = sample_kagemusha_v2_finality([0x31; 32], [0x73; 32]);
-        let mut cases = Vec::new();
-        let mut zero_operation = valid.clone();
-        zero_operation.operation_id = [0; 32];
-        cases.push(zero_operation);
-        let mut zero_transaction = valid.clone();
-        zero_transaction.transaction_hash = [0; 32];
-        cases.push(zero_transaction);
-        let mut zero_height = valid.clone();
-        zero_height.finalized_block_height = 0;
-        cases.push(zero_height);
-        let mut zero_time = valid.clone();
-        zero_time.server_time_ms = 0;
-        cases.push(zero_time);
-        let mut non_applied = valid;
-        non_applied.status = "Committed";
-        cases.push(non_applied);
-
-        for finality in cases {
-            let error = kagemusha_v2_terminal_payload(finality, None)
-                .expect_err("incomplete finality must fail closed");
-            assert!(matches!(
-                error,
-                Error::AppServiceUnavailable {
-                    code: "OFFLINE_KAGEMUSHA_FINALITY_INCOMPLETE",
-                    ..
-                }
-            ));
-        }
-    }
-
-    #[test]
-    fn kagemusha_v2_terminal_status_rejects_missing_height_or_block_time() {
-        let applied_without_height =
-            crate::PipelineStatusEntry::fresh(crate::PipelineStatusKind::Applied, None, None);
-        let missing_height = resolve_kagemusha_v2_terminal_status(
-            &applied_without_height,
-            [0x31; 32],
-            [0x73; 32],
-            |_| Some(NOW_MS),
-        )
-        .expect_err("Applied without height must fail closed");
-        assert!(matches!(
-            missing_height,
-            Error::AppServiceUnavailable {
-                code: "OFFLINE_KAGEMUSHA_FINALITY_INCOMPLETE",
-                ..
-            }
-        ));
-
-        let applied_with_height = crate::PipelineStatusEntry::fresh(
-            crate::PipelineStatusKind::Applied,
-            core::num::NonZeroU64::new(42),
-            None,
-        );
-        let missing_block = resolve_kagemusha_v2_terminal_status(
-            &applied_with_height,
-            [0x31; 32],
-            [0x73; 32],
-            |_| None,
-        )
-        .expect_err("Applied without Kura block time must fail closed");
-        assert!(matches!(
-            missing_block,
-            Error::AppServiceUnavailable {
-                code: "OFFLINE_KAGEMUSHA_FINALITY_INCOMPLETE",
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn kagemusha_v2_terminal_cache_rejection_and_expiry_do_not_timeout() {
-        for kind in [
-            crate::PipelineStatusKind::Rejected,
-            crate::PipelineStatusKind::Expired,
-        ] {
-            let entry = crate::PipelineStatusEntry::fresh(kind, None, None);
-            let error =
-                resolve_kagemusha_v2_terminal_status(&entry, [0x31; 32], [0x73; 32], |_| {
-                    panic!("terminal cache status must not load Kura")
-                })
-                .expect_err("terminal cache status must reject immediately");
-            match error {
-                Error::AppQueryValidation { code, message } => {
-                    assert_eq!(code, "OFFLINE_KAGEMUSHA_TRANSACTION_REJECTED");
-                    assert!(message.contains(kind.as_str()));
-                }
-                other => panic!("unexpected terminal cache status error: {other}"),
-            }
-        }
-    }
-
-    #[test]
-    fn kagemusha_v2_anchor_finality_binding_rejects_operation_hash_or_height_mismatch() {
-        let finality = sample_kagemusha_v2_finality([0x31; 32], [0x73; 32]);
-        for (operation_id, transaction_hash, height) in [
-            ([0x32; 32], [0x73; 32], 42),
-            ([0x31; 32], [0x75; 32], 42),
-            ([0x31; 32], [0x73; 32], 43),
-        ] {
-            let error = ensure_kagemusha_v2_anchor_finality_binding(
-                operation_id,
-                transaction_hash,
-                height,
-                &finality,
-            )
-            .expect_err("mismatched anchor/finality must fail closed");
-            assert!(matches!(
-                error,
-                Error::AppServiceUnavailable {
-                    code: "OFFLINE_KAGEMUSHA_FINALITY_INCOMPLETE",
-                    ..
-                }
-            ));
-        }
-    }
-
-    #[test]
-    fn refreshed_kagemusha_v2_authorization_keeps_direct_anchor_lookup_key() {
-        let key_pair = checked_seed_keypair(0x67);
-        let first = signed_kagemusha_v2_authorization(&key_pair, NOW_MS, NOW_MS + 60_000);
-        let refreshed =
-            signed_kagemusha_v2_authorization(&key_pair, NOW_MS + 60_000, NOW_MS + 120_000);
-
-        assert_ne!(first.issued_at_ms, refreshed.issued_at_ms);
-        assert_ne!(first.expires_at_ms, refreshed.expires_at_ms);
-        assert_ne!(first.signature, refreshed.signature);
-        assert_eq!(first.operation_id, refreshed.operation_id);
-        assert_eq!(first.nonce, refreshed.nonce);
-        assert_eq!(first.payload_digest, refreshed.payload_digest);
-        assert_eq!(
-            kagemusha_v2_anchor_state_key(first.operation_id).expect("first anchor key"),
-            kagemusha_v2_anchor_state_key(refreshed.operation_id).expect("refreshed anchor key")
-        );
-    }
-    fn sample_issuer() -> (OfflineV2IssuerRuntime, KeyPair) {
-        let issuer_key_pair = checked_seed_keypair(0x11);
-        let verifier_key_pair = checked_seed_keypair(0x22);
-        let authority = AccountId::new(issuer_key_pair.public_key().clone());
-        (
-            OfflineV2IssuerRuntime {
-                authority,
-                key_pair: issuer_key_pair,
-                attestation_verifier_public_key: verifier_key_pair.public_key().clone(),
-                max_balance: "100".parse().expect("max balance"),
-                max_tx_value: "25".parse().expect("max transaction value"),
-                certificate_ttl: Duration::from_secs(300),
-                authorization_refresh: Duration::from_secs(60),
-                authorization_ttl: Duration::from_secs(600),
+        let amount = KagemushaScaledAmountV2 {
+            atomic_units: 7,
+            scale: 0,
+        };
+        let operation_id = [operation_seed; 32];
+        OfflineTopUpRequest {
+            asset: AssetId::new(definition.clone(), authority.clone()),
+            amount,
+            current_note: KagemushaSpendableNoteDescriptorV2 {
+                chain_id: chain_id.clone(),
+                asset: definition.clone(),
+                note_commitment: [0x61; 32],
+                spend_nullifier: [0x62; 32],
+                amount,
             },
-            verifier_key_pair,
+            record_bundle: KagemushaVerifiedFoldRecordBundle {
+                bundle: KagemushaVerifiedFoldBundle {
+                    chain_id,
+                    asset: definition,
+                    steps: Vec::new(),
+                },
+                verifier_records: Vec::new(),
+            },
+            pallas_open_envelopes_archive: Vec::new(),
+            artifact_generation: "submission-coordinator-fixture".to_owned(),
+            operation_id,
+            authorization: KagemushaRequestAuthorizationV2 {
+                authority,
+                device_id: "submission-coordinator-device".to_owned(),
+                operation_id,
+                issued_at_ms: 1,
+                expires_at_ms: u64::MAX,
+                nonce: [0x63; 32],
+                payload_digest: [0x64; 32],
+                app_attest_evidence_sha256: None,
+                app_attest_evidence: None,
+                signature: Signature::new(key_pair.private_key(), b"coordinator fixture"),
+            },
+        }
+    }
+
+    fn claim_test_leader(
+        issuer: &Arc<OfflineV2IssuerRuntime>,
+        request: &OfflineTopUpRequest,
+    ) -> SubmissionLeader {
+        match issuer
+            .claim_submission(OfflineOperationRequest::TopUp(request))
+            .expect("claim fixture submission")
+        {
+            SubmissionClaim::Leader(leader) => leader,
+            SubmissionClaim::Accepted(_) | SubmissionClaim::Follower(_) => {
+                panic!("fresh fixture request must elect one leader")
+            }
+        }
+    }
+
+    fn submission_test_hash(seed: u8) -> HashOf<SignedTransaction> {
+        HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32]))
+    }
+
+    fn submission_test_transaction(requests: Vec<OfflineTopUpRequest>) -> SignedTransaction {
+        let issuer = submission_test_issuer();
+        let instructions = requests
+            .into_iter()
+            .map(TopUpKagemushaRecursiveV2::new)
+            .map(InstructionBox::from)
+            .collect::<Vec<_>>();
+        TransactionBuilder::new(
+            ChainId::from("offline-submission-coordinator"),
+            issuer.authority.clone().into(),
         )
+        .with_instructions(instructions)
+        .sign(issuer.key_pair.private_key())
     }
 
-    fn asset_definition_for_parse_tests() -> AssetDefinitionId {
-        AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-            "rose".parse().expect("asset name"),
+    async fn retry_outcome(receiver: watch::Receiver<SubmissionOutcome>) {
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_for_submission_outcome(receiver),
         )
-    }
-
-    fn app_with_account_and_asset_scope(
-        account_id: &AccountId,
-        asset_definition_id: &AssetDefinitionId,
-        scope: AssetBalanceScope,
-    ) -> SharedAppState {
-        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = Domain::new(domain_id.clone()).build(account_id);
-        let account = Account::new(account_id.clone()).build(account_id);
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name(asset_definition_id.name().to_string())
-            .build(account_id);
-        let asset = Asset::new(
-            AssetId::with_scope(asset_definition_id.clone(), account_id.clone(), scope),
-            Numeric::new(200, 0),
-        );
-        let world = World::with_assets([domain], [account], [asset_definition], [asset], []);
-        crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(world)
-    }
-
-    fn minimal_parse_body(account_literal: &str, asset_literal: &str) -> Value {
-        let offline_public_key = "a5".repeat(32);
-        let device_binding = json_object(vec![
-            ("device_id", string_value("device-1")),
-            ("offline_public_key", string_value(&offline_public_key)),
-            (
-                "signature_base64",
-                string_value("nested-device-signature-is-not-body-auth"),
-            ),
-        ]);
-        json_object(vec![
-            ("account_id", string_value(account_literal)),
-            ("operation_id", string_value("operation-1")),
-            ("device_id", string_value("device-1")),
-            ("offline_public_key", string_value(offline_public_key)),
-            ("asset_definition_id", string_value(asset_literal)),
-            ("device_binding", device_binding),
-        ])
-    }
-
-    fn add_body_freshness(
-        value: &mut Value,
-        account_literal: &str,
-        timestamp_ms: u64,
-        nonce: &str,
-    ) {
-        insert_field(value, "account_id", string_value(account_literal));
-        insert_field(value, "timestamp_ms", number_value(timestamp_ms));
-        insert_field(value, "nonce", string_value(nonce));
-    }
-
-    fn unsigned_body_bytes(value: &Value) -> Vec<u8> {
-        let mut unsigned = value.clone();
-        let Value::Object(map) = &mut unsigned else {
-            panic!("expected object body");
-        };
-        map.remove("signature_base64");
-        map.remove("witness_base64");
-        json::to_vec(&unsigned).expect("unsigned body json")
-    }
-
-    fn sign_body_value(
-        method: &Method,
-        uri: &Uri,
-        key_pair: &KeyPair,
-        mut value: Value,
-        account_literal: &str,
-        timestamp_ms: u64,
-        nonce: &str,
-    ) -> Value {
-        add_body_freshness(&mut value, account_literal, timestamp_ms, nonce);
-        let unsigned = unsigned_body_bytes(&value);
-        let message = app_auth::canonical_request_signature_message(
-            method,
-            uri,
-            &unsigned,
-            timestamp_ms,
-            nonce,
-        );
-        let signature = checked_signature(key_pair, &message);
-        insert_field(
-            &mut value,
-            "signature_base64",
-            string_value(BASE64_STANDARD.encode(signature.payload())),
-        );
-        value
-    }
-
-    fn parse_offline_request(
-        app: &SharedAppState,
-        method: &Method,
-        uri: &Uri,
-        headers: &HeaderMap,
-        body: &Value,
-        endpoint: &'static str,
-    ) -> Result<ParsedOfflineRequest, Error> {
-        let body = json::to_vec(body).expect("request body json");
-        parse_and_authorize(app.as_ref(), method, uri, headers, &body, endpoint)
+        .await
+        .expect("submission follower must be released promptly");
+        assert!(matches!(outcome, SubmissionOutcome::Retry));
     }
 
     #[test]
-    fn parse_and_authorize_uses_unique_existing_asset_balance_scope_for_issue_asset() {
-        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
-        let key_pair = checked_seed_keypair(0x34);
-        let account = AccountId::new(key_pair.public_key().clone());
-        let account_literal = account.canonical_i105().expect("i105 account");
-        let asset_definition_id = asset_definition_for_parse_tests();
-        let asset_literal = asset_definition_id.to_string();
-        let balance_scope = AssetBalanceScope::Dataspace(DataSpaceId::new(10));
-        let app = app_with_account_and_asset_scope(&account, &asset_definition_id, balance_scope);
-        let method = Method::POST;
-        let uri: Uri = PATH_NOTES_ISSUE.parse().expect("uri");
-        let body = sign_body_value(
-            &method,
-            &uri,
-            &key_pair,
-            minimal_parse_body(&account_literal, &asset_literal),
-            &account_literal,
-            now_ms(),
-            "scoped-offline-issue-asset",
-        );
+    fn transaction_recovery_uses_the_authorized_nonzero_id_and_exact_matching_instruction() {
+        let issuer = submission_test_issuer();
+        let first = submission_test_request(0x15);
+        let second = submission_test_request(0x16);
+        let transaction = submission_test_transaction(vec![first.clone(), second.clone()]);
 
-        let parsed = parse_offline_request(
-            &app,
-            &method,
-            &uri,
-            &HeaderMap::new(),
-            &body,
-            ENDPOINT_NOTES_ISSUE,
+        let recovered = offline_operation_record_in_transaction(
+            &transaction,
+            &issuer.authority,
+            second.authorization.operation_id,
         )
-        .expect("valid body auth");
-
+        .expect("matching second instruction must be recovered");
         assert_eq!(
-            parsed.asset_id,
-            AssetId::with_scope(asset_definition_id, account, balance_scope)
+            recovered.request,
+            OfflineOperationRequest::TopUp(&second).into_owned()
         );
-    }
+        assert_eq!(recovered.transaction_hash, transaction.hash());
+        assert_eq!(recovered.submitted_at_ms, second.authorization.issued_at_ms);
+        assert!(
+            offline_operation_record_in_transaction(&transaction, &issuer.authority, [0x17; 32],)
+                .is_none(),
+            "an attacker-controlled miss must not recover an unrelated instruction"
+        );
+        assert!(
+            offline_operation_record_in_transaction(&transaction, &issuer.authority, [0; 32])
+                .is_none(),
+            "zero is never a valid operation identity"
+        );
 
-    #[test]
-    fn offline_v2_note_transaction_checked_signing_verifies() {
-        let (issuer, _) = sample_issuer();
-        let tx = issuer
-            .sign_transaction(
-                TransactionBuilder::new(
-                    iroha_data_model::ChainId::from("offline-v2-note-sign-test"),
-                    issuer.authority.clone().into(),
-                )
-                .with_instructions(Vec::<InstructionBox>::new()),
-                "offline_v2_note_transaction_test",
+        let mut mismatched = submission_test_request(0x18);
+        let authorized_id = mismatched.authorization.operation_id;
+        mismatched.operation_id = [0x19; 32];
+        let malformed_transaction = submission_test_transaction(vec![mismatched.clone()]);
+        let recovered = offline_operation_record_in_transaction(
+            &malformed_transaction,
+            &issuer.authority,
+            authorized_id,
+        )
+        .expect("authorization remains the canonical retry identity");
+        assert_eq!(
+            recovered.request,
+            OfflineOperationRequest::TopUp(&mismatched).into_owned()
+        );
+        assert!(
+            offline_operation_record_in_transaction(
+                &malformed_transaction,
+                &issuer.authority,
+                mismatched.operation_id,
             )
-            .expect("checked transaction signing should succeed");
-
-        tx.verify_signature()
-            .expect("checked offline v2 note transaction signature should verify");
-        assert_eq!(tx.authority(), &issuer.authority);
-    }
-
-    fn sample_request(
-        verifier: &KeyPair,
-        note_key: [u8; 32],
-        assertion_key: Vec<u8>,
-    ) -> ParsedOfflineRequest {
-        let account_key_pair = checked_seed_keypair(0x33);
-        let account_id = AccountId::new(account_key_pair.public_key().clone());
-        let account_literal = account_id.to_string();
-        let asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("offline", "universal").expect("domain id"),
-            "usd".parse().expect("asset name"),
+            .is_none(),
+            "a forged duplicate top-level id must not create another lookup identity"
         );
-        let asset_definition_literal = asset_definition_id.to_string();
-        let offline_public_key = hex::encode(note_key);
-        let assertion_key_hex = hex::encode(&assertion_key);
-        let receipt = signed_attestation_receipt(
-            verifier,
-            &account_literal,
-            "device-1",
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        let device_binding = json_object(vec![
-            ("platform", string_value("ios")),
-            ("device_id", string_value("device-1")),
-            ("offline_public_key", string_value(&offline_public_key)),
-            ("assertion_public_key", string_value(assertion_key_hex)),
-            (
-                "attestation_report_base64",
-                string_value(BASE64_STANDARD.encode(REPORT_BYTES)),
-            ),
-            ("attestation_receipt", receipt),
-        ]);
-        let value = json_object(vec![
-            ("account_id", string_value(&account_literal)),
-            ("operation_id", string_value("operation-1")),
-            ("device_id", string_value("device-1")),
-            ("offline_public_key", string_value(&offline_public_key)),
-            (
-                "asset_definition_id",
-                string_value(&asset_definition_literal),
-            ),
-            ("device_binding", device_binding.clone()),
-        ]);
-        ParsedOfflineRequest {
-            value,
-            account_id: account_id.clone(),
-            account_literal,
-            operation_id: "operation-1".to_string(),
-            device_id: "device-1".to_string(),
-            offline_public_key,
-            asset_id: AssetId::new(asset_definition_id.clone(), account_id),
-            asset_definition_id,
-            asset_definition_literal,
-            device_binding,
-        }
-    }
 
-    fn signed_attestation_receipt(
-        verifier: &KeyPair,
-        account_id: &str,
-        device_id: &str,
-        note_key: &[u8],
-        assertion_key: &[u8],
-        hardware_one_use: bool,
-    ) -> Value {
-        signed_attestation_receipt_with_validity(
-            verifier,
-            account_id,
-            device_id,
-            note_key,
-            assertion_key,
-            hardware_one_use,
-            REPORT_BYTES,
-            NOW_MS - 1_000,
-            NOW_MS + 60_000,
+        let unrelated = TransactionBuilder::new(
+            ChainId::from("offline-submission-coordinator"),
+            issuer.authority.clone().into(),
         )
-    }
-
-    fn signed_attestation_receipt_with_validity(
-        verifier: &KeyPair,
-        account_id: &str,
-        device_id: &str,
-        note_key: &[u8],
-        assertion_key: &[u8],
-        hardware_one_use: bool,
-        report_bytes: &[u8],
-        issued_at_ms: u64,
-        expires_at_ms: u64,
-    ) -> Value {
-        let unsigned = json_object(vec![
-            ("version", number_value(1)),
-            ("platform", string_value("ios-appattest")),
-            ("account_id", string_value(account_id)),
-            ("device_id", string_value(device_id)),
-            (
-                "offline_public_key_base64",
-                string_value(BASE64_STANDARD.encode(note_key)),
-            ),
-            (
-                "assertion_public_key_base64",
-                string_value(BASE64_STANDARD.encode(assertion_key)),
-            ),
-            (
-                "assertion_scheme",
-                string_value("apple-appattest-counter-v1"),
-            ),
-            ("assertion_key_algorithm", string_value("app-attest-p256")),
-            ("attestation_key_id", string_value("attestation-key-1")),
-            ("hardware_one_use", Value::Bool(hardware_one_use)),
-            (
-                "attestation_report_hash_hex",
-                string_value(sha256_hex(report_bytes)),
-            ),
-            ("issued_at_ms", number_value(issued_at_ms)),
-            ("expires_at_ms", number_value(expires_at_ms)),
-        ]);
-        let signature = {
-            let bytes = json::to_vec(&unsigned).expect("receipt json");
-            checked_signature(verifier, &bytes)
-        };
-        let mut map = value_object(unsigned).expect("receipt object");
-        map.insert(
-            "signature_base64".to_string(),
-            string_value(BASE64_STANDARD.encode(signature.payload())),
-        );
-        Value::Object(map)
-    }
-
-    fn resign_attestation_receipt(verifier: &KeyPair, mut receipt: Value) -> Value {
-        let Value::Object(map) = &mut receipt else {
-            panic!("expected receipt object");
-        };
-        map.remove("signature_base64");
-
-        let signature = {
-            let bytes = json::to_vec(&receipt).expect("receipt json");
-            checked_signature(verifier, &bytes)
-        };
-        let Value::Object(map) = &mut receipt else {
-            panic!("expected receipt object");
-        };
-        map.insert(
-            "signature_base64".to_string(),
-            string_value(BASE64_STANDARD.encode(signature.payload())),
-        );
-        receipt
-    }
-
-    fn replace_attestation_receipt(request: &mut ParsedOfflineRequest, receipt: Value) {
-        insert_field(&mut request.device_binding, "attestation_receipt", receipt);
-        insert_field(
-            &mut request.value,
-            "device_binding",
-            request.device_binding.clone(),
+        .with_instructions([iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "unrelated".to_owned(),
+        )])
+        .sign(issuer.key_pair.private_key());
+        assert!(
+            offline_operation_record_in_transaction(&unrelated, &issuer.authority, authorized_id,)
+                .is_none(),
+            "ordinary transactions must never enter offline recovery"
         );
     }
 
-    fn insert_device_binding_field(
-        request: &mut ParsedOfflineRequest,
-        field: &str,
-        field_value: Value,
-    ) {
-        insert_field(&mut request.device_binding, field, field_value);
-        insert_field(
-            &mut request.value,
-            "device_binding",
-            request.device_binding.clone(),
-        );
-    }
-
-    fn insert_field(value: &mut Value, field: &str, field_value: Value) {
-        let Value::Object(map) = value else {
-            panic!("expected object");
-        };
-        map.insert(field.to_string(), field_value);
-    }
-
-    fn remove_field(value: &mut Value, field: &str) {
-        let Value::Object(map) = value else {
-            panic!("expected object");
-        };
-        map.remove(field);
-    }
-
-    fn rename_field(value: &mut Value, from: &str, to: &str) {
-        let Value::Object(map) = value else {
-            panic!("expected object");
-        };
-        let field_value = map
-            .remove(from)
-            .unwrap_or_else(|| panic!("missing field {from}"));
-        map.insert(to.to_string(), field_value);
-    }
-
-    fn offline_v2_fixture() -> Value {
-        json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/offline/interop_contract_v2.json"
-        )))
-        .expect("offline v2 fixture parses")
-    }
-
-    fn kagemusha_abi7_redeem_request_model() -> KagemushaRecursiveSpendRedeemRequestV1 {
-        let fixture: Value = json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/kagemusha_recursive_spend_abi7/archives.json"
-        )))
-        .expect("Kagemusha ABI-7 fixture parses");
-        let archives = fixture
-            .get("archives")
-            .and_then(Value::as_array)
-            .expect("Kagemusha fixture archives");
-        let archive = archives
-            .iter()
-            .find(|item| optional_string(item, "name") == Some("redeem_request"))
-            .expect("Kagemusha redeem request archive");
-        let encoded = required_string(archive, "bytes_base64").expect("redeem request bytes");
-        let bytes = BASE64_STANDARD
-            .decode(encoded)
-            .expect("decode Kagemusha redeem request");
-        norito::decode_from_bytes(&bytes).expect("decode Kagemusha redeem request model")
-    }
-
-    fn kagemusha_abi6_archive_bytes(name: &str) -> Vec<u8> {
-        let fixture: Value = json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/kagemusha_recursive_spend_abi6/archives.json"
-        )))
-        .expect("Kagemusha ABI-6 fixture parses");
-        let archives = fixture
-            .get("archives")
-            .and_then(Value::as_array)
-            .expect("Kagemusha ABI-6 fixture archives");
-        let archive = archives
-            .iter()
-            .find(|item| optional_string(item, "name") == Some(name))
-            .unwrap_or_else(|| panic!("Kagemusha ABI-6 archive {name}"));
-        let encoded = required_string(archive, "bytes_base64")
-            .unwrap_or_else(|_| panic!("Kagemusha ABI-6 archive {name} bytes"));
-        BASE64_STANDARD
-            .decode(encoded)
-            .unwrap_or_else(|_| panic!("decode Kagemusha ABI-6 archive {name}"))
-    }
-
-    fn kagemusha_abi6_topup_request_model() -> KagemushaRecursiveSpendTopUpRequestV1 {
-        let init_request: KagemushaRecursiveSpendInitRequestV1 =
-            norito::decode_from_bytes(&kagemusha_abi6_archive_bytes("init_request"))
-                .expect("decode Kagemusha ABI-6 init request model");
-        let account = AccountId::new(checked_seed_keypair(0x44).public_key().clone());
-        let asset = AssetId::new(init_request.record_bundle.bundle.asset.clone(), account);
-        KagemushaRecursiveSpendTopUpRequestV1::new(
-            asset,
-            init_request.current_note.amount.clone(),
-            init_request,
+    #[test]
+    fn unauthorized_outer_authority_cannot_poison_offline_recovery() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x1C);
+        let operation_id = request.authorization.operation_id;
+        let front_runner = KeyPair::try_from_seed(vec![0x1D; 32], Algorithm::Ed25519)
+            .expect("derive unauthorized offline front-run fixture key");
+        let front_runner_transaction = TransactionBuilder::new(
+            ChainId::from("offline-submission-coordinator"),
+            AccountId::new(front_runner.public_key().clone()),
         )
-        .expect("build Kagemusha ABI-6 top-up request model")
-    }
-
-    fn kagemusha_topup_parsed_request(
-        model: &KagemushaRecursiveSpendTopUpRequestV1,
-    ) -> ParsedOfflineRequest {
-        let account_literal = model.asset.account().to_string();
-        let asset_definition_literal = model.asset.definition().to_string();
-        let offline_public_key = hex::encode([0x78; 32]);
-        let device_binding = json_object(vec![
-            ("device_id", string_value("device-1")),
-            ("offline_public_key", string_value(&offline_public_key)),
-        ]);
-        let encoded =
-            BASE64_STANDARD.encode(norito::to_bytes(model).expect("encode Kagemusha top-up"));
-        let value = json_object(vec![
-            ("account_id", string_value(&account_literal)),
-            ("operation_id", string_value("fixture-kagemusha-topup")),
-            ("device_id", string_value("device-1")),
-            ("offline_public_key", string_value(&offline_public_key)),
-            (
-                "asset_definition_id",
-                string_value(&asset_definition_literal),
+        .with_instructions([InstructionBox::from(TopUpKagemushaRecursiveV2::new(
+            request.clone(),
+        ))])
+        .sign(front_runner.private_key());
+        let rejected_result = TransactionResult(Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                "outer authority is not the configured offline issuer".to_owned(),
             ),
-            ("device_binding", device_binding.clone()),
-            ("topup_request_norito_base64", string_value(&encoded)),
-        ]);
-        ParsedOfflineRequest {
-            value,
-            account_id: model.asset.account().clone(),
-            account_literal,
-            operation_id: "fixture-kagemusha-topup".to_string(),
-            device_id: "device-1".to_string(),
-            offline_public_key,
-            asset_id: model.asset.clone(),
-            asset_definition_id: model.asset.definition().clone(),
-            asset_definition_literal,
-            device_binding,
-        }
-    }
-
-    fn kagemusha_redeem_parsed_request(
-        model: &KagemushaRecursiveSpendRedeemRequestV1,
-    ) -> ParsedOfflineRequest {
-        let account_literal = model.recipient.to_string();
-        let asset_definition_literal = model.bundle.accumulator.asset.to_string();
-        let offline_public_key = hex::encode([0x77; 32]);
-        let device_binding = json_object(vec![
-            ("device_id", string_value("device-1")),
-            ("offline_public_key", string_value(&offline_public_key)),
-        ]);
-        let value = json_object(vec![
-            ("account_id", string_value(&account_literal)),
-            ("operation_id", string_value("fixture-kagemusha-redeem")),
-            ("device_id", string_value("device-1")),
-            ("offline_public_key", string_value(&offline_public_key)),
-            (
-                "asset_definition_id",
-                string_value(&asset_definition_literal),
-            ),
-            ("amount", string_value(model.public_amount.to_string())),
-            (
-                "source_note_commitment",
-                string_value(
-                    Hash::prehashed(model.bundle.accumulator.current_note.note_commitment)
-                        .to_string(),
-                ),
-            ),
-            ("device_binding", device_binding.clone()),
-        ]);
-        ParsedOfflineRequest {
-            value,
-            account_id: model.recipient.clone(),
-            account_literal,
-            operation_id: "fixture-kagemusha-redeem".to_string(),
-            device_id: "device-1".to_string(),
-            offline_public_key,
-            asset_id: AssetId::new(
-                model.bundle.accumulator.asset.clone(),
-                model.recipient.clone(),
-            ),
-            asset_definition_id: model.bundle.accumulator.asset.clone(),
-            asset_definition_literal,
-            device_binding,
-        }
-    }
-
-    fn fixture_redeem_request() -> ParsedOfflineRequest {
-        let fixture = offline_v2_fixture();
-        let token = fixture.get("payment_token").expect("payment token");
-        let recipient_certificate = token
-            .get("recipient_key_certificate")
-            .expect("recipient certificate");
-        let account_literal = required_string(token, "recipient_account_id")
-            .expect("recipient account")
-            .to_string();
-        let account_id = AccountId::parse_encoded(&account_literal)
-            .expect("fixture account id")
-            .account_id()
-            .clone();
-        let asset_definition_literal = required_string(token, "asset_definition_id")
-            .expect("asset definition")
-            .to_string();
-        let asset_definition_id =
-            AssetDefinitionId::from_str(&asset_definition_literal).expect("fixture asset id");
-        let device_id = required_string(recipient_certificate, "device_id")
-            .expect("device id")
-            .to_string();
-        let offline_public_key = required_string(recipient_certificate, "public_key")
-            .expect("public key")
-            .to_string();
-        let device_binding = json_object(vec![
-            ("device_id", string_value(&device_id)),
-            ("offline_public_key", string_value(&offline_public_key)),
-        ]);
-        let value = json_object(vec![
-            ("account_id", string_value(&account_literal)),
-            ("operation_id", string_value("fixture-redeem")),
-            ("device_id", string_value(&device_id)),
-            ("offline_public_key", string_value(&offline_public_key)),
-            (
-                "asset_definition_id",
-                string_value(&asset_definition_literal),
-            ),
-            ("device_binding", device_binding.clone()),
-        ]);
-        ParsedOfflineRequest {
-            value,
-            account_id: account_id.clone(),
-            account_literal,
-            operation_id: "fixture-redeem".to_string(),
-            device_id,
-            offline_public_key,
-            asset_id: AssetId::new(asset_definition_id.clone(), account_id),
-            asset_definition_id,
-            asset_definition_literal,
-            device_binding,
-        }
-    }
-
-    fn fixture_redeem_model() -> OfflineNoteRedeem {
-        let fixture = offline_v2_fixture();
-        let encoded = required_string(
-            fixture
-                .get("chain_vectors")
-                .and_then(|value| value.get("redeem"))
-                .expect("redeem chain vector"),
-            "norito_base64",
-        )
-        .expect("redeem norito");
-        let bytes = BASE64_STANDARD
-            .decode(encoded)
-            .expect("decode redeem vector");
-        norito::decode_from_bytes(&bytes).expect("decode redeem model")
-    }
-
-    fn chain_admissible_fixture_redeem_model() -> OfflineNoteRedeem {
-        let model = fixture_redeem_model();
-        assert_eq!(
-            model.sender_key_certificate.version,
-            OFFLINE_NOTE_KEY_CERTIFICATE_VERSION
-        );
-        model
-    }
-
-    fn certificate_json(certificate: &OfflineNoteKeyCertificate) -> Value {
-        json_object(vec![
-            ("version", number_value(u64::from(certificate.version))),
-            ("platform", string_value(&certificate.platform)),
-            ("key_id", string_value(&certificate.key_id)),
-            ("device_id", string_value(&certificate.device_id)),
-            (
-                "account_id",
-                string_value(certificate.account_id.to_string()),
-            ),
-            (
-                "public_key",
-                string_value(BASE64_STANDARD.encode(&certificate.public_key)),
-            ),
-            (
-                "assertion_scheme",
-                string_value(&certificate.assertion_scheme),
-            ),
-            (
-                "assertion_key_algorithm",
-                string_value(&certificate.assertion_key_algorithm),
-            ),
-            (
-                "assertion_public_key",
-                string_value(BASE64_STANDARD.encode(&certificate.assertion_public_key)),
-            ),
-            (
-                "assertion_usage_count_limit",
-                certificate
-                    .assertion_usage_count_limit
-                    .map(|value| number_value(u64::from(value)))
-                    .unwrap_or(Value::Null),
-            ),
-            ("one_use", Value::Bool(certificate.one_use)),
-            (
-                "issuer_signature_base64",
-                string_value(BASE64_STANDARD.encode(certificate.issuer_signature.payload())),
-            ),
-        ])
-    }
-
-    fn recursive_proof_json(proof: &OfflineNoteRecursiveProof) -> Value {
-        json_object(vec![
-            ("backend", string_value(&proof.proof.backend)),
-            ("verifier_key_id", string_value(&proof.verifier_key_id.name)),
-            (
-                "public_inputs_hash_hex",
-                string_value(proof.public_inputs_hash.to_string()),
-            ),
-            (
-                "proof_bytes_base64",
-                string_value(BASE64_STANDARD.encode(&proof.proof.bytes)),
-            ),
-        ])
-    }
-
-    fn redemption_json(redemption: &OfflineNoteRedeem) -> Value {
-        json_object(vec![
-            (
-                "source_note_commitment",
-                string_value(redemption.source_note_commitment.to_string()),
-            ),
-            (
-                "input_nullifiers",
-                Value::Array(
-                    redemption
-                        .input_nullifiers
-                        .iter()
-                        .map(ToString::to_string)
-                        .map(string_value)
-                        .collect(),
-                ),
-            ),
-            (
-                "sender_key_certificate",
-                certificate_json(&redemption.sender_key_certificate),
-            ),
-            ("amount", string_value(redemption.amount.to_string())),
-            (
-                "recursive_proof",
-                recursive_proof_json(&redemption.recursive_proof),
-            ),
-        ])
-    }
-
-    fn validation_code(result: Result<impl Sized, Error>) -> &'static str {
-        match result {
-            Err(Error::AppQueryValidation { code, .. }) => code,
-            Err(error) => panic!("expected validation error, got {error:?}"),
-            Ok(_) => panic!("expected validation error"),
-        }
-    }
-
-    #[test]
-    fn signature_base64_decoder_rejects_malformed_ed25519_signature_r() {
-        const SMALL_ORDER_R: [u8; 32] = [
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0,
-        ];
-        const NONCANONICAL_R: [u8; 32] = [
-            0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0x7f,
-        ];
-
-        for (label, r_bytes) in [
-            ("small-order", SMALL_ORDER_R),
-            ("noncanonical", NONCANONICAL_R),
-        ] {
-            let mut signature = [0xA5; 64];
-            signature[..32].copy_from_slice(&r_bytes);
-
-            assert_eq!(
-                validation_code(decode_signature_base64(
-                    &BASE64_STANDARD.encode(signature),
-                    "OFFLINE_V2_SIGNATURE_INVALID",
-                    "Offline Notes V2 signature_base64 is invalid.",
-                )),
-                "OFFLINE_V2_SIGNATURE_INVALID",
-                "{label} Ed25519 signature R must fail at base64 admission"
-            );
-        }
-    }
-
-    #[test]
-    fn verify_json_signature_rejects_malformed_ed25519_signature_r() {
-        const SMALL_ORDER_R: [u8; 32] = [
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0,
-        ];
-        const NONCANONICAL_R: [u8; 32] = [
-            0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0x7f,
-        ];
-
-        let key_pair = checked_seed_keypair(0x43);
-        let payload = json_object(vec![(
-            "kind",
-            string_value("offline-v2-json-ed25519-r-admission"),
-        )]);
-        let payload_bytes = json::to_vec(&payload).expect("offline v2 JSON signing payload");
-        let valid_signature = checked_signature(&key_pair, &payload_bytes);
-        verify_json_signature(
-            key_pair.public_key(),
-            &payload,
-            &BASE64_STANDARD.encode(valid_signature.payload()),
-            "offline_v2_json_signature_test",
-            "OFFLINE_V2_SIGNATURE_INVALID",
-            "Offline Notes V2 signature_base64 is invalid.",
-        )
-        .expect("valid offline v2 JSON signature verifies before mutation");
-
-        for (label, replacement_r) in [
-            ("small-order", SMALL_ORDER_R),
-            ("noncanonical", NONCANONICAL_R),
-        ] {
-            let mut malformed = valid_signature.payload().to_vec();
-            malformed[..replacement_r.len()].copy_from_slice(&replacement_r);
-
-            assert_eq!(
-                validation_code(verify_json_signature(
-                    key_pair.public_key(),
-                    &payload,
-                    &BASE64_STANDARD.encode(malformed),
-                    "offline_v2_json_signature_test",
-                    "OFFLINE_V2_SIGNATURE_INVALID",
-                    "Offline Notes V2 signature_base64 is invalid.",
-                )),
-                "OFFLINE_V2_SIGNATURE_INVALID",
-                "{label} Ed25519 signature R must fail closed"
-            );
-        }
-    }
-
-    #[test]
-    fn verify_json_signature_rejects_malformed_mldsa_signature_lengths() {
-        let key_pair = checked_seed_keypair_with_algorithm(0x45, Algorithm::MlDsa);
-        let payload = json_object(vec![(
-            "kind",
-            string_value("offline-v2-json-mldsa-admission"),
-        )]);
-        let payload_bytes = json::to_vec(&payload).expect("offline v2 JSON signing payload");
-        let valid_signature = checked_signature(&key_pair, &payload_bytes);
-        verify_json_signature(
-            key_pair.public_key(),
-            &payload,
-            &BASE64_STANDARD.encode(valid_signature.payload()),
-            "offline_v2_json_signature_test",
-            "OFFLINE_V2_SIGNATURE_INVALID",
-            "Offline Notes V2 signature_base64 is invalid.",
-        )
-        .expect("valid offline v2 JSON ML-DSA signature verifies before mutation");
-
-        let mut extended = valid_signature.payload().to_vec();
-        extended.push(0);
-        for (label, malformed) in [
-            (
-                "truncated",
-                valid_signature.payload()[..valid_signature.payload().len() - 1].to_vec(),
-            ),
-            ("extended", extended),
-        ] {
-            assert_eq!(
-                validation_code(verify_json_signature(
-                    key_pair.public_key(),
-                    &payload,
-                    &BASE64_STANDARD.encode(malformed),
-                    "offline_v2_json_signature_test",
-                    "OFFLINE_V2_SIGNATURE_INVALID",
-                    "Offline Notes V2 signature_base64 is invalid.",
-                )),
-                "OFFLINE_V2_SIGNATURE_INVALID",
-                "{label} ML-DSA signature length must fail closed"
-            );
-        }
-    }
-
-    fn app_error_code(result: Result<impl Sized, Error>) -> &'static str {
-        match result {
-            Err(Error::AppQueryValidation { code, .. } | Error::AppForbidden { code, .. }) => code,
-            Err(error) => panic!("expected app error, got {error:?}"),
-            Ok(_) => panic!("expected app error"),
-        }
-    }
-
-    #[test]
-    fn offline_v2_kagemusha_topup_accepts_client_produced_request_archive() {
-        let model = kagemusha_abi6_topup_request_model();
-        let request = kagemusha_topup_parsed_request(&model);
-
-        let parsed = parse_kagemusha_recursive_topup_request(
-            &request,
-            &model.init_request.record_bundle.bundle.chain_id,
-        )
-        .expect("Kagemusha top-up request parses");
-
-        assert_eq!(parsed, model);
-    }
-
-    #[test]
-    fn offline_v2_kagemusha_topup_rejects_retired_server_construction_fields() {
-        let model = kagemusha_abi6_topup_request_model();
-        for (field, value) in [
-            ("amount", string_value(model.amount.to_string())),
-            (
-                "init_request_norito_base64",
-                string_value(BASE64_STANDARD.encode(
-                    norito::to_bytes(&model.init_request).expect("encode Kagemusha init request"),
-                )),
-            ),
-            (
-                "topup_init_request_norito_base64",
-                string_value(BASE64_STANDARD.encode(
-                    norito::to_bytes(&model.init_request).expect("encode Kagemusha init request"),
-                )),
-            ),
-        ] {
-            let mut request = kagemusha_topup_parsed_request(&model);
-            insert_field(&mut request.value, field, value);
-            assert_eq!(
-                validation_code(parse_kagemusha_recursive_topup_request(
-                    &request,
-                    &model.init_request.record_bundle.bundle.chain_id
-                )),
-                "OFFLINE_KAGEMUSHA_TOPUP_RETIRED_FIELD",
-                "{field} must remain retired for top-up route parsing"
-            );
-        }
-    }
-
-    #[test]
-    fn offline_v2_kagemusha_topup_rejects_raw_init_archive_in_canonical_field() {
-        let model = kagemusha_abi6_topup_request_model();
-        let mut request = kagemusha_topup_parsed_request(&model);
-        insert_field(
-            &mut request.value,
-            "topup_request_norito_base64",
-            string_value(BASE64_STANDARD.encode(
-                norito::to_bytes(&model.init_request).expect("encode Kagemusha init request"),
-            )),
-        );
-
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_topup_request(
-                &request,
-                &model.init_request.record_bundle.bundle.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_TOPUP_INVALID"
-        );
-    }
-
-    #[test]
-    fn offline_v2_kagemusha_topup_rejects_context_mismatches() {
-        let model = kagemusha_abi6_topup_request_model();
-
-        let mut account_request = kagemusha_topup_parsed_request(&model);
-        account_request.account_id =
-            AccountId::new(checked_seed_keypair(0x45).public_key().clone());
-        account_request.account_literal = account_request.account_id.to_string();
-        insert_field(
-            &mut account_request.value,
-            "account_id",
-            string_value(&account_request.account_literal),
-        );
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_topup_request(
-                &account_request,
-                &model.init_request.record_bundle.bundle.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_TOPUP_ACCOUNT_MISMATCH"
-        );
-
-        let mut asset_request = kagemusha_topup_parsed_request(&model);
-        asset_request.asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("offline", "universal").expect("domain id"),
-            "wrong".parse().expect("asset name"),
-        );
-        asset_request.asset_definition_literal = asset_request.asset_definition_id.to_string();
-        insert_field(
-            &mut asset_request.value,
-            "asset_definition_id",
-            string_value(&asset_request.asset_definition_literal),
-        );
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_topup_request(
-                &asset_request,
-                &model.init_request.record_bundle.bundle.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_TOPUP_ASSET_MISMATCH"
-        );
-
-        let chain_request = kagemusha_topup_parsed_request(&model);
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_topup_request(
-                &chain_request,
-                &iroha_data_model::ChainId::from("offline-v2-kagemusha-wrong-chain")
-            )),
-            "OFFLINE_KAGEMUSHA_TOPUP_CHAIN_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn offline_v2_kagemusha_topup_rejects_malformed_or_ambiguous_request_archive_field() {
-        let model = kagemusha_abi6_topup_request_model();
-        for (label, field_value, expected_code) in [
-            ("missing", None, "OFFLINE_KAGEMUSHA_TOPUP_REQUEST_REQUIRED"),
-            (
-                "blank",
-                Some(string_value("   ")),
-                "OFFLINE_KAGEMUSHA_TOPUP_REQUEST_REQUIRED",
-            ),
-            (
-                "typed",
-                Some(number_value(7)),
-                "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
-            ),
-            (
-                "padded",
-                Some(string_value(format!(
-                    " {} ",
-                    BASE64_STANDARD
-                        .encode(norito::to_bytes(&model).expect("encode Kagemusha top-up"))
-                ))),
-                "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
-            ),
-            (
-                "non-base64",
-                Some(string_value("not standard base64")),
-                "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
-            ),
-            (
-                "not-norito",
-                Some(string_value(
-                    BASE64_STANDARD.encode(b"not a norito archive"),
-                )),
-                "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
-            ),
-        ] {
-            let mut request = kagemusha_topup_parsed_request(&model);
-            match field_value {
-                Some(value) => {
-                    insert_field(&mut request.value, "topup_request_norito_base64", value);
-                }
-                None => remove_field(&mut request.value, "topup_request_norito_base64"),
-            }
-            assert_eq!(
-                validation_code(parse_kagemusha_recursive_topup_request(
-                    &request,
-                    &model.init_request.record_bundle.bundle.chain_id
-                )),
-                expected_code,
-                "{label} topup_request_norito_base64 must fail closed"
-            );
-        }
-    }
-
-    #[test]
-    fn offline_v2_kagemusha_topup_rejects_public_binding_tamper() {
-        let mut model = kagemusha_abi6_topup_request_model();
-        let one: Numeric = "1".parse().expect("numeric one");
-        model.amount = model
-            .amount
-            .checked_add(one)
-            .expect("tampered top-up amount");
-        let request = kagemusha_topup_parsed_request(&model);
-
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_topup_request(
-                &request,
-                &model.init_request.record_bundle.bundle.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_TOPUP_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_accepts_chain_admissible_norito_redemption() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
-        insert_field(
-            &mut request.value,
-            "redemption",
-            json_object(vec![("norito_base64", string_value(&encoded))]),
-        );
-
-        let redemption = parse_redemption(&request).expect("redemption parses");
-
-        assert_eq!(redemption.recipient, request.account_id);
-        assert_eq!(redemption.asset.account(), &request.account_id);
-        assert_eq!(redemption.asset.definition(), &request.asset_definition_id);
-        assert_eq!(redemption.input_nullifiers.len(), 1);
-        assert_eq!(
-            redemption.recursive_proof.public_inputs_hash,
-            redemption
-                .public_inputs_hash()
-                .expect("redemption public inputs hash")
-        );
-    }
-
-    #[test]
-    fn offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request() {
-        let model = kagemusha_abi7_redeem_request_model();
-        let mut request = kagemusha_redeem_parsed_request(&model);
-        let encoded =
-            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
-        insert_field(
-            &mut request.value,
-            "redeem_request_norito_base64",
-            string_value(&encoded),
-        );
-
-        let parsed =
-            parse_kagemusha_recursive_redeem_request(&request, &model.bundle.accumulator.chain_id)
-                .expect("Kagemusha redeem request parses");
-
-        assert_eq!(parsed.recipient, request.account_id);
-        assert_eq!(parsed.bundle.accumulator.asset, request.asset_definition_id);
-        assert_eq!(parsed.public_amount, model.public_amount);
-    }
-
-    #[test]
-    fn offline_v2_notes_redeem_rejects_compact_token_without_recursive_redeem_request() {
-        let model = kagemusha_abi7_redeem_request_model();
-        let mut request = kagemusha_redeem_parsed_request(&model);
-        insert_field(
-            &mut request.value,
-            "compact_payment_token_norito_base64",
-            string_value("AAAA"),
-        );
-        insert_field(
-            &mut request.value,
-            "projection_verifier_record_norito_base64",
-            string_value("AAAA"),
-        );
-
-        assert!(has_kagemusha_redeem_payload(&request.value));
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_REQUEST_REQUIRED"
-        );
-    }
-
-    #[test]
-    fn offline_v2_notes_redeem_rejects_retired_redemption_smuggled_with_kagemusha_marker() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
-        insert_field(
-            &mut request.value,
-            "redemption",
-            json_object(vec![("norito_base64", string_value(&encoded))]),
-        );
-        insert_field(
-            &mut request.value,
-            "compact_payment_token_norito_base64",
-            string_value("AAAA"),
-        );
-        assert!(parse_redemption(&request).is_ok());
-        assert!(has_kagemusha_redeem_payload(&request.value));
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &request,
-                &iroha_data_model::ChainId::from("offline-v2-kagemusha-smuggling")
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_norito_redemption_unknown_field() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
-        insert_field(
-            &mut request.value,
-            "redemption",
-            json_object(vec![
-                ("norito_base64", string_value(&encoded)),
-                ("debug_trace", string_value("must-not-be-ignored")),
-            ]),
-        );
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn offline_v2_notes_redeem_rejects_retired_fields_with_kagemusha_archive() {
-        let model = kagemusha_abi7_redeem_request_model();
-        let encoded =
-            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
-        for field in [
-            "redemption",
-            "input_nullifiers",
-            "sender_key_certificate",
-            "recursive_proof",
-        ] {
-            let mut request = kagemusha_redeem_parsed_request(&model);
-            insert_field(
-                &mut request.value,
-                "redeem_request_norito_base64",
-                string_value(&encoded),
-            );
-            insert_field(&mut request.value, field, Value::Null);
-            assert_eq!(
-                validation_code(parse_kagemusha_recursive_redeem_request(
-                    &request,
-                    &model.bundle.accumulator.chain_id
-                )),
-                "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD"
-            );
-        }
-    }
-
-    #[test]
-    fn offline_v2_notes_redeem_rejects_auxiliary_kagemusha_fields_with_redeem_archive() {
-        let model = kagemusha_abi7_redeem_request_model();
-        let encoded =
-            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
-        for field in [
-            "compact_payment_token_norito_base64",
-            "projection_verifier_record_norito_base64",
-        ] {
-            let auxiliary_field_values =
-                [string_value("AAAA"), Value::Null, Value::Array(Vec::new())];
-            for field_value in auxiliary_field_values {
-                let mut request = kagemusha_redeem_parsed_request(&model);
-                insert_field(
-                    &mut request.value,
-                    "redeem_request_norito_base64",
-                    string_value(&encoded),
-                );
-                insert_field(&mut request.value, field, field_value);
-                assert_eq!(
-                    validation_code(parse_kagemusha_recursive_redeem_request(
-                        &request,
-                        &model.bundle.accumulator.chain_id
-                    )),
-                    "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn offline_v2_notes_redeem_rejects_present_but_malformed_kagemusha_fields() {
-        let model = kagemusha_abi7_redeem_request_model();
-        let mut blank_redeem_request = kagemusha_redeem_parsed_request(&model);
-        insert_field(
-            &mut blank_redeem_request.value,
-            "redeem_request_norito_base64",
-            string_value("   "),
-        );
-        assert!(has_kagemusha_redeem_payload(&blank_redeem_request.value));
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &blank_redeem_request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_REQUEST_REQUIRED"
-        );
-
-        let mut typed_redeem_request = kagemusha_redeem_parsed_request(&model);
-        insert_field(
-            &mut typed_redeem_request.value,
-            "redeem_request_norito_base64",
-            number_value(7),
-        );
-        assert!(has_kagemusha_redeem_payload(&typed_redeem_request.value));
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &typed_redeem_request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_INVALID"
-        );
-
-        let mut typed_compact_request = kagemusha_redeem_parsed_request(&model);
-        insert_field(
-            &mut typed_compact_request.value,
-            "compact_payment_token_norito_base64",
-            number_value(7),
-        );
-        assert!(has_kagemusha_redeem_payload(&typed_compact_request.value));
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &typed_compact_request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_REQUEST_REQUIRED"
-        );
-
-        let mut padded_redeem_request = kagemusha_redeem_parsed_request(&model);
-        let encoded =
-            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
-        insert_field(
-            &mut padded_redeem_request.value,
-            "redeem_request_norito_base64",
-            string_value(format!(" {encoded} ")),
-        );
-        assert!(has_kagemusha_redeem_payload(&padded_redeem_request.value));
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &padded_redeem_request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_INVALID"
-        );
-    }
-
-    #[test]
-    fn offline_v2_notes_redeem_rejects_kagemusha_recipient_mismatch() {
-        let model = kagemusha_abi7_redeem_request_model();
-        let mut request = kagemusha_redeem_parsed_request(&model);
-        request.account_id = AccountId::new(checked_seed_keypair(0x45).public_key().clone());
-        let encoded =
-            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
-        insert_field(
-            &mut request.value,
-            "redeem_request_norito_base64",
-            string_value(&encoded),
-        );
-
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_ACCOUNT_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn offline_v2_notes_redeem_rejects_malformed_kagemusha_archive() {
-        let model = kagemusha_abi7_redeem_request_model();
-        let mut request = kagemusha_redeem_parsed_request(&model);
-        insert_field(
-            &mut request.value,
-            "redeem_request_norito_base64",
-            string_value("not standard base64"),
-        );
-
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_INVALID"
-        );
-
-        insert_field(
-            &mut request.value,
-            "redeem_request_norito_base64",
-            string_value(BASE64_STANDARD.encode(b"not a norito archive")),
-        );
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_INVALID"
-        );
-    }
-
-    #[test]
-    fn offline_v2_notes_redeem_rejects_kagemusha_optional_echo_field_shapes() {
-        let model = kagemusha_abi7_redeem_request_model();
-        let encoded =
-            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
-        for amount_value in [
-            string_value(""),
-            string_value(format!(" {} ", model.public_amount)),
-            string_value(format!("+{}", model.public_amount)),
-            string_value(format!("0{}", model.public_amount)),
-            string_value(format!("{}.", model.public_amount)),
-            number_value(7),
-        ] {
-            let mut request = kagemusha_redeem_parsed_request(&model);
-            insert_field(&mut request.value, "amount", amount_value);
-            insert_field(
-                &mut request.value,
-                "redeem_request_norito_base64",
-                string_value(&encoded),
-            );
-            assert_eq!(
-                validation_code(parse_kagemusha_recursive_redeem_request(
-                    &request,
-                    &model.bundle.accumulator.chain_id
-                )),
-                "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH"
-            );
-        }
-
-        let expected_source =
-            Hash::prehashed(model.bundle.accumulator.current_note.note_commitment).to_string();
-        for source_value in [
-            string_value(""),
-            string_value(format!(" {expected_source} ")),
-            number_value(7),
-        ] {
-            let mut request = kagemusha_redeem_parsed_request(&model);
-            insert_field(&mut request.value, "source_note_commitment", source_value);
-            insert_field(
-                &mut request.value,
-                "redeem_request_norito_base64",
-                string_value(&encoded),
-            );
-            assert_eq!(
-                validation_code(parse_kagemusha_recursive_redeem_request(
-                    &request,
-                    &model.bundle.accumulator.chain_id
-                )),
-                "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH"
-            );
-        }
-    }
-
-    #[test]
-    fn offline_v2_notes_redeem_rejects_kagemusha_context_mismatches() {
-        let model = kagemusha_abi7_redeem_request_model();
-        let encoded =
-            BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode Kagemusha redeem"));
-
-        let mut chain_request = kagemusha_redeem_parsed_request(&model);
-        insert_field(
-            &mut chain_request.value,
-            "redeem_request_norito_base64",
-            string_value(&encoded),
-        );
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &chain_request,
-                &iroha_data_model::ChainId::from("offline-v2-kagemusha-wrong-chain")
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH"
-        );
-
-        let mut asset_request = kagemusha_redeem_parsed_request(&model);
-        asset_request.asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("offline", "universal").expect("domain id"),
-            "wrong".parse().expect("asset name"),
-        );
-        insert_field(
-            &mut asset_request.value,
-            "redeem_request_norito_base64",
-            string_value(&encoded),
-        );
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &asset_request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_ASSET_MISMATCH"
-        );
-
-        let mut amount_request = kagemusha_redeem_parsed_request(&model);
-        insert_field(&mut amount_request.value, "amount", string_value("1"));
-        insert_field(
-            &mut amount_request.value,
-            "redeem_request_norito_base64",
-            string_value(&encoded),
-        );
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &amount_request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH"
-        );
-
-        let mut source_request = kagemusha_redeem_parsed_request(&model);
-        insert_field(
-            &mut source_request.value,
-            "source_note_commitment",
-            string_value(Hash::prehashed([0x5A; 32]).to_string()),
-        );
-        insert_field(
-            &mut source_request.value,
-            "redeem_request_norito_base64",
-            string_value(&encoded),
-        );
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &source_request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn offline_v2_notes_redeem_rejects_kagemusha_public_binding_tamper() {
-        let mut model = kagemusha_abi7_redeem_request_model();
-        model.public_amount = model
-            .public_amount
-            .checked_add(1)
-            .expect("tampered public amount");
-        let mut request = kagemusha_redeem_parsed_request(&model);
-        let encoded = BASE64_STANDARD
-            .encode(norito::to_bytes(&model).expect("encode tampered Kagemusha redeem"));
-        insert_field(
-            &mut request.value,
-            "redeem_request_norito_base64",
-            string_value(&encoded),
-        );
-
-        assert_eq!(
-            validation_code(parse_kagemusha_recursive_redeem_request(
-                &request,
-                &model.bundle.accumulator.chain_id
-            )),
-            "OFFLINE_KAGEMUSHA_REDEEM_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_norito_redemption_surrounding_whitespace() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
-        insert_field(
-            &mut request.value,
-            "redemption",
-            json_object(vec![(
-                "norito_base64",
-                string_value(format!("\n{encoded}\t")),
-            )]),
-        );
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_stale_fixture_certificate_version() {
-        let mut request = fixture_redeem_request();
-        let mut model = fixture_redeem_model();
-        model.sender_key_certificate.version = OFFLINE_NOTE_KEY_CERTIFICATE_VERSION
-            .checked_add(1)
-            .expect("stale certificate version");
-        model.recursive_proof.public_inputs_hash =
-            model.public_inputs_hash().expect("public inputs hash");
-        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
-        insert_field(
-            &mut request.value,
-            "redemption",
-            json_object(vec![("norito_base64", string_value(&encoded))]),
-        );
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_accepts_structured_redemption_json() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        insert_field(&mut request.value, "redemption", redemption_json(&model));
-
-        let parsed = parse_redemption(&request).expect("structured redemption parses");
-
-        assert_eq!(parsed, model);
-    }
-
-    #[test]
-    fn redeem_route_accepts_structured_redemption_sdk_identity_fields() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        insert_field(
-            &mut redemption,
-            "recipient_account_id",
-            string_value(&request.account_literal),
-        );
-        insert_field(
-            &mut redemption,
-            "asset_definition_id",
-            string_value(&request.asset_definition_literal),
-        );
-        insert_field(&mut request.value, "redemption", redemption);
-
-        let parsed = parse_redemption(&request).expect("SDK structured redemption parses");
-
-        assert_eq!(parsed, model);
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_redemption_retired_aliases() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        rename_field(&mut redemption, "sender_key_certificate", "key_certificate");
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let proof = redemption
-            .get_mut("recursive_proof")
-            .expect("recursive proof");
-        rename_field(proof, "verifier_key_id", "verifier_key_name");
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let proof = redemption
-            .get_mut("recursive_proof")
-            .expect("recursive proof");
-        rename_field(proof, "public_inputs_hash_hex", "public_inputs_hash");
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_recursive_proof_retired_backend_aliases() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let proof = redemption
-            .get_mut("recursive_proof")
-            .expect("recursive proof");
-        let backend = proof.get("backend").expect("backend").clone();
-        remove_field(proof, "backend");
-        insert_field(proof, "verifier_key_backend", backend.clone());
-        insert_field(proof, "proof_backend", backend);
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_recursive_proof_missing_backend() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let proof = redemption
-            .get_mut("recursive_proof")
-            .expect("recursive proof");
-        remove_field(proof, "backend");
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_accepts_issuer_key_certificate_json_envelope() {
-        let (issuer, _) = sample_issuer();
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let assertion_key = sample_p256_assertion_key();
-        let public_key = decode_canonical_base64(
-            &request.offline_public_key,
-            "offline_public_key",
-            "OFFLINE_V2_REDEMPTION_INVALID",
-        )
-        .expect("fixture offline public key");
-        let attestation = VerifiedDeviceAttestation {
-            platform: "ios-appattest".to_string(),
-            key_id: "issuer-envelope-key".to_string(),
-            public_key,
-            public_key_base64: request.offline_public_key.clone(),
-            assertion_scheme: "apple-appattest-counter-v1".to_string(),
-            assertion_key_algorithm: "app-attest-p256".to_string(),
-            assertion_public_key: assertion_key.clone(),
-            assertion_public_key_base64: BASE64_STANDARD.encode(&assertion_key),
-            assertion_usage_count_limit: None,
-        };
-        let certificate =
-            build_key_certificate(&issuer, &request, &attestation, NOW_MS).expect("certificate");
-        let mut redemption = redemption_json(&model);
-        insert_field(&mut redemption, "sender_key_certificate", certificate);
-        insert_field(&mut request.value, "redemption", redemption);
-
-        let parsed = parse_redemption(&request).expect("issuer envelope certificate parses");
-
-        assert_eq!(parsed.sender_key_certificate.account_id, request.account_id);
-        assert_eq!(
-            parsed.sender_key_certificate.assertion_public_key,
-            assertion_key
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_redemption_unknown_field() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        insert_field(
-            &mut redemption,
-            "debug_trace",
-            string_value("must-not-be-ignored"),
-        );
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_redemption_nested_recipient_mismatch() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let other_account = AccountId::new(checked_seed_keypair(0x44).public_key().clone());
-        assert_ne!(other_account, request.account_id);
-        insert_field(
-            &mut redemption,
-            "recipient_account_id",
-            string_value(other_account.to_string()),
-        );
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_ACCOUNT_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_redemption_nested_asset_mismatch() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let other_asset = AssetDefinitionId::from_uuid_bytes([
-            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x46, 0x17, 0x88, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
-            0x1e, 0x1f,
-        ])
-        .expect("valid other asset id");
-        assert_ne!(other_asset, request.asset_definition_id);
-        insert_field(
-            &mut redemption,
-            "asset_definition_id",
-            string_value(other_asset.to_string()),
-        );
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_ASSET_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_redemption_hash_surrounding_whitespace() {
-        for field in ["source_note_commitment", "input_nullifiers"] {
-            let mut request = fixture_redeem_request();
-            let model = chain_admissible_fixture_redeem_model();
-            let mut redemption = redemption_json(&model);
-            if field == "source_note_commitment" {
-                let original = required_string(&redemption, field)
-                    .expect("source note commitment")
-                    .to_string();
-                insert_field(&mut redemption, field, string_value(format!(" {original}")));
-            } else {
-                let nullifiers = redemption
-                    .get_mut(field)
-                    .and_then(Value::as_array_mut)
-                    .expect("input nullifiers");
-                let original = nullifiers
-                    .first()
-                    .and_then(Value::as_str)
-                    .expect("input nullifier")
-                    .to_string();
-                nullifiers[0] = string_value(format!("{original}\n"));
-            }
-            insert_field(&mut request.value, "redemption", redemption);
-
-            assert_eq!(
-                validation_code(parse_redemption(&request)),
-                "OFFLINE_V2_REDEMPTION_INVALID",
-                "structured redemption field {field} must not be whitespace-normalized"
-            );
-        }
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_certificate_retired_alias() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let certificate = redemption
-            .get("sender_key_certificate")
-            .expect("sender key certificate")
-            .clone();
-        insert_field(&mut redemption, "key_certificate", certificate);
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_certificate_unknown_field() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let certificate = redemption
-            .get_mut("sender_key_certificate")
-            .expect("sender key certificate");
-        insert_field(
-            certificate,
-            "verifier_debug_trace",
-            string_value("must-not-be-ignored"),
-        );
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_certificate_surrounding_whitespace() {
-        for field in [
-            "platform",
-            "key_id",
-            "device_id",
-            "public_key",
-            "assertion_scheme",
-            "assertion_key_algorithm",
-            "assertion_public_key",
-            "issuer_signature_base64",
-        ] {
-            let mut request = fixture_redeem_request();
-            let model = chain_admissible_fixture_redeem_model();
-            let mut redemption = redemption_json(&model);
-            let certificate = redemption
-                .get_mut("sender_key_certificate")
-                .expect("sender key certificate");
-            let original = required_string(certificate, field)
-                .unwrap_or_else(|_| panic!("missing certificate field {field}"))
-                .to_string();
-            insert_field(certificate, field, string_value(format!(" {original}\t")));
-            insert_field(&mut request.value, "redemption", redemption);
-
-            assert_eq!(
-                validation_code(parse_redemption(&request)),
-                "OFFLINE_V2_REDEMPTION_INVALID",
-                "key certificate field {field} must not be whitespace-normalized"
-            );
-        }
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_recursive_proof_unknown_field() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let proof = redemption
-            .get_mut("recursive_proof")
-            .expect("recursive proof");
-        insert_field(proof, "debug_trace", string_value("must-not-be-ignored"));
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_recursive_proof_surrounding_whitespace() {
-        for field in [
-            "backend",
-            "verifier_key_id",
-            "public_inputs_hash_hex",
-            "proof_bytes_base64",
-        ] {
-            let mut request = fixture_redeem_request();
-            let model = chain_admissible_fixture_redeem_model();
-            let mut redemption = redemption_json(&model);
-            let proof = redemption
-                .get_mut("recursive_proof")
-                .expect("recursive proof");
-            if proof.get(field).is_none() {
-                insert_field(proof, "backend", string_value("halo2/ipa"));
-            }
-            let original = required_string(proof, field)
-                .unwrap_or_else(|_| panic!("missing recursive proof field {field}"))
-                .to_string();
-            insert_field(proof, field, string_value(format!("\t{original}")));
-            insert_field(&mut request.value, "redemption", redemption);
-
-            assert_eq!(
-                validation_code(parse_redemption(&request)),
-                "OFFLINE_V2_REDEMPTION_INVALID",
-                "recursive proof field {field} must not be whitespace-normalized"
-            );
-        }
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_recursive_proof_retired_verifier_alias() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let proof = redemption
-            .get_mut("recursive_proof")
-            .expect("recursive proof");
-        let verifier_key_id = proof
-            .get("verifier_key_id")
-            .expect("verifier key id")
-            .clone();
-        insert_field(proof, "verifier_key_name", verifier_key_id);
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_recursive_proof_retired_backend_alias_mismatch() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let proof = redemption
-            .get_mut("recursive_proof")
-            .expect("recursive proof");
-        let backend = proof.get("backend").expect("backend").clone();
-        insert_field(proof, "verifier_key_backend", backend);
-        insert_field(proof, "proof_backend", string_value("halo2/kzg"));
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_recursive_proof_retired_public_input_alias() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let proof = redemption
-            .get_mut("recursive_proof")
-            .expect("recursive proof");
-        let public_inputs_hash = proof
-            .get("public_inputs_hash_hex")
-            .expect("public inputs hash")
-            .clone();
-        insert_field(proof, "public_inputs_hash", public_inputs_hash);
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_retired_structured_certificate_json_version_two() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let Value::Object(redemption_fields) = &mut redemption else {
-            panic!("expected redemption object");
-        };
-        let certificate = redemption_fields
-            .get_mut("sender_key_certificate")
-            .expect("sender key certificate");
-        insert_field(certificate, "version", number_value(2));
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_ios_certificate_with_usage_limit() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let certificate = redemption
-            .get_mut("sender_key_certificate")
-            .expect("sender key certificate");
-        insert_field(certificate, "assertion_usage_count_limit", number_value(1));
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_android_certificate_without_usage_limit() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let certificate = redemption
-            .get_mut("sender_key_certificate")
-            .expect("sender key certificate");
-        insert_field(certificate, "platform", string_value("android-keymint"));
-        insert_field(
-            certificate,
-            "assertion_scheme",
-            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
-        );
-        insert_field(
-            certificate,
-            "assertion_key_algorithm",
-            string_value("ecdsa-p256-sha256"),
-        );
-        insert_field(certificate, "assertion_usage_count_limit", Value::Null);
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_certificate_profile_splice() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let certificate = redemption
-            .get_mut("sender_key_certificate")
-            .expect("sender key certificate");
-        insert_field(certificate, "platform", string_value("ios-appattest"));
-        insert_field(
-            certificate,
-            "assertion_scheme",
-            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
-        );
-        insert_field(
-            certificate,
-            "assertion_key_algorithm",
-            string_value("ecdsa-p256-sha256"),
-        );
-        insert_field(certificate, "assertion_usage_count_limit", number_value(1));
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_structured_certificate_off_curve_assertion_key() {
-        let mut request = fixture_redeem_request();
-        let model = chain_admissible_fixture_redeem_model();
-        let mut redemption = redemption_json(&model);
-        let certificate = redemption
-            .get_mut("sender_key_certificate")
-            .expect("sender key certificate");
-        insert_field(
-            certificate,
-            "assertion_public_key",
-            string_value(BASE64_STANDARD.encode(off_curve_p256_assertion_key())),
-        );
-        insert_field(&mut request.value, "redemption", redemption);
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_norito_certificate_profile_mismatch() {
-        let mut request = fixture_redeem_request();
-        let mut model = chain_admissible_fixture_redeem_model();
-        model.sender_key_certificate.assertion_usage_count_limit = Some(1);
-        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
-        insert_field(
-            &mut request.value,
-            "redemption",
-            json_object(vec![("norito_base64", string_value(&encoded))]),
-        );
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_INVALID"
-        );
-    }
-
-    #[test]
-    fn redeem_route_rejects_redemption_for_different_authenticated_account() {
-        let mut request = fixture_redeem_request();
-        request.account_id = AccountId::new(checked_seed_keypair(0x44).public_key().clone());
-        let model = chain_admissible_fixture_redeem_model();
-        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
-        insert_field(
-            &mut request.value,
-            "redemption",
-            json_object(vec![("norito_base64", string_value(&encoded))]),
-        );
-
-        assert_eq!(
-            validation_code(parse_redemption(&request)),
-            "OFFLINE_V2_REDEMPTION_ACCOUNT_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn verified_attestation_canonicalizes_certificate_key_bytes() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let request = sample_request(&verifier, note_key, assertion_key.clone());
-
-        let attestation =
-            verify_device_attestation(&issuer, &request, NOW_MS).expect("valid attestation");
-        assert_eq!(attestation.public_key, note_key);
-        assert_eq!(
-            attestation.public_key_base64,
-            BASE64_STANDARD.encode(note_key)
-        );
-        assert_eq!(attestation.assertion_public_key, assertion_key);
-        assert_eq!(
-            attestation.assertion_public_key_base64,
-            BASE64_STANDARD.encode(&assertion_key)
-        );
-
-        let certificate =
-            build_key_certificate(&issuer, &request, &attestation, NOW_MS).expect("certificate");
-        assert_eq!(
-            certificate.get("version").and_then(Value::as_u64),
-            Some(u64::from(OFFLINE_NOTE_KEY_CERTIFICATE_VERSION))
-        );
-        assert_eq!(
-            optional_string(&certificate, "public_key"),
-            Some(BASE64_STANDARD.encode(note_key).as_str())
-        );
-        assert_eq!(
-            optional_string(&certificate, "assertion_public_key"),
-            Some(BASE64_STANDARD.encode(&assertion_key).as_str())
-        );
-        assert_eq!(
-            certificate.get("one_use").and_then(Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn key_certificate_placeholder_signature_is_checked_nonzero() {
-        let signature = offline_v2_key_certificate_signature_placeholder();
-        let payload = signature.payload();
-
-        assert_eq!(payload, OFFLINE_V2_KEY_CERTIFICATE_SIGNATURE_PLACEHOLDER);
-        assert!(!payload.iter().all(|byte| *byte == 0));
-    }
-
-    #[test]
-    fn build_key_certificate_rejects_padded_ios_metadata() {
-        for field in ["ios_team_id", "ios_bundle_id", "ios_environment"] {
-            let (issuer, verifier) = sample_issuer();
-            let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-            insert_field(&mut request.device_binding, field, string_value(" value "));
-            let attestation =
-                verify_device_attestation(&issuer, &request, NOW_MS).expect("attestation");
-
-            assert_eq!(
-                validation_code(build_key_certificate(
-                    &issuer,
-                    &request,
-                    &attestation,
-                    NOW_MS
-                )),
-                "OFFLINE_V2_INVALID_DEVICE_BINDING",
-                "iOS metadata field {field} must be exact when present"
-            );
-        }
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_wrong_verifier_signature() {
-        let (mut issuer, verifier) = sample_issuer();
-        let request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        issuer.attestation_verifier_public_key = checked_seed_keypair(0x23).public_key().clone();
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_request_device_binding_surrounding_whitespace() {
-        for (field, value, expected_code) in [
-            (
-                "attestation_report_base64",
-                BASE64_STANDARD.encode(REPORT_BYTES),
-                "OFFLINE_V2_INVALID_ATTESTATION_REPORT",
-            ),
-            (
-                "assertion_public_key",
-                hex::encode(sample_p256_assertion_key()),
-                "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
-            ),
-            (
-                "platform",
-                "ios-appattest".to_string(),
-                "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-            ),
-            (
-                "assertion_scheme",
-                "apple-appattest-counter-v1".to_string(),
-                "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-            ),
-            (
-                "assertion_key_algorithm",
-                "app-attest-p256".to_string(),
-                "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-            ),
-        ] {
-            let (issuer, verifier) = sample_issuer();
-            let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-            insert_field(
-                &mut request.device_binding,
-                field,
-                string_value(format!("\t{value} ")),
-            );
-
-            assert_eq!(
-                validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-                expected_code,
-                "device_binding field {field} must be exact when present"
-            );
-        }
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_short_signature_base64() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(
-            &mut receipt,
-            "signature_base64",
-            string_value(BASE64_STANDARD.encode([0_u8; 63])),
-        );
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_all_zero_signature_base64() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(
-            &mut receipt,
-            "signature_base64",
-            string_value(BASE64_STANDARD.encode([0_u8; 64])),
-        );
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_unsupported_version() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "version", number_value(2));
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_unknown_field() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(
-            &mut receipt,
-            "debug_verifier_trace",
-            string_value("must-not-be-signed-into-receipts"),
-        );
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_surrounding_whitespace() {
-        for field in [
-            "account_id",
-            "device_id",
-            "platform",
-            "attestation_key_id",
-            "offline_public_key_base64",
-        ] {
-            let (issuer, verifier) = sample_issuer();
-            let note_key = [0xA5; 32];
-            let assertion_key = sample_p256_assertion_key();
-            let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-            let mut receipt = signed_attestation_receipt(
-                &verifier,
-                &request.account_literal,
-                &request.device_id,
-                &note_key,
-                &assertion_key,
-                true,
-            );
-            let original = required_string(&receipt, field)
-                .unwrap_or_else(|_| panic!("missing receipt field {field}"))
-                .to_string();
-            insert_field(&mut receipt, field, string_value(format!("\t{original}\n")));
-            let receipt = resign_attestation_receipt(&verifier, receipt);
-            replace_attestation_receipt(&mut request, receipt);
-
-            assert_eq!(
-                validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-                "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID",
-                "signed receipt field {field} must not be whitespace-normalized"
-            );
-        }
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_account_replay() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let receipt = signed_attestation_receipt(
-            &verifier,
-            "attacker-account",
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_ACCOUNT_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_device_replay() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            "attacker-device",
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_DEVICE_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_note_key_replay() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let replayed_note_key = [0xC7; 32];
-        let receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &replayed_note_key,
-            &assertion_key,
-            true,
-        );
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_KEY_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_assertion_key_replay() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let replayed_assertion_key = alternate_p256_assertion_key();
-        let receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &replayed_assertion_key,
-            true,
-        );
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ASSERTION_PUBLIC_KEY_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_retired_assertion_public_key_aliases() {
-        for field in ["app_attest_public_key_base64", "device_public_key"] {
-            let (issuer, verifier) = sample_issuer();
-            let assertion_key = sample_p256_assertion_key();
-            let mut request = sample_request(&verifier, [0xA5; 32], assertion_key.clone());
-            insert_device_binding_field(
-                &mut request,
-                field,
-                string_value(BASE64_STANDARD.encode(assertion_key)),
-            );
-
-            assert_eq!(
-                validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-                "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
-                "retired assertion key alias {field} must be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_malformed_assertion_public_key() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_public_key_base64",
-            string_value("!!!!"),
-        );
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_off_curve_assertion_public_key() {
-        let (issuer, verifier) = sample_issuer();
-        let request = sample_request(&verifier, [0xA5; 32], off_curve_p256_assertion_key());
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY"
-        );
-    }
-
-    #[test]
-    fn validate_p256_assertion_public_key_rejects_all_zero_coordinate_material() {
-        assert_eq!(
-            validation_code(validate_p256_assertion_public_key(
-                &off_curve_p256_assertion_key(),
-            )),
-            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_accepts_signed_canonical_ios_profile() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "platform", string_value("ios-appattest"));
-        insert_field(
-            &mut receipt,
-            "assertion_scheme",
-            string_value("apple-appattest-counter-v1"),
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_key_algorithm",
-            string_value("app-attest-p256"),
-        );
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        let attestation =
-            verify_device_attestation(&issuer, &request, NOW_MS).expect("canonical iOS profile");
-        assert_eq!(attestation.platform, "ios-appattest");
-        assert_eq!(attestation.assertion_scheme, "apple-appattest-counter-v1");
-        assert_eq!(attestation.assertion_key_algorithm, "app-attest-p256");
-    }
-
-    #[test]
-    fn attestation_receipt_accepts_canonical_ios_receipt_with_ios_binding_platform() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        insert_device_binding_field(&mut request, "platform", string_value("ios"));
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "platform", string_value("ios-appattest"));
-        insert_field(
-            &mut receipt,
-            "assertion_scheme",
-            string_value("apple-appattest-counter-v1"),
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_key_algorithm",
-            string_value("app-attest-p256"),
-        );
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        let attestation =
-            verify_device_attestation(&issuer, &request, NOW_MS).expect("iOS binding platform");
-        assert_eq!(attestation.platform, "ios-appattest");
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_retired_ios_binding_platform_aliases() {
-        for platform in ["ios-app-attest", "ios-appattest"] {
-            let (issuer, verifier) = sample_issuer();
-            let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-            insert_device_binding_field(&mut request, "platform", string_value(platform));
-
-            assert_eq!(
-                validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-                "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
-                "retired binding platform {platform} must be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_missing_device_binding_platform() {
-        let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        remove_field(&mut request.device_binding, "platform");
-        insert_field(
-            &mut request.value,
-            "device_binding",
-            request.device_binding.clone(),
-        );
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_accepts_signed_android_keymint_profile() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        insert_device_binding_field(&mut request, "platform", string_value("android"));
-        insert_field(
-            &mut request.device_binding,
-            "assertion_usage_count_limit",
-            number_value(1),
-        );
-        insert_field(
-            &mut request.value,
-            "device_binding",
-            request.device_binding.clone(),
-        );
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "platform", string_value("android-keymint"));
-        insert_field(
-            &mut receipt,
-            "assertion_scheme",
-            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_key_algorithm",
-            string_value("ecdsa-p256-sha256"),
-        );
-        insert_field(&mut receipt, "assertion_usage_count_limit", number_value(1));
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        let attestation = verify_device_attestation(&issuer, &request, NOW_MS)
-            .expect("canonical Android KeyMint profile");
-        assert_eq!(attestation.platform, "android-keymint");
-        assert_eq!(
-            attestation.assertion_scheme,
-            "android-keymint-ecdsa-p256-usage-limit-v1"
-        );
-        assert_eq!(attestation.assertion_key_algorithm, "ecdsa-p256-sha256");
-        assert_eq!(attestation.assertion_usage_count_limit, Some(1));
-        let certificate =
-            build_chain_certificate(&issuer, &request, &attestation).expect("chain certificate");
-        assert_eq!(certificate.assertion_usage_count_limit, Some(1));
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_canonical_android_receipt_with_keymint_binding_platform() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        insert_device_binding_field(&mut request, "platform", string_value("android-keymint"));
-        insert_field(
-            &mut request.device_binding,
-            "assertion_usage_count_limit",
-            number_value(1),
-        );
-        insert_field(
-            &mut request.value,
-            "device_binding",
-            request.device_binding.clone(),
-        );
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "platform", string_value("android-keymint"));
-        insert_field(
-            &mut receipt,
-            "assertion_scheme",
-            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_key_algorithm",
-            string_value("ecdsa-p256-sha256"),
-        );
-        insert_field(&mut receipt, "assertion_usage_count_limit", number_value(1));
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_retired_ios_app_attest_profile() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "platform", string_value("ios-app-attest"));
-        insert_field(
-            &mut receipt,
-            "assertion_scheme",
-            string_value("apple-app-attest-v1"),
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_key_algorithm",
-            string_value("ecdsa-p256-sha256"),
-        );
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_canonical_ios_profile_with_usage_limit() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        insert_field(
-            &mut request.device_binding,
-            "assertion_usage_count_limit",
-            number_value(1),
-        );
-        insert_field(
-            &mut request.value,
-            "device_binding",
-            request.device_binding.clone(),
-        );
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "platform", string_value("ios-appattest"));
-        insert_field(
-            &mut receipt,
-            "assertion_scheme",
-            string_value("apple-appattest-counter-v1"),
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_key_algorithm",
-            string_value("app-attest-p256"),
-        );
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_unsupported_platform() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "platform", string_value("browser-webauthn"));
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_profile_splice() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "platform", string_value("ios-appattest"));
-        insert_field(
-            &mut receipt,
-            "assertion_scheme",
-            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_key_algorithm",
-            string_value("ecdsa-p256-sha256"),
-        );
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_android_profile_without_usage_limit() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        insert_device_binding_field(&mut request, "platform", string_value("android"));
-        insert_field(
-            &mut request.device_binding,
-            "assertion_usage_count_limit",
-            number_value(1),
-        );
-        insert_field(
-            &mut request.value,
-            "device_binding",
-            request.device_binding.clone(),
-        );
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "platform", string_value("android-keymint"));
-        insert_field(
-            &mut receipt,
-            "assertion_scheme",
-            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_key_algorithm",
-            string_value("ecdsa-p256-sha256"),
-        );
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_android_request_missing_signed_usage_limit() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        insert_device_binding_field(&mut request, "platform", string_value("android"));
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "platform", string_value("android-keymint"));
-        insert_field(
-            &mut receipt,
-            "assertion_scheme",
-            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_key_algorithm",
-            string_value("ecdsa-p256-sha256"),
-        );
-        insert_field(&mut receipt, "assertion_usage_count_limit", number_value(1));
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_malformed_usage_limit() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        insert_device_binding_field(&mut request, "platform", string_value("android"));
-        insert_field(
-            &mut request.device_binding,
-            "assertion_usage_count_limit",
-            number_value(1),
-        );
-        insert_field(
-            &mut request.value,
-            "device_binding",
-            request.device_binding.clone(),
-        );
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(&mut receipt, "platform", string_value("android-keymint"));
-        insert_field(
-            &mut receipt,
-            "assertion_scheme",
-            string_value("android-keymint-ecdsa-p256-usage-limit-v1"),
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_key_algorithm",
-            string_value("ecdsa-p256-sha256"),
-        );
-        insert_field(
-            &mut receipt,
-            "assertion_usage_count_limit",
-            string_value("1"),
-        );
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_non_one_use_hardware() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            false,
-        );
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_NOT_ONE_USE"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_expired_signed_receipt() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let receipt = signed_attestation_receipt_with_validity(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-            REPORT_BYTES,
-            NOW_MS - 10_000,
-            NOW_MS - 1,
-        );
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_RECEIPT_EXPIRED"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_not_yet_valid_signed_receipt() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let receipt = signed_attestation_receipt_with_validity(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-            REPORT_BYTES,
-            NOW_MS + 1,
-            NOW_MS + 60_000,
-        );
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_RECEIPT_EXPIRED"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_inverted_signed_validity_window() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let receipt = signed_attestation_receipt_with_validity(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-            REPORT_BYTES,
-            NOW_MS - 1_000,
-            NOW_MS - 2_000,
-        );
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_RECEIPT_EXPIRED"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_report_hash_replay() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let receipt = signed_attestation_receipt_with_validity(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-            b"different-platform-attestation",
-            NOW_MS - 1_000,
-            NOW_MS + 60_000,
-        );
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_REPORT_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_malformed_report_hash() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(
-            &mut receipt,
-            "attestation_report_hash_hex",
-            string_value("not-hex"),
-        );
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_INVALID_ATTESTATION_REPORT_HASH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_signed_short_report_hash() {
-        let (issuer, verifier) = sample_issuer();
-        let note_key = [0xA5; 32];
-        let assertion_key = sample_p256_assertion_key();
-        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
-        let mut receipt = signed_attestation_receipt(
-            &verifier,
-            &request.account_literal,
-            &request.device_id,
-            &note_key,
-            &assertion_key,
-            true,
-        );
-        insert_field(
-            &mut receipt,
-            "attestation_report_hash_hex",
-            string_value("aa"),
-        );
-        let receipt = resign_attestation_receipt(&verifier, receipt);
-        replace_attestation_receipt(&mut request, receipt);
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_INVALID_ATTESTATION_REPORT_HASH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_mismatched_device_binding_profile() {
-        let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        insert_field(
-            &mut request.device_binding,
-            "assertion_scheme",
-            string_value("attacker-profile"),
-        );
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_rejects_non_one_assertion_usage_limit() {
-        let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        insert_field(
-            &mut request.device_binding,
-            "assertion_usage_count_limit",
-            number_value(2),
-        );
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_INVALID_ASSERTION_USAGE_LIMIT"
-        );
-    }
-
-    #[test]
-    fn attestation_receipt_is_required_before_one_use_certification() {
-        let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        let Value::Object(binding) = &mut request.device_binding else {
-            panic!("expected binding object");
-        };
-        binding.remove("attestation_receipt");
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_ATTESTATION_RECEIPT_REQUIRED"
-        );
-    }
-
-    #[test]
-    fn malformed_assertion_key_is_rejected_instead_of_falling_back() {
-        let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        insert_field(
-            &mut request.device_binding,
-            "assertion_public_key",
-            string_value("#"),
-        );
-
-        assert_eq!(
-            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
-            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY"
-        );
-    }
-
-    #[test]
-    fn issue_lineage_state_uses_signed_balance_and_rejects_tampering() {
-        let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        let lineage_id = "lineage-signed-balance";
-        let state = build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
-            .expect("lineage state");
-        insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
-        insert_field(&mut request.value, "lineage_state", state);
-
-        let verified =
-            verify_lineage_state(&issuer, &request, lineage_id, NOW_MS).expect("signed state");
-        assert_eq!(verified.balance.to_string(), "12");
-        assert_eq!(verified.revision, 3);
-
-        let state = request
-            .value
-            .get_mut("lineage_state")
-            .expect("lineage state");
-        insert_field(state, "balance", string_value("0"));
-        assert_eq!(
-            validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
-            "OFFLINE_V2_LINEAGE_STATE_HASH_MISMATCH"
-        );
-    }
-
-    #[test]
-    fn issue_lineage_state_rejects_unknown_field() {
-        let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        let lineage_id = "lineage-unknown-state-field";
-        let mut state =
-            build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
-                .expect("lineage state");
-        insert_field(
-            &mut state,
-            "debug_trace",
-            string_value("must-not-be-ignored"),
-        );
-        insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
-        insert_field(&mut request.value, "lineage_state", state);
-
-        assert_eq!(
-            validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
-            "OFFLINE_V2_INVALID_LINEAGE_STATE"
-        );
-    }
-
-    #[test]
-    fn issue_lineage_state_rejects_signed_surrounding_whitespace() {
-        for field in [
-            "lineage_id",
-            "account_id",
-            "device_id",
-            "offline_public_key",
-            "asset_definition_id",
-            "balance",
-            "locked_balance",
-            "server_state_hash",
-            "issuer_signature_base64",
-        ] {
-            let (issuer, verifier) = sample_issuer();
-            let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-            let lineage_id = "lineage-state-whitespace";
-            let mut state =
-                build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
-                    .expect("lineage state");
-            let original = required_string(&state, field)
-                .unwrap_or_else(|_| panic!("missing lineage_state field {field}"))
-                .to_string();
-            insert_field(&mut state, field, string_value(format!("\n{original}\t")));
-            insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
-            insert_field(&mut request.value, "lineage_state", state);
-
-            assert_eq!(
-                validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
-                "OFFLINE_V2_INVALID_LINEAGE_STATE",
-                "lineage_state field {field} must not be whitespace-normalized"
-            );
-        }
-    }
-
-    #[test]
-    fn issue_lineage_state_rejects_short_signature_base64() {
-        let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        let lineage_id = "lineage-state-short-signature";
-        let mut state =
-            build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
-                .expect("lineage state");
-        insert_field(
-            &mut state,
-            "issuer_signature_base64",
-            string_value(BASE64_STANDARD.encode([0_u8; 63])),
-        );
-        insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
-        insert_field(&mut request.value, "lineage_state", state);
-
-        assert_eq!(
-            validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
-            "OFFLINE_V2_LINEAGE_STATE_SIGNATURE_INVALID"
-        );
-    }
-
-    #[test]
-    fn issue_lineage_authorization_rejects_unknown_field() {
-        let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        let lineage_id = "lineage-unknown-authorization-field";
-        let mut state =
-            build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
-                .expect("lineage state");
-        let authorization = state
-            .get_mut("authorization")
-            .expect("lineage authorization");
-        insert_field(
-            authorization,
-            "debug_trace",
-            string_value("must-not-be-ignored"),
-        );
-        insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
-        insert_field(&mut request.value, "lineage_state", state);
-
-        assert_eq!(
-            validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
-            "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION"
-        );
-    }
-
-    #[test]
-    fn issue_lineage_authorization_rejects_signed_surrounding_whitespace() {
-        for field in [
-            "authorization_id",
-            "lineage_id",
-            "account_id",
-            "verdict_id",
-            "max_balance",
-            "max_tx_value",
-            "issuer_signature_base64",
-        ] {
-            let (issuer, verifier) = sample_issuer();
-            let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-            let lineage_id = "lineage-authorization-whitespace";
-            let mut state =
-                build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
-                    .expect("lineage state");
-            let authorization = state
-                .get_mut("authorization")
-                .expect("lineage authorization");
-            let original = required_string(authorization, field)
-                .unwrap_or_else(|_| panic!("missing lineage authorization field {field}"))
-                .to_string();
-            insert_field(authorization, field, string_value(format!(" {original}\n")));
-            insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
-            insert_field(&mut request.value, "lineage_state", state);
-
-            assert_eq!(
-                validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
-                "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-                "lineage authorization field {field} must not be whitespace-normalized"
-            );
-        }
-    }
-
-    #[test]
-    fn issue_lineage_authorization_rejects_short_signature_base64() {
-        let (issuer, verifier) = sample_issuer();
-        let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        let lineage_id = "lineage-authorization-short-signature";
-        let mut state =
-            build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
-                .expect("lineage state");
-        let authorization = state
-            .get_mut("authorization")
-            .expect("lineage authorization");
-        insert_field(
-            authorization,
-            "issuer_signature_base64",
-            string_value(BASE64_STANDARD.encode([0_u8; 63])),
-        );
-        insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
-        insert_field(&mut request.value, "lineage_state", state);
-
-        assert_eq!(
-            validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
-            "OFFLINE_V2_LINEAGE_AUTHORIZATION_SIGNATURE_INVALID"
-        );
-    }
-
-    #[test]
-    fn issue_lineage_authorization_device_binding_rejects_surrounding_whitespace() {
-        for field in ["device_id", "offline_public_key"] {
-            let (issuer, verifier) = sample_issuer();
-            let mut request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-            let lineage_id = "lineage-authorization-device-binding-whitespace";
-            let mut state =
-                build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
-                    .expect("lineage state");
-            let authorization = state
-                .get_mut("authorization")
-                .expect("lineage authorization");
-            let device_binding = authorization
-                .get_mut("device_binding")
-                .expect("authorization device_binding");
-            let original = required_string(device_binding, field)
-                .unwrap_or_else(|_| panic!("missing authorization device_binding field {field}"))
-                .to_string();
-            insert_field(
-                device_binding,
-                field,
-                string_value(format!("\t{original} ")),
-            );
-            insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
-            insert_field(&mut request.value, "lineage_state", state);
-
-            assert_eq!(
-                validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
-                "OFFLINE_V2_INVALID_LINEAGE_AUTHORIZATION",
-                "lineage authorization device_binding field {field} must not be whitespace-normalized"
-            );
-        }
-    }
-
-    #[test]
-    fn refill_existing_lineage_accepts_signed_old_key_state() {
-        let (issuer, verifier) = sample_issuer();
-        let old_request = sample_request(&verifier, [0xA5; 32], sample_p256_assertion_key());
-        let lineage_id = "lineage-rekey";
-        let state = build_lineage_state(
-            &issuer,
-            &old_request,
-            lineage_id,
-            "20",
-            "0",
-            4,
-            NOW_MS,
-            None,
-        )
-        .expect("lineage state");
-        let mut new_request = sample_request(&verifier, [0xC7; 32], alternate_p256_assertion_key());
-        insert_field(&mut new_request.value, "lineage_state", state);
-
-        assert_eq!(
-            validation_code(verify_lineage_state(
-                &issuer,
-                &new_request,
-                lineage_id,
-                NOW_MS
-            )),
-            "OFFLINE_V2_LINEAGE_KEY_MISMATCH"
-        );
-        let verified = verify_existing_lineage_state(&issuer, &new_request, lineage_id, NOW_MS)
-            .expect("existing lineage state");
-        assert_eq!(verified.balance.to_string(), "20");
-        assert_eq!(verified.revision, 4);
-    }
-
-    #[test]
-    fn body_auth_rejects_x_iroha_auth_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            app_auth::HEADER_SIGNATURE,
-            axum::http::HeaderValue::from_static("x-iroha-signature"),
-        );
-
-        assert_eq!(
-            app_error_code(reject_x_iroha_auth_headers(&headers)),
-            "OFFLINE_V2_HEADER_AUTH_REJECTED"
-        );
-    }
-
-    #[test]
-    fn body_auth_rejects_non_exact_optional_device_header() {
-        let empty = HeaderMap::new();
-        assert_eq!(
-            optional_exact_header_string(&empty, "X-Device-Id").expect("missing header"),
-            None
-        );
-
-        let mut exact = HeaderMap::new();
-        exact.insert(
-            "X-Device-Id",
-            axum::http::HeaderValue::from_static("device-1"),
-        );
-        assert_eq!(
-            optional_exact_header_string(&exact, "X-Device-Id").expect("exact header"),
-            Some("device-1")
-        );
-
-        for value in [" device-1", "device-1 ", "   "] {
-            let mut headers = HeaderMap::new();
-            headers.insert("X-Device-Id", axum::http::HeaderValue::from_static(value));
-
-            assert_eq!(
-                validation_code(optional_exact_header_string(&headers, "X-Device-Id")),
-                "OFFLINE_V2_INVALID_HEADER",
-                "X-Device-Id header value `{value}` must be exact"
-            );
-        }
-    }
-
-    #[test]
-    fn body_auth_removes_only_top_level_proof_fields() {
-        let value = json_object(vec![
-            ("account_id", string_value("account-1")),
-            ("timestamp_ms", number_value(NOW_MS)),
-            ("nonce", string_value("nonce-1")),
-            ("signature_base64", string_value("top-level-signature")),
-            (
-                "device_binding",
-                json_object(vec![
-                    ("signature_base64", string_value("nested-signature")),
-                    ("witness_base64", string_value("nested-witness")),
-                ]),
-            ),
-        ]);
-
-        let (auth, unsigned_body) = extract_body_auth(&value).expect("body auth");
-
-        assert_eq!(auth.account_id, "account-1");
-        assert_eq!(auth.timestamp_ms, NOW_MS);
-        assert_eq!(auth.nonce, "nonce-1");
-        match auth.proof {
-            app_auth::CanonicalRequestBodyProof::SignatureBase64(signature) => {
-                assert_eq!(signature, "top-level-signature");
-            }
-            app_auth::CanonicalRequestBodyProof::WitnessBase64(_) => {
-                panic!("expected signature proof")
-            }
-        }
-        let unsigned: Value = json::from_slice(&unsigned_body).expect("unsigned json");
-        assert!(unsigned.get("signature_base64").is_none());
-        assert!(unsigned.get("witness_base64").is_none());
-        let nested = unsigned
-            .get("device_binding")
-            .expect("device binding")
-            .as_object()
-            .expect("device binding object");
-        assert_eq!(
-            nested.get("signature_base64").and_then(Value::as_str),
-            Some("nested-signature")
-        );
-        assert_eq!(
-            nested.get("witness_base64").and_then(Value::as_str),
-            Some("nested-witness")
-        );
-    }
-
-    #[test]
-    fn body_auth_retry_removes_only_server_attestation_receipt() {
-        let value = json_object(vec![
-            ("account_id", string_value("account-1")),
-            ("timestamp_ms", number_value(NOW_MS)),
-            ("nonce", string_value("nonce-1")),
-            ("signature_base64", string_value("top-level-signature")),
-            (
-                "device_binding",
-                json_object(vec![
-                    (
-                        "attestation_receipt",
-                        json_object(vec![(
-                            "signature_base64",
-                            string_value("receipt-signature"),
-                        )]),
-                    ),
-                    ("signature_base64", string_value("nested-signature")),
-                    ("witness_base64", string_value("nested-witness")),
-                ]),
-            ),
-        ]);
-
-        let unsigned_body = unsigned_body_without_server_attestation_receipt(&value)
-            .expect("retry unsigned body")
-            .expect("receipt was present");
-
-        let unsigned: Value = json::from_slice(&unsigned_body).expect("unsigned json");
-        assert!(unsigned.get("signature_base64").is_none());
-        assert!(unsigned.get("witness_base64").is_none());
-        let nested = unsigned
-            .get("device_binding")
-            .expect("device binding")
-            .as_object()
-            .expect("device binding object");
-        assert!(nested.get("attestation_receipt").is_none());
-        assert_eq!(
-            nested.get("signature_base64").and_then(Value::as_str),
-            Some("nested-signature")
-        );
-        assert_eq!(
-            nested.get("witness_base64").and_then(Value::as_str),
-            Some("nested-witness")
-        );
-    }
-
-    #[test]
-    fn body_auth_retry_is_absent_without_server_attestation_receipt() {
-        let value = json_object(vec![
-            ("account_id", string_value("account-1")),
-            ("timestamp_ms", number_value(NOW_MS)),
-            ("nonce", string_value("nonce-1")),
-            ("signature_base64", string_value("top-level-signature")),
-            (
-                "device_binding",
-                json_object(vec![("platform", string_value("ios"))]),
-            ),
-        ]);
+        )));
 
         assert!(
-            unsigned_body_without_server_attestation_receipt(&value)
-                .expect("retry check")
-                .is_none()
+            offline_operation_record_in_transaction(
+                &front_runner_transaction,
+                &issuer.authority,
+                operation_id,
+            )
+            .is_none(),
+            "an observed signed request wrapped by another outer authority is not an admitted operation"
         );
-    }
-
-    #[test]
-    fn body_auth_rejects_non_exact_body_proof_fields() {
-        for (field, field_value) in [
-            ("signature_base64", string_value("\tAA==\n")),
-            ("witness_base64", string_value(" AA==")),
-            ("signature_base64", string_value("")),
-            ("witness_base64", Value::Null),
-            ("signature_base64", number_value(1)),
-        ] {
-            let value = json_object(vec![
-                ("account_id", string_value("account-1")),
-                ("timestamp_ms", number_value(NOW_MS)),
-                ("nonce", string_value("nonce-1")),
-                (field, field_value),
-            ]);
-
-            assert_eq!(
-                app_error_code(extract_body_auth(&value)),
-                "OFFLINE_V2_SIGNATURE_INVALID",
-                "body proof field {field} must be exact when present"
-            );
-        }
-    }
-
-    #[test]
-    fn body_auth_rejects_non_exact_account_and_nonce() {
-        for (field, field_value) in [
-            ("account_id", string_value(" account-1 ")),
-            ("nonce", string_value("\tnonce-1\n")),
-        ] {
-            let value = json_object(vec![
-                (
-                    "account_id",
-                    if field == "account_id" {
-                        field_value.clone()
-                    } else {
-                        string_value("account-1")
-                    },
-                ),
-                ("timestamp_ms", number_value(NOW_MS)),
-                (
-                    "nonce",
-                    if field == "nonce" {
-                        field_value
-                    } else {
-                        string_value("nonce-1")
-                    },
-                ),
-                ("signature_base64", string_value("top-level-signature")),
-            ]);
-
-            assert_eq!(
-                app_error_code(extract_body_auth(&value)),
-                "OFFLINE_V2_MISSING_FIELD",
-                "body auth field {field} must be exact"
-            );
-        }
-    }
-
-    #[test]
-    fn body_auth_requires_exactly_one_body_proof() {
-        let mut missing = json_object(vec![
-            ("account_id", string_value("account-1")),
-            ("timestamp_ms", number_value(NOW_MS)),
-            ("nonce", string_value("nonce-1")),
-        ]);
-        assert_eq!(
-            app_error_code(extract_body_auth(&missing)),
-            "OFFLINE_V2_SIGNATURE_REQUIRED"
-        );
-
-        insert_field(
-            &mut missing,
-            "signature_base64",
-            string_value("top-level-signature"),
-        );
-        insert_field(
-            &mut missing,
-            "witness_base64",
-            string_value("top-level-witness"),
-        );
-        assert_eq!(
-            app_error_code(extract_body_auth(&missing)),
-            "OFFLINE_V2_SIGNATURE_INVALID"
-        );
-    }
-
-    #[test]
-    fn issued_note_commitment_uses_wallet_commitment_without_chain_reencoding() {
-        let wallet_commitment = Hash::new(b"wallet-derived-note-commitment");
-        let entry_hash = settlement_entry_hash(
-            "operation-1",
-            "lineage-1",
-            "account-1",
-            "device-1",
-            "offline-key-1",
-            "usd#offline",
-            "5",
-            "12",
-            "17",
-            4,
-        )
-        .expect("entry hash");
-        let chain_commitment = Hash::new(entry_hash.as_bytes()).to_string();
-        let request = json_object(vec![(
-            "note_commitment",
-            string_value(wallet_commitment.to_string()),
-        )]);
-
-        assert_eq!(
-            parse_hash_field(&request, "note_commitment").expect("note commitment"),
-            wallet_commitment
-        );
-        assert_ne!(wallet_commitment.to_string(), chain_commitment);
-    }
-
-    #[test]
-    fn audit_receipt_ids_accept_id_and_receipt_id_aliases() {
-        let request = json_object(vec![(
-            "receipts",
-            Value::Array(vec![
-                json_object(vec![("id", string_value("receipt-1"))]),
-                json_object(vec![("receipt_id", string_value("receipt-2"))]),
-                json_object(vec![("memo", string_value("ignored"))]),
-            ]),
-        )]);
-        let accepted =
-            accepted_audit_receipt_ids(&request).expect("audit receipt ids should parse");
-
-        assert_eq!(
-            accepted
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>(),
-            vec!["receipt-1", "receipt-2"]
-        );
-    }
-
-    #[test]
-    fn audit_receipt_ids_reject_whitespace_padded_ids() {
-        let request = json_object(vec![(
-            "receipts",
-            Value::Array(vec![json_object(vec![("id", string_value(" receipt-1"))])]),
-        )]);
-
-        assert_eq!(
-            validation_code(accepted_audit_receipt_ids(&request)),
-            "OFFLINE_V2_AUDIT_RECEIPT_INVALID"
-        );
-    }
-
-    #[test]
-    fn audit_receipt_ids_allow_missing_receipts() {
-        let request = json_object(vec![("operation_id", string_value("operation-1"))]);
-
         assert!(
-            accepted_audit_receipt_ids(&request)
-                .expect("missing receipts should be accepted")
+            terminal_offline_operation_in_transaction(
+                &front_runner_transaction,
+                &rejected_result,
+                &issuer.authority,
+                operation_id,
+                1,
+                1,
+            )
+            .is_none(),
+            "a rejected front-run must not become a terminal idempotency record"
+        );
+
+        let issuer_transaction = submission_test_transaction(vec![request]);
+        assert!(
+            offline_operation_record_in_transaction(
+                &issuer_transaction,
+                &issuer.authority,
+                operation_id,
+            )
+            .is_some(),
+            "the same signed request remains recoverable under the configured issuer authority"
+        );
+    }
+
+    #[test]
+    fn terminal_recovery_binds_the_exact_operation_and_preserves_both_outcomes() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x1A);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request.clone()]);
+        let applied_result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let (applied_record, applied) = terminal_offline_operation_in_transaction(
+            &transaction,
+            &applied_result,
+            &issuer.authority,
+            operation_id,
+            17,
+            23,
+        )
+        .expect("matching applied operation must be reconstructed");
+        assert_eq!(applied_record.transaction_hash, transaction.hash());
+        assert_eq!(applied.operation_id, operation_id);
+        assert_eq!(applied.transaction_hash, transaction.hash().to_string());
+        assert_eq!(applied.finalized_block_height, 17);
+        assert_eq!(applied.server_time_ms, 23);
+        assert_eq!(applied.outcome, KagemushaV2TerminalOutcome::Applied);
+        assert!(
+            terminal_offline_operation_in_transaction(
+                &transaction,
+                &applied_result,
+                &issuer.authority,
+                [0x1B; 32],
+                17,
+                23,
+            )
+            .is_none(),
+            "a transaction containing another operation must not satisfy the lookup"
+        );
+
+        let rejected_result = TransactionResult(Err(TransactionRejectionReason::Validation(
+            ValidationFail::TooComplex,
+        )));
+        let expected_rejection = rejected_result
+            .0
+            .as_ref()
+            .expect_err("fixture is rejected")
+            .to_string();
+        let (_, rejected) = terminal_offline_operation_in_transaction(
+            &transaction,
+            &rejected_result,
+            &issuer.authority,
+            operation_id,
+            19,
+            29,
+        )
+        .expect("matching rejected operation must be reconstructed");
+        assert_eq!(
+            rejected.outcome,
+            KagemushaV2TerminalOutcome::Rejected(expected_rejection)
+        );
+        assert_eq!(rejected.finalized_block_height, 19);
+        assert_eq!(rejected.server_time_ms, 29);
+    }
+
+    #[tokio::test]
+    async fn submission_claim_deduplicates_and_binds_the_complete_typed_request() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x11);
+        let leader = claim_test_leader(&issuer, &request);
+
+        let follower = match issuer
+            .claim_submission(OfflineOperationRequest::TopUp(&request))
+            .expect("identical concurrent request must join the leader")
+        {
+            SubmissionClaim::Follower(receiver) => receiver,
+            SubmissionClaim::Accepted(_) | SubmissionClaim::Leader(_) => {
+                panic!("identical in-flight request must be a follower")
+            }
+        };
+
+        let mut conflicting = request.clone();
+        conflicting.artifact_generation.push_str("-forged");
+        let error = match issuer.claim_submission(OfflineOperationRequest::TopUp(&conflicting)) {
+            Err(error) => error,
+            Ok(_) => panic!("same operation id with changed fields must conflict"),
+        };
+        assert!(matches!(
+            error,
+            Error::AppConflict {
+                code: "operation_id_conflict",
+                ..
+            }
+        ));
+
+        let transaction_hash = submission_test_hash(0x71);
+        let admitted = leader.accept(transaction_hash);
+        let observed = tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_for_submission_outcome(follower),
+        )
+        .await
+        .expect("accepted submission must release every follower");
+        let SubmissionOutcome::Accepted(observed) = observed else {
+            panic!("accepted leader must publish the admitted operation")
+        };
+        assert_eq!(observed.request, admitted.request);
+        assert_eq!(observed.transaction_hash, transaction_hash);
+
+        match issuer
+            .claim_submission(OfflineOperationRequest::TopUp(&request))
+            .expect("admitted replay must be returned without resubmission")
+        {
+            SubmissionClaim::Accepted(replayed) => {
+                assert_eq!(replayed.transaction_hash, transaction_hash);
+                assert_eq!(replayed.request, admitted.request);
+            }
+            SubmissionClaim::Leader(_) | SubmissionClaim::Follower(_) => {
+                panic!("admitted replay must never create or join another submission")
+            }
+        }
+        let error = match issuer.claim_submission(OfflineOperationRequest::TopUp(&conflicting)) {
+            Err(error) => error,
+            Ok(_) => panic!("admitted operation id must stay bound to its original request"),
+        };
+        assert!(matches!(
+            error,
+            Error::AppConflict {
+                code: "operation_id_conflict",
+                ..
+            }
+        ));
+        assert_eq!(issuer.operations.read().expect("operations lock").len(), 1);
+        assert!(issuer.in_flight.lock().expect("in-flight lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelled_submission_leader_releases_followers_for_retry() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x12);
+        let leader = claim_test_leader(&issuer, &request);
+        let follower = match issuer
+            .claim_submission(OfflineOperationRequest::TopUp(&request))
+            .expect("claim cancellation follower")
+        {
+            SubmissionClaim::Follower(receiver) => receiver,
+            SubmissionClaim::Accepted(_) | SubmissionClaim::Leader(_) => {
+                panic!("concurrent request must follow the elected leader")
+            }
+        };
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _leader = leader;
+            let _ = ready_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        ready_rx.await.expect("leader task entered pending state");
+        task.abort();
+        assert!(
+            task.await
+                .expect_err("leader task must be cancelled")
+                .is_cancelled()
+        );
+        retry_outcome(follower).await;
+
+        let replacement = claim_test_leader(&issuer, &request);
+        drop(replacement);
+        assert!(issuer.in_flight.lock().expect("in-flight lock").is_empty());
+        assert!(
+            issuer
+                .operations
+                .read()
+                .expect("operations lock")
                 .is_empty()
         );
     }
 
-    #[test]
-    fn audit_receipt_ids_reject_non_array_receipts() {
-        let request = json_object(vec![("receipts", string_value("receipt-1"))]);
+    #[tokio::test]
+    async fn panicking_submission_leader_releases_followers_without_poisoning_coordinator() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x13);
+        let leader = claim_test_leader(&issuer, &request);
+        let follower = match issuer
+            .claim_submission(OfflineOperationRequest::TopUp(&request))
+            .expect("claim panic follower")
+        {
+            SubmissionClaim::Follower(receiver) => receiver,
+            SubmissionClaim::Accepted(_) | SubmissionClaim::Leader(_) => {
+                panic!("concurrent request must follow the elected leader")
+            }
+        };
+        let task = tokio::spawn(async move {
+            let _leader = leader;
+            panic!("adversarial leader panic");
+        });
+        assert!(task.await.expect_err("leader task must panic").is_panic());
+        retry_outcome(follower).await;
 
-        assert_eq!(
-            validation_code(accepted_audit_receipt_ids(&request)),
-            "OFFLINE_V2_AUDIT_RECEIPT_INVALID"
+        let replacement = claim_test_leader(&issuer, &request);
+        drop(replacement);
+        assert!(issuer.in_flight.lock().expect("in-flight lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn stale_submission_leader_cannot_remove_a_newer_generation() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x14);
+        let stale_leader = claim_test_leader(&issuer, &request);
+        let operation_id = request.authorization.operation_id;
+        let replacement_token = Arc::new(());
+        let (replacement_updates, replacement_receiver) =
+            watch::channel(SubmissionOutcome::Pending);
+        {
+            let mut in_flight = issuer.in_flight.lock().expect("in-flight lock");
+            in_flight.insert(
+                operation_id,
+                InFlightSubmission {
+                    request: OfflineOperationRequest::TopUp(&request).into_owned(),
+                    token: Arc::clone(&replacement_token),
+                    updates: replacement_updates.clone(),
+                },
+            );
+        }
+
+        drop(stale_leader);
+
+        let in_flight = issuer.in_flight.lock().expect("in-flight lock");
+        let replacement = in_flight
+            .get(&operation_id)
+            .expect("newer generation must survive stale leader drop");
+        assert!(Arc::ptr_eq(&replacement.token, &replacement_token));
+        drop(in_flight);
+        assert!(matches!(
+            &*replacement_receiver.borrow(),
+            SubmissionOutcome::Pending
+        ));
+
+        issuer
+            .in_flight
+            .lock()
+            .expect("in-flight lock")
+            .remove(&operation_id);
+        let _ = replacement_updates.send_replace(SubmissionOutcome::Retry);
+        retry_outcome(replacement_receiver).await;
+    }
+
+    #[tokio::test]
+    async fn closed_submission_channel_fails_safe_to_retry() {
+        let (updates, receiver) = watch::channel(SubmissionOutcome::Pending);
+        drop(updates);
+        retry_outcome(receiver).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn admission_and_duplicate_claim_race_never_elects_a_second_leader() {
+        for seed in 0x20..0x30 {
+            let issuer = submission_test_issuer();
+            let request = submission_test_request(seed);
+            let leader = claim_test_leader(&issuer, &request);
+            let barrier = Arc::new(Barrier::new(2));
+            let claim_issuer = Arc::clone(&issuer);
+            let claim_request = request.clone();
+            let claim_barrier = Arc::clone(&barrier);
+            let claim = tokio::task::spawn_blocking(move || {
+                claim_barrier.wait();
+                claim_issuer.claim_submission(OfflineOperationRequest::TopUp(&claim_request))
+            });
+            barrier.wait();
+            let admitted = leader.accept(submission_test_hash(seed));
+            match claim
+                .await
+                .expect("duplicate claim task")
+                .expect("duplicate claim must not fail")
+            {
+                SubmissionClaim::Accepted(record) => {
+                    assert_eq!(record.transaction_hash, admitted.transaction_hash);
+                }
+                SubmissionClaim::Follower(receiver) => {
+                    let outcome = wait_for_submission_outcome(receiver).await;
+                    assert!(matches!(
+                        outcome,
+                        SubmissionOutcome::Accepted(ref record)
+                            if record.transaction_hash == admitted.transaction_hash
+                    ));
+                }
+                SubmissionClaim::Leader(_) => {
+                    panic!("admission race elected a duplicate submission leader")
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_submission_waiter_observes_only_terminal_coordinator_outcomes() {
+        let (updates, receiver) = watch::channel(SubmissionOutcome::Pending);
+        let waiter = tokio::spawn(wait_for_submission_outcome(receiver));
+        tokio::task::yield_now().await;
+        assert!(
+            !waiter.is_finished(),
+            "a duplicate caller must not treat an in-flight reservation as accepted"
         );
+
+        let _ = updates.send_replace(SubmissionOutcome::Retry);
+        assert!(matches!(
+            waiter.await.expect("waiter task"),
+            SubmissionOutcome::Retry
+        ));
     }
 
     #[test]
-    fn audit_receipt_ids_reject_non_object_entries() {
-        let request = json_object(vec![(
-            "receipts",
-            Value::Array(vec![string_value("receipt-1")]),
-        )]);
-
-        assert_eq!(
-            validation_code(accepted_audit_receipt_ids(&request)),
-            "OFFLINE_V2_AUDIT_RECEIPT_INVALID"
-        );
+    fn unavailable_v2_backend_fails_closed_with_stable_service_error() {
+        let error = ensure_kagemusha_v2_backend_available()
+            .expect_err("the unreleased V2 proof backend must fail closed");
+        assert!(matches!(
+            error,
+            Error::AppServiceUnavailable {
+                code: "offline_not_ready",
+                ..
+            }
+        ));
     }
 
     #[test]
-    fn audit_receipt_ids_reject_non_string_id_aliases() {
-        let request = json_object(vec![(
-            "receipts",
-            Value::Array(vec![json_object(vec![(
-                "receipt_id",
-                Value::Number(1_u64.into()),
-            )])]),
-        )]);
-
+    fn operation_ids_use_one_canonical_path_spelling() {
+        let operation_id = [0xAB; 32];
+        let encoded = "ab".repeat(32);
         assert_eq!(
-            validation_code(accepted_audit_receipt_ids(&request)),
-            "OFFLINE_V2_AUDIT_RECEIPT_INVALID"
+            parse_operation_id(&encoded).expect("canonical id"),
+            operation_id
         );
+        assert_eq!(
+            offline_operation_status_uri(operation_id),
+            format!("/v1/offline/operations/{encoded}")
+        );
+        let uppercase = "AB".repeat(32);
+        let non_hex = "gg".repeat(32);
+        let zero = "00".repeat(32);
+        for invalid in ["ab", uppercase.as_str(), non_hex.as_str(), zero.as_str()] {
+            assert!(
+                parse_operation_id(invalid).is_err(),
+                "invalid id: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn idempotency_key_must_equal_the_signed_operation_id() {
+        let operation_id = [0x11; 32];
+        let mut headers = HeaderMap::new();
+        let zero_error = require_idempotency_key(&headers, [0; 32])
+            .expect_err("zero signed operation id must fail");
+        assert!(matches!(
+            zero_error,
+            Error::AppQueryValidation {
+                code: "operation_id_invalid",
+                ..
+            }
+        ));
+        let error = require_idempotency_key(&headers, operation_id)
+            .expect_err("missing idempotency key must fail");
+        assert!(matches!(
+            error,
+            Error::AppQueryValidation {
+                code: "idempotency_key_missing",
+                ..
+            }
+        ));
+
+        headers.insert(
+            "idempotency-key",
+            axum::http::HeaderValue::from_static(
+                "1111111111111111111111111111111111111111111111111111111111111111",
+            ),
+        );
+        require_idempotency_key(&headers, operation_id).expect("matching idempotency key");
+
+        headers.append(
+            "idempotency-key",
+            axum::http::HeaderValue::from_static(
+                "1111111111111111111111111111111111111111111111111111111111111111",
+            ),
+        );
+        let error = require_idempotency_key(&headers, operation_id)
+            .expect_err("duplicate idempotency keys must fail");
+        assert!(matches!(
+            error,
+            Error::AppQueryValidation {
+                code: "idempotency_key_invalid",
+                ..
+            }
+        ));
+        headers.remove("idempotency-key");
+
+        for malformed in [
+            "11",
+            "111111111111111111111111111111111111111111111111111111111111111g",
+            "111111111111111111111111111111111111111111111111111111111111111A",
+        ] {
+            headers.insert(
+                "idempotency-key",
+                axum::http::HeaderValue::from_str(malformed).expect("ASCII fixture header"),
+            );
+            let error = require_idempotency_key(&headers, operation_id)
+                .expect_err("malformed idempotency keys must fail validation");
+            assert!(matches!(
+                error,
+                Error::AppQueryValidation {
+                    code: "idempotency_key_invalid",
+                    ..
+                }
+            ));
+        }
+
+        headers.insert(
+            "idempotency-key",
+            axum::http::HeaderValue::from_static(
+                "2222222222222222222222222222222222222222222222222222222222222222",
+            ),
+        );
+        let error = require_idempotency_key(&headers, operation_id)
+            .expect_err("mismatched idempotency key must fail");
+        assert!(matches!(
+            error,
+            Error::AppConflict {
+                code: "idempotency_key_conflict",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn operation_binding_covers_the_full_typed_request_and_route() {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        struct RequestFixture {
+            operation_id: [u8; 32],
+            amount: u64,
+        }
+
+        let original = RequestFixture {
+            operation_id: [0x11; 32],
+            amount: 7,
+        };
+        let identical = original;
+        let different_amount = RequestFixture {
+            amount: 8,
+            ..original
+        };
+        let top_up = OfflineOperationRequest::<&RequestFixture, &RequestFixture>::TopUp(&original);
+        let identical_top_up =
+            OfflineOperationRequest::<&RequestFixture, &RequestFixture>::TopUp(&identical);
+        let changed_top_up =
+            OfflineOperationRequest::<&RequestFixture, &RequestFixture>::TopUp(&different_amount);
+        let different_route =
+            OfflineOperationRequest::<&RequestFixture, &RequestFixture>::Redeem(&identical);
+
+        ensure_same_offline_request(&top_up, &identical_top_up)
+            .expect("identical typed request is an idempotent replay");
+        for mismatch in [&changed_top_up, &different_route] {
+            let error = ensure_same_offline_request(&top_up, mismatch)
+                .expect_err("a changed field or route must conflict");
+            assert!(matches!(
+                error,
+                Error::AppConflict {
+                    code: "operation_id_conflict",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn admission_registry_retention_has_an_inclusive_saturating_boundary() {
+        let expires_at_ms = 1_000_u64;
+        let retained_until =
+            expires_at_ms.saturating_add(OFFLINE_OPERATION_RETENTION_AFTER_EXPIRY_MS);
+        assert!(offline_operation_is_retained(expires_at_ms, retained_until));
+        assert!(!offline_operation_is_retained(
+            expires_at_ms,
+            retained_until + 1
+        ));
+        assert!(offline_operation_is_retained(u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn applied_kagemusha_v2_finality_preserves_requested_operation_id() {
+        let operation_id = [0x5A; 32];
+        let finality =
+            kagemusha_v2_applied_finality(operation_id, "transaction-hash".to_owned(), 7, 11);
+
+        assert_eq!(finality.operation_id, operation_id);
+        assert_eq!(finality.transaction_hash, "transaction-hash");
+        assert_eq!(finality.finalized_block_height, 7);
+        assert_eq!(finality.outcome, KagemushaV2TerminalOutcome::Applied);
+        assert_eq!(finality.server_time_ms, 11);
+    }
+
+    #[test]
+    fn terminal_finality_mismatch_is_typed_service_unavailable() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x2A);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request]);
+        let record =
+            offline_operation_record_in_transaction(&transaction, &issuer.authority, operation_id)
+                .expect("fixture operation must be recoverable");
+        let matching = kagemusha_v2_applied_finality(
+            operation_id,
+            record.transaction_hash.to_string(),
+            41,
+            43,
+        );
+        ensure_kagemusha_v2_terminal_finality_matches_record(&record, &matching)
+            .expect("matching canonical finality");
+
+        for (label, finality) in [
+            (
+                "operation identity",
+                KagemushaV2CommittedFinality {
+                    operation_id: [0x2B; 32],
+                    ..matching.clone()
+                },
+            ),
+            (
+                "transaction hash",
+                KagemushaV2CommittedFinality {
+                    transaction_hash: submission_test_hash(0x2C).to_string(),
+                    ..matching.clone()
+                },
+            ),
+            (
+                "block height",
+                KagemushaV2CommittedFinality {
+                    finalized_block_height: 0,
+                    ..matching.clone()
+                },
+            ),
+            (
+                "block timestamp",
+                KagemushaV2CommittedFinality {
+                    server_time_ms: 0,
+                    ..matching.clone()
+                },
+            ),
+        ] {
+            let error = ensure_kagemusha_v2_terminal_finality_matches_record(&record, &finality)
+                .expect_err("terminal mismatch must fail closed");
+            match &error {
+                Error::AppServiceUnavailable { code, .. } => {
+                    assert_eq!(*code, "offline_operation_index_inconsistent", "{label}");
+                }
+                other => panic!("{label} returned the wrong error class: {other:?}"),
+            }
+            assert_eq!(
+                error.into_response().status(),
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_v2_anchor_finality_binding_rejects_identity_hash_or_height_mismatch() {
+        let operation_id = [0x31; 32];
+        let transaction_hash = submission_test_hash(0x73);
+        let anchor_transaction_hash = *transaction_hash.as_ref();
+        ensure_kagemusha_v2_anchor_finality_binding(
+            operation_id,
+            anchor_transaction_hash,
+            42,
+            operation_id,
+            &transaction_hash,
+            42,
+        )
+        .expect("matching anchor and finality");
+
+        for (anchor_operation_id, anchor_hash, anchor_height, finalized_height) in [
+            ([0x32; 32], anchor_transaction_hash, 42, 42),
+            (operation_id, [0x75; 32], 42, 42),
+            (operation_id, anchor_transaction_hash, 43, 42),
+            (operation_id, anchor_transaction_hash, 0, 0),
+        ] {
+            let error = ensure_kagemusha_v2_anchor_finality_binding(
+                anchor_operation_id,
+                anchor_hash,
+                anchor_height,
+                operation_id,
+                &transaction_hash,
+                finalized_height,
+            )
+            .expect_err("mismatched anchor finality must fail closed");
+            match &error {
+                Error::AppServiceUnavailable { code, .. } => {
+                    assert_eq!(*code, "offline_operation_index_inconsistent");
+                }
+                other => panic!("anchor mismatch returned the wrong error class: {other:?}"),
+            }
+            assert_eq!(
+                error.into_response().status(),
+                axum::http::StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_v2_rejection_detail_formats_borrowed_reason() {
+        assert_eq!(kagemusha_v2_rejection_detail(None), "no rejection reason");
+
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "fixture rejection".to_owned(),
+        ));
+        assert_eq!(
+            kagemusha_v2_rejection_detail(Some(&rejection)),
+            rejection.to_string()
+        );
+
+        let adversarial = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "attacker-controlled\nmessage".to_owned(),
+        ));
+        let message = kagemusha_v2_rejection_detail(Some(&adversarial));
+        assert_eq!(message, "The offline operation was rejected.");
+        assert!(crate::utils::is_valid_error_message(&message));
+    }
+
+    #[test]
+    fn terminal_rejection_messages_replace_control_characters_before_nesting() {
+        const FALLBACK: &str = "The offline operation was rejected.";
+
+        for adversarial in [
+            "line\nbreak",
+            "carriage\rreturn",
+            "tab\tseparated",
+            "nul\0byte",
+            "next-line\u{85}control",
+        ] {
+            let message = canonical_offline_rejection_message(adversarial.to_owned());
+            assert_eq!(message, FALLBACK, "input={adversarial:?}");
+            assert!(crate::utils::is_valid_error_message(&message));
+        }
+
+        let finality = kagemusha_v2_committed_finality(
+            [0x2D; 32],
+            submission_test_hash(0x2E).to_string(),
+            47,
+            53,
+            Some("attacker-controlled\nterminal rejection".to_owned()),
+        );
+        let KagemushaV2TerminalOutcome::Rejected(message) = finality.outcome else {
+            panic!("a rejected finality fixture must remain rejected")
+        };
+        assert_eq!(message, FALLBACK);
+        assert!(crate::utils::is_valid_error_message(&message));
     }
 }

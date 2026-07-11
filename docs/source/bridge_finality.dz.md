@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
 
@@ -52,7 +52,8 @@ certificate འདི་ འགྱུར་བ་ཅན་གྱི་ད་ལ�
 འགལ་བ་ཡང་ན་བདེན་དཔྱད་མི་ཚུགས་པ་ཨིན་པ་ཅིན་ fail closed ཨིན། ཐོབ་ཚུགས་མི་འདི་ in-memory
 history window ཉེ་འདབས་ལུ་མི་ཚད།
 
-Stateless verifier གིས་ version, chain, height, header hash, context, subject དང་ CommitQC ངེས་ཏིག་
+Stateless verifier གིས་ version, chain, height, header hash, canonical predecessor, view, context,
+subject དང་ CommitQC ངེས་ཏིག་
 མཐུན་སྒྲིག་འབད་དེ་ artifact ནང་གི་ PoP ཆ་མཉམ་བདེན་དཔྱད་འབདཝ་ཨིན། Signer index ཚུ་ཡར་འཕར་
 གོ་རིམ་ནང་དང་ཚད་ནང་འཁོད་དགོ། CommitQC གིས་ validator count དང་ voting power quorum གཉིས་ཆ་
 ཚང་དགོཔ་དང་ Sumeragi v2 vote preimage ངེས་ཏིག་གུ་ BLS aggregate signature ཆ་གནས་ཅན་དགོ།
@@ -75,9 +76,7 @@ message artifact ཚུན་ immediate successor རེ་རེ་བདེན
 ## Bundle དང་ API
 
 `BridgeFinalityBundle` འདི་ངེས་ཏིག་ `{ commitment, finality_proof }` ཨིན། Commitment འདི་
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }` ཨིན། Optional MMR ས་སྒོ་ཚུ་ commitments རྐྱངམ་ཅིག་ཨིནམ་དང་ finality
-ཡང་ན་ inclusion proof མེན།
+`{ chain_id, height_context_id, block_height, block_hash }` ཨིན།
 
 - `GET /v1/bridge/finality/{height}` གིས་ `BridgeFinalityProof` སླར་ལོག་འབདཝ་ཨིན།
 - `GET /v1/bridge/finality/bundle/{height}` གིས་ `BridgeFinalityBundle` སླར་ལོག་འབདཝ་ཨིན།

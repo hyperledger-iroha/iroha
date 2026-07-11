@@ -52,7 +52,7 @@ Payload-ը Norito կոդավորված `DaIngestRequest` է: Պատասխանն�
 | 500 Ներքին սխալ | Անսպասելի ձախողում (գրանցված + ահազանգ): |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 պետք չէ լրացուցիչ շրջագայություն՝ ակտիվ քաղաքականության փաթեթին ապացույց կապելու համար:
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

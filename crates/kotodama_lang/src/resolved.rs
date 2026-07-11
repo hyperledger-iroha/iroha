@@ -769,7 +769,7 @@ module Origins {
     fn parser_binding_facts_have_direct_owners_and_exact_utf8_ranges() {
         let text = r#"
 誓約 ExactFacts {
-    fn inspect(Option<int>, values: List<int, 4> input) {
+    fn inspect(Option<int> input, List<int, 4> values) {
         // 雪 before every repeated ASCII binding makes character and byte offsets differ.
         let int repeated = 1;
         if let Option::some(repeated) = input {
@@ -883,7 +883,7 @@ module Parenthesized {
     fn binding_fact_fixture() -> (SourceFile, SpannedProgram) {
         let text = r#"
 誓約 BindingIntegrity {
-    fn inspect(Option<int>, values: List<int, 4> input) -> int {
+    fn inspect(Option<int> input, List<int, 4> values) -> int {
         let int base = 1;
         if let Option::some(payload) = input { return payload; }
         if let Option::some(payload) = input { return payload; }
@@ -1351,12 +1351,11 @@ module BadLocals {
         ] {
             assert!(intrinsic_call(canonical), "missing intrinsic `{canonical}`");
         }
-        for retired in [
-            "int::from_i64",
-            "quantity::from_i64",
-            "quantity::from_u128",
-        ] {
-            assert!(!intrinsic_call(retired), "retired intrinsic `{retired}` leaked into V1");
+        for retired in ["int::from_i64", "quantity::from_i64", "quantity::from_u128"] {
+            assert!(
+                !intrinsic_call(retired),
+                "retired intrinsic `{retired}` leaked into V1"
+            );
         }
     }
 }
@@ -2253,7 +2252,8 @@ impl<'a> HirLowerer<'a> {
                     ));
                 }
                 for field in fields {
-                    let current = std::mem::replace(&mut field.value, Expr::IntLiteral(BigInt::zero()));
+                    let current =
+                        std::mem::replace(&mut field.value, Expr::IntLiteral(BigInt::zero()));
                     field.value = self.wrap_expr(current, scope, visible);
                 }
             }
@@ -2282,7 +2282,8 @@ impl<'a> HirLowerer<'a> {
                 else_expr,
             } => {
                 for child in [cond, then_expr, else_expr] {
-                    let current = std::mem::replace(child, Box::new(Expr::IntLiteral(BigInt::zero())));
+                    let current =
+                        std::mem::replace(child, Box::new(Expr::IntLiteral(BigInt::zero())));
                     *child = Box::new(self.wrap_expr(*current, scope, visible));
                 }
             }
@@ -2374,10 +2375,12 @@ impl<'a> HirLowerer<'a> {
                     item_source.or(source),
                     false,
                 )];
-                let current = std::mem::replace(item_expression, Box::new(Expr::IntLiteral(BigInt::zero())));
+                let current =
+                    std::mem::replace(item_expression, Box::new(Expr::IntLiteral(BigInt::zero())));
                 *item_expression =
                     Box::new(self.wrap_expr(*current, comprehension_scope, &comprehension_visible));
-                let current = std::mem::replace(list_source, Box::new(Expr::IntLiteral(BigInt::zero())));
+                let current =
+                    std::mem::replace(list_source, Box::new(Expr::IntLiteral(BigInt::zero())));
                 *list_source = Box::new(self.wrap_expr(*current, scope, visible));
                 if let Some(current) = condition.take() {
                     *condition = Some(Box::new(self.wrap_expr(
@@ -2389,7 +2392,8 @@ impl<'a> HirLowerer<'a> {
             }
             Expr::JsonObject(entries) => {
                 for entry in entries {
-                    let current = std::mem::replace(&mut entry.value, Expr::IntLiteral(BigInt::zero()));
+                    let current =
+                        std::mem::replace(&mut entry.value, Expr::IntLiteral(BigInt::zero()));
                     entry.value = self.wrap_expr(current, scope, visible);
                 }
             }
@@ -2461,7 +2465,8 @@ impl<'a> HirLowerer<'a> {
                     if let Some(current) = declaration.ty.take() {
                         declaration.ty = Some(self.wrap_type(current, root));
                     }
-                    let current = std::mem::replace(&mut declaration.value, Expr::IntLiteral(BigInt::zero()));
+                    let current =
+                        std::mem::replace(&mut declaration.value, Expr::IntLiteral(BigInt::zero()));
                     declaration.value = self.wrap_expr(current, root, &root_visible);
                 }
                 Item::State(declaration) => {
@@ -2470,7 +2475,8 @@ impl<'a> HirLowerer<'a> {
                 }
                 Item::Trigger(declaration) => {
                     for entry in &mut declaration.metadata {
-                        let current = std::mem::replace(&mut entry.value, Expr::IntLiteral(BigInt::zero()));
+                        let current =
+                            std::mem::replace(&mut entry.value, Expr::IntLiteral(BigInt::zero()));
                         entry.value = self.wrap_expr(current, root, &root_visible);
                     }
                 }

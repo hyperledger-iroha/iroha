@@ -1,101 +1,68 @@
-//! Source-level smoke checks for the offline v2 Kagemusha redeem bridge.
+//! Source-level contract guards for the first-release offline redeem command.
 
-const OFFLINE_V2_ISSUER_SOURCE: &str = include_str!("../src/offline_v2_issuer.rs");
+const OFFLINE_ISSUER_SOURCE: &str = include_str!("../src/offline_v2_issuer.rs");
+const OFFLINE_API_SOURCE: &str = include_str!("../../iroha_torii_shared/src/offline_api.rs");
+const TORII_SOURCE: &str = include_str!("../src/lib.rs");
 
-fn source_section(start: &str, end: &str) -> &'static str {
-    let start = OFFLINE_V2_ISSUER_SOURCE
-        .find(start)
-        .expect("source section start marker must exist");
-    let end = OFFLINE_V2_ISSUER_SOURCE[start..]
-        .find(end)
-        .map(|offset| start + offset)
-        .expect("source section end marker must exist");
-    &OFFLINE_V2_ISSUER_SOURCE[start..end]
+fn production_source(source: &str) -> &str {
+    source
+        .split("\nmod tests")
+        .next()
+        .expect("production source")
 }
 
-#[tokio::test]
-async fn offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request() {
-    assert!(
-        OFFLINE_V2_ISSUER_SOURCE
-            .contains("const PATH_NOTES_REDEEM: &str = \"/v1/offline/v2/notes/redeem\";")
-    );
-    assert!(!OFFLINE_V2_ISSUER_SOURCE.contains("/v1/offline/v2/kagemusha/redeem"));
+#[test]
+fn redeem_is_a_typed_async_command_on_the_final_route() {
+    let issuer = production_source(OFFLINE_ISSUER_SOURCE);
 
-    let handler = source_section(
-        "pub(crate) async fn handle_notes_redeem(",
-        "async fn handle_kagemusha_recursive_notes_redeem(",
+    assert!(TORII_SOURCE.contains("&route_catalog::offline::REDEEM"));
+    assert!(TORII_SOURCE.contains("catalog_post(handler_offline_redeem)"));
+    assert!(TORII_SOURCE.contains("offline_api::OfflineRedeemRequest"));
+    assert!(TORII_SOURCE.contains("NoritoJson(request)"));
+    assert!(OFFLINE_API_SOURCE.contains("as OfflineRedeemRequest"));
+    assert!(OFFLINE_API_SOURCE.contains("OFFLINE_REDEEM_REQUEST_SCHEMA_NAME"));
+    assert_eq!(
+        iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+        "iroha.torii.v1.offline.redeem.request"
     );
-    for marker in [
-        "reject_x_iroha_auth_headers(headers)?;",
-        "parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>(",
+    assert!(issuer.contains("handle_redeem"));
+    assert!(issuer.contains("redeem_request: OfflineRedeemRequest"));
+    assert!(issuer.contains("require_idempotency_key"));
+    assert!(issuer.contains("OfflineOperationReference"));
+    assert!(issuer.contains("StatusCode::ACCEPTED"));
+    assert!(issuer.contains("header::LOCATION"));
+    assert!(issuer.contains("header::RETRY_AFTER"));
+    assert!(issuer.contains("header::CACHE_CONTROL"));
+}
+
+#[test]
+fn redeem_has_no_wrapper_or_compatibility_payload() {
+    let issuer = production_source(OFFLINE_ISSUER_SOURCE);
+
+    for retired_field in [
         "redeem_request_norito_base64",
-        "redeem_request.validate_public_binding()",
-        "validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;",
-        "load_kagemusha_v2_redeem_operation_receipt(",
-        "let operation_id = redeem_request.authorization.operation_id;",
-        "RedeemKagemushaRecursiveV2::new(redeem_request)",
-        "wait_for_kagemusha_v2_finality(&app, tx_hash, operation_id).await?",
-        "kagemusha_v2_terminal_response(finality, None)",
-        "PATH_NOTES_REDEEM",
+        "compact_payment_token_norito_base64",
+        "projection_verifier_record_norito_base64",
     ] {
         assert!(
-            handler.contains(marker),
-            "missing V2 redeem handler marker: {marker}"
+            !issuer.contains(retired_field),
+            "whole-payload wrapper must be absent: {retired_field}"
         );
     }
-    assert!(!handler.contains("KagemushaRecursiveSpendRedeemRequestV1"));
-    assert!(!handler.contains("RedeemKagemushaRecursive::"));
+    assert!(!issuer.contains("KagemushaRecursiveSpendRedeemRequestV1"));
 }
 
-#[tokio::test]
-async fn offline_v2_notes_redeem_rejects_noncanonical_or_ambiguous_v2_envelopes() {
-    let parser = source_section(
-        "fn parse_strict_kagemusha_v2_archive<T>(",
-        "fn kagemusha_v2_snapshot_time_ms(",
-    );
-    for marker in [
-        "if object.len() != 1 || !object.contains_key(field)",
-        "must contain exactly",
-        "if encoded.is_empty() || encoded.trim() != encoded",
-        "must be non-empty with no surrounding whitespace",
-        "BASE64_STANDARD.decode(encoded)",
-        "BASE64_STANDARD.encode(&bytes) != encoded",
-        "is not canonical standard base64",
-        "norito::decode_from_bytes(&bytes)",
-        "norito::to_bytes(&decoded)",
-        "if canonical != bytes",
-        "does not round-trip to identical canonical Norito",
+#[test]
+fn retired_redeem_routes_are_not_mounted() {
+    for retired_path in [
+        "/v1/offline/v2/notes/redeem",
+        "/v1/offline/v2/redeem",
+        "/v1/offline/notes/redeem",
+        "/v1/offline/cash/redeem",
     ] {
         assert!(
-            parser.contains(marker),
-            "missing strict V2 parser marker: {marker}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_v2_notes_redeem_uses_direct_receipts_and_preserves_finality_integrity() {
-    for marker in [
-        "optional_finalized_kagemusha_v2_anchor",
-        "finalized_kagemusha_v2_topup_anchor_finality",
-        "committed_transaction_height(&transaction_hash)",
-        "load_kagemusha_v2_redeem_operation_receipt",
-        "OFFLINE_KAGEMUSHA_REDEEM_RECEIPT_UNAVAILABLE",
-        "pipeline_status_terminal_or_state_entry",
-        "OFFLINE_KAGEMUSHA_FINALITY_INCOMPLETE",
-        "ensure_kagemusha_v2_anchor_finality_binding",
-        "operation_id: [u8; 32]",
-        "newly_applied_kagemusha_v2_redeem_response_preserves_operation_id",
-        "replayed_kagemusha_v2_redeem_response_preserves_operation_id",
-        "kagemusha_v2_terminal_response_rejects_zero_or_non_applied_finality",
-        "kagemusha_v2_terminal_status_rejects_missing_height_or_block_time",
-        "kagemusha_v2_terminal_cache_rejection_and_expiry_do_not_timeout",
-        "kagemusha_v2_anchor_finality_binding_rejects_operation_hash_or_height_mismatch",
-        "refreshed_kagemusha_v2_authorization_keeps_direct_anchor_lookup_key",
-    ] {
-        assert!(
-            OFFLINE_V2_ISSUER_SOURCE.contains(marker),
-            "missing bounded replay/finality marker: {marker}"
+            !TORII_SOURCE.contains(&format!(".route(\"{retired_path}\"")),
+            "retired route must not be mounted: {retired_path}"
         );
     }
 }

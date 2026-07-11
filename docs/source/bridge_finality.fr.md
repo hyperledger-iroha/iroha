@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 ---
 
 <!--
@@ -67,7 +67,8 @@ certificats.
    d'époque structurellement valides ;
 3. l'égalité exacte entre hauteur, context id, sujet, hash répété et CommitQC,
    avec phase `Commit` ;
-4. le chain id attendu et la hauteur/hash recalculés du header ;
+4. le chain id attendu et la hauteur, le hash, le prédécesseur et la view
+   recalculés du header, tous exactement liés à l'artéfact ;
 5. un PoP BLS-normal durable et valide dans l'artéfact pour chaque membre du roster ;
 6. des indices de signataires strictement croissants et dans les limites ;
 7. simultanément au moins `floor(2n/3) + 1` signataires distincts et une
@@ -113,11 +114,9 @@ message ne suffit pas à établir la finalité Taira.
 ## Bundle et API
 
 `BridgeFinalityBundle` contient exactement `{ commitment, finality_proof }`.
-L'engagement est `{ chain_id, height_context_id, block_height, block_hash,
-mmr_root?, mmr_leaf_index?, mmr_peaks? }`. Les champs MMR optionnels ne sont que
-des engagements : ils aident à fixer une racine, mais ne remplacent pas la
-finalité et ne constituent pas une preuve d'inclusion. SCCP utilise sa propre
-branche Merkle typée et son ancre gouvernée.
+L'engagement est exactement
+`{ chain_id, height_context_id, block_height, block_hash }`. SCCP utilise sa
+propre branche Merkle typée et son ancre gouvernée.
 
 - `GET /v1/bridge/finality/{height}` renvoie `BridgeFinalityProof`.
 - `GET /v1/bridge/finality/bundle/{height}` renvoie `BridgeFinalityBundle`.

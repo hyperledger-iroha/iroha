@@ -184,6 +184,11 @@ pub fn render_fixture() -> String {
         int_vector("int_128", BigInt::from_i128(128)),
         int_vector("int_neg_128", BigInt::from_i128(-128)),
         int_vector("int_neg_129", BigInt::from_i128(-129)),
+        int_vector(
+            "int_2_pow_63_minus_1",
+            BigInt::from_i128(i128::from(i64::MAX)),
+        ),
+        int_vector("int_2_pow_63", BigInt::from_i128(1_i128 << 63)),
         int_vector("int_min", minimum),
         int_vector("int_max", maximum),
         decimal_vector("decimal_zero", Numeric::new(0, 0)),
@@ -195,6 +200,7 @@ pub fn render_fixture() -> String {
 
     let redundant_zero_frame = frame(INT_SCHEMA_HASH_V1, &body(&[0], None));
     let redundant_positive_frame = frame(INT_SCHEMA_HASH_V1, &body(&[1, 0], None));
+    let redundant_negative_frame = frame(INT_SCHEMA_HASH_V1, &body(&[0xff, 0xff], None));
     let decimal_zero_scale_frame = frame(DECIMAL_SCHEMA_HASH_V1, &body(&[], Some(1)));
     let decimal_trailing_zero_frame = frame(DECIMAL_SCHEMA_HASH_V1, &body(&[10], Some(1)));
     let decimal_scale_29_frame = frame(DECIMAL_SCHEMA_HASH_V1, &body(&[1], Some(29)));
@@ -202,6 +208,9 @@ pub fn render_fixture() -> String {
     let mut positive_overflow = vec![0_u8; MAX_MANTISSA_BYTES + 1];
     positive_overflow[MAX_MANTISSA_BYTES - 1] = 0x80;
     let positive_overflow_frame = frame(INT_SCHEMA_HASH_V1, &body(&positive_overflow, None));
+    let mut negative_overflow = vec![0xff_u8; MAX_MANTISSA_BYTES + 1];
+    negative_overflow[MAX_MANTISSA_BYTES - 1] = 0x7f;
+    let negative_overflow_frame = frame(INT_SCHEMA_HASH_V1, &body(&negative_overflow, None));
     let canonical_int_frame = IntValueV1::try_new(BigInt::one())
         .expect("bounded attack integer")
         .encode_frame()
@@ -209,6 +218,12 @@ pub fn render_fixture() -> String {
 
     let mut wrong_schema_frame = canonical_int_frame.clone();
     wrong_schema_frame[6..22].copy_from_slice(&DECIMAL_SCHEMA_HASH_V1);
+
+    let mut compressed_frame = canonical_int_frame.clone();
+    compressed_frame[22] = 1;
+
+    let mut layout_flags_frame = canonical_int_frame.clone();
+    layout_flags_frame[39] = 1;
 
     let mut bad_crc_frame = canonical_int_frame.clone();
     let last = bad_crc_frame.len() - 1;
@@ -240,6 +255,13 @@ pub fn render_fixture() -> String {
             "int",
             "noncanonical_mantissa",
             redundant_positive_frame,
+        ),
+        invalid(
+            "redundant_negative_sign",
+            "frame",
+            "int",
+            "noncanonical_mantissa",
+            redundant_negative_frame,
         ),
         invalid(
             "decimal_zero_nonzero_scale",
@@ -277,11 +299,32 @@ pub fn render_fixture() -> String {
             positive_overflow_frame,
         ),
         invalid(
+            "negative_mantissa_overflow",
+            "frame",
+            "int",
+            "frame_too_large",
+            negative_overflow_frame,
+        ),
+        invalid(
             "wrong_frame_schema",
             "frame",
             "int",
             "schema_mismatch",
             wrong_schema_frame,
+        ),
+        invalid(
+            "compressed_frame",
+            "frame",
+            "int",
+            "compression_not_allowed",
+            compressed_frame,
+        ),
+        invalid(
+            "layout_flags_frame",
+            "frame",
+            "int",
+            "layout_flags_not_allowed",
+            layout_flags_frame,
         ),
         invalid(
             "bad_frame_checksum",
@@ -305,11 +348,18 @@ pub fn render_fixture() -> String {
             canonical_int_envelope.clone(),
         ),
         invalid(
+            "retired_amount_pointer_type",
+            "envelope",
+            "int",
+            "type_not_allowed",
+            envelope(PointerType::RetiredAmount as u16, 1, &canonical_int_frame),
+        ),
+        invalid(
             "unassigned_pointer_type",
             "envelope",
             "int",
             "unknown_type",
-            envelope(0x0013, 2, &canonical_int_frame),
+            envelope(0x0014, 2, &canonical_int_frame),
         ),
         invalid(
             "known_nonnumeric_pointer_precedes_version",

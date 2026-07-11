@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.client.stream;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /** Representation of a single server-sent event frame. */
 public final class ServerSentEvent {
@@ -31,5 +32,18 @@ public final class ServerSentEvent {
   /** Event identifier supplied via the {@code id:} field (may be {@code null}). */
   public String id() {
     return id;
+  }
+
+  /**
+   * Returns the typed terminal error carried by this event.
+   *
+   * <p>A malformed {@code stream_error} frame throws {@link ToriiStreamProtocolException} instead
+   * of being treated as an unrelated application event.
+   */
+  public Optional<ToriiStreamException> terminalStreamError() {
+    if (!"stream_error".equals(event)) {
+      return Optional.empty();
+    }
+    return Optional.of(ToriiStreamErrorParser.parse(data));
   }
 }

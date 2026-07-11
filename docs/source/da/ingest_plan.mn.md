@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 дотоод алдаа | Гэнэтийн алдаа (бүртгэгдсэн + анхааруулга). |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ DA-ийн амлалт эсвэл нотолгоог баталгаажуула�
 Идэвхтэй бодлогын багцад нотлох баримтыг холбохын тулд нэмэлт хоёр талын аялал хийх шаардлагагүй.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

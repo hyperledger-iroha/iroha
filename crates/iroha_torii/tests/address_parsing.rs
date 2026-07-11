@@ -54,7 +54,7 @@ const ACCOUNTS_PERMISSIONS_CTX: &str = "/v1/accounts/{account_id}/permissions";
 const ACCOUNTS_ASSETS_CTX: &str = "/v1/accounts/{account_id}/assets";
 const ACCOUNTS_ASSETS_QUERY_CTX: &str = "/v1/accounts/{account_id}/assets/query";
 const KAIGI_RELAY_DETAIL_CTX: &str = "/v1/kaigi/relays/{relay_id}";
-const NEXUS_PUBLIC_LANE_STAKE_CTX: &str = "/v1/nexus/public_lanes/{lane_id}/stake";
+const NEXUS_PUBLIC_LANE_STAKE_CTX: &str = "/v1/nexus/public-lanes/{lane_id}/stake";
 const REPO_AGREEMENTS_ENDPOINT: &str = "/v1/repo/agreements";
 
 fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
@@ -1183,7 +1183,7 @@ async fn nexus_public_lane_stake_accepts_validator_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v1/nexus/public_lanes/0/stake?validator={encoded}"
+                        "/v1/nexus/public-lanes/0/stake?validator={encoded}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1210,7 +1210,7 @@ async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/0/stake?validator={literal}"
+                    "/v1/nexus/public-lanes/0/stake?validator={literal}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1230,7 +1230,7 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v1/nexus/public_lanes/0/stake?validator={encoded}"
+                        "/v1/nexus/public-lanes/0/stake?validator={encoded}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1266,7 +1266,7 @@ async fn nexus_public_lane_stake_rejects_public_key_validator() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/0/stake?validator={encoded}"
+                    "/v1/nexus/public-lanes/0/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1299,7 +1299,7 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/0/stake?validator={encoded}"
+                    "/v1/nexus/public-lanes/0/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1328,7 +1328,7 @@ async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/0/stake?validator={encoded}"
+                    "/v1/nexus/public-lanes/0/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),

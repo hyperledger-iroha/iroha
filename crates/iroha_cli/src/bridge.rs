@@ -27,7 +27,6 @@ pub enum Command {
     #[command(subcommand)]
     Sccp(SccpCommand),
 }
-
 #[derive(Subcommand, Debug)]
 pub enum SccpCommand {
     /// Fetch the closed first-release SCCP HTTP surface.
@@ -45,7 +44,6 @@ pub enum SccpCommand {
     /// Prepare or directly submit one protocol-native inbound proof.
     SubmitNativeMessage(SubmitNativeMessageArgs),
 }
-
 #[derive(clap::Args, Debug, Clone)]
 pub struct DetachedSubmitArgs {
     /// File containing the exact canonical padded-base64 transaction payload returned by prepare.

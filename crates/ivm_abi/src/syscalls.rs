@@ -2503,7 +2503,10 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
         numeric.text("decimal_schema_name", surface.numeric.decimal_schema_name)?;
         numeric.field("decimal_schema_hash", &surface.numeric.decimal_schema_hash)?;
         numeric.text("quantity_schema_name", surface.numeric.quantity_schema_name)?;
-        numeric.field("quantity_schema_hash", &surface.numeric.quantity_schema_hash)?;
+        numeric.field(
+            "quantity_schema_hash",
+            &surface.numeric.quantity_schema_hash,
+        )?;
         numeric.u64("frame_header_bytes", surface.numeric.frame_header_bytes)?;
         numeric.u64("int_max_frame_bytes", surface.numeric.int_max_frame_bytes)?;
         numeric.u64(
@@ -3186,10 +3189,7 @@ mod tests {
             Some(PointerType::RetiredAmount)
         );
         assert!(!surface.pointer_type_ids.contains(&0x0010));
-        assert_eq!(
-            PointerType::from_u16(0x0013),
-            Some(PointerType::Quantity)
-        );
+        assert_eq!(PointerType::from_u16(0x0013), Some(PointerType::Quantity));
         assert!(surface.pointer_type_ids.contains(&0x0013));
         assert_eq!(
             surface.numeric.retired_amount_pointer_type_id,
@@ -3210,10 +3210,7 @@ mod tests {
         assert_eq!(surface.numeric.int_schema_name, INT_SCHEMA_NAME_V1);
         assert_eq!(surface.numeric.int_schema_hash, INT_SCHEMA_HASH_V1);
         assert_eq!(surface.numeric.decimal_schema_name, DECIMAL_SCHEMA_NAME_V1);
-        assert_eq!(
-            surface.numeric.decimal_schema_hash,
-            DECIMAL_SCHEMA_HASH_V1
-        );
+        assert_eq!(surface.numeric.decimal_schema_hash, DECIMAL_SCHEMA_HASH_V1);
         assert_eq!(
             surface.numeric.quantity_schema_name,
             QUANTITY_SCHEMA_NAME_V1
@@ -3310,12 +3307,9 @@ mod tests {
         );
 
         assert_surface_mutation_changes_hash(|changed| {
-            let numeric_id = changed
+            changed
                 .pointer_type_ids
-                .iter_mut()
-                .find(|type_id| **type_id == PointerType::Decimal as u16)
-                .expect("Decimal pointer type is allowed");
-            *numeric_id += 1;
+                .retain(|type_id| *type_id != PointerType::Decimal as u16);
         });
         assert_surface_mutation_changes_hash(|changed| {
             changed.numeric.retired_amount_pointer_type_id += 1;

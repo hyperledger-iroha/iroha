@@ -58,7 +58,7 @@ const ROUTE_CHECKS: &[(&str, &str, &[u16])] = &[
     ("validator_sets", "/v1/sumeragi/validator-sets", &[200]),
     (
         "public_lane_validators",
-        "/v1/nexus/public_lanes/0/validators",
+        "/v1/nexus/public-lanes/0/validators",
         &[200],
     ),
     // A missing selector should reach the mounted contract-state route and be

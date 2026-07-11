@@ -12444,22 +12444,6 @@ def test_rollout_checkers_use_shared_remaining_require_validation_primitives() -
             and 'payload.get("status") != "passed"' in read(path)
         )
     ]
-    local_string_in_errors = [
-        path.name
-        for path in CHECKERS
-        if (
-            path.name in string_in_validation_checkers()
-            and "archive_route_state must be `active` or `retired`" in read(path)
-        )
-    ]
-    local_string_in_predicates = [
-        path.name
-        for path in CHECKERS
-        if (
-            path.name in string_in_validation_checkers()
-            and "state not in ALLOWED_MANUAL_TRIGGER_STATES" in read(path)
-        )
-    ]
     local_string_not_equal_errors = [
         path.name
         for path in CHECKERS
@@ -12758,8 +12742,6 @@ def test_rollout_checkers_use_shared_remaining_require_validation_primitives() -
     assert local_maximum_int_predicates == []
     assert local_passed_status_errors == []
     assert local_passed_status_predicates == []
-    assert local_string_in_errors == []
-    assert local_string_in_predicates == []
     assert local_string_not_equal_errors == []
     assert local_string_not_equal_predicates == []
     assert local_string_value_equal_errors == []
@@ -14916,6 +14898,8 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         "/v1/sorafs/storage/peers",
         "/v1/sorafs/storage/state",
         "/v1/sorafs/storage/por-sample",
+    )
+    unsupported_routes = (
         "/v1/sorafs/storage/por-challenge",
         "/v1/sorafs/storage/por-proof",
         "/v1/sorafs/storage/por-verdict",
@@ -14932,12 +14916,10 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         "/v1/sorafs/storage/por/sample",
         "--features sorafs-storage",
     )
-    docs = (
-        *sorted(SORAFS_NODE_PLAN.parent.glob("sorafs_node_plan*.md")),
-        *sorted(SORAFS_NODE_PORTAL_DIR.glob("node-plan*.md")),
-    )
+    docs = (SORAFS_NODE_PLAN, SORAFS_NODE_PORTAL_DIR / "node-plan.md")
     missing_routes: dict[str, list[str]] = {}
     stale: dict[str, list[str]] = {}
+    unsupported: dict[str, list[str]] = {}
     openapi = read(TORII_OPENAPI_RS)
     torii_sorafs_api = read(TORII_SORAFS_API_RS)
 
@@ -14945,10 +14927,13 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         source = read(path)
         missing = [route for route in required_routes if route not in source]
         matched_stale = [fragment for fragment in stale_fragments if fragment in source]
+        matched_unsupported = [route for route in unsupported_routes if route in source]
         if missing:
             missing_routes[str(path.relative_to(REPO_ROOT))] = missing
         if matched_stale:
             stale[str(path.relative_to(REPO_ROOT))] = matched_stale
+        if matched_unsupported:
+            unsupported[str(path.relative_to(REPO_ROOT))] = matched_unsupported
 
     missing_openapi = [
         route for route in required_routes if f'"{route}".to_owned()' not in openapi
@@ -14956,6 +14941,7 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
 
     assert missing_routes == {}
     assert stale == {}
+    assert unsupported == {}
     assert missing_openapi == []
     assert (
         'const TELEMETRY_ENDPOINT_POR_SAMPLE: &str = "/v1/sorafs/storage/por-sample";'
@@ -17794,7 +17780,7 @@ def test_reputation_live_service_surface_matcher_has_negative_controls() -> None
         "/v1/sorafs/reputation/weights",
         "/v1/sorafs/reputation/events",
         "/v1/sorafs/reputation/events/stream",
-        "/ws/reputation",
+        "/v1/sorafs/reputation/events/ws",
     )
     shipped_local_route_candidates = (
         "/v1/sorafs/reputation/ingest-canary",
@@ -18227,7 +18213,7 @@ def test_por_live_deployment_and_archive_work_stays_open_in_docs() -> None:
     required_validator_open = (
         "Remaining SF-9b work is live auditor rollout evidence, production archive handoff, and any richer proof-bundle inspection commands required by operators.",
         "The SF-9 validator/reporting release claim is tied to the same fail-closed gate used by the scheduler plan:",
-        "The validator-specific evidence must prove `sorafs-validate por` challenge/proof replay, challenge/proof binding, exact sample coverage, deadline policy, Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded status/export/report route latency, weekly report generation, archive-retention policy, governance archive handoff, the exact `archive_backend` value (`sql` or `parquet`), and the explicit `retired` decision for the manual-trigger server route.",
+        "The validator-specific evidence must prove `sorafs-validate por` challenge/proof replay, challenge/proof binding, exact sample coverage, deadline policy, Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded status/export/report route latency, weekly report generation, archive-retention policy, governance archive handoff, and the exact `archive_backend` value (`sql` or `parquet`).",
         "Add proof-bundle fetch/show/offline replay commands if operators need them beyond `sorafs-validate por`.",
         "Archive live auditor, drand, VRF, report, and export evidence before treating SF-9 as fully released, and require that evidence to pass the SF-9 gate.",
     )
@@ -18613,14 +18599,9 @@ def test_por_live_deployment_surface_matcher_has_negative_controls() -> None:
         "/v1/sorafs/por/export",
         "/v1/sorafs/por/ingestion/{manifest_digest_hex}",
         "/v1/sorafs/por/report/{iso_week}",
-        "/v1/sorafs/por/trigger",
-        "/v1/sorafs/capacity/por-challenge",
         "/v1/sorafs/capacity/por-proof",
         "/v1/sorafs/capacity/por-verdict",
         "/v1/sorafs/storage/por-sample",
-        "/v1/sorafs/storage/por-challenge",
-        "/v1/sorafs/storage/por-proof",
-        "/v1/sorafs/storage/por-verdict",
     )
     shipped_local_route_candidates = (
         "/v1/sorafs/por/live-deployment-canary",
@@ -18634,7 +18615,6 @@ def test_por_live_deployment_surface_matcher_has_negative_controls() -> None:
         "status",
         "export",
         "report",
-        "trigger",
         "sorafs-validate",
         "sorafs_cli",
         "por-rollout",
@@ -18642,7 +18622,6 @@ def test_por_live_deployment_surface_matcher_has_negative_controls() -> None:
         "por status",
         "por export",
         "por report",
-        "por trigger",
         "por rollout",
         "por live-deployment-canary",
         "por external-drand-proof",

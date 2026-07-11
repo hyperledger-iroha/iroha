@@ -46,14 +46,18 @@ public final class TransportResponse {
     if (source == null) {
       return Collections.emptyMap();
     }
-    final Map<String, List<String>> copy = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+    final Map<String, List<String>> merged = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
     for (final Map.Entry<String, List<String>> entry : source.entrySet()) {
       final List<String> values =
-          entry.getValue() == null
-              ? Collections.emptyList()
-              : Collections.unmodifiableList(new ArrayList<>(entry.getValue()));
-      copy.put(entry.getKey(), values);
+          merged.computeIfAbsent(entry.getKey(), ignored -> new ArrayList<>());
+      if (entry.getValue() != null) {
+        values.addAll(entry.getValue());
+      }
     }
+    final Map<String, List<String>> copy = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+    merged.forEach(
+        (name, values) ->
+            copy.put(name, Collections.unmodifiableList(new ArrayList<>(values))));
     return copy;
   }
 

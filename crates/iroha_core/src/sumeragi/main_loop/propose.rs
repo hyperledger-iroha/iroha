@@ -555,6 +555,7 @@ fn known_lane_block_tips_for_proposal(
             .filter(|relay| {
                 let relay_proposal_height = relay.block_header.height().get();
                 relay.is_merge_admissible()
+                    && relay.block_header.height().get() <= proposal_height
                     && relay.lane_block_descriptor_hash.is_some()
                     && state.da_lane_visible_after_reset(relay_proposal_height, relay.lane_id)
                     && crate::state::consensus_lane_dataspace_at_height(
@@ -2712,17 +2713,17 @@ impl Actor {
                 .committed_lane_blocks
                 .unapplied_lane_ids_for_admissible_lanes_for_state(
                     state,
-                    |lane_id, dataspace_id, _lane_block_height, artifact_proposal_height| {
-                        state
-                            .lane_incarnation_at_height(lane_id, artifact_proposal_height)
-                            .is_some_and(|lane_incarnation| {
-                                self.lane_block_artifact_targets_active_route(
-                                    lane_id,
-                                    dataspace_id,
-                                    lane_incarnation,
-                                    artifact_proposal_height,
-                                )
-                            })
+                    |lane_id,
+                     dataspace_id,
+                     lane_incarnation,
+                     _lane_block_height,
+                     artifact_proposal_height| {
+                        self.lane_block_artifact_targets_active_route(
+                            lane_id,
+                            dataspace_id,
+                            lane_incarnation,
+                            artifact_proposal_height,
+                        )
                     },
                 ),
         );

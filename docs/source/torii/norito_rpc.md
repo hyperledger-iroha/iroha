@@ -44,7 +44,7 @@ SoraNet handshake guide (`docs/source/soranet_handshake.md`).
   - Otherwise Torii replies with Norito JSON (`application/json`) so clients
     without binary support can interoperate.
 - Media type parameters are ignored during negotiation. JSON callers may send
-  `application/json`, `text/json`, or any `application/*+json` media type.
+  `application/json` or any `application/*+json` media type.
 - Unsupported media types yield `415 Unsupported Media Type` with a plain-text
   explanation.
 

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
 
@@ -51,8 +51,9 @@ Sumeragi v2 apply жолы артефактты тексеріп, өзгерме
 тексерілмейтін sidecar жабық түрде қабылданбайды; қолжетімділік соңғы in-memory тарих
 терезесімен шектелмейді.
 
-Stateless тексергіш version, chain, height, header hash, context, subject және CommitQC-ді
-дәл сәйкестендіріп, артефакттағы барлық PoP-ты тексереді. Қол қоюшы индекстері қатаң
+Stateless тексергіш version, chain, height, header hash, header-дің canonical predecessor-ы
+және view-ы, context, subject және CommitQC-ді дәл сәйкестендіріп, артефакттағы барлық PoP-ты
+тексереді. Қол қоюшы индекстері қатаң
 өспелі және диапазонда болуы керек. CommitQC validator саны мен дауыс қуатының екі
 quorum талабын да орындап, нақты Sumeragi v2 vote preimage үшін BLS aggregate signature
 жарамды болуы тиіс.
@@ -74,9 +75,7 @@ SCCP сол `BridgeFinalityProof` түрін қолданады. Хабар бе
 ## Bundle және API
 
 `BridgeFinalityBundle` дәл `{ commitment, finality_proof }` пішімінде. Commitment:
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }`. Optional MMR өрістері тек commitments; олар финалдылық
-та, inclusion proof та емес.
+`{ chain_id, height_context_id, block_height, block_hash }`.
 
 - `GET /v1/bridge/finality/{height}` `BridgeFinalityProof` қайтарады;
 - `GET /v1/bridge/finality/bundle/{height}` `BridgeFinalityBundle` қайтарады.

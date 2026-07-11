@@ -108,6 +108,7 @@ public final class ToriiEventStreamClient {
     headers.putIfAbsent("Cache-Control", "no-cache");
     headers.putIfAbsent("Connection", "keep-alive");
     options.headers().forEach(headers::put);
+    rejectUnsupportedCanonicalResume(path, target, headers);
     TransportSecurity.requireHttpRequestAllowed(
         "ToriiEventStreamClient", baseUri, target, headers, null);
     final TransportRequest.Builder builder = TransportRequest.builder().setUri(target).setMethod("GET");
@@ -145,6 +146,40 @@ public final class ToriiEventStreamClient {
     }
     builder.append(query);
     return URI.create(builder.toString());
+  }
+
+  private static void rejectUnsupportedCanonicalResume(
+      final String requestedPath,
+      final URI target,
+      final Map<String, String> headers) {
+    if (!isCanonicalLiveSsePath(requestedPath, target)) {
+      return;
+    }
+    for (final String headerName : headers.keySet()) {
+      if ("Last-Event-ID".equalsIgnoreCase(headerName)) {
+        throw new IllegalArgumentException(
+            "Last-Event-ID is unsupported for canonical live SSE streams because they have no replay log");
+      }
+    }
+  }
+
+  private static boolean isCanonicalLiveSsePath(
+      final String requestedPath, final URI target) {
+    String requestedRawPath = null;
+    if (requestedPath != null && !requestedPath.trim().isEmpty()) {
+      try {
+        requestedRawPath = URI.create(requestedPath).getRawPath();
+      } catch (final IllegalArgumentException ignored) {
+        // The ordinary URI construction path reports malformed request paths.
+      }
+    }
+    return isCanonicalLiveSseRawPath(requestedRawPath)
+        || isCanonicalLiveSseRawPath(target.getRawPath());
+  }
+
+  private static boolean isCanonicalLiveSseRawPath(final String rawPath) {
+    return "/v1/events/sse".equals(rawPath)
+        || "/v1/contracts/events/sse".equals(rawPath);
   }
 
   private static URI normalizeEventSseUriFilter(final URI target) {
@@ -522,10 +557,11 @@ public final class ToriiEventStreamClient {
       final ActiveStream stream,
       final Throwable parseError) {
     stream.closeStreamResponse();
-    if (parseError != null && !(parseError instanceof CancellationException)) {
-      stream.signalFailure(parseError);
-      notifyFailure(request, parseError);
-      listener.onError(parseError);
+    final Throwable cause = parseError == null ? null : unwrapCompletion(parseError);
+    if (cause != null && !(cause instanceof CancellationException)) {
+      stream.signalFailure(cause);
+      notifyFailure(request, cause);
+      listener.onError(cause);
     } else if (!stream.closedByCaller()) {
       listener.onClosed();
       stream.signalSuccess();

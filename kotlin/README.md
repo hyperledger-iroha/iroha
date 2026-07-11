@@ -30,6 +30,24 @@ implementation("org.hyperledger.iroha.sdk:client-android:0.1-SNAPSHOT")
 implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1-SNAPSHOT")
 ```
 
+### Torii server-sent events
+
+`HttpClientTransport.newEventStreamClient()` opens SSE feeds with the same base
+URI, authentication headers, and observers as the HTTP client. The canonical
+`/v1/events/sse` and `/v1/contracts/events/sse` feeds are live-only and have no
+replay log. `ToriiEventStreamClient` therefore rejects every case variant of
+`Last-Event-ID` before dispatch for exactly those two paths; custom streams that
+provide replay may still receive the header through `ToriiEventStreamOptions`.
+
+Raw listeners receive terminal `event: stream_error` frames. Call
+`ServerSentEvent.terminalStreamError()` before application-event projection to
+obtain a strict `ToriiStreamException` containing the stable code, server
+message, optional unsigned dropped-message count, replay flag, and raw JSON.
+Malformed or schema-expanded terminal envelopes fail closed as
+`ToriiStreamProtocolException`; they must not be filtered as unrelated events.
+A reconnect to either canonical feed starts a new live subscription and can
+have a gap.
+
 ### Offline Note wallet flow
 
 `core-jvm` exposes `OfflineBearerCashWallet` over the Offline Note engine for
@@ -81,13 +99,15 @@ val transports = OfflineNoteTransferCapabilities.current(
 Do not render NFC controls when `supportedModalities()` omits NFC; non-NFC
 devices and app builds without HCE should use QR or Nearby only.
 
-JVM core includes an in-memory store and `ToriiOfflineNoteIssuerClient` for
-Torii key-refill. Retired note issue and
-`IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions are
-fail-closed historical APIs; `NativeOfflineNoteProver` and chain-VK proof
-providers also fail closed for retired proof generation. Production offline
-payments use Kagemusha flows. Apps provide canonical auth and a device-binding provider;
-Android secure storage remains in the platform wallet layer. The
+The public `OfflineToriiClient` exposes only readiness for a required asset
+definition, direct-Norito top-up and redeem submissions, and operation status.
+`OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the canonical
+schema-bound request archive; they derive the lowercase idempotency key from
+its nonzero 32-byte `operation_id` field, so callers cannot supply a mismatched
+operation ID.
+The fixture-only `IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund
+submissions and classic proof providers fail closed. Android secure storage
+remains in the platform wallet layer. The
 Android `AndroidOfflineNoteSecureStore` rotates a non-exportable Android
 Keystore key on every committed wallet-state revision and rejects app-data
 rollback or cloned preference snapshots when the old revision key is no longer
@@ -178,21 +198,20 @@ Use
 `canRedeemWitnessless(circuitId, hopCount)` or
 `requiresLineageWitnessForRedeem(circuitId, hopCount)` before online redeem
 construction. `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is `64`, and
-`RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is `true`, so
-witnessless Reserved-lineage online redemption is available for lineage bundles
-inside the 64-hop cap.
-Use `canAppendWitnesslessLineage(previousHopCount)` before attempting a
-witnessless Reserved-lineage append; it returns `true` for previous hop counts
-`1..63`.
+`RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is `false`. The hop
+constant is only the protocol bound: witnessless Reserved-lineage redeem and
+append fail closed for every circuit and hop count, and redeem requires a
+record-backed lineage witness.
+`canAppendWitnesslessLineage(previousHopCount)` therefore returns `false` for
+every input while transition verification is unavailable.
 Use `preferredAppendOutputCircuitId(previousHopCount)` as the default append
-output selector; it selects Reserved-lineage append for previous hop counts `1..63`.
+output selector; it selects semantic recursive aggregation.
 Use `canProveAppendOutputCircuitId(outputCircuitId, previousHopCount)` before
 selecting an append output circuit; semantic recursive append returns true
-through hop 64, and Reserved-lineage append returns true for previous hop
-counts `1..63`.
-The semantic append path is bounded by `COMPACT_TOKEN_MAX_HOPS`; witnessless
-Reserved-lineage append and redeem use the separate
-`RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` cap.
+for previous hop counts `1..63`, while Reserved-lineage append is not currently
+provable. The semantic append path is bounded by `COMPACT_TOKEN_MAX_HOPS`; the
+separate `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` remains a protocol
+bound and does not enable witnessless admission.
 Use `canSelectAppendOutputCircuitId(previousProofCircuitId, outputCircuitId,
 previousHopCount)` to apply the previous-proof transition rule before
 serializing an append request.

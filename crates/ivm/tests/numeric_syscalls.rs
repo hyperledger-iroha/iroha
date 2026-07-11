@@ -8,6 +8,7 @@ use iroha_primitives::{
 use ivm::{
     IVM, Memory, ProgramMetadata, VMError, encoding,
     host::{DefaultHost, IVMHost},
+    ivm_mode,
     numeric::{
         NUMERIC_FAILURE_STATUS, NUMERIC_FAILURE_TRAP, NumericFaultV1, PointerAbiFaultV1,
         RoundingModeV1,
@@ -28,6 +29,18 @@ fn vm_for(syscall: u32, gas: u64) -> IVM {
     let mut vm = IVM::new(gas);
     vm.load_program(&program(syscall))
         .expect("load numeric program");
+    vm.set_host(DefaultHost::new());
+    vm
+}
+
+fn zk_vm_for(syscall: u32, gas: u64) -> IVM {
+    let mut metadata = ProgramMetadata::default_for(1, 0, 1);
+    metadata.mode = ivm_mode::ZK;
+    let mut program = metadata.encode();
+    program.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
+    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    let mut vm = IVM::new(gas);
+    vm.load_program(&program).expect("load ZK numeric program");
     vm.set_host(DefaultHost::new());
     vm
 }
@@ -148,10 +161,19 @@ fn envelope_len(vm: &IVM, pointer: u64) -> u64 {
     u64::try_from(payload + 39).expect("bounded envelope")
 }
 
-fn validation_work_for_envelope(bytes: u64) -> u64 {
-    let frame_bytes = bytes
+fn frame_len_for_envelope(envelope_bytes: u64) -> u64 {
+    envelope_bytes
         .checked_sub(39)
-        .expect("numeric envelope overhead");
+        .expect("numeric envelope includes fixed overhead")
+}
+
+fn output_length_work(value: &BigInt) -> u64 {
+    let magnitude_bits = u64::try_from(value.bit_len()).expect("bounded bit width");
+    ivm::numeric_gas::limbs_for_bits(magnitude_bits + 1)
+}
+
+fn validation_work_for_envelope(bytes: u64) -> u64 {
+    let frame_bytes = bytes.checked_sub(39).expect("numeric envelope overhead");
     ivm::numeric_gas::numeric_frame_validation_work(
         usize::try_from(frame_bytes).expect("bounded frame length"),
     )
@@ -165,8 +187,8 @@ fn decimal_validation_work_for_envelope(bytes: u64, value: &Numeric) -> u64 {
             .expect("bounded bit width")
             .max(1)
             .div_ceil(64);
-        work += ivm::numeric_gas::quotient_remainder_work(limbs, 1)
-            .expect("bounded canonicality work");
+        work +=
+            ivm::numeric_gas::quotient_remainder_work(limbs, 1).expect("bounded canonicality work");
     }
     work
 }
@@ -511,14 +533,22 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
         vm.set_register(11, rhs);
         vm.set_register(14, NUMERIC_FAILURE_TRAP);
         vm.run().expect("width-boundary addition");
+        let output_value = result_int(&vm);
         let output_bytes = envelope_len(&vm, vm.register(10));
         let input_bytes = u64::try_from(lhs_envelope.len() + rhs_envelope.len()).unwrap();
+        let input_hash_bytes = frame_len_for_envelope(lhs_envelope.len() as u64)
+            + frame_len_for_envelope(rhs_envelope.len() as u64);
+        let output_frame_bytes = frame_len_for_envelope(output_bytes);
         let validation = validation_work_for_envelope(lhs_envelope.len() as u64)
             + validation_work_for_envelope(rhs_envelope.len() as u64);
         let expected = ivm::numeric_gas::successful_call_gas(
             input_bytes,
+            input_hash_bytes,
             output_bytes,
-            limbs as u64,
+            output_frame_bytes,
+            output_length_work(&output_value),
+            ivm::numeric_gas::checked_int_additive_work(limbs as u64, 1)
+                .expect("bounded checked-add work"),
             validation,
             0,
         )
@@ -553,12 +583,14 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
     assert_eq!(aligned_lhs, 10);
     let comparison_work = ivm::numeric_gas::aligned_work(8, 28, aligned_lhs, 1, 0, aligned_rhs)
         .expect("comparison work");
-    let validation = decimal_validation_work_for_envelope(
-        lhs_envelope.len() as u64,
-        &maximum,
-    ) + decimal_validation_work_for_envelope(rhs_envelope.len() as u64, &tiny);
+    let validation = decimal_validation_work_for_envelope(lhs_envelope.len() as u64, &maximum)
+        + decimal_validation_work_for_envelope(rhs_envelope.len() as u64, &tiny);
     let expected = ivm::numeric_gas::successful_call_gas(
         (lhs_envelope.len() + rhs_envelope.len()) as u64,
+        frame_len_for_envelope(lhs_envelope.len() as u64)
+            + frame_len_for_envelope(rhs_envelope.len() as u64),
+        0,
+        0,
         0,
         comparison_work,
         validation,
@@ -591,7 +623,7 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
     );
     assert_eq!(
         product_context.phase_charge(SyscallMeteringPhase::Arithmetic),
-        4 * 8 * 8,
+        4 * (8 * 8 + 16),
     );
     assert_eq!(product.register(10), 0);
 
@@ -639,10 +671,9 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
         vm.set_register(11, rhs);
         vm.set_register(14, NUMERIC_FAILURE_TRAP);
         let mut input_bytes = (lhs_envelope.len() + rhs_envelope.len()) as u64;
-        let mut validation = decimal_validation_work_for_envelope(
-            lhs_envelope.len() as u64,
-            &lhs_value,
-        ) + decimal_validation_work_for_envelope(rhs_envelope.len() as u64, &rhs_value);
+        let mut validation =
+            decimal_validation_work_for_envelope(lhs_envelope.len() as u64, &lhs_value)
+                + decimal_validation_work_for_envelope(rhs_envelope.len() as u64, &rhs_value);
         if let Some(scale) = scale {
             let scale_envelope = ivm::numeric_tlv::encode_int(&BigInt::from_i128(scale.into()))
                 .expect("scale envelope");
@@ -653,10 +684,14 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
             validation += validation_work_for_envelope(scale_envelope.len() as u64);
         }
         vm.run().expect("representative decimal operation");
+        let output_value = result_decimal(&vm);
         let output_bytes = envelope_len(&vm, vm.register(10));
         let expected = ivm::numeric_gas::successful_call_gas(
             input_bytes,
+            input_bytes - 39 * if scale.is_some() { 3 } else { 2 },
             output_bytes,
+            frame_len_for_envelope(output_bytes),
+            output_length_work(output_value.mantissa()),
             observed_work,
             validation,
             0,
@@ -792,9 +827,13 @@ fn exact_and_rounded_decimal_division_have_distinct_faults_and_signed_public_mod
     );
 
     for (mode, expected_positive, expected_negative) in [
+        (RoundingModeV1::TowardZero, "2", "-2"),
+        (RoundingModeV1::AwayFromZero, "3", "-3"),
         (RoundingModeV1::Floor, "2", "-3"),
         (RoundingModeV1::Ceil, "3", "-2"),
         (RoundingModeV1::NearestEven, "2", "-2"),
+        (RoundingModeV1::NearestAway, "3", "-3"),
+        (RoundingModeV1::NearestTowardZero, "2", "-2"),
     ] {
         for (numerator, expected) in [(5, expected_positive), (-5, expected_negative)] {
             let mut vm = vm_for(syscalls::SYSCALL_DECIMAL_DIV_ROUND, u64::MAX);
@@ -874,7 +913,9 @@ fn quantity_is_nominal_and_underflow_is_recoverable_without_output() {
     same_operands_add.set_register(10, lhs);
     same_operands_add.set_register(11, rhs);
     same_operands_add.set_register(14, NUMERIC_FAILURE_TRAP);
-    same_operands_add.run().expect("same-width quantity addition");
+    same_operands_add
+        .run()
+        .expect("same-width quantity addition");
     assert_eq!(result_quantity(&same_operands_add).to_string(), "3");
     assert_eq!(
         same_operands_add
@@ -930,7 +971,7 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
         Err(VMError::NumericFault(NumericFaultV1::InvalidFailureMode))
     );
 
-    for invalid_tag in [3, 4, 5, 6, u64::MAX] {
+    for invalid_tag in [7, u64::MAX] {
         let mut rounding = vm_for(syscalls::SYSCALL_DECIMAL_DIV_ROUND, u64::MAX);
         let lhs = install_decimal(&mut rounding, &Numeric::new(1, 0));
         let rhs = install_decimal(&mut rounding, &Numeric::new(2, 0));
@@ -1109,17 +1150,14 @@ fn every_decode_and_output_phase_has_a_charge_before_work() {
         .expect("reference envelope")
         .len()
         - 39;
-    assert_eq!(
-        context.phase_charge(SyscallMeteringPhase::PointerHeader),
-        7
-    );
+    assert_eq!(context.phase_charge(SyscallMeteringPhase::PointerHeader), 7);
     assert_eq!(
         context.phase_charge(SyscallMeteringPhase::PointerEnvelope),
         u64::try_from(frame_bytes).expect("bounded frame")
     );
     assert_eq!(
         context.phase_charge(SyscallMeteringPhase::PayloadHash),
-        32
+        32 + u64::try_from(frame_bytes).expect("bounded frame")
     );
     let instruction_gas =
         ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
@@ -1156,6 +1194,100 @@ fn every_decode_and_output_phase_has_a_charge_before_work() {
         );
         completed += charge;
     }
+}
+
+#[test]
+fn maximum_frame_hash_and_output_traversals_are_pinned_and_oog_safe() {
+    let syscall = syscalls::SYSCALL_INT_NEG;
+    let value = max_int();
+    let envelope = ivm::numeric_tlv::encode_int(&value).expect("maximum envelope");
+    let frame_bytes = frame_len_for_envelope(envelope.len() as u64);
+    assert_eq!(frame_bytes, 108);
+
+    let mut baseline = vm_for(syscall, u64::MAX);
+    let operand = baseline.alloc_host_tlv(&envelope).expect("maximum operand");
+    baseline.set_register(10, operand);
+    baseline.set_register(14, NUMERIC_FAILURE_TRAP);
+    baseline.run().expect("maximum negation");
+    let result = result_int(&baseline);
+    let output_bytes = envelope_len(&baseline, baseline.register(10));
+    let output_frame = frame_len_for_envelope(output_bytes);
+    let context = baseline
+        .last_staged_syscall_context()
+        .expect("maximum context")
+        .clone();
+    assert_eq!(
+        context.phase_charge(SyscallMeteringPhase::PayloadHash),
+        32 + frame_bytes
+    );
+    assert_eq!(
+        context.phase_charge(SyscallMeteringPhase::OutputSerialization),
+        4 * output_length_work(&result) + output_bytes + 2 * output_frame
+    );
+
+    let instruction = ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
+    let hash_prefix = instruction
+        + context.phase_charge(SyscallMeteringPhase::Entry)
+        + context.phase_charge(SyscallMeteringPhase::PointerHeader)
+        + context.phase_charge(SyscallMeteringPhase::PointerEnvelope);
+    let mut hash_oog = vm_for(
+        syscall,
+        hash_prefix + context.phase_charge(SyscallMeteringPhase::PayloadHash) - 1,
+    );
+    let operand = hash_oog
+        .alloc_host_tlv(&envelope)
+        .expect("maximum hash operand");
+    hash_oog.set_register(10, operand);
+    hash_oog.set_register(14, NUMERIC_FAILURE_TRAP);
+    assert_eq!(
+        hash_oog.run(),
+        Err(VMError::SyscallOutOfGas {
+            syscall,
+            phase: SyscallMeteringPhase::PayloadHash.tag(),
+        })
+    );
+
+    let output_charge = context.phase_charge(SyscallMeteringPhase::OutputSerialization);
+    let before_output = instruction + context.charged() - output_charge;
+    let mut output_oog = vm_for(syscall, before_output + output_charge - 1);
+    let operand = output_oog
+        .alloc_host_tlv(&envelope)
+        .expect("maximum output operand");
+    output_oog.set_register(10, operand);
+    output_oog.set_register(14, NUMERIC_FAILURE_TRAP);
+    assert_eq!(
+        output_oog.run(),
+        Err(VMError::SyscallOutOfGas {
+            syscall,
+            phase: SyscallMeteringPhase::OutputSerialization.tag(),
+        })
+    );
+    assert_eq!(output_oog.register(10), operand);
+}
+
+#[test]
+fn entry_oog_precedes_staged_numeric_privacy_validation() {
+    let syscall = syscalls::SYSCALL_INT_NEG;
+    let instruction_gas =
+        ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
+    let mut vm = zk_vm_for(
+        syscall,
+        instruction_gas + ivm::numeric_gas::NUMERIC_ENTRY_GAS - 1,
+    );
+    vm.set_register(10, 1);
+    vm.registers.set_tag(10, true);
+    assert_eq!(
+        vm.run(),
+        Err(VMError::SyscallOutOfGas {
+            syscall,
+            phase: SyscallMeteringPhase::Entry.tag(),
+        })
+    );
+    let context = vm
+        .last_staged_syscall_context()
+        .expect("entry OOG staged context");
+    assert_eq!(context.charged(), 0);
+    assert_eq!(context.completion(), Some(SyscallCompletion::Trap));
 }
 
 #[test]
@@ -1203,6 +1335,20 @@ fn every_stable_staged_phase_tag_is_reachable_in_production_numeric_paths() {
 
 #[test]
 fn repeated_arithmetic_normalization_and_scale_steps_are_individually_oog_safe() {
+    let wrapping = collect_oog_prefixes(syscalls::SYSCALL_INT_WRAP_MUL, |vm| {
+        let maximum = max_int();
+        let lhs = install_int(vm, &maximum);
+        let rhs = install_int(vm, &maximum);
+        vm.set_register(10, lhs);
+        vm.set_register(11, rhs);
+    });
+    assert!(
+        wrapping
+            .get(&SyscallMeteringPhase::Arithmetic.tag())
+            .is_some_and(|prefixes| prefixes.len() >= 2),
+        "wrapping multiplication and its 512-bit reduction have separate OOG boundaries",
+    );
+
     let scaled_decode = collect_oog_prefixes(syscalls::SYSCALL_DECIMAL_ADD, |vm| {
         let lhs = install_decimal(vm, &"0.1".parse().expect("lhs"));
         let rhs = install_decimal(vm, &"0.2".parse().expect("rhs"));

@@ -95,7 +95,6 @@ Torii 转发入站身份验证相关标头以进行工具调度：
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 客户端还可以通过 `arguments.headers` 提供额外的每次调用标头。
 `content-length`、`host` 和 `arguments.headers` 中的 `connection` 将被忽略。

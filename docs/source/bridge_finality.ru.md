@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 ---
 
 <!--
@@ -66,7 +66,8 @@ SPDX-License-Identifier: Apache-2.0
 2. корректные контекст, взвешенный реестр, quorum, родителя и переход эпохи;
 3. точное совпадение высоты, context id, subject, повторного хеша и CommitQC в
    фазе `Commit`;
-4. ожидаемый chain id и пересчитанные из header высоту и хеш;
+4. ожидаемый chain id и пересчитанные из header высоту, хеш,
+   предшественника и view, точно связанные с артефактом;
 5. долговечно встроенный в артефакт действительный BLS-normal PoP для каждого
    участника реестра;
 6. строго возрастающие индексы подписантов в допустимом диапазоне;
@@ -113,11 +114,9 @@ Merkle заверяют сообщение. Сырое доказательст�
 ## Bundle и API
 
 `BridgeFinalityBundle` содержит ровно `{ commitment, finality_proof }`.
-Обязательство имеет вид `{ chain_id, height_context_id, block_height,
-block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks? }`. Необязательные поля MMR —
-только обязательства: они помогают закрепить корень, но не заменяют финальность
-и не являются доказательством включения. SCCP использует типизированную ветвь
-Merkle и управляемый якорь.
+Обязательство имеет точный вид
+`{ chain_id, height_context_id, block_height, block_hash }`. SCCP использует
+типизированную ветвь Merkle и управляемый якорь.
 
 - `GET /v1/bridge/finality/{height}` возвращает `BridgeFinalityProof`.
 - `GET /v1/bridge/finality/bundle/{height}` возвращает `BridgeFinalityBundle`.

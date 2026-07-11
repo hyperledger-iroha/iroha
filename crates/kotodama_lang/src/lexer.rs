@@ -399,19 +399,14 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
 }
 
 fn validate_integer_literal(text: &str) -> Result<(), String> {
-    let (digits, radix) = if let Some(digits) = text
-        .strip_prefix("0x")
-        .or_else(|| text.strip_prefix("0X"))
-    {
-        (digits, 16)
-    } else if let Some(digits) = text
-        .strip_prefix("0b")
-        .or_else(|| text.strip_prefix("0B"))
-    {
-        (digits, 2)
-    } else {
-        (text, 10)
-    };
+    let (digits, radix) =
+        if let Some(digits) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            (digits, 16)
+        } else if let Some(digits) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
+            (digits, 2)
+        } else {
+            (text, 10)
+        };
     if digits.is_empty() {
         return Err("integer literal requires at least one digit".to_owned());
     }
@@ -441,9 +436,7 @@ fn validate_decimal_literal(text: &str) -> Result<(), String> {
         validate_digit_component(fractional, 10, "decimal fractional")?;
     }
     if let Some(exponent) = exponent {
-        let digits = exponent
-            .strip_prefix(['+', '-'])
-            .unwrap_or(exponent);
+        let digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
         validate_digit_component(digits, 10, "decimal exponent")?;
     }
     if fractional.is_none() && exponent.is_none() {
@@ -722,9 +715,7 @@ mod tests {
 
     #[test]
     fn every_retired_numeric_suffix_has_a_stable_diagnostic() {
-        for spelling in [
-            "1i64", "1u128", "1amt", "1.25amt", "1.25float", "10money",
-        ] {
+        for spelling in ["1i64", "1u128", "1amt", "1.25amt", "1.25float", "10money"] {
             let error = lex(spelling).expect_err("retired numeric suffix must fail");
             assert!(
                 error.contains("E_RETIRED_NUMERIC_SUFFIX"),

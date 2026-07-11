@@ -568,16 +568,11 @@ where
     (value.to_string() == spelling).then_some(value)
 }
 
-enum GetterValue {
-    Word(u64),
-    Pointer(PointerType, Vec<u8>),
-}
-
-fn getter_value(number: u32, field: &njson::Value) -> Option<GetterValue> {
+fn getter_value(number: u32, field: &njson::Value) -> Option<(PointerType, Vec<u8>)> {
     Some(match number {
         syscalls::SYSCALL_JSON_GET_JSON => {
             let json = Json::from_norito_value_ref(field).ok()?;
-            GetterValue::Pointer(PointerType::Json, to_bytes(&json).ok()?)
+            (PointerType::Json, to_bytes(&json).ok()?)
         }
         syscalls::SYSCALL_JSON_GET_NAME => {
             let raw = field.as_str()?;
@@ -585,20 +580,20 @@ fn getter_value(number: u32, field: &njson::Value) -> Option<GetterValue> {
             if value.as_ref() != raw {
                 return None;
             }
-            GetterValue::Pointer(PointerType::Name, to_bytes(&value).ok()?)
+            (PointerType::Name, to_bytes(&value).ok()?)
         }
-        syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => GetterValue::Pointer(
+        syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => (
             PointerType::AccountId,
             to_bytes(&canonical_account(field.as_str()?)?).ok()?,
         ),
-        syscalls::SYSCALL_JSON_GET_NFT_ID => GetterValue::Pointer(
+        syscalls::SYSCALL_JSON_GET_NFT_ID => (
             PointerType::NftId,
             to_bytes(&canonical_from_str::<NftId>(field.as_str()?)?).ok()?,
         ),
         syscalls::SYSCALL_JSON_GET_BLOB_HEX => {
-            GetterValue::Pointer(PointerType::Blob, canonical_hex_bytes(field.as_str()?)?)
+            (PointerType::Blob, canonical_hex_bytes(field.as_str()?)?)
         }
-        syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID => GetterValue::Pointer(
+        syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID => (
             PointerType::AssetDefinitionId,
             to_bytes(&canonical_asset_definition(field.as_str()?)?).ok()?,
         ),
@@ -607,7 +602,7 @@ fn getter_value(number: u32, field: &njson::Value) -> Option<GetterValue> {
                 .ok()?
                 .encode_frame()
                 .ok()?;
-            GetterValue::Pointer(PointerType::Int, frame)
+            (PointerType::Int, frame)
         }
         syscalls::SYSCALL_JSON_GET_DECIMAL => {
             let value = canonical_numeric_string::<Numeric>(field)?;
@@ -615,13 +610,13 @@ fn getter_value(number: u32, field: &njson::Value) -> Option<GetterValue> {
                 .ok()?
                 .encode_frame()
                 .ok()?;
-            GetterValue::Pointer(PointerType::Decimal, frame)
+            (PointerType::Decimal, frame)
         }
         syscalls::SYSCALL_JSON_GET_QUANTITY => {
             let frame = QuantityValueV1::new(canonical_numeric_string::<Quantity>(field)?)
                 .encode_frame()
                 .ok()?;
-            GetterValue::Pointer(PointerType::Quantity, frame)
+            (PointerType::Quantity, frame)
         }
         _ => return None,
     })
@@ -657,11 +652,7 @@ pub fn typed_getter(
     let input_bytes = json_tlv.payload.len().saturating_add(key_tlv.payload.len());
     let layout = crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;
     let (handle, payload_bytes) = match converted {
-        Some(GetterValue::Word(word)) => (
-            crate::sum::allocate_words(vm, layout, 1, &[word])?,
-            core::mem::size_of::<u64>(),
-        ),
-        Some(GetterValue::Pointer(pointer_type, payload)) => {
+        Some((pointer_type, payload)) => {
             let pointer = allocate_tlv(vm, pointer_type, &payload)?;
             (
                 crate::sum::allocate_words(vm, layout, 1, &[pointer])?,

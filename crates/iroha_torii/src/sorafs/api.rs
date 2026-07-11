@@ -24,7 +24,7 @@ use axum::{
     Json,
     body::{Body, Bytes},
     extract::{
-        ConnectInfo, Path, State,
+        ConnectInfo, Extension, Path, State,
         ws::{Message as WsMessage, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
@@ -2365,30 +2365,6 @@ pub struct ModerationBallotTallyRequestDto {
     pub round_id: String,
     /// Ignored by public handlers; tally uses server-side Iroha network time.
     pub now_unix_ms: Option<u64>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload retained for the retired `/v1/sorafs/storage/por-challenge` route.
-pub struct StoragePorChallengeDto {
-    /// Base64-encoded Norito PoR challenge payload.
-    pub challenge_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload retained for the retired `/v1/sorafs/storage/por-proof` route.
-pub struct StoragePorProofDto {
-    /// Base64-encoded Norito PoR proof payload.
-    pub proof_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload retained for the retired `/v1/sorafs/storage/por-verdict` route.
-pub struct StoragePorVerdictDto {
-    /// Base64-encoded Norito PoR verdict payload.
-    pub verdict_b64: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -8085,6 +8061,7 @@ pub(crate) async fn handle_get_sorafs_reputation_events_stream(
 
 pub(crate) async fn handle_get_sorafs_reputation_events_ws(
     State(state): State<SharedAppState>,
+    preauth_guard: Option<Extension<crate::PreAuthGuardHandoff>>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -8100,7 +8077,9 @@ pub(crate) async fn handle_get_sorafs_reputation_events_ws(
         .sorafs_node
         .reputation_events_since(query.since, limit);
     let receiver = state.sorafs_node.subscribe_reputation_events();
+    let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
     ws.on_upgrade(move |socket| async move {
+        let _preauth_guard = preauth_guard;
         if let Err(err) = reputation_event_websocket_stream(socket, initial_events, receiver).await
         {
             debug!(%err, "SoraFS reputation WebSocket stream closed with error");
@@ -11123,6 +11102,7 @@ pub(crate) async fn handle_get_sorafs_orderbook_events_stream(
 
 pub(crate) async fn handle_get_sorafs_orderbook_events_ws(
     State(state): State<SharedAppState>,
+    preauth_guard: Option<Extension<crate::PreAuthGuardHandoff>>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -11137,7 +11117,9 @@ pub(crate) async fn handle_get_sorafs_orderbook_events_ws(
         let limit = normalize_limit(query.limit);
         let initial_events = state.sorafs_node.orderbook_events_since(query.since, limit);
         let receiver = state.sorafs_node.subscribe_orderbook_events();
+        let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
         ws.on_upgrade(move |socket| async move {
+            let _preauth_guard = preauth_guard;
             if let Err(err) =
                 orderbook_event_websocket_stream(socket, initial_events, receiver).await
             {
@@ -11662,6 +11644,7 @@ pub(crate) async fn handle_get_sorafs_reserve_lifecycle_events_stream(
 
 pub(crate) async fn handle_get_sorafs_reserve_lifecycle_events_ws(
     State(state): State<SharedAppState>,
+    preauth_guard: Option<Extension<crate::PreAuthGuardHandoff>>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -11677,7 +11660,9 @@ pub(crate) async fn handle_get_sorafs_reserve_lifecycle_events_ws(
         .sorafs_node
         .reserve_lifecycle_events_since(query.since, limit);
     let receiver = state.sorafs_node.subscribe_reserve_lifecycle_events();
+    let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
     ws.on_upgrade(move |socket| async move {
+        let _preauth_guard = preauth_guard;
         if let Err(err) =
             reserve_lifecycle_event_websocket_stream(socket, initial_events, receiver).await
         {
@@ -11953,6 +11938,7 @@ pub(crate) async fn handle_get_sorafs_repair_events_stream(
 
 pub(crate) async fn handle_get_sorafs_repair_events_ws(
     State(state): State<SharedAppState>,
+    preauth_guard: Option<Extension<crate::PreAuthGuardHandoff>>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -11963,7 +11949,9 @@ pub(crate) async fn handle_get_sorafs_repair_events_ws(
     let limit = normalize_limit(query.limit);
     let initial_events = state.sorafs_node.repair_events_since(query.since, limit);
     let receiver = state.sorafs_node.subscribe_repair_events();
+    let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
     ws.on_upgrade(move |socket| async move {
+        let _preauth_guard = preauth_guard;
         if let Err(err) = repair_event_websocket_stream(socket, initial_events, receiver).await {
             debug!(%err, "SoraFS repair WebSocket stream closed with error");
         }
@@ -24102,29 +24090,6 @@ pub(crate) async fn handle_get_sorafs_cid_lookup(
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) async fn handle_get_sorafs_cid_root_redirect(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    uri: Uri,
-    Path(cid): Path<String>,
-) -> Response {
-    if decode_canonical_content_cid(&cid).is_none() {
-        return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
-    }
-
-    if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
-        return response;
-    }
-
-    let mut location = format!("/sorafs/cid/{cid}/");
-    if let Some(query) = uri.query() {
-        location.push('?');
-        location.push_str(query);
-    }
-    permanent_redirect(location)
-}
-
-#[cfg(feature = "app_api")]
 pub(crate) async fn handle_get_sorafs_cid_root(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -28128,100 +28093,6 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
             "unsupported proof_kind; expected `por` or `potr`",
         ),
     }
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_por_challenge(
-    State(_state): State<SharedAppState>,
-    JsonOnly(_req): JsonOnly<StoragePorChallengeDto>,
-) -> Response {
-    retired_storage_por_mutation_response("challenge")
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) fn manual_por_trigger_retired_response() -> Response {
-    let response = json_object(vec![
-        json_entry("error", "manual_por_trigger_retired"),
-        json_entry("route_state", "retired"),
-        json_entry("replacement", "trusted PoR coordinator scheduler"),
-        json_entry(
-            "message",
-            "manual PoR trigger requests are retired; challenges are issued only by the trusted PoR coordinator scheduler",
-        ),
-    ]);
-    (StatusCode::GONE, JsonBody(response)).into_response()
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_por_proof(
-    State(_state): State<SharedAppState>,
-    JsonOnly(_req): JsonOnly<StoragePorProofDto>,
-) -> Response {
-    retired_storage_por_mutation_response("proof")
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_por_verdict(
-    State(_state): State<SharedAppState>,
-    JsonOnly(_req): JsonOnly<StoragePorVerdictDto>,
-) -> Response {
-    retired_storage_por_mutation_response("verdict")
-}
-
-#[cfg(feature = "app_api")]
-fn retired_storage_por_mutation_response(kind: &str) -> Response {
-    let replacement = match kind {
-        "challenge" => "trusted PoR coordinator scheduler".to_owned(),
-        _ => format!("/v1/sorafs/capacity/por-{kind}"),
-    };
-    (
-        StatusCode::GONE,
-        JsonBody(json_object(vec![
-            json_entry("error", "storage_por_mutation_retired"),
-            json_entry("kind", kind),
-            json_entry(
-                "replacement",
-                replacement,
-            ),
-            json_entry(
-                "message",
-                "direct storage PoR mutation routes are retired; use the authenticated capacity PoR lifecycle",
-            ),
-        ])),
-    )
-    .into_response()
-}
-
-#[cfg(feature = "app_api")]
-/// Build a stable retirement response for unsafe legacy capacity PoR mutations.
-pub(crate) fn capacity_por_mutation_retired_response(kind: &str) -> Response {
-    let (error, replacement, message) = match kind {
-        "challenge" => (
-            "capacity_por_challenge_retired",
-            "trusted PoR coordinator scheduler",
-            "externally supplied PoR challenges are retired because beacon and VRF evidence must originate from the trusted coordinator scheduler",
-        ),
-        "observation" => (
-            "capacity_por_observation_retired",
-            "/v1/sorafs/capacity/por-proof and /v1/sorafs/capacity/por-verdict",
-            "manual PoR success/failure observations are retired; metering is derived from the authenticated proof and verdict lifecycle",
-        ),
-        _ => (
-            "capacity_por_mutation_retired",
-            "trusted PoR lifecycle",
-            "this PoR mutation route is retired",
-        ),
-    };
-    (
-        StatusCode::GONE,
-        JsonBody(json_object(vec![
-            json_entry("error", error),
-            json_entry("kind", kind),
-            json_entry("replacement", replacement),
-            json_entry("message", message),
-        ])),
-    )
-        .into_response()
 }
 
 fn header_value(value: impl AsRef<str>, name: &str) -> HeaderValue {
@@ -47526,7 +47397,7 @@ mod advert_tests {
         let cid_root = handle_get_sorafs_cid_root(
             State(state.clone()),
             cid_headers.clone(),
-            format!("/sorafs/cid/{content_cid}/")
+            format!("/sorafs/cid/{content_cid}")
                 .parse::<Uri>()
                 .expect("cid root uri"),
             Path(content_cid.clone()),
@@ -48207,7 +48078,7 @@ mod advert_tests {
         let cid_root = handle_get_sorafs_cid_root(
             State(state.clone()),
             cid_headers,
-            format!("/sorafs/cid/{content_cid}/")
+            format!("/sorafs/cid/{content_cid}")
                 .parse::<Uri>()
                 .expect("preferred cid root uri"),
             Path(content_cid.clone()),
@@ -48385,7 +48256,7 @@ mod advert_tests {
         let cid_root = handle_get_sorafs_cid_root(
             State(state),
             HeaderMap::new(),
-            format!("/sorafs/cid/{content_cid}/")
+            format!("/sorafs/cid/{content_cid}")
                 .parse::<Uri>()
                 .expect("cid root uri"),
             Path(content_cid),
@@ -48533,7 +48404,7 @@ mod advert_tests {
         let cid_root = handle_get_sorafs_cid_root(
             State(state.clone()),
             HeaderMap::new(),
-            format!("/sorafs/cid/{content_cid}/")
+            format!("/sorafs/cid/{content_cid}")
                 .parse::<Uri>()
                 .expect("remote cid root uri"),
             Path(content_cid.clone()),
@@ -48609,7 +48480,7 @@ mod advert_tests {
         let cached_root = handle_get_sorafs_cid_root(
             State(state.clone()),
             isolated_headers,
-            format!("/sorafs/cid/{content_cid}/")
+            format!("/sorafs/cid/{content_cid}")
                 .parse::<Uri>()
                 .expect("cached CID root URI"),
             Path(content_cid),
@@ -49373,115 +49244,6 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn manual_por_trigger_route_is_explicitly_retired() {
-        let response = manual_por_trigger_retired_response();
-        assert_eq!(response.status(), StatusCode::GONE);
-
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode retirement response");
-        assert_eq!(
-            value.get("error").and_then(Value::as_str),
-            Some("manual_por_trigger_retired")
-        );
-        assert_eq!(
-            value.get("route_state").and_then(Value::as_str),
-            Some("retired")
-        );
-        assert_eq!(
-            value.get("replacement").and_then(Value::as_str),
-            Some("trusted PoR coordinator scheduler")
-        );
-    }
-
-    #[tokio::test]
-    async fn capacity_challenge_and_manual_observation_routes_are_retired() {
-        for (kind, expected_error) in [
-            ("challenge", "capacity_por_challenge_retired"),
-            ("observation", "capacity_por_observation_retired"),
-        ] {
-            let response = capacity_por_mutation_retired_response(kind);
-            assert_eq!(response.status(), StatusCode::GONE);
-            let body = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("retirement response body");
-            let value: Value = norito::json::from_slice(&body).expect("decode retirement response");
-            assert_eq!(
-                value.get("error").and_then(Value::as_str),
-                Some(expected_error)
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn storage_por_mutation_routes_are_retired_without_side_effects() {
-        let (challenge, proof, verdict) = sample_por_artifacts();
-
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        let node_view = node.clone();
-        inner.sorafs_node = node;
-        let state = Arc::new(inner);
-
-        let challenge_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&challenge).expect("encode challenge"));
-        let challenge_req = StoragePorChallengeDto { challenge_b64 };
-        let challenge_resp =
-            handle_post_sorafs_storage_por_challenge(State(state.clone()), JsonOnly(challenge_req))
-                .await;
-        assert_eq!(challenge_resp.status(), StatusCode::GONE);
-        let challenge_body = body::to_bytes(challenge_resp.into_body(), usize::MAX)
-            .await
-            .expect("body bytes");
-        let challenge_json: Value =
-            norito::json::from_slice(&challenge_body).expect("challenge response");
-        assert_eq!(
-            challenge_json.get("error").and_then(Value::as_str),
-            Some("storage_por_mutation_retired")
-        );
-
-        let proof_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&proof).expect("encode proof"));
-        let proof_req = StoragePorProofDto { proof_b64 };
-        let proof_resp =
-            handle_post_sorafs_storage_por_proof(State(state.clone()), JsonOnly(proof_req)).await;
-        assert_eq!(proof_resp.status(), StatusCode::GONE);
-        let proof_body = body::to_bytes(proof_resp.into_body(), usize::MAX)
-            .await
-            .expect("body bytes");
-        let proof_json: Value = norito::json::from_slice(&proof_body).expect("proof response");
-        assert_eq!(
-            proof_json.get("replacement").and_then(Value::as_str),
-            Some("/v1/sorafs/capacity/por-proof")
-        );
-
-        let verdict_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&verdict).expect("encode verdict"));
-        let verdict_req = StoragePorVerdictDto { verdict_b64 };
-        let verdict_resp =
-            handle_post_sorafs_storage_por_verdict(State(state.clone()), JsonOnly(verdict_req))
-                .await;
-        assert_eq!(verdict_resp.status(), StatusCode::GONE);
-        let verdict_body = body::to_bytes(verdict_resp.into_body(), usize::MAX)
-            .await
-            .expect("body bytes");
-        let verdict_json: Value =
-            norito::json::from_slice(&verdict_body).expect("verdict response");
-        assert_eq!(
-            verdict_json.get("replacement").and_then(Value::as_str),
-            Some("/v1/sorafs/capacity/por-verdict")
-        );
-
-        let snapshot = node_view.metering_snapshot();
-        assert_eq!(snapshot.por_samples_success, 0);
-        assert_eq!(snapshot.por_samples_total, 0);
-        assert!(node_view.por_ingestion_overview().is_empty());
-    }
-
-    #[tokio::test]
     async fn por_ingestion_readback_limit_bounds_provider_statuses() {
         let (challenge, _, _) = sample_por_artifacts();
         let mut second_challenge = challenge.clone();
@@ -49542,32 +49304,6 @@ mod advert_tests {
                 .and_then(Value::as_u64),
             Some(1)
         );
-    }
-
-    #[tokio::test]
-    async fn retired_storage_por_challenge_does_not_parse_or_mutate_payload() {
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        inner.sorafs_node = node;
-        let state = Arc::new(inner);
-
-        let request = StoragePorChallengeDto {
-            challenge_b64: "!!not_base64!!".to_owned(),
-        };
-        let response =
-            handle_post_sorafs_storage_por_challenge(State(state.clone()), JsonOnly(request)).await;
-        assert_eq!(response.status(), StatusCode::GONE);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error response");
-        let error_msg = value
-            .get("error")
-            .and_then(Value::as_str)
-            .expect("error string");
-        assert_eq!(error_msg, "storage_por_mutation_retired");
-        assert!(state.sorafs_node.por_ingestion_overview().is_empty());
     }
 
     #[tokio::test]

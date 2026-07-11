@@ -52,7 +52,7 @@ La charge utile est un `DaIngestRequest` codé en Norito. Utilisation des répon
 | 500 Erreur interne | Échec inattendu (enregistré + alerte). |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ hachage groupé. La liste d'engagement/les points de terminaison de preuve porte
 vous n’avez pas besoin d’un aller-retour supplémentaire pour lier une preuve à l’ensemble de règles actif.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

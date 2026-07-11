@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 内部错误 |意外失败（记录+警报）。 |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 不需要额外的往返来将证明绑定到活动策略集。
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

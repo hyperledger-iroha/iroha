@@ -16,8 +16,6 @@ mod accounts_onboard;
 mod accounts_portfolio;
 #[path = "../address_parsing.rs"]
 mod address_parsing;
-#[path = "../api_versioning.rs"]
-mod api_versioning;
 #[path = "../app_api_router_smoke.rs"]
 mod app_api_router_smoke;
 #[path = "../asset_definitions_endpoints.rs"]
@@ -26,6 +24,8 @@ mod asset_definitions_endpoints;
 mod configuration_endpoint;
 #[path = "../domains_endpoints.rs"]
 mod domains_endpoints;
+#[path = "../first_release_api.rs"]
+mod first_release_api;
 #[path = "../nfts_endpoints.rs"]
 mod nfts_endpoints;
 #[path = "../router_feature_matrix.rs"]

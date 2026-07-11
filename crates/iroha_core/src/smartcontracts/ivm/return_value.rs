@@ -19,7 +19,6 @@ use iroha_data_model::{
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,
-    numeric::{Numeric, Quantity},
     numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},
 };
 use ivm::{IVM, PointerType, list::ListLayoutV1, sum::SumLayoutV1};
@@ -1844,6 +1843,7 @@ mod tests {
     use iroha_data_model::smart_contract::entrypoint::{
         EntrypointListTypeNodeV1, EntrypointStructTypeNodeV1, MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH,
     };
+    use iroha_primitives::numeric::Quantity;
 
     use super::*;
 

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 ---
 
 <!--
@@ -63,7 +63,8 @@ janela recente de certificados.
 2. contexto, roster ponderado, quorum, pai e transição de época válidos;
 3. igualdade exata de altura, context id, sujeito, hash repetido e CommitQC,
    sempre na fase `Commit`;
-4. chain id esperado e altura/hash recalculados do header;
+4. chain id esperado e altura, hash, predecessor e view recalculados do header,
+   todos vinculados exatamente ao artefato;
 5. um PoP BLS-normal durável e válido no artefato para cada membro do roster;
 6. índices de signatários estritamente crescentes e dentro do intervalo;
 7. simultaneamente pelo menos `floor(2n/3) + 1` signatários distintos e poder
@@ -108,10 +109,9 @@ Taira.
 ## Bundle e API
 
 `BridgeFinalityBundle` contém exatamente `{ commitment, finality_proof }`. O
-compromisso é `{ chain_id, height_context_id, block_height, block_hash,
-mmr_root?, mmr_leaf_index?, mmr_peaks? }`. Os campos MMR opcionais são apenas
-compromissos: ajudam a fixar uma raiz, mas não substituem finalidade nem são
-uma prova de inclusão. SCCP usa seu ramo Merkle tipado e sua âncora governada.
+compromisso é exatamente
+`{ chain_id, height_context_id, block_height, block_hash }`. SCCP usa seu ramo
+Merkle tipado e sua âncora governada.
 
 - `GET /v1/bridge/finality/{height}` retorna `BridgeFinalityProof`.
 - `GET /v1/bridge/finality/bundle/{height}` retorna `BridgeFinalityBundle`.

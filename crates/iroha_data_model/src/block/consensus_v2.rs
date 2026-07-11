@@ -351,12 +351,12 @@ impl HeightContext {
     pub fn id(&self) -> HeightContextId {
         let identity = HeightContextIdentity {
             identity_version: HEIGHT_CONTEXT_IDENTITY_VERSION,
-            chain_id: &self.chain_id,
+            chain_id: self.chain_id.clone(),
             protocol_version: self.protocol_version,
             height: self.height,
             epoch: self.epoch,
             epoch_end_height: self.epoch_end_height,
-            next_epoch_snapshot: &self.next_epoch_snapshot,
+            next_epoch_snapshot: self.next_epoch_snapshot.clone(),
             mode: self.mode,
             parent_commit: self
                 .parent_commit_qc
@@ -367,7 +367,7 @@ impl HeightContext {
                     phase: certificate.phase,
                     subject: certificate.subject,
                 }),
-            roster: &self.roster,
+            roster: self.roster.clone(),
             quorum: self.quorum,
             nexus_amx_context_hash: self.nexus_amx_context_hash,
             da_layout: self.da_layout,
@@ -489,17 +489,17 @@ impl HeightContext {
 }
 
 #[derive(Encode)]
-struct HeightContextIdentity<'a> {
+struct HeightContextIdentity {
     identity_version: u16,
-    chain_id: &'a ChainId,
+    chain_id: ChainId,
     protocol_version: u16,
     height: Height,
     epoch: u64,
     epoch_end_height: Height,
-    next_epoch_snapshot: &'a Option<finality::FinalizedNextEpochSnapshot>,
+    next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     mode: ConsensusMode,
     parent_commit: Option<ParentCommitIdentity>,
-    roster: &'a Vec<ValidatorPower>,
+    roster: Vec<ValidatorPower>,
     quorum: DualQuorum,
     nexus_amx_context_hash: Hash,
     da_layout: DataAvailabilityLayout,

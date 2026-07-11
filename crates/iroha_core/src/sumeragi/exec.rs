@@ -6,11 +6,21 @@ use iroha_crypto::Hash;
 
 use super::{
     consensus::ExecWitness,
-    smt::{KvPair, compute_post_state_root},
+    smt::{KvPair, compute_consensus_post_state_root, compute_post_state_root},
 };
 
 /// Convert an `ExecWitness` into SMT `KvPair` slices and compute the `post_state_root`.
 pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
+    try_post_state_from_witness(w).unwrap_or_else(|error| {
+        let mut preimage = b"iroha:sumeragi:invalid-exec-witness".to_vec();
+        preimage.push(0);
+        preimage.extend_from_slice(error.as_bytes());
+        Hash::new(preimage)
+    })
+}
+
+/// Checked variant used before a validator signs execution roots.
+pub fn try_post_state_from_witness(w: &ExecWitness) -> Result<Hash, &'static str> {
     let reads: Vec<KvPair> = w
         .reads
         .iter()
@@ -21,7 +31,7 @@ pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
         .iter()
         .map(|kv| KvPair::new(kv.key.clone(), kv.value.clone()))
         .collect();
-    compute_post_state_root(&reads, &writes)
+    compute_consensus_post_state_root(&reads, &writes)
 }
 
 /// Compute the `parent_state_root` using only the witnessed reads (pre-values).

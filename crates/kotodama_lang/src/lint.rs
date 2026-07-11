@@ -890,10 +890,7 @@ fn is_literal_state_key(expr: &Expr) -> bool {
         Expr::Source { .. } | Expr::Resolved { .. } => {
             unreachable!("kind() strips provenance wrappers")
         }
-        Expr::IntLiteral(_)
-        | Expr::DecimalLiteral(_)
-        | Expr::String(_)
-        | Expr::Bytes(_) => true,
+        Expr::IntLiteral(_) | Expr::DecimalLiteral(_) | Expr::String(_) | Expr::Bytes(_) => true,
         Expr::Call { name, args, .. } => {
             let literal_arg = args.first().is_some_and(|argument| {
                 matches!(argument.kind(), Expr::String(_) | Expr::Bytes(_))
@@ -944,7 +941,8 @@ fn is_literal_state_path(expr: &Expr) -> bool {
                     return false;
                 }
                 is_literal_state_path(&args[0])
-                    && (matches!(args[1].kind(), Expr::IntLiteral(_)) || is_literal_state_key(&args[1]))
+                    && (matches!(args[1].kind(), Expr::IntLiteral(_))
+                        || is_literal_state_key(&args[1]))
             }
             _ => false,
         },
@@ -2331,10 +2329,9 @@ mod tests {
 
     #[test]
     fn lint_duplicate_json_name_literals_are_allowed() {
-        let program = parse(
-            r#"fn main() { let p = json { amount: 1 }; let q = json { amount: 2 }; }"#,
-        )
-        .unwrap();
+        let program =
+            parse(r#"fn main() { let p = json { amount: 1 }; let q = json { amount: 2 }; }"#)
+                .unwrap();
         let warnings = lint_program(&program);
         assert!(
             !warnings

@@ -75,7 +75,7 @@ class NumericV1Test {
 
         val quantity = KotodamaQuantity.parse("1.25")
         val quantityEnvelope = NumericV1Codec.encodeQuantityEnvelope(quantity)
-        assertEquals(listOf(0x00, 0x10), quantityEnvelope.take(2).map { it.toInt() and 0xFF })
+        assertEquals(listOf(0x00, 0x13), quantityEnvelope.take(2).map { it.toInt() and 0xFF })
         assertEquals(quantity, NumericV1Codec.decodeQuantityFrame(NumericV1Codec.encodeQuantityFrame(quantity)))
         assertEquals(quantity, NumericV1Codec.decodeQuantityEnvelope(quantityEnvelope))
 
@@ -97,12 +97,16 @@ class NumericV1Test {
             .also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
         assertCode(NumericV1ErrorCode.PAYLOAD_HASH_MISMATCH) { NumericV1Codec.decodeIntEnvelope(badHash) }
 
+        val retired = NumericV1Codec.encodeIntEnvelope(KotodamaInt.parse("1"))
+            .also { it[0] = 0; it[1] = 0x10.toByte(); it[2] = 2 }
+        assertCode(NumericV1ErrorCode.TYPE_NOT_ALLOWED) { NumericV1Codec.decodeIntEnvelope(retired) }
+
         val knownWrong = NumericV1Codec.encodeIntEnvelope(KotodamaInt.parse("1"))
             .also { it[0] = 0; it[1] = 0x01; it[2] = 2 }
         assertCode(NumericV1ErrorCode.WRONG_TYPE) { NumericV1Codec.decodeIntEnvelope(knownWrong) }
 
         val unknown = NumericV1Codec.encodeIntEnvelope(KotodamaInt.parse("1"))
-            .also { it[0] = 0; it[1] = 0x13.toByte(); it[2] = 2 }
+            .also { it[0] = 0; it[1] = 0x14.toByte(); it[2] = 2 }
         assertCode(NumericV1ErrorCode.UNKNOWN_TYPE) { NumericV1Codec.decodeIntEnvelope(unknown) }
     }
 
@@ -130,29 +134,41 @@ class NumericV1Test {
             val id = vector.getValue("id").jsonPrimitive.content
             val kind = vector.getValue("kind").jsonPrimitive.content
             val canonical = vector.getValue("canonical").jsonPrimitive.content
+            val fixtureFrame = vector.getValue("frame_hex").jsonPrimitive.content.hexBytes()
+            val fixtureEnvelope = vector.getValue("envelope_hex").jsonPrimitive.content.hexBytes()
             val frame: ByteArray
             val envelope: ByteArray
+            val decodedFrame: String
+            val decodedEnvelope: String
             when (kind) {
                 "int" -> {
                     val value = NumericV1Codec.decodeIntJson(canonical)
                     frame = NumericV1Codec.encodeIntFrame(value)
                     envelope = NumericV1Codec.encodeIntEnvelope(value)
+                    decodedFrame = NumericV1Codec.decodeIntFrame(fixtureFrame).toString()
+                    decodedEnvelope = NumericV1Codec.decodeIntEnvelope(fixtureEnvelope).toString()
                 }
                 "decimal" -> {
                     val value = NumericV1Codec.decodeDecimalJson(canonical)
                     frame = NumericV1Codec.encodeDecimalFrame(value)
                     envelope = NumericV1Codec.encodeDecimalEnvelope(value)
+                    decodedFrame = NumericV1Codec.decodeDecimalFrame(fixtureFrame).toString()
+                    decodedEnvelope = NumericV1Codec.decodeDecimalEnvelope(fixtureEnvelope).toString()
                 }
                 "quantity" -> {
                     val value = NumericV1Codec.decodeQuantityJson(canonical)
                     frame = NumericV1Codec.encodeQuantityFrame(value)
                     envelope = NumericV1Codec.encodeQuantityEnvelope(value)
+                    decodedFrame = NumericV1Codec.decodeQuantityFrame(fixtureFrame).toString()
+                    decodedEnvelope = NumericV1Codec.decodeQuantityEnvelope(fixtureEnvelope).toString()
                 }
                 else -> error("unknown fixture kind $kind")
             }
             assertEquals(vector.getValue("body_hex").jsonPrimitive.content, frame.copyOfRange(40, frame.size).hex(), "$id body")
             assertEquals(vector.getValue("frame_hex").jsonPrimitive.content, frame.hex(), "$id frame")
             assertEquals(vector.getValue("envelope_hex").jsonPrimitive.content, envelope.hex(), "$id envelope")
+            assertEquals(canonical, decodedFrame, "$id frame decode")
+            assertEquals(canonical, decodedEnvelope, "$id envelope decode")
         }
 
         fixture.getValue("invalid").jsonArray.forEach { element ->

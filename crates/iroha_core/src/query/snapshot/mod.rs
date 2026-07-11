@@ -37,6 +37,24 @@ pub enum CursorMode {
     Stored,
 }
 
+fn revalidate_stored_continuation(
+    live_query_store: &LiveQueryStoreHandle,
+    authority: &AccountId,
+    request: &QueryRequest,
+    state_ro: &impl StateReadOnly,
+    limits: QueryLimits,
+) -> Result<(), SnapshotQueryError> {
+    let QueryRequest::Continue(cursor) = request else {
+        return Ok(());
+    };
+    let original = live_query_store
+        .revalidation_request(cursor, authority)
+        .map_err(SnapshotQueryError::Execution)?;
+    ValidQueryRequest::validate_for_client_parts(original, authority, state_ro, limits)
+        .map_err(SnapshotQueryError::Validation)?;
+    Ok(())
+}
+
 /// Execute a query against a point-in-time snapshot of the state with the provided cursor mode
 /// and query limits.
 ///
@@ -76,6 +94,10 @@ pub fn run_on_snapshot_with_mode(
         }
     }
 
+    if matches!(mode, CursorMode::Stored) {
+        revalidate_stored_continuation(live_query_store, authority, &request, &view, limits)?;
+    }
+
     let validated = ValidQueryRequest::validate_for_client_parts(request, authority, &view, limits)
         .map_err(SnapshotQueryError::Validation)?;
 
@@ -108,14 +130,13 @@ pub fn run_on_snapshot_with_mode(
     Ok(response)
 }
 
-/// Execute a query with an owning state handle available to bounded stored
-/// cursors for one-page-at-a-time continuations.
+/// Execute a query from an owning state handle.
 ///
-/// This keeps the first response cheap for Torii's Arc-owned state path while
-/// preserving the existing borrowed-state API for callers that cannot provide a
-/// state handle. The initial request still validates and reads from one query
-/// view; unsorted bounded continuations may open a fresh query view per page
-/// instead of retaining the fully materialized tail.
+/// Stored cursors retain continuation data derived from the initial query view;
+/// they never reopen current state to fetch later pages. This gives both the
+/// borrowed and Arc-backed Torii paths the same snapshot-consistent result
+/// semantics. Current authorization policy is still revalidated separately on
+/// every continuation.
 ///
 /// # Errors
 /// Returns a validation error if the request is rejected by the executor, or an execution
@@ -149,6 +170,10 @@ pub fn run_on_snapshot_with_mode_arc(
         }
     }
 
+    if matches!(mode, CursorMode::Stored) {
+        revalidate_stored_continuation(live_query_store, authority, &request, &view, limits)?;
+    }
+
     let validated = ValidQueryRequest::validate_for_client_parts(request, authority, &view, limits)
         .map_err(SnapshotQueryError::Validation)?;
 
@@ -159,7 +184,7 @@ pub fn run_on_snapshot_with_mode_arc(
             .execute_ephemeral(live_query_store, &view, authority)
             .map_err(SnapshotQueryError::Execution)?,
         CursorMode::Stored => validated
-            .execute_with_replay_state(live_query_store, &view, authority, Arc::downgrade(state))
+            .execute(live_query_store, &view, authority)
             .map_err(SnapshotQueryError::Execution)?,
     };
 
@@ -205,7 +230,7 @@ pub fn run_on_snapshot(
 #[cfg(test)]
 mod tests {
     use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
-    use iroha_test_samples::ALICE_ID;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;
 
     use super::*;
@@ -520,7 +545,9 @@ mod tests {
         let _ = sblock.commit();
 
         while let Some(cur) = cursor.take() {
-            let next = store.handle_iter_continue(cur).expect("continue ok");
+            let next = store
+                .handle_iter_continue(cur, &ALICE_ID)
+                .expect("continue ok");
             let (batch, _rem, next_cur) = next.into_parts();
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::Domain(v) => v,
@@ -537,7 +564,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bounded_stored_arc_continuation_replays_one_page() {
+    async fn bounded_stored_arc_continuation_returns_next_snapshot_page() {
         use crate::smartcontracts::isi::query::QueryCountMode;
 
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
@@ -700,7 +727,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bounded_stored_arc_forged_query_id_does_not_consume_original_cursor() {
+    async fn bounded_stored_arc_forged_or_foreign_cursor_does_not_consume_original() {
         use crate::smartcontracts::isi::query::QueryCountMode;
 
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
@@ -751,6 +778,22 @@ mod tests {
             limits,
         )
         .expect_err("unknown query id should expire");
+        match err {
+            SnapshotQueryError::Execution(
+                iroha_data_model::query::error::QueryExecutionFail::Expired,
+            ) => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let err = run_on_snapshot_with_mode_arc(
+            &state,
+            &store,
+            &BOB_ID,
+            iroha_data_model::query::QueryRequest::Continue(cursor.clone()),
+            CursorMode::Stored,
+            limits,
+        )
+        .expect_err("another authority must not continue Alice's cursor");
         match err {
             SnapshotQueryError::Execution(
                 iroha_data_model::query::error::QueryExecutionFail::Expired,
@@ -970,7 +1013,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bounded_stored_arc_replay_can_observe_later_state_on_continue() {
+    async fn bounded_stored_arc_cursor_excludes_later_state_on_continue() {
         use crate::smartcontracts::isi::query::QueryCountMode;
 
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
@@ -1036,7 +1079,7 @@ mod tests {
         };
         let (batch, _remaining_hint, cursor) = next.into_parts();
         assert!(cursor.is_none());
-        assert_eq!(domain_ids_from_batch(batch), vec![d3.id, d4_id]);
+        assert_eq!(domain_ids_from_batch(batch), vec![d3.id]);
     }
 
     #[tokio::test]
@@ -1145,7 +1188,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bounded_stored_arc_dropped_state_expires_replay_cursor() {
+    async fn bounded_stored_arc_cursor_owns_snapshot_after_state_is_dropped() {
         use crate::smartcontracts::isi::query::QueryCountMode;
 
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
@@ -1186,20 +1229,15 @@ mod tests {
 
         drop(state);
 
-        let err = store
-            .handle_iter_continue(cursor.clone())
-            .expect_err("dropped state expires replay cursor");
+        let next = store
+            .handle_iter_continue(cursor, &ALICE_ID)
+            .expect("stored snapshot does not borrow the state");
+        let (batch, remaining, cursor) = next.into_parts();
+        assert_eq!(remaining, 0);
+        assert!(cursor.is_none());
         assert_eq!(
-            err,
-            iroha_data_model::query::error::QueryExecutionFail::Expired
-        );
-
-        let err = store
-            .handle_iter_continue(cursor)
-            .expect_err("expired replay cursor should be evicted");
-        assert_eq!(
-            err,
-            iroha_data_model::query::error::QueryExecutionFail::Expired
+            domain_ids_from_batch(batch),
+            vec![DomainId::try_new("d3", "universal").unwrap()]
         );
     }
 

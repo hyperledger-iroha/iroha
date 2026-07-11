@@ -95,7 +95,6 @@ Torii transmet les en-têtes liés à l'authentification entrante pour l'envoi d
 -`x-api-token`
 -`x-iroha-account`
 -`x-iroha-signature`
--`x-iroha-api-version`
 
 Les clients peuvent également fournir des en-têtes supplémentaires par appel via `arguments.headers`.
 `content-length`, `host` et `connection` de `arguments.headers` sont ignorés.

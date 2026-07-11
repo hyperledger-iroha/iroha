@@ -1724,6 +1724,12 @@ impl SumeragiLanePayloadOwnership {
                 SumeragiLanePayloadOwnershipReplayError::UnexpectedGenesisPredecessorDescriptorHash,
             );
         }
+        if self.previous_lane_block_height > 0 && self.previous_lane_block_descriptor_hash.is_none()
+        {
+            // Keep the public error surface stable: this variant also covers a
+            // required predecessor descriptor hash that is absent.
+            return Err(SumeragiLanePayloadOwnershipReplayError::MissingDescriptorHash);
+        }
         if self.lane_block_descriptor_hash.is_none() {
             return Err(SumeragiLanePayloadOwnershipReplayError::MissingDescriptorHash);
         }
@@ -2125,7 +2131,7 @@ pub struct LaneSwapMetadata {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct LaneBlockCommitment {
-    /// Block height associated with the commitment.
+    /// Lane-local block height associated with the commitment.
     pub block_height: u64,
     /// Numeric lane identifier.
     pub lane_id: LaneId,
@@ -5659,6 +5665,18 @@ mod tests {
         assert_eq!(
             ownership.validate_replay_material(),
             Err(SumeragiLanePayloadOwnershipReplayError::PreviousLaneBlockHeightMismatch)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_missing_non_genesis_predecessor_hash() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        assert!(ownership.previous_lane_block_height > 0);
+        ownership.previous_lane_block_descriptor_hash = None;
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::MissingDescriptorHash)
         );
     }
 

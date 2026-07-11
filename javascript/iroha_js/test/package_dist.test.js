@@ -2201,7 +2201,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1, 64);
   assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1,
-    true,
+    false,
   );
   assert.equal(
     KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1,
@@ -2703,14 +2703,14 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canRedeemKagemushaRecursiveSpendWitnessless(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
       2,
     ),
-    true,
+    false,
   );
   assert.equal(
     requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
@@ -2765,45 +2765,54 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       true,
     );
   }
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(0), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(1), true);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(63), true);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(64), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(1.5), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(-1), false);
-  assert.equal(
-    canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.MAX_SAFE_INTEGER),
+  for (const circuitId of [
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+  ]) {
+    for (const hopCount of [1, 2, 63, 64]) {
+      assert.equal(canRedeemKagemushaRecursiveSpendWitnessless(circuitId, hopCount), false);
+      assert.equal(
+        requiresKagemushaRecursiveSpendLineageWitnessForRedeem(circuitId, hopCount),
+        true,
+        `${circuitId} hop ${hopCount} must require a record-backed lineage witness`,
+      );
+    }
+  }
+  for (const hopCount of [
+    Number.NEGATIVE_INFINITY,
+    -1,
+    0,
+    1,
+    2,
+    63,
+    64,
+    Number.MAX_SAFE_INTEGER,
+    Number.POSITIVE_INFINITY,
+    Number.NaN,
+    1.5,
+    1n,
+    new Number(1),
+    true,
     false,
-  );
-  assert.equal(
-    canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.NaN),
-    false,
-  );
-  assert.equal(
-    canAppendKagemushaRecursiveSpendWitnesslessLineage(
-      Number.POSITIVE_INFINITY,
-    ),
-    false,
-  );
+    "1",
+  ]) {
+    assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(hopCount), false);
+  }
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(1n), false);
-  assert.equal(
-    canAppendKagemushaRecursiveSpendWitnesslessLineage(new Number(1)),
-    false,
-  );
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(new Number(1)), false);
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(true), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage("1"), false);
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(1),
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(63),
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(64),
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-    "preferred append selector falls back at the witnessless hop cap",
+    "the semantic append circuit remains preferred while lineage transition verification is unavailable",
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(0),
@@ -2864,7 +2873,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -2964,7 +2973,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -4678,11 +4687,15 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(),
         lineageKeyArtifacts: initArtifacts,
       }),
-    kagemushaRequestCodecError("field", "lineageKeyArtifacts", null),
+    kagemushaRequestCodecError(
+      "field",
+      "outputProofCircuitId",
+      /cannot prove selected output circuit at previous hop count/,
+    ),
   );
 });
 
-test("package dist Kagemusha recursive spend typed requests reject malformed raw lineage key fields before native dispatch", () => {
+test("package dist Kagemusha recursive spend validates init keys and fails closed before append key parsing", () => {
   const recordBundle = syntheticKagemushaRecordBundleArchive();
   const pallasOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
   const previousProofOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
@@ -4721,8 +4734,8 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
       }),
     ),
   );
-  assert.ok(
-    Buffer.isBuffer(
+  assert.throws(
+    () =>
       encodeKagemushaRecursiveSpendAppendRequest({
         previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
         recordBundle,
@@ -4734,6 +4747,10 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         lineageVerifierKey: appendVerifierKey,
         lineageProvingKeyArchive: appendProvingKey,
       }),
+    kagemushaRequestCodecError(
+      "field",
+      "outputProofCircuitId",
+      /cannot prove selected output circuit at previous hop count/,
     ),
   );
   assert.throws(
@@ -4798,8 +4815,8 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         lineageVerifierKey: appendVerifierKey,
         lineageProvingKeyArchive: appendProvingKey,
       }),
-    kagemushaRequestCodecError("field", "previousProofOpenEnvelopes", null),
-    "package dist accepted append raw lineage keys without previous proof openings",
+    kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+    "package dist did not fail closed before append key parsing",
   );
   assert.throws(
     () =>
@@ -4813,8 +4830,8 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         previousProofOpenEnvelopes,
         lineageProvingKeyArchive: appendProvingKey,
       }),
-    kagemushaRequestCodecError("field", "lineageVerifierKey", null),
-    "package dist accepted append raw lineage proving key without verifier key",
+    kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+    "package dist parsed append raw lineage proving key while the circuit is unavailable",
   );
   assert.throws(
     () =>
@@ -4828,8 +4845,8 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         previousProofOpenEnvelopes,
         lineageVerifierKey: appendVerifierKey,
       }),
-    kagemushaRequestCodecError("archive", "lineageProvingKeyArchive", null),
-    "package dist accepted append raw lineage verifier key without proving key",
+    kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+    "package dist parsed append raw lineage verifier key while the circuit is unavailable",
   );
   assert.throws(
     () =>
@@ -4844,12 +4861,12 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
         lineageVerifierKey: appendVerifierKey,
         lineageProvingKeyArchive: initProvingKey,
       }),
-    kagemushaRequestCodecError("field", "lineageKeyArtifacts", /lineageKeyArtifacts:/),
-    "package dist accepted append raw lineage key profile mismatch",
+    kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+    "package dist parsed append key profiles while the circuit is unavailable",
   );
 });
 
-test("package dist Kagemusha recursive spend typed requests parse previous lineage records before opening validation", () => {
+test("package dist Kagemusha recursive spend fails closed before previous lineage parsing", () => {
   const recordBundle = syntheticKagemushaRecordBundleArchive();
   const pallasOpenEnvelopes = syntheticPallasOpenEnvelopesArchive();
   const currentNote = {
@@ -4871,12 +4888,8 @@ test("package dist Kagemusha recursive spend typed requests parse previous linea
         },
         previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(2),
       }),
-    kagemushaRequestCodecError(
-      "archive",
-      "previousLineageVerifierRecord",
-      /valid Norito archive/,
-    ),
-    "package dist checked previous-proof openings before parsing previous lineage record",
+    kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+    "package dist parsed previous lineage material while the output circuit is unavailable",
   );
 });
 
@@ -5117,8 +5130,8 @@ test("package dist Kagemusha recursive spend typed requests reject malformed Pal
           lineageVerifierKey: appendVerifierKey,
           lineageProvingKeyArchive: appendProvingKey,
         }),
-      kagemushaRequestCodecError("archive", previousField, message),
-      "package dist accepted malformed previous-proof Pallas open-envelope archive",
+      kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+      `package dist parsed unavailable lineage append opening ${previousField}: ${message}`,
     );
   }
   for (const [
@@ -5154,11 +5167,8 @@ test("package dist Kagemusha recursive spend typed requests reject malformed Pal
           lineageVerifierKey: appendVerifierKey,
           lineageProvingKeyArchive: appendProvingKey,
         }),
-      (error) =>
-        error?.kind === "archive" &&
-        error.field === `previousProofOpenEnvelopes[0].${metadataField}` &&
-        (expectedMessage == null || expectedMessage.test(error.message)),
-      `package dist accepted stale fixed-array previous-proof Pallas metadata payload for ${metadataField}`,
+      kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+      `package dist parsed unavailable lineage append metadata ${metadataField}: ${expectedMessage}`,
     );
   }
 });

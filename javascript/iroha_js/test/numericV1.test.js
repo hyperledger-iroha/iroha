@@ -63,7 +63,7 @@ test("numeric V1 frames and pointer envelopes roundtrip all domains", () => {
       NumericV1.encodeIntEnvelope, NumericV1.decodeIntEnvelope],
     [0x0012, new KotodamaDecimal("-1.25"), NumericV1.encodeDecimalFrame, NumericV1.decodeDecimalFrame,
       NumericV1.encodeDecimalEnvelope, NumericV1.decodeDecimalEnvelope],
-    [0x0010, new KotodamaQuantity("1.25"), NumericV1.encodeQuantityFrame, NumericV1.decodeQuantityFrame,
+    [0x0013, new KotodamaQuantity("1.25"), NumericV1.encodeQuantityFrame, NumericV1.decodeQuantityFrame,
       NumericV1.encodeQuantityEnvelope, NumericV1.decodeQuantityEnvelope],
   ];
   for (const [pointerType, value, encodeFrame, decodeFrame, encodeEnvelope, decodeEnvelope] of values) {
@@ -92,6 +92,12 @@ test("numeric V1 rejects noncanonical and authenticated mutations", () => {
   badHash[badHash.length - 1] ^= 1;
   assert.throws(() => NumericV1.decodeIntEnvelope(badHash), { code: "payload_hash_mismatch" });
 
+  const retired = NumericV1.encodeIntEnvelope(1n).slice();
+  retired[0] = 0;
+  retired[1] = 0x10;
+  retired[2] = 2;
+  assert.throws(() => NumericV1.decodeIntEnvelope(retired), { code: "type_not_allowed" });
+
   const knownWrong = NumericV1.encodeIntEnvelope(1n).slice();
   knownWrong[0] = 0;
   knownWrong[1] = 0x01;
@@ -100,7 +106,7 @@ test("numeric V1 rejects noncanonical and authenticated mutations", () => {
 
   const unknown = NumericV1.encodeIntEnvelope(1n).slice();
   unknown[0] = 0;
-  unknown[1] = 0x13;
+  unknown[1] = 0x14;
   unknown[2] = 2;
   assert.throws(() => NumericV1.decodeIntEnvelope(unknown), { code: "unknown_type" });
 });
@@ -140,6 +146,21 @@ test("numeric V1 consumes the Rust-authored shared golden fixture", async () => 
     assert.equal(toHex(frame.subarray(40)), vector.body_hex, `${vector.id} body`);
     assert.equal(toHex(frame), vector.frame_hex, `${vector.id} frame`);
     assert.equal(toHex(envelope), vector.envelope_hex, `${vector.id} envelope`);
+
+    const fixtureFrame = fromHex(vector.frame_hex);
+    const fixtureEnvelope = fromHex(vector.envelope_hex);
+    const decodedFrame = vector.kind === "int"
+      ? NumericV1.decodeIntFrame(fixtureFrame)
+      : vector.kind === "decimal"
+        ? NumericV1.decodeDecimalFrame(fixtureFrame)
+        : NumericV1.decodeQuantityFrame(fixtureFrame);
+    const decodedEnvelope = vector.kind === "int"
+      ? NumericV1.decodeIntEnvelope(fixtureEnvelope)
+      : vector.kind === "decimal"
+        ? NumericV1.decodeDecimalEnvelope(fixtureEnvelope)
+        : NumericV1.decodeQuantityEnvelope(fixtureEnvelope);
+    assert.equal(decodedFrame.toString(), vector.canonical, `${vector.id} frame decode`);
+    assert.equal(decodedEnvelope.toString(), vector.canonical, `${vector.id} envelope decode`);
   }
 
   for (const vector of fixture.invalid) {

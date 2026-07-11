@@ -1,7 +1,7 @@
 use crate::arithmetic::mul_512;
 use crate::arithmetic::sbb;
 use crate::{
-    arithmetic::{CurveEndo, EndoParameters},
+    arithmetic::{CurveAffineExt, CurveEndo, EndoParameters},
     endo,
 };
 use crate::serde::SerdeObject;
@@ -40,6 +40,12 @@ const ENDO_PARAMS_EP: EndoParameters = EndoParameters {
 
 endo!(Eq, Fp, ENDO_PARAMS_EQ);
 endo!(Ep, Fq, ENDO_PARAMS_EP);
+
+// `pasta_curves` owns these affine types, while this vendored compatibility
+// crate owns `CurveAffineExt`; keep the default canonical-coordinate adapter
+// available to halo2-lib's generic ECC chips.
+impl CurveAffineExt for EqAffine {}
+impl CurveAffineExt for EpAffine {}
 
 fn read_32_bytes<R: Read>(reader: &mut R) -> io::Result<[u8; 32]> {
     let mut buf = [0u8; 32];

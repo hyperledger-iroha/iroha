@@ -197,10 +197,7 @@ mod tests {
 
     use super::*;
     use iroha::client::Client;
-    use iroha::config::{
-        AnonymityPolicy, Config, DEFAULT_TORII_API_MIN_PROOF_VERSION, default_connect_queue_root,
-        default_torii_api_version,
-    };
+    use iroha::config::{AnonymityPolicy, Config, default_connect_queue_root};
     use iroha::data_model::ChainId;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
@@ -262,8 +259,6 @@ mod tests {
             account_chain_discriminant:
                 iroha_config::parameters::defaults::common::chain_discriminant(),
             torii_api_url: "http://127.0.0.1:1".parse().expect("valid url"),
-            torii_api_version: default_torii_api_version(),
-            torii_api_min_proof_version: DEFAULT_TORII_API_MIN_PROOF_VERSION.to_string(),
             torii_request_timeout: Duration::from_millis(50),
             basic_auth: None,
             transaction_add_nonce: false,

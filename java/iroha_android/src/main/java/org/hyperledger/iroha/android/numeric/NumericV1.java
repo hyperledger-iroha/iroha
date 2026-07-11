@@ -28,6 +28,7 @@ public final class NumericV1 {
     CHECKSUM_MISMATCH,
     TRUNCATED_ENVELOPE,
     UNKNOWN_TYPE,
+    TYPE_NOT_ALLOWED,
     WRONG_TYPE,
     INVALID_ENVELOPE_VERSION,
     OVERSIZED_LENGTH,
@@ -384,7 +385,12 @@ public final class NumericV1 {
     }
     final ByteBuffer header = ByteBuffer.wrap(envelope).order(ByteOrder.BIG_ENDIAN);
     final int pointerType = header.getShort() & 0xFFFF;
-    final boolean knownAllowedType = pointerType >= 0x0001 && pointerType <= 0x0012;
+    if (pointerType == 0x0010) {
+      fail(ErrorCode.TYPE_NOT_ALLOWED, "retired Amount pointer type is permanently reserved");
+    }
+    final boolean knownAllowedType =
+        (pointerType >= 0x0001 && pointerType <= 0x000F)
+            || (pointerType >= 0x0011 && pointerType <= 0x0013);
     if (!knownAllowedType) fail(ErrorCode.UNKNOWN_TYPE, "unknown pointer type");
     if (pointerType != kind.pointerType) fail(ErrorCode.WRONG_TYPE, "pointer type does not match");
     if ((header.get() & 0xFF) != 1) fail(ErrorCode.INVALID_ENVELOPE_VERSION, "version must be 1");
@@ -547,7 +553,7 @@ public final class NumericV1 {
   private enum Kind {
     INT("07c039457363b9e1d36bbd31d93dec4a", 0x0011, false),
     DECIMAL("ba2ffed52e4d8ee16f17efefe1828524", 0x0012, true),
-    QUANTITY("e4769984c81ce0e8b678f2eb06274ee3", 0x0010, true);
+    QUANTITY("e4769984c81ce0e8b678f2eb06274ee3", 0x0013, true);
 
     final byte[] schemaHash;
     final int pointerType;

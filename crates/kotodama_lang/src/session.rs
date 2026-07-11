@@ -1033,7 +1033,7 @@ mod tests {
         for _ in 0..crate::source::MAX_NESTING_DEPTH - 2 {
             ty = format!("Option<{ty}>");
         }
-        let source = format!("module Deep {{ struct Wrapper {{ value: {ty} }} }}");
+        let source = format!("module Deep {{ struct Wrapper {{ {ty} value }} }}");
         let request = CompileRequest {
             source: &source,
             source_name: Some("deep.ko"),
@@ -1144,7 +1144,7 @@ mod tests {
             "payload"
         );
 
-        let at_limit = source.replace("f13: int", "");
+        let at_limit = source.replace("int f13", "");
         session
             .build(CompileRequest {
                 source: &at_limit,

@@ -14,15 +14,15 @@ translation_last_reviewed: 2026-01-01
 Cette page répertorie les endpoints non consensuels, destinés aux opérateurs, qui aident à la visibilité et au dépannage. Les réponses sont en JSON sauf indication contraire.
 
 Consensus (Sumeragi)
-- GET `/v1/sumeragi/new_view`
+- GET `/v1/sumeragi/new-view`
   - Instantané des comptes de réception NEW_VIEW par `(height, view)`.
   - Format : `{ "ts_ms": <u64>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
   - Exemple :
-    - `curl -s http://127.0.0.1:8080/v1/sumeragi/new_view | jq .`
-- GET `/v1/sumeragi/new_view/sse` (SSE)
+    - `curl -s http://127.0.0.1:8080/v1/sumeragi/new-view | jq .`
+- GET `/v1/sumeragi/new-view/sse` (SSE)
   - Flux périodique (≈1 s) du même payload pour les tableaux de bord.
   - Exemple :
-    - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
+    - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new-view/sse`
 - Métriques : les jauges `sumeragi_new_view_receipts_by_hv{height,view}` reflètent les comptes.
 - GET `/v1/sumeragi/status`
   - Instantané de l’index du leader, Highest/Locked QCs (`highest_qc`/`locked_qc`, hauteurs, vues, hachages de sujet), compteurs des collecteurs/VRF, reports du pacemaker, profondeur de la file des transactions et santé du store RBC (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
@@ -95,7 +95,7 @@ TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
 while true; do
-  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new_view" \
+  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new-view" \
     | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
   sleep "$INTERVAL"
 done
@@ -110,7 +110,7 @@ TORII="${TORII:-http://127.0.0.1:8080}"
 TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new_view/sse" \
+curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new-view/sse" \
   | awk '/^data:/{sub(/^data: /,""); print}' \
   | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
 ```

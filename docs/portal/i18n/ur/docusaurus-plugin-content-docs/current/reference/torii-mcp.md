@@ -95,7 +95,6 @@ Torii ٹول ڈسپیچ کے لیے ان باؤنڈ تصنیف سے متعلق �
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 کلائنٹ `arguments.headers` کے ذریعے اضافی فی کال ہیڈرز بھی فراہم کر سکتے ہیں۔
 `content-length`، `host`، اور `connection` سے `arguments.headers` کو نظر انداز کر دیا گیا ہے۔

@@ -185,6 +185,21 @@ performs no speculative output-scale attempts and distinguishes:
 
 Rounded division requires an output scale and one of these stable modes:
 
+```text
+decimal.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> decimal
+quantity.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> quantity
+quantity.ratio_round(divisor: quantity, scale: int, mode: rounding-mode) -> decimal
+```
+
+All three methods require the three argument names shown above. `rounding-mode`
+denotes one of the seven `Rounding::*` paths below, not a user-declarable type
+or an integer tag. `scale` is
+checked against `0..=28`; a constant outside that range is rejected with
+`E_INVALID_SCALE`, and a dynamic value is checked by the numeric syscall before
+arithmetic. `div_round` is not defined on `int`, and `ratio_round` is defined
+only on `quantity`. The result domain is fixed by the signature and never
+inferred from assignment context.
+
 | Tag | Mode | Meaning |
 | ---: | --- | --- |
 | 0 | `Rounding::toward_zero` | toward zero |
@@ -220,6 +235,17 @@ Checked negation, addition, subtraction, multiplication, division, and
 remainder fail rather than wrap. The explicit integer wrapping operations use
 modulo `2^512` and reinterpret the result in the signed domain. V1 does not
 inherit an `i64` or `u128` modulus from retired source types.
+
+```text
+math::wrapping_neg(value: int) -> int
+math::wrapping_add(left: int, right: int) -> int
+math::wrapping_sub(left: int, right: int) -> int
+math::wrapping_mul(left: int, right: int) -> int
+```
+
+The binary forms require the `left` and `right` argument names. These four
+spellings are the complete V1 wrapping surface; flat `wrapping_*` aliases and
+generic `numeric::*` helpers are not source APIs.
 
 V1 defines no source bitwise or shift operators. A future operation must first
 specify its complete 512-bit two's-complement semantics, valid shift counts,
@@ -264,6 +290,13 @@ seven-byte type/version/length header and a 32-byte `iroha_crypto::Hash::new`
 digest of the complete frame, for maxima of 147, 148, and 148 bytes
 respectively.
 
+The digest is the uniform pointer-ABI frame-integrity binding: it proves that
+the bounded frame snapshot subsequently decoded is exactly the frame carried
+by the envelope. It is not an authorization mechanism. Before work begins, the
+VM debits the declared, capped frame bytes for snapshot transport and
+`32 + frame_bytes` for supplied-digest handling plus the complete hash
+traversal, then decodes only that authenticated snapshot.
+
 Pointer type IDs are:
 
 ```text
@@ -273,9 +306,13 @@ Pointer type IDs are:
 0x0013  QuantityValueV1
 ```
 
-Numeric equality, map-key hashing, and collection ordering operate on the
-canonical mathematical value. SDKs MUST use arbitrary-precision integer or
-exact-decimal representations and MUST NOT map these values to JavaScript
+Numeric comparison and equality operate on the mathematical value after
+canonicalization. A numeric `StateMap` key's identity and hash input are its
+canonical encoded bytes, so alternate spellings of one value cannot create
+distinct keys. Deterministic `StateMap` iteration uses canonical encoded-key
+byte order; that order is not promised to match signed numeric magnitude.
+SDKs MUST use arbitrary-precision integer or exact-decimal representations and
+MUST NOT map these values to JavaScript
 `number`, Java/Kotlin `double`, Swift `Double`, or another lossy host type.
 Norito JSON and SDK-facing JSON render all three numeric domains as canonical
 base-10 strings: `int` has no decimal point, while `decimal` and `quantity`
@@ -353,12 +390,12 @@ never refund. Each phase is debited immediately before its bounded work begins;
 an unaffordable phase performs no work and leaves earlier phase charges
 consumed.
 
-The complete formula and stable OOG phase-tag map have gas-formula version 1.
+The complete formula and stable OOG phase-tag map have gas-formula version 3.
 That version is an input to the canonical gas-schedule hash. Changing any
 logical-work formula, charge-point ordering, or phase tag MUST increment the
 version and regenerate the gas-schedule hash golden.
 
-The version-1 phase tags are `0 Entry`, `1 PointerHeader`,
+The version-3 phase tags are `0 Entry`, `1 PointerHeader`,
 `2 PointerEnvelope`, `3 PayloadHash`, `4 NoritoDecode`,
 `5 CanonicalValidation`, `6 Arithmetic`, `7 Normalization`, and
 `8 OutputSerialization`. Every tag names work that a production numeric path
@@ -369,14 +406,22 @@ The successful aggregate identity is:
 ```text
 gas = 16
     + canonical input envelope bytes
+    + input frame bytes traversed by the authentication hash
     + canonical output envelope bytes
+    + 2 * output frame bytes
     + 4 * logical_limb_work
 ```
+
+The two output-frame traversals cover canonical Norito framing/checksum work
+and the outer authentication hash. `logical_limb_work` includes the bounded
+output-length probe before exact compact serialization begins.
 
 There is no implicit minimum applied to `logical_limb_work`; operations whose
 normative work is zero still pay the entry and envelope charges.
 
-The constants are calibrated consensus weights, not host-cycle counts. The
+The constants are consensus weights, not host-cycle counts. They are not
+considered release-calibrated until the required benchmark evidence is
+archived. The
 entry weight `16` covers syscall dispatch, staged-context initialization,
 bounded validation of at most four control/reserved registers, and completion
 bookkeeping. Pointer traversal is excluded because every traversed envelope
@@ -391,17 +436,19 @@ bigint representation.
 Release calibration uses `cargo bench -p ivm --bench gas_calibration`. The
 `ivm-numeric-limb-cal` benchmark pins the formula's work denominator in every
 benchmark ID for one through eight input limbs, products through sixteen
-limbs, division/remainder, and scale-28 rounded division. For each supported
+limbs, division/remainder, scale-28 rounded division, and minimum/maximum
+input/output envelope authentication, framing, and canonical decode. For each supported
 baseline hardware tier, maintainers compare median time per declared work cell
 against the scalar IVM `ADD` baseline after subtracting harness overhead. The
 rounded-up worst ratio, plus a minimum 25% safety margin, MUST remain no greater
 than `4`; bounded dispatch/control overhead MUST remain no greater than `16`
 baseline gas units. A failure requires increasing the constants, changing the
 gas-formula version/hash, and regenerating gas goldens before release—it MUST
-NOT be hidden by a hardware-specific implementation. The initial reference
-run is pinned to Apple M1 Ultra (`Mac13,2`, arm64), Rust 1.93.1; release records
-retain the Criterion output alongside the build artifacts and repeat the run
-on the slowest supported tier.
+NOT be hidden by a hardware-specific implementation. The first-release
+reference-calibration target is Apple M1 Ultra (`Mac13,2`, arm64), Rust 1.93.1;
+release records MUST retain the Criterion output alongside the build artifacts
+and repeat the run on the slowest supported tier. This specification does not
+claim that calibration has completed unless that archived output is present.
 
 The fixed entry charge includes bounded register-contract checks (required-zero
 registers, failure mode, and rounding tag). It is not followed by hidden fixed
@@ -421,10 +468,20 @@ traversal. `canonical_work` covers body decoding, minimal signed encoding, and
 decimal/quantity domain checks. A canonical nonzero scaled decimal or quantity
 then performs one divisibility-by-ten probe; it is charged with the same
 logical quotient/remainder formula used everywhere else immediately before the
-probe. Scale-zero values and canonical zero perform no such probe. The frame
-bytes are still counted exactly once as input-envelope transport bytes; these
-work units account for the real algorithmic passes rather than charging the
-bytes twice.
+probe. Scale-zero values and canonical zero perform no such probe. Frame bytes
+are counted once as input-envelope transport and once for authentication-hash
+traversal; the logical work units separately account for structural and
+canonical decode passes.
+
+The checked core decimal operations also validate their own operands before
+arithmetic so callers outside the pointer decoder cannot bypass the canonical
+value invariant. Consequently `decimal` negation/arithmetic/division and
+decimal-to-int conversion, plus `quantity` arithmetic/division/ratio, emit and
+charge one additional canonicality probe for each nonzero-scale operand.
+Comparisons and the explicit `int`/`decimal`/`quantity` representation
+conversions do not perform this second probe. This is real repeated validation
+work, not a transport-byte charge, and it is included in
+`logical_limb_work` through the observed primitive work steps.
 
 Logical limbs are 64 bits, so an input has at most eight limbs. Arithmetic
 width uses the bit length of the unsigned magnitude, with zero assigned one
@@ -435,15 +492,21 @@ limb work. Let `B(d)` be the exact integer bit length of `10^d` and let:
 ```text
 L(b) = max(1, ceil(b / 64))
 P(d) = L(B(d))
+C(d) = sum(P(k), k = 0..d-1)
 S(0, d) = 1
 S(b, 0) = L(b), for b > 0
 S(b, d) = L(b + B(d)), for b > 0 and d > 0
-A(b, 0) = 0
-A(b, d) = L(b) * P(d), for d > 0
+A(b, 0) = L(b)
+A(b, d) = C(d) + L(b) * P(d), for d > 0
 ```
 
 `B(d)` is pinned as an integer table for `d` in `0..=56`; gas computation never
-uses floating-point logarithms. Comparison charges both alignment
+uses floating-point logarithms. `C(d)` charges deterministic construction of
+`10^d` as the sequence `1 * 10`, `10 * 10`, ..., `10^(d-1) * 10`; the
+primitive implementation performs that same bounded sequence instead of an
+unmetered backend exponentiation. `A(b, 0)` charges the owned temporary that
+the implementation materializes even when no decimal scaling is needed.
+Comparison charges both alignment
 multiplications using `A` plus the largest conservative aligned width from `S`,
 all before it materializes aligned operands. Addition and subtraction debit
 each alignment multiplication first; once those exact aligned operands exist,
@@ -460,7 +523,32 @@ For long division with dividend width `n` and divisor width `d`:
 ```text
 q = max(1, max(n, 1) - max(d, 1) + 1), with subtraction clamped at zero
 division_work(n, d) = max(n, 1) + max(d, 1) + max(d, 1) * q
+quotient_remainder_work(n, d) = division_work(n, d)
+    + q * max(d, 1)
+    + max(n, 1)
 ```
+
+Rounded division uses one conservative all-mode bound. Let
+`r = min(max(n, 1), max(d, 1))`; then:
+
+```text
+rounded_division_work(n, d) = quotient_remainder_work(n, d)
+    + 2*r                         # remainder absolute-value and doubling scans
+    + max(d, 1)                   # denominator absolute-value scan
+    + max(max(d, 1), r + 1)       # doubled-remainder comparison
+    + 1                           # nearest-even parity probe
+    + q + 1                       # possible quotient adjustment
+```
+
+The same bound applies to every rounding mode so the selected tag and whether
+the result is a tie do not create a gas side channel. Exact classification
+first charges `numerator_limbs + 2 * denominator_limbs` for its absolute-value
+and state-copy preparation. Every final conceptual result charges one scan of
+its limb width before the signed-domain check. Checked integer operations also
+include their generic-bigint and V1-domain result scans. Wrapping operations
+separately charge arithmetic and the source scan, eight-limb sign fill,
+truncation, and two eight-limb reconstruction/domain scans used by modulo
+`2^512` reduction.
 
 Exact division first charges the Euclidean reduction and denominator
 classification steps actually begun. Once classification proves a terminating
@@ -478,15 +566,18 @@ Pointer processing is ordered and charged as follows:
 2. debit the seven-byte header charge, then validate readable provenance and
    read the header;
 3. validate the hard length cap with checked arithmetic;
-4. debit the declared frame bytes for the envelope-snapshot phase and the 32
-   digest bytes for the payload-authentication phase, each exactly once;
+4. debit the declared frame bytes for the envelope-snapshot phase, then debit
+   `32 + frame_bytes` for supplied-digest handling and the complete
+   `Hash::new(frame)` traversal;
 5. snapshot exactly that range and validate its payload hash;
 6. debit `4 * decode_work`, then validate the Norito header, schema, flags,
    length, and CRC; only if that succeeds, debit `4 * canonical_work`, then
    decode the numeric body; for a nonzero scaled decimal/quantity, debit
    `4 * canonicality_probe_work` immediately before its canonicality probe;
 7. debit each arithmetic/normalization phase before it begins;
-8. determine the exact output envelope length and debit it;
+8. debit the signed-length probe, determine the exact output envelope length,
+   then debit `envelope_bytes + 2 * frame_bytes` for framing/checksum,
+   authentication hashing, and publication;
 9. allocate and write the output, then publish result registers.
 
 Malformed inputs never cause allocation based on an uncapped length. Guest
@@ -498,14 +589,24 @@ an intentional transport cost and is distinct from syscall marshalling.
 
 Validation follows the phase order above. Within an operand, pointer
 provenance/type/version/length precede payload hash, which precedes frame/schema
-and canonical-value validation. Operands are validated in register order.
-Only after every operand is valid are the scale pointer, rounding tag,
-required-zero registers, and failure tag validated in register order. Invalid
-rounding, failure, or required-zero controls are malformed-call traps with
-their distinct fault tags; they are never converted to status-mode arithmetic
-failures. A representationally valid scale pointer whose value is outside
-`0..=28` remains the recoverable `InvalidScale` numeric fault. Control
-validation precedes divisor validation; divisor validation precedes arithmetic.
+and canonical-value validation. Pointer operands are authenticated and decoded
+in register order. For rounded division and ratio calls, this includes fully
+authenticating the `int` scale pointer in `r12` before interpreting either
+scalar control: the rounding tag in `r13` is validated next, followed by the
+failure tag in `r14`. Only after those malformed-call checks pass is the
+decoded scale value resolved against `0..=28`; an out-of-range but canonical
+scale is the recoverable `InvalidScale` numeric fault. Thus a bad scale pointer
+precedes bad scalar controls, while a bad rounding or failure tag precedes a
+semantic out-of-range scale.
+
+Required-zero registers otherwise precede the failure tag according to each
+published signature. The rounded decimal-to-int conversion is the explicit
+special case: after authenticating `r10`, it checks required-zero `r11` and
+`r12` before validating the rounding tag in `r13`; that conversion has no
+failure-mode register. Invalid rounding, failure, or required-zero controls are
+malformed-call traps with their distinct fault tags and are never converted to
+status-mode arithmetic failures. All applicable control and scale checks
+precede divisor-zero validation, which precedes arithmetic.
 
 If a phase is unaffordable, out-of-gas for that phase takes precedence over an
 error discoverable only by performing the phase. A phase that has not begun is

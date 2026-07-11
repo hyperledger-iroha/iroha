@@ -186,7 +186,7 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
         )
         try OfflineNoteV2Validation.validateHash(recentBlockHash, field: "recent_block_hash")
 
-        let resolvedChallengeHash = try Self.computeChallengeHash(
+        let resolvedChallengeHash = try Self.preAttestationChallengeHash(
             version: version,
             platform: platform,
             keyId: keyId,
@@ -201,7 +201,6 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             publicKey: publicKey,
             assertionScheme: assertionScheme,
             assertionKeyAlgorithm: assertionKeyAlgorithm,
-            assertionPublicKey: assertionPublicKey,
             assertionUsageCountLimit: assertionUsageCountLimit,
             oneUse: oneUse,
             recentBlockHeight: recentBlockHeight,
@@ -286,8 +285,65 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
         )
     }
 
-    public func canonicalChallengeHash() throws -> Data {
-        try Self.computeChallengeHash(
+    /// Build the platform challenge before App Attest reveals its assertion public key.
+    ///
+    /// Chain admission later requires the credential and certificate keys in
+    /// the returned attestation report to equal the registration's
+    /// `assertionPublicKey`, so excluding that not-yet-known key here does not
+    /// weaken the final key binding.
+    public static func preAttestationChallengeHash(
+        version: UInt16 = OfflineNoteV2Constants.keyCertificateVersion,
+        platform: String,
+        keyId: String,
+        deviceId: String,
+        accountId: String,
+        assetDefinitionId: String? = nil,
+        iosTeamId: String? = nil,
+        iosBundleId: String? = nil,
+        iosEnvironment: String? = nil,
+        androidPackageName: String? = nil,
+        androidSigningCertificateSha256: Data? = nil,
+        publicKey: Data,
+        assertionScheme: String,
+        assertionKeyAlgorithm: String,
+        assertionUsageCountLimit: UInt32?,
+        oneUse: Bool = true,
+        recentBlockHeight: UInt64,
+        recentBlockHash: Data,
+        expiresAtMs: UInt64
+    ) throws -> Data {
+        try OfflineNoteV2Validation.validateCertificateCore(
+            version: version,
+            accountId: accountId,
+            publicKey: publicKey,
+            oneUse: oneUse
+        )
+        try OfflineNoteV2Validation.validateAttestationIdentity(keyId: keyId, deviceId: deviceId)
+        try OfflineNoteV2Validation.validateOptionalAttestationMetadata(
+            iosTeamId: iosTeamId,
+            iosBundleId: iosBundleId,
+            iosEnvironment: iosEnvironment,
+            androidPackageName: androidPackageName
+        )
+        if let assetDefinitionId, AssetDefinitionAddress.decode(assetDefinitionId) == nil {
+            throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
+        }
+        if let androidSigningCertificateSha256,
+           androidSigningCertificateSha256.count != 32 {
+            throw OfflineNoteV2Error.invalidDigestLength(
+                field: "android_signing_certificate_sha256",
+                expected: 32,
+                actual: androidSigningCertificateSha256.count
+            )
+        }
+        guard !assertionScheme.isEmpty,
+              assertionScheme == assertionScheme.trimmingCharacters(in: .whitespacesAndNewlines),
+              !assertionKeyAlgorithm.isEmpty,
+              assertionKeyAlgorithm == assertionKeyAlgorithm.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            throw OfflineNoteV2Error.nonCanonicalField(field: "assertion_profile")
+        }
+        try OfflineNoteV2Validation.validateHash(recentBlockHash, field: "recent_block_hash")
+        return try computeChallengeHash(
             version: version,
             platform: platform,
             keyId: keyId,
@@ -302,7 +358,30 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             publicKey: publicKey,
             assertionScheme: assertionScheme,
             assertionKeyAlgorithm: assertionKeyAlgorithm,
-            assertionPublicKey: assertionPublicKey,
+            assertionUsageCountLimit: assertionUsageCountLimit,
+            oneUse: oneUse,
+            recentBlockHeight: recentBlockHeight,
+            recentBlockHash: recentBlockHash,
+            expiresAtMs: expiresAtMs
+        )
+    }
+
+    public func canonicalChallengeHash() throws -> Data {
+        try Self.preAttestationChallengeHash(
+            version: version,
+            platform: platform,
+            keyId: keyId,
+            deviceId: deviceId,
+            accountId: accountId,
+            assetDefinitionId: assetDefinitionId,
+            iosTeamId: iosTeamId,
+            iosBundleId: iosBundleId,
+            iosEnvironment: iosEnvironment,
+            androidPackageName: androidPackageName,
+            androidSigningCertificateSha256: androidSigningCertificateSha256,
+            publicKey: publicKey,
+            assertionScheme: assertionScheme,
+            assertionKeyAlgorithm: assertionKeyAlgorithm,
             assertionUsageCountLimit: assertionUsageCountLimit,
             oneUse: oneUse,
             recentBlockHeight: recentBlockHeight,
@@ -382,7 +461,6 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
                                              publicKey: Data,
                                              assertionScheme: String,
                                              assertionKeyAlgorithm: String,
-                                             assertionPublicKey: Data,
                                              assertionUsageCountLimit: UInt32?,
                                              oneUse: Bool,
                                              recentBlockHeight: UInt64,
@@ -403,7 +481,6 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             publicKey: publicKey,
             assertionScheme: assertionScheme,
             assertionKeyAlgorithm: assertionKeyAlgorithm,
-            assertionPublicKey: assertionPublicKey,
             assertionUsageCountLimit: assertionUsageCountLimit,
             oneUse: oneUse,
             recentBlockHeight: recentBlockHeight,
@@ -429,7 +506,6 @@ fileprivate struct OfflineDeviceAttestationChallengePreimage {
     let publicKey: Data
     let assertionScheme: String
     let assertionKeyAlgorithm: String
-    let assertionPublicKey: Data
     let assertionUsageCountLimit: UInt32?
     let oneUse: Bool
     let recentBlockHeight: UInt64
@@ -1522,7 +1598,6 @@ enum OfflineNoteV2Encoding {
         writer.writeField(encodeBytesVec(preimage.publicKey))
         writer.writeField(OfflineCompactNorito.encodeString(preimage.assertionScheme))
         writer.writeField(OfflineCompactNorito.encodeString(preimage.assertionKeyAlgorithm))
-        writer.writeField(encodeBytesVec(preimage.assertionPublicKey))
         writer.writeField(try OfflineCompactNorito.encodeOption(
             preimage.assertionUsageCountLimit,
             encode: OfflineCompactNorito.encodeUInt32

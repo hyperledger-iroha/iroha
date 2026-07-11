@@ -97,7 +97,6 @@ Torii აგზავნის შემომავალ ავტორიზ
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 კლიენტებს ასევე შეუძლიათ მიაწოდონ დამატებითი სათაურები თითო ზარზე `arguments.headers`-ის საშუალებით.
 `content-length`, `host` და `connection` `arguments.headers`-დან იგნორირებულია.

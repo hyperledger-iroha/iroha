@@ -299,16 +299,21 @@ fn gas_for_recursive_kagemusha_topup(topup: &dm_isi::offline::TopUpKagemushaRecu
 }
 
 fn gas_for_recursive_kagemusha_topup_v2(topup: &dm_isi::offline::TopUpKagemushaRecursiveV2) -> u64 {
-    let inner = &topup.request.init_request.init_request;
-    let mut gas = inner.record_bundle.bundle.steps.first().map_or(0, |step| {
-        gas_for_proof_attachment(
-            &step.attachment,
-            step.input_nullifiers.len(),
-            step.output_commitments.len(),
-        )
-    });
+    let request = &topup.request;
+    let mut gas = request
+        .record_bundle
+        .bundle
+        .steps
+        .first()
+        .map_or(0, |step| {
+            gas_for_proof_attachment(
+                &step.attachment,
+                step.input_nullifiers.len(),
+                step.output_commitments.len(),
+            )
+        });
     let pallas_archive_bytes =
-        u64::try_from(inner.pallas_open_envelopes_archive.len()).unwrap_or(u64::MAX);
+        u64::try_from(request.pallas_open_envelopes_archive.len()).unwrap_or(u64::MAX);
     gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(pallas_archive_bytes));
     gas
 }

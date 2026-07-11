@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
 
@@ -53,8 +53,9 @@ certificate չի վերականգնում փոփոխական ընթացիկ worl
 հակասական կամ չստուգվող sidecar-ը մերժվում է fail-closed կերպով, իսկ հասանելիությունը
 չի սահմանափակվում վերջին in-memory history window-ով։
 
-Stateless verifier-ը ճշգրտորեն համադրում է version, chain, height, header hash, context,
-subject և CommitQC դաշտերը և ստուգում artifact-ի բոլոր PoP-երը։ Signer index-ները պետք
+Stateless verifier-ը ճշգրտորեն համադրում է version, chain, height, header hash, header-ի
+canonical predecessor և view, context, subject և CommitQC դաշտերը և ստուգում artifact-ի բոլոր PoP-երը։
+Signer index-ները պետք
 է լինեն խիստ աճող ու սահմաններում։ CommitQC-ն պետք է բավարարի և՛ validator count, և՛
 voting power quorum-ը, իսկ ճշգրիտ Sumeragi v2 vote preimage-ի BLS aggregate signature-ը
 պետք է վավեր լինի։
@@ -78,9 +79,7 @@ successor-ը։
 ## Bundle և API
 
 `BridgeFinalityBundle`-ը ճշգրտորեն `{ commitment, finality_proof }` է։ Commitment-ը
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }` է։ Optional MMR դաշտերը միայն commitments են, ոչ թե
-finality կամ inclusion proof։
+`{ chain_id, height_context_id, block_height, block_hash }` է։
 
 - `GET /v1/bridge/finality/{height}`-ը վերադարձնում է `BridgeFinalityProof`;
 - `GET /v1/bridge/finality/bundle/{height}`-ը վերադարձնում է `BridgeFinalityBundle`։

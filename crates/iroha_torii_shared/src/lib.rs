@@ -8,26 +8,29 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
+/// Public Torii DTOs for the offline cash lifecycle.
+pub mod offline_api;
 /// Shared QR Code encoder used by Torii and CLI offline flows.
 pub mod qr;
+/// Canonical Torii route metadata and projection helpers.
+pub mod route_catalog;
 
-/// First-release Torii API version advertised by default (`major.minor`).
-pub const API_VERSION_DEFAULT: &str = "1.0";
-/// Supported Torii API versions in ascending order (`major.minor`).
-pub const API_VERSION_SUPPORTED: &[&str] = &[API_VERSION_DEFAULT];
-/// Minimum Torii API version required for proof/staking/fee endpoints.
-pub const API_MIN_PROOF_VERSION: &str = API_VERSION_DEFAULT;
-/// Optional unix timestamp when the oldest supported Torii API version sunsets.
-pub const API_VERSION_SUNSET_UNIX: Option<u64> = None;
-
-/// Header carrying the requested Torii API version (semantic `major.minor`).
-pub const HEADER_API_VERSION: &str = "x-iroha-api-version";
+/// Required WebSocket subprotocol for canonical Norito event and block streams.
+pub const NORITO_V1_WEBSOCKET_SUBPROTOCOL: &str = "iroha-norito-v1";
 
 pub mod uri {
     //! URI that Torii uses to route incoming requests.
 
     /// Query URI is used to handle incoming Query requests.
     pub const QUERY: &str = "/v1/query";
+    /// URI used to evaluate offline-payment readiness.
+    pub const OFFLINE_READINESS: &str = crate::route_catalog::offline::READINESS_PATH;
+    /// URI used to submit an online-to-offline top-up operation.
+    pub const OFFLINE_TOP_UP: &str = crate::route_catalog::offline::TOP_UP_PATH;
+    /// URI used to submit an offline redemption operation.
+    pub const OFFLINE_REDEEM: &str = crate::route_catalog::offline::REDEEM_PATH;
+    /// URI used to fetch an offline operation by ID.
+    pub const OFFLINE_OPERATION: &str = crate::route_catalog::offline::OPERATION_PATH;
     /// Transaction URI is used to handle incoming signed transaction requests.
     pub const TRANSACTION: &str = "/v1/pipeline/transactions";
     /// Transaction entrypoint URI is used to handle sealed and non-external submissions.
@@ -78,8 +81,6 @@ pub mod uri {
     pub const SCHEMA: &str = "/v1/schema";
     /// URI for getting the API version currently used
     pub const API_VERSION: &str = "/v1/api/version";
-    /// URI for listing supported Torii API versions and the default.
-    pub const API_VERSIONS: &str = "/v1/api/versions";
     /// URI for getting cpu profile
     pub const PROFILE: &str = "/debug/pprof/profile";
     /// Base path for governance API endpoints
@@ -390,19 +391,6 @@ impl ErrorEnvelope {
     pub fn message(&self) -> &str {
         &self.message
     }
-}
-
-/// Supported Torii API versions and defaults exposed over `/v1/api/versions`.
-#[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
-pub struct ApiVersionInfo {
-    /// Default API version the node will assume when no header is present.
-    pub default: String,
-    /// All supported API versions (sorted ascending).
-    pub supported: Vec<String>,
-    /// Optional unix timestamp when the lowest supported version sunsets.
-    pub sunset_unix: Option<u64>,
-    /// Minimum API version required for proof/staking/fee endpoints.
-    pub min_proof_version: String,
 }
 
 /// Per-backend proof retention snapshot.
@@ -821,6 +809,47 @@ mod tests {
             details.hint.as_deref(),
             Some("inspect transaction rejection reason")
         );
+    }
+
+    #[test]
+    fn error_envelope_json_discards_unknown_members_and_rejects_duplicates() {
+        let decoded: ErrorEnvelope = norito::json::from_str(
+            r#"{"code":"bad_request","message":"invalid","unknown":"discarded","details":{"field":"amount","unknown_nested":{"secret":true}}}"#,
+        )
+        .expect("decode envelope with independently additive members");
+        assert_eq!(decoded.code(), "bad_request");
+        assert_eq!(
+            decoded
+                .details
+                .as_ref()
+                .and_then(|details| details.field.as_deref()),
+            Some("amount")
+        );
+        let canonical = norito::json::to_string(&decoded).expect("re-encode closed envelope");
+        assert!(!canonical.contains("unknown"));
+        assert!(!canonical.contains("secret"));
+
+        for json in [
+            r#"{"code":"bad_request","code":"conflict","message":"invalid"}"#,
+            r#"{"code":"bad_request","message":"invalid","details":{"field":"amount","field":"asset"}}"#,
+        ] {
+            let error = norito::json::from_str::<ErrorEnvelope>(json)
+                .expect_err("duplicate declared error member must fail");
+            assert!(
+                error.to_string().contains("duplicate field"),
+                "unexpected duplicate-member error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn error_envelope_json_rejects_untyped_details_values() {
+        for details in ["[]", "\"dynamic\"", "1", "true"] {
+            let json =
+                format!(r#"{{"code":"bad_request","message":"invalid","details":{details}}}"#);
+            norito::json::from_str::<ErrorEnvelope>(&json)
+                .expect_err("details must be the declared typed record or null");
+        }
     }
 
     #[test]

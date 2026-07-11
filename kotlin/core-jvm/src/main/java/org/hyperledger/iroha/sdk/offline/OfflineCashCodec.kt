@@ -5,36 +5,13 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 
-/** Canonicalization helpers for the `/v1/offline/cash/` route family. */
+/** Canonicalization helpers for local offline wallet state and proofs. */
 object OfflineCashCodec {
 
     /** Canonical amount matching Rust `iroha_primitives::numeric::Numeric::to_string`. */
     @JvmStatic
     fun canonicalAmountString(amount: String): String {
         return parseNumeric(amount).canonicalString()
-    }
-
-    internal fun requireExactNonEmptyText(value: String, field: String): String {
-        require(value.isNotEmpty() && value.trim() == value) {
-            "$field must be an exact non-empty string"
-        }
-        return value
-    }
-
-    internal fun requireOptionalExactNonEmptyText(value: String?, field: String): String? {
-        if (value == null) return null
-        return requireExactNonEmptyText(value, field)
-    }
-
-    internal fun canonicalNonNegativeAmountString(amount: String, field: String): String {
-        require(amount.isNotEmpty() && amount.trim() == amount) {
-            "$field must be an exact amount string"
-        }
-        val canonical = canonicalAmountString(amount)
-        require(!canonical.startsWith("-")) {
-            "$field must be a non-negative amount"
-        }
-        return canonical
     }
 
     /** Lexicographically sorted `"{transferId}:{localRevision}"` keys for a receipt list. */
@@ -71,31 +48,6 @@ object OfflineCashCodec {
         payload["receipt_keys"] = receiptKeys(receipts)
         val canonical = JsonEncoder.encode(payload).toByteArray(StandardCharsets.UTF_8)
         return sha256Hex(canonical)
-    }
-
-    /**
-     * Stable idempotency key header value for mutating cash routes.
-     *
-     * Exact port of `ToriiClient.offlineCashIdempotencyKey` from IrohaSwift
-     * (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:11885-11909`):
-     * operation-id scoped for load / refresh / sync / redeem; a SHA-256 fingerprint of the
-     * request path + encoded body for setup (which has no `operation_id`).
-     */
-    @JvmStatic
-    fun stableIdempotencyKey(request: Any, path: String, encodedBody: ByteArray): String = when (request) {
-        is OfflineCashLoadRequest -> "offline-cash:${request.operationId}"
-        is OfflineCashRefreshRequest -> "offline-cash:${request.operationId}"
-        is OfflineCashSyncRequest -> "offline-cash:${request.operationId}"
-        is OfflineCashRedeemRequest -> "offline-cash:${request.operationId}"
-        is OfflineCashSetupRequest -> {
-            val digestInput = ByteArray(path.toByteArray(StandardCharsets.UTF_8).size + 1 + encodedBody.size)
-            val pathBytes = path.toByteArray(StandardCharsets.UTF_8)
-            System.arraycopy(pathBytes, 0, digestInput, 0, pathBytes.size)
-            digestInput[pathBytes.size] = 0
-            System.arraycopy(encodedBody, 0, digestInput, pathBytes.size + 1, encodedBody.size)
-            "offline-cash:setup:${sha256Hex(digestInput)}"
-        }
-        else -> error("Unsupported cash request type for Idempotency-Key: ${request::class.java.name}")
     }
 
     private fun sha256Hex(bytes: ByteArray): String {

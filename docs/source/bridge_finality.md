@@ -50,18 +50,23 @@ verifier to choose between competing copies of the same consensus fact.
 
 The Sumeragi-v2 apply service constructs the artifact from the frozen height
 context, exact decided subject, and exact CommitQC, validates it, and stores it
-as an immutable Kura sidecar after applying the block. The write is idempotent;
-Kura rejects a conflicting artifact at the same height. Restart recovery can
-finish a missing sidecar without re-executing an already applied block.
+as an immutable Kura sidecar after applying the block. Before accepting a new
+sidecar, Kura validates its structure and exact canonical-header association
+(height, hash, predecessor, and view), then verifies every roster-aligned PoP,
+both quorum thresholds, and the CommitQC aggregate signature. The write is
+idempotent; Kura rejects a conflicting artifact at the same height. Restart
+recovery can finish a missing sidecar without re-executing an already applied
+block.
 
 `build_finality_proof` reads the canonical block and its sidecar by height,
-checks their height/hash/chain association, and runs the same cryptographic
-verifier used by consumers. Historical verification reads the PoPs embedded in
-the sidecar; it never substitutes keys or PoPs from mutable current world state,
-reconstructs historical consensus evidence, or projects a retired certificate
-format. Proof availability follows the durable block and sidecar; it is not a
-recent in-memory certificate window. Missing, corrupt, conflicting, or
-unverifiable sidecars fail closed.
+requires the same complete header association, and obtains an artifact that
+Kura has cryptographically verified for the exact immutable sidecar identity.
+Historical verification reads the PoPs embedded in the sidecar; it never
+substitutes keys or PoPs from mutable current world state, reconstructs
+historical consensus evidence, or projects a retired certificate format. Proof
+availability follows the durable block and sidecar; it is not a recent
+in-memory certificate window. Missing, corrupt, conflicting, or unverifiable
+sidecars fail closed.
 
 ## Canonical verification
 
@@ -77,8 +82,9 @@ structural and cryptographic checks:
    in the height context is mandatory for an epoch-ending boundary parent and
    forbidden elsewhere.
 4. Require the artifact chain id to equal the caller's expected chain id.
-5. Recompute the block-header height and hash and require both to match the
-   artifact.
+5. Recompute the block-header height, hash, predecessor, and view-change index
+   and require them to match the artifact's height, block hash, subject parent,
+   and CommitQC view respectively.
 6. Require the artifact to embed one BLS-normal PoP per roster entry and verify
    every PoP against the corresponding public key.
 7. Require strictly increasing, in-range signer indices. The certificate must
@@ -153,21 +159,17 @@ chain from the checkpoint to the message artifact (or compare against the same
 trusted local artifacts). Merely accepting a valid aggregate signature under a
 roster supplied by the message would not establish Taira finality.
 
-## Commitment bundle and MMR
+## Compact commitment bundle
 
 `BridgeFinalityBundle` has exactly two fields:
 
-- `commitment`: `{ chain_id, height_context_id, block_height, block_hash,
-  mmr_root?, mmr_leaf_index?, mmr_peaks? }`;
+- `commitment`: `{ chain_id, height_context_id, block_height, block_hash }`;
 - `finality_proof`: the complete proof described above.
 
-The optional MMR fields are commitments only: they are a root-checkpoint aid,
-not a finality substitute or an inclusion proof.
-The endpoint recomputes the block-hash MMR and returns its peaks but does not
-return a membership path. Peaks are ordered left to right and bagged from right
-to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`. SCCP uses its own typed
-message Merkle branch and governed finality anchor instead of this optional MMR
-surface.
+The compact commitment duplicates only the exact chain, height context, block
+height, and block hash needed to reject bundle drift before verifying the
+embedded proof. SCCP inclusion uses its own typed message Merkle branch and
+governed finality anchor.
 
 ## API surface
 

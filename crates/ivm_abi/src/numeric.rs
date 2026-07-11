@@ -181,7 +181,10 @@ mod tests {
     #[test]
     fn numeric_fault_tags_are_complete_and_stable() {
         for tag in 1..=12 {
-            assert_eq!(NumericFaultV1::from_tag(tag).map(NumericFaultV1::tag), Some(tag));
+            assert_eq!(
+                NumericFaultV1::from_tag(tag).map(NumericFaultV1::tag),
+                Some(tag)
+            );
         }
         assert_eq!(NumericFaultV1::from_tag(0), None);
         assert_eq!(NumericFaultV1::from_tag(13), None);
@@ -190,7 +193,10 @@ mod tests {
     #[test]
     fn rounding_tags_are_complete_and_stable() {
         for tag in 0..=6 {
-            assert_eq!(RoundingModeV1::from_tag(tag).map(RoundingModeV1::tag), Some(tag));
+            assert_eq!(
+                RoundingModeV1::from_tag(tag).map(RoundingModeV1::tag),
+                Some(tag)
+            );
         }
         assert_eq!(RoundingModeV1::from_tag(7), None);
     }
@@ -198,7 +204,10 @@ mod tests {
     #[test]
     fn pointer_fault_tags_are_complete_and_stable() {
         for tag in 1..=11 {
-            assert_eq!(PointerAbiFaultV1::from_tag(tag).map(PointerAbiFaultV1::tag), Some(tag));
+            assert_eq!(
+                PointerAbiFaultV1::from_tag(tag).map(PointerAbiFaultV1::tag),
+                Some(tag)
+            );
         }
         assert_eq!(PointerAbiFaultV1::from_tag(0), None);
         assert_eq!(PointerAbiFaultV1::from_tag(12), None);

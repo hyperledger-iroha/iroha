@@ -183,6 +183,7 @@ impl V2ApplyService {
             task.certificate().clone(),
             self.validator_set_pops.clone(),
         );
+        artifact.validate_for_header(&body.header())?;
         artifact
             .verify()
             .map_err(V2ApplyError::FinalityCryptography)?;
@@ -925,6 +926,64 @@ mod tests {
             fixture.service.execute(&fixture.context, &mut store, &task),
             Err(V2ApplyError::FinalityCryptography(
                 wire::finality::V2QuorumCertificateVerificationError::InvalidAggregateSignature
+            ))
+        ));
+        fixture.assert_no_apply_mutation();
+    }
+
+    #[test]
+    fn resigned_commit_qc_with_wrong_header_view_is_rejected_without_mutation() {
+        let fixture = ApplyFixture::new();
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS key")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let mut certificate = fixture.task.certificate().clone();
+        certificate.round.view = fixture.body.header().view_change_index().saturating_add(1);
+        let preimage = wire::Vote {
+            round: certificate.round,
+            phase: certificate.phase,
+            subject: certificate.subject,
+            signer: certificate.signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let signatures = certificate
+            .signers
+            .iter()
+            .map(|index| {
+                Signature::try_new(
+                    keys[usize::try_from(*index).expect("fixture signer index")].private_key(),
+                    &preimage,
+                )
+                .expect("sign wrong-view Commit vote")
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate wrong-view Commit votes");
+        let task = ApplyTask::for_test(
+            2,
+            fixture.task.tag(),
+            fixture.task.subject(),
+            certificate,
+            fixture.task.validated_receipt().clone(),
+        );
+        let mut store = fixture.reopen_body_store();
+
+        assert!(matches!(
+            fixture.service.execute(&fixture.context, &mut store, &task),
+            Err(V2ApplyError::Finality(
+                wire::finality::V2FinalityValidationError::AssociatedViewMismatch {
+                    certificate: 1,
+                    block: 0,
+                }
             ))
         ));
         fixture.assert_no_apply_mutation();

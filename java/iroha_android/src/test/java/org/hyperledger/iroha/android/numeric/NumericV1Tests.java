@@ -87,7 +87,7 @@ public final class NumericV1Tests {
     final NumericV1.QuantityValue quantity = NumericV1.QuantityValue.parse("1.25");
     final byte[] quantityEnvelope = NumericV1.encodeQuantityEnvelope(quantity);
     assertEquals(0x00, quantityEnvelope[0] & 0xFF);
-    assertEquals(0x10, quantityEnvelope[1] & 0xFF);
+    assertEquals(0x13, quantityEnvelope[1] & 0xFF);
     assertEquals(quantity, NumericV1.decodeQuantityFrame(NumericV1.encodeQuantityFrame(quantity)));
     assertEquals(quantity, NumericV1.decodeQuantityEnvelope(quantityEnvelope));
 
@@ -112,6 +112,12 @@ public final class NumericV1Tests {
     badHash[badHash.length - 1] ^= 1;
     assertCode(NumericV1.ErrorCode.PAYLOAD_HASH_MISMATCH, () -> NumericV1.decodeIntEnvelope(badHash));
 
+    final byte[] retired = NumericV1.encodeIntEnvelope(NumericV1.IntValue.parse("1"));
+    retired[0] = 0;
+    retired[1] = 0x10;
+    retired[2] = 2;
+    assertCode(NumericV1.ErrorCode.TYPE_NOT_ALLOWED, () -> NumericV1.decodeIntEnvelope(retired));
+
     final byte[] knownWrong = NumericV1.encodeIntEnvelope(NumericV1.IntValue.parse("1"));
     knownWrong[0] = 0;
     knownWrong[1] = 0x01;
@@ -120,7 +126,7 @@ public final class NumericV1Tests {
 
     final byte[] unknown = NumericV1.encodeIntEnvelope(NumericV1.IntValue.parse("1"));
     unknown[0] = 0;
-    unknown[1] = 0x13;
+    unknown[1] = 0x14;
     unknown[2] = 2;
     assertCode(NumericV1.ErrorCode.UNKNOWN_TYPE, () -> NumericV1.decodeIntEnvelope(unknown));
   }
@@ -149,23 +155,33 @@ public final class NumericV1Tests {
       final String id = (String) vector.get("id");
       final String kind = (String) vector.get("kind");
       final String canonical = (String) vector.get("canonical");
+      final byte[] fixtureFrame = unhex((String) vector.get("frame_hex"));
+      final byte[] fixtureEnvelope = unhex((String) vector.get("envelope_hex"));
       final byte[] frame;
       final byte[] envelope;
+      final String decodedFrame;
+      final String decodedEnvelope;
       switch (kind) {
         case "int":
           final NumericV1.IntValue integer = NumericV1.decodeIntJson(canonical);
           frame = NumericV1.encodeIntFrame(integer);
           envelope = NumericV1.encodeIntEnvelope(integer);
+          decodedFrame = NumericV1.decodeIntFrame(fixtureFrame).toString();
+          decodedEnvelope = NumericV1.decodeIntEnvelope(fixtureEnvelope).toString();
           break;
         case "decimal":
           final NumericV1.DecimalValue decimal = NumericV1.decodeDecimalJson(canonical);
           frame = NumericV1.encodeDecimalFrame(decimal);
           envelope = NumericV1.encodeDecimalEnvelope(decimal);
+          decodedFrame = NumericV1.decodeDecimalFrame(fixtureFrame).toString();
+          decodedEnvelope = NumericV1.decodeDecimalEnvelope(fixtureEnvelope).toString();
           break;
         case "quantity":
           final NumericV1.QuantityValue quantity = NumericV1.decodeQuantityJson(canonical);
           frame = NumericV1.encodeQuantityFrame(quantity);
           envelope = NumericV1.encodeQuantityEnvelope(quantity);
+          decodedFrame = NumericV1.decodeQuantityFrame(fixtureFrame).toString();
+          decodedEnvelope = NumericV1.decodeQuantityEnvelope(fixtureEnvelope).toString();
           break;
         default:
           throw new AssertionError("unknown fixture kind " + kind);
@@ -173,6 +189,8 @@ public final class NumericV1Tests {
       assertEquals(id + " body", vector.get("body_hex"), hex(java.util.Arrays.copyOfRange(frame, 40, frame.length)));
       assertEquals(id + " frame", vector.get("frame_hex"), hex(frame));
       assertEquals(id + " envelope", vector.get("envelope_hex"), hex(envelope));
+      assertEquals(id + " frame decode", canonical, decodedFrame);
+      assertEquals(id + " envelope decode", canonical, decodedEnvelope);
     }
 
     for (final Object raw : (List<Object>) fixture.get("invalid")) {

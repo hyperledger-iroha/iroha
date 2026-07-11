@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
 
@@ -50,7 +50,8 @@ builder የcanonical block-ውንና sidecar-ውን ያነባል፤ ታሪካዊ
 የአሁኑ world state እንደገና አይገነባም። የጎደለ፣ የተበላሸ፣ የሚጋጭ ወይም የማይረጋገጥ
 sidecar fail closed ይሆናል፤ ተደራሽነት በቅርብ in-memory history window አይገደብም።
 
-Stateless verifier version፣ chain፣ height፣ header hash፣ context፣ subject እና CommitQC-ን
+Stateless verifier version፣ chain፣ height፣ header hash፣ canonical predecessor፣ view፣ context፣
+subject እና CommitQC-ን
 በትክክል ያዛምዳል እና በartifact ውስጥ ያሉትን PoP-ዎች ሁሉ ያረጋግጣል። Signer index-ዎች
 በጥብቅ እየጨመሩና በወሰን ውስጥ መሆን አለባቸው። CommitQC የvalidator count እና voting
 power quorum ሁለቱንም ማሟላት፣ በትክክለኛው Sumeragi v2 vote preimage ላይ BLS aggregate
@@ -73,9 +74,7 @@ SCCP ይህንኑ `BridgeFinalityProof` ይጠቀማል። በmessage የቀረ�
 ## Bundle እና API
 
 `BridgeFinalityBundle` በትክክል `{ commitment, finality_proof }` ነው። Commitment-ው
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }` ነው። Optional MMR መስኮች commitments ብቻ ናቸው፤ finality
-ወይም inclusion proof አይደሉም።
+`{ chain_id, height_context_id, block_height, block_hash }` ነው።
 
 - `GET /v1/bridge/finality/{height}` `BridgeFinalityProof` ይመልሳል፤
 - `GET /v1/bridge/finality/bundle/{height}` `BridgeFinalityBundle` ይመልሳል።

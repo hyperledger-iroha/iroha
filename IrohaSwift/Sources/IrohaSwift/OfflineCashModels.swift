@@ -780,20 +780,6 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
     }
 }
 
-public struct ToriiOfflineCashEnvelope: Codable, Sendable, Equatable {
-    public let lineageState: ToriiOfflineCashState
-
-    public init(
-        lineageState: ToriiOfflineCashState
-    ) {
-        self.lineageState = lineageState
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case lineageState = "lineage_state"
-    }
-}
-
 public enum ToriiOfflineCashCodec {
     public enum Error: LocalizedError, Equatable {
         case invalidSignature

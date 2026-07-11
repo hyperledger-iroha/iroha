@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 ---
 
 <div dir="rtl">
@@ -50,7 +50,8 @@ SPDX-License-Identifier: Apache-2.0
 التاريخية من world state الحالية القابلة للتغيير. يؤدي فقد sidecar أو تلفه أو تعارضه أو
 فشل التحقق منه إلى الرفض المغلق، ولا تعتمد الإتاحة على نافذة تاريخ حديثة في الذاكرة.
 
-يطابق المدقق عديم الحالة الإصدار والسلسلة والارتفاع وhash الـ header والسياق والـ subject
+يطابق المدقق عديم الحالة الإصدار والسلسلة والارتفاع وhash الـ header والـ predecessor
+القانوني وview والسياق والـ subject
 وCommitQC بدقة، ويتحقق من جميع PoP المضمنة في الـ artifact. يجب أن تكون فهارس الموقعين
 متزايدة تماما وضمن المجال، وأن يحقق CommitQC حدّي quorum: عدد المدققين وقوة التصويت،
 وأن تكون BLS aggregate signature على Sumeragi v2 vote preimage الدقيق صحيحة.
@@ -73,9 +74,8 @@ roster وPoP المجمدين السابقين. داخل الحقبة ينسخ a
 ## Bundle وواجهة API
 
 يحتوي `BridgeFinalityBundle` بالضبط على `{ commitment, finality_proof }`. ويكون
-commitment هو `{ chain_id, height_context_id, block_height, block_hash,
-mmr_root?, mmr_leaf_index?, mmr_peaks? }`. حقول MMR الاختيارية التزامات فقط؛ وليست
-نهائية ولا برهان تضمين.
+commitment هو بالضبط
+`{ chain_id, height_context_id, block_height, block_hash }`.
 
 - يعيد `GET /v1/bridge/finality/{height}` قيمة `BridgeFinalityProof`؛
 - يعيد `GET /v1/bridge/finality/bundle/{height}` قيمة `BridgeFinalityBundle`.

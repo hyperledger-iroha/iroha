@@ -40,7 +40,7 @@ Payload is a Norito-encoded `DaIngestRequest`. Responses use
 | 500 Internal Error | Unexpected failure (logged + alert). |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -56,7 +56,7 @@ bundle hash. Commitment list/prove endpoints carry the same bundle so SDKs
 don’t need an extra round-trip to bind a proof to the active policy set.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

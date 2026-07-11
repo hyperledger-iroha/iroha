@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn structured_missing_tokens_are_independent_of_diagnostic_wording() {
-        let text = "seiyaku Broken { fn bad(value int) { return; } }";
+        let text = "seiyaku Broken { fn bad(int) { return; } }";
         let source = SourceFile::new(SourceId(46), "structured-missing.ko", text);
         let lexed = lex(&source, FrontendBudget::v1());
         let lossless = lexed.tokens.clone();
@@ -351,9 +351,9 @@ mod tests {
             .expect("lower significant token view");
         let mut parsed = crate::parser::parse_with_syntax(&source, &tokens);
         let missing_offset =
-            u32::try_from(text.find("int").expect("unexpected type")).expect("source budget");
+            u32::try_from(text.find(')').expect("parameter close")).expect("source budget");
         assert!(parsed.missing.iter().any(|missing| {
-            missing.offset == missing_offset && missing.expected == SyntaxKind::Colon
+            missing.offset == missing_offset && missing.expected == SyntaxKind::Ident
         }));
         for diagnostic in &mut parsed.diagnostics.diagnostics {
             diagnostic.message = "localized parser message without token spelling".into();
@@ -363,7 +363,7 @@ mod tests {
         assert!(
             tree.tokens()
                 .iter()
-                .any(|token| { token.is_missing() && token.expected == Some(SyntaxKind::Colon) })
+                .any(|token| { token.is_missing() && token.expected == Some(SyntaxKind::Ident) })
         );
     }
 
@@ -503,12 +503,13 @@ mod tests {
             .iter()
             .map(|token| token.kind)
             .collect::<Vec<_>>();
-        assert!(
+        assert_eq!(
             kinds
                 .iter()
                 .filter(|kind| **kind == SyntaxKind::Colon)
-                .count()
-                >= 5
+                .count(),
+            2,
+            "only named struct and call arguments use colons in type-first V1 syntax"
         );
         assert!(
             kinds
@@ -738,78 +739,77 @@ mod tests {
         cst_snapshot(output.tree.root(), &source, 0, &mut snapshot);
         assert_eq!(
             snapshot,
-            r#"Root@0..134
-  SourceUnit@0..132
+            r#"Root@0..133
+  SourceUnit@0..131
     KwSeiyaku="seiyaku"@0..7
     Ident="C"@8..9
     LBrace="{"@10..11
-    ItemList@11..131
-      FunctionItem@12..129
+    ItemList@11..130
+      FunctionItem@12..128
         KwFn="fn"@12..14
         Ident="f"@15..16
-        ParamList@16..32
+        ParamList@16..31
           LParen="("@16..17
-          Ident="v"@17..18
-          Colon=":"@18..19
-          Ident="Option"@20..26
-          Less="<"@26..27
-          Ident="int"@27..30
-          Greater=">"@30..31
-          RParen=")"@31..32
-        Block@33..129
-          LBrace="{"@33..34
-          StatementList@34..128
-            LetStmt@35..59
-              KwLet="let"@35..38
-              Ident="choice"@39..45
-              Equal="="@46..47
-              Ident="v"@48..49
-              Question="?"@49..50
-              Question="?"@51..52
-              Number="1"@53..54
-              Colon=":"@55..56
-              Number="2"@57..58
-              Semicolon=";"@58..59
-            LetStmt@60..127
-              KwLet="let"@60..63
-              Ident="payload"@64..71
-              Equal="="@72..73
-              JsonObjectExpr@74..126
-                Ident="json"@74..78
-                LBrace="{"@79..80
-                JsonObjectEntry@81..126
-                  Ident="values"@81..87
-                  Colon=":"@87..88
-                  JsonArrayExpr@89..126
-                    Ident="json"@89..93
-                    LBracket="["@94..95
-                    Number="1"@95..96
-                    Comma=","@96..97
-                    ListComprehension@98..126
-                      LBracket="["@98..99
-                      Ident="x"@99..100
-                      KwFor="for"@101..104
-                      Ident="x"@105..106
-                      KwIn="in"@107..109
-                      ListExpr@110..116
-                        LBracket="["@110..111
-                        Number="1"@111..112
-                        Comma=","@112..113
-                        Number="2"@114..115
-                        RBracket="]"@115..116
-                      KwIf="if"@117..119
-                      Ident="x"@120..121
-                      Greater=">"@122..123
-                      Number="0"@124..125
-                      RBracket="]"@125..126
-                    Missing(Some(RBracket))@126
-              ErrorNode@126..127
-                Semicolon=";"@126..127
-          RBrace="}"@128..129
-      ErrorNode@129..130
-        Semicolon=";"@129..130
-    RBrace="}"@131..132
-  RBrace="}"@133..134
+          Ident="Option"@17..23
+          Less="<"@23..24
+          Ident="int"@24..27
+          Greater=">"@27..28
+          Ident="v"@29..30
+          RParen=")"@30..31
+        Block@32..128
+          LBrace="{"@32..33
+          StatementList@33..127
+            LetStmt@34..58
+              KwLet="let"@34..37
+              Ident="choice"@38..44
+              Equal="="@45..46
+              Ident="v"@47..48
+              Question="?"@48..49
+              Question="?"@50..51
+              Number="1"@52..53
+              Colon=":"@54..55
+              Number="2"@56..57
+              Semicolon=";"@57..58
+            LetStmt@59..126
+              KwLet="let"@59..62
+              Ident="payload"@63..70
+              Equal="="@71..72
+              JsonObjectExpr@73..125
+                Ident="json"@73..77
+                LBrace="{"@78..79
+                JsonObjectEntry@80..125
+                  Ident="values"@80..86
+                  Colon=":"@86..87
+                  JsonArrayExpr@88..125
+                    Ident="json"@88..92
+                    LBracket="["@93..94
+                    Number="1"@94..95
+                    Comma=","@95..96
+                    ListComprehension@97..125
+                      LBracket="["@97..98
+                      Ident="x"@98..99
+                      KwFor="for"@100..103
+                      Ident="x"@104..105
+                      KwIn="in"@106..108
+                      ListExpr@109..115
+                        LBracket="["@109..110
+                        Number="1"@110..111
+                        Comma=","@111..112
+                        Number="2"@113..114
+                        RBracket="]"@114..115
+                      KwIf="if"@116..118
+                      Ident="x"@119..120
+                      Greater=">"@121..122
+                      Number="0"@123..124
+                      RBracket="]"@124..125
+                    Missing(Some(RBracket))@125
+              ErrorNode@125..126
+                Semicolon=";"@125..126
+          RBrace="}"@127..128
+      ErrorNode@128..129
+        Semicolon=";"@128..129
+    RBrace="}"@130..131
+  RBrace="}"@132..133
 "#,
         );
     }

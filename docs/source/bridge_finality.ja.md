@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 ---
 
 <!--
@@ -50,7 +50,8 @@ proof builder は canonical block とその sidecar を読み、現在の可変 
 過去の PoP や certificate を再構成しません。sidecar の欠落、破損、競合、検証失敗は
 fail closed です。最近の in-memory history window による保持制限はありません。
 
-stateless verifier は version、chain、高さ、header hash、context、subject、CommitQC を
+stateless verifier は version、chain、高さ、header hash、canonical predecessor、view、
+context、subject、CommitQC を
 厳密に対応させ、artifact 内の全 PoP を検証します。signer index は昇順かつ範囲内で、
 CommitQC は人数と voting power の両方の quorum を満たし、正確な Sumeragi v2 vote
 preimage に対する BLS aggregate signature が有効でなければなりません。
@@ -72,9 +73,8 @@ SCCP は同じ `BridgeFinalityProof` を使います。message が提供した r
 ## Bundle と API
 
 `BridgeFinalityBundle` は正確に `{ commitment, finality_proof }` です。
-commitment は `{ chain_id, height_context_id, block_height, block_hash,
-mmr_root?, mmr_leaf_index?, mmr_peaks? }` です。任意の MMR フィールドは commitment
-にすぎず、finality や inclusion proof ではありません。
+commitment は正確に
+`{ chain_id, height_context_id, block_height, block_hash }` です。
 
 - `GET /v1/bridge/finality/{height}` は `BridgeFinalityProof` を返します。
 - `GET /v1/bridge/finality/bundle/{height}` は `BridgeFinalityBundle` を返します。

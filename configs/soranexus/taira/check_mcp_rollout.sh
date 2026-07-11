@@ -1199,9 +1199,9 @@ check_route_parity() {
     "ZK proof count route"
   check_route_status "$label" GET "${root_url}/v1/sumeragi/validator-sets" "200" \
     "validator-set snapshot route"
-  check_route_status "$label" GET "${root_url}/v1/nexus/public_lanes/${lane_id}/validators" "200" \
+  check_route_status "$label" GET "${root_url}/v1/nexus/public-lanes/${lane_id}/validators" "200" \
     "public-lane validator snapshot route"
-  check_route_status "$label" GET "${root_url}/v1/nexus/public_lanes/${lane_id}/stake" "200" \
+  check_route_status "$label" GET "${root_url}/v1/nexus/public-lanes/${lane_id}/stake" "200" \
     "public-lane stake snapshot route"
   check_route_status "$label" GET "${root_url}/v1/contracts/state" "400" \
     "contract state route should be mounted and reject missing query selectors"

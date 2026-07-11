@@ -1499,14 +1499,14 @@ mod tests {
     };
 
     use super::{
-        AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets, COLLECTION_ITERATION_CAP,
-        Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES, DataKind, DeferredTransfer,
-        GLOBAL_WILDCARD_KEY, HINT_SKIP_DYNAMIC_STATE_PATH, HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE,
-        HINT_SKIP_OPAQUE_ISI, IrAccessClass, LiteralFixups, NFT_COARSE_KEY, STATE_WILDCARD_KEY,
-        TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX, checked_align_stack_frame_size,
-        classify_ir_access, decoded_control_target, emit_addi, emit_load64, emit_store64,
-        encode_addi, encode_jal, encode_nop, patch_indexed_literal_load, patch_literal_load,
-        pointer_type_for_kind, push_word, record_isi_access,
+        ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
+        COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES,
+        DataKind, DeferredTransfer, GLOBAL_WILDCARD_KEY, HINT_SKIP_DYNAMIC_STATE_PATH,
+        HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI, IrAccessClass, LiteralFixups,
+        NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX,
+        checked_align_stack_frame_size, classify_ir_access, decoded_control_target, emit_addi,
+        emit_load64, emit_store64, encode_addi, encode_jal, encode_nop, patch_indexed_literal_load,
+        patch_literal_load, pointer_type_for_kind, push_word, record_isi_access,
         relax_control_transfers_with_trampolines, reserve_word, stack_slot_offset_bytes,
     };
     use crate::{
@@ -1662,24 +1662,27 @@ mod tests {
     #[test]
     fn unresolved_world_ir_uses_read_or_write_appropriate_wildcards() {
         let temp = ir::Temp(0);
-        for instruction in [
-            ir::Instr::ResolveAccountAlias {
-                dest: temp,
-                alias: temp,
-            },
-            ir::Instr::ZkVerify {
-                number: syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-                payload: temp,
-            },
-        ] {
-            let (access, skips) = unresolved_world_access(&instruction);
-            assert_eq!(
-                access.reads,
-                IndexSet::from([GLOBAL_WILDCARD_KEY.to_owned()])
-            );
-            assert!(access.writes.is_empty());
-            assert_eq!(skips, IndexSet::from([HINT_SKIP_OPAQUE_ISI.to_owned()]));
-        }
+        let (access, skips) = unresolved_world_access(&ir::Instr::ResolveAccountAlias {
+            dest: temp,
+            alias: temp,
+        });
+        assert_eq!(
+            access.reads,
+            IndexSet::from([ACCOUNT_WILDCARD_KEY.to_owned()])
+        );
+        assert!(access.writes.is_empty());
+        assert!(skips.is_empty());
+
+        let (access, skips) = unresolved_world_access(&ir::Instr::ZkVerify {
+            number: syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+            payload: temp,
+        });
+        assert_eq!(
+            access.reads,
+            IndexSet::from([GLOBAL_WILDCARD_KEY.to_owned()])
+        );
+        assert!(access.writes.is_empty());
+        assert_eq!(skips, IndexSet::from([HINT_SKIP_OPAQUE_ISI.to_owned()]));
 
         let (access, skips) = unresolved_world_access(&ir::Instr::CreateNftsForAllUsers);
         assert_eq!(
@@ -2449,7 +2452,10 @@ seiyaku SumJoinFacts {
         let add_count = bytes[parsed.code_offset..]
             .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
-            .filter(|word| instruction::wide::opcode(*word) == instruction::wide::arithmetic::ADD)
+            .filter(|word| {
+                instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
+                    && encoding::wide::decode_syscallx(*word) == syscalls::SYSCALL_INT_ADD
+            })
             .count();
         assert_eq!(
             add_count, 1,
@@ -2732,7 +2738,7 @@ seiyaku HelperAccess {
     }
 
     #[test]
-    fn unary_neg_emits_neg_opcode() {
+    fn unary_neg_emits_exact_int_syscall() {
         let src = r#"
 seiyaku NegTest {
   kotoage fn neg(int x) -> int authorize("Entry") {
@@ -2746,12 +2752,14 @@ seiyaku NegTest {
         let mut found = false;
         for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
             let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
-            if instruction::wide::opcode(word) == instruction::wide::arithmetic::NEG {
+            if instruction::wide::opcode(word) == instruction::wide::system::SYSTEM
+                && encoding::wide::decode_syscallx(word) == syscalls::SYSCALL_INT_NEG
+            {
                 found = true;
                 break;
             }
         }
-        assert!(found, "expected NEG opcode in compiled code");
+        assert!(found, "expected INT_NEG syscall in compiled code");
     }
 
     #[test]
@@ -2798,7 +2806,7 @@ seiyaku NegTest {
     }
 
     #[test]
-    fn signed_comparisons_use_overflow_safe_opcodes() {
+    fn adaptive_int_comparisons_use_exact_numeric_syscalls() {
         let src = r#"
 seiyaku CompilerFixture {
 
@@ -2818,38 +2826,38 @@ view fn branch(int a, int b) -> int {
             .compile_source(src)
             .expect("compile signed comparisons");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-        let opcodes = bytes[parsed.code_offset..]
+        let words = bytes[parsed.code_offset..]
             .chunks_exact(4)
-            .map(|chunk| {
-                instruction::wide::opcode(u32::from_le_bytes(
-                    chunk.try_into().expect("instruction word"),
-                ))
-            })
+            .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
             .collect::<Vec<_>>();
 
+        for syscall in [
+            syscalls::SYSCALL_INT_LT,
+            syscalls::SYSCALL_INT_LE,
+            syscalls::SYSCALL_INT_GT,
+            syscalls::SYSCALL_INT_GE,
+        ] {
+            assert!(
+                words.iter().any(|word| {
+                    instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
+                        && encoding::wide::decode_syscallx(*word) == syscall
+                }),
+                "missing exact adaptive-int comparison syscall {}",
+                syscalls::syscall_name(syscall).unwrap_or("UNKNOWN")
+            );
+        }
         assert!(
-            opcodes.contains(&instruction::wide::arithmetic::SLT),
-            "signed comparison values must use SLT"
-        );
-        assert!(
-            opcodes.contains(&instruction::wide::arithmetic::XORI),
-            "inclusive signed comparisons must invert SLT"
-        );
-        assert!(
-            opcodes.contains(&instruction::wide::control::BLT),
-            "signed less-than branches must use BLT"
-        );
-        assert!(
-            opcodes.contains(&instruction::wide::control::BGE),
-            "signed greater-or-equal branches must use BGE"
-        );
-        assert!(
-            !opcodes.contains(&instruction::wide::arithmetic::SUB),
-            "signed comparison lowering must not infer ordering from wrapping subtraction"
-        );
-        assert!(
-            !opcodes.contains(&instruction::wide::arithmetic::SRA),
-            "signed comparison lowering must not extract a wrapped subtraction sign bit"
+            words.iter().all(|word| {
+                !matches!(
+                    instruction::wide::opcode(*word),
+                    instruction::wide::arithmetic::SLT
+                        | instruction::wide::control::BLT
+                        | instruction::wide::control::BGE
+                        | instruction::wide::arithmetic::SUB
+                        | instruction::wide::arithmetic::SRA
+                )
+            }),
+            "adaptive int pointers must never enter scalar signed comparison opcodes"
         );
     }
 
@@ -5266,7 +5274,7 @@ fn main() {
     fn opaque_pointer_abi_types_are_not_source_types() {
         for type_name in ["Domain", "Blob", "NoritoBytes", "Opaque"] {
             let source = format!(
-                "seiyaku CompilerFixture {{ view fn inspect(value: {type_name}) -> int {{ return 0; }} }}"
+                "seiyaku CompilerFixture {{ view fn inspect({type_name} value) -> int {{ return 0; }} }}"
             );
             let error = test_mode_compiler()
                 .compile_source(&source)
@@ -6527,6 +6535,22 @@ fn main() {
                 "unexpected rejection for {call}: {error}"
             );
         }
+
+        let canonical = r#"
+            seiyaku CompilerFixture {
+                view fn wrapping(int left, int right) -> (int, int, int, int) {
+                    return (
+                        math::wrapping_neg(left),
+                        math::wrapping_add(left: left, right: right),
+                        math::wrapping_sub(left: left, right: right),
+                        math::wrapping_mul(left: left, right: right)
+                    );
+                }
+            }
+        "#;
+        test_mode_compiler()
+            .compile_source(canonical)
+            .expect("canonical V1 wrapping helpers must not match retired-helper diagnostics");
     }
 
     #[test]
@@ -7922,16 +7946,19 @@ kotoage fn main() authorize("AssetAdmin") {{
                 .write_keys
                 .contains(&format!("asset_def.detail:{asset_def}:zk.unshield.last"))
         );
-        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert_conservative_ledger_read(&hints.read_keys, &hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let demo = entrypoints
             .iter()
             .find(|entry| entry.name == "demo")
             .expect("demo entrypoint");
-        assert_eq!(demo.access_hints_complete, Some(true));
-        assert!(demo.access_hints_skipped.is_empty());
+        assert_eq!(demo.access_hints_complete, Some(false));
+        assert_eq!(
+            demo.access_hints_skipped,
+            vec![HINT_SKIP_OPAQUE_ISI.to_owned()],
+            "opaque proof envelopes require a conservative read wildcard even when the built instruction payloads are exact"
+        );
     }
 
     #[test]
@@ -10579,6 +10606,66 @@ seiyaku RoundedQuantity {
     }
 
     #[test]
+    fn user_facing_type_first_counter_example_compiles_as_a_complete_contract() {
+        let source = r#"
+seiyaku Counter {
+    const int initial = 1;
+    const int step = 2;
+
+    state int value;
+
+    hajimari() {
+        value = initial;
+    }
+
+    kotoage fn increment() authorize("CanIncrement") {
+        value = value + step;
+    }
+
+    view fn current() -> int {
+        return value;
+    }
+}
+"#;
+
+        let (artifact, manifest) = Compiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile the normative type-first Counter example");
+        let interface = ProgramMetadata::parse(&artifact)
+            .expect("parse Counter artifact")
+            .contract_interface
+            .expect("Counter embeds its contract interface");
+
+        assert_eq!(interface.seiyaku_name, "Counter");
+        assert!(
+            interface
+                .states
+                .iter()
+                .any(|state| { state.name == "value" && state.ty == EmbeddedStateType::Int })
+        );
+        let increment = interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "increment")
+            .expect("authorized increment entrypoint");
+        assert_eq!(increment.permission.as_deref(), Some("CanIncrement"));
+        assert!(
+            interface
+                .entrypoints
+                .iter()
+                .any(|entrypoint| entrypoint.name == "hajimari")
+        );
+        assert!(
+            interface
+                .entrypoints
+                .iter()
+                .any(|entrypoint| entrypoint.name == "current")
+        );
+        assert_eq!(manifest.seiyaku_name.as_deref(), Some("Counter"));
+        assert!(manifest.abi_hash.is_some());
+    }
+
+    #[test]
     fn leaf_identity_emits_no_frame_or_stack_traffic() {
         let source = r#"
         seiyaku LeafOptimization {
@@ -10924,16 +11011,16 @@ seiyaku RoundedQuantity {
         let arithmetic_uses = words[reload + 1..]
             .iter()
             .filter(|word| {
-                if instruction::wide::opcode(**word) != instruction::wide::arithmetic::ADD {
+                if instruction::wide::opcode(**word) != instruction::wide::arithmetic::ADDI {
                     return false;
                 }
-                let (_, _, left, right) = encoding::wide::decode_rr(**word);
-                left == split_register || right == split_register
+                let (_, _, source, immediate) = encoding::wide::decode_ri(**word);
+                source == split_register && immediate == 0
             })
             .count();
         assert!(
             arithmetic_uses >= 3,
-            "the split register must feed all clustered a0 additions: {words:08x?}"
+            "the split register must feed every clustered checked numeric syscall: {words:08x?}"
         );
     }
 
@@ -10991,17 +11078,20 @@ seiyaku RoundedQuantity {
 
         let ordered = function_words("ordered");
         assert!(
-            ordered.iter().any(|word| matches!(
-                instruction::wide::opcode(*word),
-                instruction::wide::control::BLT | instruction::wide::control::BGE
-            )),
-            "signed comparison must lower directly into the branch"
+            ordered.iter().any(|word| {
+                instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
+                    && encoding::wide::decode_syscallx(*word) == syscalls::SYSCALL_INT_LT
+            }),
+            "adaptive int comparison must use the exact INT_LT syscall"
         );
         assert!(
             ordered.iter().all(|word| {
-                instruction::wide::opcode(*word) != instruction::wide::arithmetic::SLT
+                !matches!(
+                    instruction::wide::opcode(*word),
+                    instruction::wide::control::BLT | instruction::wide::control::BGE
+                ) && instruction::wide::opcode(*word) != instruction::wide::arithmetic::SLT
             }),
-            "compare-branch fusion must not materialize a dead boolean"
+            "adaptive int pointers must never be compared by scalar signed opcodes"
         );
     }
 
@@ -11033,8 +11123,8 @@ seiyaku RoundedQuantity {
             .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
             .collect::<Vec<_>>();
         assert_eq!(
-            answer.bytecode_words, 3,
-            "only the returned constant, return-register move, and leaf return should remain; report={answer:?}; words={words:08x?}"
+            answer.bytecode_words, 2,
+            "only the returned literal load and leaf return should remain; report={answer:?}; words={words:08x?}"
         );
     }
 
@@ -19491,7 +19581,9 @@ fn record_isi_access(
                 func_idx,
                 *account,
             ) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+                access_set.reads.insert(ACCOUNT_WILDCARD_KEY.to_owned());
+                access_set.writes.insert(ACCOUNT_WILDCARD_KEY.to_owned());
+                return;
             };
             add_account_hint_rw(access_set, &id);
         }
@@ -19504,7 +19596,9 @@ fn record_isi_access(
                 func_idx,
                 *account,
             ) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+                access_set.reads.insert(ACCOUNT_WILDCARD_KEY.to_owned());
+                access_set.writes.insert(ACCOUNT_WILDCARD_KEY.to_owned());
+                return;
             };
             add_account_hint_rw(access_set, &id);
         }
@@ -19707,7 +19801,12 @@ fn record_isi_access(
                 _ => apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI),
             }
         }
-        ir::Instr::ResolveAccountAlias { .. } | ir::Instr::ZkVerify { .. } => {
+        ir::Instr::ResolveAccountAlias { .. } => {
+            // Alias resolution is account-scoped even when the alias is malformed or
+            // not statically bound. A global world wildcard would overstate its reach.
+            access_set.reads.insert(ACCOUNT_WILDCARD_KEY.to_owned());
+        }
+        ir::Instr::ZkVerify { .. } => {
             apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI)
         }
         ir::Instr::CreateNftsForAllUsers => {

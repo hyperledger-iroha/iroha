@@ -115,7 +115,6 @@ use iroha_data_model::{
     },
 };
 
-use crate::api_version::{self, ApiVersion};
 use core::fmt;
 use std::{
     cmp::{Ordering, Reverse},
@@ -3488,7 +3487,7 @@ use core::convert::Infallible;
 #[cfg(feature = "app_api")]
 use std::num::NonZeroU64;
 
-use axum::response::sse::{Event as SseEvent, Sse};
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use futures::stream;
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
@@ -5826,7 +5825,7 @@ pub async fn handle_v1_zk_verify(
         // For Norito, treat non-empty body as accepted. We avoid binding to a
         // specific envelope type in this app-facing convenience endpoint.
         !body.is_empty()
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         norito::json::from_slice::<norito::json::Value>(&body).is_ok()
     } else {
         // Unknown content type; try JSON as a last resort.
@@ -5869,7 +5868,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
         view_timeout_target_ms: m.sumeragi_pacemaker_view_timeout_target_ms.get(),
         view_timeout_remaining_ms: m.sumeragi_pacemaker_view_timeout_remaining_ms.get(),
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5880,7 +5879,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
     let snap = sumeragi::status_snapshot();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5940,7 +5939,7 @@ pub async fn handle_v1_sumeragi_checkpoints(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let checkpoints: Vec<ValidatorSetCheckpoint> = sumeragi::status::validator_checkpoint_history();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5976,7 +5975,7 @@ pub async fn handle_v1_sumeragi_consensus_keys(
             .then_with(|| a.id.cmp(&b.id))
     });
 
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -6011,7 +6010,7 @@ pub async fn handle_v1_sumeragi_commit_qcs(
         COMMIT_CERT_PAGE_CAP,
         |cert| cert.height,
     );
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -6036,8 +6035,12 @@ pub async fn handle_v1_bridge_finality(
     height: u64,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let proof = iroha_core::bridge::build_finality_proof(state.as_ref(), height)
-        .map_err(map_bridge_finality_error)?;
+    let proof = tokio::task::spawn_blocking(move || {
+        iroha_core::bridge::build_finality_proof(state.as_ref(), height)
+    })
+    .await
+    .map_err(|_| sccp_internal_error("bridge finality verification worker failed"))?
+    .map_err(map_bridge_finality_error)?;
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -6057,15 +6060,19 @@ pub async fn handle_v1_bridge_finality(
     Ok(resp)
 }
 
-/// GET /v1/bridge/finality/bundle/{height} — MMR commitment + exact v2 proof for a block.
+/// GET /v1/bridge/finality/bundle/{height} — Compact commitment + exact v2 proof for a block.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_bridge_finality_bundle(
     state: Arc<CoreState>,
     height: u64,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let bundle = iroha_core::bridge::build_finality_bundle(state.as_ref(), height)
-        .map_err(map_bridge_finality_error)?;
+    let bundle = tokio::task::spawn_blocking(move || {
+        iroha_core::bridge::build_finality_bundle(state.as_ref(), height)
+    })
+    .await
+    .map_err(|_| sccp_internal_error("bridge finality bundle worker failed"))?
+    .map_err(map_bridge_finality_error)?;
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -6095,8 +6102,7 @@ fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Er
             ))
         }
         iroha_core::bridge::BridgeFinalityError::FinalityArtifactRead { .. }
-        | iroha_core::bridge::BridgeFinalityError::FinalityArtifactMismatch { .. }
-        | iroha_core::bridge::BridgeFinalityError::InvalidFinalityArtifact { .. } => Error::Query(
+        | iroha_core::bridge::BridgeFinalityError::FinalityArtifactMismatch { .. } => Error::Query(
             iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
         ),
     }
@@ -6122,9 +6128,9 @@ fn sccp_internal_error(message: impl Into<String>) -> Error {
 
 fn sccp_bundle_response<T>(value: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
 where
-    T: Clone + Send + norito::core::NoritoSerialize + norito::json::JsonSerialize,
+    T: Clone + Send + norito::core::NoritoSerialize + norito::json::JsonSerialize + 'static,
 {
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
+    let format = match crate::utils::negotiate_response_format(accept) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
@@ -7510,21 +7516,27 @@ fn validate_sccp_durable_outbox_record(
     Ok(())
 }
 
-fn reconstruct_sccp_message_bundles_from_block(
+struct ValidatedSccpBlockMessages {
+    commitment_root: [u8; 32],
+    messages: Vec<iroha_core::bridge::RecordedSccpMessage>,
+    positions: BTreeMap<[u8; 32], usize>,
+}
+
+fn validate_sccp_block_messages(
     state: &CoreState,
     height: u64,
     block: &iroha_data_model::block::SignedBlock,
     indexed_records: &[SccpIndexedOutboundRecord],
-) -> Result<Vec<TairaSccpMessageProofV1>> {
+) -> Result<Option<ValidatedSccpBlockMessages>> {
     if indexed_records.is_empty() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
     if indexed_records
         .iter()
         .any(|indexed| indexed.record.recorded_at_height != height)
     {
         return Err(sccp_internal_error(format!(
-            "SCCP recent-message block group mixes records outside height {height}"
+            "SCCP block group mixes records outside height {height}"
         )));
     }
 
@@ -7552,13 +7564,9 @@ fn reconstruct_sccp_message_bundles_from_block(
         )));
     }
 
-    let commitments = messages
-        .iter()
-        .map(|message| message.commitment.clone())
-        .collect::<Vec<_>>();
-    let mut message_positions = BTreeMap::new();
+    let mut positions = BTreeMap::new();
     for (index, message) in messages.iter().enumerate() {
-        if message_positions
+        if positions
             .insert(message.commitment.message_id, index)
             .is_some()
         {
@@ -7568,6 +7576,29 @@ fn reconstruct_sccp_message_bundles_from_block(
             )));
         }
     }
+    Ok(Some(ValidatedSccpBlockMessages {
+        commitment_root,
+        messages,
+        positions,
+    }))
+}
+
+fn reconstruct_sccp_message_bundles_from_block(
+    state: &CoreState,
+    height: u64,
+    block: &iroha_data_model::block::SignedBlock,
+    indexed_records: &[SccpIndexedOutboundRecord],
+) -> Result<Vec<TairaSccpMessageProofV1>> {
+    let Some(validated) = validate_sccp_block_messages(state, height, block, indexed_records)? else {
+        return Ok(Vec::new());
+    };
+    let commitment_root = validated.commitment_root;
+    let messages = validated.messages;
+    let message_positions = validated.positions;
+    let commitments = messages
+        .iter()
+        .map(|message| message.commitment.clone())
+        .collect::<Vec<_>>();
     let finality_proof = iroha_core::bridge::build_finality_proof(state, height)
         .map_err(map_bridge_finality_error)?;
     let finality_proof_bytes = build_sccp_finality_proof_bytes(&finality_proof, commitment_root)?;
@@ -7768,13 +7799,23 @@ fn validate_recent_message_projection(
     Ok(())
 }
 
-fn recent_message_entry_from_bundle(
+fn recent_message_entry_from_recorded(
     height: u64,
-    bundle: &TairaSccpMessageProofV1,
+    message: &iroha_core::bridge::RecordedSccpMessage,
 ) -> Result<SccpRecentMessageDto> {
-    let context = sccp_committed_outbound_context(bundle)?;
-    let message_id_hex = hex::encode(bundle.commitment.message_id);
-    let payload_projection = sccp_payload_projection(&bundle.payload).ok_or_else(|| {
+    let context = message.context;
+    if !context.is_well_formed()
+        || sccp_message_source_domain(&message.payload) != context.lane.source.domain_id()
+        || sccp_message_target_domain(&message.payload) != context.lane.target.domain_id()
+        || iroha_sccp::hub_commitment_from_sccp_payload(context, &message.payload).as_ref()
+            != Some(&message.commitment)
+    {
+        return Err(sccp_internal_error(
+            "finalized SCCP message disagrees with its exact committed outbound context",
+        ));
+    }
+    let message_id_hex = hex::encode(message.commitment.message_id);
+    let payload_projection = sccp_payload_projection(&message.payload).ok_or_else(|| {
         sccp_internal_error(format!(
             "finalized SCCP message {message_id_hex} has no valid closed transfer projection"
         ))
@@ -7787,7 +7828,7 @@ fn recent_message_entry_from_bundle(
     Ok(SccpRecentMessageDto {
         height,
         message_id_hex: message_id_hex.clone(),
-        kind: sccp_message_payload_kind_key(&bundle.payload).to_owned(),
+        kind: sccp_message_payload_kind_key(&message.payload).to_owned(),
         source_profile: context.lane.source.profile_key().to_owned(),
         target_profile: context.lane.target.profile_key().to_owned(),
         destination_binding_hash: format!("0x{}", hex::encode(context.destination_binding_hash)),
@@ -7823,6 +7864,69 @@ fn group_sccp_indexed_records_by_height(
             .push(indexed);
     }
     groups.into_values().collect()
+}
+
+fn recent_sccp_entries_from_indexed_records(
+    state: &CoreState,
+    indexed_records: &[SccpIndexedOutboundRecord],
+) -> Result<Vec<SccpRecentMessageDto>> {
+    let Some(first) = indexed_records.first() else {
+        return Ok(Vec::new());
+    };
+    let height = first.record.recorded_at_height;
+    let host_height = usize::try_from(height).map_err(|_| {
+        sccp_internal_error(format!(
+            "SCCP message {} records a block height that is not representable on this host",
+            hex::encode(first.key.message_id)
+        ))
+    })?;
+    let host_height = NonZeroUsize::new(host_height).ok_or_else(|| {
+        sccp_internal_error(format!(
+            "SCCP message {} records forbidden block height zero",
+            hex::encode(first.key.message_id)
+        ))
+    })?;
+    let block = state.block_by_height(host_height).ok_or_else(|| {
+        sccp_internal_error(format!(
+            "SCCP message {} is indexed at height {height}, but the finalized block body is unavailable",
+            hex::encode(first.key.message_id)
+        ))
+    })?;
+    let validated = validate_sccp_block_messages(state, height, block.as_ref(), indexed_records)?
+        .ok_or_else(|| sccp_internal_error("nonempty SCCP group validated as empty"))?;
+
+    let mut entries = Vec::with_capacity(indexed_records.len());
+    for indexed in indexed_records {
+        let index = *validated
+            .positions
+            .get(&indexed.key.message_id)
+            .ok_or_else(|| {
+                sccp_internal_error(format!(
+                    "SCCP message {} is indexed at height {height}, but that block contains no matching successful record",
+                    hex::encode(indexed.key.message_id)
+                ))
+            })?;
+        let message = &validated.messages[index];
+        if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
+            return Err(sccp_bad_request(
+                "SCCP recent readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
+            ));
+        }
+        if message.commitment.context.lane != indexed.key.lane
+            || message.commitment.context.destination_binding_hash
+                != indexed.record.destination_binding_hash
+            || message.commitment.context.route_configuration_hash
+                != indexed.record.route_configuration_hash
+            || message.commitment.payload_hash != indexed.record.payload_hash
+        {
+            return Err(sccp_internal_error(format!(
+                "SCCP message {} disagrees with its indexed lane, destination binding, route configuration, or payload",
+                hex::encode(indexed.key.message_id)
+            )));
+        }
+        entries.push(recent_message_entry_from_recorded(height, message)?);
+    }
+    Ok(entries)
 }
 
 fn collect_recent_sccp_messages(
@@ -7890,18 +7994,13 @@ fn collect_recent_sccp_messages(
 
     let mut items = Vec::with_capacity(indexed_records.len());
     for group in group_sccp_indexed_records_by_height(indexed_records) {
-        let bundles = reconstruct_sccp_message_bundles_from_indexed_records(state, &group)?;
-        if bundles.len() != group.len() {
+        let entries = recent_sccp_entries_from_indexed_records(state, &group)?;
+        if entries.len() != group.len() {
             return Err(sccp_internal_error(
                 "SCCP recent-message block reconstruction returned an incomplete group",
             ));
         }
-        for (indexed, bundle) in group.into_iter().zip(bundles) {
-            items.push(recent_message_entry_from_bundle(
-                indexed.record.recorded_at_height,
-                &bundle,
-            )?);
-        }
+        items.extend(entries);
     }
 
     Ok(SccpRecentMessagesDto { items })
@@ -7910,12 +8009,17 @@ fn collect_recent_sccp_messages(
 /// GET /v1/sccp/proofs/message/{message_id} — SORA-origin SCCP message bundle.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_message_bundle(
-    state: &CoreState,
+    state: Arc<CoreState>,
     message_id_hex: String,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
-    let bundle = sccp_message_bundle_for_request(state, message_id)?.ok_or_else(sccp_not_found)?;
+    let bundle = tokio::task::spawn_blocking(move || {
+        sccp_message_bundle_for_request(state.as_ref(), message_id)
+    })
+    .await
+    .map_err(|_| sccp_internal_error("SCCP message-proof worker failed"))??
+    .ok_or_else(sccp_not_found)?;
     sccp_bundle_response(&bundle, accept.as_ref())
 }
 
@@ -7932,12 +8036,17 @@ pub async fn handle_v1_sccp_registry(
 /// GET /v1/sccp/proof-requests/{message_id} — exact state-derived Groth16 request.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_proof_request(
-    state: &CoreState,
+    state: Arc<CoreState>,
     message_id_hex: String,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
-    let material = sccp_exact_proof_material(state, message_id)?.ok_or_else(sccp_not_found)?;
+    let material = tokio::task::spawn_blocking(move || {
+        sccp_exact_proof_material(state.as_ref(), message_id)
+    })
+    .await
+    .map_err(|_| sccp_internal_error("SCCP proof-request worker failed"))??
+    .ok_or_else(sccp_not_found)?;
     sccp_bundle_response(&material.request, accept.as_ref())
 }
 
@@ -7954,11 +8063,15 @@ pub async fn handle_v1_sccp_capabilities(
 /// GET /v1/sccp/messages/recent — newest-first committed SCCP message discovery with compact metadata.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_messages_recent(
-    state: &CoreState,
+    state: Arc<CoreState>,
     crate::NoritoQuery(window): crate::NoritoQuery<HistoryWindowQuery>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let snapshot = collect_recent_sccp_messages(state, &window)?;
+    let snapshot = tokio::task::spawn_blocking(move || {
+        collect_recent_sccp_messages(state.as_ref(), &window)
+    })
+    .await
+    .map_err(|_| sccp_internal_error("SCCP recent-message worker failed"))??;
     sccp_bundle_response(&snapshot, accept.as_ref())
 }
 
@@ -7976,7 +8089,7 @@ pub async fn handle_v1_sumeragi_validator_sets(
         COMMIT_CERT_PAGE_CAP,
         |snap| snap.height,
     );
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8108,7 +8221,7 @@ pub async fn handle_v1_sumeragi_phases(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v1/sumeragi/bls_keys — map of network public keys -> BLS public keys (hex strings)
+/// GET /v1/sumeragi/bls-keys — map of network public keys -> BLS public keys (hex strings)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_bls_keys(
     State(state): State<Arc<CoreState>>,
@@ -8155,7 +8268,7 @@ pub async fn handle_v1_sumeragi_leader(
             epoch_seed: seed_opt.map(hex::encode),
         },
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8243,7 +8356,7 @@ pub async fn handle_v1_sumeragi_collectors(
                 epoch_seed: epoch_seed_hex,
             },
         };
-        let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+        let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
             Ok(fmt) => fmt,
             Err(resp) => return Ok(resp),
         };
@@ -8332,7 +8445,7 @@ pub async fn handle_v1_sumeragi_collectors(
             epoch_seed: epoch_seed_hex,
         },
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8390,7 +8503,7 @@ pub async fn handle_v1_sumeragi_params(
         mode_activation_height: sp.mode_activation_height,
         chain_height: state.committed_height() as u64,
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8497,7 +8610,7 @@ pub async fn handle_v1_zk_submit_proof(
     let ok = if ct.contains(super::utils::NORITO_MIME_TYPE) {
         // For Norito, any non-empty payload is considered accepted by the demo handler.
         !body.is_empty()
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         norito::json::from_slice::<norito::json::Value>(&body).is_ok()
     } else {
         // Unknown content type; try JSON as a last resort.
@@ -8509,7 +8622,7 @@ pub async fn handle_v1_zk_submit_proof(
         hex::encode::<[u8; 32]>(h.into())
     };
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8666,7 +8779,7 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
             statuses_json = bools_to_json_array(&statuses);
             ok = true;
         }
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         // JSON: accept array of base64-encoded Norito envelopes.
         if let Ok(v) = norito::json::from_slice::<norito::json::Value>(&body) {
             if let Some(arr) = v.as_array() {
@@ -8896,7 +9009,7 @@ pub async fn handle_v1_zk_roots(
         // For convenience, report the total number of roots recorded for this asset.
         height: roots_all.len() as u32,
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -9015,7 +9128,7 @@ pub async fn handle_v1_zk_merkle_path(
         next_zero_path,
         paths,
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -9038,7 +9151,7 @@ pub async fn handle_v1_zk_vote_tally(
         None => (false, Vec::new()),
     };
     let payload = ZkVoteGetTallyResponseDto { finalized, tally };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -9119,7 +9232,7 @@ pub async fn handle_v1_sumeragi_evidence_list(
         let end = core::cmp::min(total, offset + limit);
         &records[offset..end]
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -12838,12 +12951,12 @@ mod contract_manifest_response_tests {
                         name: "amount".to_owned(),
                         ty: EntrypointValueTypeV1 {
                             nodes: vec![EntrypointValueTypeNodeV1::Leaf(
-                                EntrypointValueKindV1::Amount,
+                                EntrypointValueKindV1::Quantity,
                             )],
                         },
                     }],
                 }),
-                return_type: Some("i64".to_owned()),
+                return_type: Some("int".to_owned()),
                 return_schema: Some(EntrypointValueTypeV1 {
                     nodes: vec![EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int)],
                 }),
@@ -12856,7 +12969,7 @@ mod contract_manifest_response_tests {
             }]),
             states: Some(vec![StateDescriptor {
                 name: "Balances".to_owned(),
-                type_name: "StateMap<AccountId,Amount>".to_owned(),
+                type_name: "StateMap<AccountId,quantity>".to_owned(),
             }]),
             error_codes: Some(vec![ContractErrorCodeDescriptor {
                 namespace: "TreasuryError".to_owned(),
@@ -13116,6 +13229,38 @@ fn encode_contract_state_pointer_tlv_bytes(
     use norito::to_bytes;
 
     let (type_id, payload) = match ty {
+        ivm::EmbeddedStateType::Int => {
+            let value = raw.parse::<iroha_primitives::bigint::BigInt>().ok()?;
+            let frame = iroha_primitives::numeric_abi::IntValueV1::try_new(value)
+                .ok()?
+                .encode_frame()
+                .ok()?;
+            (PointerType::Int, frame)
+        }
+        ivm::EmbeddedStateType::Decimal => {
+            let value = raw
+                .parse::<iroha_primitives::numeric::Numeric>()
+                .ok()?
+                .canonicalize_decimal()
+                .ok()?;
+            let frame = iroha_primitives::numeric_abi::DecimalValueV1::try_from_numeric(value)
+                .ok()?
+                .encode_frame()
+                .ok()?;
+            (PointerType::Decimal, frame)
+        }
+        ivm::EmbeddedStateType::Quantity => {
+            let value = raw
+                .parse::<iroha_primitives::numeric::Numeric>()
+                .ok()?
+                .canonicalize_decimal()
+                .ok()?;
+            let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(value).ok()?;
+            let frame = iroha_primitives::numeric_abi::QuantityValueV1::new(quantity)
+                .encode_frame()
+                .ok()?;
+            (PointerType::Quantity, frame)
+        }
         ivm::EmbeddedStateType::Name => {
             let value: iroha_data_model::name::Name = raw.parse().ok()?;
             (PointerType::Name, to_bytes(&value).ok()?)
@@ -13147,6 +13292,15 @@ fn encode_contract_state_pointer_tlv_bytes(
             let value = iroha_data_model::nexus::DataSpaceId::new(raw_id);
             (PointerType::DataSpaceId, to_bytes(&value).ok()?)
         }
+        ivm::EmbeddedStateType::String => (PointerType::Blob, raw.as_bytes().to_vec()),
+        ivm::EmbeddedStateType::Bytes => {
+            let value = if let Some(trimmed) = raw.strip_prefix("0x") {
+                hex::decode(trimmed).ok()?
+            } else {
+                raw.as_bytes().to_vec()
+            };
+            (PointerType::Blob, value)
+        }
         _ => return None,
     };
 
@@ -13166,23 +13320,20 @@ fn contract_state_stored_map_key_suffix(
     logical_key_suffix: &str,
 ) -> Option<String> {
     match key_ty {
-        ivm::EmbeddedStateType::I64 => Some(logical_key_suffix.to_owned()),
-        ivm::EmbeddedStateType::U128 | ivm::EmbeddedStateType::Amount => {
-            let value = logical_key_suffix
-                .parse::<iroha_primitives::numeric::Numeric>()
-                .ok()?;
-            let encoded = norito::to_bytes(&value).ok()?;
-            Some(hex::encode(Hash::new(&encoded).as_ref()))
-        }
-        ivm::EmbeddedStateType::Bytes => {
-            let encoded = if let Some(trimmed) = logical_key_suffix.strip_prefix("0x") {
-                hex::decode(trimmed).ok()?
-            } else {
-                logical_key_suffix.as_bytes().to_vec()
+        ivm::EmbeddedStateType::Bool => {
+            let value = match logical_key_suffix {
+                "false" | "0" => 0_i64,
+                "true" | "1" => 1_i64,
+                _ => return None,
             };
-            Some(hex::encode(Hash::new(&encoded).as_ref()))
+            Some(hex::encode(norito::to_bytes(&value).ok()?))
         }
-        ivm::EmbeddedStateType::Name
+        ivm::EmbeddedStateType::Int
+        | ivm::EmbeddedStateType::Decimal
+        | ivm::EmbeddedStateType::Quantity
+        | ivm::EmbeddedStateType::String
+        | ivm::EmbeddedStateType::Bytes
+        | ivm::EmbeddedStateType::Name
         | ivm::EmbeddedStateType::AccountId
         | ivm::EmbeddedStateType::AssetDefinitionId
         | ivm::EmbeddedStateType::AssetId
@@ -13190,7 +13341,7 @@ fn contract_state_stored_map_key_suffix(
         | ivm::EmbeddedStateType::DomainId
         | ivm::EmbeddedStateType::DataSpaceId => {
             let encoded = encode_contract_state_pointer_tlv_bytes(key_ty, logical_key_suffix)?;
-            Some(hex::encode(Hash::new(&encoded).as_ref()))
+            Some(hex::encode(encoded))
         }
         _ => None,
     }
@@ -13239,12 +13390,31 @@ fn decode_contract_state_scalar_json(
     use ivm::pointer_abi::PointerType;
 
     match ty {
-        ivm::EmbeddedStateType::I64 => {
-            if tlv.type_id != PointerType::NoritoBytes {
-                return Err("expected NoritoBytes payload for i64 state".into());
+        ivm::EmbeddedStateType::Int => {
+            if tlv.type_id != PointerType::Int {
+                return Err("expected Int payload for int state".into());
             }
-            let value: i64 =
-                norito::decode_from_bytes(payload).map_err(|err| format!("decode i64: {err}"))?;
+            let value = iroha_primitives::numeric_abi::IntValueV1::decode_frame(payload)
+                .map_err(|err| format!("decode int: {err}"))?
+                .into_int();
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        ivm::EmbeddedStateType::Decimal => {
+            if tlv.type_id != PointerType::Decimal {
+                return Err("expected Decimal payload for decimal state".into());
+            }
+            let value = iroha_primitives::numeric_abi::DecimalValueV1::decode_frame(payload)
+                .map_err(|err| format!("decode decimal: {err}"))?
+                .into_numeric();
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        ivm::EmbeddedStateType::Quantity => {
+            if tlv.type_id != PointerType::Quantity {
+                return Err("expected Quantity payload for quantity state".into());
+            }
+            let value = iroha_primitives::numeric_abi::QuantityValueV1::decode_frame(payload)
+                .map_err(|err| format!("decode quantity: {err}"))?
+                .into_quantity();
             Ok(norito::json::Value::from(value.to_string()))
         }
         ivm::EmbeddedStateType::Bool => {
@@ -13255,23 +13425,7 @@ fn decode_contract_state_scalar_json(
                 norito::decode_from_bytes(payload).map_err(|err| format!("decode bool: {err}"))?;
             Ok(norito::json::Value::from(value != 0))
         }
-        ivm::EmbeddedStateType::U128 | ivm::EmbeddedStateType::Amount => {
-            if tlv.type_id != PointerType::NoritoBytes {
-                return Err("expected NoritoBytes payload for numeric state".into());
-            }
-            let value: iroha_primitives::numeric::Numeric = norito::decode_from_bytes(payload)
-                .map_err(|err| format!("decode numeric: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
         ivm::EmbeddedStateType::Json => {
-            if tlv.type_id == PointerType::NoritoBytes {
-                if let Ok(value) = norito::decode_from_bytes(tlv.payload) {
-                    let value: iroha_primitives::json::Json = value;
-                    return value
-                        .try_into_any_norito::<norito::json::Value>()
-                        .map_err(|err| format!("convert json payload: {err}"));
-                }
-            }
             let payload = decode_contract_state_pointer_payload(bytes, PointerType::Json, "Json")?;
             let value: iroha_primitives::json::Json =
                 norito::decode_from_bytes(payload).map_err(|err| format!("decode json: {err}"))?;
@@ -13338,9 +13492,9 @@ fn decode_contract_state_scalar_json(
             base64::engine::general_purpose::STANDARD.encode(payload),
         )),
         ivm::EmbeddedStateType::String => {
-            let value: String = norito::decode_from_bytes(payload)
-                .map_err(|err| format!("decode string: {err}"))?;
-            Ok(norito::json::Value::from(value))
+            let value = std::str::from_utf8(payload)
+                .map_err(|err| format!("decode UTF-8 string: {err}"))?;
+            Ok(norito::json::Value::from(value.to_owned()))
         }
         ivm::EmbeddedStateType::Tuple(_)
         | ivm::EmbeddedStateType::Struct { .. }
@@ -13974,6 +14128,11 @@ mod contract_state_tests {
         bytes
     }
 
+    fn int_tlv(raw: &str) -> Vec<u8> {
+        encode_contract_state_pointer_tlv_bytes(&ivm::EmbeddedStateType::Int, raw)
+            .expect("canonical int TLV")
+    }
+
     fn scoped_state_key(
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
         logical_path: &str,
@@ -14092,10 +14251,9 @@ mod contract_state_tests {
 
     #[test]
     fn decode_contract_state_scalar_json_returns_lossless_strings_for_ints() {
-        let payload = norito::to_bytes(&9_223_372_036_854_775_000_i64).expect("encode int");
         let decoded = decode_contract_state_scalar_json(
-            &make_tlv(PointerType::NoritoBytes, &payload),
-            &ivm::EmbeddedStateType::I64,
+            &int_tlv("9223372036854775000"),
+            &ivm::EmbeddedStateType::Int,
         )
         .expect("decode int");
         assert_eq!(
@@ -14107,10 +14265,9 @@ mod contract_state_tests {
     #[test]
     fn decode_contract_state_map_value_json_preserves_struct_field_encodings() {
         let mut storage = BTreeMap::<String, Vec<u8>>::new();
-        let status_payload = norito::to_bytes(&1_i64).expect("encode status");
         storage.insert(
             "Requests_status/mr123".to_owned(),
-            make_tlv(PointerType::NoritoBytes, &status_payload),
+            int_tlv("1"),
         );
         storage.insert(
             "Requests_approval_alias_fqn/mr123".to_owned(),
@@ -14122,7 +14279,7 @@ mod contract_state_tests {
             fields: vec![
                 ivm::EmbeddedStateFieldDescriptor {
                     name: "status".to_owned(),
-                    ty: ivm::EmbeddedStateType::I64,
+                    ty: ivm::EmbeddedStateType::Int,
                 },
                 ivm::EmbeddedStateFieldDescriptor {
                     name: "approval_alias_fqn".to_owned(),
@@ -14152,7 +14309,7 @@ mod contract_state_tests {
             "BeneficiaryTrancheIndexByLookupKey".to_owned(),
             Some(ivm::EmbeddedStateType::StateMap {
                 key: Box::new(ivm::EmbeddedStateType::Name),
-                value: Box::new(ivm::EmbeddedStateType::I64),
+                value: Box::new(ivm::EmbeddedStateType::Int),
             }),
         );
 
@@ -14160,10 +14317,9 @@ mod contract_state_tests {
         let stored_key =
             contract_state_stored_map_key_suffix(&ivm::EmbeddedStateType::Name, logical_key)
                 .expect("name map key should encode");
-        let value_payload = norito::to_bytes(&5_i64).expect("encode tranche index");
         let storage = BTreeMap::from([(
             format!("BeneficiaryTrancheIndexByLookupKey/{stored_key}"),
-            make_tlv(PointerType::NoritoBytes, &value_payload),
+            int_tlv("5"),
         )]);
 
         let decoded = decode_contract_state_path_json(
@@ -14183,7 +14339,7 @@ mod contract_state_tests {
             "BeneficiaryTrancheIndexByLookupKey".to_owned(),
             Some(ivm::EmbeddedStateType::StateMap {
                 key: Box::new(ivm::EmbeddedStateType::Name),
-                value: Box::new(ivm::EmbeddedStateType::I64),
+                value: Box::new(ivm::EmbeddedStateType::Int),
             }),
         );
 
@@ -14201,15 +14357,14 @@ mod contract_state_tests {
     }
 
     #[test]
-    fn decode_contract_state_scalar_json_unwraps_nested_json_payloads() {
+    fn decode_contract_state_scalar_json_decodes_canonical_json_pointer() {
         let json_value = iroha_primitives::json::Json::from_str_norito(
             "{\"marketId\":\"mkt-1\",\"status\":\"open\"}",
         )
         .expect("valid json payload");
         let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
-        let nested = make_tlv(PointerType::Json, &json_payload);
         let decoded = decode_contract_state_scalar_json(
-            &make_tlv(PointerType::NoritoBytes, &nested),
+            &make_tlv(PointerType::Json, &json_payload),
             &ivm::EmbeddedStateType::Json,
         )
         .expect("decode json");
@@ -14221,22 +14376,44 @@ mod contract_state_tests {
     }
 
     #[test]
-    fn decode_contract_state_scalar_json_decodes_direct_norito_json_payloads() {
+    fn decode_contract_state_scalar_json_rejects_policyless_norito_json_wrapper() {
         let json_value = iroha_primitives::json::Json::from_str_norito(
             "{\"tranche_id\":\"benefit-1\",\"beneficiary_account_id\":\"i105-user\"}",
         )
         .expect("valid json payload");
         let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
-        let decoded = decode_contract_state_scalar_json(
+        let error = decode_contract_state_scalar_json(
             &make_tlv(PointerType::NoritoBytes, &json_payload),
             &ivm::EmbeddedStateType::Json,
         )
-        .expect("decode direct json");
+        .expect_err("policy-less NoritoBytes wrappers are not canonical JSON state");
+        assert!(error.contains("expected Json payload"), "{error}");
+    }
 
-        let mut expected = Map::new();
-        expected.insert("tranche_id".into(), Value::from("benefit-1"));
-        expected.insert("beneficiary_account_id".into(), Value::from("i105-user"));
-        assert_eq!(decoded, Value::Object(expected));
+    #[test]
+    fn contract_state_numeric_map_keys_use_exact_nominal_pointer_envelopes() {
+        for (ty, first, equivalent) in [
+            (ivm::EmbeddedStateType::Int, "7", "7"),
+            (ivm::EmbeddedStateType::Decimal, "7.00", "7"),
+            (ivm::EmbeddedStateType::Quantity, "7.00", "7"),
+        ] {
+            let suffix = contract_state_stored_map_key_suffix(&ty, first)
+                .expect("canonical numeric state-map key");
+            let canonical = encode_contract_state_pointer_tlv_bytes(&ty, equivalent)
+                .expect("canonical numeric pointer envelope");
+            assert_eq!(suffix, hex::encode(canonical));
+            assert_eq!(
+                suffix,
+                contract_state_stored_map_key_suffix(&ty, equivalent)
+                    .expect("equivalent canonical numeric state-map key")
+            );
+        }
+
+        assert!(
+            contract_state_stored_map_key_suffix(&ivm::EmbeddedStateType::Quantity, "-1")
+                .is_none(),
+            "negative quantities must fail closed"
+        );
     }
 }
 
@@ -16936,7 +17113,7 @@ fn execute_contract_view(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
-    host.bind_contract_runtime_context(
+    host.bind_prevalidated_contract_runtime_context(
         contract_address.clone(),
         live_alias,
         program.code_hash,
@@ -17116,7 +17293,7 @@ fn execute_contract_call_simulation(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
-    host.bind_contract_runtime_context(
+    host.bind_prevalidated_contract_runtime_context(
         contract_address.clone(),
         live_alias,
         program.code_hash,
@@ -24306,7 +24483,7 @@ fn multisig_spec_response(
     })
 }
 
-/// POST /v1/multisig/proposals/list — list multisig proposals for a multisig authority.
+/// POST /v1/multisig/proposals/query — list multisig proposals for a multisig authority.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_proposals_list(
@@ -24352,7 +24529,7 @@ fn multisig_proposals_list_response(
     })
 }
 
-/// POST /v1/multisig/proposals/get — resolve a multisig selector and fetch a specific proposal.
+/// POST /v1/multisig/proposals/lookup — resolve a multisig selector and fetch a specific proposal.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_proposals_get(
@@ -24409,7 +24586,7 @@ fn multisig_proposals_get_response(
     })
 }
 
-/// POST /v1/multisig/approvals/list — list signer-visible multisig approvals.
+/// POST /v1/multisig/approvals/query — list signer-visible multisig approvals.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_approvals_list(
@@ -24514,7 +24691,7 @@ fn multisig_approvals_list_response(
     Ok(MultisigApprovalsListResponseDto { items, next_cursor })
 }
 
-/// POST /v1/multisig/approvals/get — fetch a signer-visible multisig approval by id/hash.
+/// POST /v1/multisig/approvals/lookup — fetch a signer-visible multisig approval by id/hash.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_approvals_get(
@@ -29022,19 +29199,6 @@ pub struct RecordUptimeObservationResponseDto {
     pub uptime_secs: u64,
     /// Total seconds observed for the sample.
     pub observed_secs: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for recording a PoR challenge issued by governance.
-pub struct RecordPorChallengeDto {
-    /// Base64-encoded Norito `PorChallengeV1`.
-    pub challenge_b64: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -39679,9 +39843,9 @@ pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/list";
+pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/query";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/get";
+pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/lookup";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
@@ -39808,12 +39972,12 @@ const CONTEXT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
 
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS: &str =
-    "/v1/nexus/public_lanes/{lane_id}/validators";
+    "/v1/nexus/public-lanes/{lane_id}/validators";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_NEXUS_PUBLIC_LANE_STAKE: &str = "/v1/nexus/public_lanes/{lane_id}/stake";
+pub const ENDPOINT_NEXUS_PUBLIC_LANE_STAKE: &str = "/v1/nexus/public-lanes/{lane_id}/stake";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS: &str =
-    "/v1/nexus/public_lanes/{lane_id}/rewards/pending";
+    "/v1/nexus/public-lanes/{lane_id}/rewards/pending";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY: &str =
     "/v1/nexus/dataspaces/accounts/{literal}/summary";
@@ -50536,6 +50700,72 @@ struct ContractEventsSseState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     state: Arc<CoreState>,
     pending: VecDeque<ContractEventProjection>,
+    last_block_height: Option<u64>,
+    terminal: bool,
+}
+
+#[cfg(not(test))]
+const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(25);
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+struct StreamErrorEvent {
+    code: String,
+    message: String,
+    dropped_messages: Option<u64>,
+    replay_available: bool,
+}
+
+#[cfg(feature = "app_api")]
+fn stream_error_event(
+    code: &'static str,
+    message: impl Into<String>,
+    dropped_messages: Option<u64>,
+) -> SseEvent {
+    let payload = StreamErrorEvent {
+        code: code.to_owned(),
+        message: message.into(),
+        dropped_messages,
+        replay_available: false,
+    };
+    let data = norito::json::to_json(&payload).unwrap_or_else(|error| {
+        iroha_logger::error!(%error, code, "failed to encode SSE stream error payload");
+        "{\"code\":\"stream_internal_error\",\"message\":\"failed to encode stream error\",\"dropped_messages\":null,\"replay_available\":false}".to_owned()
+    });
+    SseEvent::default().event("stream_error").data(data)
+}
+
+/// Reject an SSE resume attempt before stream establishment.
+///
+/// The canonical live streams do not retain a replay log. Returning a native
+/// SSE error keeps the rejection compatible with `Accept: text/event-stream`
+/// while making the unsupported resume request explicit and machine-readable.
+#[cfg(feature = "app_api")]
+pub fn stream_resume_unsupported_response() -> Response {
+    let event = stream_error_event(
+        "stream_resume_unsupported",
+        "Last-Event-ID is unsupported because this live stream has no replay log.",
+        None,
+    );
+    let stream = stream::once(async move { Ok::<_, Infallible>(event) });
+    let mut response = Sse::new(stream).into_response();
+    *response.status_mut() = StatusCode::BAD_REQUEST;
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-iroha-stream-error"),
+        axum::http::HeaderValue::from_static("stream_resume_unsupported"),
+    );
+    response
+        .extensions_mut()
+        .insert(crate::utils::HttpErrorCode::new(
+            "stream_resume_unsupported",
+        ));
+    response
 }
 
 /// GET /v1/contracts/events/sse – Server-Sent Events stream of generic contract events.
@@ -50551,20 +50781,32 @@ pub fn handle_v1_contracts_events_sse(
             rx: events.subscribe(),
             state,
             pending: VecDeque::new(),
+            last_block_height: None,
+            terminal: false,
         },
         move |mut state| {
             let query = query.clone();
             async move {
                 use tokio::sync::broadcast::error::RecvError;
+                if state.terminal {
+                    return None;
+                }
                 loop {
                     if let Some(event) = state.pending.pop_front() {
                         let json_value = contract_event_projection_to_json_value(&event);
-                        let json =
-                            norito::json::to_json(&json_value).unwrap_or_else(|_| "{}".to_owned());
-                        let ev = SseEvent::default()
-                            .event("contract_event")
-                            .id(event.event_id.clone())
-                            .data(json);
+                        let ev = match norito::json::to_json(&json_value) {
+                            Ok(json) => SseEvent::default().event("contract_event").data(json),
+                            Err(error) => {
+                                iroha_logger::error!(%error, event_id = %event.event_id, "failed to encode contract SSE event");
+                                state.pending.clear();
+                                state.terminal = true;
+                                stream_error_event(
+                                    "stream_encode_error",
+                                    "The server could not encode a contract event.",
+                                    None,
+                                )
+                            }
+                        };
                         return Some((Ok(ev), state));
                     }
                     match state.rx.recv().await {
@@ -50572,6 +50814,13 @@ pub fn handle_v1_contracts_events_sse(
                             let Some(height) = committed_block_height(&event_box) else {
                                 continue;
                             };
+                            if state
+                                .last_block_height
+                                .is_some_and(|last_height| height <= last_height)
+                            {
+                                continue;
+                            }
+                            state.last_block_height = Some(height);
                             let Ok(height_usize) = usize::try_from(height) else {
                                 iroha_logger::warn!(
                                     height,
@@ -50589,18 +50838,36 @@ pub fn handle_v1_contracts_events_sse(
                                 }
                             }
                         }
-                        Err(RecvError::Lagged(_)) => {
-                            let ev = SseEvent::default().comment("lagged");
+                        Err(RecvError::Lagged(dropped_messages)) => {
+                            state.pending.clear();
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_lagged",
+                                "The contract event stream lost buffered events and cannot replay them.",
+                                Some(dropped_messages),
+                            );
                             return Some((Ok(ev), state));
                         }
-                        Err(RecvError::Closed) => return None,
+                        Err(RecvError::Closed) => {
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_source_closed",
+                                "The contract event source closed.",
+                                None,
+                            );
+                            return Some((Ok(ev), state));
+                        }
                     }
                 }
             }
         },
     );
 
-    Ok(Sse::new(stream))
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(SSE_HEARTBEAT_INTERVAL)
+            .text("heartbeat"),
+    ))
 }
 
 /// GET /v1/events/sse – Server-Sent Events stream of JSON events.
@@ -50638,6 +50905,7 @@ pub fn handle_v1_events_sse(
         EventsSseState {
             rx: events.subscribe(),
             pending: VecDeque::new(),
+            terminal: false,
         },
         move |mut state| {
             let filters = filters.clone();
@@ -50646,12 +50914,25 @@ pub fn handle_v1_events_sse(
             let proof_envelope_hash = proof_envelope_hash.clone();
             async move {
                 use tokio::sync::broadcast::error::RecvError;
+                if state.terminal {
+                    return None;
+                }
                 loop {
                     if let Some(event_box) = state.pending.pop_front() {
                         let json_val = event_to_json_value(&event_box);
-                        let json =
-                            norito::json::to_json(&json_val).unwrap_or_else(|_| "{}".to_owned());
-                        let ev = SseEvent::default().data(json);
+                        let ev = match norito::json::to_json(&json_val) {
+                            Ok(json) => SseEvent::default().data(json),
+                            Err(error) => {
+                                iroha_logger::error!(%error, "failed to encode SSE event");
+                                state.pending.clear();
+                                state.terminal = true;
+                                stream_error_event(
+                                    "stream_encode_error",
+                                    "The server could not encode an event.",
+                                    None,
+                                )
+                            }
+                        };
                         return Some((Ok(ev), state));
                     }
                     match state.rx.recv().await {
@@ -50686,25 +50967,43 @@ pub fn handle_v1_events_sse(
                                 }
                             }
                         }
-                        Err(RecvError::Lagged(_)) => {
-                            // Skip lagged messages but keep the stream alive.
-                            let ev = SseEvent::default().comment("lagged");
+                        Err(RecvError::Lagged(dropped_messages)) => {
+                            state.pending.clear();
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_lagged",
+                                "The event stream lost buffered events and cannot replay them.",
+                                Some(dropped_messages),
+                            );
                             return Some((Ok(ev), state));
                         }
-                        Err(RecvError::Closed) => return None,
+                        Err(RecvError::Closed) => {
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_source_closed",
+                                "The event source closed.",
+                                None,
+                            );
+                            return Some((Ok(ev), state));
+                        }
                     }
                 }
             }
         },
     );
 
-    Ok(Sse::new(stream))
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(SSE_HEARTBEAT_INTERVAL)
+            .text("heartbeat"),
+    ))
 }
 
 #[cfg(feature = "app_api")]
 struct EventsSseState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     pending: VecDeque<EventBox>,
+    terminal: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -52259,7 +52558,7 @@ fn soradns_revoke_reason_label(reason: RadRevokeReason) -> &'static str {
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v1/sumeragi/new_view/sse — SSE stream of NEW_VIEW counts polled periodically.
+/// GET /v1/sumeragi/new-view/sse — SSE stream of NEW_VIEW counts polled periodically.
 pub fn handle_v1_new_view_sse(
     poll_ms: u64,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
@@ -57511,7 +57810,7 @@ pub async fn handle_v1_sumeragi_status(
     accept: Option<axum::http::HeaderValue>,
     nexus_enabled: bool,
 ) -> Result<Response> {
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
@@ -58313,7 +58612,7 @@ fn rbc_status_summary_has_complete_delivery(summary: &rbc_status::Summary) -> bo
         && summary.received_chunks == summary.total_chunks
 }
 
-/// GET /v1/sumeragi/commit_qc/{hash} — return full commit QC record for a block hash (if present)
+/// GET /v1/sumeragi/commit-qcs/{block_hash} — return the full commit QC record for a block hash.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_commit_qc(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -58330,7 +58629,7 @@ pub async fn handle_v1_sumeragi_commit_qc(
     let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
     let world = state.world_view();
     let qc_opt = world.commit_qcs().get(&typed).cloned();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -59096,6 +59395,7 @@ mod sse_filter_validation_tests {
 
 #[cfg(all(test, feature = "app_api"))]
 mod sse_stream_tests {
+    use axum::body::Body;
     use axum::response::IntoResponse as _;
     use http_body_util::BodyExt as _;
     use iroha_crypto::{Hash, HashOf};
@@ -59110,6 +59410,31 @@ mod sse_stream_tests {
     use tokio::time::{Duration, timeout};
 
     use super::*;
+
+    async fn next_sse_chunk(body: &mut Body) -> String {
+        let frame = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("timeout waiting for SSE frame")
+            .expect("stream ended before SSE frame")
+            .expect("SSE body frame");
+        let data = frame.into_data().expect("SSE data frame");
+        std::str::from_utf8(&data)
+            .expect("UTF-8 SSE frame")
+            .to_owned()
+    }
+
+    fn queued_transaction_event(byte: u8) -> EventBox {
+        let hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [byte; Hash::LENGTH],
+        ));
+        EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
+            hash,
+            block_height: None,
+            lane_id: LaneId::new(0),
+            dataspace_id: DataSpaceId::new(0),
+            status: TransactionStatus::Queued,
+        }))
+    }
 
     #[tokio::test]
     async fn sse_stream_expands_pipeline_batches() {
@@ -59133,13 +59458,7 @@ mod sse_stream_tests {
             })]);
         events.send(batch).expect("send batch event");
 
-        let frame = timeout(Duration::from_secs(1), body.frame())
-            .await
-            .expect("timeout waiting for SSE frame")
-            .expect("frame")
-            .expect("frame data");
-        let data = frame.into_data().expect("data frame");
-        let payload = std::str::from_utf8(&data).expect("utf8");
+        let payload = next_sse_chunk(&mut body).await;
         let data_line = payload
             .lines()
             .find(|line| line.starts_with("data: "))
@@ -59147,6 +59466,144 @@ mod sse_stream_tests {
         let json = data_line.trim_start_matches("data: ").trim();
         let value: norito::json::Value = norito::json::from_str(json).expect("json payload");
         assert!(matches!(value, norito::json::Value::Object(_)));
+    }
+
+    #[tokio::test]
+    async fn sse_stream_preserves_pipeline_batch_order() {
+        let events: EventsSender = tokio::sync::broadcast::channel(8).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+
+        events
+            .send(EventBox::PipelineBatch(vec![
+                match queued_transaction_event(0x31) {
+                    EventBox::Pipeline(event) => event,
+                    _ => unreachable!(),
+                },
+                match queued_transaction_event(0x32) {
+                    EventBox::Pipeline(event) => event,
+                    _ => unreachable!(),
+                },
+            ]))
+            .expect("send batch");
+
+        let first = next_sse_chunk(&mut body).await;
+        let second = next_sse_chunk(&mut body).await;
+        assert!(first.contains(&Hash::prehashed([0x31; Hash::LENGTH]).to_string()));
+        assert!(second.contains(&Hash::prehashed([0x32; Hash::LENGTH]).to_string()));
+    }
+
+    #[tokio::test]
+    async fn sse_lag_is_machine_readable_and_terminal() {
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+
+        events
+            .send(queued_transaction_event(0x41))
+            .expect("send first");
+        events
+            .send(queued_transaction_event(0x42))
+            .expect("send second");
+
+        let error_frame = next_sse_chunk(&mut body).await;
+        assert!(error_frame.contains("event: stream_error"));
+        let data = error_frame
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .expect("stream error data");
+        let value: norito::json::Value = norito::json::from_str(data).expect("error JSON");
+        assert_eq!(value["code"].as_str(), Some("stream_lagged"));
+        assert_eq!(value["dropped_messages"].as_u64(), Some(1));
+        assert_eq!(value["replay_available"].as_bool(), Some(false));
+
+        let terminal = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("terminal stream should not hang");
+        assert!(
+            terminal.is_none(),
+            "lagged stream must close after its error event"
+        );
+    }
+
+    #[tokio::test]
+    async fn sse_idle_stream_emits_heartbeat_comment() {
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+
+        let heartbeat = next_sse_chunk(&mut body).await;
+        assert_eq!(heartbeat, ": heartbeat\n\n");
+    }
+
+    #[tokio::test]
+    async fn sse_source_shutdown_is_machine_readable_and_terminal() {
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+        drop(events);
+
+        let error_frame = next_sse_chunk(&mut body).await;
+        assert!(error_frame.contains("event: stream_error"));
+        assert!(error_frame.contains("\"code\":\"stream_source_closed\""));
+        let terminal = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("terminal stream should not hang");
+        assert!(terminal.is_none());
+    }
+
+    #[tokio::test]
+    async fn resume_rejection_uses_native_sse_error_contract() {
+        let response = stream_resume_unsupported_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .extensions()
+                .get::<crate::utils::HttpErrorCode>()
+                .map(crate::utils::HttpErrorCode::as_str),
+            Some("stream_resume_unsupported")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-stream-error")
+                .and_then(|value| value.to_str().ok()),
+            Some("stream_resume_unsupported")
+        );
+
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect rejection")
+            .to_bytes();
+        let payload = std::str::from_utf8(&body).expect("UTF-8 rejection");
+        assert!(payload.contains("event: stream_error"));
+        assert!(payload.contains("stream_resume_unsupported"));
+        assert!(payload.contains("\"replay_available\":false"));
     }
 }
 
@@ -84782,27 +85239,6 @@ pub fn handle_get_nexus_lane_lifecycle(state: &CoreState) -> Result<LaneLifecycl
     .map_err(|err| conversion_error(format!("invalid committed lane lifecycle status: {err}")))
 }
 
-/// Reject the retired node-local Nexus lane lifecycle mutation path.
-///
-/// Lane lifecycle changes must be submitted as signed transactions carrying a
-/// `SetParameter(nexus_lane_lifecycle_v1)` instruction. That path is permission
-/// checked, consensus replicated, and replay durable; mutating one Torii node
-/// directly would fork runtime topology from its peers.
-pub async fn handle_post_nexus_lane_lifecycle(
-    _state: Arc<CoreState>,
-    _queue: Arc<Queue>,
-) -> Result<Response> {
-    Err(Error::AppForbidden {
-        code: "local_lane_lifecycle_disabled",
-        message: concat!(
-            "node-local lane lifecycle mutation is disabled; submit a signed transaction with ",
-            "SetParameter custom id `nexus_lane_lifecycle_v1` from an account holding ",
-            "CanSetParameters"
-        )
-        .to_owned(),
-    })
-}
-
 #[cfg(test)]
 mod nexus_lane_lifecycle_tests {
     use super::*;
@@ -84820,42 +85256,6 @@ mod nexus_lane_lifecycle_tests {
             })
             .expect("enable Nexus for lifecycle test");
         Arc::new(state)
-    }
-
-    fn queue_for_lifecycle_test() -> Arc<Queue> {
-        let (events_sender, _) = tokio::sync::broadcast::channel(8);
-        Arc::new(Queue::from_config(
-            iroha_config::parameters::actual::Queue::default(),
-            events_sender,
-        ))
-    }
-
-    #[tokio::test]
-    async fn direct_lane_lifecycle_endpoint_fails_closed_without_mutation() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let lane_id = LaneId::new(1);
-        let before_nexus = state.nexus_snapshot();
-        let before_limits = queue.queue_limits().for_lane(lane_id);
-        let err =
-            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue)).await {
-                Ok(_) => panic!("node-local lifecycle mutation must remain disabled"),
-                Err(err) => err,
-            };
-
-        assert!(matches!(
-            err,
-            Error::AppForbidden {
-                code: "local_lane_lifecycle_disabled",
-                message,
-            } if message.contains("nexus_lane_lifecycle_v1")
-                && message.contains("CanSetParameters")
-        ));
-        assert_eq!(
-            state.nexus_snapshot().lane_catalog,
-            before_nexus.lane_catalog
-        );
-        assert_eq!(queue.queue_limits().for_lane(lane_id), before_limits);
     }
 
     #[test]
@@ -84904,6 +85304,42 @@ pub mod block {
 
     type Result<T> = core::result::Result<T, Error>;
 
+    #[cfg(not(test))]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+    #[cfg(test)]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+    fn close_frame_for_error(error: &Error) -> (u16, String) {
+        use crate::stream::{
+            CLOSE_INTERNAL_ERROR, CLOSE_INVALID_PAYLOAD, CLOSE_POLICY_VIOLATION,
+            CLOSE_TRY_AGAIN_LATER, Error as StreamError,
+        };
+
+        match error {
+            Error::Consumer(block::Error::Stream(StreamError::Decode(_)))
+            | Error::Consumer(block::Error::Stream(StreamError::UnexpectedFrame { .. })) => (
+                CLOSE_INVALID_PAYLOAD,
+                "invalid_subscription_payload".to_owned(),
+            ),
+            Error::Consumer(block::Error::Stream(StreamError::ReadTimeout)) => {
+                (CLOSE_POLICY_VIOLATION, "subscription_timeout".to_owned())
+            }
+            Error::Consumer(block::Error::InvalidHeight(_)) => (
+                CLOSE_POLICY_VIOLATION,
+                "invalid_block_subscription".to_owned(),
+            ),
+            Error::Consumer(block::Error::Stream(StreamError::SendTimeout)) => {
+                (CLOSE_TRY_AGAIN_LATER, "stream_backpressure".to_owned())
+            }
+            Error::Consumer(block::Error::Stream(
+                StreamError::Encode(_) | StreamError::WebSocket(_),
+            )) => (CLOSE_INTERNAL_ERROR, "stream_internal_error".to_owned()),
+            Error::Consumer(block::Error::Stream(StreamError::Closed)) | Error::Close => {
+                (1000, "stream_closed".to_owned())
+            }
+        }
+    }
+
     #[iroha_futures::telemetry_future]
     pub async fn handle_blocks_stream(
         kura: Arc<Kura>,
@@ -84920,8 +85356,10 @@ pub mod block {
             Ok(()) => stream.close().await.map_err(Into::into),
             Err(Error::Close) => Ok(()),
             Err(err) => {
-                // NOTE: try close websocket and return initial error
-                let _ = stream.close().await;
+                let (code, reason) = close_frame_for_error(&err);
+                if let Err(close_error) = stream.close_with(code, reason).await {
+                    iroha_logger::debug!(%close_error, "failed to send block stream close frame");
+                }
                 Err(err.into())
             }
         }
@@ -84932,6 +85370,9 @@ pub mod block {
     /// Ideally should return `Result<!>` cause it either runs forever or returns error
     async fn subscribe_forever(consumer: &mut block::Consumer<'_>) -> Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
+        let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        heartbeat.tick().await;
         loop {
             tokio::select! {
                 // Wait for stream to be closed by client
@@ -84943,6 +85384,9 @@ pub mod block {
                 }
                 // This branch sends blocks
                 _ = interval.tick() => consumer.consume().await?,
+                _ = heartbeat.tick() => {
+                    consumer.stream.ping().await.map_err(block::Error::from)?;
+                }
             }
         }
     }
@@ -84976,6 +85420,49 @@ pub mod event {
 
     type Result<T> = core::result::Result<T, Error>;
 
+    #[cfg(not(test))]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+    #[cfg(test)]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+    fn close_frame_for_error(error: &Error) -> (u16, String) {
+        use crate::stream::{
+            CLOSE_INTERNAL_ERROR, CLOSE_INVALID_PAYLOAD, CLOSE_POLICY_VIOLATION,
+            CLOSE_TRY_AGAIN_LATER, Error as StreamError,
+        };
+
+        match error {
+            Error::Event(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => (
+                CLOSE_TRY_AGAIN_LATER,
+                format!("event_stream_lagged:{skipped}"),
+            ),
+            Error::Event(tokio::sync::broadcast::error::RecvError::Closed) => {
+                (CLOSE_INTERNAL_ERROR, "event_source_closed".to_owned())
+            }
+            Error::Consumer(event::Error::Stream(StreamError::Decode(_)))
+            | Error::Consumer(event::Error::Stream(StreamError::UnexpectedFrame { .. })) => (
+                CLOSE_INVALID_PAYLOAD,
+                "invalid_subscription_payload".to_owned(),
+            ),
+            Error::Consumer(event::Error::Stream(StreamError::ReadTimeout)) => {
+                (CLOSE_POLICY_VIOLATION, "subscription_timeout".to_owned())
+            }
+            Error::Consumer(event::Error::InvalidSubscription(_)) => (
+                CLOSE_POLICY_VIOLATION,
+                "invalid_event_subscription".to_owned(),
+            ),
+            Error::Consumer(event::Error::Stream(StreamError::SendTimeout)) => {
+                (CLOSE_TRY_AGAIN_LATER, "stream_backpressure".to_owned())
+            }
+            Error::Consumer(event::Error::Stream(
+                StreamError::Encode(_) | StreamError::WebSocket(_),
+            )) => (CLOSE_INTERNAL_ERROR, "stream_internal_error".to_owned()),
+            Error::Consumer(event::Error::Stream(StreamError::Closed)) | Error::Close => {
+                (1000, "stream_closed".to_owned())
+            }
+        }
+    }
+
     /// Subscribes `stream` for `events` filtered by filter that is
     /// received through the `stream`
     #[iroha_futures::telemetry_future]
@@ -85006,8 +85493,10 @@ pub mod event {
             Ok(()) => stream.close().await.map_err(Into::into),
             Err(Error::Close) => Ok(()),
             Err(err) => {
-                // NOTE: try close websocket and return initial error
-                let _ = stream.close().await;
+                let (code, reason) = close_frame_for_error(&err);
+                if let Err(close_error) = stream.close_with(code, reason).await {
+                    iroha_logger::debug!(%close_error, "failed to send event stream close frame");
+                }
                 Err(err.into())
             }
         }
@@ -85020,6 +85509,9 @@ pub mod event {
         events: &mut tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
         consumer: &mut event::Consumer<'_>,
     ) -> Result<()> {
+        let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        heartbeat.tick().await;
         loop {
             tokio::select! {
                 // Wait for stream to be closed by client
@@ -85036,11 +85528,11 @@ pub mod event {
                             iroha_logger::trace!(?event);
                             consumer.consume(event).await?;
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            iroha_logger::warn!("event stream lagged; skipping buffered events");
-                        }
                         Err(err) => return Err(Error::Event(err)),
                     }
+                }
+                _ = heartbeat.tick() => {
+                    consumer.stream.ping().await.map_err(event::Error::from)?;
                 }
             }
         }
@@ -85099,24 +85591,6 @@ mod version_tests {
             "genesis not applied"
         );
     }
-}
-
-/// List supported Torii API versions and defaults.
-pub fn handle_api_versions(
-    policy: &api_version::ApiVersionPolicy,
-) -> crate::utils::NoritoBody<iroha_torii_shared::ApiVersionInfo> {
-    let supported = policy
-        .supported
-        .iter()
-        .copied()
-        .map(ApiVersion::to_label)
-        .collect();
-    crate::utils::NoritoBody(iroha_torii_shared::ApiVersionInfo {
-        default: policy.default.to_label(),
-        supported,
-        sunset_unix: policy.sunset_unix,
-        min_proof_version: policy.min_proof.to_label(),
-    })
 }
 
 #[cfg(feature = "telemetry")]
@@ -85582,7 +86056,7 @@ mod tests {
                 .expect("paths section");
             assert!(!paths.contains_key("/v1/aliases/voprf/evaluate"));
             assert!(paths.contains_key("/v1/aliases/resolve"));
-            assert!(paths.contains_key("/v1/aliases/resolve_index"));
+            assert!(paths.contains_key("/v1/aliases/resolve-index"));
         });
     }
 
@@ -86344,6 +86818,84 @@ mod event_stream_tests {
 
     use super::event::handle_events_stream_with_receiver;
 
+    async fn spawn_event_stream_server(
+        receiver: tokio::sync::broadcast::Receiver<EventBox>,
+    ) -> Option<std::net::SocketAddr> {
+        let rx_holder = Arc::new(Mutex::new(Some(receiver)));
+        let app = Router::new().route(
+            "/ws",
+            get({
+                let rx_holder = Arc::clone(&rx_holder);
+                move |ws: WebSocketUpgrade| {
+                    let rx_holder = Arc::clone(&rx_holder);
+                    async move {
+                        ws.on_upgrade(move |ws| async move {
+                            let mut guard = rx_holder.lock().await;
+                            let rx = guard.take().expect("event receiver already used");
+                            let _ = handle_events_stream_with_receiver(
+                                rx,
+                                ws,
+                                std::time::Duration::from_millis(
+                                    iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
+                                ),
+                            )
+                            .await;
+                        })
+                    }
+                }
+            }),
+        );
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => return None,
+            Err(err) => panic!("tcp bind failed: {err}"),
+        };
+        let addr = listener.local_addr().expect("listener addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("axum server");
+        });
+        Some(addr)
+    }
+
+    async fn connect_event_stream(
+        addr: std::net::SocketAddr,
+    ) -> Option<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    > {
+        match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
+            Ok((stream, _response)) => Some(stream),
+            Err(tokio_tungstenite::tungstenite::Error::Io(io_err))
+                if io_err.kind() == ErrorKind::PermissionDenied =>
+            {
+                None
+            }
+            Err(err) => panic!("ws connect failed: {err}"),
+        }
+    }
+
+    async fn next_close_frame(
+        stream: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> tokio_tungstenite::tungstenite::protocol::CloseFrame {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match stream.next().await {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Close(Some(frame)))) => {
+                        break frame;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => panic!("ws message error: {err}"),
+                    None => panic!("ws stream closed without a close frame"),
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for close frame")
+    }
+
     #[tokio::test]
     async fn ws_stream_receives_buffered_events() {
         let events: EventsSender = tokio::sync::broadcast::channel(16).0;
@@ -86451,7 +87003,7 @@ mod event_stream_tests {
     }
 
     #[tokio::test]
-    async fn ws_stream_survives_lagged_receiver() {
+    async fn ws_stream_reports_lag_and_closes() {
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let lagged_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
             [0x11; Hash::LENGTH],
@@ -86495,9 +87047,9 @@ mod event_stream_tests {
                             let _ = handle_events_stream_with_receiver(
                                 rx,
                                 ws,
-                            std::time::Duration::from_millis(
-                                iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
-                            ),
+                                std::time::Duration::from_millis(
+                                    iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
+                                ),
                             )
                             .await;
                         })
@@ -86540,28 +87092,136 @@ mod event_stream_tests {
             .await
             .expect("send subscription");
 
-        let event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let close = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 match ws_stream.next().await {
-                    Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(bytes))) => {
-                        let event_msg: EventMessage =
-                            decode_from_bytes(bytes.as_ref()).expect("decode event message");
-                        let event_box: EventBox = event_msg.into();
-                        if let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event_box
-                        {
-                            break event;
-                        }
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Close(Some(frame)))) => {
+                        break frame;
                     }
                     Some(Ok(_)) => {}
                     Some(Err(err)) => panic!("ws message error: {err}"),
-                    None => panic!("ws stream closed before event received"),
+                    None => panic!("ws stream closed without a close frame"),
                 }
             }
         })
         .await
-        .expect("timed out waiting for event");
+        .expect("timed out waiting for close frame");
 
-        assert_eq!(event.hash(), &wanted_hash);
-        assert_eq!(event.status(), &TransactionStatus::Queued);
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_TRY_AGAIN_LATER);
+        assert_eq!(close.reason, "event_stream_lagged:1");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_rejects_text_subscription_payload() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                "not-norito".into(),
+            ))
+            .await
+            .expect("send text subscription");
+        let close = next_close_frame(&mut ws_stream).await;
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_INVALID_PAYLOAD);
+        assert_eq!(close.reason, "invalid_subscription_payload");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_rejects_empty_event_filter_set() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        let subscription = EventSubscriptionRequest::new(Vec::new());
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                to_bytes(&subscription)
+                    .expect("encode empty subscription")
+                    .into(),
+            ))
+            .await
+            .expect("send empty subscription");
+        let close = next_close_frame(&mut ws_stream).await;
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_POLICY_VIOLATION);
+        assert_eq!(close.reason, "invalid_event_subscription");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_rejects_data_after_subscription() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        let subscription = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
+            TransactionEventFilter::default().into(),
+        )]);
+        let bytes = to_bytes(&subscription).expect("encode subscription");
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                bytes.clone().into(),
+            ))
+            .await
+            .expect("send subscription");
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                bytes.into(),
+            ))
+            .await
+            .expect("send unexpected second request");
+
+        let close = next_close_frame(&mut ws_stream).await;
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_INVALID_PAYLOAD);
+        assert_eq!(close.reason, "invalid_subscription_payload");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_emits_transport_heartbeat() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        let subscription = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
+            TransactionEventFilter::default().into(),
+        )]);
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                to_bytes(&subscription).expect("encode subscription").into(),
+            ))
+            .await
+            .expect("send subscription");
+
+        let heartbeat = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                match ws_stream.next().await {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(payload))) => {
+                        break payload;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => panic!("ws heartbeat error: {err}"),
+                    None => panic!("ws stream closed before heartbeat"),
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for heartbeat");
+        assert!(heartbeat.is_empty());
     }
 }

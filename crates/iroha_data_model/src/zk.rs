@@ -474,7 +474,16 @@ impl norito::json::JsonDeserialize for BackendTag {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        Ok(BackendTag::from_catalog_label(&parser.parse_string()?))
+        let label = parser.parse_string()?;
+        let backend = BackendTag::from_catalog_label(&label);
+        if backend.canonical_label() == label {
+            Ok(backend)
+        } else {
+            Err(norito::json::Error::InvalidField {
+                field: "backend".to_owned(),
+                message: format!("unknown or non-canonical backend label `{label}`"),
+            })
+        }
     }
 }
 
@@ -1753,6 +1762,53 @@ mod tests {
                     ..OpenVerifyEnvelopeBounds::default()
                 })
                 .expect("explicit non-admission bounds can inspect pending backend envelopes");
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn backend_tag_json_accepts_only_exact_canonical_labels() {
+        for backend in [
+            BackendTag::Halo2IpaPasta,
+            BackendTag::Halo2Bn254,
+            BackendTag::Groth16,
+            BackendTag::Stark,
+            BackendTag::Unsupported,
+            BackendTag::Halo2IpaOrchard,
+            BackendTag::Groth16Bls12377,
+            BackendTag::FcmpPlusPlusCurveTree,
+            BackendTag::LatticePcsSis,
+            BackendTag::MidenStark,
+            BackendTag::AztecPlonkishPrivateKernel,
+            BackendTag::PqMaspStarkFri,
+            BackendTag::AnonymousPgc,
+            BackendTag::VeRange,
+            BackendTag::ZkAt,
+            BackendTag::RecursiveAnonymousAdmission,
+            BackendTag::VegaExistingCredentialZk,
+            BackendTag::SilentThresholdAnoncred,
+            BackendTag::ZkX509,
+            BackendTag::SisWithHints,
+        ] {
+            let json = format!("\"{}\"", backend.canonical_label());
+            let decoded = norito::json::from_str::<BackendTag>(&json)
+                .expect("canonical backend label must decode");
+            assert_eq!(decoded, backend);
+        }
+
+        for alias in [
+            "halo2/ipa",
+            "HALO2-IPA-PASTA",
+            " halo2-ipa-pasta",
+            "halo2-ipa-pasta ",
+            "stark/fri",
+            "groth16/bn254",
+            "orchard",
+            "unknown/privacy/backend",
+        ] {
+            let json = format!("\"{alias}\"");
+            norito::json::from_str::<BackendTag>(&json)
+                .expect_err("backend aliases and unknown labels must be rejected by JSON");
         }
     }
 

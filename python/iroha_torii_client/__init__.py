@@ -1,4 +1,4 @@
-"""Lightweight Torii HTTP client and exact first-release SCCP helpers."""
+"""Typed Torii HTTP client with Offline and exact first-release SCCP helpers."""
 
 from . import client as _client
 from . import sccp as _sccp

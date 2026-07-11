@@ -189,7 +189,7 @@ pub struct DaCommitmentVerifyResponse {
     pub error: Option<String>,
 }
 
-/// Request payload for `/v1/da/pin_intents` and `/v1/da/pin_intents/prove`.
+/// Request payload for `/v1/da/pin-intents` and `/v1/da/pin-intents/prove`.
 #[derive(Debug, Default, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaPinIntentQueryRequest {
     /// Optional manifest digest used as a lookup key.
@@ -208,7 +208,7 @@ pub struct DaPinIntentQueryRequest {
     pub pagination: Option<Pagination>,
 }
 
-/// Response payload for `/v1/da/pin_intents/verify`.
+/// Response payload for `/v1/da/pin-intents/verify`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaPinIntentVerifyResponse {
     /// Indicates whether the supplied pin intent verified against the current store.

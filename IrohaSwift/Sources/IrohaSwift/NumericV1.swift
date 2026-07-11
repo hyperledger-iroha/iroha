@@ -18,6 +18,7 @@ public enum KotodamaNumericV1ErrorCode: String, Sendable {
     case checksumMismatch = "checksum_mismatch"
     case truncatedEnvelope = "truncated_envelope"
     case unknownType = "unknown_type"
+    case typeNotAllowed = "type_not_allowed"
     case wrongType = "wrong_type"
     case invalidEnvelopeVersion = "invalid_envelope_version"
     case oversizedLength = "oversized_length"
@@ -237,7 +238,7 @@ private enum NumericV1Kind {
         switch self {
         case .int: return 0x0011
         case .decimal: return 0x0012
-        case .quantity: return 0x0010
+        case .quantity: return 0x0013
         }
     }
 
@@ -417,7 +418,11 @@ private enum NumericV1Internal {
         guard let pointerType = readUInt16BE(envelope, at: 0) else {
             throw numericFailure(.truncatedEnvelope, "envelope is truncated")
         }
-        let knownAllowedType = (0x0001...0x0012).contains(pointerType)
+        guard pointerType != 0x0010 else {
+            throw numericFailure(.typeNotAllowed, "retired Amount pointer type is permanently reserved")
+        }
+        let knownAllowedType = (0x0001...0x000F).contains(pointerType)
+            || (0x0011...0x0013).contains(pointerType)
         guard knownAllowedType else {
             throw numericFailure(.unknownType, "unknown pointer type")
         }

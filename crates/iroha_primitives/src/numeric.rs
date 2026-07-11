@@ -221,6 +221,11 @@ pub enum NumericWorkStep {
         /// Decimal exponent.
         exponent: u8,
     },
+    /// Materialize one unchanged conceptual integer into an owned temporary.
+    Materialize {
+        /// Width of the value being copied.
+        value_limbs: u16,
+    },
     /// Negate one conceptual integer.
     Negate {
         /// Operand width.
@@ -270,6 +275,14 @@ pub enum NumericWorkStep {
         /// Width of the divisor before the division.
         divisor_limbs: u16,
     },
+    /// Prepare absolute numerator/denominator values for exact classification.
+    DivisionClassificationPrepare {
+        /// Width of the numerator copied into the Euclidean state.
+        numerator_limbs: u16,
+        /// Width of the denominator copied into both the Euclidean state and
+        /// the later reduced-denominator state.
+        denominator_limbs: u16,
+    },
     /// One quotient/remainder operation used for explicit rounding or conversion.
     RoundedDivision {
         /// Width of the conceptual numerator.
@@ -278,6 +291,11 @@ pub enum NumericWorkStep {
         denominator_limbs: u16,
         /// Requested output scale.
         output_scale: u8,
+    },
+    /// Scan and validate one final conceptual value before bounding it.
+    Finalize {
+        /// Width of the final conceptual value.
+        value_limbs: u16,
     },
 }
 
@@ -893,6 +911,10 @@ impl Numeric {
     {
         self.validate_decimal_observed(observer)?;
         if self.scale == 0 {
+            observer(NumericWorkStep::Finalize {
+                value_limbs: logical_limbs(self.mantissa.inner()),
+            })
+            .map_err(ObservedNumericError::Observer)?;
             return Ok(self.mantissa.clone());
         }
         let divisor = scale_unbounded_observed(&UnboundedBigInt::one(), self.scale, observer)?;
@@ -908,8 +930,7 @@ impl Numeric {
                 NumericOperationError::InexactConversion,
             ));
         }
-        BigInt::from_inner(quotient)
-            .map_err(|_| ObservedNumericError::Numeric(NumericOperationError::MantissaOverflow))
+        finalize_bigint_observed(quotient, observer)
     }
 
     /// Convert to an integer by truncating toward zero.
@@ -935,6 +956,10 @@ impl Numeric {
     {
         self.validate_decimal_observed(observer)?;
         if self.scale == 0 {
+            observer(NumericWorkStep::Finalize {
+                value_limbs: logical_limbs(self.mantissa.inner()),
+            })
+            .map_err(ObservedNumericError::Observer)?;
             return Ok(self.mantissa.clone());
         }
         let divisor = scale_unbounded_observed(&UnboundedBigInt::one(), self.scale, observer)?;
@@ -944,8 +969,10 @@ impl Numeric {
             output_scale: 0,
         })
         .map_err(ObservedNumericError::Observer)?;
-        BigInt::from_inner(quotient_remainder(self.mantissa.inner(), &divisor).0)
-            .map_err(|_| ObservedNumericError::Numeric(NumericOperationError::MantissaOverflow))
+        finalize_bigint_observed(
+            quotient_remainder(self.mantissa.inner(), &divisor).0,
+            observer,
+        )
     }
 
     /// Convert to an integer using an explicit deterministic rounding mode.
@@ -977,6 +1004,10 @@ impl Numeric {
     {
         self.validate_decimal_observed(observer)?;
         if self.scale == 0 {
+            observer(NumericWorkStep::Finalize {
+                value_limbs: logical_limbs(self.mantissa.inner()),
+            })
+            .map_err(ObservedNumericError::Observer)?;
             return Ok(self.mantissa.clone());
         }
         let divisor = scale_unbounded_observed(&UnboundedBigInt::one(), self.scale, observer)?;
@@ -986,8 +1017,10 @@ impl Numeric {
             output_scale: 0,
         })
         .map_err(ObservedNumericError::Observer)?;
-        BigInt::from_inner(rounded_quotient(self.mantissa.inner(), &divisor, mode))
-            .map_err(|_| ObservedNumericError::Numeric(NumericOperationError::MantissaOverflow))
+        finalize_bigint_observed(
+            rounded_quotient(self.mantissa.inner(), &divisor, mode),
+            observer,
+        )
     }
 
     fn scale_up(mantissa: &BigInt, delta_scale: u32) -> Option<BigInt> {
@@ -1457,8 +1490,7 @@ where
             NumericOperationError::ScaleOverflow,
         ));
     }
-    let mantissa = BigInt::from_inner(mantissa)
-        .map_err(|_| ObservedNumericError::Numeric(NumericOperationError::MantissaOverflow))?;
+    let mantissa = finalize_bigint_observed(mantissa, observer)?;
     Numeric::try_new_raw(mantissa, scale).map_err(|error| {
         ObservedNumericError::Numeric(match error {
             NumericError::MantissaTooLarge => NumericOperationError::MantissaOverflow,
@@ -1466,6 +1498,21 @@ where
             NumericError::Malformed => unreachable!("structured numeric fields are well formed"),
         })
     })
+}
+
+fn finalize_bigint_observed<E, F>(
+    value: UnboundedBigInt,
+    observer: &mut F,
+) -> Result<BigInt, ObservedNumericError<E>>
+where
+    F: FnMut(NumericWorkStep) -> Result<(), E>,
+{
+    observer(NumericWorkStep::Finalize {
+        value_limbs: logical_limbs(&value),
+    })
+    .map_err(ObservedNumericError::Observer)?;
+    BigInt::from_inner(value)
+        .map_err(|_| ObservedNumericError::Numeric(NumericOperationError::MantissaOverflow))
 }
 
 fn mantissa_fits_numeric_domain(value: &BigInt) -> bool {
@@ -1482,25 +1529,14 @@ where
     F: FnMut(NumericWorkStep) -> Result<(), E>,
 {
     let numerator_scale = divisor.scale + output_scale;
-    let (numerator, denominator) = if numerator_scale >= dividend.scale {
-        (
-            scale_unbounded_observed(
-                dividend.mantissa.inner(),
-                numerator_scale - dividend.scale,
-                observer,
-            )?,
-            divisor.mantissa.inner().clone(),
-        )
+    let (numerator_delta, denominator_delta) = if numerator_scale >= dividend.scale {
+        (numerator_scale - dividend.scale, 0)
     } else {
-        (
-            dividend.mantissa.inner().clone(),
-            scale_unbounded_observed(
-                divisor.mantissa.inner(),
-                dividend.scale - numerator_scale,
-                observer,
-            )?,
-        )
+        (0, dividend.scale - numerator_scale)
     };
+    let numerator = scale_unbounded_observed(dividend.mantissa.inner(), numerator_delta, observer)?;
+    let denominator =
+        scale_unbounded_observed(divisor.mantissa.inner(), denominator_delta, observer)?;
     Ok((numerator, denominator))
 }
 
@@ -1554,8 +1590,14 @@ where
 {
     let (numerator, denominator) =
         decimal_division_operands_observed(dividend, divisor, 0, observer)?;
+    observer(NumericWorkStep::DivisionClassificationPrepare {
+        numerator_limbs: logical_limbs(&numerator),
+        denominator_limbs: logical_limbs(&denominator),
+    })
+    .map_err(ObservedNumericError::Observer)?;
+    let absolute_denominator = denominator.abs();
     let mut lhs = numerator.abs();
-    let mut rhs = denominator.abs();
+    let mut rhs = absolute_denominator.clone();
     while !rhs.is_zero() {
         let (_, remainder) = classification_division(&lhs, &rhs, observer)?;
         lhs = rhs;
@@ -1563,9 +1605,9 @@ where
     }
 
     let mut reduced_denominator = if lhs.is_one() {
-        denominator.abs()
+        absolute_denominator
     } else {
-        classification_division(&denominator.abs(), &lhs, observer)?.0
+        classification_division(&absolute_denominator, &lhs, observer)?.0
     };
     let mut factors_two = 0_u32;
     let mut factors_five = 0_u32;
@@ -1645,6 +1687,10 @@ where
     F: FnMut(NumericWorkStep) -> Result<(), E>,
 {
     if decimal_places == 0 || value.is_zero() {
+        observer(NumericWorkStep::Materialize {
+            value_limbs: logical_limbs(value),
+        })
+        .map_err(ObservedNumericError::Observer)?;
         return Ok(value.clone());
     }
     observer(NumericWorkStep::ScaleByPowerOfTen {
@@ -1652,14 +1698,23 @@ where
         exponent: u8::try_from(decimal_places).unwrap_or(u8::MAX),
     })
     .map_err(ObservedNumericError::Observer)?;
-    Ok(value * UnboundedBigInt::from(10_u8).pow(decimal_places))
+    Ok(value * decimal_power_unbounded(decimal_places))
 }
 
 fn scale_unbounded(value: &UnboundedBigInt, decimal_places: u32) -> UnboundedBigInt {
     if decimal_places == 0 {
         return value.clone();
     }
-    value * UnboundedBigInt::from(10_u8).pow(decimal_places)
+    value * decimal_power_unbounded(decimal_places)
+}
+
+fn decimal_power_unbounded(decimal_places: u32) -> UnboundedBigInt {
+    let ten = UnboundedBigInt::from(10_u8);
+    let mut power = UnboundedBigInt::one();
+    for _ in 0..decimal_places {
+        power *= &ten;
+    }
+    power
 }
 
 impl Numeric {
@@ -2049,6 +2104,9 @@ mod schema_ {
 #[cfg(test)]
 mod tests {
     use core::cmp::Ordering;
+
+    use num_bigint::BigInt as ReferenceInt;
+    use num_traits::{One as _, Signed as _, Zero as _};
 
     use super::*;
 
@@ -2502,12 +2560,16 @@ mod tests {
             })
             .expect("normalize");
         assert_eq!(normalized, Numeric::one());
-        assert_eq!(normalization_steps.len(), 4);
+        assert_eq!(normalization_steps.len(), 5);
         assert!(
-            normalization_steps
+            normalization_steps[..4]
                 .iter()
                 .all(|step| matches!(step, NumericWorkStep::Normalize { .. }))
         );
+        assert!(matches!(
+            normalization_steps[4],
+            NumericWorkStep::Finalize { value_limbs: 1 }
+        ));
 
         let mut zero_steps = Vec::new();
         let zero = Numeric::try_new_raw(0, MAX_DECIMAL_SCALE)
@@ -2518,9 +2580,10 @@ mod tests {
             })
             .expect("canonicalize zero");
         assert_eq!(zero, Numeric::zero());
-        assert!(
-            zero_steps.is_empty(),
-            "zero canonicalization performs no bigint division"
+        assert_eq!(
+            zero_steps,
+            [NumericWorkStep::Finalize { value_limbs: 1 }],
+            "zero performs no division but still validates its final domain"
         );
 
         let mut validation_steps = Vec::new();
@@ -2650,8 +2713,13 @@ mod tests {
                 exponent: 1,
             }
         );
-        assert!(matches!(add_steps[2], NumericWorkStep::Add { .. }));
-        assert!(matches!(add_steps[3], NumericWorkStep::Normalize { .. }));
+        assert!(matches!(
+            add_steps[2],
+            NumericWorkStep::Materialize { value_limbs: 1 }
+        ));
+        assert!(matches!(add_steps[3], NumericWorkStep::Add { .. }));
+        assert!(matches!(add_steps[4], NumericWorkStep::Normalize { .. }));
+        assert!(matches!(add_steps[5], NumericWorkStep::Finalize { .. }));
 
         let mut multiply_steps = Vec::new();
         let product = decimal("0.2")
@@ -2673,8 +2741,15 @@ mod tests {
         assert!(
             multiply_steps[multiply_index + 1..]
                 .iter()
-                .all(|step| matches!(step, NumericWorkStep::Normalize { .. }))
+                .all(|step| matches!(
+                    step,
+                    NumericWorkStep::Normalize { .. } | NumericWorkStep::Finalize { .. }
+                ))
         );
+        assert!(matches!(
+            multiply_steps.last(),
+            Some(NumericWorkStep::Finalize { .. })
+        ));
 
         let mut saw_add = false;
         let aborted =
@@ -2969,44 +3044,300 @@ mod tests {
         }
     }
 
-    #[test]
-    fn classified_exact_division_matches_exhaustive_scale_reference() {
-        fn exhaustive_reference(
-            lhs: &Numeric,
-            rhs: &Numeric,
-        ) -> Result<Numeric, NumericOperationError> {
-            for scale in 0..=MAX_DECIMAL_SCALE {
-                if let Some(value) = lhs.try_decimal_div_exact_at_scale(rhs, scale)? {
-                    return Ok(value);
-                }
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct ReferenceDecimal {
+        mantissa: ReferenceInt,
+        scale: u32,
+    }
+
+    impl ReferenceDecimal {
+        fn read(value: &Numeric) -> Self {
+            Self {
+                mantissa: value
+                    .mantissa()
+                    .to_string()
+                    .parse()
+                    .expect("bounded mantissa parses as num_bigint::BigInt"),
+                scale: value.scale(),
             }
-            Err(match lhs.classify_exact_division(rhs)? {
-                ExactDivisionClass::Repeating => NumericOperationError::RepeatingDecimal,
-                ExactDivisionClass::ScaleOverflow => {
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ReferenceExactClass {
+        Representable { minimum_scale: u8 },
+        Repeating,
+        ScaleOverflow,
+    }
+
+    fn reference_pow10(exponent: u32) -> ReferenceInt {
+        ReferenceInt::from(10_u8).pow(exponent)
+    }
+
+    fn reference_normalize(
+        mut mantissa: ReferenceInt,
+        mut scale: u32,
+    ) -> Result<ReferenceDecimal, NumericOperationError> {
+        if mantissa.is_zero() {
+            return Ok(ReferenceDecimal { mantissa, scale: 0 });
+        }
+        let ten = ReferenceInt::from(10_u8);
+        while scale > 0 && (&mantissa % &ten).is_zero() {
+            mantissa /= &ten;
+            scale -= 1;
+        }
+        if scale > MAX_DECIMAL_SCALE {
+            return Err(NumericOperationError::ScaleOverflow);
+        }
+        let signed_limit = ReferenceInt::one() << (MAX_MANTISSA_BITS - 1);
+        if mantissa < -signed_limit.clone() || mantissa >= signed_limit {
+            return Err(NumericOperationError::MantissaOverflow);
+        }
+        Ok(ReferenceDecimal { mantissa, scale })
+    }
+
+    fn reference_add_or_sub(
+        lhs: &ReferenceDecimal,
+        rhs: &ReferenceDecimal,
+        subtract: bool,
+    ) -> Result<ReferenceDecimal, NumericOperationError> {
+        let scale = lhs.scale.max(rhs.scale);
+        let lhs_aligned = &lhs.mantissa * reference_pow10(scale - lhs.scale);
+        let rhs_aligned = &rhs.mantissa * reference_pow10(scale - rhs.scale);
+        let mantissa = if subtract {
+            lhs_aligned - rhs_aligned
+        } else {
+            lhs_aligned + rhs_aligned
+        };
+        reference_normalize(mantissa, scale)
+    }
+
+    fn reference_multiply(
+        lhs: &ReferenceDecimal,
+        rhs: &ReferenceDecimal,
+    ) -> Result<ReferenceDecimal, NumericOperationError> {
+        reference_normalize(&lhs.mantissa * &rhs.mantissa, lhs.scale + rhs.scale)
+    }
+
+    fn reference_gcd(mut lhs: ReferenceInt, mut rhs: ReferenceInt) -> ReferenceInt {
+        lhs = lhs.abs();
+        rhs = rhs.abs();
+        while !rhs.is_zero() {
+            let remainder = &lhs % &rhs;
+            lhs = rhs;
+            rhs = remainder;
+        }
+        lhs
+    }
+
+    fn reference_reduced_ratio(
+        lhs: &ReferenceDecimal,
+        rhs: &ReferenceDecimal,
+    ) -> Result<(ReferenceInt, ReferenceInt), NumericOperationError> {
+        if rhs.mantissa.is_zero() {
+            return Err(NumericOperationError::DivisionByZero);
+        }
+        // This is a direct rational construction: (lm / 10^ls) /
+        // (rm / 10^rs) = (lm * 10^rs) / (rm * 10^ls). It intentionally does
+        // not use any Numeric division, scale-alignment, or classification
+        // helper.
+        let mut numerator = &lhs.mantissa * reference_pow10(rhs.scale);
+        let mut denominator = &rhs.mantissa * reference_pow10(lhs.scale);
+        if denominator.is_negative() {
+            numerator = -numerator;
+            denominator = -denominator;
+        }
+        let gcd = reference_gcd(numerator.clone(), denominator.clone());
+        Ok((numerator / &gcd, denominator / gcd))
+    }
+
+    fn reference_exact_class(
+        lhs: &ReferenceDecimal,
+        rhs: &ReferenceDecimal,
+    ) -> Result<ReferenceExactClass, NumericOperationError> {
+        let (_, mut denominator) = reference_reduced_ratio(lhs, rhs)?;
+        let mut factors_two = 0_u32;
+        let mut factors_five = 0_u32;
+        for (factor, count) in [
+            (ReferenceInt::from(2_u8), &mut factors_two),
+            (ReferenceInt::from(5_u8), &mut factors_five),
+        ] {
+            while (&denominator % &factor).is_zero() {
+                denominator /= &factor;
+                *count += 1;
+            }
+        }
+        if denominator != ReferenceInt::one() {
+            return Ok(ReferenceExactClass::Repeating);
+        }
+        let minimum_scale = factors_two.max(factors_five);
+        if minimum_scale > MAX_DECIMAL_SCALE {
+            return Ok(ReferenceExactClass::ScaleOverflow);
+        }
+        Ok(ReferenceExactClass::Representable {
+            minimum_scale: u8::try_from(minimum_scale).expect("reference scale is at most 28"),
+        })
+    }
+
+    fn reference_exact_divide(
+        lhs: &ReferenceDecimal,
+        rhs: &ReferenceDecimal,
+    ) -> Result<ReferenceDecimal, NumericOperationError> {
+        let class = reference_exact_class(lhs, rhs)?;
+        let ReferenceExactClass::Representable { minimum_scale } = class else {
+            return Err(match class {
+                ReferenceExactClass::Repeating => NumericOperationError::RepeatingDecimal,
+                ReferenceExactClass::ScaleOverflow => {
                     NumericOperationError::ExactDivisionScaleOverflow
                 }
-                ExactDivisionClass::Representable { .. } => {
-                    panic!("representable quotient was missed by the exhaustive reference")
-                }
-            })
-        }
+                ReferenceExactClass::Representable { .. } => unreachable!(),
+            });
+        };
+        let (numerator, denominator) = reference_reduced_ratio(lhs, rhs)?;
+        let scaled = numerator * reference_pow10(u32::from(minimum_scale));
+        let quotient = &scaled / &denominator;
+        assert!(
+            (&scaled % &denominator).is_zero(),
+            "independent classification must prove exact divisibility"
+        );
+        reference_normalize(quotient, u32::from(minimum_scale))
+    }
 
-        for lhs_mantissa in -20_i64..=20 {
-            for rhs_mantissa in -10_i64..=10 {
-                if rhs_mantissa == 0 {
-                    continue;
-                }
-                for lhs_scale in 0..=2 {
-                    for rhs_scale in 0..=2 {
-                        let lhs = Numeric::new(lhs_mantissa, lhs_scale);
-                        let rhs = Numeric::new(rhs_mantissa, rhs_scale);
-                        assert_eq!(
-                            lhs.try_decimal_div_exact(&rhs),
-                            exhaustive_reference(&lhs, &rhs),
-                            "classification mismatch for {lhs} / {rhs}"
-                        );
+    fn reference_rounded_divide(
+        lhs: &ReferenceDecimal,
+        rhs: &ReferenceDecimal,
+        output_scale: u32,
+        mode: RoundingMode,
+    ) -> Result<ReferenceDecimal, NumericOperationError> {
+        if output_scale > MAX_DECIMAL_SCALE {
+            return Err(NumericOperationError::InvalidScale);
+        }
+        let (numerator, denominator) = reference_reduced_ratio(lhs, rhs)?;
+        let scaled = numerator * reference_pow10(output_scale);
+        let magnitude = scaled.abs();
+        let mut quotient = &magnitude / &denominator;
+        let remainder = &magnitude % &denominator;
+        let negative = scaled.is_negative();
+        let increment = if remainder.is_zero() {
+            false
+        } else {
+            match mode {
+                RoundingMode::TowardZero => false,
+                RoundingMode::AwayFromZero => true,
+                RoundingMode::Floor => negative,
+                RoundingMode::Ceil => !negative,
+                RoundingMode::NearestEven
+                | RoundingMode::NearestAway
+                | RoundingMode::NearestTowardZero => {
+                    match (&remainder * ReferenceInt::from(2_u8)).cmp(&denominator) {
+                        Ordering::Less => false,
+                        Ordering::Greater => true,
+                        Ordering::Equal => match mode {
+                            RoundingMode::NearestEven => {
+                                !(&quotient % ReferenceInt::from(2_u8)).is_zero()
+                            }
+                            RoundingMode::NearestAway => true,
+                            RoundingMode::NearestTowardZero => false,
+                            _ => unreachable!("matched a nearest rounding mode"),
+                        },
                     }
                 }
+            }
+        };
+        if increment {
+            quotient += ReferenceInt::one();
+        }
+        if negative {
+            quotient = -quotient;
+        }
+        reference_normalize(quotient, output_scale)
+    }
+
+    fn reference_result(
+        result: Result<Numeric, NumericOperationError>,
+    ) -> Result<ReferenceDecimal, NumericOperationError> {
+        result.map(|value| ReferenceDecimal::read(&value))
+    }
+
+    fn reference_class_result(
+        result: Result<ExactDivisionClass, NumericOperationError>,
+    ) -> Result<ReferenceExactClass, NumericOperationError> {
+        result.map(|class| match class {
+            ExactDivisionClass::Representable { minimum_scale } => {
+                ReferenceExactClass::Representable { minimum_scale }
+            }
+            ExactDivisionClass::Repeating => ReferenceExactClass::Repeating,
+            ExactDivisionClass::ScaleOverflow => ReferenceExactClass::ScaleOverflow,
+        })
+    }
+
+    #[test]
+    fn randomized_decimal_arithmetic_matches_independent_rational_reference() {
+        const ROUNDING_MODES: [RoundingMode; 7] = [
+            RoundingMode::TowardZero,
+            RoundingMode::AwayFromZero,
+            RoundingMode::Floor,
+            RoundingMode::Ceil,
+            RoundingMode::NearestEven,
+            RoundingMode::NearestAway,
+            RoundingMode::NearestTowardZero,
+        ];
+
+        // Fixed xorshift seed makes failures reproducible without coupling the
+        // oracle to a random-number crate or host entropy.
+        let mut random = 0x6a09_e667_f3bc_c909_u64;
+        let mut next = || {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            random
+        };
+
+        for case in 0..2_048 {
+            let lhs_mantissa =
+                i64::try_from(next() % 2_000_001).expect("bounded sample") - 1_000_000;
+            let rhs_mantissa =
+                i64::try_from(next() % 2_000_001).expect("bounded sample") - 1_000_000;
+            let lhs_scale = u32::try_from(next() % 29).expect("bounded scale");
+            let rhs_scale = u32::try_from(next() % 29).expect("bounded scale");
+            let output_scale = u32::try_from(next() % 29).expect("bounded scale");
+            let lhs = Numeric::new(lhs_mantissa, lhs_scale);
+            let rhs = Numeric::new(rhs_mantissa, rhs_scale);
+            let lhs_reference = ReferenceDecimal::read(&lhs);
+            let rhs_reference = ReferenceDecimal::read(&rhs);
+            let context = format!("case={case}, lhs={lhs}, rhs={rhs}, output_scale={output_scale}");
+
+            assert_eq!(
+                reference_result(lhs.try_decimal_add(&rhs)),
+                reference_add_or_sub(&lhs_reference, &rhs_reference, false),
+                "add: {context}"
+            );
+            assert_eq!(
+                reference_result(lhs.try_decimal_sub(&rhs)),
+                reference_add_or_sub(&lhs_reference, &rhs_reference, true),
+                "subtract: {context}"
+            );
+            assert_eq!(
+                reference_result(lhs.try_decimal_mul(&rhs)),
+                reference_multiply(&lhs_reference, &rhs_reference),
+                "multiply: {context}"
+            );
+            assert_eq!(
+                reference_class_result(lhs.classify_exact_division(&rhs)),
+                reference_exact_class(&lhs_reference, &rhs_reference),
+                "exact classification: {context}"
+            );
+            assert_eq!(
+                reference_result(lhs.try_decimal_div_exact(&rhs)),
+                reference_exact_divide(&lhs_reference, &rhs_reference),
+                "exact division: {context}"
+            );
+            for mode in ROUNDING_MODES {
+                assert_eq!(
+                    reference_result(lhs.try_decimal_div_round(&rhs, output_scale, mode)),
+                    reference_rounded_divide(&lhs_reference, &rhs_reference, output_scale, mode,),
+                    "rounded division ({mode:?}): {context}"
+                );
             }
         }
     }

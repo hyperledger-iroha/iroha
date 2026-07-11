@@ -479,6 +479,17 @@ arithmetic implementation as runtime execution.
 
 Intentional modular arithmetic is written with explicit operations such as `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and `math::wrapping_neg`. Ordinary operators never silently wrap.
 
+```text
+math::wrapping_neg(value: int) -> int
+math::wrapping_add(left: int, right: int) -> int
+math::wrapping_sub(left: int, right: int) -> int
+math::wrapping_mul(left: int, right: int) -> int
+```
+
+The binary forms are named-only. These are the complete V1 modular-arithmetic
+APIs; the corresponding flat names and all generic `numeric::*` helpers are
+retired source spellings.
+
 `int` is the signed range `-2^511..=2^511-1`; its compact encoding does not
 change its semantic bounds. Division truncates toward zero, and remainder has
 the dividend's sign. `min_int / -1` and the paired remainder operation fail
@@ -500,6 +511,19 @@ are rejected rather than treated as compatibility aliases.
 Rounded operations never round implicitly. Invalid constant arithmetic is
 diagnosed during compilation; runtime failures use the same stable numeric
 faults.
+
+The exact rounded source surface is:
+
+```text
+decimal.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> decimal
+quantity.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> quantity
+quantity.ratio_round(divisor: quantity, scale: int, mode: rounding-mode) -> decimal
+```
+
+All three arguments are named-only. `rounding-mode` denotes one of the seven
+`Rounding::*` paths listed above, not an integer tag or a user-declarable type.
+The scale is checked in `0..=28`; `div_round` is not an `int` method, and
+`ratio_round` is not a `decimal` method.
 
 ## Bounded lists
 

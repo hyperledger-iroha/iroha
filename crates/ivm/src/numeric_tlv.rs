@@ -15,6 +15,8 @@ use iroha_primitives::{
     },
 };
 
+pub use iroha_primitives::numeric_abi::MAX_QUANTITY_ENVELOPE_BYTES_V1;
+
 use crate::{
     IVM, PointerType, VMError, numeric::PointerAbiFaultV1, numeric_gas,
     syscall_metering::SyscallMeteringPhase,
@@ -170,7 +172,7 @@ fn snapshot_metered(
     )?;
     vm.charge_syscall_stage(
         SyscallMeteringPhase::PayloadHash,
-        numeric_gas::POINTER_HASH_BYTES,
+        numeric_gas::payload_hash_gas(frame_len)?,
     )?;
     let total_u64 = u64::try_from(total).map_err(|_| VMError::GasCostOverflow)?;
     vm.ensure_owned_tlv_range(pointer, total_u64)
@@ -211,8 +213,7 @@ fn snapshot_metered(
     // now; after structure succeeds, the typed decoder separately debits the
     // body scan and any scaled-mantissa canonicality probe immediately before
     // each begins.
-    let (decode_work, _) =
-        numeric_gas::numeric_frame_validation_phase_work(frame_len)?;
+    let (decode_work, _) = numeric_gas::numeric_frame_validation_phase_work(frame_len)?;
     vm.charge_syscall_stage(
         SyscallMeteringPhase::NoritoDecode,
         numeric_gas::work_gas(decode_work)?,
@@ -268,10 +269,22 @@ fn exact_envelope_len(frame_len: usize) -> Result<usize, VMError> {
         .ok_or(VMError::GasCostOverflow)
 }
 
-fn charge_output(vm: &mut IVM, envelope_len: usize) -> Result<(), VMError> {
+fn charge_output_length_probe(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
+    let magnitude_bits = u64::try_from(value.bit_len()).map_err(|_| VMError::GasCostOverflow)?;
+    // One conservative sign bit covers every minimal two's-complement length,
+    // including positive sign-extension boundaries. Negative powers of two
+    // may need one limb less, which is a deliberate bounded overcharge.
+    let limbs = numeric_gas::limbs_for_bits(numeric_gas::checked_add(magnitude_bits, 1)?);
     vm.charge_syscall_stage(
         SyscallMeteringPhase::OutputSerialization,
-        numeric_gas::checked_bytes(envelope_len)?,
+        numeric_gas::work_gas(numeric_gas::finalization_work(limbs))?,
+    )
+}
+
+fn charge_output(vm: &mut IVM, envelope_len: usize, frame_len: usize) -> Result<(), VMError> {
+    vm.charge_syscall_stage(
+        SyscallMeteringPhase::OutputSerialization,
+        numeric_gas::output_serialization_gas(envelope_len, frame_len)?,
     )
 }
 
@@ -362,8 +375,10 @@ pub fn decode_quantity_metered(vm: &mut IVM, pointer: u64) -> Result<Quantity, V
 
 /// Debit, serialize, and allocate a staged integer result.
 pub fn allocate_int_metered(vm: &mut IVM, value: &BigInt) -> Result<u64, VMError> {
-    let envelope_len = exact_envelope_len(exact_int_frame_len(value)?)?;
-    charge_output(vm, envelope_len)?;
+    charge_output_length_probe(vm, value)?;
+    let frame_len = exact_int_frame_len(value)?;
+    let envelope_len = exact_envelope_len(frame_len)?;
+    charge_output(vm, envelope_len, frame_len)?;
     let envelope = encode_int(value)?;
     debug_assert_eq!(envelope.len(), envelope_len);
     vm.alloc_host_tlv(&envelope)
@@ -371,8 +386,10 @@ pub fn allocate_int_metered(vm: &mut IVM, value: &BigInt) -> Result<u64, VMError
 
 /// Debit, serialize, and allocate a staged decimal result.
 pub fn allocate_decimal_metered(vm: &mut IVM, value: &Numeric) -> Result<u64, VMError> {
-    let envelope_len = exact_envelope_len(exact_scaled_frame_len(value)?)?;
-    charge_output(vm, envelope_len)?;
+    charge_output_length_probe(vm, value.mantissa())?;
+    let frame_len = exact_scaled_frame_len(value)?;
+    let envelope_len = exact_envelope_len(frame_len)?;
+    charge_output(vm, envelope_len, frame_len)?;
     let envelope = encode_decimal(value)?;
     debug_assert_eq!(envelope.len(), envelope_len);
     vm.alloc_host_tlv(&envelope)
@@ -380,8 +397,10 @@ pub fn allocate_decimal_metered(vm: &mut IVM, value: &Numeric) -> Result<u64, VM
 
 /// Debit, serialize, and allocate a staged quantity result.
 pub fn allocate_quantity_metered(vm: &mut IVM, value: &Quantity) -> Result<u64, VMError> {
-    let envelope_len = exact_envelope_len(exact_scaled_frame_len(value.as_numeric())?)?;
-    charge_output(vm, envelope_len)?;
+    charge_output_length_probe(vm, value.mantissa())?;
+    let frame_len = exact_scaled_frame_len(value.as_numeric())?;
+    let envelope_len = exact_envelope_len(frame_len)?;
+    charge_output(vm, envelope_len, frame_len)?;
     let envelope = encode_quantity(value)?;
     debug_assert_eq!(envelope.len(), envelope_len);
     vm.alloc_host_tlv(&envelope)
@@ -412,6 +431,13 @@ mod tests {
     #[test]
     fn outer_envelope_attacks_have_stable_precedence() {
         let envelope = encode_int(&BigInt::one()).expect("envelope");
+
+        assert!(matches!(
+            decode_int_bytes(&envelope[..OUTER_HEADER_BYTES - 1]),
+            Err(VMError::PointerAbiFault(
+                PointerAbiFaultV1::TruncatedEnvelope
+            ))
+        ));
 
         let mut unknown = envelope.clone();
         unknown[..2].copy_from_slice(&0xffff_u16.to_be_bytes());
@@ -446,6 +472,26 @@ mod tests {
             decode_int_bytes(&bad_version),
             Err(VMError::PointerAbiFault(
                 PointerAbiFaultV1::InvalidEnvelopeVersion
+            ))
+        ));
+
+        let mut oversized = envelope.clone();
+        oversized[3..7].copy_from_slice(
+            &u32::try_from(MAX_INT_FRAME_BYTES_V1 + 1)
+                .expect("bounded oversized length")
+                .to_be_bytes(),
+        );
+        assert!(matches!(
+            decode_int_bytes(&oversized),
+            Err(VMError::PointerAbiFault(PointerAbiFaultV1::OversizedLength))
+        ));
+
+        let mut trailing = envelope.clone();
+        trailing.push(0);
+        assert!(matches!(
+            decode_int_bytes(&trailing),
+            Err(VMError::PointerAbiFault(
+                PointerAbiFaultV1::TruncatedEnvelope
             ))
         ));
 

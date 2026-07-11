@@ -2,6 +2,9 @@ package org.hyperledger.iroha.android.offline;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -12,66 +15,29 @@ import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 
 public final class OfflineJsonParser {
-  private static final String[] REMOVED_KAGEMUSHA_ABI7_READINESS_FIELDS = {
-    "offline_kagemusha_abi7",
-    "offline_kagemusha_abi7_mode",
-    "offline_kagemusha_abi7_bridge_abi_version",
-    "offline_kagemusha_abi7_circuit_id",
-    "offline_kagemusha_abi7_artifacts"
-  };
-
+  private static final BigInteger U64_MAX =
+      BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
   private OfflineJsonParser() {}
 
   public static OfflineReadiness parseOfflineReadiness(final byte[] payload) {
     final Object root = parse(payload);
     final Map<String, Object> object = expectObject(root, "root");
-    rejectRemovedKagemushaAbi7ReadinessFields(object);
+    final List<Object> rawBlockers = asList(object.get("blockers"), "blockers");
+    final List<OfflineReadinessBlocker> blockers = new ArrayList<>(rawBlockers.size());
+    for (int i = 0; i < rawBlockers.size(); i++) {
+      final String path = "blockers[" + i + "]";
+      final Map<String, Object> blocker = expectObject(rawBlockers.get(i), path);
+      blockers.add(
+          new OfflineReadinessBlocker(
+              asExactReadinessString(blocker.get("code"), path + ".code"),
+              asExactReadinessString(blocker.get("message"), path + ".message")));
+    }
     return new OfflineReadiness(
-        asOptionalBoolean(object.get("offline_note"), "offline_note", false),
-        asOptionalBoolean(object.get("offline_one_use_keys"), "offline_one_use_keys", false),
-        asOptionalBoolean(
-            object.get("offline_recursive_note_proof"), "offline_recursive_note_proof", false),
-        asOptionalBoolean(object.get("offline_fountain_qr"), "offline_fountain_qr", false),
-        asOptionalBoolean(object.get("offline_sync_optional"), "offline_sync_optional", false),
-        asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
-        asBoolean(
-            object.get("offline_kagemusha_recursive_compact_available"),
-            "offline_kagemusha_recursive_compact_available"),
-        asPresentReadinessString(
-            object.get("offline_kagemusha_recursive_compact_mode"),
-            "offline_kagemusha_recursive_compact_mode"),
-        Integer.valueOf(asPresentReadinessInteger(
-            object.get("offline_kagemusha_recursive_compact_required_native_bridge_abi_version"),
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version")),
-        asPresentReadinessString(
-            object.get("offline_kagemusha_recursive_compact_circuit_id"),
-            "offline_kagemusha_recursive_compact_circuit_id"),
-        asBoolean(
-            object.get("offline_kagemusha_recursive_compact_artifacts_available"),
-            "offline_kagemusha_recursive_compact_artifacts_available"));
-  }
-
-  public static OfflineV2Readiness parseOfflineV2Readiness(final byte[] payload) {
-    final Object root = parse(payload);
-    final Map<String, Object> object = expectObject(root, "root");
-    rejectRemovedKagemushaAbi7ReadinessFields(object);
-    return new OfflineV2Readiness(
-        asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
-        asBoolean(
-            object.get("offline_kagemusha_recursive_compact_available"),
-            "offline_kagemusha_recursive_compact_available"),
-        asPresentReadinessString(
-            object.get("offline_kagemusha_recursive_compact_mode"),
-            "offline_kagemusha_recursive_compact_mode"),
-        Integer.valueOf(asPresentReadinessInteger(
-            object.get("offline_kagemusha_recursive_compact_required_native_bridge_abi_version"),
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version")),
-        asPresentReadinessString(
-            object.get("offline_kagemusha_recursive_compact_circuit_id"),
-            "offline_kagemusha_recursive_compact_circuit_id"),
-        asBoolean(
-            object.get("offline_kagemusha_recursive_compact_artifacts_available"),
-            "offline_kagemusha_recursive_compact_artifacts_available"));
+        asExactReadinessString(object.get("asset_definition_id"), "asset_definition_id"),
+        asReadinessU64(object.get("evaluated_block_height"), "evaluated_block_height"),
+        asExactLowercaseHash(object.get("evaluated_block_hash"), "evaluated_block_hash"),
+        asBoolean(object.get("ready"), "ready"),
+        blockers);
   }
 
   public static String canonicalJson(final byte[] payload) {
@@ -92,7 +58,19 @@ public final class OfflineJsonParser {
   }
 
   private static Object parse(final byte[] payload) {
-    final String json = new String(payload, StandardCharsets.UTF_8).trim();
+    final String json;
+    try {
+      json =
+          StandardCharsets.UTF_8
+              .newDecoder()
+              .onMalformedInput(CodingErrorAction.REPORT)
+              .onUnmappableCharacter(CodingErrorAction.REPORT)
+              .decode(ByteBuffer.wrap(payload))
+              .toString()
+              .trim();
+    } catch (final CharacterCodingException error) {
+      throw new IllegalStateException("Offline JSON payload must be valid UTF-8", error);
+    }
     if (json.isEmpty()) {
       throw new IllegalStateException("Empty JSON payload");
     }
@@ -114,18 +92,7 @@ public final class OfflineJsonParser {
     return bool.booleanValue();
   }
 
-  private static boolean asOptionalBoolean(
-      final Object value, final String path, final boolean defaultValue) {
-    if (value == null) {
-      return defaultValue;
-    }
-    if (!(value instanceof Boolean bool)) {
-      throw new IllegalStateException(path + " must be a boolean");
-    }
-    return bool.booleanValue();
-  }
-
-  private static String asPresentReadinessString(final Object value, final String path) {
+  private static String asExactReadinessString(final Object value, final String path) {
     if (!(value instanceof String string)) {
       throw new IllegalStateException(path + " must be a string");
     }
@@ -135,24 +102,27 @@ public final class OfflineJsonParser {
     return string;
   }
 
-  private static int asPresentReadinessInteger(final Object value, final String path) {
-    if (value instanceof String string) {
-      if (string.isEmpty() || !string.equals(string.trim())) {
-        throw new IllegalStateException(path + " must be an exact integer string");
+  private static String asExactLowercaseHash(final Object value, final String path) {
+    final String string = asExactReadinessString(value, path);
+    if (string.length() != 64) {
+      throw new IllegalStateException(path + " must be exact lowercase 32-byte hexadecimal");
+    }
+    for (int index = 0; index < string.length(); index++) {
+      final char character = string.charAt(index);
+      if (!((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'))) {
+        throw new IllegalStateException(path + " must be exact lowercase 32-byte hexadecimal");
       }
-      if (!string.matches("[1-9][0-9]*")) {
-        throw new IllegalStateException(path + " must be an exact integer string");
-      }
-      try {
-        return asPositiveReadinessInteger(new BigInteger(string), path);
-      } catch (final NumberFormatException ex) {
-        throw new IllegalStateException(path + " must be an integer", ex);
-      }
-    } else if (value instanceof BigInteger bigInteger) {
-      return asPositiveReadinessInteger(bigInteger, path);
+    }
+    return string;
+  }
+
+  private static BigInteger asReadinessU64(final Object value, final String path) {
+    final BigInteger integer;
+    if (value instanceof BigInteger bigInteger) {
+      integer = bigInteger;
     } else if (value instanceof BigDecimal bigDecimal) {
       try {
-        return asPositiveReadinessInteger(bigDecimal.toBigIntegerExact(), path);
+        integer = bigDecimal.toBigIntegerExact();
       } catch (final ArithmeticException ex) {
         throw new IllegalStateException(path + " must be an integer", ex);
       }
@@ -160,42 +130,16 @@ public final class OfflineJsonParser {
         || value instanceof Short
         || value instanceof Integer
         || value instanceof Long) {
-      return asPositiveReadinessInteger(((Number) value).longValue(), path);
-    } else {
+      integer = BigInteger.valueOf(((Number) value).longValue());
+    } else if (value instanceof Float || value instanceof Double) {
       throw new IllegalStateException(path + " must be an integer");
+    } else {
+      throw new IllegalStateException(path + " must be a JSON integer number");
     }
-  }
-
-  private static int asPositiveReadinessInteger(final BigInteger value, final String path) {
-    if (value.signum() <= 0) {
-      throw new IllegalStateException(path + " must be a positive integer");
+    if (integer.signum() < 0 || integer.compareTo(U64_MAX) > 0) {
+      throw new IllegalStateException(path + " must fit in an unsigned 64-bit integer");
     }
-    try {
-      return value.intValueExact();
-    } catch (final ArithmeticException ex) {
-      throw new IllegalStateException(path + " must fit in signed 32-bit range", ex);
-    }
-  }
-
-  private static int asPositiveReadinessInteger(final long value, final String path) {
-    if (value <= 0) {
-      throw new IllegalStateException(path + " must be a positive integer");
-    }
-    try {
-      return Math.toIntExact(value);
-    } catch (final ArithmeticException ex) {
-      throw new IllegalStateException(path + " must fit in signed 32-bit range", ex);
-    }
-  }
-
-  private static void rejectRemovedKagemushaAbi7ReadinessFields(
-      final Map<String, Object> object) {
-    for (final String field : REMOVED_KAGEMUSHA_ABI7_READINESS_FIELDS) {
-      if (object.containsKey(field)) {
-        throw new IllegalStateException(
-            field + " is not supported; use offline_kagemusha_recursive_compact_*");
-      }
-    }
+    return integer;
   }
 
   private static OfflineTransferList.OfflineTransferItem parseTransferItem(

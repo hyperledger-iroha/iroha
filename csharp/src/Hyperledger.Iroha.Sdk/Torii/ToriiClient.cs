@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using Hyperledger.Iroha.Http;
+using Hyperledger.Iroha.Offline;
 using Hyperledger.Iroha.Queries;
 using Hyperledger.Iroha.Transactions;
 using Hyperledger.Iroha.Zk;
@@ -480,7 +481,7 @@ public sealed partial class ToriiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         var response = await PostOptionalAsync<ToriiAccountAliasLookupRequest, ToriiAccountAliasLookupResponse>(
-            "/v1/aliases/by_account",
+            "/v1/aliases/by-account",
             new ToriiAccountAliasLookupRequest
             {
                 AccountId = ToriiAccountFaucetPow.RequireExactAccountId(accountId, nameof(accountId)),
@@ -550,7 +551,7 @@ public sealed partial class ToriiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         var response = await PostOptionalAsync<ToriiAliasResolveIndexRequest, ToriiAccountAliasIndexResolution>(
-            "/v1/aliases/resolve_index",
+            "/v1/aliases/resolve-index",
             new ToriiAliasResolveIndexRequest
             {
                 Index = index,
@@ -1290,22 +1291,19 @@ public sealed partial class ToriiClient : IDisposable
 
     public Task<HttpResponseMessage> OpenEventSseAsync(
         string? query = null,
-        string? lastEventId = null,
         CancellationToken cancellationToken = default)
     {
-        return OpenSseAsync(
+        return OpenLiveSseAsync(
             "/v1/events/sse",
             NormalizeEventSseQuery(query),
-            lastEventId,
-            cancellationToken);
+            cancellationToken: cancellationToken);
     }
 
     public async IAsyncEnumerable<ToriiServerSentEvent> StreamEventsAsync(
         string? query = null,
-        string? lastEventId = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        using var response = await OpenEventSseAsync(query, lastEventId, cancellationToken);
+        using var response = await OpenEventSseAsync(query, cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
 
         await foreach (var sseEvent in ReadServerSentEventsAsync(stream, cancellationToken))
@@ -1316,11 +1314,11 @@ public sealed partial class ToriiClient : IDisposable
 
     public async IAsyncEnumerable<ToriiPipelineEvent> StreamPipelineEventsAsync(
         string? query = null,
-        string? lastEventId = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await foreach (var sseEvent in StreamEventsAsync(query, lastEventId, cancellationToken))
+        await foreach (var sseEvent in StreamEventsAsync(query, cancellationToken))
         {
+            ThrowIfTerminalStreamError(sseEvent, "pipeline SSE payload");
             if (sseEvent.IsComment || sseEvent.RawData is null)
             {
                 continue;
@@ -1351,11 +1349,11 @@ public sealed partial class ToriiClient : IDisposable
 
     public async IAsyncEnumerable<ToriiProofEvent> StreamProofEventsAsync(
         string? query = null,
-        string? lastEventId = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await foreach (var sseEvent in StreamEventsAsync(query, lastEventId, cancellationToken))
+        await foreach (var sseEvent in StreamEventsAsync(query, cancellationToken))
         {
+            ThrowIfTerminalStreamError(sseEvent, "proof SSE payload");
             if (sseEvent.IsComment || sseEvent.RawData is null)
             {
                 continue;
@@ -1518,6 +1516,180 @@ public sealed partial class ToriiClient : IDisposable
             $"pipeline transaction status response for `{response.RequestMessage?.RequestUri}`",
             cancellationToken);
         return ParsePipelineTransactionStatus(document.RootElement, normalizedHash);
+    }
+
+    /// <summary>Evaluate offline-payment readiness for one asset definition.</summary>
+    public async Task<OfflineReadiness> GetOfflineReadinessAsync(
+        string assetDefinitionId,
+        CancellationToken cancellationToken = default)
+    {
+        var exactAssetDefinitionId = NormalizeExactValue(assetDefinitionId, nameof(assetDefinitionId));
+        var query = BuildQueryString(
+        [
+            new KeyValuePair<string, string?>("asset_definition_id", exactAssetDefinitionId),
+        ]);
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            OfflineApiRoutes.Readiness,
+            query,
+            content: null,
+            accept: "application/json",
+            cancellationToken: cancellationToken);
+        RequireResponseMediaType(response, "application/json", "Offline readiness");
+        return await DeserializeAsync<OfflineReadiness>(response, cancellationToken);
+    }
+
+    /// <summary>Submit a canonical top-up request as a direct typed Norito body.</summary>
+    public Task<OfflineOperationReference> SubmitOfflineTopUpAsync(
+        OfflineTopUpRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return SubmitOfflineOperationAsync(
+            OfflineApiRoutes.TopUp,
+            request.OperationId,
+            request.NoritoArchive(),
+            OfflineOperationKind.TopUp,
+            cancellationToken);
+    }
+
+    /// <summary>Submit a canonical redemption request as a direct typed Norito body.</summary>
+    public Task<OfflineOperationReference> SubmitOfflineRedeemAsync(
+        OfflineRedeemRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return SubmitOfflineOperationAsync(
+            OfflineApiRoutes.Redeem,
+            request.OperationId,
+            request.NoritoArchive(),
+            OfflineOperationKind.Redeem,
+            cancellationToken);
+    }
+
+    /// <summary>Fetch the current tagged state of an Offline operation.</summary>
+    public async Task<OfflineOperationStatus> GetOfflineOperationStatusAsync(
+        string operationId,
+        CancellationToken cancellationToken = default)
+    {
+        var exactOperationId = OfflineApiRoutes.Operation(operationId);
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            exactOperationId,
+            content: null,
+            accept: "application/x-norito",
+            cancellationToken: cancellationToken);
+        RequireExactStatus(response, HttpStatusCode.OK, "Offline operation status");
+        RequireResponseMediaType(response, "application/x-norito", "Offline operation status");
+        var archive = await ReadBoundedOfflineArchiveAsync(response.Content, cancellationToken);
+        var status = OfflineOperationCodec.DecodeStatus(archive);
+        if (!string.Equals(status.OperationId, operationId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Offline operation status operation_id does not match the requested resource.");
+        }
+        return status;
+    }
+
+    private async Task<OfflineOperationReference> SubmitOfflineOperationAsync(
+        string path,
+        string operationId,
+        byte[] archive,
+        OfflineOperationKind expectedKind,
+        CancellationToken cancellationToken)
+    {
+        using var content = CreateBinaryContent(archive, "application/x-norito");
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            path,
+            content: content,
+            accept: "application/x-norito",
+            configureRequest: request =>
+            {
+                if (!request.Headers.TryAddWithoutValidation("Idempotency-Key", operationId))
+                {
+                    throw new InvalidOperationException("Unable to set the Offline Idempotency-Key header.");
+                }
+            },
+            cancellationToken: cancellationToken);
+        RequireExactStatus(response, HttpStatusCode.Accepted, "Offline operation submission");
+        RequireResponseMediaType(response, "application/x-norito", "Offline operation submission");
+        var responseArchive = await ReadBoundedOfflineArchiveAsync(response.Content, cancellationToken);
+        var reference = OfflineOperationCodec.DecodeReference(responseArchive);
+        if (!string.Equals(reference.OperationId, operationId, StringComparison.Ordinal)
+            || reference.Kind != expectedKind
+            || reference.State != OfflineOperationState.Pending)
+        {
+            throw new InvalidDataException(
+                "Offline operation reference does not match the submitted command.");
+        }
+
+        var location = response.Headers.Location?.OriginalString;
+        if (!string.Equals(location, reference.StatusUri, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Offline operation response Location does not match its typed status_uri.");
+        }
+        return reference;
+    }
+
+    private static void RequireExactStatus(
+        HttpResponseMessage response,
+        HttpStatusCode expected,
+        string context)
+    {
+        if (response.StatusCode != expected)
+        {
+            throw new InvalidDataException(
+                $"{context} returned HTTP {(int)response.StatusCode}; expected {(int)expected}.");
+        }
+    }
+
+    private static void RequireResponseMediaType(
+        HttpResponseMessage response,
+        string expected,
+        string context)
+    {
+        var actual = response.Content.Headers.ContentType?.MediaType;
+        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"{context} response Content-Type must be {expected}.");
+        }
+    }
+
+    private static async Task<byte[]> ReadBoundedOfflineArchiveAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        const int bufferSize = 81_920;
+        var maximum = KagemushaRecursiveSpendNative.NativeArchiveMaxBytes;
+        if (content.Headers.ContentLength is { } contentLength
+            && (contentLength < 0 || contentLength > maximum))
+        {
+            throw new InvalidDataException(
+                $"Offline Norito response must not exceed {maximum} bytes.");
+        }
+
+        await using var input = await content.ReadAsStreamAsync(cancellationToken);
+        using var output = content.Headers.ContentLength is > 0
+            ? new MemoryStream((int)Math.Min(content.Headers.ContentLength.Value, bufferSize))
+            : new MemoryStream();
+        var buffer = new byte[bufferSize];
+        while (true)
+        {
+            var read = await input.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+            {
+                return output.ToArray();
+            }
+            if (output.Length + read > maximum)
+            {
+                throw new InvalidDataException(
+                    $"Offline Norito response must not exceed {maximum} bytes.");
+            }
+            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+        }
     }
 
     public async Task<JsonDocument> PostJsonDocumentAsync<TRequest>(
@@ -2248,6 +2420,84 @@ public sealed partial class ToriiClient : IDisposable
         {
             throw new JsonException($"{context}.data must be valid non-null JSON.", exception);
         }
+    }
+
+    private static void ThrowIfTerminalStreamError(ToriiServerSentEvent sseEvent, string context)
+    {
+        if (!string.Equals(sseEvent.Event, "stream_error", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var payload = RequireSseJsonData(sseEvent, $"{context} terminal stream error");
+        if (payload is not JsonObject payloadObject)
+        {
+            throw new JsonException($"{context} terminal stream error.data must be a JSON object.");
+        }
+
+        string[] expectedProperties = ["code", "message", "dropped_messages", "replay_available"];
+        var unexpectedProperty = payloadObject
+            .Select(static property => property.Key)
+            .FirstOrDefault(property => !expectedProperties.Contains(property, StringComparer.Ordinal));
+        if (unexpectedProperty is not null)
+        {
+            throw new JsonException(
+                $"{context} terminal stream error.{unexpectedProperty} is not part of the v1 stream error schema.");
+        }
+
+        if (payloadObject.Count != expectedProperties.Length)
+        {
+            var missingProperty = expectedProperties.First(property => !payloadObject.ContainsKey(property));
+            throw new JsonException($"{context} terminal stream error.{missingProperty} is required.");
+        }
+
+        var code = RequireTerminalStreamErrorString(payloadObject, "code", context, token: true);
+        var message = RequireTerminalStreamErrorString(payloadObject, "message", context, token: false);
+
+        var droppedNode = payloadObject["dropped_messages"];
+        ulong? droppedMessages = null;
+        if (droppedNode is not null)
+        {
+            if (droppedNode is not JsonValue droppedValue || !droppedValue.TryGetValue<ulong>(out var parsedDropped))
+            {
+                throw new JsonException(
+                    $"{context} terminal stream error.dropped_messages must be null or an unsigned integer.");
+            }
+
+            droppedMessages = parsedDropped;
+        }
+
+        if (payloadObject["replay_available"] is not JsonValue replayValue
+            || !replayValue.TryGetValue<bool>(out var replayAvailable))
+        {
+            throw new JsonException(
+                $"{context} terminal stream error.replay_available must be a boolean.");
+        }
+
+        throw new ToriiStreamException(code, message, droppedMessages, replayAvailable);
+    }
+
+    private static string RequireTerminalStreamErrorString(
+        JsonObject payload,
+        string propertyName,
+        string context,
+        bool token)
+    {
+        if (payload[propertyName] is not JsonValue value || !value.TryGetValue<string>(out var text))
+        {
+            throw new JsonException($"{context} terminal stream error.{propertyName} must be a string.");
+        }
+
+        if (string.IsNullOrEmpty(text)
+            || !string.Equals(text.Trim(), text, StringComparison.Ordinal)
+            || text.Any(char.IsControl)
+            || (token && text.Any(char.IsWhiteSpace)))
+        {
+            var shape = token ? "a non-empty exact token" : "non-empty exact text";
+            throw new JsonException($"{context} terminal stream error.{propertyName} must be {shape}.");
+        }
+
+        return text;
     }
 
     private static bool TryReadSseStringProperty(
@@ -4441,6 +4691,20 @@ public sealed partial class ToriiClient : IDisposable
         }
     }
 
+    private Task<HttpResponseMessage> OpenLiveSseAsync(
+        string path,
+        string? query = null,
+        CancellationToken cancellationToken = default)
+    {
+        return SendAsync(
+            HttpMethod.Get,
+            path,
+            query,
+            content: null,
+            accept: "text/event-stream",
+            cancellationToken: cancellationToken);
+    }
+
     private Task<HttpResponseMessage> OpenSseAsync(
         string path,
         string? query = null,
@@ -5688,7 +5952,6 @@ public sealed partial class ToriiClient : IDisposable
     {
         var builder = new StringBuilder("/sorafs/cid/");
         builder.Append(EncodeSoraFsCidPathSegment(cid, nameof(cid)));
-        builder.Append('/');
 
         if (relativePath is null || relativePath.Length == 0)
         {
@@ -5717,6 +5980,7 @@ public sealed partial class ToriiClient : IDisposable
         }
 
         var encodedSegments = segments.Select(Uri.EscapeDataString);
+        builder.Append('/');
         builder.Append(string.Join('/', encodedSegments));
         return builder.ToString();
     }

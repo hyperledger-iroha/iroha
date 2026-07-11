@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
-source_last_modified: "2026-07-11T23:16:35+00:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
 
@@ -45,8 +45,8 @@ Sumeragi v2 的应用路径验证该制品并将其写为不可变的 Kura sidec
 区块及其 sidecar，不会从可变的当前 world state 重建历史 PoP 或证书。sidecar 缺失、
 损坏、冲突或无法验证时一律关闭失败；证明不受近期内存历史窗口限制。
 
-无状态验证器严格核对版本、链、高度、header 哈希、上下文、subject 和 CommitQC，并验证
-制品中的全部 PoP。签名者索引必须严格递增且在范围内；CommitQC 必须同时满足验证器数量
+无状态验证器严格核对版本、链、高度、header 哈希、规范前驱和 view、上下文、subject 和
+CommitQC，并验证制品中的全部 PoP。签名者索引必须严格递增且在范围内；CommitQC 必须同时满足验证器数量
 和投票权重两个 quorum，并且针对精确 Sumeragi v2 投票 preimage 的 BLS 聚合签名必须有效。
 
 ## 信任锚与后继验证
@@ -63,8 +63,7 @@ checkpoint context/artifact 开始，验证到消息制品为止的每个紧邻�
 ## Bundle 与 API
 
 `BridgeFinalityBundle` 恰好为 `{ commitment, finality_proof }`。commitment 为
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }`。可选 MMR 字段仅是承诺，不是最终性或包含证明。
+`{ chain_id, height_context_id, block_height, block_hash }`。
 
 - `GET /v1/bridge/finality/{height}` 返回 `BridgeFinalityProof`；
 - `GET /v1/bridge/finality/bundle/{height}` 返回 `BridgeFinalityBundle`。

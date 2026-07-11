@@ -42,9 +42,7 @@ impl ConstantNumericError {
     pub(crate) const fn code(self) -> &'static str {
         match self {
             Self::Int(BigIntError::Overflow) => "E_INT_OVERFLOW",
-            Self::Numeric(NumericOperationError::MantissaOverflow) => {
-                "E_DECIMAL_MANTISSA_OVERFLOW"
-            }
+            Self::Numeric(NumericOperationError::MantissaOverflow) => "E_DECIMAL_MANTISSA_OVERFLOW",
             Self::Int(BigIntError::DivisionByZero)
             | Self::Numeric(NumericOperationError::DivisionByZero) => "E_DIVISION_BY_ZERO",
             Self::Int(BigIntError::NonCanonical)
@@ -123,14 +121,14 @@ pub(crate) fn evaluate(
     expression: &TypedExpr,
 ) -> Result<Option<ConstantNumeric>, ConstantNumericError> {
     match expression.kind() {
-        ExprKind::IntLiteral(value) => Ok(Some(ConstantNumeric::Int(ensure_int_v1(
-            value.clone(),
-        )?))),
+        ExprKind::IntLiteral(value) => {
+            Ok(Some(ConstantNumeric::Int(ensure_int_v1(value.clone())?)))
+        }
         ExprKind::DecimalLiteral { value, .. } => match expression.ty {
             Type::Decimal => Ok(Some(ConstantNumeric::Decimal(value.clone()))),
-            Type::Quantity => Ok(Some(ConstantNumeric::Quantity(
-                Quantity::try_from_numeric(value.clone())?,
-            ))),
+            Type::Quantity => Ok(Some(ConstantNumeric::Quantity(Quantity::try_from_numeric(
+                value.clone(),
+            )?))),
             _ => Err(ConstantNumericError::InvalidTypedOperation),
         },
         ExprKind::NumericCast { expr } => {
@@ -141,9 +139,9 @@ pub(crate) fn evaluate(
                 (ConstantNumeric::Int(value), Type::Decimal) => {
                     ConstantNumeric::Decimal(Numeric::new(value, 0))
                 }
-                (ConstantNumeric::Int(value), Type::Quantity) => ConstantNumeric::Quantity(
-                    Quantity::try_from_numeric(Numeric::new(value, 0))?,
-                ),
+                (ConstantNumeric::Int(value), Type::Quantity) => {
+                    ConstantNumeric::Quantity(Quantity::try_from_numeric(Numeric::new(value, 0))?)
+                }
                 (ConstantNumeric::Decimal(value), Type::Int) => {
                     ConstantNumeric::Int(value.try_decimal_to_int_exact()?)
                 }
@@ -181,14 +179,12 @@ pub(crate) fn evaluate(
             };
             Ok(Some(value))
         }
-        ExprKind::Binary {
-            op,
-            left,
-            right,
-        } if matches!(
-            op,
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
-        ) => {
+        ExprKind::Binary { op, left, right }
+            if matches!(
+                op,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
+            ) =>
+        {
             let Some(left) = evaluate(left)? else {
                 return Ok(None);
             };
@@ -222,21 +218,15 @@ fn evaluate_binary(
     right: ConstantNumeric,
 ) -> Result<ConstantNumeric, ConstantNumericError> {
     match (left, operation, right) {
-        (ConstantNumeric::Int(left), BinaryOp::Add, ConstantNumeric::Int(right)) => {
-            Ok(ConstantNumeric::Int(ensure_int_v1(
-                left.checked_add(&right)?,
-            )?))
-        }
-        (ConstantNumeric::Int(left), BinaryOp::Sub, ConstantNumeric::Int(right)) => {
-            Ok(ConstantNumeric::Int(ensure_int_v1(
-                left.checked_sub(&right)?,
-            )?))
-        }
-        (ConstantNumeric::Int(left), BinaryOp::Mul, ConstantNumeric::Int(right)) => {
-            Ok(ConstantNumeric::Int(ensure_int_v1(
-                left.checked_mul(&right)?,
-            )?))
-        }
+        (ConstantNumeric::Int(left), BinaryOp::Add, ConstantNumeric::Int(right)) => Ok(
+            ConstantNumeric::Int(ensure_int_v1(left.checked_add(&right)?)?),
+        ),
+        (ConstantNumeric::Int(left), BinaryOp::Sub, ConstantNumeric::Int(right)) => Ok(
+            ConstantNumeric::Int(ensure_int_v1(left.checked_sub(&right)?)?),
+        ),
+        (ConstantNumeric::Int(left), BinaryOp::Mul, ConstantNumeric::Int(right)) => Ok(
+            ConstantNumeric::Int(ensure_int_v1(left.checked_mul(&right)?)?),
+        ),
         (ConstantNumeric::Int(left), BinaryOp::Div, ConstantNumeric::Int(right)) => {
             let (quotient, _) = left.checked_div_rem(&right)?;
             Ok(ConstantNumeric::Int(ensure_int_v1(quotient)?))
@@ -258,11 +248,9 @@ fn evaluate_binary(
         (ConstantNumeric::Decimal(left), BinaryOp::Mul, ConstantNumeric::Decimal(right)) => {
             Ok(ConstantNumeric::Decimal(left.try_decimal_mul(&right)?))
         }
-        (ConstantNumeric::Decimal(left), BinaryOp::Div, ConstantNumeric::Decimal(right)) => {
-            Ok(ConstantNumeric::Decimal(
-                left.try_decimal_div_exact(&right)?,
-            ))
-        }
+        (ConstantNumeric::Decimal(left), BinaryOp::Div, ConstantNumeric::Decimal(right)) => Ok(
+            ConstantNumeric::Decimal(left.try_decimal_div_exact(&right)?),
+        ),
         (ConstantNumeric::Quantity(left), BinaryOp::Add, ConstantNumeric::Quantity(right)) => {
             Ok(ConstantNumeric::Quantity(left.try_add(&right)?))
         }

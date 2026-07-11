@@ -95,7 +95,6 @@ Torii གིས་ ལག་ཆས་གཏང་ནིའི་དོན་ལ�
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 མཁོ་མངགས་འབད་མི་ཚུ་གིས་ `arguments.headers` བརྒྱུད་དེ་ ཁ་སླབ་རེ་རེ་གི་མགོ་ཡིག་ཁ་སྐོང་ཚུ་ཡང་ བཀྲམ་སྤེལ་འབད་ཚུགས།
 `content-length`, `host`, དང་ `connection` ཚུ་ `arguments.headers` ལས་ སྣང་མེད་བཞགཔ་ཨིན།

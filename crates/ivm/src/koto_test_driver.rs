@@ -2428,6 +2428,23 @@ mod tests {
     }
 
     #[test]
+    fn pure_unit_test_suite_executes_without_runtime_artifact() {
+        let compiled = compiled_suite_with_fixtures(Vec::new());
+        assert!(compiled.runtime_code.is_none());
+        assert!(compiled.runtime_entrypoints.is_empty());
+
+        let results = execute_suite(&compiled, TraceMode::Off, 1)
+            .expect("execute a suite containing only private helpers and tests");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "smoke");
+        assert!(
+            results[0].passed,
+            "unexpected failure: {:?}",
+            results[0].failure
+        );
+    }
+
+    #[test]
     fn parse_args_accepts_supported_subcommands() {
         let options = parse_args(vec![
             "coverage".to_string(),

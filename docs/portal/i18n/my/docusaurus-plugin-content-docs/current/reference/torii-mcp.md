@@ -95,7 +95,6 @@ Torii သည် tool dispatch အတွက် inbound auth-related headers က�
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 ဖောက်သည်များသည် `arguments.headers` မှတစ်ဆင့် နောက်ထပ်ခေါ်ဆိုမှုတစ်ခုအတွက် ခေါင်းစီးများကို ထောက်ပံ့ပေးနိုင်သည်။
 `content-length`၊ `host` နှင့် `connection` တို့မှ လျစ်လျူရှုထားသည်။
