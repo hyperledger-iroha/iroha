@@ -223,9 +223,7 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
         }],
     });
     let argument_code = [
-        ivm::encoding::wide::encode_syscallx(
-            ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD,
-        ),
+        ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD),
         ivm::encoding::wide::encode_halt(),
     ];
     let artifact = contract_artifact_with_code(1, vec![argument_mismatch], None, &argument_code);

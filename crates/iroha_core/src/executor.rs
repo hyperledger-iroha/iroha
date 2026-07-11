@@ -1719,22 +1719,6 @@ impl ContractEntrypointAuthorizationSnapshot {
     }
 }
 
-impl ContractRuntimeExecutionContext {
-    fn allows_benefit_runtime_asset_transfer_bypass(&self) -> bool {
-        self.contract_alias.as_ref().is_some_and(|contract_alias| {
-            contract_alias.name_segment() == "benefit"
-                && contract_alias.dataspace_segment() == "benefit"
-        }) && matches!(self.entrypoint.as_str(), "spend_to_merchant" | "spend_many")
-    }
-
-    fn allows_bisp_spend_permission_grant_bypass(&self) -> bool {
-        self.contract_alias.as_ref().is_some_and(|contract_alias| {
-            contract_alias.name_segment() == "bisp_bisp"
-                && contract_alias.dataspace_segment() == "sbp"
-        }) && self.entrypoint == "grant_beneficiary_spend_permission"
-    }
-}
-
 /// Reject binding mutations emitted from a lifecycle hook before executor dispatch.
 ///
 /// This guard runs ahead of both initial and user-provided executors and is shared by owned and
@@ -1902,6 +1886,7 @@ fn prepare_validated_contract_argument_record(
 
 type ResolvedContractEntrypoint = (u64, Option<String>, Option<ivm::EntrypointArgumentSchemaV1>);
 
+#[cfg(test)]
 fn resolve_callable_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
@@ -1932,6 +1917,7 @@ fn resolve_callable_contract_entrypoint(
     ))
 }
 
+#[cfg(test)]
 fn resolve_nested_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
@@ -2132,6 +2118,7 @@ impl ContractDispatchSource<'_> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
@@ -2458,6 +2445,7 @@ fn parse_contract_call_execution_context_from_source(
 /// A contract alias is security-sensitive runtime context and must never be trusted merely
 /// because it was signed by the transaction authority. When an address is present, reject a
 /// conflicting claimed alias and install only the alias stored for that active instance.
+#[cfg(test)]
 pub(crate) fn canonicalize_contract_call_execution_context<R: StateReadOnly>(
     state: &R,
     context: &mut ContractCallExecutionContext,
@@ -2487,6 +2475,7 @@ pub(crate) fn canonicalize_contract_call_execution_context<R: StateReadOnly>(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn parse_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     bytecode: &[u8],
@@ -2525,6 +2514,7 @@ pub(crate) fn parse_contract_invocation_execution_context(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn parse_nested_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     bytecode: &[u8],

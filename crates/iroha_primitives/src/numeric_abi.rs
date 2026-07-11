@@ -10,9 +10,7 @@ use norito::{Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize}
 
 use crate::{
     bigint::{BigInt, BigIntError},
-    numeric::{
-        MAX_DECIMAL_SCALE, MAX_MANTISSA_BYTES, Numeric, NumericOperationError, Quantity,
-    },
+    numeric::{MAX_DECIMAL_SCALE, MAX_MANTISSA_BYTES, Numeric, NumericOperationError, Quantity},
 };
 
 /// Nominal schema name of a V1 integer frame.
@@ -38,8 +36,7 @@ pub const QUANTITY_SCHEMA_HASH_V1: [u8; 16] = [
 /// Norito header length used by all V1 numeric frames.
 pub const NUMERIC_FRAME_HEADER_BYTES_V1: usize = 40;
 /// Maximum canonical integer frame length.
-pub const MAX_INT_FRAME_BYTES_V1: usize =
-    NUMERIC_FRAME_HEADER_BYTES_V1 + 4 + MAX_MANTISSA_BYTES;
+pub const MAX_INT_FRAME_BYTES_V1: usize = NUMERIC_FRAME_HEADER_BYTES_V1 + 4 + MAX_MANTISSA_BYTES;
 /// Maximum canonical decimal frame length.
 pub const MAX_DECIMAL_FRAME_BYTES_V1: usize = MAX_INT_FRAME_BYTES_V1 + 1;
 /// Maximum canonical quantity frame length.

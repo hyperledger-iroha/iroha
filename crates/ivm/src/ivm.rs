@@ -4605,10 +4605,7 @@ impl IVM {
     /// This prevents a successful no-write or partial-write host from
     /// declassifying stale private register contents.
     #[inline]
-    fn sanitize_syscall_output_privacy(
-        &mut self,
-        number: u32,
-    ) -> SavedSyscallOutputRegisters {
+    fn sanitize_syscall_output_privacy(&mut self, number: u32) -> SavedSyscallOutputRegisters {
         let mut saved = SavedSyscallOutputRegisters::default();
         if !self.zk_mode {
             return saved;
@@ -6611,8 +6608,7 @@ impl IVM {
                             return Err(VMError::PrivacyViolation);
                         }
                         let mut fail_index = 0u64;
-                        let request =
-                            self.validate_public_crypto_tlv(self.registers.get(rs1))?;
+                        let request = self.validate_public_crypto_tlv(self.registers.get(rs1))?;
                         let ok = if let Some(tlv_req) = request {
                             let is_norito = tlv_req.type_id_raw()
                                 == crate::pointer_abi::PointerType::NoritoBytes as u16;

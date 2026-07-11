@@ -375,7 +375,6 @@ impl V2ApplyService {
         self.kura.store_commit_manifest(manifest)?;
         Ok(())
     }
-
 }
 
 /// Fail-closed application or recovery failure.

@@ -318,14 +318,13 @@ fn value_dependent_arithmetic_traps_reject_private_operands_before_reading_value
         instruction::wide::arithmetic::REMU,
         instruction::wide::arithmetic::DIV_CEIL,
     ] {
-        for (numerator, denominator) in [
-            (12_u64, 3_u64),
-            (12, 0),
-            (i64::MIN as u64, (-1_i64) as u64),
-        ] {
+        for (numerator, denominator) in
+            [(12_u64, 3_u64), (12, 0), (i64::MIN as u64, (-1_i64) as u64)]
+        {
             let program = raw_zk_program(&[encoding::wide::encode_rr(opcode, 3, 1, 2)]);
             let mut vm = IVM::new(10_000);
-            vm.load_program(&program).expect("load private trap fixture");
+            vm.load_program(&program)
+                .expect("load private trap fixture");
             vm.set_register(1, numerator);
             vm.set_register(2, denominator);
             vm.registers.set_tag(1, true);
@@ -371,8 +370,7 @@ fn zk_assertions_reject_private_predicates_independent_of_truth_value() {
     }
 
     for (left, right) in [(7_u64, 7_u64), (7, 8)] {
-        let word =
-            encoding::wide::encode_rr(instruction::wide::zk::ASSERT_EQ, 0, 1, 2);
+        let word = encoding::wide::encode_rr(instruction::wide::zk::ASSERT_EQ, 0, 1, 2);
         let mut vm = IVM::new(10_000);
         vm.load_program(&raw_zk_program(&[word]))
             .expect("load private equality assertion fixture");
@@ -571,9 +569,7 @@ fn successful_hosts_cannot_declassify_unwritten_output_registers() {
 
     let mut no_write = IVM::new(10_000);
     no_write
-        .load_program(&raw_zk_program(&[scall(
-            syscalls::SYSCALL_CURRENT_TIME_MS,
-        )]))
+        .load_program(&raw_zk_program(&[scall(syscalls::SYSCALL_CURRENT_TIME_MS)]))
         .expect("load output-only syscall fixture");
     no_write.set_host(PartialOutputHost);
     no_write.set_register(10, 0xDEAD_BEEF);
@@ -645,15 +641,10 @@ fn output_sanitization_restores_registers_when_prepare_or_quote_fails() {
         }
     }
 
-    fn assert_restored(
-        host: impl IVMHost + Send + Sync + 'static,
-        expected: VMError,
-    ) {
+    fn assert_restored(host: impl IVMHost + Send + Sync + 'static, expected: VMError) {
         let mut vm = IVM::new(10_000);
-        vm.load_program(&raw_zk_program(&[scall(
-            syscalls::SYSCALL_CURRENT_TIME_MS,
-        )]))
-        .expect("load restoration fixture");
+        vm.load_program(&raw_zk_program(&[scall(syscalls::SYSCALL_CURRENT_TIME_MS)]))
+            .expect("load restoration fixture");
         vm.set_host(host);
         vm.set_register(10, 0xC0FF_EE);
         vm.registers.set_tag(10, true);

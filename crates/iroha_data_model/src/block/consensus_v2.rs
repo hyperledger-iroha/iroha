@@ -357,11 +357,11 @@ impl HeightContext {
         let encoded = match self.next_epoch_snapshot.as_ref() {
             None => identity.encode(),
             Some(next_epoch_snapshot) => EpochBoundaryHeightContextIdentity {
-                    domain: b"iroha:sumeragi:v2:height-context:epoch-transition:v1".to_vec(),
-                    base: identity,
-                    next_epoch_snapshot: next_epoch_snapshot.clone(),
-                }
-                .encode(),
+                domain: b"iroha:sumeragi:v2:height-context:epoch-transition:v1".to_vec(),
+                base: identity,
+                next_epoch_snapshot: next_epoch_snapshot.clone(),
+            }
+            .encode(),
         };
         HeightContextId(HashOf::from_untyped_unchecked(Hash::new(encoded)))
     }

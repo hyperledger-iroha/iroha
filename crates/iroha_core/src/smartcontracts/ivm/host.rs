@@ -36,6 +36,8 @@ use crate::{
     },
 };
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
+#[cfg(test)]
+use iroha_data_model::proof::ProofAttachment;
 #[cfg(not(feature = "fast_dsl"))]
 use iroha_data_model::query::{
     account::prelude::FindAccounts,
@@ -78,7 +80,7 @@ use iroha_data_model::{
     parameter::{Parameters, system::ivm_metadata},
     permission::Permissions,
     prelude::{AccountId, *},
-    proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofBox, VerifyingKeyId, VerifyingKeyRecord},
     query::{
         QueryBox, QueryOutputBatchBox, QueryRequest, QueryResponse, QueryWithFilter,
         QueryWithParams, SingularQueryBox, SingularQueryOutputBox,
@@ -475,11 +477,7 @@ impl std::io::Write for BoundedCountingWriter {
     }
 }
 
-/// Core host adapter used by Iroha to run IVM bytecode.
-///
-/// Stateful operations must be translated into ISIs and executed via the
-/// executor. Durable-state syscalls are only forwarded to an in-memory
-/// overlay when access logging is enabled for prepass execution.
+/// A verifying-key record prepared for repeated host-side verification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreparedVerifyingKey {
     record: Arc<VerifyingKeyRecord>,
@@ -487,6 +485,11 @@ struct PreparedVerifyingKey {
     ipa_k: Option<u32>,
 }
 
+/// Core host adapter used by Iroha to run IVM bytecode.
+///
+/// Stateful operations must be translated into ISIs and executed via the
+/// executor. Durable-state syscalls are only forwarded to an in-memory
+/// overlay when access logging is enabled for prepass execution.
 pub struct CoreHostImpl<QS> {
     authority: AccountId,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
@@ -2976,6 +2979,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_entrypoint_authorization = Some(authorization);
     }
 
+    /// Bind a consensus-validated deployed identity for an external runtime entrypoint.
+    ///
+    /// Callers must obtain `contract_subject` and `identity` from the same live world-state
+    /// snapshot immediately before execution. The host captures its authority, selected
+    /// entrypoint, permission, address, alias, and code hash so nested calls can revalidate the
+    /// complete authorization chain against that snapshot.
+    pub fn bind_deployed_contract_runtime_context(
+        &mut self,
+        contract_subject: AccountId,
+        identity: &crate::smartcontracts::code::BoundContractIdentity,
+        entrypoint: String,
+        permission: Option<String>,
+    ) {
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            self.authority.clone(),
+            entrypoint,
+            permission,
+            identity,
+        );
+        self.bind_contract_runtime_context(contract_subject, authorization);
+    }
+
     /// Share the outer runtime's bounded immutable contract-artifact cache.
     pub fn set_prepared_contract_cache(&mut self, cache: PreparedContractCache) {
         self.prepared_contract_cache = cache;
@@ -3802,7 +3827,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             {
                 return Err(ivm::VMError::NoritoInvalid);
             }
-            if !Self::verifying_key_record_metadata_is_portable(rec) {
+            if !Self::verifying_key_record_metadata_is_portable(&rec) {
                 return Err(ivm::VMError::NoritoInvalid);
             }
             if rec.backend.is_pending_production_backend() {

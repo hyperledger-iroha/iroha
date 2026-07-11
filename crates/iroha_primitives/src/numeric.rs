@@ -2348,8 +2348,8 @@ mod tests {
 
     #[test]
     fn legacy_checked_multiplication_normalizes_before_enforcing_width() {
-        let lhs_mantissa = BigInt::from_inner(UnboundedBigInt::one() << 256)
-            .expect("257-bit left mantissa");
+        let lhs_mantissa =
+            BigInt::from_inner(UnboundedBigInt::one() << 256).expect("257-bit left mantissa");
         let rhs_mantissa = BigInt::from_inner(
             UnboundedBigInt::from(5_u8) * ((UnboundedBigInt::one() << 255) - 1_u8),
         )

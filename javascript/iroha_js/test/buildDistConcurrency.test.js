@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 import {
@@ -29,6 +29,7 @@ import {
 const TEST_DIR = resolve(fileURLToPath(import.meta.url), "..");
 const ROOT = resolve(TEST_DIR, "..");
 const SCRIPT = join(ROOT, "scripts", "build-dist.mjs");
+const SCRIPT_URL = pathToFileURL(SCRIPT).href;
 const REQUIRED_OUTPUTS = [
   "address.js",
   "curveRegistry.js",
@@ -65,7 +66,8 @@ function assertNoPublicationArtifacts(root) {
       (entry) =>
         entry.startsWith(".dist-stage-") ||
         entry.startsWith(".dist-backup-") ||
-        entry.startsWith(".dist-failed-"),
+        entry.startsWith(".dist-failed-") ||
+        entry.startsWith(".build-dist.lock.retired-"),
     ),
     [],
   );
@@ -104,6 +106,195 @@ test("parallel build:dist processes publish one complete distribution", async ()
       "an unchanged distribution must not be replaced while another pack operation may read it",
     );
     assertNoPublicationArtifacts(fixtureRoot);
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("release refuses to unlink a replacement lock after ownership is lost", async () => {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "iroha-js-build-dist-release-race-"));
+  try {
+    const lock = await acquireDistLock({ root: fixtureRoot });
+    const lockPath = join(fixtureRoot, ".build-dist.lock");
+    const displaced = join(fixtureRoot, ".displaced-owned-lock");
+    renameSync(lockPath, displaced);
+    const replacement = `${JSON.stringify({
+      pid: process.pid,
+      token: "replacement-owner",
+      createdAt: new Date().toISOString(),
+    })}\n`;
+    writeFileSync(lockPath, replacement, { flag: "wx", mode: 0o600 });
+
+    assert.throws(() => releaseDistLock(lock), /lost ownership/u);
+    assert.equal(readFileSync(lockPath, "utf8"), replacement);
+    assert.equal(existsSync(displaced), true);
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("lock ownership includes the exact fsynced owner record, not only its inode", async () => {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "iroha-js-build-dist-lock-digest-"));
+  try {
+    const lock = await acquireDistLock({ root: fixtureRoot });
+    const lockPath = join(fixtureRoot, ".build-dist.lock");
+    const modified = JSON.parse(readFileSync(lockPath, "utf8"));
+    modified.attacker = "same-inode-content-rewrite";
+    writeFileSync(lockPath, `${JSON.stringify(modified)}\n`);
+
+    assert.throws(() => releaseDistLock(lock), /lost ownership/u);
+    assert.equal(existsSync(lockPath), true);
+    assert.equal(JSON.parse(readFileSync(lockPath, "utf8")).attacker, modified.attacker);
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("post-close lock replacement reports the ownership race without masking or deletion", async () => {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "iroha-js-build-dist-post-close-race-"));
+  try {
+    const lockPath = join(fixtureRoot, ".build-dist.lock");
+    const displaced = join(fixtureRoot, ".post-close-displaced-lock");
+    const replacement = `${JSON.stringify({
+      pid: process.pid,
+      token: "post-close-replacement",
+      createdAt: new Date().toISOString(),
+    })}\n`;
+    await assert.rejects(
+      acquireDistLock({
+        root: fixtureRoot,
+        onLockCreated() {
+          renameSync(lockPath, displaced);
+          writeFileSync(lockPath, replacement, { flag: "wx", mode: 0o600 });
+        },
+      }),
+      /lost ownership/u,
+    );
+    assert.equal(readFileSync(lockPath, "utf8"), replacement);
+    assert.equal(existsSync(displaced), true);
+    assert.deepEqual(
+      readdirSync(fixtureRoot).filter((entry) => entry.startsWith(".build-dist.lock.retired-")),
+      [],
+    );
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("stale malformed locks are quarantined while live stale-looking locks are preserved", async () => {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "iroha-js-build-dist-stale-owner-"));
+  try {
+    const lockPath = join(fixtureRoot, ".build-dist.lock");
+    writeFileSync(lockPath, "not-json\n", { mode: 0o600 });
+    const old = new Date(Date.now() - 10 * 60_000);
+    utimesSync(lockPath, old, old);
+    const recovered = await acquireDistLock({
+      root: fixtureRoot,
+      staleLockMs: 1,
+      timeoutMs: 500,
+    });
+    releaseDistLock(recovered);
+    assertNoPublicationArtifacts(fixtureRoot);
+
+    const live = `${JSON.stringify({
+      pid: process.pid,
+      token: "live-owner",
+      createdAt: "1970-01-01T00:00:00.000Z",
+    })}\n`;
+    writeFileSync(lockPath, live, { flag: "wx", mode: 0o600 });
+    utimesSync(lockPath, old, old);
+    await assert.rejects(
+      acquireDistLock({ root: fixtureRoot, staleLockMs: 1, timeoutMs: 125 }),
+      /timed out waiting/u,
+    );
+    assert.equal(readFileSync(lockPath, "utf8"), live);
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("stale takeover atomically preserves a lock replaced during its decision window", async () => {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "iroha-js-build-dist-stale-race-"));
+  try {
+    const lockPath = join(fixtureRoot, ".build-dist.lock");
+    const displaced = join(fixtureRoot, ".observed-stale-lock");
+    const marker = join(fixtureRoot, ".stale-candidate-observed");
+    const resume = join(fixtureRoot, ".resume-stale-candidate");
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({
+        pid: 2_147_483_647,
+        token: "dead-owner",
+        createdAt: "1970-01-01T00:00:00.000Z",
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const old = new Date(Date.now() - 10 * 60_000);
+    utimesSync(lockPath, old, old);
+
+    const source = String.raw`
+import { existsSync, writeFileSync } from "node:fs";
+import { acquireDistLock } from ${JSON.stringify(SCRIPT_URL)};
+const blocker = new Int32Array(new SharedArrayBuffer(4));
+try {
+  await acquireDistLock({
+    root: process.env.ROOT,
+    staleLockMs: 1,
+    timeoutMs: 750,
+    onStaleCandidate() {
+      writeFileSync(process.env.MARKER, "observed", { flag: "wx" });
+      while (!existsSync(process.env.RESUME)) Atomics.wait(blocker, 0, 0, 5);
+    },
+  });
+  throw new Error("stale race worker unexpectedly acquired the replacement lock");
+} catch (error) {
+  if (!String(error?.message).includes("timed out waiting")) throw error;
+}
+`;
+    const child = spawn(process.execPath, ["--input-type=module", "--eval", source], {
+      env: {
+        ...process.env,
+        MARKER: marker,
+        RESUME: resume,
+        ROOT: fixtureRoot,
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const started = Date.now();
+    while (!existsSync(marker)) {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        throw new Error(`stale race worker exited before synchronization: ${stderr}`);
+      }
+      if (Date.now() - started > 5_000) {
+        throw new Error("timed out waiting for stale race synchronization marker");
+      }
+      await delay(10);
+    }
+
+    renameSync(lockPath, displaced);
+    const replacement = `${JSON.stringify({
+      pid: process.pid,
+      token: "live-replacement-owner",
+      createdAt: new Date().toISOString(),
+    })}\n`;
+    writeFileSync(lockPath, replacement, { flag: "wx", mode: 0o600 });
+    writeFileSync(resume, "resume", { flag: "wx" });
+    const exit = await new Promise((resolveExit, rejectExit) => {
+      child.once("error", rejectExit);
+      child.once("exit", (code, signal) => resolveExit({ code, signal }));
+    });
+    assert.deepEqual(exit, { code: 0, signal: null }, stderr);
+    assert.equal(readFileSync(lockPath, "utf8"), replacement);
+    assert.equal(readFileSync(displaced, "utf8").includes("dead-owner"), true);
+    assert.deepEqual(
+      readdirSync(fixtureRoot).filter((entry) => entry.startsWith(".build-dist.lock.retired-")),
+      [],
+    );
   } finally {
     rmSync(fixtureRoot, { recursive: true, force: true });
   }

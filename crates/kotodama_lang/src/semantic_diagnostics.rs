@@ -289,10 +289,7 @@ mod tests {
         )
         .expect("safe positional fix");
         assert_eq!(fix.span.byte_range, Some(primary.range));
-        assert_eq!(
-            fix.replacement,
-            "Pair { left: 1.250_0, right: nested(2), }"
-        );
+        assert_eq!(fix.replacement, "Pair { left: 1.250_0, right: nested(2), }");
     }
 
     #[test]

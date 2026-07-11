@@ -5,10 +5,8 @@ use iroha_primitives::{
     numeric::{Numeric, Quantity},
     numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},
 };
-use std::collections::{BTreeMap, BTreeSet};
 use ivm::{
-    IVM, Memory, ProgramMetadata, VMError,
-    encoding,
+    IVM, Memory, ProgramMetadata, VMError, encoding,
     host::{DefaultHost, IVMHost},
     numeric::{
         NUMERIC_FAILURE_STATUS, NUMERIC_FAILURE_TRAP, NumericFaultV1, PointerAbiFaultV1,
@@ -17,6 +15,7 @@ use ivm::{
     syscall_metering::{SyscallCompletion, SyscallMetering, SyscallMeteringPhase},
     syscalls,
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 fn program(syscall: u32) -> Vec<u8> {
     let mut program = ProgramMetadata::default_for(1, 0, 1).encode();
@@ -27,7 +26,8 @@ fn program(syscall: u32) -> Vec<u8> {
 
 fn vm_for(syscall: u32, gas: u64) -> IVM {
     let mut vm = IVM::new(gas);
-    vm.load_program(&program(syscall)).expect("load numeric program");
+    vm.load_program(&program(syscall))
+        .expect("load numeric program");
     vm.set_host(DefaultHost::new());
     vm
 }
@@ -153,8 +153,7 @@ where
         .last_staged_syscall_context()
         .expect("baseline staged context")
         .charged();
-    let instruction = ivm::cost_of(encoding::wide::encode_syscallx(syscall))
-        .expect("SCALLX gas");
+    let instruction = ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
     let mut prefixes = BTreeMap::<u8, BTreeSet<u64>>::new();
     for gas in instruction..=instruction + staged {
         let mut vm = vm_for(syscall, gas);
@@ -202,7 +201,10 @@ fn abi_contains_exactly_the_52_numeric_calls_and_rejects_retired_numbers() {
         .chain(0xd2..=0xde)
         .chain(0x01_0040..=0x01_004d)
     {
-        assert_eq!(host.prepare_syscall(retired, &vm), Err(VMError::UnknownSyscall(retired)));
+        assert_eq!(
+            host.prepare_syscall(retired, &vm),
+            Err(VMError::UnknownSyscall(retired))
+        );
     }
 }
 
@@ -339,7 +341,12 @@ fn every_shipping_numeric_syscall_executes_with_a_semantic_assertion() {
     }
 
     for (syscall, input, mode, expected_value) in [
-        (syscalls::SYSCALL_DECIMAL_TRY_TO_INT_EXACT, "7", None, 7_i128),
+        (
+            syscalls::SYSCALL_DECIMAL_TRY_TO_INT_EXACT,
+            "7",
+            None,
+            7_i128,
+        ),
         (syscalls::SYSCALL_DECIMAL_TO_INT_TRUNC, "7.9", None, 7_i128),
         (
             syscalls::SYSCALL_DECIMAL_TO_INT_ROUND,
@@ -366,8 +373,7 @@ fn every_shipping_numeric_syscall_executes_with_a_semantic_assertion() {
     assert_eq!(result_quantity(&quantity_from_int).to_string(), "7");
     covered.insert(syscalls::SYSCALL_QUANTITY_TRY_FROM_INT);
 
-    let mut quantity_from_decimal =
-        vm_for(syscalls::SYSCALL_QUANTITY_TRY_FROM_DECIMAL, u64::MAX);
+    let mut quantity_from_decimal = vm_for(syscalls::SYSCALL_QUANTITY_TRY_FROM_DECIMAL, u64::MAX);
     let decimal = install_decimal(
         &mut quantity_from_decimal,
         &"1.25".parse().expect("decimal"),
@@ -378,10 +384,7 @@ fn every_shipping_numeric_syscall_executes_with_a_semantic_assertion() {
     covered.insert(syscalls::SYSCALL_QUANTITY_TRY_FROM_DECIMAL);
 
     let mut quantity_to_decimal = vm_for(syscalls::SYSCALL_QUANTITY_TO_DECIMAL, u64::MAX);
-    let quantity = install_quantity(
-        &mut quantity_to_decimal,
-        &"1.25".parse().expect("quantity"),
-    );
+    let quantity = install_quantity(&mut quantity_to_decimal, &"1.25".parse().expect("quantity"));
     quantity_to_decimal.set_register(10, quantity);
     quantity_to_decimal.run().expect("quantity to decimal");
     assert_eq!(result_decimal(&quantity_to_decimal).to_string(), "1.25");
@@ -458,7 +461,10 @@ fn every_shipping_numeric_syscall_executes_with_a_semantic_assertion() {
         covered.insert(syscall);
     }
 
-    assert_eq!(covered, expected, "every shipping numeric syscall must execute");
+    assert_eq!(
+        covered, expected,
+        "every shipping numeric syscall must execute"
+    );
 }
 
 #[test]
@@ -491,7 +497,10 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
         let context = vm.last_staged_syscall_context().expect("staged context");
         assert_eq!(context.charged(), expected, "limbs={limbs}");
         assert_eq!(context.completion(), Some(SyscallCompletion::Success));
-        assert!(context.charged() > previous, "each defined limb transition costs more");
+        assert!(
+            context.charged() > previous,
+            "each defined limb transition costs more"
+        );
         previous = context.charged();
     }
 
@@ -513,15 +522,8 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
     let aligned_lhs = ivm::numeric_gas::scaled_limbs(lhs_bits, 28).expect("aligned lhs");
     let aligned_rhs = ivm::numeric_gas::scaled_limbs(rhs_bits, 0).expect("aligned rhs");
     assert_eq!(aligned_lhs, 10);
-    let comparison_work = ivm::numeric_gas::aligned_work(
-        8,
-        28,
-        aligned_lhs,
-        1,
-        0,
-        aligned_rhs,
-    )
-    .expect("comparison work");
+    let comparison_work = ivm::numeric_gas::aligned_work(8, 28, aligned_lhs, 1, 0, aligned_rhs)
+        .expect("comparison work");
     let validation = validation_work_for_envelope(lhs_envelope.len() as u64)
         + validation_work_for_envelope(rhs_envelope.len() as u64);
     let expected = ivm::numeric_gas::successful_call_gas(
@@ -549,8 +551,13 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
     product.set_register(11, rhs);
     product.set_register(14, NUMERIC_FAILURE_STATUS);
     product.run().expect("recoverable 16-limb product overflow");
-    let product_context = product.last_staged_syscall_context().expect("product context");
-    assert_eq!(product_context.completion(), Some(SyscallCompletion::RecoverableFailure));
+    let product_context = product
+        .last_staged_syscall_context()
+        .expect("product context");
+    assert_eq!(
+        product_context.completion(),
+        Some(SyscallCompletion::RecoverableFailure)
+    );
     assert_eq!(
         product_context.phase_charge(SyscallMeteringPhase::Arithmetic),
         4 * 8 * 8,
@@ -815,7 +822,9 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
     let mut malformed = vm_for(syscalls::SYSCALL_INT_ADD, u64::MAX);
     let mut envelope = ivm::numeric_tlv::encode_int(&BigInt::one()).expect("int envelope");
     *envelope.last_mut().expect("hash byte") ^= 1;
-    let bad = malformed.alloc_host_tlv(&envelope).expect("install malformed int");
+    let bad = malformed
+        .alloc_host_tlv(&envelope)
+        .expect("install malformed int");
     let rhs = install_int(&mut malformed, &BigInt::one());
     malformed.set_register(10, bad);
     malformed.set_register(11, rhs);
@@ -823,7 +832,9 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
     malformed.set_register(14, 99);
     assert_eq!(
         malformed.run(),
-        Err(VMError::PointerAbiFault(PointerAbiFaultV1::PayloadHashMismatch))
+        Err(VMError::PointerAbiFault(
+            PointerAbiFaultV1::PayloadHashMismatch
+        ))
     );
 
     let mut reserved = vm_for(syscalls::SYSCALL_INT_ADD, u64::MAX);
@@ -870,8 +881,7 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
     let mut bad_scale_pointer = vm_for(syscalls::SYSCALL_DECIMAL_DIV_ROUND, u64::MAX);
     let lhs = install_decimal(&mut bad_scale_pointer, &Numeric::new(1, 0));
     let rhs = install_decimal(&mut bad_scale_pointer, &Numeric::new(2, 0));
-    let mut scale_envelope =
-        ivm::numeric_tlv::encode_int(&BigInt::zero()).expect("scale envelope");
+    let mut scale_envelope = ivm::numeric_tlv::encode_int(&BigInt::zero()).expect("scale envelope");
     *scale_envelope.last_mut().expect("scale hash") ^= 1;
     let scale = bad_scale_pointer
         .alloc_host_tlv(&scale_envelope)
@@ -926,7 +936,10 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
     invalid_scale.set_register(14, NUMERIC_FAILURE_STATUS);
     invalid_scale.run().expect("recoverable invalid scale");
     assert_eq!(invalid_scale.register(10), 0);
-    assert_eq!(invalid_scale.register(11), NumericFaultV1::InvalidScale.tag());
+    assert_eq!(
+        invalid_scale.register(11),
+        NumericFaultV1::InvalidScale.tag()
+    );
 
     // Control validity is established before the zero-divisor branch begins.
     let mut zero_with_bad_mode = vm_for(syscalls::SYSCALL_DECIMAL_DIV_EXACT, u64::MAX);
@@ -967,8 +980,8 @@ fn every_decode_and_output_phase_has_a_charge_before_work() {
         .last_staged_syscall_context()
         .expect("baseline staged context")
         .clone();
-    let instruction_gas = ivm::cost_of(encoding::wide::encode_syscallx(syscall))
-        .expect("SCALLX gas");
+    let instruction_gas =
+        ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
     let phases = [
         SyscallMeteringPhase::Entry,
         SyscallMeteringPhase::PointerHeader,
@@ -995,7 +1008,11 @@ fn every_decode_and_output_phase_has_a_charge_before_work() {
             }),
             "phase {phase:?}"
         );
-        assert_eq!(vm.register(10), operand, "failed phase must not publish output");
+        assert_eq!(
+            vm.register(10),
+            operand,
+            "failed phase must not publish output"
+        );
         completed += charge;
     }
 }
@@ -1062,8 +1079,14 @@ fn numeric_failure_paths_charge_completed_work_without_output_and_oog_precedes_c
         vm.set_register(14, NUMERIC_FAILURE_STATUS);
         vm.run().expect("recoverable exact-division failure");
         let context = vm.last_staged_syscall_context().expect("failure context");
-        assert_eq!(context.completion(), Some(SyscallCompletion::RecoverableFailure));
-        assert_eq!(context.phase_charge(SyscallMeteringPhase::OutputSerialization), 0);
+        assert_eq!(
+            context.completion(),
+            Some(SyscallCompletion::RecoverableFailure)
+        );
+        assert_eq!(
+            context.phase_charge(SyscallMeteringPhase::OutputSerialization),
+            0
+        );
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), expected_fault.tag());
     }
@@ -1081,8 +1104,14 @@ fn numeric_failure_paths_charge_completed_work_without_output_and_oog_precedes_c
     let context = scale_overflow
         .last_staged_syscall_context()
         .expect("scale-overflow context");
-    assert_eq!(context.completion(), Some(SyscallCompletion::RecoverableFailure));
-    assert_eq!(context.phase_charge(SyscallMeteringPhase::OutputSerialization), 0);
+    assert_eq!(
+        context.completion(),
+        Some(SyscallCompletion::RecoverableFailure)
+    );
+    assert_eq!(
+        context.phase_charge(SyscallMeteringPhase::OutputSerialization),
+        0
+    );
     assert_eq!(scale_overflow.register(10), 0);
     assert_eq!(
         scale_overflow.register(11),

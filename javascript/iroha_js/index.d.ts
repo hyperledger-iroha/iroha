@@ -5085,7 +5085,8 @@ type NoritoRuntimeNamespaceExport =
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
   | "noritoEncodePrivacyProofEnvelope"
-  | "noritoEncodeTransactionPayloadBatch";
+  | "noritoEncodeTransactionPayloadBatch"
+  | "validateNoritoFrame";
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
@@ -8820,10 +8821,10 @@ export interface ContractEntrypointKindRecord {
 
 export type ContractEntrypointValueKindName =
   | "Int"
-  | "U128"
+  | "Decimal"
+  | "Quantity"
   | "Bool"
   | "String"
-  | "Amount"
   | "Json"
   | "Name"
   | "AccountId"

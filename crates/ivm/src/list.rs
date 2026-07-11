@@ -396,13 +396,7 @@ mod tests {
                     let replacement = vec![9_000 + active_len; width];
                     let before_failed_set = snapshot(&vm, base, layout);
                     assert_eq!(
-                        try_set_words(
-                            &mut vm,
-                            base,
-                            layout,
-                            active_len,
-                            &replacement,
-                        ),
+                        try_set_words(&mut vm, base, layout, active_len, &replacement,),
                         Ok(false)
                     );
                     assert_eq!(

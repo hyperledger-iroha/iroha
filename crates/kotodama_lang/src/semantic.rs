@@ -3922,9 +3922,7 @@ fn parse_decimal_literal(spelling: &str) -> Result<Numeric, SemanticError> {
         .map_or((false, coefficient), |coefficient| (true, coefficient));
     let (whole, fractional) = coefficient
         .split_once('.')
-        .map_or((coefficient, ""), |(whole, fractional)| {
-            (whole, fractional)
-        });
+        .map_or((coefficient, ""), |(whole, fractional)| (whole, fractional));
     let whole = whole.replace('_', "");
     let fractional = fractional.replace('_', "");
     let combined = format!("{whole}{fractional}");
@@ -6284,10 +6282,7 @@ fn analyze_statement_inner(
                                 message: "`.take(n)` requires an int literal no greater than 64"
                                     .into(),
                             })?;
-                            enforce_static_iteration_limit(
-                                "StateMap.take(N)",
-                                u128::from(value),
-                            )?;
+                            enforce_static_iteration_limit("StateMap.take(N)", u128::from(value))?;
                             Some(usize::try_from(value).expect("V1 iteration bound is at most 64"))
                         }
                         _ => None,
@@ -8993,9 +8988,7 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::NumericToIntDirect => {
-            if arg_typed.len() != 1
-                || !matches!(resolve_struct_type(&arg_typed[0].ty), Type::Int)
-            {
+            if arg_typed.len() != 1 || !matches!(resolve_struct_type(&arg_typed[0].ty), Type::Int) {
                 return Err(SemanticError {
                     code: "K2003",
                     message:
@@ -10221,9 +10214,7 @@ fn numeric_rounding_mode(expression: &Expr) -> Option<(RoundingMode, i64)> {
         Expr::Ident(name) if name == "Rounding::floor" => {
             (RoundingMode::Floor, AbiMode::Floor.tag())
         }
-        Expr::Ident(name) if name == "Rounding::ceil" => {
-            (RoundingMode::Ceil, AbiMode::Ceil.tag())
-        }
+        Expr::Ident(name) if name == "Rounding::ceil" => (RoundingMode::Ceil, AbiMode::Ceil.tag()),
         Expr::Ident(name) if name == "Rounding::nearest_even" => {
             (RoundingMode::NearestEven, AbiMode::NearestEven.tag())
         }
@@ -10269,15 +10260,11 @@ fn analyze_decimal_to_int_round_call(
             message: "decimal::to_int_round expects value and mode".into(),
         }));
     }
-    let mut value = match analyze_expr_expected(
-        context,
-        &plan.ordered[0],
-        vars,
-        Some(&Type::Decimal),
-    ) {
-        Ok(value) => value,
-        Err(error) => return Some(Err(error)),
-    };
+    let mut value =
+        match analyze_expr_expected(context, &plan.ordered[0], vars, Some(&Type::Decimal)) {
+            Ok(value) => value,
+            Err(error) => return Some(Err(error)),
+        };
     if let Err(error) = ensure_assignable_and_coerce(&Type::Decimal, &mut value) {
         return Some(Err(error));
     }
@@ -10332,9 +10319,7 @@ fn analyze_numeric_round_method_call(
     implicit_receiver: bool,
     vars: &mut HashMap<String, Type>,
 ) -> Option<Result<TypedExpr, SemanticError>> {
-    if !implicit_receiver
-        || args.is_empty()
-        || !matches!(source_name, "div_round" | "ratio_round")
+    if !implicit_receiver || args.is_empty() || !matches!(source_name, "div_round" | "ratio_round")
     {
         return None;
     }
@@ -10486,29 +10471,53 @@ fn analyze_numeric_round_method_call(
     }
 
     let constant_scale = match scale.kind() {
-        ExprKind::IntLiteral(scale) => scale.try_to_u64().and_then(|scale| u32::try_from(scale).ok()),
+        ExprKind::IntLiteral(scale) => scale
+            .try_to_u64()
+            .and_then(|scale| u32::try_from(scale).ok()),
         _ => None,
     };
     if let Some(output_scale) = constant_scale {
         use crate::checked_arithmetic::{ConstantNumeric, ConstantNumericError};
         let lhs = match crate::checked_arithmetic::evaluate(&receiver) {
             Ok(value) => value,
-            Err(error) => return Some(Err(SemanticError { code: error.code(), message: error.to_string() })),
+            Err(error) => {
+                return Some(Err(SemanticError {
+                    code: error.code(),
+                    message: error.to_string(),
+                }));
+            }
         };
         let rhs = match crate::checked_arithmetic::evaluate(&divisor) {
             Ok(value) => value,
-            Err(error) => return Some(Err(SemanticError { code: error.code(), message: error.to_string() })),
+            Err(error) => {
+                return Some(Err(SemanticError {
+                    code: error.code(),
+                    message: error.to_string(),
+                }));
+            }
         };
         let folded = match (intrinsic, lhs, rhs) {
-            (DECIMAL_DIV_ROUND_INTRINSIC, Some(ConstantNumeric::Decimal(lhs)), Some(ConstantNumeric::Decimal(rhs))) => {
-                lhs.try_decimal_div_round(&rhs, output_scale, rounding_mode).map(ConstantNumeric::Decimal)
-            }
-            (QUANTITY_DIV_ROUND_INTRINSIC, Some(ConstantNumeric::Quantity(lhs)), Some(ConstantNumeric::Decimal(rhs))) => {
-                lhs.try_div_decimal_round(&rhs, output_scale, rounding_mode).map(ConstantNumeric::Quantity)
-            }
-            (QUANTITY_RATIO_ROUND_INTRINSIC, Some(ConstantNumeric::Quantity(lhs)), Some(ConstantNumeric::Quantity(rhs))) => {
-                lhs.try_ratio_round(&rhs, output_scale, rounding_mode).map(ConstantNumeric::Decimal)
-            }
+            (
+                DECIMAL_DIV_ROUND_INTRINSIC,
+                Some(ConstantNumeric::Decimal(lhs)),
+                Some(ConstantNumeric::Decimal(rhs)),
+            ) => lhs
+                .try_decimal_div_round(&rhs, output_scale, rounding_mode)
+                .map(ConstantNumeric::Decimal),
+            (
+                QUANTITY_DIV_ROUND_INTRINSIC,
+                Some(ConstantNumeric::Quantity(lhs)),
+                Some(ConstantNumeric::Decimal(rhs)),
+            ) => lhs
+                .try_div_decimal_round(&rhs, output_scale, rounding_mode)
+                .map(ConstantNumeric::Quantity),
+            (
+                QUANTITY_RATIO_ROUND_INTRINSIC,
+                Some(ConstantNumeric::Quantity(lhs)),
+                Some(ConstantNumeric::Quantity(rhs)),
+            ) => lhs
+                .try_ratio_round(&rhs, output_scale, rounding_mode)
+                .map(ConstantNumeric::Decimal),
             (_, None, _) | (_, _, None) => {
                 return Some(Ok(retain_named_call_evaluation_order(
                     TypedExpr {
@@ -10521,16 +10530,21 @@ fn analyze_numeric_round_method_call(
                     &plan,
                 )));
             }
-            _ => return Some(Err(SemanticError {
-                code: "E_INTERNAL_NUMERIC_MATRIX",
-                message: "rounded numeric operands violate their typed operator matrix".into(),
-            })),
+            _ => {
+                return Some(Err(SemanticError {
+                    code: "E_INTERNAL_NUMERIC_MATRIX",
+                    message: "rounded numeric operands violate their typed operator matrix".into(),
+                }));
+            }
         };
         let folded = match folded {
             Ok(folded) => folded,
             Err(error) => {
                 let error = ConstantNumericError::Numeric(error);
-                return Some(Err(SemanticError { code: error.code(), message: error.to_string() }));
+                return Some(Err(SemanticError {
+                    code: error.code(),
+                    message: error.to_string(),
+                }));
             }
         };
         let value = match folded {
@@ -12050,16 +12064,15 @@ fn analyze_const_expr_inner(
         {
             let mut left = analyze_const_expr(context, left, consts)?;
             let mut right = analyze_const_expr(context, right, consts)?;
-            let result = arithmetic_result_type(*op, &left.ty, &right.ty).ok_or_else(|| {
-                SemanticError {
+            let result =
+                arithmetic_result_type(*op, &left.ty, &right.ty).ok_or_else(|| SemanticError {
                     code: "K2003",
                     message: format!(
                         "operator {op:?} is not defined for {} and {}",
                         type_name(&left.ty),
                         type_name(&right.ty)
                     ),
-                }
-            })?;
+                })?;
             if result == Type::Decimal {
                 coerce_numeric_operand(&mut left, &Type::Decimal)?;
                 coerce_numeric_operand(&mut right, &Type::Decimal)?;
@@ -14813,9 +14826,8 @@ mod tests {
 
     #[test]
     fn native_json_requires_explicit_result_and_struct_conversion() {
-        let result = analyze_error(
-            "fn invalid(Result<int, int> value) -> Json { json { value: value } }",
-        );
+        let result =
+            analyze_error("fn invalid(Result<int, int> value) -> Json { json { value: value } }");
         assert_eq!(result.code, "E_JSON_VALUE_TYPE");
         assert!(result.message.contains("Result"), "{}", result.message);
 
@@ -14926,9 +14938,12 @@ mod tests {
         );
         assert_eq!(error.code, "E_NAMED_ARGUMENTS_REQUIRED");
 
-        analyze(&parse(
-            "fn distinct() { var List<string, 2> values = [\"a\"]; values.try_set(0, \"b\"); }",
-        ).expect("parse distinct List.try_set types"))
+        analyze(
+            &parse(
+                "fn distinct() { var List<string, 2> values = [\"a\"]; values.try_set(0, \"b\"); }",
+            )
+            .expect("parse distinct List.try_set types"),
+        )
         .expect("distinct index/value types may remain positional");
     }
 
@@ -15023,9 +15038,8 @@ mod tests {
             ("1.5e-3", "0.0015"),
             ("12.00e+2", "1200"),
         ] {
-            let expression = returned_expr(&format!(
-                "fn value() -> decimal {{ return {spelling}; }}"
-            ));
+            let expression =
+                returned_expr(&format!("fn value() -> decimal {{ return {spelling}; }}"));
             let ExprKind::DecimalLiteral {
                 value,
                 spelling: retained,
@@ -15041,9 +15055,7 @@ mod tests {
     #[test]
     fn decimal_literal_normalizes_before_enforcing_scale_twenty_eight() {
         let removable = format!("0.{}10", "0".repeat(27));
-        let expression = returned_expr(&format!(
-            "fn value() -> decimal {{ return {removable}; }}"
-        ));
+        let expression = returned_expr(&format!("fn value() -> decimal {{ return {removable}; }}"));
         let ExprKind::DecimalLiteral { value, .. } = expression.expr else {
             panic!("expected normalized decimal literal");
         };
@@ -15094,13 +15106,11 @@ mod tests {
         minimum_bytes[63] = 0x80;
         let minimum = BigInt::from_twos_bytes(&minimum_bytes).expect("signed 512-bit minimum");
 
-        let maximum_expression = returned_expr(&format!(
-            "fn value() -> int {{ return {maximum}; }}"
-        ));
+        let maximum_expression =
+            returned_expr(&format!("fn value() -> int {{ return {maximum}; }}"));
         assert!(matches!(maximum_expression.expr, ExprKind::IntLiteral(value) if value == maximum));
-        let minimum_expression = returned_expr(&format!(
-            "fn value() -> int {{ return {minimum}; }}"
-        ));
+        let minimum_expression =
+            returned_expr(&format!("fn value() -> int {{ return {minimum}; }}"));
         assert!(matches!(minimum_expression.expr, ExprKind::IntLiteral(value) if value == minimum));
 
         let above = decimal_plus_one(&maximum.to_string());
@@ -15156,9 +15166,8 @@ mod tests {
             ("1.5 * 2.0", "3"),
             ("1.0 / 8.0", "0.125"),
         ] {
-            let expression = returned_expr(&format!(
-                "fn value() -> decimal {{ return {source}; }}"
-            ));
+            let expression =
+                returned_expr(&format!("fn value() -> decimal {{ return {source}; }}"));
             let ExprKind::DecimalLiteral { value, .. } = expression.expr else {
                 panic!("constant decimal expression {source} must fold");
             };
@@ -15166,9 +15175,18 @@ mod tests {
         }
 
         for (source, expected_code) in [
-            ("fn value() -> quantity { return 1 - 2; }", "E_QUANTITY_UNDERFLOW"),
-            ("fn value() -> decimal { return 1.0 / 0.0; }", "E_DIVISION_BY_ZERO"),
-            ("fn value() -> decimal { return 1.0 / 3.0; }", "E_REPEATING_DECIMAL"),
+            (
+                "fn value() -> quantity { return 1 - 2; }",
+                "E_QUANTITY_UNDERFLOW",
+            ),
+            (
+                "fn value() -> decimal { return 1.0 / 0.0; }",
+                "E_DIVISION_BY_ZERO",
+            ),
+            (
+                "fn value() -> decimal { return 1.0 / 3.0; }",
+                "E_REPEATING_DECIMAL",
+            ),
             (
                 "fn value() -> decimal { return 0.000000000000001 * 0.000000000000001; }",
                 "E_DECIMAL_SCALE_OVERFLOW",
@@ -15239,15 +15257,18 @@ mod tests {
         );
         assert!(matches!(recoverable.expr, ExprKind::NumericTryCast { .. }));
 
-        let truncated = returned_expr(
-            "fn value() -> int { return decimal::to_int_trunc(value: -1.9); }",
+        let truncated =
+            returned_expr("fn value() -> int { return decimal::to_int_trunc(value: -1.9); }");
+        assert!(
+            matches!(truncated.expr, ExprKind::IntLiteral(ref value) if value.try_to_i64() == Some(-1))
         );
-        assert!(matches!(truncated.expr, ExprKind::IntLiteral(ref value) if value.try_to_i64() == Some(-1)));
         let rounded = returned_expr(
             "fn value() -> int { return decimal::to_int_round(\
                 value: 2.5, mode: Rounding::nearest_even); }",
         );
-        assert!(matches!(rounded.expr, ExprKind::IntLiteral(ref value) if value.try_to_i64() == Some(2)));
+        assert!(
+            matches!(rounded.expr, ExprKind::IntLiteral(ref value) if value.try_to_i64() == Some(2))
+        );
     }
 
     #[test]
@@ -15269,7 +15290,9 @@ mod tests {
         );
         assert!(matches!(fields[0].1.expr, ExprKind::DecimalLiteral { .. }));
         assert!(matches!(fields[1].1.expr, ExprKind::String(ref value) if value == "sink"));
-        assert!(matches!(fields[2].1.expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(7_i64)));
+        assert!(
+            matches!(fields[2].1.expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(7_i64))
+        );
     }
 
     #[test]
@@ -15733,9 +15756,8 @@ mod tests {
         let err = analyze(&parse("fn f(AccountId who) { let y = who + 1; } ").unwrap());
         assert!(err.is_err());
         // Equality on same named struct references is allowed
-        let ok = analyze(
-            &parse("fn g(AccountId a, AccountId b) -> bool { return a == b; } ").unwrap(),
-        );
+        let ok =
+            analyze(&parse("fn g(AccountId a, AccountId b) -> bool { return a == b; } ").unwrap());
         assert!(ok.is_ok());
     }
 
@@ -17356,10 +17378,9 @@ mod tests {
 
     #[test]
     fn adaptive_int_values_use_width_independent_operators() {
-        let program = parse(
-            "seiyaku C { fn f(int value) -> int { return value < 0 ? -value : value; } }",
-        )
-        .expect("parse width-independent int expression");
+        let program =
+            parse("seiyaku C { fn f(int value) -> int { return value < 0 ? -value : value; } }")
+                .expect("parse width-independent int expression");
         analyze(&program).expect("ordinary int operators must accept the complete V1 domain");
     }
 

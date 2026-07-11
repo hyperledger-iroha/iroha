@@ -143,12 +143,12 @@ pub fn freeze_staged_genesis_v2(
     };
 
     let election = FrozenElectionInputs {
-            epoch: 0,
-            epoch_end_height,
-            mode,
-            roster,
-            leader_seed,
-        };
+        epoch: 0,
+        epoch_end_height,
+        mode,
+        roster,
+        leader_seed,
+    };
     let next_epoch_snapshot = finalized_next_epoch_snapshot(staged, &chain_id, 1, &election)
         .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
     let context = build_genesis_height_context(GenesisContextInputs {
@@ -923,12 +923,7 @@ mod tests {
             aggregate_signature: vec![0xA5; 48],
         };
         let validator_set_pops = vec![vec![0xA6]; context.roster.len()];
-        wire::finality::V2FinalityArtifact::new(
-            context,
-            subject,
-            commit_qc,
-            validator_set_pops,
-        )
+        wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
     }
 
     #[test]
@@ -959,13 +954,9 @@ mod tests {
             leader_seed: [0x77; 32],
         };
         let parent = artifact(parent_context, Some(snapshot));
-        let successor = build_successor_height_context(
-            &parent,
-            Hash::new(b"next lanes"),
-            Some(5),
-            None,
-        )
-        .expect("epoch successor");
+        let successor =
+            build_successor_height_context(&parent, Hash::new(b"next lanes"), Some(5), None)
+                .expect("epoch successor");
         assert_eq!(successor.height, 2);
         assert_eq!(successor.epoch, 5);
         assert_eq!(successor.epoch_end_height, 5);
@@ -977,12 +968,7 @@ mod tests {
     fn epoch_end_argument_is_present_only_at_a_certified_boundary() {
         let non_boundary = artifact(genesis(wire::ConsensusMode::Npos, &[4, 3, 2, 1], 3), None);
         assert_eq!(
-            build_successor_height_context(
-                &non_boundary,
-                Hash::new(b"lanes"),
-                Some(8),
-                None,
-            ),
+            build_successor_height_context(&non_boundary, Hash::new(b"lanes"), Some(8), None,),
             Err(V2ContextBuildError::UnexpectedNextEpochEnd)
         );
 

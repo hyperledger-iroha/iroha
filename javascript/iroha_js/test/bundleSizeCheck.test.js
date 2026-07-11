@@ -22,6 +22,61 @@ test("bundle-size check fails closed when esbuild cannot be resolved", async () 
   );
 });
 
+test("bundle-size targets retain audited ceilings and browser graph guards", () => {
+  assert.deepEqual(
+    BUNDLE_TARGETS.map(({ label, limitKb, forbidNodeInputs, forbidGlobalBuffer }) => ({
+      label,
+      limitKb,
+      forbidNodeInputs: forbidNodeInputs === true,
+      forbidGlobalBuffer: forbidGlobalBuffer === true,
+    })),
+    [
+      {
+        label: "toriiClient.js",
+        limitKb: 840,
+        forbidNodeInputs: false,
+        forbidGlobalBuffer: false,
+      },
+      {
+        label: "transactionCodec.js (browser)",
+        limitKb: 132,
+        forbidNodeInputs: true,
+        forbidGlobalBuffer: true,
+      },
+      {
+        label: "nexusApp.js (browser)",
+        limitKb: 205,
+        forbidNodeInputs: true,
+        forbidGlobalBuffer: true,
+      },
+      {
+        label: "canonicalRequest.js (browser)",
+        limitKb: 75,
+        forbidNodeInputs: true,
+        forbidGlobalBuffer: true,
+      },
+      {
+        label: "ivmArtifact.js (browser)",
+        limitKb: 12,
+        forbidNodeInputs: true,
+        forbidGlobalBuffer: true,
+      },
+      {
+        label: "kotodamaCompiler/browser.js (browser)",
+        limitKb: 49,
+        forbidNodeInputs: true,
+        forbidGlobalBuffer: true,
+      },
+      {
+        label: "browser.js (public aggregate)",
+        limitKb: 300,
+        forbidNodeInputs: true,
+        forbidGlobalBuffer: true,
+      },
+    ],
+  );
+});
+
 test("bundle-size check covers the browser transaction codec", () => {
   const target = BUNDLE_TARGETS.find(({ label }) => label.includes("transactionCodec"));
   assert.ok(target, "browser transaction-codec bundle target is required");
@@ -66,6 +121,18 @@ test("bundle-size check gates the IVM artifact helper as a browser leaf", () => 
   assert.ok(target.limitKb > 0 && target.limitKb <= 12);
 });
 
+test("bundle-size check gates the remote Kotodama compiler browser export", () => {
+  const target = BUNDLE_TARGETS.find(({ label }) =>
+    label.includes("kotodamaCompiler/browser"),
+  );
+  assert.ok(target, "browser Kotodama compiler bundle target is required");
+  assert.equal(target.platform, "browser");
+  assert.match(target.entryPoint, /dist[/\\]kotodamaCompiler[/\\]browser\.js$/u);
+  assert.equal(target.forbidNodeInputs, true);
+  assert.equal(target.forbidGlobalBuffer, true);
+  assert.equal(target.limitKb, 49);
+});
+
 test("browser graph guard detects every forbidden Node-only edge", () => {
   const candidates = [
     "node:crypto",
@@ -100,6 +167,8 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
+  assert.equal(Object.keys(result.metafile.inputs).length, 51);
+  assert.equal(result.outputFiles[0].contents.byteLength, 303_676);
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,
@@ -127,7 +196,72 @@ test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims"
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
+  assert.equal(Object.keys(result.metafile.inputs).length, 7);
+  assert.equal(result.outputFiles[0].contents.byteLength, 9_644);
   assert.ok(result.outputFiles[0].contents.byteLength <= 12 * 1024);
+  assert.doesNotMatch(
+    result.outputFiles[0].text,
+    /(?:globalThis|window|global)\.Buffer\s*=/u,
+  );
+});
+
+test("remaining bundle targets retain exact pinned-esbuild baselines", async () => {
+  const expected = new Map([
+    ["toriiClient.js", { bytes: 852_966, modules: 57 }],
+    ["transactionCodec.js (browser)", { bytes: 125_424, modules: 36 }],
+    ["nexusApp.js (browser)", { bytes: 206_556, modules: 45 }],
+    ["canonicalRequest.js (browser)", { bytes: 69_529, modules: 31 }],
+  ]);
+  const { build } = await import("esbuild");
+  for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
+    const result = await build({
+      entryPoints: [target.entryPoint],
+      bundle: true,
+      write: false,
+      platform: target.platform,
+      target: target.target,
+      format: "esm",
+      treeShaking: true,
+      sourcemap: false,
+      minify: true,
+      metafile: true,
+    });
+    assert.deepEqual(
+      {
+        bytes: result.outputFiles[0].contents.byteLength,
+        modules: Object.keys(result.metafile.inputs).length,
+      },
+      expected.get(target.label),
+      target.label,
+    );
+  }
+});
+
+test("Kotodama compiler browser export stays below 49 KiB without Node or Buffer shims", async () => {
+  const target = BUNDLE_TARGETS.find(({ label }) =>
+    label.includes("kotodamaCompiler/browser"),
+  );
+  assert.ok(target);
+  const { build } = await import("esbuild");
+  const result = await build({
+    entryPoints: [target.entryPoint],
+    bundle: true,
+    write: false,
+    platform: "browser",
+    target: target.target,
+    format: "esm",
+    treeShaking: true,
+    sourcemap: false,
+    minify: true,
+    metafile: true,
+  });
+  assert.deepEqual(
+    findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
+    [],
+  );
+  assert.equal(Object.keys(result.metafile.inputs).length, 6);
+  assert.equal(result.outputFiles[0].contents.byteLength, 49_487);
+  assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,
     /(?:globalThis|window|global)\.Buffer\s*=/u,

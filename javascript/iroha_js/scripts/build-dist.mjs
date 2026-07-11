@@ -1,8 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
+  constants,
   cpSync,
   existsSync,
+  fstatSync,
+  fsyncSync,
+  linkSync,
   lstatSync,
   openSync,
   readFileSync,
@@ -10,11 +14,9 @@ import {
   readdirSync,
   renameSync,
   rmSync,
-  statSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -41,11 +43,34 @@ const STAGING_PREFIX = ".dist-stage-";
 const BACKUP_PREFIX = ".dist-backup-";
 const FAILED_PREFIX = ".dist-failed-";
 const TEST_FAILPOINTS = new Set(["after-backup", "after-publish"]);
+const RETIRED_LOCK_PREFIX = ".build-dist.lock.retired-";
 
 const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 
 function lockPathFor(root) {
   return join(root, ".build-dist.lock");
+}
+
+const UNSUPPORTED_DIRECTORY_SYNC_CODES = new Set([
+  "EACCES",
+  "EBADF",
+  "EINVAL",
+  "EISDIR",
+  "ENOTSUP",
+  "EPERM",
+]);
+
+/** Flush a directory entry update when the host filesystem supports it. */
+export function syncDirectory(directory) {
+  let descriptor;
+  try {
+    descriptor = openSync(directory, "r");
+    fsyncSync(descriptor);
+  } catch (error) {
+    if (!UNSUPPORTED_DIRECTORY_SYNC_CODES.has(error?.code)) throw error;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
 }
 
 function processIsRunning(pid) {
@@ -58,16 +83,113 @@ function processIsRunning(pid) {
   }
 }
 
-function readLockOwner(lockPath) {
+function parseLockOwner(bytes) {
   try {
-    const parsed = JSON.parse(readFileSync(lockPath, "utf8"));
+    const parsed = JSON.parse(bytes.toString("utf8"));
     return {
       pid: Number(parsed?.pid),
       token: typeof parsed?.token === "string" ? parsed.token : undefined,
+      createdAt: typeof parsed?.createdAt === "string" ? parsed.createdAt : undefined,
     };
   } catch {
     return {};
   }
+}
+
+function lockIdentity(metadata) {
+  return {
+    dev: metadata.dev,
+    ino: metadata.ino,
+    size: metadata.size,
+  };
+}
+
+function sameLockIdentity(left, right) {
+  return left?.dev === right?.dev && left?.ino === right?.ino;
+}
+
+function snapshotLock(lockPath) {
+  const pathMetadata = lstatSync(lockPath);
+  if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) {
+    throw new Error(`build:dist lock must be a regular non-symbolic-link file: ${lockPath}`);
+  }
+  const descriptor = openSync(lockPath, constants.O_RDONLY);
+  try {
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile() || !sameLockIdentity(lockIdentity(pathMetadata), lockIdentity(metadata))) {
+      throw new Error(`build:dist lock changed while it was being examined: ${lockPath}`);
+    }
+    const bytes = readFileSync(descriptor);
+    return {
+      digest: createHash("sha256").update(bytes).digest("hex"),
+      identity: lockIdentity(metadata),
+      mtimeMs: metadata.mtimeMs,
+      owner: parseLockOwner(bytes),
+    };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function sameLockSnapshot(left, right) {
+  return (
+    sameLockIdentity(left?.identity, right?.identity) &&
+    left?.digest === right?.digest &&
+    left?.owner?.pid === right?.owner?.pid &&
+    left?.owner?.token === right?.owner?.token
+  );
+}
+
+function restoreUnexpectedRetiredLock(retiredPath, lockPath) {
+  try {
+    // Hard-linking is exclusive at the public pathname and cannot overwrite a
+    // lock that another contender acquired while the candidate was examined.
+    // It also works when Windows refuses rename-over-existing-file.
+    linkSync(retiredPath, lockPath);
+    syncDirectory(dirname(lockPath));
+    rmSync(retiredPath, { force: true });
+    syncDirectory(dirname(lockPath));
+    return true;
+  } catch (error) {
+    if (error?.code === "EEXIST") return false;
+    throw error;
+  }
+}
+
+function retireLockCandidate(root, lockPath, observed) {
+  const retiredPath = join(root, `${RETIRED_LOCK_PREFIX}${process.pid}-${randomUUID()}`);
+  renameSync(lockPath, retiredPath);
+  syncDirectory(root);
+  const moved = snapshotLock(retiredPath);
+  if (!sameLockSnapshot(observed, moved)) {
+    const restored = restoreUnexpectedRetiredLock(retiredPath, lockPath);
+    if (!restored) {
+      throw new Error(
+        `build:dist lock changed during stale takeover; preserved the replacement at ${retiredPath}`,
+      );
+    }
+    return false;
+  }
+  rmSync(retiredPath, { force: true });
+  syncDirectory(root);
+  return true;
+}
+
+/** Fail closed if the public lock pathname no longer names this transaction. */
+export function assertDistLockOwnership(lock) {
+  if (!lock || typeof lock !== "object") {
+    throw new TypeError("build:dist lock ownership requires a lock handle");
+  }
+  const current = snapshotLock(lock.lockPath);
+  if (
+    current.owner.token !== lock.token ||
+    current.owner.pid !== lock.pid ||
+    current.digest !== lock.digest ||
+    !sameLockIdentity(current.identity, lock.identity)
+  ) {
+    throw new Error(`build:dist lost ownership of ${lock.lockPath}`);
+  }
+  return current;
 }
 
 /**
@@ -81,36 +203,91 @@ export async function acquireDistLock({
   root = ROOT,
   timeoutMs = LOCK_TIMEOUT_MS,
   staleLockMs = STALE_LOCK_MS,
+  onLockCreated,
+  onStaleCandidate,
 } = {}) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    throw new TypeError("build:dist lock timeoutMs must be a non-negative finite number");
+  }
+  if (!Number.isFinite(staleLockMs) || staleLockMs < 0) {
+    throw new TypeError("build:dist lock staleLockMs must be a non-negative finite number");
+  }
+  if (onStaleCandidate !== undefined && typeof onStaleCandidate !== "function") {
+    throw new TypeError("build:dist onStaleCandidate must be a function");
+  }
+  if (onLockCreated !== undefined && typeof onLockCreated !== "function") {
+    throw new TypeError("build:dist onLockCreated must be a function");
+  }
   const resolvedRoot = resolve(root);
   const lockPath = lockPathFor(resolvedRoot);
   const startedAt = Date.now();
   while (true) {
     const token = randomUUID();
+    let descriptor;
+    let createdIdentity;
     try {
-      const descriptor = openSync(lockPath, "wx", 0o600);
-      try {
-        writeFileSync(
-          descriptor,
-          `${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString() })}\n`,
-          { encoding: "utf8" },
-        );
-        return { descriptor, lockPath, root: resolvedRoot, token };
-      } catch (error) {
-        closeSync(descriptor);
-        rmSync(lockPath, { force: true });
-        throw error;
-      }
+      descriptor = openSync(lockPath, "wx", 0o600);
+      writeFileSync(
+        descriptor,
+        `${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString() })}\n`,
+        { encoding: "utf8" },
+      );
+      fsyncSync(descriptor);
+      createdIdentity = lockIdentity(fstatSync(descriptor));
+      closeSync(descriptor);
+      descriptor = undefined;
+      onLockCreated?.({ lockPath });
+      syncDirectory(resolvedRoot);
+      const current = snapshotLock(lockPath);
+      const lock = {
+        digest: current.digest,
+        identity: createdIdentity,
+        lockPath,
+        pid: process.pid,
+        root: resolvedRoot,
+        token,
+      };
+      assertDistLockOwnership(lock);
+      return lock;
     } catch (error) {
+      if (descriptor !== undefined) {
+        try {
+          createdIdentity ??= lockIdentity(fstatSync(descriptor));
+        } finally {
+          closeSync(descriptor);
+          descriptor = undefined;
+        }
+      }
+      if (createdIdentity !== undefined) {
+        try {
+          const observed = snapshotLock(lockPath);
+          if (sameLockIdentity(createdIdentity, observed.identity)) {
+            retireLockCandidate(resolvedRoot, lockPath, observed);
+          }
+        } catch (cleanupError) {
+          if (cleanupError?.code !== "ENOENT") {
+            throw new AggregateError(
+              [error, cleanupError],
+              "build:dist failed to initialize its lock and could not clean it safely",
+            );
+          }
+        }
+      }
       if (error?.code !== "EEXIST") throw error;
     }
 
     try {
-      const stale = Date.now() - statSync(lockPath).mtimeMs > staleLockMs;
+      const observed = snapshotLock(lockPath);
+      const stale = Date.now() - observed.mtimeMs > staleLockMs;
       if (stale) {
-        const owner = readLockOwner(lockPath);
-        if (!processIsRunning(owner.pid)) {
-          unlinkSync(lockPath);
+        if (!processIsRunning(observed.owner.pid)) {
+          onStaleCandidate?.({
+            lockPath,
+            owner: Object.freeze({ ...observed.owner }),
+          });
+          if (retireLockCandidate(resolvedRoot, lockPath, observed)) {
+            continue;
+          }
           continue;
         }
       }
@@ -128,19 +305,10 @@ export async function acquireDistLock({
 
 export function releaseDistLock(lock) {
   if (!lock) return;
-  let releaseError;
-  try {
-    const owner = readLockOwner(lock.lockPath);
-    if (owner.token !== lock.token || owner.pid !== process.pid) {
-      throw new Error(`build:dist lost ownership of ${lock.lockPath}`);
-    }
-    unlinkSync(lock.lockPath);
-  } catch (error) {
-    if (error?.code !== "ENOENT") releaseError = error;
-  } finally {
-    closeSync(lock.descriptor);
+  const observed = assertDistLockOwnership(lock);
+  if (!retireLockCandidate(lock.root, lock.lockPath, observed)) {
+    throw new Error(`build:dist lost ownership of ${lock.lockPath} during release`);
   }
-  if (releaseError) throw releaseError;
 }
 
 export function validateDistOutputs(directory) {
@@ -203,36 +371,54 @@ function isValidDistribution(directory) {
   }
 }
 
-function recoverInterruptedPublication(root) {
+function recoverInterruptedPublication(root, lock) {
   const dist = join(root, "dist");
   const backups = publicationArtifacts(root, BACKUP_PREFIX);
 
   if (!existsSync(dist)) {
     const recoverable = backups.find(isValidDistribution);
-    if (recoverable) renameSync(recoverable, dist);
+    if (recoverable) {
+      assertDistLockOwnership(lock);
+      renameSync(recoverable, dist);
+      syncDirectory(root);
+    }
   } else if (!isValidDistribution(dist)) {
     const recoverable = backups.find(isValidDistribution);
     if (recoverable) {
       const failed = join(root, `${FAILED_PREFIX}${process.pid}-${randomUUID()}`);
+      assertDistLockOwnership(lock);
       renameSync(dist, failed);
       try {
+        assertDistLockOwnership(lock);
         renameSync(recoverable, dist);
       } catch (error) {
+        assertDistLockOwnership(lock);
         renameSync(failed, dist);
         throw error;
       }
+      syncDirectory(root);
+      assertDistLockOwnership(lock);
       rmSync(failed, { recursive: true, force: true });
+      syncDirectory(root);
     }
   }
 
   for (const backup of backups) {
-    if (existsSync(backup)) rmSync(backup, { recursive: true, force: true });
+    if (existsSync(backup)) {
+      assertDistLockOwnership(lock);
+      rmSync(backup, { recursive: true, force: true });
+      syncDirectory(root);
+    }
   }
   for (const staging of publicationArtifacts(root, STAGING_PREFIX)) {
+    assertDistLockOwnership(lock);
     rmSync(staging, { recursive: true, force: true });
+    syncDirectory(root);
   }
   for (const failed of publicationArtifacts(root, FAILED_PREFIX)) {
+    assertDistLockOwnership(lock);
     rmSync(failed, { recursive: true, force: true });
+    syncDirectory(root);
   }
 }
 
@@ -261,28 +447,43 @@ function triggerTestFailpoint(failpoint, point) {
   }
 }
 
-function publishStagingTree({ root, dist, staging, failpoint }) {
+function publishStagingTree({ root, dist, staging, failpoint, lock }) {
   const backup = join(root, `${BACKUP_PREFIX}${process.pid}-${randomUUID()}`);
   const failed = join(root, `${FAILED_PREFIX}${process.pid}-${randomUUID()}`);
   let previousMoved = false;
   let stagingPublished = false;
   try {
     if (existsSync(dist)) {
+      assertDistLockOwnership(lock);
       renameSync(dist, backup);
+      syncDirectory(root);
       previousMoved = true;
     }
     triggerTestFailpoint(failpoint, "after-backup");
 
+    assertDistLockOwnership(lock);
     renameSync(staging, dist);
+    syncDirectory(root);
     stagingPublished = true;
     triggerTestFailpoint(failpoint, "after-publish");
     validateDistOutputs(dist);
   } catch (error) {
     let rollbackError;
     try {
-      if (stagingPublished && existsSync(dist)) renameSync(dist, failed);
-      if (previousMoved && existsSync(backup)) renameSync(backup, dist);
-      if (existsSync(failed)) rmSync(failed, { recursive: true, force: true });
+      if (stagingPublished && existsSync(dist)) {
+        assertDistLockOwnership(lock);
+        renameSync(dist, failed);
+      }
+      if (previousMoved && existsSync(backup)) {
+        assertDistLockOwnership(lock);
+        renameSync(backup, dist);
+      }
+      syncDirectory(root);
+      if (existsSync(failed)) {
+        assertDistLockOwnership(lock);
+        rmSync(failed, { recursive: true, force: true });
+        syncDirectory(root);
+      }
     } catch (candidate) {
       rollbackError = candidate;
     }
@@ -294,7 +495,11 @@ function publishStagingTree({ root, dist, staging, failpoint }) {
     }
     throw error;
   }
-  if (previousMoved) rmSync(backup, { recursive: true, force: true });
+  if (previousMoved) {
+    assertDistLockOwnership(lock);
+    rmSync(backup, { recursive: true, force: true });
+    syncDirectory(root);
+  }
 }
 
 export async function buildDistribution({ root = ROOT } = {}) {
@@ -307,7 +512,7 @@ export async function buildDistribution({ root = ROOT } = {}) {
   let resultError;
   try {
     lock = await acquireDistLock({ root: resolvedRoot });
-    recoverInterruptedPublication(resolvedRoot);
+    recoverInterruptedPublication(resolvedRoot, lock);
     cpSync(src, staging, { recursive: true, errorOnExist: true });
     validateDistOutputs(staging);
     const stagingDigest = directoryDigest(staging);
@@ -320,7 +525,7 @@ export async function buildDistribution({ root = ROOT } = {}) {
     if (distDigest === stagingDigest) {
       return { changed: false, digest: distDigest };
     }
-    publishStagingTree({ root: resolvedRoot, dist, staging, failpoint });
+    publishStagingTree({ root: resolvedRoot, dist, staging, failpoint, lock });
     return { changed: true, digest: stagingDigest };
   } catch (error) {
     resultError = error;
@@ -328,7 +533,9 @@ export async function buildDistribution({ root = ROOT } = {}) {
   } finally {
     const cleanupErrors = [];
     try {
+      if (lock) assertDistLockOwnership(lock);
       rmSync(staging, { recursive: true, force: true });
+      if (lock) syncDirectory(resolvedRoot);
     } catch (error) {
       cleanupErrors.push(error);
     }

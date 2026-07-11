@@ -4,6 +4,39 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Hardened Kotodama compiler result normalization against malformed or hostile
+  native/service output. Successful manifests, recursive entrypoint schemas,
+  triggers, localization/provenance metadata, and source-map/budget sidecars
+  now use exact bounded V1 field contracts with cross-sidecar identity checks;
+  accessors, sparse byte arrays, unsafe integers, retired `Amount`/`U128`
+  leaves, and inconsistent parameter/return schemas fail closed. TypeScript
+  declarations now expose the canonical `Int`/`Decimal`/`Quantity` leaf set,
+  and the exact `Norito` runtime namespace includes `validateNoritoFrame`.
+  Remote compilation now has a 30-second total deadline (bounded to two
+  minutes when overridden), supports caller cancellation without trusting
+  instance accessors, and races uncooperative Fetch/body readers while
+  deterministically releasing listeners, timers, and streams. Its complete
+  browser export bundles to 43,384 bytes (42.4 KiB, six modules, zero
+  Node-only inputs or global `Buffer` assignments) under a 43 KiB gate.
+- Rebased only the complete Node Torii bundle ceiling to 840 KiB after the
+  pinned-esbuild security-hardening baseline reached exactly 852,966 bytes.
+  The gate retains 7,194 bytes (0.84%) of headroom, while regression tests keep
+  every browser ceiling unchanged and require all browser bundles to exclude
+  Node-only inputs and global `Buffer` shims.
+- Made native-host publication repeatable on Windows and fail closed across
+  replacement failures. The publisher now locks the destination, verifies and
+  probes a staged addon for the required Norito and Kotodama exports, moves an
+  existing binary/checksum pair aside before replacement, publishes the new
+  checksum manifest last, re-verifies the public pair, and restores the exact
+  prior state while cleaning transaction artifacts on failure. Publication is
+  now also durable across hard process termination: a versioned append-only
+  journal, fsynced files and directory entries, exact old/new component
+  inventories, and lock-held startup recovery resolve every replacement phase
+  without guessing. Ambiguous, duplicated, missing, symlinked, or tampered
+  recovery artifacts are preserved and rejected. Distribution/native locking
+  now fingerprints the exact owner file, rechecks ownership before destructive
+  phases, and atomically quarantines stale candidates so a replacement lock is
+  never unlinked through a stale-lock time-of-check/time-of-use race.
 - Replaced lossy Kotodama compiler exceptions with a discriminated asynchronous
   result. Node and browser-service compilation now preserve the canonical Rust
   diagnostic fields and UTF-8 byte spans, validate artifact/manifest/sidecar

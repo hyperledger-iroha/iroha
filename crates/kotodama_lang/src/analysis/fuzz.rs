@@ -590,8 +590,7 @@ impl<'a> Evaluator<'a> {
                 }
             }
             ExprKind::NumericTryCast { .. } => Err(EvalError::Runtime(
-                "recoverable numeric conversions are not interpreted by the bounded fuzzer"
-                    .into(),
+                "recoverable numeric conversions are not interpreted by the bounded fuzzer".into(),
             )),
             ExprKind::Binary { op, left, right } => {
                 let lval = self.eval_expr(left, locals, depth)?;

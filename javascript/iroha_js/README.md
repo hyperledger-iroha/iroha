@@ -460,6 +460,15 @@ services must use HTTPS; loopback HTTP is accepted for local development. The
 service receives the complete source, so use only an endpoint you trust. Node
 and browser adapters reject source larger than the canonical 1 MiB UTF-8 limit
 before invoking the native binding or making a network request.
+Validated service URLs and Fetch implementations are kept in immutable private
+client state, so later property mutation cannot redirect source. Responses must
+be HTTP 200 with exact `application/json`, absent/identity content encoding, and
+consistent byte framing. Successful artifacts are bounded to the ledger's 4 MiB
+limit and must carry canonical IVM 1.1/ABI-1 metadata, a checksummed CNTR Norito
+interface whose identity/capabilities and collection counts match the manifest,
+valid literal-section bounds, and a non-empty word-aligned instruction stream.
+The first release accepts only `provenance: null`; signed provenance remains
+disabled until its exact message and public-key algorithm can be verified.
 The native binding and service receive the same canonical JSON-shaped request,
 `{ source, sourceName?, zk }`. `sourceName` is limited to 4096 UTF-8 bytes and
 must not contain control characters. Unknown options—including ABI, vector,

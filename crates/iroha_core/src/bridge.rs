@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::HashOf;
 use iroha_data_model::{
     ChainId,
     block::{BlockHeader, SignedBlock},

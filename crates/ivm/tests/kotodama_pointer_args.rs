@@ -64,8 +64,7 @@ fn pointer_map_default_roundtrip() {
 
     // Durable storage contains the raw schema-bound record payload. The active
     // pointer atom contains the original validated AccountId envelope.
-    let inner_envelope =
-        common::decode_pointer_state_value(&stored, StateValueKindV1::AccountId);
+    let inner_envelope = common::decode_pointer_state_value(&stored, StateValueKindV1::AccountId);
     let inner = validate_tlv_bytes(&inner_envelope).expect("inner TLV");
     assert_eq!(inner.type_id, PointerType::AccountId);
 

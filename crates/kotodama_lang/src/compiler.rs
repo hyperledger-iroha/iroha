@@ -1312,6 +1312,9 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
     use iroha_primitives::json::Json;
     use norito::{decode_from_bytes, to_bytes};
 
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+
     let (type_id, payload) = match kind {
         DRK::Account => {
             let id = iroha_data_model::account::AccountId::parse_encoded(raw)
@@ -1505,8 +1508,8 @@ mod tests {
         HINT_SKIP_OPAQUE_ISI, IrAccessClass, LiteralFixups, NFT_COARSE_KEY, STATE_WILDCARD_KEY,
         TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX, checked_align_stack_frame_size,
         classify_ir_access, decoded_control_target, emit_addi, emit_load64, emit_store64,
-        encode_addi, encode_jal, encode_nop, patch_indexed_literal_load, patch_literal_load,
-        pointer_type_for_kind, push_word, record_isi_access,
+        encode_addi, encode_jal, encode_nop, encode_pointer_tlv_bytes, patch_indexed_literal_load,
+        patch_literal_load, pointer_type_for_kind, push_word, record_isi_access,
         relax_control_transfers_with_trampolines, reserve_word, stack_slot_offset_bytes,
     };
     use crate::{
@@ -9714,13 +9717,37 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        let literal_key = canonical_i64_state_key("Foo", 1);
+        let literal_key = canonical_numeric_state_key("Foo", ir::DataRefKind::Int, "1");
         assert!(
             hints.read_keys.contains(&"state:Foo".to_string()),
             "{hints:?}"
         );
         assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
         assert!(hints.write_keys.contains(&"state:Foo".to_string()));
+        assert!(hints.write_keys.contains(&literal_key), "{hints:?}");
+    }
+
+    #[test]
+    fn manifest_access_set_hints_use_norito_i64_for_bool_map_keys() {
+        let src = r#"
+seiyaku Test {
+  state StateMap<bool, int> Foo;
+
+  kotoage fn main()  authorize("Entry") {
+    Foo[true] = 2;
+    let _x = Foo.get(true);
+  }
+}
+"#;
+        let (_bytes, manifest) = Compiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile bool map access hints");
+        let hints = manifest.access_set_hints.expect("access hints");
+        let encoded = norito::to_bytes(&1_i64).expect("encode canonical bool map key");
+        let literal_key = format!("state:Foo/{}", hex::encode(encoded));
+        assert!(hints.read_keys.contains(&"state:Foo".to_string()));
+        assert!(hints.write_keys.contains(&"state:Foo".to_string()));
+        assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
         assert!(hints.write_keys.contains(&literal_key), "{hints:?}");
     }
 
@@ -11398,17 +11425,28 @@ impl Compiler {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Int);
                     }
                     if let ir::Instr::NumericConvert {
-                        dest, destination, ..
+                        dest,
+                        value,
+                        source,
+                        destination,
                     } = instr
                     {
-                        dataref_kind_map.insert(
-                            (func_idx, *dest),
-                            match destination {
-                                ir::WideNumericKind::Int => DRK::Int,
-                                ir::WideNumericKind::Decimal => DRK::Decimal,
-                                ir::WideNumericKind::Quantity => DRK::Quantity,
-                            },
-                        );
+                        let source_kind = match source {
+                            ir::WideNumericKind::Int => DRK::Int,
+                            ir::WideNumericKind::Decimal => DRK::Decimal,
+                            ir::WideNumericKind::Quantity => DRK::Quantity,
+                        };
+                        let destination_kind = match destination {
+                            ir::WideNumericKind::Int => DRK::Int,
+                            ir::WideNumericKind::Decimal => DRK::Decimal,
+                            ir::WideNumericKind::Quantity => DRK::Quantity,
+                        };
+                        if dataref_kind_map.get(&(func_idx, *value)) == Some(&source_kind)
+                            && let Some(raw) = string_map.get(&(func_idx, *value)).cloned()
+                        {
+                            string_map.insert((func_idx, *dest), raw);
+                        }
+                        dataref_kind_map.insert((func_idx, *dest), destination_kind);
                     }
                     if let ir::Instr::NumericTryConvert {
                         dest, destination, ..

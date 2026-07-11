@@ -95,8 +95,8 @@ fn bigint_literal_expr(value: BigInt) -> Expr {
 
 fn retired_numeric_type_replacement(name: &str) -> Option<Option<&'static str>> {
     match name {
-        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
-        | "u64" | "u128" | "usize" | "num" => Some(Some("int")),
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
+        | "usize" | "num" => Some(Some("int")),
         "float" | "f32" | "f64" => Some(Some("decimal")),
         "Amount" | "amount" | "money" => Some(Some("quantity")),
         "number" => Some(None),
@@ -2753,10 +2753,8 @@ impl<'a> CstAstLowerer<'a> {
                             "integer literal is outside the signed Kotodama int domain",
                         )
                     })?;
-                    let mut expr = self.source_expression_from(
-                        minus.range.start,
-                        bigint_literal_expr(value),
-                    );
+                    let mut expr =
+                        self.source_expression_from(minus.range.start, bigint_literal_expr(value));
                     for (op, token) in prefixes.into_iter().rev() {
                         expr = self.source_expression_from(
                             token.range.start,
@@ -2946,15 +2944,15 @@ impl<'a> CstAstLowerer<'a> {
         let expression = match &tok.kind {
             TokenKind::True => Expr::Bool(true),
             TokenKind::False => Expr::Bool(false),
-            TokenKind::Number(spelling) => bigint_literal_expr(
-                parse_integer_value(spelling, false).map_err(|_| {
+            TokenKind::Number(spelling) => {
+                bigint_literal_expr(parse_integer_value(spelling, false).map_err(|_| {
                     self.coded_error(
                         tok.clone(),
                         "E_INT_LITERAL_OVERFLOW",
                         "integer literal is outside the signed Kotodama int domain",
                     )
-                })?,
-            ),
+                })?)
+            }
             TokenKind::DecimalLiteral(spelling) => {
                 let range = tok.range;
                 let node = self.facts.source_map.allocate_owned(
@@ -3700,16 +3698,16 @@ impl<'a> CstAstLowerer<'a> {
                 let (base, base_token) = self.expect_ident_token()?;
                 if let Some(replacement) = retired_numeric_type_replacement(&base) {
                     let replacement = replacement.map_or_else(
-                        || "use `int`, `decimal`, or `quantity` according to the value's domain"
-                            .to_owned(),
+                        || {
+                            "use `int`, `decimal`, or `quantity` according to the value's domain"
+                                .to_owned()
+                        },
                         |replacement| format!("use `{replacement}`"),
                     );
                     return Err(self.coded_error(
                         base_token,
                         "E_RETIRED_NUMERIC_TYPE",
-                        format!(
-                            "numeric type `{base}` is not part of Kotodama V1; {replacement}"
-                        ),
+                        format!("numeric type `{base}` is not part of Kotodama V1; {replacement}"),
                     ));
                 }
                 self.record_type_use(base.clone(), base_token.range);
@@ -4021,7 +4019,9 @@ impl<'a> CstAstLowerer<'a> {
     fn number_to_usize(&self, token: &Token, value: &str, context: &str) -> ParseResult<usize> {
         parse_bounded_unsigned(value, usize::MAX as u64)
             .and_then(|value| usize::try_from(value).map_err(|_| ()))
-            .map_err(|()| self.range_error(token, format!("{context} integer literal out of range")))
+            .map_err(|()| {
+                self.range_error(token, format!("{context} integer literal out of range"))
+            })
     }
 
     fn range_error(&self, token: &Token, message: String) -> ParseError {
@@ -4067,13 +4067,15 @@ impl<'a> CstAstLowerer<'a> {
                     kind: TokenKind::Ident(_),
                     ..
                 }),
-                Some(Token {
-                    kind: TokenKind::Ident(_),
-                    ..
-                } | Token {
-                    kind: TokenKind::Less,
-                    ..
-                })
+                Some(
+                    Token {
+                        kind: TokenKind::Ident(_),
+                        ..
+                    } | Token {
+                        kind: TokenKind::Less,
+                        ..
+                    }
+                )
             )
         ) {
             return true;
@@ -4381,26 +4383,10 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
         "json::set_i64" | "json::set_int" => Some(
             "scalar JSON setters are not part of Kotodama V1; use native `json { key: value }` construction so adaptive-width int values remain exact",
         ),
-        "numeric::to_i64"
-        | "numeric::neg"
-        | "numeric::add"
-        | "numeric::sub"
-        | "numeric::mul"
-        | "numeric::div"
-        | "numeric::rem"
-        | "numeric::eq"
-        | "numeric::ne"
-        | "numeric::lt"
-        | "numeric::le"
-        | "numeric::gt"
-        | "numeric::ge"
-        | "math::isqrt"
-        | "math::abs"
-        | "math::min"
-        | "math::max"
-        | "math::div_ceil"
-        | "math::gcd"
-        | "math::mean" => Some(
+        "numeric::to_i64" | "numeric::neg" | "numeric::add" | "numeric::sub" | "numeric::mul"
+        | "numeric::div" | "numeric::rem" | "numeric::eq" | "numeric::ne" | "numeric::lt"
+        | "numeric::le" | "numeric::gt" | "numeric::ge" | "math::isqrt" | "math::abs"
+        | "math::min" | "math::max" | "math::div_ceil" | "math::gcd" | "math::mean" => Some(
             "generic numeric helpers are not part of Kotodama V1; use operators and the named int, decimal, or quantity conversions",
         ),
         "contains" | "std::map::contains" | "has" | "std::map::has" => {
@@ -4429,14 +4415,10 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
         "get_int" | "json_get_int" | "json::get_int" => {
             Some("`get_int(...)` was removed as a free helper; use `json.get_int(key)`")
         }
-        "get_amount"
-        | "json_get_amount"
-        | "json::get_amount"
-        | "get_numeric"
-        | "json_get_numeric"
-        | "json::get_numeric" => Some(
-            "legacy numeric JSON getters were retired; use `value.get_quantity(key)`",
-        ),
+        "get_amount" | "json_get_amount" | "json::get_amount" | "get_numeric"
+        | "json_get_numeric" | "json::get_numeric" => {
+            Some("legacy numeric JSON getters were retired; use `value.get_quantity(key)`")
+        }
         "get_json" | "json_get_json" | "json::get_json" => {
             Some("`get_json(...)` was removed as a free helper; use `json.get_json(key)`")
         }
@@ -4675,8 +4657,7 @@ mod tests {
 
     #[test]
     fn list_type_capacity_is_preserved_as_a_constant_argument() {
-        let program =
-            parse_module("fn values(List<Option<int>, 64> input) {}").expect("List type");
+        let program = parse_module("fn values(List<Option<int>, 64> input) {}").expect("List type");
         let Item::Function(function) = &program.items[0] else {
             panic!("expected function item");
         };
@@ -5128,10 +5109,16 @@ mod tests {
     fn retired_colon_declarations_report_the_type_first_replacement() {
         for (source, replacement) in [
             ("module M { fn f(value: int) {} }", "`int value`"),
-            ("module M { const limit: int = 1; }", "`const int limit = 1;`"),
+            (
+                "module M { const limit: int = 1; }",
+                "`const int limit = 1;`",
+            ),
             ("seiyaku C { state value: int; }", "`state int value;`"),
             ("module M { struct Pair { value: int; } }", "`int field;`"),
-            ("module M { fn f() { let value: int = 1; } }", "`let int value = ...;`"),
+            (
+                "module M { fn f() { let value: int = 1; } }",
+                "`let int value = ...;`",
+            ),
         ] {
             let error = parse(source).expect_err("retired declaration order must fail closed");
             assert!(error.contains("E_RETIRED_DECLARATION_ORDER"), "{error}");
@@ -5142,9 +5129,8 @@ mod tests {
     #[test]
     fn retired_numeric_type_spellings_are_rejected_with_replacements() {
         for legacy in [
-            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64",
-            "u128", "usize", "num", "float", "f32", "f64", "Amount", "amount", "money",
-            "number",
+            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+            "num", "float", "f32", "f64", "Amount", "amount", "money", "number",
         ] {
             let source = format!("module Types {{ fn use_type({legacy} value) {{}} }}");
             let error = parse(&source).expect_err("retired numeric type must fail closed");
@@ -5324,10 +5310,8 @@ mod tests {
 
     #[test]
     fn decimal_literals_follow_existing_expression_precedence() {
-        let program = parse_module(
-            "fn main() { let value = true ? 1.0 : 2.0 + 3.0 * 4.0; }",
-        )
-        .expect("parse decimal expression");
+        let program = parse_module("fn main() { let value = true ? 1.0 : 2.0 + 3.0 * 4.0; }")
+            .expect("parse decimal expression");
         let function = program
             .items
             .into_iter()
@@ -5422,10 +5406,9 @@ mod tests {
 
     #[test]
     fn method_named_arguments_exclude_the_implicit_receiver() {
-        let program = parse_module(
-            "fn main(Json value, Name key) { let found = value.get_int(key: key); }",
-        )
-        .expect("parse named method call");
+        let program =
+            parse_module("fn main(Json value, Name key) { let found = value.get_int(key: key); }")
+                .expect("parse named method call");
         let function = program
             .items
             .iter()
@@ -5482,9 +5465,8 @@ mod tests {
         assert!(implicit_receiver);
 
         for legacy in ["get_amount", "get_numeric"] {
-            let source = format!(
-                "fn main(Json value, Name key) {{ let found = value.{legacy}(key); }}"
-            );
+            let source =
+                format!("fn main(Json value, Name key) {{ let found = value.{legacy}(key); }}");
             let error = parse_module(&source).expect_err("retired JSON getter must fail");
             assert!(error.contains("E_LEGACY_JSON_GETTER"), "{error}");
         }
@@ -5666,7 +5648,10 @@ mod tests {
         ] {
             let error = parse_module(&format!("fn main() {{ let int value = {spelling}; }}"))
                 .expect_err("neighbor outside the signed domain must fail");
-            assert!(error.contains("E_INT_LITERAL_OVERFLOW"), "{spelling}: {error}");
+            assert!(
+                error.contains("E_INT_LITERAL_OVERFLOW"),
+                "{spelling}: {error}"
+            );
         }
     }
 

@@ -673,12 +673,7 @@ mod tests {
             aggregate_signature: vec![0xB4; 48],
         };
         let validator_set_pops = vec![vec![0xB5]; context.roster.len()];
-        wire::finality::V2FinalityArtifact::new(
-            context,
-            subject,
-            commit_qc,
-            validator_set_pops,
-        )
+        wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
     }
 
     fn authenticated_artifact_for(
@@ -728,12 +723,7 @@ mod tests {
                     .expect("fixture validator PoP")
             })
             .collect();
-        wire::finality::V2FinalityArtifact::new(
-            context,
-            subject,
-            commit_qc,
-            validator_set_pops,
-        )
+        wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
     }
 
     #[test]

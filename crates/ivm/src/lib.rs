@@ -66,10 +66,10 @@ mod metadata;
 pub mod numeric {
     pub use ivm_abi::numeric::*;
 }
+pub mod mock_wsv;
 pub mod numeric_gas;
 pub mod numeric_tlv;
 pub mod numeric_v1;
-pub mod mock_wsv;
 mod pedersen;
 pub mod pointer_abi;
 mod poseidon;
