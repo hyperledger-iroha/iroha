@@ -65,11 +65,11 @@ translator: machine-google-reviewed
 
 - ٹیسٹ: موچی/موچی انٹیگریشن/ٹیسٹ/سپروائزر۔ آر ایس: 33- `let kagami = env!("CARGO_BIN_EXE_kagami_mock");`
 
-## cargo_bin_exe_koto_compile (ٹیسٹ: 3)
+## cargo_bin_exe_koto build (ٹیسٹ: 3)
 
-- ٹیسٹ: کریٹس/IVM/ٹیسٹ/CLI_SMOKE.RS: 8 - `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- ٹیسٹ: کریٹس/IVM/ٹیسٹ/CLI_SMOKE.RS: 56 - `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- ٹیسٹ: کریٹس/IVM/ٹیسٹ/CLI_SMOKE.RS: 88 - `let bin = env!("CARGO_BIN_EXE_koto_compile");`
+- ٹیسٹ: کریٹس/IVM/ٹیسٹ/CLI_SMOKE.RS: 8 - `let bin = env!("CARGO_BIN_EXE_koto build");`
+- ٹیسٹ: کریٹس/IVM/ٹیسٹ/CLI_SMOKE.RS: 56 - `let bin = env!("CARGO_BIN_EXE_koto build");`
+- ٹیسٹ: کریٹس/IVM/ٹیسٹ/CLI_SMOKE.RS: 88 - `let bin = env!("CARGO_BIN_EXE_koto build");`
 
 ## cargo_bin_exe_sorafs_chunk_dump (ٹیسٹ: 1)
 
@@ -744,10 +744,6 @@ translator: machine-google-reviewed
 - پروڈ: کریٹس/IVM/SRC/CUDA.RS: 22 - `static BITONIC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx"));`
 - ٹیسٹ: کریٹس/IVM/SRC/PTX_TESTS.RS: 7 - `let out_dir = match std::env::var("OUT_DIR") {`
 - ٹیسٹ: کریٹس/IVM/ٹیسٹ/ptx_kernels.rs: 5 - `let out_dir = env!("OUT_DIR");`
-
-## p2p_turn (prod: 1)
-
-- پروڈ: کریٹس/آئروہ_پی 2 پی/ایس آر سی/ٹرانسپورٹ۔ آر ایس: 296 - `let endpoint = std::env::var("P2P_TURN")`
 
 ## راستہ (پروڈ: 2 ، ٹیسٹ: 1)
 

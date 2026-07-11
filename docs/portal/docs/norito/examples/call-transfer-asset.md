@@ -3,11 +3,11 @@
 ---
 slug: /norito/examples/call-transfer-asset
 title: Invoke host transfer from Kotodama
-description: Demonstrates how a Kotodama entrypoint can call the host `transfer_asset` instruction with inline metadata validation.
+description: Demonstrates how an authorized Kotodama entrypoint invokes `ledger::asset::transfer` with typed identifiers.
 source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-Demonstrates how a Kotodama entrypoint can call the host `transfer_asset` instruction with inline metadata validation.
+Demonstrates how an authorized Kotodama entrypoint invokes `ledger::asset::transfer` with typed identifiers.
 
 ## Ledger walkthrough
 
@@ -23,17 +23,21 @@ Demonstrates how a Kotodama entrypoint can call the host `transfer_asset` instru
 
 [Download the Kotodama source](/norito-snippets/call-transfer-asset.ko)
 
-```text
+```kotodama
 // Direct builtin call (no contract-style call syntax) inside a contract.
 seiyaku TransferCall {
-  kotoage fn pay() permission(AssetTransferRole) {
-    transfer_asset(
-      account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-      account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      10,
-      dataspace_id("0")
-    );
-  }
+    kotoage fn pay() authorize("AssetTransferRole") {
+        ledger::asset::transfer(
+            source: AccountId::parse(
+                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            ),
+            destination: AccountId::parse(
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+            ),
+            asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            amount: 10,
+            dataspace: DataSpaceId::parse("0"),
+        );
+    }
 }
 ```

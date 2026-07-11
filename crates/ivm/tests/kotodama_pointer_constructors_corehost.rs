@@ -2,14 +2,17 @@
 //! CoreHost validates TLVs for SetAccountDetail.
 
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+mod common;
 
 #[test]
 fn kotodama_set_account_detail_with_constructors() {
-    // Kotodama program uses pointer constructors for Name/Json and authority() for AccountId
+    // Kotodama program uses typed pointer constructors for the host call.
     let src = r#"
-        fn main() {
+        seiyaku SetAccountDetail {
+        kotoage fn main() authorize("SetAccountDetail") {
           // Use a valid AccountId multihash form for Iroha v2
-          set_account_detail(account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), name("cursor"), json("{\"x\":1}"));
+          ledger::account::set_detail(account: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), key: Name::parse("cursor"), value: Json::parse("{\"x\":1}"));
+        }
         }
     "#;
     // Use default compiler options (no forced VECTOR bit)
@@ -20,6 +23,7 @@ fn kotodama_set_account_detail_with_constructors() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&prog).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("CoreHost should validate typed TLVs for name/json");
 }

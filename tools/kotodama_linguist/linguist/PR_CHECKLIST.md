@@ -6,8 +6,8 @@ request.
 ## 1. Prove public usage
 
 Run these in an authenticated GitHub browser session:
-- `extension:ko seiyaku NOT is:fork`
-- `extension:ko kotoage NOT is:fork`
+- `extension:ko contract NOT is:fork`
+- `extension:ko entry NOT is:fork`
 - `extension:ko "register_trigger" NOT is:fork`
 
 Acceptance caveat:

@@ -91,11 +91,14 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
 - `torii.zk_prover_allowed_backends` / `torii.zk_prover_allowed_circuits` (string list)
   - Allowlists for prover scope (prefix match, empty = allow all).
 - `torii.zk_ivm_prove_max_inflight` / `torii.zk_ivm_prove_max_queue`
-  - Concurrency controls for the IVM prove helper endpoint (`POST /v1/zk/ivm/prove`).
+  - Shared blocking-execution concurrency and prove-queue controls for IVM prove, derive, contract simulation, and contract views.
   - When saturated, Torii rejects new jobs with `429` and a `Retry-After` hint.
-- `torii.zk_ivm_prove_job_ttl_secs` / `torii.zk_ivm_prove_job_max_entries`
+- `torii.zk_ivm_tooling_timeout_ms`
+  - Wall-clock deadline for derive/simulation/view. Capacity remains held until a timed-out blocking worker physically exits.
+- `torii.zk_ivm_prove_job_ttl_secs` / `torii.zk_ivm_prove_job_max_entries` / `torii.zk_ivm_prove_job_max_retained_bytes`
   - Retention controls for the in-memory prove job cache used by `/v1/zk/ivm/prove/{job_id}`.
-  - Jobs older than `zk_ivm_prove_job_ttl_secs` are evicted (pending/running jobs are cancelled best-effort to free capacity).
+  - The default aggregate retained-byte cap is 128 MiB. Terminal responses are compact JSON cached once; GET clones immutable bytes and charges exact egress before refreshing LRU state.
+  - Jobs older than `zk_ivm_prove_job_ttl_secs` are evicted. Started blocking work is discard-only on cancellation and keeps its capacity/memory reservation until physical completion.
 - `torii.max_content_len` (bytes)
   - Global HTTP request body limit; applies to attachments uploads as an upper bound.
 

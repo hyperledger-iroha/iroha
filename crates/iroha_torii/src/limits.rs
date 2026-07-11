@@ -192,6 +192,20 @@ impl RateLimiter {
         Self::new_with_capacity(rate_per_sec, burst, DEFAULT_MAX_BUCKETS)
     }
 
+    /// Create a limiter from an exact requests-per-minute rate.
+    ///
+    /// Fractional per-second refill is preserved, so rates below 60/minute do
+    /// not get rounded up to one request per second.
+    pub fn new_per_minute(rate_per_minute: Option<u32>, burst: Option<u32>) -> Self {
+        let rate = rate_per_minute.and_then(|value| {
+            (value > 0).then_some(f64::from(value) / Duration::from_secs(60).as_secs_f64())
+        });
+        let burst = burst.unwrap_or_else(|| rate_per_minute.unwrap_or(0)).max(1) as f64;
+        Self {
+            inner: Arc::new(ShardedLimiter::new(rate, burst, DEFAULT_MAX_BUCKETS)),
+        }
+    }
+
     /// Create a new limiter configured with `u64`-sized token buckets.
     pub fn new_u64(rate_per_sec: Option<u64>, burst: Option<u64>) -> Self {
         let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
@@ -860,6 +874,31 @@ mod tests {
         assert!(limiter.allow("a").await);
         // Third should be limited
         assert!(!limiter.allow("a").await);
+    }
+
+    #[test]
+    fn per_minute_rates_preserve_fractional_refill_boundaries() {
+        for rate_per_minute in [1_u32, 59] {
+            let limiter = RateLimiter::new_per_minute(Some(rate_per_minute), Some(1));
+            let configured = limiter.inner.shards[0].lock().rate_per_sec;
+            let expected = f64::from(rate_per_minute) / 60.0;
+            assert!((configured - expected).abs() < f64::EPSILON);
+
+            let mut inner = InnerLimiter::new(expected, 1.0, 1);
+            let start = Instant::now();
+            assert!(inner.allow_cost("boundary", 1, start));
+            let refill_period = 60.0 / f64::from(rate_per_minute);
+            assert!(!inner.allow_cost(
+                "boundary",
+                1,
+                start + Duration::from_secs_f64(refill_period * 0.99),
+            ));
+            assert!(inner.allow_cost(
+                "boundary",
+                1,
+                start + Duration::from_secs_f64(refill_period),
+            ));
+        }
     }
 
     #[tokio::test]

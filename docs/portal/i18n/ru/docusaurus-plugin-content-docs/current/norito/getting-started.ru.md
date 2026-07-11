@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 
 1. Установите набор инструментов Rust (1.76 или новую версию) и клонируйте этот репозиторий.
 2. Выберите или скачайте вспомогательные бинарники:
-   - `koto_compile` - компилятор Kotodama, который последовательно байткод IVM/Norito
+   - `koto build` - компилятор Kotodama, который последовательно байткод IVM/Norito
    - `ivm_run` и `ivm_tool` — утилиты локального запуска и проверки.
    - `iroha_cli` - используется для развертывания контрактов через Torii.
 
    Репозиторий Makefile предполагает наличие этих бинарников в формате `PATH`. Вы можете скачать готовые документы или собрать их из исходников. Если вы компилируете инструментальную цепочку локально, укажите Makefile-хелперам путь к бинарникам:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Убедитесь, что узел Iroha запущен к моменту шага деплоя. Примеры ниже предполагают, что Torii доступен по URL из профиля `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -34,16 +34,15 @@ translation_last_reviewed: 2026-02-07
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Ключевые флаги:
 
-- `--abi 1` фиксирует контракт на ABI версии 1 (единственная прикладная версия на момент написания).
-- `--max-cycles 0` требует неограниченного выполнения работ; Установите положительное число, чтобы согласовать циклы заполнения для доказательства с нулевым разглашением.
+- `ABI V1` фиксирует контракт на ABI версии 1 (единственная прикладная версия на момент написания).
+- `--max-cycles 1000000` требует неограниченного выполнения работ; Установите положительное число, чтобы согласовать циклы заполнения для доказательства с нулевым разглашением.
 
 ## 2. Проверить документ Norito (опционально)
 
@@ -70,7 +69,7 @@ ivm_run target/examples/hello.to --args '{}'
 Когда вы заключаете контракт, задеплойте его на узел через CLI. Укажите аккаунт-авторитет, его ключ загрузки и любой файл `.to`, либо полезную нагрузку Base64:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -79,8 +78,8 @@ iroha_cli app contracts deploy \
 Команда отправляет пакет манифеста Norito + байткод через Torii и печатает статус транзакции. После того как коммита показал в ответе код хэша, можно использовать для получения манифестов или списка инстансов:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ##5. Запуск через Torii
@@ -88,7 +87,7 @@ iroha_cli app contracts instances --namespace apps --table
 После регистрации байт-кода вы можете перейти к нему, отправив команду, которая отправляет сохраненный код (например, через `iroha_cli ledger transaction submit` или ваше клиентское приложение). Убедитесь, что права аккаунта разрешают нужные системные вызовы (`set_account_detail`, `transfer_asset` и т.д.).
 
 ##Советы и устранение проблем- Используйте `make examples-run`, чтобы собрать и настроить пример одним запуском. Переопределите переменные окружения `KOTO`/`IVM`, если бинарники не находятся в `PATH`.
-- Если `koto_compile` отклоняет версию ABI, проверьте, что компилятор и компоненты ABI v1 (запустите `koto_compile --abi` без аргументов, чтобы увидеть поддержку).
+- Если `koto build` отклоняет версию ABI, проверьте, что компилятор и компоненты ABI v1 (запустите `koto build --help` без аргументов, чтобы увидеть поддержку).
 - CLI принимает ключи замены в шестнадцатеричном формате или Base64. Для тестов можно использовать ключи, выданные `iroha_cli tools crypto keypair`.
 - При отладке Norito полезных нагрузок полезная команда `ivm_tool disassemble`, которая помогает сопоставлять инструкции с исходниками Kotodama.
 

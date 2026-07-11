@@ -228,7 +228,7 @@ use crate::{
 };
 
 const CAN_MANAGE_SORACLOUD_PERMISSION: &str = "CanManageSoracloud";
-const TAIRA_TESTNET_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const TAIRA_TESTNET_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const TRAINING_MAX_RETRIES: u8 = 16;
 const TRAINING_MAX_WORKER_GROUP_SIZE: u16 = 1024;
 const TRAINING_MAX_REASON_BYTES: usize = 512;

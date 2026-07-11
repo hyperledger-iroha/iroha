@@ -775,6 +775,7 @@ mod tests {
                 height: 1,
                 epoch: 0,
                 epoch_end_height: 100,
+                next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
@@ -807,16 +808,20 @@ mod tests {
                 aggregate_signature: vec![0xC1; 96],
             };
             commit_qc.aggregate_signature = aggregate_commit(&commit_qc, &old_validators);
-            let artifact =
-                wire::finality::V2FinalityArtifact::new(context.clone(), subject, commit_qc, None);
-            artifact.validate().expect("valid historical artifact");
             let proofs_of_possession = old_validators
                 .iter()
                 .map(|key| {
                     iroha_crypto::bls_normal_pop_prove(key.private_key())
                         .expect("BLS proof of possession")
                 })
-                .collect();
+                .collect::<Vec<_>>();
+            let artifact = wire::finality::V2FinalityArtifact::new(
+                context.clone(),
+                subject,
+                commit_qc,
+                proofs_of_possession.clone(),
+            );
+            artifact.validate().expect("valid historical artifact");
             Self {
                 context,
                 old_validators,
@@ -1147,7 +1152,7 @@ mod tests {
             context_two.clone(),
             subject_two,
             commit_two,
-            None,
+            fixture.proofs_of_possession.clone(),
         );
         artifact_two.validate().expect("height-two artifact");
         let mut height_two = V2BlockSyncDiscovery::new(context_two, peer(&fixture.requester), 1)
@@ -1428,7 +1433,7 @@ mod tests {
             context.clone(),
             subject,
             certificate.clone(),
-            None,
+            fixture.proofs_of_possession.clone(),
         );
 
         let kura = Kura::blank_kura_for_testing();

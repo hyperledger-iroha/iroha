@@ -189,7 +189,7 @@ prefetch locks or apply UAID manifests. The new `ivm::analysis` module
 (`crates/ivm/src/analysis.rs`) exposes `analyze_program(&[u8])` which decodes a
 `.to` artefact, tallies register reads/writes, memory ops, and syscall usage,
 and produces a JSON-friendly report that the SDK manifests can embed. Run it
-alongside `koto_lint` when publishing UAIDs so the generated R/W summary is
+alongside `koto check` when publishing UAIDs so the generated R/W summary is
 captured in the evidence bundle referenced during NX-17 readiness reviews.
 
 ## Space Directory policy enforcement

@@ -103,7 +103,24 @@ final class KagemushaRecursiveSpendV2Tests: XCTestCase {
             KagemushaRecursiveSpendV2.splitResultWireName,
             "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV2"
         )
-        XCTAssertEqual(KagemushaRecursiveSpendV2.requiredNativeSymbols.count, 21)
+        XCTAssertEqual(
+            KagemushaRecursiveSpendV2.requiredProofSymbols,
+            [
+                "connect_norito_kagemusha_recursive_spend_init_v2",
+                "connect_norito_kagemusha_recursive_spend_topup_v2",
+                "connect_norito_kagemusha_recursive_spend_append_v2",
+                "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
+                "connect_norito_kagemusha_recursive_spend_verify_v2",
+                "connect_norito_kagemusha_recursive_spend_redeem_v2",
+            ]
+        )
+        XCTAssertEqual(KagemushaRecursiveSpendV2.requiredProtocolSymbols.count, 15)
+        XCTAssertEqual(
+            KagemushaRecursiveSpendV2.requiredNativeSymbols,
+            KagemushaRecursiveSpendV2.requiredProofSymbols
+                + KagemushaRecursiveSpendV2.requiredProtocolSymbols
+        )
+        XCTAssertEqual(Set(KagemushaRecursiveSpendV2.requiredNativeSymbols).count, 21)
         XCTAssertThrowsError(try KagemushaRecursiveSpendV2.ensureProofBackendAvailable()) { error in
             XCTAssertEqual(error as? KagemushaRecursiveSpendV2Error, .proofBackendUnavailable)
         }

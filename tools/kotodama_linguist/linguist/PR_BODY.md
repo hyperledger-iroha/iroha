@@ -18,11 +18,11 @@ force an unrelated language.
 ## Usage evidence
 
 - Authenticated GitHub code-search query:
-  - `extension:ko seiyaku NOT is:fork`
+  - `extension:ko contract NOT is:fork`
 - Result count:
   - `<fill in>`
 - Additional supporting queries:
-  - `extension:ko kotoage NOT is:fork`
+  - `extension:ko entry NOT is:fork`
   - `extension:ko "register_trigger" NOT is:fork`
 - Distribution check across unique repositories:
   - `<fill in>`

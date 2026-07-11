@@ -1574,10 +1574,19 @@ pub mod torii {
     pub const PROOF_BURST: Option<u32> = Some(60);
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024); // 8 MiB
+    /// Maximum proof request bodies buffered concurrently before handler admission.
+    pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
+    /// Absolute deadline for reading one admitted proof request body.
+    pub const PROOF_BODY_READ_TIMEOUT_MS: u64 = 15_000;
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
     pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(8 * 1024 * 1024); // 8 MiB/s
     /// Burst egress budget for proof responses (bytes).
-    pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(16 * 1024 * 1024); // 16 MiB
+    ///
+    /// The 32 MiB default accommodates the canonical IVM job response ceiling:
+    /// a 16 MiB encoded proved payload plus an 8 MiB proof encoded as base64.
+    pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(32 * 1024 * 1024); // 32 MiB
+    /// Aggregate memory budget for retained `/v1/zk/ivm/prove` job state.
+    pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024); // 128 MiB
     /// Maximum page size accepted by proof listing endpoints.
     pub const PROOF_MAX_LIST_LIMIT: u32 = 200;
     /// Wall-clock timeout applied to proof list/count handlers (milliseconds).
@@ -1907,6 +1916,8 @@ pub mod torii {
     ///
     /// This limit applies to `POST /v1/zk/ivm/prove` (non-consensus helper).
     pub const ZK_IVM_PROVE_MAX_QUEUE: usize = 16;
+    /// Wall-clock timeout for synchronous IVM derive/simulation/view tooling.
+    pub const ZK_IVM_TOOLING_TIMEOUT_MS: u64 = 60_000;
     /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
     pub const ZK_IVM_PROVE_JOB_TTL_SECS: u64 = 30 * 60; // 30 minutes
     /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
@@ -2703,6 +2714,10 @@ pub mod time {
 
 /// Execution pipeline defaults (scheduler, overlay, batching).
 pub mod pipeline {
+    use std::num::NonZeroU64;
+
+    use nonzero_ext::nonzero;
+
     /// Enable dynamic prepass (IVM read-only run to derive access sets).
     pub const DYNAMIC_PREPASS: bool = true;
     /// Cache derived access sets by code hash/entrypoint for diagnostics.
@@ -2750,7 +2765,7 @@ pub mod pipeline {
     /// Default gas-collection technical account identifier (encoded-only literal).
     pub const GAS_TECH_ACCOUNT_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     /// Admission-time upper bound for `max_cycles` embedded in IVM bytecode headers.
-    pub const IVM_MAX_CYCLES_UPPER_BOUND: u64 = 1_000_000;
+    pub const IVM_MAX_CYCLES_UPPER_BOUND: NonZeroU64 = nonzero!(1_000_000_u64);
     /// Maximum decoded Kotodama instructions accepted during admission (0 = unlimited).
     pub const IVM_MAX_DECODED_INSTRUCTIONS: u64 = 1_048_576;
     /// Maximum decoded byte length after Kotodama instruction expansion (0 = unlimited).
@@ -2868,6 +2883,59 @@ pub mod accel {
 pub mod zk {
     /// SCCP launch policy. Generic deployments preserve the Ethereum mainnet lane default.
     pub const SCCP_LAUNCH_MODE: &str = "ethereum_mainnet_lane";
+
+    /// SCCP proof-admission and deterministic verifier-work defaults.
+    pub mod sccp {
+        use std::num::{NonZeroU32, NonZeroU64};
+
+        use nonzero_ext::nonzero;
+
+        /// Maximum closed SCCP proofs in one transaction.
+        pub const MAX_PROOFS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
+        /// Maximum closed SCCP proofs committed in one block.
+        pub const MAX_PROOFS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
+        /// Maximum canonical bytes retained for one closed SCCP bridge proof.
+        ///
+        /// This stays below the first-release 10 MiB transaction wire ceiling and leaves room for
+        /// the transaction envelope, signatures, and a same-transaction settlement receipt.
+        pub const MAX_PROOF_BYTES_PER_PROOF: NonZeroU64 = nonzero!(8_u64 * 1024 * 1024);
+        /// Maximum aggregate SCCP proof bytes in one transaction.
+        pub const MAX_PROOF_BYTES_PER_TRANSACTION: NonZeroU64 = MAX_PROOF_BYTES_PER_PROOF;
+        /// Maximum aggregate SCCP proof bytes committed in one block.
+        pub const MAX_PROOF_BYTES_PER_BLOCK: NonZeroU64 = nonzero!(32_u64 * 1024 * 1024);
+        /// Maximum native-finality continuation headers in one transaction.
+        pub const MAX_NATIVE_HEADERS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_004_u32);
+        /// Maximum native-finality continuation headers committed in one block.
+        pub const MAX_NATIVE_HEADERS_PER_BLOCK: NonZeroU32 = nonzero!(4_016_u32);
+        /// Maximum Ethereum light-client updates in one transaction.
+        pub const MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_TRANSACTION: NonZeroU32 = nonzero!(128_u32);
+        /// Maximum Ethereum light-client updates committed in one block.
+        pub const MAX_ETHEREUM_LIGHT_CLIENT_UPDATES_PER_BLOCK: NonZeroU32 = nonzero!(512_u32);
+        /// Maximum framed native-finality header bytes in one transaction.
+        pub const MAX_NATIVE_HEADER_BYTES_PER_TRANSACTION: NonZeroU64 =
+            nonzero!(8_u64 * 1024 * 1024);
+        /// Maximum framed native-finality header bytes committed in one block.
+        pub const MAX_NATIVE_HEADER_BYTES_PER_BLOCK: NonZeroU64 = nonzero!(32_u64 * 1024 * 1024);
+        /// Maximum secp256k1 recoveries in one transaction.
+        pub const MAX_SECP256K1_RECOVERIES_PER_TRANSACTION: NonZeroU32 = nonzero!(1_005_u32);
+        /// Maximum secp256k1 recoveries committed in one block.
+        pub const MAX_SECP256K1_RECOVERIES_PER_BLOCK: NonZeroU32 = nonzero!(4_020_u32);
+        /// Maximum BLS aggregate-signature checks in one transaction.
+        pub const MAX_BLS_AGGREGATE_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_004_u32);
+        /// Maximum BLS aggregate-signature checks committed in one block.
+        pub const MAX_BLS_AGGREGATE_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(4_016_u32);
+        /// Maximum BLS public-key contributions processed in one transaction.
+        ///
+        /// The exact Ethereum V1 worst case is one 513-key bootstrap plus 128 updates, each with
+        /// 513 next-committee keys and 512 aggregate participants: `513 + 128 * 1_025`.
+        pub const MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION: NonZeroU32 = nonzero!(131_713_u32);
+        /// Maximum BLS public-key contributions committed in one block.
+        pub const MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK: NonZeroU32 = nonzero!(526_852_u32);
+        /// Maximum BN254 Groth16 pairing-product checks in one transaction.
+        pub const MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
+        /// Maximum BN254 Groth16 pairing-product checks committed in one block.
+        pub const MAX_BN254_PAIRING_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
+    }
 
     /// FASTPQ prover defaults.
     pub mod fastpq {
@@ -3111,6 +3179,9 @@ pub mod sumeragi {
     pub const KURA_STORE_RETRY_MAX_ATTEMPTS: u32 = 5;
     /// Default timeout for inflight commit jobs before liveness recovery reports a stall (milliseconds).
     pub const COMMIT_INFLIGHT_TIMEOUT_MS: u64 = 5_000;
+    /// Maximum time finalized rollover waits for its height-local I/O worker
+    /// to report body cleanup before continuing under supervision (milliseconds).
+    pub const POST_FINALITY_CLEANUP_TIMEOUT_MS: u64 = 5_000;
     /// Commit worker work-queue capacity.
     pub const COMMIT_WORK_QUEUE_CAP: usize = 1;
     /// Commit worker result-queue capacity.

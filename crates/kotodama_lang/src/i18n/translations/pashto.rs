@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "پارامیټر `{name}` په فنکشن `{func}` کې هېڅکله نه کارېږي",
     lint_unreachable_after_return: "په {context} کې نه رسیېدونکی عبارت وموندل شو: د return وروسته کوډ هېڅکله نه اجرا کېږي",
     lint_ok: "سمه ده",
-    lint_usage: "کارونه: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "کارونه: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "د ورکړل شويو سرچینو لپاره د Kotodama lint تفتیشونه چلوئ.",
     ..english::MESSAGES
 };

@@ -2,46 +2,88 @@
 //!
 //! The lexer converts a source string into a sequence of [`Token`]s.
 
+use crate::{
+    diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
+    source::{FrontendBudget, SourceFile, SourceId, TextRange},
+    syntax::SyntaxKind,
+};
+
+pub use crate::source::{MAX_NESTING_DEPTH, MAX_SOURCE_BYTES, MAX_TOKENS};
+
+macro_rules! define_v1_keywords {
+    ($($spelling:literal => $variant:ident),+ $(,)?) => {
+        /// Canonical V1 keyword table consumed by the lexer, formatter,
+        /// documentation, and LSP tooling.
+        ///
+        /// Rejected compatibility and policy spellings are intentionally excluded.
+        pub const V1_KEYWORDS: &[&str] = &[$($spelling),+];
+
+        pub(crate) fn v1_keyword_kind(spelling: &str) -> Option<TokenKind> {
+            Some(match spelling {
+                $($spelling => TokenKind::$variant,)+
+                _ => return None,
+            })
+        }
+
+        #[cfg(test)]
+        const V1_KEYWORD_TOKEN_KINDS: &[TokenKind] = &[$(TokenKind::$variant),+];
+    };
+}
+
+/// Normative machine-readable lexical grammar used to generate V1 tables.
+pub const V1_LEXICAL_GRAMMAR: &str = include_str!("../grammar/v1.lex");
+
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TokenKind {
     Fn,
     Let,
+    /// Mutable local binding declaration.
+    Var,
     Const,
     Return,
     Break,
     Continue,
     State,
     Struct,
-    Permission,
-    /// Sugar keyword for explicit function call statements: `call name(args...)`.
-    Call,
-    Meta,
+    /// Stable seiyaku error declaration (`error enum Name`).
+    Error,
+    /// Enumeration keyword used after `error`.
+    Enum,
+    /// Caller-authorization modifier (`authorize("Permission")`).
+    Authorize,
+    /// Seiyaku-level trigger declaration (`trigger name -> callback { ... }`).
+    Trigger,
     If,
+    Match,
     Else,
-    While,
     For,
-    /// Contract keyword ("seiyaku" or "誓約")
+    /// Membership keyword used by bounded `for ... in ...` loops.
+    In,
+    /// Deployable source-unit keyword (`seiyaku` or `誓約`).
     Seiyaku,
-    /// Contract initializer ("hajimari" or "始まり")
-    Hajimari,
-    /// Contract upgrade hook ("kaizen" or "改善")
-    Kaizen,
-    /// Public function modifier ("kotoage" or "言挙げ")
+    /// Library source-unit keyword (`module`).
+    Module,
+    /// Public transaction entrypoint modifier (`kotoage` or `言挙げ`).
     Kotoage,
+    /// Seiyaku lifecycle declaration (`hajimari` or `始まり`).
+    Hajimari,
+    /// Seiyaku lifecycle declaration (`kaizen` or `改善`).
+    Kaizen,
     /// Read-only public function modifier (`view`).
     View,
     True,
     False,
     Arrow,
-    This,
+    FatArrow,
     Ident(String),
-    Number(u64),
-    Decimal(String),
+    /// Exact source spelling of an unsuffixed integer literal.
+    Number(String),
+    /// Exact source spelling of an unsuffixed base-10 decimal literal.
+    DecimalLiteral(String),
     String(String),
     Bytes(Vec<u8>),
     Plus,
-    PlusPlus,
     PlusEqual,
     Minus,
     MinusEqual,
@@ -67,952 +109,674 @@ pub enum TokenKind {
     Semicolon,
     Comma,
     Colon,
+    ColonColon,
     Percent,
     Dot,
-    Ampersand,
     LBracket,
     RBracket,
-    Pipe,
     Question,
     Hash,
     EOF,
 }
+
+include!(concat!(env!("OUT_DIR"), "/kotodama_v1_lexical.rs"));
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub line: usize,
     pub column: usize,
+    /// Exact half-open UTF-8 byte range in the source file.
+    pub range: TextRange,
 }
 
 /// Lex an entire source string into a vector of [`Token`]s.
 pub fn lex(src: &str) -> Result<Vec<Token>, String> {
-    let mut lexer = Lexer::new(src);
+    if src.len() > MAX_SOURCE_BYTES {
+        return Err(format!(
+            "K0001: source contains {} bytes and exceeds the {MAX_SOURCE_BYTES}-byte Kotodama V1 limit",
+            src.len()
+        ));
+    }
+    let source = SourceFile::new(SourceId(0), "<source>", src);
+    lex_source(&source, FrontendBudget::v1()).map_err(|bundle| bundle.render_human())
+}
+
+/// Lex one source file into the significant, value-carrying token stream used
+/// by the AST parser.
+///
+/// This is an adapter over the lossless lexer, not a second scanner. Formatter,
+/// CST, LSP, and compiler consumers therefore agree on token boundaries and
+/// resource limits.
+pub(crate) fn lex_source(
+    source: &SourceFile,
+    budget: FrontendBudget,
+) -> Result<Vec<Token>, DiagnosticBundle> {
+    let lexed = crate::syntax::lexer::lex(source, budget);
+    lower_lexed(source, budget, lexed)
+}
+
+/// Lower one already-scanned lossless token stream for the AST parser.
+pub(crate) fn lower_lexed(
+    source: &SourceFile,
+    budget: FrontendBudget,
+    lexed: crate::syntax::lexer::Lexed,
+) -> Result<Vec<Token>, DiagnosticBundle> {
+    let (tokens, diagnostics) = lower_lexed_recovering(source, budget, lexed);
+    if diagnostics.is_empty() {
+        Ok(tokens)
+    } else {
+        Err(DiagnosticBundle::new(diagnostics))
+    }
+}
+
+/// Lower every valid token from one lossless scan while retaining lexical
+/// diagnostics for CST recovery.
+///
+/// Compiler-facing callers use [`lower_lexed`] and therefore still fail
+/// closed on any lexical error. The lossless parser uses this form so one bad
+/// token does not collapse otherwise recognisable declarations into a single
+/// root error node.
+pub(crate) fn lower_lexed_recovering(
+    source: &SourceFile,
+    budget: FrontendBudget,
+    lexed: crate::syntax::lexer::Lexed,
+) -> (Vec<Token>, Vec<Diagnostic>) {
+    let crate::syntax::lexer::Lexed {
+        tokens,
+        diagnostics,
+        omitted_diagnostics,
+    } = lexed;
+    lower_green_tokens(
+        source,
+        budget,
+        tokens.iter(),
+        diagnostics,
+        omitted_diagnostics,
+    )
+}
+
+fn lower_green_tokens<'token>(
+    source: &SourceFile,
+    budget: FrontendBudget,
+    green_tokens: impl IntoIterator<Item = &'token crate::syntax::cst::GreenToken>,
+    mut diagnostics: Vec<Diagnostic>,
+    omitted_diagnostics: usize,
+) -> (Vec<Token>, Vec<Diagnostic>) {
+    let retained = budget.max_diagnostics().saturating_sub(1);
+    let mut omitted =
+        omitted_diagnostics.saturating_add(diagnostics.len().saturating_sub(retained));
+    diagnostics.truncate(retained);
     let mut tokens = Vec::new();
-    loop {
-        let tok = lexer.next_token()?;
-        let end = matches!(tok.kind, TokenKind::EOF);
-        tokens.push(tok);
-        if end {
-            break;
+
+    for token in green_tokens {
+        if token.kind.is_trivia() || token.kind == SyntaxKind::ErrorToken {
+            continue;
+        }
+        let text = source.slice(token.range).unwrap_or("");
+        match lower_token_kind(token.kind, text) {
+            Ok(Some(kind)) => {
+                let position = source.line_column(token.range.start);
+                tokens.push(Token {
+                    kind,
+                    line: position.line,
+                    column: position.column,
+                    range: token.range,
+                });
+            }
+            Ok(None) => {}
+            Err(message) => {
+                let diagnostic = lexical_diagnostic(source, message, token.range);
+                if diagnostics.len() < retained {
+                    diagnostics.push(diagnostic);
+                } else {
+                    omitted = omitted.saturating_add(1);
+                }
+            }
         }
     }
-    Ok(tokens)
+
+    if omitted != 0 {
+        diagnostics.push(Diagnostic::error(
+            "K0004",
+            DiagnosticPhase::Lex,
+            format!("diagnostic limit reached; {omitted} additional syntax error(s) were omitted"),
+            None,
+        ));
+    }
+    (tokens, diagnostics)
 }
 
-struct Lexer<'a> {
-    src: Vec<char>,
-    pos: usize,
-    line: usize,
-    col: usize,
-    _marker: std::marker::PhantomData<&'a ()>,
+fn lexical_diagnostic(
+    source: &SourceFile,
+    message: impl Into<String>,
+    range: TextRange,
+) -> Diagnostic {
+    let start = source.line_column(range.start);
+    let end = source.line_column(range.end);
+    Diagnostic::error(
+        "K0100",
+        DiagnosticPhase::Lex,
+        message,
+        Some(SourceSpan {
+            source: Some(source.name().to_owned()),
+            start: SourcePosition {
+                line: start.line,
+                column: start.column,
+            },
+            end: SourcePosition {
+                line: end.line,
+                column: end.column,
+            },
+            byte_range: Some(range),
+        }),
+    )
 }
 
-impl<'a> Lexer<'a> {
-    fn new(src: &'a str) -> Self {
-        Self {
-            src: src.chars().collect(),
-            pos: 0,
-            line: 1,
-            col: 1,
-            _marker: std::marker::PhantomData,
+fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, String> {
+    let lowered = match kind {
+        SyntaxKind::Whitespace | SyntaxKind::LineComment | SyntaxKind::BlockComment => {
+            return Ok(None);
         }
-    }
+        SyntaxKind::Ident => TokenKind::Ident(text.to_owned()),
+        SyntaxKind::Number => {
+            validate_integer_literal(text)?;
+            TokenKind::Number(text.to_owned())
+        }
+        SyntaxKind::Decimal => {
+            validate_decimal_literal(text)?;
+            TokenKind::DecimalLiteral(text.to_owned())
+        }
+        SyntaxKind::String => TokenKind::String(decode_string_literal(text)?),
+        SyntaxKind::Bytes => TokenKind::Bytes(decode_byte_literal(text)?),
+        SyntaxKind::Eof => TokenKind::EOF,
+        SyntaxKind::KwFn => TokenKind::Fn,
+        SyntaxKind::KwLet => TokenKind::Let,
+        SyntaxKind::KwVar => TokenKind::Var,
+        SyntaxKind::KwConst => TokenKind::Const,
+        SyntaxKind::KwReturn => TokenKind::Return,
+        SyntaxKind::KwBreak => TokenKind::Break,
+        SyntaxKind::KwContinue => TokenKind::Continue,
+        SyntaxKind::KwState => TokenKind::State,
+        SyntaxKind::KwStruct => TokenKind::Struct,
+        SyntaxKind::KwError => TokenKind::Error,
+        SyntaxKind::KwEnum => TokenKind::Enum,
+        SyntaxKind::KwAuthorize => TokenKind::Authorize,
+        SyntaxKind::KwTrigger => TokenKind::Trigger,
+        SyntaxKind::KwIf => TokenKind::If,
+        SyntaxKind::KwMatch => TokenKind::Match,
+        SyntaxKind::KwElse => TokenKind::Else,
+        SyntaxKind::KwFor => TokenKind::For,
+        SyntaxKind::KwIn => TokenKind::In,
+        SyntaxKind::KwSeiyaku => TokenKind::Seiyaku,
+        SyntaxKind::KwModule => TokenKind::Module,
+        SyntaxKind::KwKotoage => TokenKind::Kotoage,
+        SyntaxKind::KwHajimari => TokenKind::Hajimari,
+        SyntaxKind::KwKaizen => TokenKind::Kaizen,
+        SyntaxKind::KwView => TokenKind::View,
+        SyntaxKind::KwTrue => TokenKind::True,
+        SyntaxKind::KwFalse => TokenKind::False,
+        SyntaxKind::Plus => TokenKind::Plus,
+        SyntaxKind::PlusEqual => TokenKind::PlusEqual,
+        SyntaxKind::Minus => TokenKind::Minus,
+        SyntaxKind::MinusEqual => TokenKind::MinusEqual,
+        SyntaxKind::Arrow => TokenKind::Arrow,
+        SyntaxKind::FatArrow => TokenKind::FatArrow,
+        SyntaxKind::Star => TokenKind::Star,
+        SyntaxKind::StarEqual => TokenKind::StarEqual,
+        SyntaxKind::Slash => TokenKind::Slash,
+        SyntaxKind::SlashEqual => TokenKind::SlashEqual,
+        SyntaxKind::Percent => TokenKind::Percent,
+        SyntaxKind::PercentEqual => TokenKind::PercentEqual,
+        SyntaxKind::Bang => TokenKind::Bang,
+        SyntaxKind::BangEqual => TokenKind::BangEqual,
+        SyntaxKind::Equal => TokenKind::Equal,
+        SyntaxKind::EqualEqual => TokenKind::EqualEqual,
+        SyntaxKind::Less => TokenKind::Less,
+        SyntaxKind::LessEqual => TokenKind::LessEqual,
+        SyntaxKind::Greater => TokenKind::Greater,
+        SyntaxKind::GreaterEqual => TokenKind::GreaterEqual,
+        SyntaxKind::AndAnd => TokenKind::AndAnd,
+        SyntaxKind::OrOr => TokenKind::OrOr,
+        SyntaxKind::LParen => TokenKind::LParen,
+        SyntaxKind::RParen => TokenKind::RParen,
+        SyntaxKind::LBrace => TokenKind::LBrace,
+        SyntaxKind::RBrace => TokenKind::RBrace,
+        SyntaxKind::LBracket => TokenKind::LBracket,
+        SyntaxKind::RBracket => TokenKind::RBracket,
+        SyntaxKind::Semicolon => TokenKind::Semicolon,
+        SyntaxKind::Comma => TokenKind::Comma,
+        SyntaxKind::Colon => TokenKind::Colon,
+        SyntaxKind::ColonColon => TokenKind::ColonColon,
+        SyntaxKind::Dot => TokenKind::Dot,
+        SyntaxKind::Question => TokenKind::Question,
+        SyntaxKind::Hash => TokenKind::Hash,
+        SyntaxKind::ErrorToken => {
+            return Err("invalid Kotodama V1 token".to_owned());
+        }
+        SyntaxKind::Root
+        | SyntaxKind::SourceUnit
+        | SyntaxKind::ItemList
+        | SyntaxKind::FunctionItem
+        | SyntaxKind::StructItem
+        | SyntaxKind::ErrorEnumItem
+        | SyntaxKind::ConstItem
+        | SyntaxKind::StateItem
+        | SyntaxKind::TriggerItem
+        | SyntaxKind::FixtureItem
+        | SyntaxKind::TestTargetItem
+        | SyntaxKind::Attribute
+        | SyntaxKind::ParamList
+        | SyntaxKind::ArgumentList
+        | SyntaxKind::NamedArgument
+        | SyntaxKind::StructLiteral
+        | SyntaxKind::StructLiteralField
+        | SyntaxKind::ListExpr
+        | SyntaxKind::ListComprehension
+        | SyntaxKind::JsonObjectExpr
+        | SyntaxKind::JsonObjectEntry
+        | SyntaxKind::JsonArrayExpr
+        | SyntaxKind::Block
+        | SyntaxKind::StatementList
+        | SyntaxKind::LetStmt
+        | SyntaxKind::ExprStmt
+        | SyntaxKind::ReturnStmt
+        | SyntaxKind::BreakStmt
+        | SyntaxKind::ContinueStmt
+        | SyntaxKind::IfStmt
+        | SyntaxKind::IfExpr
+        | SyntaxKind::MatchExpr
+        | SyntaxKind::MatchArm
+        | SyntaxKind::SumPattern
+        | SyntaxKind::TailExpr
+        | SyntaxKind::ForStmt
+        | SyntaxKind::ErrorNode
+        | SyntaxKind::Missing => {
+            return Err("internal frontend node appeared in the token stream".to_owned());
+        }
+    };
+    Ok(Some(lowered))
+}
 
-    fn peek(&self) -> Option<char> {
-        self.src.get(self.pos).copied()
-    }
-
-    fn peek_n(&self, n: usize) -> Option<char> {
-        self.src.get(self.pos + n).copied()
-    }
-
-    fn bump(&mut self) -> Option<char> {
-        let ch = self.src.get(self.pos).copied();
-        if let Some(c) = ch {
-            self.pos += 1;
-            if c == '\n' {
-                self.line += 1;
-                self.col = 1;
-            } else {
-                self.col += 1;
-            }
-        }
-        ch
-    }
-
-    fn next_token(&mut self) -> Result<Token, String> {
-        self.skip_ws_and_comments()?;
-        let line = self.line;
-        let col = self.col;
-        let ch = match self.peek() {
-            Some(c) => c,
-            None => {
-                return Ok(Token {
-                    kind: TokenKind::EOF,
-                    line,
-                    column: col,
-                });
-            }
-        };
-        if matches!(ch, 'r' | 'b')
-            && let Some(tok) = self.lex_prefixed_string()?
-        {
-            return Ok(tok);
-        }
-        match ch {
-            c if c.is_alphabetic() || c == '_' => self.lex_ident_or_keyword(),
-            c if c.is_ascii_digit() => self.lex_number(),
-            '"' => self.lex_string(),
-            '+' => {
-                self.bump();
-                if self.peek() == Some('+') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::PlusPlus,
-                        line,
-                        column: col,
-                    })
-                } else if self.peek() == Some('=') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::PlusEqual,
-                        line,
-                        column: col,
-                    })
-                } else {
-                    Ok(Token {
-                        kind: TokenKind::Plus,
-                        line,
-                        column: col,
-                    })
-                }
-            }
-            '-' => {
-                self.bump();
-                if self.peek() == Some('>') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::Arrow,
-                        line,
-                        column: col,
-                    })
-                } else if self.peek() == Some('=') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::MinusEqual,
-                        line,
-                        column: col,
-                    })
-                } else {
-                    Ok(Token {
-                        kind: TokenKind::Minus,
-                        line,
-                        column: col,
-                    })
-                }
-            }
-            '*' => {
-                self.bump();
-                if self.peek() == Some('=') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::StarEqual,
-                        line,
-                        column: col,
-                    })
-                } else {
-                    Ok(Token {
-                        kind: TokenKind::Star,
-                        line,
-                        column: col,
-                    })
-                }
-            }
-            '/' => {
-                self.bump();
-                if self.peek() == Some('=') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::SlashEqual,
-                        line,
-                        column: col,
-                    })
-                } else {
-                    Ok(Token {
-                        kind: TokenKind::Slash,
-                        line,
-                        column: col,
-                    })
-                }
-            }
-            '=' => {
-                self.bump();
-                if self.peek() == Some('=') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::EqualEqual,
-                        line,
-                        column: col,
-                    })
-                } else {
-                    Ok(Token {
-                        kind: TokenKind::Equal,
-                        line,
-                        column: col,
-                    })
-                }
-            }
-            '!' => {
-                self.bump();
-                if self.peek() == Some('=') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::BangEqual,
-                        line,
-                        column: col,
-                    })
-                } else {
-                    Ok(Token {
-                        kind: TokenKind::Bang,
-                        line,
-                        column: col,
-                    })
-                }
-            }
-            '<' => {
-                self.bump();
-                if self.peek() == Some('=') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::LessEqual,
-                        line,
-                        column: col,
-                    })
-                } else {
-                    Ok(Token {
-                        kind: TokenKind::Less,
-                        line,
-                        column: col,
-                    })
-                }
-            }
-            '>' => {
-                self.bump();
-                if self.peek() == Some('=') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::GreaterEqual,
-                        line,
-                        column: col,
-                    })
-                } else {
-                    Ok(Token {
-                        kind: TokenKind::Greater,
-                        line,
-                        column: col,
-                    })
-                }
-            }
-            '&' => {
-                self.bump();
-                if self.peek() == Some('&') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::AndAnd,
-                        line,
-                        column: col,
-                    })
-                } else {
-                    Ok(Token {
-                        kind: TokenKind::Ampersand,
-                        line,
-                        column: col,
-                    })
-                }
-            }
-            '(' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::LParen,
-                    line,
-                    column: col,
-                })
-            }
-            ')' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::RParen,
-                    line,
-                    column: col,
-                })
-            }
-            '{' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::LBrace,
-                    line,
-                    column: col,
-                })
-            }
-            '}' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::RBrace,
-                    line,
-                    column: col,
-                })
-            }
-            ';' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::Semicolon,
-                    line,
-                    column: col,
-                })
-            }
-            ',' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::Comma,
-                    line,
-                    column: col,
-                })
-            }
-            ':' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::Colon,
-                    line,
-                    column: col,
-                })
-            }
-            '%' => {
-                self.bump();
-                if self.peek() == Some('=') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::PercentEqual,
-                        line,
-                        column: col,
-                    })
-                } else {
-                    Ok(Token {
-                        kind: TokenKind::Percent,
-                        line,
-                        column: col,
-                    })
-                }
-            }
-            '.' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::Dot,
-                    line,
-                    column: col,
-                })
-            }
-            '[' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::LBracket,
-                    line,
-                    column: col,
-                })
-            }
-            ']' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::RBracket,
-                    line,
-                    column: col,
-                })
-            }
-            '#' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::Hash,
-                    line,
-                    column: col,
-                })
-            }
-            '|' => {
-                self.bump();
-                if self.peek() == Some('|') {
-                    self.bump();
-                    Ok(Token {
-                        kind: TokenKind::OrOr,
-                        line,
-                        column: col,
-                    })
-                } else {
-                    Ok(Token {
-                        kind: TokenKind::Pipe,
-                        line,
-                        column: col,
-                    })
-                }
-            }
-            '?' => {
-                self.bump();
-                Ok(Token {
-                    kind: TokenKind::Question,
-                    line,
-                    column: col,
-                })
-            }
-            _ => Err(format!("Unexpected character '{ch}' at {line}:{col}")),
-        }
-    }
-
-    fn skip_ws_and_comments(&mut self) -> Result<(), String> {
-        loop {
-            match self.peek() {
-                Some(' ' | '\t' | '\r' | '\n') => {
-                    self.bump();
-                }
-                Some('/') if self.src.get(self.pos + 1) == Some(&'/') => {
-                    while let Some(c) = self.bump() {
-                        if c == '\n' {
-                            break;
-                        }
-                    }
-                }
-                Some('/') if self.src.get(self.pos + 1) == Some(&'*') => {
-                    // Block comments: /* ... */ (no nesting)
-                    let start_line = self.line;
-                    let start_col = self.col;
-                    self.bump(); // '/'
-                    self.bump(); // '*'
-                    loop {
-                        match self.bump() {
-                            Some('*') if self.peek() == Some('/') => {
-                                self.bump(); // consume '/'
-                                break;
-                            }
-                            Some(_) => {}
-                            None => {
-                                return Err(format!(
-                                    "unterminated block comment starting at {start_line}:{start_col}"
-                                ));
-                            }
-                        }
-                    }
-                }
-                _ => break,
-            }
-        }
-        Ok(())
-    }
-
-    fn lex_ident_or_keyword(&mut self) -> Result<Token, String> {
-        let line = self.line;
-        let col = self.col;
-        let mut ident = String::new();
-        while let Some(c) = self.peek() {
-            if c.is_alphanumeric() || c == '_' {
-                ident.push(c);
-                self.bump();
-            } else {
-                break;
-            }
-        }
-        let kind = match ident.as_str() {
-            "fn" => TokenKind::Fn,
-            "let" => TokenKind::Let,
-            "const" => TokenKind::Const,
-            "return" => TokenKind::Return,
-            "break" => TokenKind::Break,
-            "continue" => TokenKind::Continue,
-            "state" => TokenKind::State,
-            "struct" => TokenKind::Struct,
-            "permission" => TokenKind::Permission,
-            "call" => TokenKind::Call,
-            "meta" => TokenKind::Meta,
-            "if" => TokenKind::If,
-            "else" => TokenKind::Else,
-            "while" => TokenKind::While,
-            "for" => TokenKind::For,
-            "seiyaku" | "誓約" => TokenKind::Seiyaku,
-            "hajimari" | "始まり" => TokenKind::Hajimari,
-            "kaizen" | "改善" => TokenKind::Kaizen,
-            "kotoage" | "言挙げ" => TokenKind::Kotoage,
-            "view" => TokenKind::View,
-            "true" => TokenKind::True,
-            "false" => TokenKind::False,
-            "this" => TokenKind::This,
-            _ => TokenKind::Ident(ident),
-        };
-        Ok(Token {
-            kind,
-            line,
-            column: col,
-        })
-    }
-
-    fn lex_number(&mut self) -> Result<Token, String> {
-        let line = self.line;
-        let col = self.col;
-        // Support 0x.. (hex), 0b.. (binary), and underscores in literals
-        let mut num = 0u64;
-        // Lookahead for 0x/0b prefixes
-        if self.peek() == Some('0') {
-            if self.src.get(self.pos + 1) == Some(&'x') || self.src.get(self.pos + 1) == Some(&'X')
-            {
-                // consume 0x
-                self.bump();
-                self.bump();
-                let base = 16u64;
-                let mut saw_digit = false;
-                while let Some(c) = self.peek() {
-                    let v = match c {
-                        '0'..='9' => Some((c as u8 - b'0') as u64),
-                        'a'..='f' => Some((c as u8 - b'a' + 10) as u64),
-                        'A'..='F' => Some((c as u8 - b'A' + 10) as u64),
-                        '_' => {
-                            self.bump();
-                            continue;
-                        }
-                        _ => None,
-                    };
-                    if let Some(d) = v {
-                        saw_digit = true;
-                        num = num
-                            .checked_mul(base)
-                            .and_then(|n| n.checked_add(d))
-                            .ok_or_else(|| format!("numeric literal overflow at {line}:{col}"))?;
-                        self.bump();
-                    } else {
-                        break;
-                    }
-                }
-                if !saw_digit {
-                    return Err(format!(
-                        "expected hexadecimal digits after 0x at {line}:{col}"
-                    ));
-                }
-                return Ok(Token {
-                    kind: TokenKind::Number(num),
-                    line,
-                    column: col,
-                });
-            } else if self.src.get(self.pos + 1) == Some(&'b')
-                || self.src.get(self.pos + 1) == Some(&'B')
-            {
-                // consume 0b
-                self.bump();
-                self.bump();
-                let base = 2u64;
-                let mut saw_digit = false;
-                while let Some(c) = self.peek() {
-                    match c {
-                        '0' | '1' => {
-                            saw_digit = true;
-                            let bit = if c == '1' { 1u64 } else { 0u64 };
-                            num = num
-                                .checked_mul(base)
-                                .and_then(|n| n.checked_add(bit))
-                                .ok_or_else(|| {
-                                    format!("numeric literal overflow at {line}:{col}")
-                                })?;
-                            self.bump();
-                        }
-                        '_' => {
-                            self.bump();
-                        }
-                        _ => break,
-                    }
-                }
-                if !saw_digit {
-                    return Err(format!("expected binary digits after 0b at {line}:{col}"));
-                }
-                return Ok(Token {
-                    kind: TokenKind::Number(num),
-                    line,
-                    column: col,
-                });
-            }
-        }
-        // Decimal with optional underscores, plus optional fractional part.
-        let mut saw_digit = false;
-        let mut digits = String::new();
-        while let Some(c) = self.peek() {
-            if c.is_ascii_digit() {
-                saw_digit = true;
-                digits.push(c);
-                self.bump();
-            } else if c == '_' {
-                self.bump();
-            } else {
-                break;
-            }
-        }
-        if !saw_digit {
-            return Err(format!("expected number at {line}:{col}"));
-        }
-        if self.peek() == Some('.') && self.peek_n(1).is_some_and(|c| c.is_ascii_digit()) {
-            self.bump();
-            let mut frac_digits = String::new();
-            let mut saw_frac = false;
-            while let Some(c) = self.peek() {
-                if c.is_ascii_digit() {
-                    saw_frac = true;
-                    frac_digits.push(c);
-                    self.bump();
-                } else if c == '_' {
-                    self.bump();
-                } else {
-                    break;
-                }
-            }
-            if !saw_frac {
-                return Err(format!("expected fractional digits at {line}:{col}"));
-            }
-            let mut raw = digits;
-            raw.push('.');
-            raw.push_str(&frac_digits);
-            return Ok(Token {
-                kind: TokenKind::Decimal(raw),
-                line,
-                column: col,
-            });
-        }
-        let num = digits
-            .parse::<u64>()
-            .map_err(|_| format!("numeric literal overflow at {line}:{col}"))?;
-        Ok(Token {
-            kind: TokenKind::Number(num),
-            line,
-            column: col,
-        })
-    }
-
-    fn lex_prefixed_string(&mut self) -> Result<Option<Token>, String> {
-        match self.peek() {
-            Some('r') => {
-                if self.peek_n(1) == Some('b') && matches!(self.peek_n(2), Some('"' | '#')) {
-                    return self
-                        .lex_raw_string(true, 2)
-                        .map(Some)
-                        .map_err(|e| e.to_string());
-                }
-                if matches!(self.peek_n(1), Some('"' | '#')) {
-                    return self
-                        .lex_raw_string(false, 1)
-                        .map(Some)
-                        .map_err(|e| e.to_string());
-                }
-            }
-            Some('b') => {
-                if self.peek_n(1) == Some('r') && matches!(self.peek_n(2), Some('"' | '#')) {
-                    return self
-                        .lex_raw_string(true, 2)
-                        .map(Some)
-                        .map_err(|e| e.to_string());
-                }
-                if self.peek_n(1) == Some('"') {
-                    return self.lex_byte_string().map(Some).map_err(|e| e.to_string());
-                }
-            }
-            _ => {}
-        }
-        // Not a prefixed literal; return None so caller can lex identifier.
-        Ok(None)
-    }
-
-    fn lex_raw_string(&mut self, is_bytes: bool, prefix_len: usize) -> Result<Token, String> {
-        let line = self.line;
-        let col = self.col;
-        for _ in 0..prefix_len {
-            self.bump();
-        }
-        let mut hashes = 0usize;
-        while self.peek() == Some('#') {
-            self.bump();
-            hashes += 1;
-        }
-        if self.peek() != Some('"') {
-            return Err(format!(
-                "expected '\"' after raw string prefix at {line}:{col}"
-            ));
-        }
-        self.bump(); // opening quote
-        let mut out = String::new();
-        loop {
-            match self.peek() {
-                None => {
-                    return Err(format!(
-                        "unterminated raw string literal at {line}:{col}: missing closing delimiter"
-                    ));
-                }
-                Some('"') => {
-                    if self.is_raw_terminator(hashes) {
-                        self.bump(); // closing quote
-                        for _ in 0..hashes {
-                            self.bump();
-                        }
-                        break;
-                    }
-                    out.push('"');
-                    self.bump();
-                }
-                Some(c) => {
-                    out.push(c);
-                    self.bump();
-                }
-            }
-        }
-        let kind = if is_bytes {
-            TokenKind::Bytes(out.into_bytes())
+fn validate_integer_literal(text: &str) -> Result<(), String> {
+    let (digits, radix) =
+        if let Some(digits) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            (digits, 16)
+        } else if let Some(digits) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
+            (digits, 2)
         } else {
-            TokenKind::String(out)
+            (text, 10)
         };
-        Ok(Token {
-            kind,
-            line,
-            column: col,
-        })
+    if digits.is_empty() {
+        return Err("integer literal requires at least one digit".to_owned());
     }
+    validate_digit_component(digits, radix, "integer")?;
+    Ok(())
+}
 
-    fn is_raw_terminator(&self, hashes: usize) -> bool {
-        if hashes == 0 {
-            return true;
-        }
-        for idx in 1..=hashes {
-            if self.peek_n(idx) != Some('#') {
-                return false;
-            }
-        }
-        true
+fn validate_decimal_literal(text: &str) -> Result<(), String> {
+    let (coefficient, exponent) = text
+        .split_once(['e', 'E'])
+        .map_or((text, None), |(coefficient, exponent)| {
+            (coefficient, Some(exponent))
+        });
+    if exponent.is_some_and(|exponent| exponent.contains(['e', 'E'])) {
+        return Err("decimal literal contains more than one exponent".to_owned());
     }
-
-    fn lex_byte_string(&mut self) -> Result<Token, String> {
-        let line = self.line;
-        let col = self.col;
-        self.bump(); // 'b'
-        self.bump(); // opening quote
-        let mut bytes = Vec::new();
-        let mut terminated = false;
-        while let Some(c) = self.peek() {
-            match c {
-                '"' => {
-                    self.bump();
-                    terminated = true;
-                    break;
-                }
-                '\n' => {
-                    return Err(format!(
-                        "unterminated byte string literal at {line}:{col}: newline before closing quote"
-                    ));
-                }
-                '\\' => {
-                    self.bump(); // consume '\\'
-                    let escaped = self.read_escape_bytes(line, col)?;
-                    bytes.extend_from_slice(&escaped);
-                }
-                ch => {
-                    bytes.extend_from_slice(ch.encode_utf8(&mut [0u8; 4]).as_bytes());
-                    self.bump();
-                }
-            }
-        }
-        if !terminated {
-            return Err(format!(
-                "unterminated byte string literal at {line}:{col}: missing closing quote"
-            ));
-        }
-        Ok(Token {
-            kind: TokenKind::Bytes(bytes),
-            line,
-            column: col,
-        })
+    let (whole, fractional) = coefficient
+        .split_once('.')
+        .map_or((coefficient, None), |(whole, fractional)| {
+            (whole, Some(fractional))
+        });
+    if fractional.is_some_and(|fractional| fractional.contains('.')) {
+        return Err("decimal literal contains more than one decimal point".to_owned());
     }
-
-    fn lex_string(&mut self) -> Result<Token, String> {
-        let line = self.line;
-        let col = self.col;
-        self.bump(); // opening quote
-        let mut s = String::new();
-        let mut terminated = false;
-        while let Some(c) = self.peek() {
-            match c {
-                '"' => {
-                    self.bump();
-                    terminated = true;
-                    break;
-                }
-                '\n' => {
-                    return Err(format!(
-                        "unterminated string literal at {line}:{col}: newline before closing quote"
-                    ));
-                }
-                '\\' => {
-                    self.bump(); // consume '\\'
-                    let escaped = self.read_escape_char(line, col)?;
-                    s.push(escaped);
-                }
-                ch => {
-                    s.push(ch);
-                    self.bump();
-                }
-            }
-        }
-        if !terminated {
-            return Err(format!(
-                "unterminated string literal at {line}:{col}: missing closing quote"
-            ));
-        }
-        Ok(Token {
-            kind: TokenKind::String(s),
-            line,
-            column: col,
-        })
+    validate_digit_component(whole, 10, "decimal whole-number")?;
+    if let Some(fractional) = fractional {
+        validate_digit_component(fractional, 10, "decimal fractional")?;
     }
+    if let Some(exponent) = exponent {
+        let digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+        validate_digit_component(digits, 10, "decimal exponent")?;
+    }
+    if fractional.is_none() && exponent.is_none() {
+        return Err("decimal literal requires a decimal point or exponent".to_owned());
+    }
+    Ok(())
+}
 
-    fn read_escape_char(&mut self, line: usize, col: usize) -> Result<char, String> {
-        let Some(esc) = self.bump() else {
-            return Err(format!("unterminated escape at {line}:{col}"));
-        };
-        match esc {
-            'n' => Ok('\n'),
-            'r' => Ok('\r'),
-            't' => Ok('\t'),
-            '0' => Ok('\0'),
-            '"' => Ok('"'),
-            '\\' => Ok('\\'),
-            'x' => {
-                let byte = self.read_hex_escape(line, col, 2)?;
-                Ok(byte as char)
-            }
-            'u' => self.read_unicode_escape(line, col),
-            other => Err(format!("unknown escape \\{other} at {line}:{col}")),
+fn validate_digit_component(text: &str, radix: u32, context: &str) -> Result<(), String> {
+    if text.is_empty()
+        || text.starts_with('_')
+        || text.ends_with('_')
+        || text.contains("__")
+        || !text
+            .chars()
+            .all(|character| character == '_' || character.is_digit(radix))
+    {
+        return Err(format!(
+            "{context} digits require underscores only between valid base-{radix} digits"
+        ));
+    }
+    Ok(())
+}
+
+fn raw_literal_contents(text: &str) -> Option<&str> {
+    let quote = text.find('"')?;
+    let prefix = &text[..quote];
+    let hashes = prefix
+        .strip_prefix("br")
+        .or_else(|| prefix.strip_prefix("rb"))
+        .or_else(|| prefix.strip_prefix('r'))?;
+    if !hashes.chars().all(|character| character == '#') {
+        return None;
+    }
+    let closing_len = 1_usize.saturating_add(hashes.len());
+    let content_end = text.len().checked_sub(closing_len)?;
+    (content_end >= quote + 1).then(|| &text[quote + 1..content_end])
+}
+
+fn decode_string_literal(text: &str) -> Result<String, String> {
+    if let Some(contents) = raw_literal_contents(text) {
+        return Ok(contents.to_owned());
+    }
+    let contents = text
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .ok_or_else(|| "invalid string literal delimiters".to_owned())?;
+    decode_escaped_string(contents)
+}
+
+fn decode_byte_literal(text: &str) -> Result<Vec<u8>, String> {
+    if let Some(contents) = raw_literal_contents(text) {
+        return Ok(contents.as_bytes().to_vec());
+    }
+    let contents = text
+        .strip_prefix("b\"")
+        .and_then(|value| value.strip_suffix('"'))
+        .ok_or_else(|| "invalid byte-string delimiters".to_owned())?;
+    decode_escaped_bytes(contents)
+}
+
+fn decode_escaped_string(contents: &str) -> Result<String, String> {
+    let mut output = String::new();
+    let mut characters = contents.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            output.push(character);
+            continue;
+        }
+        let escape = characters
+            .next()
+            .ok_or_else(|| "unterminated string escape".to_owned())?;
+        match escape {
+            'n' => output.push('\n'),
+            'r' => output.push('\r'),
+            't' => output.push('\t'),
+            '0' => output.push('\0'),
+            '"' => output.push('"'),
+            '\\' => output.push('\\'),
+            'x' => output.push(char::from(read_hex_escape(&mut characters, 2)?)),
+            'u' => output.push(read_unicode_escape(&mut characters)?),
+            other => return Err(format!("unknown escape `\\{other}`")),
         }
     }
+    Ok(output)
+}
 
-    fn read_escape_bytes(&mut self, line: usize, col: usize) -> Result<Vec<u8>, String> {
-        let Some(esc) = self.bump() else {
-            return Err(format!("unterminated escape at {line}:{col}"));
-        };
-        match esc {
-            'n' => Ok(vec![b'\n']),
-            'r' => Ok(vec![b'\r']),
-            't' => Ok(vec![b'\t']),
-            '0' => Ok(vec![0]),
-            '"' => Ok(vec![b'"']),
-            '\\' => Ok(vec![b'\\']),
-            'x' => Ok(vec![self.read_hex_escape(line, col, 2)?]),
+fn decode_escaped_bytes(contents: &str) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    let mut characters = contents.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            let mut buffer = [0_u8; 4];
+            output.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
+            continue;
+        }
+        let escape = characters
+            .next()
+            .ok_or_else(|| "unterminated byte-string escape".to_owned())?;
+        match escape {
+            'n' => output.push(b'\n'),
+            'r' => output.push(b'\r'),
+            't' => output.push(b'\t'),
+            '0' => output.push(0),
+            '"' => output.push(b'"'),
+            '\\' => output.push(b'\\'),
+            'x' => output.push(read_hex_escape(&mut characters, 2)?),
             'u' => {
-                let ch = self.read_unicode_escape(line, col)?;
-                let mut buf = [0u8; 4];
-                let encoded = ch.encode_utf8(&mut buf);
-                Ok(encoded.as_bytes().to_vec())
+                let character = read_unicode_escape(&mut characters)?;
+                let mut buffer = [0_u8; 4];
+                output.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
             }
-            other => Err(format!("unknown escape \\{other} at {line}:{col}")),
+            other => return Err(format!("unknown escape `\\{other}`")),
         }
     }
+    Ok(output)
+}
 
-    fn read_hex_escape(&mut self, line: usize, col: usize, digits: usize) -> Result<u8, String> {
-        let mut value: u32 = 0;
-        for _ in 0..digits {
-            let Some(c) = self.bump() else {
-                return Err(format!("incomplete hex escape at {line}:{col}"));
-            };
-            let digit = c
-                .to_digit(16)
-                .ok_or_else(|| format!("invalid hex digit '{c}' in escape at {line}:{col}"))?;
-            value = value
-                .checked_mul(16)
-                .and_then(|v| v.checked_add(digit))
-                .ok_or_else(|| format!("hex escape overflow at {line}:{col}"))?;
-        }
-        Ok(value as u8)
+fn read_hex_escape(
+    characters: &mut impl Iterator<Item = char>,
+    digits: usize,
+) -> Result<u8, String> {
+    let mut value = 0_u8;
+    for _ in 0..digits {
+        let character = characters
+            .next()
+            .ok_or_else(|| "incomplete hexadecimal escape".to_owned())?;
+        let digit = character
+            .to_digit(16)
+            .ok_or_else(|| format!("invalid hex digit `{character}` in escape"))?
+            as u8;
+        value = value
+            .checked_mul(16)
+            .and_then(|current| current.checked_add(digit))
+            .ok_or_else(|| "hexadecimal escape overflow".to_owned())?;
     }
+    Ok(value)
+}
 
-    fn read_unicode_escape(&mut self, line: usize, col: usize) -> Result<char, String> {
-        let Some(open) = self.bump() else {
-            return Err(format!("incomplete unicode escape at {line}:{col}"));
-        };
-        if open != '{' {
-            return Err(format!(
-                "unicode escape at {line}:{col} must start with '{{'"
-            ));
-        }
-        let mut value: u32 = 0;
-        let mut digits = 0usize;
-        loop {
-            let Some(c) = self.peek() else {
-                return Err(format!("unterminated unicode escape at {line}:{col}"));
-            };
-            if c == '}' {
-                self.bump();
-                break;
-            }
-            let digit = c.to_digit(16).ok_or_else(|| {
-                format!("invalid hex digit '{c}' in unicode escape at {line}:{col}")
-            })?;
-            value = value
-                .checked_mul(16)
-                .and_then(|v| v.checked_add(digit))
-                .ok_or_else(|| format!("unicode escape overflow at {line}:{col}"))?;
-            digits += 1;
-            if digits > 6 {
-                return Err(format!("unicode escape too long at {line}:{col}"));
-            }
-            self.bump();
-        }
-        if digits == 0 {
-            return Err(format!("empty unicode escape at {line}:{col}"));
-        }
-        if value > 0x10FFFF || (0xD800..=0xDFFF).contains(&value) {
-            return Err(format!("invalid unicode scalar value at {line}:{col}"));
-        }
-        char::from_u32(value).ok_or_else(|| format!("invalid unicode scalar value at {line}:{col}"))
+fn read_unicode_escape(characters: &mut impl Iterator<Item = char>) -> Result<char, String> {
+    if characters.next() != Some('{') {
+        return Err("Unicode escape must start with `{`".to_owned());
     }
+    let mut digits = String::new();
+    for character in characters.by_ref() {
+        if character == '}' {
+            if digits.is_empty() {
+                return Err("empty Unicode escape".to_owned());
+            }
+            let value = u32::from_str_radix(&digits, 16)
+                .map_err(|_| "invalid Unicode escape".to_owned())?;
+            return char::from_u32(value).ok_or_else(|| "invalid Unicode scalar value".to_owned());
+        }
+        if !character.is_ascii_hexdigit() {
+            return Err(format!("invalid hex digit `{character}` in Unicode escape"));
+        }
+        digits.push(character);
+        if digits.len() > 6 {
+            return Err("Unicode escape is longer than six digits".to_owned());
+        }
+    }
+    Err("unterminated Unicode escape".to_owned())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{TokenKind, lex};
+    use super::{
+        MAX_NESTING_DEPTH, MAX_SOURCE_BYTES, MAX_TOKENS, TokenKind, V1_KEYWORD_TOKEN_KINDS,
+        V1_KEYWORDS, lex, lex_source, lower_lexed, lower_lexed_recovering,
+    };
+    use crate::{
+        source::{FrontendBudget, SourceFile, SourceId},
+        syntax::SyntaxKind,
+    };
 
     #[test]
-    fn decimal_literal_overflow_is_reported() {
-        let err = lex("18446744073709551616").unwrap_err();
-        assert!(err.contains("overflow"));
+    fn canonical_keyword_table_drives_lexer_tokens_without_drift() {
+        assert_eq!(V1_KEYWORDS.len(), V1_KEYWORD_TOKEN_KINDS.len());
+        for (spelling, expected) in V1_KEYWORDS.iter().zip(V1_KEYWORD_TOKEN_KINDS) {
+            let tokens = lex(spelling).expect("canonical keyword must lex");
+            assert_eq!(&tokens[0].kind, expected, "keyword `{spelling}`");
+        }
+        for rejected in [
+            "contract",
+            "entry",
+            "init",
+            "meta",
+            "permission",
+            "this",
+            "upgrade",
+            "while",
+        ] {
+            assert!(
+                !V1_KEYWORDS.contains(&rejected),
+                "rejected spelling `{rejected}` leaked into the V1 table"
+            );
+            let tokens = lex(rejected).expect("retired spelling is an ordinary identifier");
+            assert!(
+                matches!(&tokens[0].kind, TokenKind::Ident(name) if name == rejected),
+                "retired spelling `{rejected}` must not have a dedicated token"
+            );
+        }
     }
 
     #[test]
-    fn decimal_literal_max_plus_one_is_tokenized() {
-        let tokens = lex("9223372036854775808").expect("lex");
+    fn retired_operators_are_rejected_without_semantic_tokens() {
+        for spelling in ["++", "&", "|"] {
+            let error = lex(spelling).expect_err("retired operator must be rejected lexically");
+            assert!(
+                error.contains("invalid Kotodama V1 operator")
+                    || error.contains("invalid source character"),
+                "unexpected diagnostic for `{spelling}`: {error}"
+            );
+        }
+
+        for spelling in ["&&", "||"] {
+            lex(spelling).expect("canonical short-circuit operator must remain supported");
+        }
+    }
+
+    #[test]
+    fn source_size_limit_is_enforced_before_lexing() {
+        let source = " ".repeat(MAX_SOURCE_BYTES + 1);
+        let err = lex(&source).expect_err("oversized source must fail");
+        assert!(err.contains("K0001"));
+    }
+
+    #[test]
+    fn token_limit_is_enforced() {
+        let source = "a ".repeat(MAX_TOKENS);
+        let err = lex(&source).expect_err("excess token count must fail");
+        assert!(err.contains("K0002"));
+    }
+
+    #[test]
+    fn nesting_limit_is_enforced() {
+        let source = format!(
+            "{}0{}",
+            "(".repeat(MAX_NESTING_DEPTH + 1),
+            ")".repeat(MAX_NESTING_DEPTH + 1)
+        );
+        let err = lex(&source).expect_err("excess nesting must fail");
+        assert!(err.contains("K0003"));
+    }
+
+    #[test]
+    fn large_integer_spelling_is_preserved_for_the_parser_domain_check() {
+        let spelling = "340282366920938463463374607431768211456";
+        let tokens = lex(spelling).expect("lex adaptive-width int");
+        assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == spelling));
+    }
+
+    #[test]
+    fn former_u128_endpoint_is_an_ordinary_unsuffixed_int() {
+        let spelling = "340282366920938463463374607431768211455";
+        let tokens = lex(spelling).expect("lex");
         assert!(
-            matches!(tokens[0].kind, TokenKind::Number(n) if n == 9_223_372_036_854_775_808),
-            "expected u64 literal token, got {:?}",
+            matches!(&tokens[0].kind, TokenKind::Number(value) if value == spelling),
+            "expected unsuffixed int token, got {:?}",
             tokens[0].kind
         );
     }
 
     #[test]
-    fn decimal_fraction_literal_is_tokenized() {
-        let tokens = lex("1_234.50_0").expect("lex");
-        assert!(
-            matches!(tokens[0].kind, TokenKind::Decimal(ref s) if s == "1234.500"),
-            "expected decimal literal token, got {:?}",
-            tokens[0].kind
-        );
+    fn exact_decimal_literals_retain_their_source_spelling() {
+        let tokens = lex("1_234.50_0 1e6 1.5e-3").expect("lex exact decimals");
+        let spellings = tokens
+            .iter()
+            .filter_map(|token| match &token.kind {
+                TokenKind::DecimalLiteral(spelling) => Some(spelling.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(spellings, ["1_234.50_0", "1e6", "1.5e-3"]);
     }
 
     #[test]
-    fn hex_literal_overflow_is_reported() {
-        let err = lex("0x1_0000_0000_0000_0000").unwrap_err();
-        assert!(err.contains("overflow"));
+    fn every_retired_numeric_suffix_has_a_stable_diagnostic() {
+        for spelling in ["1i64", "1u128", "1amt", "1.25amt", "1.25float", "10money"] {
+            let error = lex(spelling).expect_err("retired numeric suffix must fail");
+            assert!(
+                error.contains("E_RETIRED_NUMERIC_SUFFIX"),
+                "unexpected diagnostic for `{spelling}`: {error}"
+            );
+        }
     }
 
     #[test]
-    fn binary_literal_overflow_is_reported() {
-        let err = lex(
-            "0b1_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000",
-        )
-        .unwrap_err();
-        assert!(err.contains("overflow"));
+    fn separated_type_name_is_not_a_literal_suffix() {
+        let tokens = lex("10 int").expect("lex separate literal and type identifier");
+        assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == "10"));
+        assert!(matches!(&tokens[1].kind, TokenKind::Ident(name) if name == "int"));
+    }
+
+    #[test]
+    fn var_is_a_dedicated_keyword() {
+        let tokens = lex("var value = 1;").expect("lex var binding");
+        assert!(matches!(tokens[0].kind, TokenKind::Var));
+    }
+
+    #[test]
+    fn branded_declaration_keywords_are_reserved_in_both_scripts() {
+        for (spelling, expected) in [
+            ("seiyaku", TokenKind::Seiyaku),
+            ("誓約", TokenKind::Seiyaku),
+            ("kotoage", TokenKind::Kotoage),
+            ("言挙げ", TokenKind::Kotoage),
+            ("hajimari", TokenKind::Hajimari),
+            ("始まり", TokenKind::Hajimari),
+            ("kaizen", TokenKind::Kaizen),
+            ("改善", TokenKind::Kaizen),
+        ] {
+            let tokens = lex(spelling).expect("branded keyword must lex");
+            assert_eq!(tokens[0].kind, expected, "keyword `{spelling}`");
+        }
+    }
+
+    #[test]
+    fn non_ascii_identifiers_are_rejected() {
+        for spelling in ["café", "誓約名", "利用者", "言挙げrun"] {
+            let error = lex(spelling).expect_err("V1 identifiers must be ASCII");
+            assert!(
+                error.contains("non-ASCII"),
+                "unexpected diagnostic for `{spelling}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_hex_literal_is_preserved_for_the_parser_domain_check() {
+        let spelling = "0x1_0000_0000_0000_0000_0000_0000_0000_0000";
+        let tokens = lex(spelling).expect("lex wide hexadecimal int");
+        assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == spelling));
+    }
+
+    #[test]
+    fn wide_binary_literal_is_preserved_for_the_parser_domain_check() {
+        let spelling = format!("0b1{}", "0".repeat(128));
+        let tokens = lex(&spelling).expect("lex wide binary int");
+        assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == &spelling));
     }
 
     #[test]
@@ -1030,7 +794,7 @@ mod tests {
     #[test]
     fn newline_in_string_is_rejected() {
         let err = lex("\"hello\nworld\"").unwrap_err();
-        assert!(err.contains("newline"));
+        assert!(err.contains("unterminated string literal"));
     }
 
     #[test]
@@ -1092,6 +856,84 @@ mod tests {
     #[test]
     fn invalid_unicode_escape_reports_error() {
         let err = lex("\"\\u{}\"").unwrap_err();
-        assert!(err.contains("empty unicode escape"));
+        assert!(err.contains("empty Unicode escape"));
+    }
+
+    #[test]
+    fn semantic_tokens_reuse_lossless_token_boundaries() {
+        let text = r##"seiyaku Demo { // trivia
+            kotoage fn run(int value) authorize("Run") {
+                let string raw = r#"日本語"#;
+                let bytes data = br"a\n";
+            }
+        }"##;
+        let source = SourceFile::new(SourceId(41), "boundaries.ko", text);
+        let lossless = crate::syntax::lexer::lex(&source, FrontendBudget::v1());
+        let expected = lossless
+            .tokens
+            .iter()
+            .filter(|token| !token.kind.is_trivia() && token.kind != SyntaxKind::ErrorToken)
+            .map(|token| token.range)
+            .collect::<Vec<_>>();
+        let actual = lex_source(&source, FrontendBudget::v1())
+            .expect("lower canonical lossless token stream")
+            .into_iter()
+            .map(|token| token.range)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn recovering_lowering_retains_valid_tokens_without_admitting_bad_source() {
+        let text = "seiyaku Broken { fn run() { let int value = @; } }";
+        let source = SourceFile::new(SourceId(43), "recovering.ko", text);
+        let lossless = crate::syntax::lexer::lex(&source, FrontendBudget::v1());
+
+        let (tokens, diagnostics) =
+            lower_lexed_recovering(&source, FrontendBudget::v1(), lossless.clone());
+        assert!(
+            tokens.iter().any(|token| token.kind == TokenKind::Fn),
+            "valid declaration tokens must remain available to CST recovery"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "K0100")
+        );
+        assert!(
+            lower_lexed(&source, FrontendBudget::v1(), lossless).is_err(),
+            "compiler-facing lowering must still fail closed"
+        );
+    }
+
+    #[test]
+    fn typed_constructor_path_is_one_spanned_token_stream() {
+        let text = r#"module Typed {
+            fn parse_id() { let id = AccountId::parse("alice@wonderland"); }
+        }"#;
+        let source = SourceFile::new(SourceId(42), "typed-path.ko", text);
+        let tokens = lex_source(&source, FrontendBudget::v1()).expect("lex typed path");
+        let separator = tokens
+            .iter()
+            .find(|token| token.kind == TokenKind::ColonColon)
+            .expect("typed path separator");
+        assert_eq!(source.slice(separator.range), Some("::"));
+        let start = source.line_column(separator.range.start);
+        let end = source.line_column(separator.range.end);
+        assert_eq!(start.line, 2);
+        assert_eq!(end.column, start.column + 2);
+
+        let program = crate::parser::parse_source(&source, FrontendBudget::v1())
+            .expect("parse uppercase typed constructor");
+        let crate::ast::Item::Function(function) = &program.items[0] else {
+            panic!("expected function item")
+        };
+        let crate::ast::Statement::Let { value, .. } = &function.body.statements[0] else {
+            panic!("expected constructor binding")
+        };
+        assert!(matches!(
+            value,
+            crate::ast::Expr::Call { name, .. } if name == "AccountId::parse"
+        ));
     }
 }

@@ -33,7 +33,7 @@ title: ソラ Nexus والمراقبة
 ## いいえ
 - 評価 Nexus 評価:
 - **Sora Nexus (メインネット)** - بادئة شبكة انتاج `nexus` تستضيف الحوكمة القانونية وخدمات SoraFS/SoraNet المتراكبة (チェーン ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`)。
-- **Sora Testus (テストネット)** - ステージング `testus` تعكس تكوين メインネット لاختبارات التكامل والتحقق قبل الاصدار (チェーン) UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`)。
+- **Sora Testus (テストネット)** - ステージング `testus` تعكس تكوين メインネット لاختبارات التكامل والتحقق قبل الاصدار (チェーン) UUID `fc56984b-2be7-431d-840e-21514d1883f0`)。
 - ジェネシス、ジェネシス、世界、そして世界。 Testus は SoraFS/SoraNet をテストし、Nexus をテストしました。
 - CI/CD テストテスト 煙テストテスト Nexus テストテストああ。
 - `configs/soranexus/nexus/` (メインネット) と `configs/soranexus/testus/` (テストネット) と `config.toml` و`genesis.json` وادلة قبول Torii نموذجية。

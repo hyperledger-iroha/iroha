@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "paaramitarri `{name}` faankishinii `{func}` keessatti yeroo hunda hin fayyadamamu",
     lint_unreachable_after_return: "ibsa gara hin geenye {context} keessatti argame; koodiin return boodaa hin hojjetu",
     lint_ok: "tole",
-    lint_usage: "Fayyadama: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Fayyadama: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Bu'uuraalee kennaman irratti sakatta'iinsa lint Kotodama hojjechiisu.",
     ..english::MESSAGES
 };

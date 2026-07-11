@@ -25,7 +25,12 @@ added with new IDs; existing IDs must not change.
 | 0x000D | ProofBlob | OK |
 | 0x000E | SoracloudRequest | OK |
 | 0x000F | SoracloudResponse | OK |
+| 0x0010 | RetiredAmount | - |
+| 0x0011 | Int | OK |
+| 0x0012 | Decimal | OK |
+| 0x0013 | Quantity | OK |
 <!-- END GENERATED POINTER TYPES -->
+
 
 
 Notes
@@ -34,3 +39,9 @@ Notes
 - TLV structure is enforced regardless of policy; type IDs gate which categories are accepted for host syscalls.
 - `DataSpaceId`, `AxtDescriptor`, `AssetHandle`, and `ProofBlob` underpin the AXT (atomic cross-transaction) flow. Default and WSV hosts fully validate these pointers when servicing AXT syscalls, ensuring descriptor membership, capability binding equality, and proof material are honoured.
 - `SoracloudRequest` and `SoracloudResponse` carry Norito envelopes for the Soracloud runtime host ABI. They are only meaningful on the dedicated Soracloud syscall block and remain part of ABI v1.
+- `Int`, `Decimal`, and `Quantity` are distinct canonical numeric pointer
+  domains. `Quantity` is the nonnegative nominal ledger domain used for source
+  `quantity` values; hosts reject cross-typed pointers rather than aliasing
+  numeric domains.
+- `RetiredAmount` preserves `0x0010` solely to reject pre-release payloads with
+  a stable known-but-forbidden type. No ABI policy permits it.

@@ -102,32 +102,27 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 Les deux scripts se terminent avec le code d'état `1` si Torii ne signale jamais de terminal.
 transition, ce qui les rend adaptés aux travaux de porte CI.
 
-### Assistant d'alias ISO`recipes/iso_alias.mjs` cible les points de terminaison de l'alias ISO afin que les répétitions puissent couvrir
-hachage d'éléments en aveugle et recherches d'alias sans écrire d'outils sur mesure. Il
-appelle `ToriiClient.evaluateAliasVoprf` plus `resolveAlias` / `resolveAliasByIndex`
-et imprime le backend, le résumé, la liaison de compte, la source et l'index déterministe
-renvoyé par Torii.
+### Assistant d'alias ISO
+
+`recipes/iso_alias.mjs` teste les recherches d’alias ISO sans nécessiter d’outillage personnalisé.
+Il appelle `resolveAlias` et `resolveAliasByIndex`, puis affiche la liaison de compte, la source et l’index déterministe renvoyés par Torii.
 
 Variables d'environnement :
 
 - `TORII_URL` — Point de terminaison Torii exposant les assistants d'alias.
-- `ISO_VOPRF_INPUT` — élément masqué codé en hexadécimal (par défaut : `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — ignore l'appel VOPRF lorsque vous testez uniquement les recherches.
 - `ISO_ALIAS_LABEL` — alias littéral à résoudre (par exemple, chaînes de style IBAN).
 - `ISO_ALIAS_INDEX` — index décimal ou avec préfixe `0x` transmis à `resolveAliasByIndex`.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — en-têtes facultatifs pour les déploiements Torii sécurisés.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

@@ -10,7 +10,6 @@ use crate::query::{
 #[derive(Debug)]
 pub struct QueryIterator<E: QueryExecutor, T: HasTypedBatchIter> {
     current_batch_iter: T::TypedBatchIter,
-    remaining_items: Option<u64>,
     continue_cursor: Option<E::Cursor>,
 }
 
@@ -26,14 +25,12 @@ where
     /// Returns an error if the type of the batch does not match the expected type `T`.
     pub fn new(
         first_batch: QueryOutputBatchBoxTuple,
-        remaining_items: Option<u64>,
         continue_cursor: Option<E::Cursor>,
     ) -> Result<Self, TypedBatchDowncastError> {
         let batch_iter = T::downcast(first_batch)?;
 
         Ok(Self {
             current_batch_iter: batch_iter,
-            remaining_items,
             continue_cursor,
         })
     }
@@ -47,6 +44,7 @@ where
 impl<E, T> Iterator for QueryIterator<E, T>
 where
     E: QueryExecutor,
+    E::Error: From<TypedBatchDowncastError>,
     T: HasTypedBatchIter,
 {
     type Item = Result<T, E::Error>;
@@ -64,39 +62,35 @@ where
             let cursor = self.continue_cursor.take()?;
 
             // Get the next batch from the executor.
-            let (batch, remaining_items, cursor) = match E::continue_query(cursor) {
+            let (batch, _remaining_items, cursor) = match E::continue_query(cursor) {
                 Ok(r) => r,
-                Err(e) => return Some(Err(e)),
+                Err(error) => return Some(Err(error)),
             };
-            self.continue_cursor = cursor;
-
-            // Downcast the batch to the expected type.
-            // We've already downcast the first batch to the expected type, so if the executor
-            // returns a different type here, it surely is a bug.
-            let batch_iter =
-                T::downcast(batch).expect("BUG: iroha returned unexpected type in iterable query");
+            // Treat a malformed or schema-incompatible response as a terminal query error.
+            // Continuing from a response whose columns cannot be interpreted would risk
+            // silently skipping rows or combining data from incompatible schemas.
+            let batch_iter = match T::downcast(batch) {
+                Ok(batch_iter) => batch_iter,
+                Err(error) => {
+                    self.continue_cursor = None;
+                    return Some(Err(error.into()));
+                }
+            };
 
             self.current_batch_iter = batch_iter;
-            self.remaining_items = remaining_items;
+            self.continue_cursor = cursor;
             // Loop and attempt to yield from the refreshed batch.
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let current_batch_len = self.current_batch_iter.len();
-        match self.remaining_items {
-            Some(remaining_items) => {
-                let exact = remaining_items
-                    .try_into()
-                    .ok()
-                    .and_then(|remaining_items: usize| {
-                        remaining_items.checked_add(current_batch_len)
-                    });
-                exact.map_or((current_batch_len, None), |exact| (exact, Some(exact)))
-            }
-            None if self.continue_cursor.is_none() => (current_batch_len, Some(current_batch_len)),
-            None => (current_batch_len, None),
+        if self.continue_cursor.is_some() {
+            // Remote counts are untrusted and a continuation may fail or violate its
+            // advertised count. Only already-decoded rows are guaranteed.
+            return (current_batch_len, None);
         }
+        (current_batch_len, Some(current_batch_len))
     }
 }
 
@@ -113,7 +107,7 @@ mod tests {
 
     impl QueryExecutor for DummyExec {
         type Cursor = usize; // how many empty batches left
-        type Error = ();
+        type Error = TypedBatchDowncastError;
 
         fn execute_singular_query(
             &self,
@@ -136,17 +130,15 @@ mod tests {
         {
             if cursor > 0 {
                 Ok((
-                    QueryOutputBatchBoxTuple {
-                        tuple: vec![QueryOutputBatchBox::Numeric(vec![])],
-                    },
+                    QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Numeric(vec![])),
                     Some(1),
                     Some(cursor - 1),
                 ))
             } else {
                 Ok((
-                    QueryOutputBatchBoxTuple {
-                        tuple: vec![QueryOutputBatchBox::Numeric(vec![Numeric::new(42, 0)])],
-                    },
+                    QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Numeric(vec![
+                        Numeric::new(42, 0),
+                    ])),
                     Some(0),
                     None,
                 ))
@@ -157,10 +149,8 @@ mod tests {
     #[test]
     fn iterator_handles_many_empty_batches_without_recursion() {
         // First batch is empty, but there are 64 empty batches to skip via cursor before one item appears.
-        let first = QueryOutputBatchBoxTuple {
-            tuple: vec![QueryOutputBatchBox::Numeric(vec![])],
-        };
-        let mut iter = QueryIterator::<DummyExec, Numeric>::new(first, Some(1), Some(64))
+        let first = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Numeric(vec![]));
+        let mut iter = QueryIterator::<DummyExec, Numeric>::new(first, Some(64))
             .expect("downcast should succeed");
 
         let item = iter.next().expect("some result").expect("ok result");
@@ -170,16 +160,119 @@ mod tests {
     }
 
     #[test]
-    fn iterator_size_hint_preserves_unknown_remaining_count() {
-        let first = QueryOutputBatchBoxTuple {
-            tuple: vec![QueryOutputBatchBox::Numeric(vec![
-                Numeric::new(1, 0),
-                Numeric::new(2, 0),
-            ])],
-        };
-        let iter = QueryIterator::<DummyExec, Numeric>::new(first, None, Some(0))
+    fn iterator_size_hint_has_no_upper_bound_while_cursor_exists() {
+        let first = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Numeric(vec![
+            Numeric::new(1, 0),
+            Numeric::new(2, 0),
+        ]));
+        let iter = QueryIterator::<DummyExec, Numeric>::new(first, Some(0))
             .expect("downcast should succeed");
 
         assert_eq!(iter.size_hint(), (2, None));
+    }
+
+    #[test]
+    fn iterator_size_hint_is_exact_without_cursor() {
+        let first = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Numeric(vec![
+            Numeric::new(1, 0),
+            Numeric::new(2, 0),
+        ]));
+        let iter =
+            QueryIterator::<DummyExec, Numeric>::new(first, None).expect("initial batch matches");
+
+        assert_eq!(iter.size_hint(), (2, Some(2)));
+    }
+
+    struct HostileExec;
+
+    impl QueryExecutor for HostileExec {
+        type Cursor = ();
+        type Error = TypedBatchDowncastError;
+
+        fn execute_singular_query(
+            &self,
+            _query: crate::query::SingularQueryBox,
+        ) -> Result<crate::query::SingularQueryOutputBox, Self::Error> {
+            unreachable!()
+        }
+
+        fn start_query(
+            &self,
+            _query: crate::query::QueryWithParams,
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
+            unreachable!()
+        }
+
+        fn continue_query(
+            (): Self::Cursor,
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
+            Ok((
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(vec![
+                    "hostile".to_owned(),
+                ])),
+                Some(0),
+                Some(()),
+            ))
+        }
+    }
+
+    #[test]
+    fn iterator_returns_terminal_error_for_hostile_continuation_type() {
+        let first = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Numeric(vec![]));
+        let mut iter = QueryIterator::<HostileExec, Numeric>::new(first, Some(()))
+            .expect("initial batch matches");
+
+        assert_eq!(
+            iter.next(),
+            Some(Err(TypedBatchDowncastError::WrongType { column: 0 }))
+        );
+        assert_eq!(iter.size_hint(), (0, Some(0)));
+        assert_eq!(iter.next(), None, "hostile response must terminate cursor");
+    }
+
+    struct FailingExec;
+
+    impl QueryExecutor for FailingExec {
+        type Cursor = ();
+        type Error = TypedBatchDowncastError;
+
+        fn execute_singular_query(
+            &self,
+            _query: crate::query::SingularQueryBox,
+        ) -> Result<crate::query::SingularQueryOutputBox, Self::Error> {
+            unreachable!()
+        }
+
+        fn start_query(
+            &self,
+            _query: crate::query::QueryWithParams,
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
+            unreachable!()
+        }
+
+        fn continue_query(
+            (): Self::Cursor,
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
+            Err(TypedBatchDowncastError::WrongType { column: 0 })
+        }
+    }
+
+    #[test]
+    fn size_hint_never_promises_remote_rows_that_can_be_replaced_by_error() {
+        let first = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Numeric(vec![]));
+        let mut iter = QueryIterator::<FailingExec, Numeric>::new(first, Some(()))
+            .expect("initial batch matches");
+
+        assert_eq!(iter.size_hint(), (0, None));
+        assert_eq!(
+            iter.next(),
+            Some(Err(TypedBatchDowncastError::WrongType { column: 0 }))
+        );
+        assert_eq!(iter.size_hint(), (0, Some(0)));
+        assert_eq!(iter.next(), None);
     }
 }

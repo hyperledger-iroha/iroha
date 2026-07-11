@@ -726,7 +726,7 @@ fn proof_stream_command_consumes_ndjson() {
 #[test]
 fn norito_build_compiles_contract() {
     let tempdir = tempdir().expect("tempdir");
-    let source_path = PathBuf::from("../kotodama_lang/src/samples/kotodama_jp.ko");
+    let source_path = PathBuf::from("../kotodama_lang/src/samples/kotodama_swap.ko");
     assert!(
         source_path.exists(),
         "expected Kotodama sample `{}` to exist",
@@ -741,7 +741,6 @@ fn norito_build_compiles_contract() {
         .arg("build")
         .arg(format!("--source={}", source_path.display()))
         .arg(format!("--bytecode-out={}", bytecode_path.display()))
-        .arg("--abi-version=1")
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
         .success();
@@ -779,6 +778,36 @@ fn norito_build_compiles_contract() {
     assert_eq!(
         summary_stdout.get("source_kind").and_then(Value::as_str),
         Some("file")
+    );
+    assert_eq!(
+        summary_stdout.get("abi_version").and_then(Value::as_u64),
+        Some(1),
+        "the first-release compiler owns and reports ABI v1"
+    );
+}
+
+#[test]
+fn norito_build_rejects_removed_abi_selection() {
+    let tempdir = tempdir().expect("tempdir");
+    let source_path = PathBuf::from("../kotodama_lang/src/samples/kotodama_swap.ko");
+    let bytecode_path = tempdir.path().join("contract.to");
+
+    let assert = sorafs_cli_cmd()
+        .arg("norito")
+        .arg("build")
+        .arg(format!("--source={}", source_path.display()))
+        .arg(format!("--bytecode-out={}", bytecode_path.display()))
+        .arg("--abi-version=1")
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("stderr utf8");
+    assert!(
+        stderr.contains("unrecognised option `--abi-version`"),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        !bytecode_path.exists(),
+        "rejected ABI selection must not publish an artifact"
     );
 }
 
@@ -1504,7 +1533,7 @@ fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant()
     let (client_config, _private_key) = write_deploy_client_config_with_chain(
         tempdir.path(),
         &primary.base_url(),
-        "809574f5-fee7-5e69-bfcf-52451e42d50f",
+        "fc56984b-2be7-431d-840e-21514d1883f0",
     );
 
     let register = primary.mock(|when, then| {
@@ -1641,7 +1670,7 @@ fn deploy_uses_transaction_fallback_when_pin_register_route_unavailable() {
         when.method(GET).path("/v1/sorafs/pin");
         then.status(200)
             .header("Content-Type", "application/json")
-            .body(r#"{"attestation":{"chain_id":"809574f5-fee7-5e69-bfcf-52451e42d50f"}}"#);
+            .body(r#"{"attestation":{"chain_id":"fc56984b-2be7-431d-840e-21514d1883f0"}}"#);
     });
     let transaction = primary.mock(|when, then| {
         when.method(POST).path("/transaction");
@@ -2061,7 +2090,7 @@ fn manifest_submit_transaction_fallback_waits_for_commit() {
         when.method(GET).path("/v1/sorafs/pin");
         then.status(200)
             .header("Content-Type", "application/json")
-            .body(r#"{"attestation":{"chain_id":"809574f5-fee7-5e69-bfcf-52451e42d50f"}}"#);
+            .body(r#"{"attestation":{"chain_id":"fc56984b-2be7-431d-840e-21514d1883f0"}}"#);
     });
     let tx_mock = server.mock(|when, then| {
         when.method(POST).path("/transaction");
@@ -2142,7 +2171,7 @@ fn manifest_submit_transaction_fallback_surfaces_rejection() {
         when.method(GET).path("/v1/sorafs/pin");
         then.status(200)
             .header("Content-Type", "application/json")
-            .body(r#"{"attestation":{"chain_id":"809574f5-fee7-5e69-bfcf-52451e42d50f"}}"#);
+            .body(r#"{"attestation":{"chain_id":"fc56984b-2be7-431d-840e-21514d1883f0"}}"#);
     });
     let tx_mock = server.mock(|when, then| {
         when.method(POST).path("/transaction");

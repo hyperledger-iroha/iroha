@@ -1,8 +1,11 @@
 # NoritoBridge XCFramework Artifacts
 
-Current source ABI: 14 (`connect_norito_encode_transfer_instruction_box`
-added for native multisig proposal instruction boxes). Regenerate and republish
-bridge artifacts before cutting an SDK release that depends on this surface.
+Current source ABI: 17. ABI 14 added
+`connect_norito_encode_transfer_instruction_box` for native multisig proposal
+instruction boxes; later additive revisions include the native Kagemusha V2
+surfaces. The archive checksums below are historical and do not establish an
+ABI-17 artifact. Regenerate, verify, and republish the bridge artifacts before
+cutting an SDK release that depends on the current source surface.
 
 - `NoritoBridge.xcframework.zip`
   - SHA-256: 9bdd96f97f2eccc9e901c0500bd8f2b046c600080ebbe1213a4febba13c44efd

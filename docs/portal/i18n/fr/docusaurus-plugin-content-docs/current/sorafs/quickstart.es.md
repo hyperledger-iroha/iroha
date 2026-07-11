@@ -125,3 +125,23 @@ lorsque la charge sera reconstruite à la fin du manifeste.
 - **Automatización de CI** – ajouter les commandes antérieures aux pipelines de publication pour cela
   la documentation, les installations et les artefacts publics manifestes déterminants conjointement avec
   métadonnées firmados.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

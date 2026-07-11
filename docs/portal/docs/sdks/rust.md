@@ -184,7 +184,7 @@ events, data events, and telemetry feeds.
 
 ## Related Norito examples
 
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — compile, run, and deploy
+- [Initializer skeleton](../norito/examples/hajimari-entrypoint) — check, build, and deploy
  the minimal Kotodama scaffold that mirrors the setup phase in this quickstart.
 - [Register domain and mint assets](../norito/examples/register-and-mint) — aligns with the
  `Register` + `Mint` flow shown above so you can replay the same operations from a contract.

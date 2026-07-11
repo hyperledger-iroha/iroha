@@ -16289,18 +16289,16 @@ button {
 }
 
 fn single_api_contract_ko(app_name: &str) -> String {
-    let contract_name = format!("{}_api_service", normalized_contract_identifier(app_name));
+    let seiyaku_name = format!("{}_api_service", normalized_contract_identifier(app_name));
     r#"seiyaku __CONTRACT_NAME__ {
-  meta { abi_version: 1 }
-
-  kotoage fn main() -> Json {
+  view fn main() -> Json {
     return {
       app: "__APP_NAME__",
       status: "ready"
     };
   }
 
-  kotoage fn serve_healthz(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
+  view fn serve_healthz(_request_body: bytes, _request_meta: Json, observed_height: i64) -> Json {
     return {
       app: "__APP_NAME__",
       observed_height: observed_height,
@@ -16310,7 +16308,7 @@ fn single_api_contract_ko(app_name: &str) -> String {
   }
 }
 "#
-    .replace("__CONTRACT_NAME__", &contract_name)
+    .replace("__CONTRACT_NAME__", &seiyaku_name)
     .replace("__APP_NAME__", app_name)
 }
 
@@ -16571,122 +16569,79 @@ pre {
 
 fn hayahi_app_contract_ko(service_name: &str) -> String {
     r#"seiyaku __CONTRACT_NAME__ {
-  meta { abi_version: 1 }
-
-  kotoage fn with_observed_height(payload: Json, observed_height: int) -> Json {
-    return json_set_int(payload, name("observed_height"), observed_height);
+  fn with_observed_height(payload: Json, observed_height: i64) -> Json {
+    return json_set_int(payload, Name::parse("observed_height"), observed_height);
   }
 
-  kotoage fn with_execution_metadata(payload: Json, execution_sequence: int, observed_height: int) -> Json {
-    let payload = json_set_int(payload, name("execution_sequence"), execution_sequence);
-    return with_observed_height(payload, observed_height);
+  fn with_execution_metadata(payload: Json, execution_sequence: i64, observed_height: i64) -> Json {
+    let updated = json_set_int(payload, Name::parse("execution_sequence"), execution_sequence);
+    return with_observed_height(updated, observed_height);
   }
 
-  kotoage fn user_preferences_payload() -> Json {
-    let payload = json!{
-      route: "/api/v1/user/preferences",
-      service: "__SERVICE_NAME__",
-      storage_scope: "confidential_state"
-    };
+  fn user_preferences_payload() -> Json {
+    let payload = Json::parse("{\"route\":\"/api/v1/user/preferences\",\"service\":\"__SERVICE_NAME__\",\"storage_scope\":\"confidential_state\"}");
     return payload;
   }
 
-  kotoage fn saved_searches_payload() -> Json {
-    let payload = json!{
-      route: "/api/v1/user/saved-searches",
-      service: "__SERVICE_NAME__",
-      storage_scope: "confidential_state"
-    };
+  fn saved_searches_payload() -> Json {
+    let payload = Json::parse("{\"route\":\"/api/v1/user/saved-searches\",\"service\":\"__SERVICE_NAME__\",\"storage_scope\":\"confidential_state\"}");
     return payload;
   }
 
-  kotoage fn main() -> Json {
-    let payload = json!{
-      entrypoint: "main",
-      runtime: "soracloud_ivm",
-      service: "__SERVICE_NAME__",
-      status: "compiled"
-    };
+  view fn main() -> Json {
+    let payload = Json::parse("{\"entrypoint\":\"main\",\"runtime\":\"soracloud_ivm\",\"service\":\"__SERVICE_NAME__\",\"status\":\"compiled\"}");
     return payload;
   }
 
-  kotoage fn serve_health(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
-    let payload = json!{
-      ok: true,
-      route: "/api/v1/health",
-      service: "__SERVICE_NAME__"
-    };
+  view fn serve_health(_request_body: bytes, _request_meta: Json, observed_height: i64) -> Json {
+    let payload = Json::parse("{\"ok\":true,\"route\":\"/api/v1/health\",\"service\":\"__SERVICE_NAME__\"}");
     return with_observed_height(payload, observed_height);
   }
 
-  kotoage fn serve_state_overview(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
-    let payload = json!{
-      route: "/api/v1/state/overview",
-      service: "__SERVICE_NAME__",
-      storage: "service_manifest_state_bindings"
-    };
+  view fn serve_state_overview(_request_body: bytes, _request_meta: Json, observed_height: i64) -> Json {
+    let payload = Json::parse("{\"route\":\"/api/v1/state/overview\",\"service\":\"__SERVICE_NAME__\",\"storage\":\"service_manifest_state_bindings\"}");
     return with_observed_height(payload, observed_height);
   }
 
-  kotoage fn serve_collector_status(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
-    let payload = json!{
-      collectors: "validator_workers",
-      route: "/api/v1/collector/status",
-      service: "__SERVICE_NAME__"
-    };
+  view fn serve_collector_status(_request_body: bytes, _request_meta: Json, observed_height: i64) -> Json {
+    let payload = Json::parse("{\"collectors\":\"validator_workers\",\"route\":\"/api/v1/collector/status\",\"service\":\"__SERVICE_NAME__\"}");
     return with_observed_height(payload, observed_height);
   }
 
-  kotoage fn serve_auth_me(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
-    let payload = json!{
-      auth_surface: "/api/auth/me",
-      service: "__SERVICE_NAME__",
-      wallet_session_mode: "planned"
-    };
+  view fn serve_auth_me(_request_body: bytes, _request_meta: Json, observed_height: i64) -> Json {
+    let payload = Json::parse("{\"auth_surface\":\"/api/auth/me\",\"service\":\"__SERVICE_NAME__\",\"wallet_session_mode\":\"planned\"}");
     return with_observed_height(payload, observed_height);
   }
 
-  kotoage fn serve_user_preferences(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
+  view fn serve_user_preferences(_request_body: bytes, _request_meta: Json, observed_height: i64) -> Json {
     return with_observed_height(user_preferences_payload(), observed_height);
   }
 
-  kotoage fn serve_saved_searches(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
+  view fn serve_saved_searches(_request_body: bytes, _request_meta: Json, observed_height: i64) -> Json {
     return with_observed_height(saved_searches_payload(), observed_height);
   }
 
-  kotoage fn issue_auth_challenge(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
-    let payload = json!{
-      route: "/api/auth/challenge",
-      service: "__SERVICE_NAME__"
-    };
+  view fn issue_auth_challenge(_request_body: bytes, execution_sequence: i64, observed_height: i64) -> Json {
+    let payload = Json::parse("{\"route\":\"/api/auth/challenge\",\"service\":\"__SERVICE_NAME__\"}");
     return with_execution_metadata(payload, execution_sequence, observed_height);
   }
 
-  kotoage fn enqueue_search_request(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
-    let payload = json!{
-      route: "/api/v1/search",
-      service: "__SERVICE_NAME__"
-    };
+  view fn enqueue_search_request(_request_body: bytes, execution_sequence: i64, observed_height: i64) -> Json {
+    let payload = Json::parse("{\"route\":\"/api/v1/search\",\"service\":\"__SERVICE_NAME__\"}");
     return with_execution_metadata(payload, execution_sequence, observed_height);
   }
 
-  kotoage fn complete_auth_login(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
-    let payload = json!{
-      route: "/api/auth/login",
-      service: "__SERVICE_NAME__"
-    };
+  view fn complete_auth_login(_request_body: bytes, execution_sequence: i64, observed_height: i64) -> Json {
+    let payload = Json::parse("{\"route\":\"/api/auth/login\",\"service\":\"__SERVICE_NAME__\"}");
     return with_execution_metadata(payload, execution_sequence, observed_height);
   }
 
-  kotoage fn close_auth_session(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
-    let payload = json!{
-      route: "/api/auth/logout",
-      service: "__SERVICE_NAME__"
-    };
+  view fn close_auth_session(_request_body: bytes, execution_sequence: i64, observed_height: i64) -> Json {
+    let payload = Json::parse("{\"route\":\"/api/auth/logout\",\"service\":\"__SERVICE_NAME__\"}");
     return with_execution_metadata(payload, execution_sequence, observed_height);
   }
 
-  kotoage fn store_user_preferences(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
+  view fn store_user_preferences(_request_body: bytes, execution_sequence: i64, observed_height: i64) -> Json {
     return with_execution_metadata(
       user_preferences_payload(),
       execution_sequence,
@@ -16694,7 +16649,7 @@ fn hayahi_app_contract_ko(service_name: &str) -> String {
     );
   }
 
-  kotoage fn store_saved_search(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
+  view fn store_saved_search(_request_body: bytes, execution_sequence: i64, observed_height: i64) -> Json {
     return with_execution_metadata(
       saved_searches_payload(),
       execution_sequence,
@@ -17848,33 +17803,32 @@ CONTRACT_MANIFEST_FILE="$OUTPUT_DIR/api-service.contract_manifest.json"
 
 mkdir -p "$OUTPUT_DIR"
 
-if [[ -n "${KOTO_COMPILE_BIN:-}" && -x "${KOTO_COMPILE_BIN:-}" ]]; then
-  KOTO_COMPILE=("$KOTO_COMPILE_BIN")
-elif command -v koto_compile >/dev/null 2>&1; then
-  KOTO_COMPILE=("$(command -v koto_compile)")
+if [[ -n "${KOTO_BIN:-}" && -x "${KOTO_BIN:-}" ]]; then
+  KOTO=("$KOTO_BIN")
+elif command -v koto >/dev/null 2>&1; then
+  KOTO=("$(command -v koto)")
 else
   if [[ -n "${IROHA_SOURCE_DIR:-}" && -f "${IROHA_SOURCE_DIR}/Cargo.toml" ]]; then
     IROHA_CARGO_MANIFEST="${IROHA_SOURCE_DIR}/Cargo.toml"
   elif [[ -n "${IROHA_MANIFEST_PATH:-}" && -f "${IROHA_MANIFEST_PATH}" ]]; then
     IROHA_CARGO_MANIFEST="$IROHA_MANIFEST_PATH"
   else
-    echo "Unable to locate koto_compile. Set KOTO_COMPILE_BIN or IROHA_SOURCE_DIR." >&2
+    echo "Unable to locate koto. Set KOTO_BIN or IROHA_SOURCE_DIR." >&2
     exit 1
   fi
-  KOTO_COMPILE=(
+  KOTO=(
     cargo run
     --manifest-path "$IROHA_CARGO_MANIFEST"
     -p ivm
-    --bin koto_compile
+    --bin koto
     --
   )
 fi
 
-"${KOTO_COMPILE[@]}" "$SOURCE_FILE" \
+"${KOTO[@]}" build "$SOURCE_FILE" \
   --out "$BYTECODE_FILE" \
   --manifest-out "$CONTRACT_MANIFEST_FILE" \
-  --abi 1 \
-  --max-cycles 0
+  --max-cycles 1000000
 
 echo "built $BYTECODE_FILE"
 "#
@@ -17951,34 +17905,33 @@ if [[ ! -f "$MANIFEST_FILE" ]]; then
   exit 1
 fi
 
-if [[ -n "${KOTO_COMPILE_BIN:-}" && -x "${KOTO_COMPILE_BIN:-}" ]]; then
-  KOTO_COMPILE=("$KOTO_COMPILE_BIN")
-elif command -v koto_compile >/dev/null 2>&1; then
-  KOTO_COMPILE=("$(command -v koto_compile)")
+if [[ -n "${KOTO_BIN:-}" && -x "${KOTO_BIN:-}" ]]; then
+  KOTO=("$KOTO_BIN")
+elif command -v koto >/dev/null 2>&1; then
+  KOTO=("$(command -v koto)")
 else
   if [[ -n "${IROHA_SOURCE_DIR:-}" && -f "${IROHA_SOURCE_DIR}/Cargo.toml" ]]; then
     IROHA_CARGO_MANIFEST="${IROHA_SOURCE_DIR}/Cargo.toml"
   elif [[ -n "${IROHA_MANIFEST_PATH:-}" && -f "${IROHA_MANIFEST_PATH}" ]]; then
     IROHA_CARGO_MANIFEST="$IROHA_MANIFEST_PATH"
   else
-    echo "Unable to locate koto_compile. Set KOTO_COMPILE_BIN or IROHA_SOURCE_DIR." >&2
+    echo "Unable to locate koto. Set KOTO_BIN or IROHA_SOURCE_DIR." >&2
     exit 1
   fi
-  KOTO_COMPILE=(
+  KOTO=(
     cargo run
     --manifest-path "$IROHA_CARGO_MANIFEST"
     -p ivm
-    --bin koto_compile
+    --bin koto
     --
   )
 fi
 
-"${KOTO_COMPILE[@]}" \
+"${KOTO[@]}" build \
   "$SCRIPT_DIR/contract/api_service.ko" \
   --out "$TMP_DIR/api-service.to" \
   --manifest-out "$TMP_DIR/api-service.contract_manifest.json" \
-  --abi 1 \
-  --max-cycles 0
+  --max-cycles 1000000
 
 cmp -s "$BYTECODE_FILE" "$TMP_DIR/api-service.to" || {
   echo "Compiled bytecode differs from build/api-service.to. Re-run ./build.sh." >&2
@@ -18007,33 +17960,32 @@ CONTRACT_MANIFEST_FILE="$OUTPUT_DIR/hayahi-app-api.contract_manifest.json"
 
 mkdir -p "$OUTPUT_DIR"
 
-if [[ -n "${KOTO_COMPILE_BIN:-}" && -x "${KOTO_COMPILE_BIN:-}" ]]; then
-  KOTO_COMPILE=("$KOTO_COMPILE_BIN")
-elif command -v koto_compile >/dev/null 2>&1; then
-  KOTO_COMPILE=("$(command -v koto_compile)")
+if [[ -n "${KOTO_BIN:-}" && -x "${KOTO_BIN:-}" ]]; then
+  KOTO=("$KOTO_BIN")
+elif command -v koto >/dev/null 2>&1; then
+  KOTO=("$(command -v koto)")
 else
   if [[ -n "${IROHA_SOURCE_DIR:-}" && -f "${IROHA_SOURCE_DIR}/Cargo.toml" ]]; then
     IROHA_CARGO_MANIFEST="${IROHA_SOURCE_DIR}/Cargo.toml"
   elif [[ -n "${IROHA_MANIFEST_PATH:-}" && -f "${IROHA_MANIFEST_PATH}" ]]; then
     IROHA_CARGO_MANIFEST="$IROHA_MANIFEST_PATH"
   else
-    echo "Unable to locate koto_compile. Set KOTO_COMPILE_BIN or IROHA_SOURCE_DIR." >&2
+    echo "Unable to locate koto. Set KOTO_BIN or IROHA_SOURCE_DIR." >&2
     exit 1
   fi
-  KOTO_COMPILE=(
+  KOTO=(
     cargo run
     --manifest-path "$IROHA_CARGO_MANIFEST"
     -p ivm
-    --bin koto_compile
+    --bin koto
     --
   )
 fi
 
-"${KOTO_COMPILE[@]}" "$SOURCE_FILE" \
+"${KOTO[@]}" build "$SOURCE_FILE" \
   --out "$BYTECODE_FILE" \
   --manifest-out "$CONTRACT_MANIFEST_FILE" \
-  --abi 1 \
-  --max-cycles 0
+  --max-cycles 1000000
 
 echo "built $BYTECODE_FILE"
 "#
@@ -19203,23 +19155,22 @@ CONTRACT_MANIFEST_FILE="$OUTPUT_DIR/vault-api.contract_manifest.json"
 
 mkdir -p "$OUTPUT_DIR"
 
-if [[ -n "${KOTO_COMPILE_BIN:-}" ]]; then
-  KOTO_COMPILE=("${KOTO_COMPILE_BIN}")
-elif command -v koto_compile >/dev/null 2>&1; then
-  KOTO_COMPILE=("$(command -v koto_compile)")
+if [[ -n "${KOTO_BIN:-}" ]]; then
+  KOTO=("${KOTO_BIN}")
+elif command -v koto >/dev/null 2>&1; then
+  KOTO=("$(command -v koto)")
 elif [[ -n "${IROHA_MANIFEST_PATH:-}" ]]; then
-  KOTO_COMPILE=(cargo run --manifest-path "$IROHA_MANIFEST_PATH" -p ivm --bin koto_compile --)
+  KOTO=(cargo run --manifest-path "$IROHA_MANIFEST_PATH" -p ivm --bin koto --)
 else
-  echo "Unable to locate koto_compile. Set KOTO_COMPILE_BIN or IROHA_MANIFEST_PATH." >&2
+  echo "Unable to locate koto. Set KOTO_BIN or IROHA_MANIFEST_PATH." >&2
   exit 1
 fi
 
-"${KOTO_COMPILE[@]}" \
+"${KOTO[@]}" build \
   "$SOURCE_FILE" \
   --out "$BYTECODE_FILE" \
   --manifest-out "$CONTRACT_MANIFEST_FILE" \
-  --abi 1 \
-  --max-cycles 0
+  --max-cycles 1000000
 
 echo "built $BYTECODE_FILE"
 "#
@@ -19257,23 +19208,22 @@ if [[ ! -f "$MANIFEST_FILE" ]]; then
   exit 1
 fi
 
-if [[ -n "${KOTO_COMPILE_BIN:-}" ]]; then
-  KOTO_COMPILE=("${KOTO_COMPILE_BIN}")
-elif command -v koto_compile >/dev/null 2>&1; then
-  KOTO_COMPILE=("$(command -v koto_compile)")
+if [[ -n "${KOTO_BIN:-}" ]]; then
+  KOTO=("${KOTO_BIN}")
+elif command -v koto >/dev/null 2>&1; then
+  KOTO=("$(command -v koto)")
 elif [[ -n "${IROHA_MANIFEST_PATH:-}" ]]; then
-  KOTO_COMPILE=(cargo run --manifest-path "$IROHA_MANIFEST_PATH" -p ivm --bin koto_compile --)
+  KOTO=(cargo run --manifest-path "$IROHA_MANIFEST_PATH" -p ivm --bin koto --)
 else
-  echo "Unable to locate koto_compile. Set KOTO_COMPILE_BIN or IROHA_MANIFEST_PATH." >&2
+  echo "Unable to locate koto. Set KOTO_BIN or IROHA_MANIFEST_PATH." >&2
   exit 1
 fi
 
-"${KOTO_COMPILE[@]}" \
+"${KOTO[@]}" build \
   "$SCRIPT_DIR/contract/vault_api.ko" \
   --out "$TMP_DIR/vault-api.to" \
   --manifest-out "$TMP_DIR/vault-api.contract_manifest.json" \
-  --abi 1 \
-  --max-cycles 0
+  --max-cycles 1000000
 
 cmp -s "$BYTECODE_FILE" "$TMP_DIR/vault-api.to" || {
   echo "Compiled bytecode differs from build/vault-api.to. Re-run ./build.sh." >&2
@@ -19490,79 +19440,56 @@ server.listen(PORT, "0.0.0.0", () => {{
 }
 
 fn split_app_vault_contract_ko(app_name: &str) -> String {
-    let contract_name = format!("{}_vault_api", normalized_contract_identifier(app_name));
+    let seiyaku_name = format!("{}_vault_api", normalized_contract_identifier(app_name));
     format!(
-        r#"seiyaku {contract_name} {{
-  meta {{ abi_version: 1 }}
-
-  kotoage fn with_observed_height(payload: Json, observed_height: int) -> Json {{
-    return json_set_int(payload, name("observed_height"), observed_height);
+        r#"seiyaku {seiyaku_name} {{
+  fn with_observed_height(payload: Json, observed_height: i64) -> Json {{
+    return json_set_int(payload, Name::parse("observed_height"), observed_height);
   }}
 
-  kotoage fn with_execution_sequence(payload: Json, execution_sequence: int, observed_height: int) -> Json {{
-    let payload = json_set_int(payload, name("sequence"), execution_sequence);
+  fn with_execution_sequence(payload: Json, execution_sequence: i64, observed_height: i64) -> Json {{
+    let updated = json_set_int(payload, Name::parse("sequence"), execution_sequence);
+    return with_observed_height(updated, observed_height);
+  }}
+
+  view fn serve_auth_me(_request_body: bytes, _request_meta: Json, observed_height: i64) -> Json {{
+    let payload = Json::parse("{{\"authenticated\":false,\"wallet\":null}}");
     return with_observed_height(payload, observed_height);
   }}
 
-  kotoage fn serve_auth_me(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
-    let payload = json!{{
-      authenticated: false,
-      wallet: null
-    }};
+  view fn serve_user_preferences(_request_body: bytes, _request_meta: Json, observed_height: i64) -> Json {{
+    let payload = Json::parse("{{\"preferences\":{{}}}}");
     return with_observed_height(payload, observed_height);
   }}
 
-  kotoage fn serve_user_preferences(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
-    let payload = json!{{
-      preferences: {{}}
-    }};
+  view fn serve_saved_searches(_request_body: bytes, _request_meta: Json, observed_height: i64) -> Json {{
+    let payload = Json::parse("{{\"saved_searches\":[]}}");
     return with_observed_height(payload, observed_height);
   }}
 
-  kotoage fn serve_saved_searches(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
-    let payload = json!{{
-      saved_searches: []
-    }};
+  view fn issue_auth_challenge(_request_body: bytes, execution_sequence: i64, observed_height: i64) -> Json {{
+    let payload = Json::parse("{{\"accepted\":true}}");
+    let payload = json_set_int(payload, Name::parse("challenge_id"), execution_sequence);
     return with_observed_height(payload, observed_height);
   }}
 
-  kotoage fn issue_auth_challenge(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
-    let payload = json!{{
-      accepted: true
-    }};
-    let payload = json_set_int(payload, name("challenge_id"), execution_sequence);
-    return with_observed_height(payload, observed_height);
-  }}
-
-  kotoage fn complete_auth_login(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
-    let payload = json!{{
-      accepted: true,
-      action: "login"
-    }};
+  view fn complete_auth_login(_request_body: bytes, execution_sequence: i64, observed_height: i64) -> Json {{
+    let payload = Json::parse("{{\"accepted\":true,\"action\":\"login\"}}");
     return with_execution_sequence(payload, execution_sequence, observed_height);
   }}
 
-  kotoage fn close_auth_session(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
-    let payload = json!{{
-      accepted: true,
-      action: "logout"
-    }};
+  view fn close_auth_session(_request_body: bytes, execution_sequence: i64, observed_height: i64) -> Json {{
+    let payload = Json::parse("{{\"accepted\":true,\"action\":\"logout\"}}");
     return with_execution_sequence(payload, execution_sequence, observed_height);
   }}
 
-  kotoage fn store_user_preferences(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
-    let payload = json!{{
-      accepted: true,
-      action: "store_preferences"
-    }};
+  view fn store_user_preferences(_request_body: bytes, execution_sequence: i64, observed_height: i64) -> Json {{
+    let payload = Json::parse("{{\"accepted\":true,\"action\":\"store_preferences\"}}");
     return with_execution_sequence(payload, execution_sequence, observed_height);
   }}
 
-  kotoage fn store_saved_search(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
-    let payload = json!{{
-      accepted: true,
-      action: "store_saved_search"
-    }};
+  view fn store_saved_search(_request_body: bytes, execution_sequence: i64, observed_height: i64) -> Json {{
+    let payload = Json::parse("{{\"accepted\":true,\"action\":\"store_saved_search\"}}");
     return with_execution_sequence(payload, execution_sequence, observed_height);
   }}
 }}
@@ -19665,7 +19592,7 @@ deploy still use the IVM bytecode emitted by `./build.sh`.
 ./verify-build.sh
 ```
 
-`verify-build.sh` recompiles `contract/vault_api.ko` with `koto_compile` and
+`verify-build.sh` recompiles `contract/vault_api.ko` with `koto build` and
 checks that both the bytecode and emitted contract manifest match the committed
 build outputs.
 
@@ -20204,7 +20131,7 @@ The build emits `build/api-service.to` plus
 ./verify-build.sh
 ```
 
-`verify-build.sh` recompiles `contract/api_service.ko` with `koto_compile` and
+`verify-build.sh` recompiles `contract/api_service.ko` with `koto build` and
 checks that both the bytecode and emitted contract manifest still match the
 committed build outputs.
 
@@ -20635,16 +20562,15 @@ This template provides a real Soracloud/IVM Hayahi API scaffold:
 ./build.sh
 ```
 
-`build.sh` will use a local `koto_compile` binary when available and otherwise
+`build.sh` will use a local `koto` binary when available and otherwise
 falls back to:
 
 ```bash
-cargo run --manifest-path ../../../Cargo.toml -p ivm --bin koto_compile -- \
+cargo run --manifest-path ../../../Cargo.toml -p ivm --bin koto -- build \
   ./contract/hayahi_api.ko \
   --out ./build/hayahi-app-api.to \
   --manifest-out ./build/hayahi-app-api.contract_manifest.json \
-  --abi 1 \
-  --max-cycles 0
+  --max-cycles 1000000
 ```
 
 ## Exposed routes
@@ -20941,7 +20867,8 @@ mod tests {
         ))
         .expect("build draft response");
 
-        let decoded = decode_soracloud_tx_instructions(&response).expect("decode framed instructions");
+        let decoded =
+            decode_soracloud_tx_instructions(&response).expect("decode framed instructions");
         let decoded_instruction = decoded.first().expect("single instruction");
 
         assert_eq!(decoded.len(), 1);
@@ -26772,7 +26699,7 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-args.txt"
         let contract = fs::read_to_string(dir.join("services/api/contract/api_service.ko"))
             .expect("read single-api contract");
         assert!(contract.contains("seiyaku travel_ops_api_service {"));
-        assert!(contract.contains("kotoage fn serve_healthz"));
+        assert!(contract.contains("view fn serve_healthz"));
         let dev_server = fs::read_to_string(dir.join("services/api/dev-server.mjs"))
             .expect("read single-api dev server");
         assert!(dev_server.contains("/api/healthz"));
@@ -26782,7 +26709,7 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-args.txt"
             .expect("read single-api api readme");
         assert!(api_readme.contains("./dev.sh"));
         assert!(api_readme.contains("./verify-build.sh"));
-        assert!(api_readme.contains("koto_compile"));
+        assert!(api_readme.contains("koto build"));
 
         let readme = fs::read_to_string(dir.join("README.md")).expect("read single-api readme");
         assert!(readme.contains("./dev.sh"));
@@ -27291,7 +27218,6 @@ main().catch((error) => {
         let vault_contract = fs::read_to_string(dir.join("services/vault/contract/vault_api.ko"))
             .expect("read vault contract");
         assert!(vault_contract.contains("seiyaku travel_ops_vault_api {"));
-        assert!(vault_contract.contains("meta { abi_version: 1 }"));
         assert!(!vault_contract.contains("seiyaku travel-ops_vault_api {"));
         assert!(vault_contract.contains("serve_saved_searches"));
         assert!(vault_contract.contains("store_saved_search"));
@@ -27336,7 +27262,7 @@ main().catch((error) => {
         assert!(vault_readme.contains("./dev.sh"));
         assert!(vault_readme.contains("local HTTP shim"));
         assert!(vault_readme.contains("./verify-build.sh"));
-        assert!(vault_readme.contains("koto_compile"));
+        assert!(vault_readme.contains("koto build"));
 
         let app_readme = fs::read_to_string(dir.join("README.md")).expect("read app readme");
         assert!(app_readme.contains("/sorafs/cid/"));
@@ -29714,13 +29640,13 @@ main().catch((error) => {
 
         let contract = fs::read_to_string(dir.join("hayahi-app/contract/hayahi_api.ko"))
             .expect("read hayahi contract");
-        assert!(contract.contains("kotoage fn serve_health"));
-        assert!(contract.contains("kotoage fn serve_state_overview"));
-        assert!(contract.contains("kotoage fn serve_collector_status"));
-        assert!(contract.contains("kotoage fn issue_auth_challenge"));
-        assert!(contract.contains("kotoage fn complete_auth_login"));
-        assert!(contract.contains("kotoage fn store_user_preferences"));
-        assert!(contract.contains("kotoage fn store_saved_search"));
+        assert!(contract.contains("view fn serve_health"));
+        assert!(contract.contains("view fn serve_state_overview"));
+        assert!(contract.contains("view fn serve_collector_status"));
+        assert!(contract.contains("view fn issue_auth_challenge"));
+        assert!(contract.contains("view fn complete_auth_login"));
+        assert!(contract.contains("view fn store_user_preferences"));
+        assert!(contract.contains("view fn store_saved_search"));
         assert!(
             !contract.contains("TODO"),
             "placeholder TODO markers must be removed from hayahi-app scaffold"
@@ -35037,7 +34963,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    json() {
+    Json::parse() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };
@@ -35256,7 +35182,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    json() {
+    Json::parse() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };
@@ -35380,7 +35306,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    json() {
+    Json::parse() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };

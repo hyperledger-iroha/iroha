@@ -255,7 +255,12 @@ LaneConfigEntry {
   the journal-owned logical target even after moving the archive into its
   quarantine name. Restart completes a block-before-merge partial move in
   either direction without overwriting an operator-created collision or
-  adopting an unauthenticated path.
+  adopting an unauthenticated path. Only a newly appended journal `Intent` may
+  finish provisioning its journal-owned empty staging pair. Replay keeps
+  `CatalogPublished` or `RolledBack` provenance until the inverse or forward
+  move completes, and requires authenticated durable storage on every retry;
+  losing that evidence can never be reinterpreted as authority to create an
+  empty lane.
   Catalog-only routing without a live Nexus state view does not shard over
   elastic lanes; it keeps ordinary no-target traffic on the configured base
   default lane until live autoscale enablement and bounds are available.

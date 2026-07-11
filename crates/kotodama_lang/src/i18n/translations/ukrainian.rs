@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "Параметр `{name}` у функції `{func}` ніде не використовується",
     lint_unreachable_after_return: "Виявлено недосяжний оператор у {context}: код після return ніколи не виконується",
     lint_ok: "ок",
-    lint_usage: "Використання: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Використання: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Запускає lint-перевірки Kotodama для наданих вихідних файлів.",
     ..english::MESSAGES
 };

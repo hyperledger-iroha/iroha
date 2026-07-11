@@ -1,10 +1,13 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Hyperledger.Iroha.Sccp;
 
 namespace Hyperledger.Iroha.Torii;
 
 [JsonSerializable(typeof(JsonNode))]
 [JsonSerializable(typeof(JsonObject))]
+[JsonSerializable(typeof(SccpBridgeProofSubmitRequest))]
+[JsonSerializable(typeof(SccpBridgeMessageSubmitRequest))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupRequest))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupItem))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupResponse))]
@@ -102,7 +105,25 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(ToriiContractAliasBinding))]
 [JsonSerializable(typeof(ToriiContractAliasResolutionRequest))]
 [JsonSerializable(typeof(ToriiContractAliasResolution))]
-[JsonSerializable(typeof(ToriiContractManifestSummary))]
+[JsonSerializable(typeof(ToriiContractManifest))]
+[JsonSerializable(typeof(ToriiContractAccessSetHints))]
+[JsonSerializable(typeof(ToriiContractDynamicAccessHint))]
+[JsonSerializable(typeof(ToriiContractEntrypointDescriptor))]
+[JsonSerializable(typeof(ToriiContractEntrypointParameter))]
+[JsonSerializable(typeof(ToriiEntrypointArgumentSchemaV1))]
+[JsonSerializable(typeof(ToriiEntrypointArgumentFieldV1))]
+[JsonSerializable(typeof(ToriiEntrypointValueTypeV1))]
+[JsonSerializable(typeof(ToriiEntrypointValueTypeNodeV1))]
+[JsonSerializable(typeof(ToriiEntrypointStructTypeNodeV1))]
+[JsonSerializable(typeof(ToriiEntrypointListTypeNodeV1))]
+[JsonSerializable(typeof(ToriiContractTriggerDescriptor))]
+[JsonSerializable(typeof(ToriiContractTriggerRepeats))]
+[JsonSerializable(typeof(ToriiContractTriggerCallback))]
+[JsonSerializable(typeof(ToriiContractStateDescriptor))]
+[JsonSerializable(typeof(ToriiContractErrorCodeDescriptor))]
+[JsonSerializable(typeof(ToriiContractKotobaTranslationEntry))]
+[JsonSerializable(typeof(ToriiContractKotobaTranslation))]
+[JsonSerializable(typeof(ToriiContractManifestProvenance))]
 [JsonSerializable(typeof(ToriiContractCodeRecord))]
 [JsonSerializable(typeof(ToriiDeployContractRequest))]
 [JsonSerializable(typeof(ToriiDeployContractResponse))]

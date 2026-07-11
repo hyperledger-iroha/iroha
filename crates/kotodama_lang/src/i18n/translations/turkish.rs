@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "`{func}` fonksiyonundaki `{name}` parametresi hiç kullanılmıyor",
     lint_unreachable_after_return: "{context} içinde erişilemeyen ifade bulundu: return sonrasındaki kod hiçbir zaman çalışmaz",
     lint_ok: "tamam",
-    lint_usage: "Kullanım: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Kullanım: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Belirtilen kaynaklar üzerinde Kotodama lint kontrollerini çalıştırır.",
     ..english::MESSAGES
 };

@@ -1,6 +1,16 @@
 import { createHash } from "node:crypto";
 import { getNativeBinding } from "./native.js";
 import {
+  CRYPTO_ALGORITHMS,
+  normalizeCryptoAlgorithm,
+  publicKeyFromPrivate,
+} from "./crypto.js";
+import {
+  computeIvmArtifactHashes,
+  IVM_ARTIFACT_MAX_BYTES,
+  IVM_PROGRAM_HEADER_LENGTH,
+} from "./ivmArtifact.js";
+import {
   ToriiClient,
   getTrustedValidationFeeVerificationContext,
 } from "./toriiClient.js";
@@ -45,7 +55,7 @@ import {
   buildRegisterSmartContractBytesInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
-  buildProposeSccpRouteManifestInstruction,
+  buildProposeSccpRouteGovernanceInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
   buildEnactReferendumInstruction,
@@ -63,6 +73,18 @@ import {
   normalizeAccountId,
   normalizeAssetId,
 } from "./instructionBuilders.js";
+import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
+
+const submissionAbortSignalAbortedGetter =
+  typeof AbortSignal === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get ??
+      null);
+const submissionAbortSignalReasonGetter =
+  typeof AbortSignal === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")?.get ??
+      null);
 
 function normalizeAuthority(authority) {
   const raw = String(authority ?? "");
@@ -651,76 +673,25 @@ export function buildTransaction(input) {
 }
 
 /**
- * Build an `UpsertSccpRouteManifest` instruction from a canonical data-model
- * route manifest. The manifest should use snake_case fields accepted by the
- * native host and chain-side ISI validation.
- * @param {{manifest?: object, routeManifest?: object, route_manifest?: object} | object} input
- * @returns {{UpsertSccpRouteManifest: {manifest: object}}}
+ * Build an `ApplySccpRouteGovernance` instruction from one closed atomic action.
+ * @param {object} action
+ * @returns {{ApplySccpRouteGovernance: {action: object}}}
  */
-export function buildUpsertSccpRouteManifestInstruction(input) {
-  const source = normalizePlainObject(
-    input,
-    "buildUpsertSccpRouteManifestInstruction input",
-  );
-  const hasExplicitManifest =
-    Object.prototype.hasOwnProperty.call(source, "manifest") ||
-    Object.prototype.hasOwnProperty.call(source, "routeManifest") ||
-    Object.prototype.hasOwnProperty.call(source, "route_manifest");
-  const manifest = hasExplicitManifest
-    ? source.manifest ?? source.routeManifest ?? source.route_manifest
-    : source;
+export function buildApplySccpRouteGovernanceInstruction(action) {
   return {
-    UpsertSccpRouteManifest: {
-      manifest: normalizePlainObject(
-        manifest,
-        "buildUpsertSccpRouteManifestInstruction.manifest",
-      ),
+    ApplySccpRouteGovernance: {
+      action: normalizeSccpRouteGovernanceAction(action),
     },
   };
 }
 
 /**
- * Build a `RemoveSccpRouteManifest` instruction.
- * @param {{routeId?: string, route_id?: string, assetKey?: string, asset_key?: string, counterpartyDomain?: number|string|bigint, counterparty_domain?: number|string|bigint, chainIdHex?: string, chain_id_hex?: string}} input
- * @returns {{RemoveSccpRouteManifest: {route_id: string, asset_key: string, counterparty_domain: number, chain_id_hex: string}}}
+ * Build and sign a transaction containing one `ApplySccpRouteGovernance` instruction.
  */
-export function buildRemoveSccpRouteManifestInstruction(input) {
-  const source = normalizePlainObject(
-    input,
-    "buildRemoveSccpRouteManifestInstruction input",
-  );
-  return {
-    RemoveSccpRouteManifest: {
-      route_id: normalizeNonEmptyString(
-        source.route_id ?? source.routeId,
-        "buildRemoveSccpRouteManifestInstruction.routeId",
-      ),
-      asset_key: normalizeNonEmptyString(
-        source.asset_key ?? source.assetKey,
-        "buildRemoveSccpRouteManifestInstruction.assetKey",
-      ),
-      counterparty_domain: normalizeUint32(
-        source.counterparty_domain ?? source.counterpartyDomain,
-        "buildRemoveSccpRouteManifestInstruction.counterpartyDomain",
-      ),
-      chain_id_hex: normalizeNonEmptyString(
-        source.chain_id_hex ?? source.chainIdHex,
-        "buildRemoveSccpRouteManifestInstruction.chainIdHex",
-      ),
-    },
-  };
-}
-
-/**
- * Build and sign a transaction containing one `UpsertSccpRouteManifest`
- * instruction.
- */
-export function buildUpsertSccpRouteManifestTransaction({
+export function buildApplySccpRouteGovernanceTransaction({
   chainId,
   authority,
-  manifest,
-  routeManifest,
-  route_manifest,
+  action,
   metadata = null,
   creationTimeMs = null,
   ttlMs = null,
@@ -728,50 +699,7 @@ export function buildUpsertSccpRouteManifestTransaction({
   privateKey,
   privateKeyAlgorithm = null,
 }) {
-  const instruction = buildUpsertSccpRouteManifestInstruction({
-    manifest: manifest ?? routeManifest ?? route_manifest,
-  });
-  return buildTransaction({
-    chainId,
-    authority,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-/**
- * Build and sign a transaction containing one `RemoveSccpRouteManifest`
- * instruction.
- */
-export function buildRemoveSccpRouteManifestTransaction({
-  chainId,
-  authority,
-  routeId,
-  route_id,
-  assetKey,
-  asset_key,
-  counterpartyDomain,
-  counterparty_domain,
-  chainIdHex,
-  chain_id_hex,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
-  const instruction = buildRemoveSccpRouteManifestInstruction({
-    routeId: routeId ?? route_id,
-    assetKey: assetKey ?? asset_key,
-    counterpartyDomain: counterpartyDomain ?? counterparty_domain,
-    chainIdHex: chainIdHex ?? chain_id_hex,
-  });
+  const instruction = buildApplySccpRouteGovernanceInstruction(action);
   return buildTransaction({
     chainId,
     authority,
@@ -922,7 +850,11 @@ function readExclusiveInputAlias(record, aliases, context) {
   const supplied = [];
   for (const alias of aliases) {
     if (!Object.prototype.hasOwnProperty.call(record, alias)) continue;
-    const value = record[alias];
+    const descriptor = Object.getOwnPropertyDescriptor(record, alias);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError(`${context}.${alias} must be an enumerable data property`);
+    }
+    const value = descriptor.value;
     if (value !== undefined) supplied.push({ alias, value });
   }
   if (supplied.length > 1) {
@@ -931,6 +863,59 @@ function readExclusiveInputAlias(record, aliases, context) {
     );
   }
   return supplied.length === 0 ? undefined : supplied[0].value;
+}
+
+function readOwnEnumerableDataValue(record, key, context) {
+  if (
+    record === null ||
+    (typeof record !== "object" && typeof record !== "function") ||
+    !Object.prototype.hasOwnProperty.call(record, key)
+  ) {
+    return undefined;
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+    throw new TypeError(`${context}.${key} must be an enumerable data property`);
+  }
+  return descriptor.value;
+}
+
+function readExactInstructionVariant(record, supportedKeys, context) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return null;
+  }
+  const ownKeys = Reflect.ownKeys(record);
+  if (
+    ownKeys.length !== 1 ||
+    typeof ownKeys[0] !== "string" ||
+    !supportedKeys.includes(ownKeys[0])
+  ) {
+    return null;
+  }
+  const name = ownKeys[0];
+  return {
+    name,
+    value: readOwnEnumerableDataValue(record, name, context),
+  };
+}
+
+function hasExactEnumerableDataShape(record, expectedKeys, context) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return false;
+  }
+  const ownKeys = Reflect.ownKeys(record);
+  if (
+    ownKeys.length !== expectedKeys.length ||
+    ownKeys.some(
+      (key) => typeof key !== "string" || !expectedKeys.includes(key),
+    )
+  ) {
+    return false;
+  }
+  for (const key of expectedKeys) {
+    readOwnEnumerableDataValue(record, key, context);
+  }
+  return true;
 }
 
 function normalizeIvmProvedContractMetadata(value) {
@@ -953,7 +938,7 @@ function normalizeIvmProvedContractMetadata(value) {
       );
     }
   }
-  return { ...record };
+  return snapshotJsonValue(record, "metadata", 64 * 1024);
 }
 
 function canonicalJsonValue(value) {
@@ -972,10 +957,181 @@ function canonicalJsonValue(value) {
   return JSON.stringify(value);
 }
 
-function assertZkModeIvmBytecode(bytecodeBase64) {
-  const bytecode = Buffer.from(bytecodeBase64, "base64");
+function snapshotJsonValue(value, context, maxBytes = 1024 * 1024) {
+  let encoded;
+  try {
+    encoded = JSON.stringify(value);
+  } catch (error) {
+    throw new TypeError(`${context} must be JSON-serializable: ${error?.message ?? error}`);
+  }
+  if (encoded === undefined) {
+    throw new TypeError(`${context} must be a JSON value`);
+  }
+  if (Buffer.byteLength(encoded, "utf8") > maxBytes) {
+    throw new RangeError(`${context} exceeds ${maxBytes} serialized bytes`);
+  }
+  return JSON.parse(encoded);
+}
+
+const IVM_ARTIFACT_MAX_BASE64_LENGTH =
+  Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+
+function hasExactStandardBase64Shape(value) {
+  if (value.length === 0 || value.length % 4 !== 0) return false;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const dataLength = value.length - padding;
+  for (let index = 0; index < dataLength; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      !(
+        (code >= 0x41 && code <= 0x5a) ||
+        (code >= 0x61 && code <= 0x7a) ||
+        (code >= 0x30 && code <= 0x39) ||
+        code === 0x2b ||
+        code === 0x2f
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function normalizeExactBase64(value, context) {
   if (
-    bytecode.length < 17 ||
+    typeof value === "string" &&
+    value.length > IVM_ARTIFACT_MAX_BASE64_LENGTH
+  ) {
+    throw new RangeError(
+      `${context} exceeds the ${IVM_ARTIFACT_MAX_BYTES}-byte artifact limit`,
+    );
+  }
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`${context} must be non-empty canonical standard base64`);
+  }
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  if (
+    value.length % 4 === 0 &&
+    (value.length / 4) * 3 - padding > IVM_ARTIFACT_MAX_BYTES
+  ) {
+    throw new RangeError(
+      `${context} exceeds the ${IVM_ARTIFACT_MAX_BYTES}-byte artifact limit`,
+    );
+  }
+  if (!hasExactStandardBase64Shape(value)) {
+    throw new TypeError(`${context} must be non-empty canonical standard base64`);
+  }
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.length === 0 || bytes.toString("base64") !== value) {
+    throw new TypeError(`${context} must be non-empty canonical standard base64`);
+  }
+  return { bytes, base64: value };
+}
+
+function requireExactContractCodeBytesResponse(value) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    throw new TypeError(
+      "deployed contract bytecode response must be a plain object",
+    );
+  }
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length !== 1 || ownKeys[0] !== "code_b64") {
+    throw new TypeError(
+      "deployed contract bytecode response must contain exactly the code_b64 field",
+    );
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, "code_b64");
+  if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+    throw new TypeError(
+      "deployed contract bytecode response code_b64 must be an enumerable data property",
+    );
+  }
+  return descriptor.value;
+}
+
+function throwIfSubmissionAborted(signal) {
+  if (!signal) return;
+  let aborted;
+  let reason;
+  if (submissionAbortSignalAbortedGetter !== null) {
+    try {
+      aborted = submissionAbortSignalAbortedGetter.call(signal);
+      reason = submissionAbortSignalReasonGetter?.call(signal);
+    } catch {
+      // AbortSignal-like fallbacks are read only from own data properties.
+    }
+  }
+  if (aborted === undefined) {
+    const abortedDescriptor = Object.getOwnPropertyDescriptor(signal, "aborted");
+    if (
+      !abortedDescriptor ||
+      !("value" in abortedDescriptor) ||
+      typeof abortedDescriptor.value !== "boolean"
+    ) {
+      throw new TypeError("signal.aborted must be an own boolean data property");
+    }
+    aborted = abortedDescriptor.value;
+    const reasonDescriptor = Object.getOwnPropertyDescriptor(signal, "reason");
+    reason = reasonDescriptor && "value" in reasonDescriptor
+      ? reasonDescriptor.value
+      : undefined;
+  }
+  if (aborted) {
+    throw reason ?? new Error("The operation was aborted");
+  }
+}
+
+function normalizeIvmCodeHashHex(value, context) {
+  if (typeof value !== "string" || !/^[0-9a-fA-F]{64}$/u.test(value)) {
+    throw new TypeError(`${context} must be exactly 32 hexadecimal bytes`);
+  }
+  return value.toLowerCase();
+}
+
+function normalizeIvmVerifyingKeyRef(value, context) {
+  const record = normalizePlainObject(value, context);
+  const keys = Object.keys(record).sort();
+  if (keys.length !== 2 || keys[0] !== "backend" || keys[1] !== "name") {
+    throw new TypeError(`${context} must contain exactly backend and name`);
+  }
+  const backend = record.backend;
+  const name = record.name;
+  if (
+    typeof backend !== "string" ||
+    backend.length === 0 ||
+    backend.trim() !== backend
+  ) {
+    throw new TypeError(`${context}.backend must be an exact non-empty string`);
+  }
+  if (
+    typeof name !== "string" ||
+    name.length === 0 ||
+    name.trim() !== name ||
+    name.includes(":")
+  ) {
+    throw new TypeError(
+      `${context}.name must be an exact non-empty string without ':'`,
+    );
+  }
+  return { backend, name };
+}
+
+function assertZkModeIvmBytecode(
+  bytecodeBase64,
+  expectedCodeHashHex,
+  expectedArtifactSha256Hex,
+) {
+  const { bytes: bytecode, base64 } = normalizeExactBase64(
+    bytecodeBase64,
+    "deployed contract bytecode",
+  );
+  if (
+    bytecode.length < IVM_PROGRAM_HEADER_LENGTH ||
     !bytecode.subarray(0, 4).equals(Buffer.from([0x49, 0x56, 0x4d, 0x00]))
   ) {
     throw new Error("deployed contract bytecode has an invalid IVM header");
@@ -983,6 +1139,61 @@ function assertZkModeIvmBytecode(bytecodeBase64) {
   if ((bytecode[6] & 0x01) === 0) {
     throw new Error(
       "deployed contract bytecode is not ZK mode; compile and deploy the artifact with --force-zk",
+    );
+  }
+  const {
+    codeHashHex: actualCodeHashHex,
+    artifactSha256Hex: actualArtifactSha256Hex,
+  } = computeIvmArtifactHashes(bytecode);
+  if (actualArtifactSha256Hex !== expectedArtifactSha256Hex) {
+    throw new Error(
+      `deployed contract artifact SHA-256 ${actualArtifactSha256Hex} does not match caller-trusted expected artifact SHA-256 ${expectedArtifactSha256Hex}`,
+    );
+  }
+  if (actualCodeHashHex !== expectedCodeHashHex) {
+    throw new Error(
+      `deployed contract bytecode hash ${actualCodeHashHex} does not match expected code hash ${expectedCodeHashHex}`,
+    );
+  }
+  return base64;
+}
+
+function assertIvmProvedBytecodeBinding(proved, expectedBytecode, context) {
+  const record = normalizePlainObject(proved, context);
+  const { base64 } = normalizeExactBase64(
+    record.bytecode,
+    `${context}.bytecode`,
+  );
+  if (base64 !== expectedBytecode) {
+    throw new Error(
+      `${context}.bytecode differs from the code-hash-bound deployed contract bytecode`,
+    );
+  }
+}
+
+function assertIvmProofAttachmentBinding(attachment, expectedVkRef) {
+  const record = normalizePlainObject(attachment, "proof attachment");
+  if (record.backend !== expectedVkRef.backend) {
+    throw new Error(
+      "proof attachment backend differs from the requested verifying-key backend",
+    );
+  }
+  const proof = normalizePlainObject(record.proof, "proof attachment.proof");
+  if (proof.backend !== expectedVkRef.backend) {
+    throw new Error(
+      "proof attachment proof backend differs from the requested verifying-key backend",
+    );
+  }
+  const actualVkRef = normalizeIvmVerifyingKeyRef(
+    record.vk_ref,
+    "proof attachment.vk_ref",
+  );
+  if (
+    actualVkRef.backend !== expectedVkRef.backend ||
+    actualVkRef.name !== expectedVkRef.name
+  ) {
+    throw new Error(
+      "proof attachment vk_ref differs from the requested verifying-key reference",
     );
   }
 }
@@ -1163,41 +1374,132 @@ function prepareValidationFeePolicyIntent(
 }
 
 function directAssetTransfer(instruction) {
-  const transfer = instruction?.Transfer?.Asset;
-  if (!transfer || typeof transfer !== "object" || Array.isArray(transfer)) {
+  const instructionVariant = readExactInstructionVariant(
+    instruction,
+    ["Transfer"],
+    "overlay instruction",
+  );
+  if (instructionVariant === null) return null;
+  const transferVariant = instructionVariant.value;
+  if (
+    transferVariant === undefined ||
+    transferVariant === null ||
+    typeof transferVariant !== "object" ||
+    Array.isArray(transferVariant)
+  ) {
     return null;
   }
-  const source = transfer.source;
+  const assetVariant = readExactInstructionVariant(
+    transferVariant,
+    ["Asset"],
+    "overlay instruction.Transfer",
+  );
+  if (assetVariant === null) return null;
+  const transfer = assetVariant.value;
+  if (
+    !hasExactEnumerableDataShape(
+      transfer,
+      ["source", "object", "destination"],
+      "overlay instruction.Transfer.Asset",
+    )
+  ) {
+    return null;
+  }
+  const source = readOwnEnumerableDataValue(
+    transfer,
+    "source",
+    "overlay instruction.Transfer.Asset",
+  );
   if (typeof source !== "string") return null;
   const separator = source.indexOf("#");
   if (separator <= 0 || separator === source.length - 1) return null;
   return {
     assetDefinitionId: source.slice(0, separator),
     sourceAccountId: source.slice(separator + 1),
-    destinationAccountId: transfer.destination,
-    quantity: String(transfer.object),
+    destinationAccountId: readOwnEnumerableDataValue(
+      transfer,
+      "destination",
+      "overlay instruction.Transfer.Asset",
+    ),
+    quantity: String(
+      readOwnEnumerableDataValue(
+        transfer,
+        "object",
+        "overlay instruction.Transfer.Asset",
+      ),
+    ),
   };
 }
 
 function batchAssetTransfers(instruction) {
-  if (!instruction || typeof instruction !== "object" || Array.isArray(instruction)) {
-    return [];
-  }
-  const batch = readExclusiveInputAlias(
+  const variant = readExactInstructionVariant(
     instruction,
     ["TransferAssetBatch", "transfer_asset_batch", "AssetTransferBatch"],
+    "overlay instruction",
+  );
+  if (variant === null) return null;
+  const batch = variant.value;
+  if (
+    !hasExactEnumerableDataShape(
+      batch,
+      ["entries"],
+      "overlay instruction TransferAssetBatch",
+    )
+  ) {
+    throw new TypeError(
+      "overlay instruction TransferAssetBatch must contain exactly entries",
+    );
+  }
+  const entries = readOwnEnumerableDataValue(
+    batch,
+    "entries",
     "overlay instruction TransferAssetBatch",
   );
-  if (!batch || typeof batch !== "object" || !Array.isArray(batch.entries)) {
-    return [];
+  if (!batch || typeof batch !== "object" || !Array.isArray(entries)) {
+    throw new TypeError(
+      "overlay instruction TransferAssetBatch.entries must be an array",
+    );
   }
-  return batch.entries.map((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  return entries.map((entry, entryIndex) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new TypeError(
+        `overlay instruction TransferAssetBatch.entries[${entryIndex}] must be an object`,
+      );
+    }
+    if (
+      !hasExactEnumerableDataShape(
+        entry,
+        ["from", "to", "asset_definition", "amount"],
+        `overlay instruction TransferAssetBatch.entries[${entryIndex}]`,
+      )
+    ) {
+      throw new TypeError(
+        `overlay instruction TransferAssetBatch.entries[${entryIndex}] must contain exactly from, to, asset_definition, and amount`,
+      );
+    }
     return {
-      assetDefinitionId: entry.asset_definition,
-      sourceAccountId: entry.from,
-      destinationAccountId: entry.to,
-      quantity: String(entry.amount),
+      assetDefinitionId: readOwnEnumerableDataValue(
+        entry,
+        "asset_definition",
+        `overlay instruction TransferAssetBatch.entries[${entryIndex}]`,
+      ),
+      sourceAccountId: readOwnEnumerableDataValue(
+        entry,
+        "from",
+        `overlay instruction TransferAssetBatch.entries[${entryIndex}]`,
+      ),
+      destinationAccountId: readOwnEnumerableDataValue(
+        entry,
+        "to",
+        `overlay instruction TransferAssetBatch.entries[${entryIndex}]`,
+      ),
+      quantity: String(
+        readOwnEnumerableDataValue(
+          entry,
+          "amount",
+          `overlay instruction TransferAssetBatch.entries[${entryIndex}]`,
+        ),
+      ),
     };
   });
 }
@@ -1225,25 +1527,81 @@ function decodeOverlayInstruction(value, context) {
 }
 
 function multisigPropose(instruction) {
-  const customProposal = instruction?.Custom?.payload?.Propose;
-  const aliasProposal = instruction?.MultisigPropose;
-  if (customProposal !== undefined && aliasProposal !== undefined) {
-    throw new TypeError(
-      "overlay multisig proposal must use exactly one of Custom.payload.Propose, MultisigPropose",
+  const variant = readExactInstructionVariant(
+    instruction,
+    ["Custom", "MultisigPropose"],
+    "overlay instruction",
+  );
+  if (variant === null) return null;
+  let proposal = variant.value;
+  if (variant.name === "Custom") {
+    if (
+      !hasExactEnumerableDataShape(
+        variant.value,
+        ["payload"],
+        "overlay instruction.Custom",
+      )
+    ) {
+      throw new TypeError(
+        "overlay instruction.Custom must contain exactly payload",
+      );
+    }
+    const payload = readOwnEnumerableDataValue(
+      variant.value,
+      "payload",
+      "overlay instruction.Custom",
+    );
+    if (
+      !hasExactEnumerableDataShape(
+        payload,
+        ["Propose"],
+        "overlay instruction.Custom.payload",
+      )
+    ) {
+      throw new TypeError(
+        "overlay instruction.Custom.payload must contain exactly Propose",
+      );
+    }
+    proposal = readOwnEnumerableDataValue(
+      payload,
+      "Propose",
+      "overlay instruction.Custom.payload",
     );
   }
-  const proposal = customProposal ?? aliasProposal;
-  if (proposal === undefined || proposal === null) return null;
+  if (proposal === undefined || proposal === null) {
+    return null;
+  }
   if (typeof proposal !== "object" || Array.isArray(proposal)) {
     throw new TypeError("MultisigPropose payload must be an object");
   }
-  if (!Array.isArray(proposal.instructions)) {
+  if (
+    !hasExactEnumerableDataShape(
+      proposal,
+      ["account", "instructions"],
+      "MultisigPropose",
+    )
+  ) {
+    throw new TypeError(
+      "MultisigPropose must contain exactly account and instructions",
+    );
+  }
+  const instructions = readOwnEnumerableDataValue(
+    proposal,
+    "instructions",
+    "MultisigPropose",
+  );
+  if (!Array.isArray(instructions)) {
     throw new TypeError("MultisigPropose.instructions must be an array");
   }
-  if (typeof proposal.account !== "string" || proposal.account.length === 0) {
+  const account = readOwnEnumerableDataValue(
+    proposal,
+    "account",
+    "MultisigPropose",
+  );
+  if (typeof account !== "string" || account.length === 0) {
     throw new TypeError("MultisigPropose.account must be an account id");
   }
-  return proposal;
+  return { account, instructions };
 }
 
 function collectOverlayTransferContexts(overlay, authority, context) {
@@ -1267,6 +1625,17 @@ function collectOverlayTransferContexts(overlay, authority, context) {
         `${context}.overlay[${instructionIndex}]`,
       );
       const direct = directAssetTransfer(instruction);
+      const batch = batchAssetTransfers(instruction);
+      const proposal = multisigPropose(instruction);
+      const recognizedKinds =
+        Number(direct !== null) +
+        Number(batch !== null) +
+        Number(proposal !== null);
+      if (recognizedKinds !== 1) {
+        throw new Error(
+          `${context}.overlay[${instructionIndex}] is not one unambiguous explicit asset transfer, transfer batch, or recursive multisig proposal; validation-fee submission fails closed on other instruction families`,
+        );
+      }
       if (direct) {
         transferContext.transfers.push({
           ...direct,
@@ -1275,23 +1644,19 @@ function collectOverlayTransferContexts(overlay, authority, context) {
           transferEntryIndex: null,
         });
       }
-      const batch = batchAssetTransfers(instruction);
       for (
         let transferEntryIndex = 0;
-        transferEntryIndex < batch.length;
+        transferEntryIndex < (batch?.length ?? 0);
         transferEntryIndex += 1
       ) {
-        if (batch[transferEntryIndex]) {
-          transferContext.transfers.push({
-            ...batch[transferEntryIndex],
-            contextIndex: transferContext.contextIndex,
-            instructionIndex,
-            transferEntryIndex,
-          });
-        }
+        transferContext.transfers.push({
+          ...batch[transferEntryIndex],
+          contextIndex: transferContext.contextIndex,
+          instructionIndex,
+          transferEntryIndex,
+        });
       }
 
-      const proposal = multisigPropose(instruction);
       if (proposal) {
         const nestedContext = {
           contextIndex: contexts.length,
@@ -1488,12 +1853,193 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   }
   const record = normalizePlainObject(input, "input");
   const opts = normalizePlainObject(options, "options");
-  const authority = normalizeAuthority(record.authority);
-  const chainId = readExclusiveInputAlias(
-    record,
-    ["chainId", "chain_id"],
-    "input.chainId",
+  const { signal } = ToriiClient._normalizeOptionsWithSignal(
+    opts.signal === undefined ? {} : { signal: opts.signal },
+    "submitIvmProvedContractCall",
   );
+  if (opts.waitForCommit !== undefined && typeof opts.waitForCommit !== "boolean") {
+    throw new TypeError("options.waitForCommit must be a boolean");
+  }
+  const proofIntervalMs =
+    opts.proofIntervalMs === undefined
+      ? undefined
+      : ToriiClient._normalizeUnsignedInteger(
+          opts.proofIntervalMs,
+          "options.proofIntervalMs",
+          { allowZero: true },
+        );
+  const proofTimeoutMs =
+    opts.proofTimeoutMs === undefined
+      ? undefined
+      : opts.proofTimeoutMs === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+            opts.proofTimeoutMs,
+            "options.proofTimeoutMs",
+            { allowZero: true },
+          );
+  const hasTransactionPollOptions =
+    opts.transactionIntervalMs !== undefined ||
+    opts.transactionTimeoutMs !== undefined ||
+    opts.transactionStatusScope !== undefined ||
+    opts.waitForCommit === true;
+  const transactionPollOptions = hasTransactionPollOptions
+    ? ToriiClient._normalizeTransactionStatusPollOptions(
+        {
+          ...(opts.transactionIntervalMs === undefined
+            ? {}
+            : { intervalMs: opts.transactionIntervalMs }),
+          ...(opts.transactionTimeoutMs === undefined
+            ? {}
+            : { timeoutMs: opts.transactionTimeoutMs }),
+          ...(opts.transactionStatusScope === undefined
+            ? {}
+            : { scope: opts.transactionStatusScope }),
+          ...(signal === undefined ? {} : { signal }),
+          successStatuses: ["Committed", "Applied"],
+        },
+        "submitIvmProvedContractCall transaction status options",
+      )
+    : null;
+  const authority = normalizeAuthority(record.authority);
+  const chainIdValue = readExclusiveInputAlias(
+    record, ["chainId", "chain_id"], "input.chainId",
+  );
+  const chainId = normalizeNonEmptyString(chainIdValue, "input.chainId");
+  if (chainId !== chainIdValue) {
+    throw new TypeError("input.chainId must not contain surrounding whitespace");
+  }
+  const expectedCodeHashHex = normalizeIvmCodeHashHex(
+    readExclusiveInputAlias(
+      record,
+      ["expectedCodeHashHex", "expected_code_hash_hex"],
+      "input.expectedCodeHashHex",
+    ),
+    "input.expectedCodeHashHex",
+  );
+  const expectedArtifactSha256Hex = normalizeIvmCodeHashHex(
+    readExclusiveInputAlias(
+      record,
+      ["expectedArtifactSha256Hex", "expected_artifact_sha256_hex"],
+      "input.expectedArtifactSha256Hex",
+    ),
+    "input.expectedArtifactSha256Hex",
+  );
+  const vkRef = normalizeIvmVerifyingKeyRef(
+    readExclusiveInputAlias(record, ["vkRef", "vk_ref"], "input.vkRef"),
+    "input.vkRef",
+  );
+  const privateKeyValue = readExclusiveInputAlias(
+    record,
+    ["privateKey", "private_key"],
+    "input.privateKey",
+  );
+  const privateKey = Buffer.from(toBuffer(privateKeyValue, "input.privateKey"));
+  const privateKeyAlgorithmValue = readExclusiveInputAlias(
+    record,
+    ["privateKeyAlgorithm", "private_key_algorithm"],
+    "input.privateKeyAlgorithm",
+  );
+  if (
+    typeof privateKeyAlgorithmValue === "string" &&
+    privateKeyAlgorithmValue.trim() !== privateKeyAlgorithmValue
+  ) {
+    throw new TypeError(
+      "input.privateKeyAlgorithm must not contain surrounding whitespace",
+    );
+  }
+  const privateKeyAlgorithm = normalizeCryptoAlgorithm(
+    privateKeyAlgorithmValue ?? undefined,
+  );
+  if (privateKeyAlgorithm === CRYPTO_ALGORITHMS.ED25519) {
+    if (privateKey.length !== 32 && privateKey.length !== 64) {
+      throw new TypeError("input.privateKey must be a 32- or 64-byte Ed25519 key");
+    }
+  } else {
+    // Parse the algorithm-specific key before creating any proof-side effects.
+    publicKeyFromPrivate(privateKey, { algorithm: privateKeyAlgorithm });
+  }
+  const contractAddressValue = readExclusiveInputAlias(
+    record,
+    ["contractAddress", "contract_address"],
+    "input.contractAddress",
+  );
+  const contractAliasValue = readExclusiveInputAlias(
+    record,
+    ["contractAlias", "contract_alias"],
+    "input.contractAlias",
+  );
+  if (
+    (contractAddressValue === undefined || contractAddressValue === null) ===
+    (contractAliasValue === undefined || contractAliasValue === null)
+  ) {
+    throw new TypeError(
+      "input must provide exactly one of contractAddress or contractAlias",
+    );
+  }
+  const contractAddress =
+    contractAddressValue === undefined || contractAddressValue === null
+      ? null
+      : normalizeNonEmptyString(contractAddressValue, "input.contractAddress");
+  const contractAlias =
+    contractAliasValue === undefined || contractAliasValue === null
+      ? null
+      : normalizeNonEmptyString(contractAliasValue, "input.contractAlias");
+  if (
+    (contractAddress !== null && contractAddress !== contractAddressValue) ||
+    (contractAlias !== null && contractAlias !== contractAliasValue)
+  ) {
+    throw new TypeError(
+      "input contract selector must not contain surrounding whitespace",
+    );
+  }
+  const entrypoint =
+    record.entrypoint === undefined || record.entrypoint === null
+      ? null
+      : normalizeNonEmptyString(record.entrypoint, "input.entrypoint");
+  if (entrypoint !== null && entrypoint !== record.entrypoint) {
+    throw new TypeError("input.entrypoint must not contain surrounding whitespace");
+  }
+  const payload =
+    record.payload === undefined
+      ? undefined
+      : snapshotJsonValue(record.payload, "input.payload");
+  const gasLimitValue = readExclusiveInputAlias(
+    record,
+    ["gasLimit", "gas_limit"],
+    "input.gasLimit",
+  );
+  const gasLimit = ToriiClient._normalizeUnsignedInteger(
+    gasLimitValue,
+    "input.gasLimit",
+    { allowZero: false },
+  );
+  const metadataInput = normalizeIvmProvedContractMetadata(record.metadata);
+  function optionalTransactionInteger(aliases, context, { positive = false } = {}) {
+    const value = readExclusiveInputAlias(record, aliases, context);
+    if (value === undefined || value === null) return null;
+    const normalized = ToriiClient._normalizeUnsignedInteger(value, context, {
+      allowZero: !positive,
+    });
+    if (positive && normalized === 0) {
+      throw new RangeError(`${context} must be positive`);
+    }
+    return normalized;
+  }
+  const creationTimeMs = optionalTransactionInteger(
+    ["creationTimeMs", "creation_time_ms"],
+    "input.creationTimeMs",
+  );
+  const ttlMs = optionalTransactionInteger(
+    ["ttlMs", "ttl_ms"],
+    "input.ttlMs",
+  );
+  const nonce = optionalTransactionInteger(["nonce"], "input.nonce", {
+    positive: true,
+  });
+  if (nonce !== null && nonce > 0xffff_ffff) {
+    throw new RangeError("input.nonce must fit in u32");
+  }
   const callerRequiredTransferValue = readExclusiveInputAlias(
     record,
     ["requiredOverlayTransfer", "required_overlay_transfer"],
@@ -1518,8 +2064,16 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
           chainId,
           getTrustedValidationFeeVerificationContext(client),
         );
-  const gasAssetValue = record.gasAssetId ?? record.gas_asset_id;
-  const feeSponsorValue = record.feeSponsor ?? record.fee_sponsor;
+  const gasAssetValue = readExclusiveInputAlias(
+    record,
+    ["gasAssetId", "gas_asset_id"],
+    "input.gasAssetId",
+  );
+  const feeSponsorValue = readExclusiveInputAlias(
+    record,
+    ["feeSponsor", "fee_sponsor"],
+    "input.feeSponsor",
+  );
   const gasAssetId =
     gasAssetValue === undefined || gasAssetValue === null
       ? null
@@ -1530,27 +2084,15 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
       : normalizeAccountId(feeSponsorValue, "feeSponsor");
   const simulationRequest = {
     authority,
-    ...(record.contractAddress !== undefined
-      ? { contractAddress: record.contractAddress }
-      : {}),
-    ...(record.contract_address !== undefined
-      ? { contract_address: record.contract_address }
-      : {}),
-    ...(record.contractAlias !== undefined
-      ? { contractAlias: record.contractAlias }
-      : {}),
-    ...(record.contract_alias !== undefined
-      ? { contract_alias: record.contract_alias }
-      : {}),
-    ...(record.entrypoint === undefined
-      ? {}
-      : { entrypoint: record.entrypoint }),
-    ...(record.payload === undefined ? {} : { payload: record.payload }),
+    ...(contractAddress === null ? {} : { contractAddress }),
+    ...(contractAlias === null ? {} : { contractAlias }),
+    ...(entrypoint === null ? {} : { entrypoint }),
+    ...(payload === undefined ? {} : { payload }),
     ...(gasAssetId === null ? {} : { gasAssetId }),
     ...(feeSponsor === null ? {} : { feeSponsor }),
-    gasLimit: record.gasLimit ?? record.gas_limit,
+    gasLimit,
   };
-  const requestOptions = opts.signal === undefined ? {} : { signal: opts.signal };
+  const requestOptions = signal === undefined ? {} : { signal };
   const simulation = await client.simulateContractCall(
     simulationRequest,
     requestOptions,
@@ -1563,28 +2105,69 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   if (!simulation.contract_address) {
     throw new Error("contract call simulation did not resolve a contract address");
   }
-
-  const code = await client.getContractCodeBytes(simulation.code_hash_hex);
-  if (!code?.code_b64) {
+  if (
+    contractAddress !== null &&
+    simulation.contract_address !== contractAddress
+  ) {
     throw new Error(
-      `deployed contract bytecode ${simulation.code_hash_hex} is unavailable`,
+      "contract call simulation resolved a different contract address than requested",
     );
   }
-  assertZkModeIvmBytecode(code.code_b64);
+  if (simulation.gas_limit !== gasLimit) {
+    throw new Error(
+      `contract call simulation gas limit ${simulation.gas_limit} does not match requested gas limit ${gasLimit}`,
+    );
+  }
+  if (entrypoint !== null && simulation.entrypoint !== entrypoint) {
+    throw new Error(
+      "contract call simulation resolved a different entrypoint than requested",
+    );
+  }
+  if (
+    payload !== undefined &&
+    (simulation.normalized_payload === null ||
+      canonicalJsonValue(simulation.normalized_payload) !==
+        canonicalJsonValue(payload))
+  ) {
+    throw new Error(
+      "contract call simulation normalized payload differs from the requested payload",
+    );
+  }
+  const simulationCodeHashHex = normalizeIvmCodeHashHex(
+    simulation.code_hash_hex,
+    "contract call simulation code_hash_hex",
+  );
+  if (simulationCodeHashHex !== expectedCodeHashHex) {
+    throw new Error(
+      `contract call simulation code hash ${simulationCodeHashHex} does not match caller-trusted expected code hash ${expectedCodeHashHex}`,
+    );
+  }
+
+  const code = await client.getContractCodeBytes(
+    expectedCodeHashHex,
+    requestOptions,
+  );
+  if (code === null || code === undefined) {
+    throw new Error(
+      `deployed contract bytecode ${expectedCodeHashHex} is unavailable`,
+    );
+  }
+  const codeBase64 = requireExactContractCodeBytesResponse(code);
+  const deployedBytecode = assertZkModeIvmBytecode(
+    codeBase64,
+    expectedCodeHashHex,
+    expectedArtifactSha256Hex,
+  );
 
   const metadata = {
-    ...normalizeIvmProvedContractMetadata(record.metadata),
+    ...metadataInput,
     contract_address: simulation.contract_address,
     contract_entrypoint: simulation.entrypoint,
     gas_limit: simulation.gas_limit,
     ...(validationFeeBinding === null ? {} : validationFeeBinding.metadata),
   };
-  const contractAlias = record.contractAlias ?? record.contract_alias;
-  if (contractAlias !== undefined && contractAlias !== null) {
-    metadata.contract_alias = normalizeNonEmptyString(
-      contractAlias,
-      "contractAlias",
-    );
+  if (contractAlias !== null) {
+    metadata.contract_alias = contractAlias;
   }
   if (simulation.normalized_payload !== null) {
     metadata.contract_payload = simulation.normalized_payload;
@@ -1597,12 +2180,17 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   }
 
   const proofRequest = {
-    vkRef: record.vkRef ?? record.vk_ref,
+    vkRef,
     authority,
     metadata,
-    bytecode: code.code_b64,
+    bytecode: deployedBytecode,
   };
   const derived = await client.deriveIvmProved(proofRequest, requestOptions);
+  assertIvmProvedBytecodeBinding(
+    derived?.proved,
+    deployedBytecode,
+    "node-derived proved payload",
+  );
   const validationResult =
     validationFeeBinding === null
       ? null
@@ -1634,15 +2222,15 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   }
 
   const proofJob = await client.proveIvmAndWait(
-    { ...proofRequest, proved: derived.proved },
+    proofRequest,
     {
       ...requestOptions,
-      ...(opts.proofIntervalMs === undefined
+      ...(proofIntervalMs === undefined
         ? {}
-        : { intervalMs: opts.proofIntervalMs }),
-      ...(opts.proofTimeoutMs === undefined
+        : { intervalMs: proofIntervalMs }),
+      ...(proofTimeoutMs === undefined
         ? {}
-        : { timeoutMs: opts.proofTimeoutMs }),
+        : { timeoutMs: proofTimeoutMs }),
     },
   );
   if (canonicalJsonValue(proofJob.proved) !== canonicalJsonValue(derived.proved)) {
@@ -1650,6 +2238,12 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
       "prover returned an IvmProved payload different from the authoritative derived payload",
     );
   }
+  assertIvmProvedBytecodeBinding(
+    proofJob.proved,
+    deployedBytecode,
+    "proved payload",
+  );
+  assertIvmProofAttachmentBinding(proofJob.attachment, vkRef);
   if (validationFeeBinding === null) {
     assertRequiredOverlayTransfer(
       proofJob.proved,
@@ -1674,33 +2268,35 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     }
   }
 
+  throwIfSubmissionAborted(signal);
   const built = buildIvmProvedTransaction({
     chainId,
     authority,
     proved: proofJob.proved,
     attachment: proofJob.attachment,
     metadata,
-    creationTimeMs: record.creationTimeMs ?? record.creation_time_ms ?? null,
-    ttlMs: record.ttlMs ?? record.ttl_ms ?? null,
-    nonce: record.nonce ?? null,
-    privateKey: record.privateKey ?? record.private_key,
-    privateKeyAlgorithm:
-      record.privateKeyAlgorithm ?? record.private_key_algorithm ?? null,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+    privateKeyAlgorithm,
   });
+  throwIfSubmissionAborted(signal);
   const hashHex = built.hash.toString("hex");
-  const submission = await client.submitTransaction(built.signedTransaction);
+  const submission = await client.submitTransaction(
+    built.signedTransaction,
+    requestOptions,
+  );
   const status = opts.waitForCommit
     ? await client.waitForTransactionStatusTyped(hashHex, {
-        ...(opts.transactionIntervalMs === undefined
+        intervalMs: transactionPollOptions.intervalMs,
+        timeoutMs: transactionPollOptions.timeoutMs,
+        ...(transactionPollOptions.scope === undefined
           ? {}
-          : { intervalMs: opts.transactionIntervalMs }),
-        ...(opts.transactionTimeoutMs === undefined
+          : { scope: transactionPollOptions.scope }),
+        ...(transactionPollOptions.signal === undefined
           ? {}
-          : { timeoutMs: opts.transactionTimeoutMs }),
-        ...(opts.transactionStatusScope === undefined
-          ? {}
-          : { scope: opts.transactionStatusScope }),
-        ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+          : { signal: transactionPollOptions.signal }),
         successStatuses: ["Committed", "Applied"],
       })
     : null;
@@ -4004,15 +4600,13 @@ export function buildProposeDeployContractTransaction({
 }
 
 /**
- * Build a transaction containing a `ProposeSccpRouteManifest` instruction.
+ * Build a transaction containing a `ProposeSccpRouteGovernance` instruction.
  */
-export function buildProposeSccpRouteManifestTransaction({
+export function buildProposeSccpRouteGovernanceTransaction({
   chainId,
   authority,
   proposal,
-  manifest,
-  routeManifest,
-  route_manifest,
+  action,
   metadata = null,
   creationTimeMs = null,
   ttlMs = null,
@@ -4020,10 +4614,8 @@ export function buildProposeSccpRouteManifestTransaction({
   privateKey,
   privateKeyAlgorithm = null,
 }) {
-  const instruction = buildProposeSccpRouteManifestInstruction(
-    proposal ?? {
-      manifest: manifest ?? routeManifest ?? route_manifest,
-    },
+  const instruction = buildProposeSccpRouteGovernanceInstruction(
+    proposal ?? { action },
   );
   return buildTransaction({
     chainId,

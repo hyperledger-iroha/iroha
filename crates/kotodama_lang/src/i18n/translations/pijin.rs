@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "Parameter `{name}` long function `{func}` i no yusim nating",
     lint_unreachable_after_return: "Statement insaed long {context} i no save kasem; kode bihaen long return i no ron",
     lint_ok: "oraet",
-    lint_usage: "Yus: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Yus: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Ronim Kotodama lint long ol fael we iu givim.",
     ..english::MESSAGES
 };

@@ -9,14 +9,14 @@ const SDK_GUIDES = [
 export const SNIPPETS = [
   {
     slug: 'hajimari-entrypoint',
-    title: 'Hajimari entrypoint skeleton',
+    title: 'Hajimari skeleton',
     description:
-      'Minimal Kotodama contract scaffold with a single public entrypoint and state handle.',
+      'Minimal strict-V1 Kotodama contract scaffold with a dedicated hajimari lifecycle declaration.',
     source: 'crates/ivm/docs/examples/01_hajimari.ko',
     ledgerWalkthrough: [
-      'Compile the contract with `koto_compile --abi 1` as shown in [Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) or via `cargo test -p ivm developer_portal_norito_snippets_compile`.',
-      'Smoke-test the bytecode locally with `ivm_run` / `developer_portal_norito_snippets_run` to verify the `info!` log and initial syscall before touching a node.',
-      'Deploy the artifact through `iroha app contracts deploy` and confirm the manifest using the steps in [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha).'
+      'Check and compile the contract with `koto check` and `koto build` as shown in [Norito Getting Started](/norito/getting-started#1-check-and-build-a-kotodama-contract), or run `cargo test -p ivm developer_portal_norito_snippets_compile`.',
+      'Use `iroha contract debug-call` or `developer_portal_norito_snippets_run` for a local runtime check before touching a node.',
+      'Deploy the artifact through `iroha contract deploy` and confirm the manifest using the steps in [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha).'
     ],
     sdkGuides: SDK_GUIDES
   },
@@ -37,7 +37,7 @@ export const SNIPPETS = [
     slug: 'call-transfer-asset',
     title: 'Invoke host transfer from Kotodama',
     description:
-      'Demonstrates how a Kotodama entrypoint can call the host `transfer_asset` instruction with inline metadata validation.',
+      'Demonstrates how an authorized Kotodama entrypoint invokes `ledger::asset::transfer` with typed identifiers.',
     source: 'crates/ivm/docs/examples/08_call_transfer_asset.ko',
     ledgerWalkthrough: [
       'Fund the contract authority (for example `<i105-account-id>` for the contract account) with the asset it will transfer and grant the authority the `CanTransfer` role or equivalent permission.',
@@ -79,7 +79,7 @@ export const SNIPPETS = [
       'Single-payer escrow that accepts top-ups to an exact target amount, then releases or refunds the funds.',
     source: 'crates/kotodama_lang/src/samples/threshold_escrow.ko',
     ledgerWalkthrough: [
-      'Pre-create the configured escrow recipient, escrow account, and numeric asset definition, then fund the payer account that will submit the contract calls. The sample binds that payer automatically with `authority()` during `open_escrow`.',
+      'Pre-create the configured escrow recipient, escrow account, and numeric asset definition, then fund the payer account that will submit the contract calls. The sample binds that payer with `context::authority()` during `open_escrow`.',
       'Call `open_escrow(target_amount)` once to record the payer, configured recipient, configured escrow account, configured asset definition, exact target, and open/released/refunded flags in durable contract state.',
       'Call `deposit(amount)` from the same payer until `funded_amount_value == target_amount_value`; deposits must stay positive and any top-up that would overfund the escrow is rejected.',
       'Call `release_if_ready()` to move the escrowed funds to the recipient once the target is met, or call `refund()` while the escrow is still open to return the funded amount to the payer.',

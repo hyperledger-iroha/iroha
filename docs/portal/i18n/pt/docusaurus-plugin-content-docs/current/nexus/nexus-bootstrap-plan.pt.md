@@ -33,7 +33,7 @@ Esta página reflete `docs/source/soranexus_bootstrap_plan.md`. Mantenha as duas
 ## Ambientes de rede
 - Operar dois ambientes Nexus com prefixos de rede diferentes:
 - **Sora Nexus (mainnet)** - prefixo de rede de produção `nexus`, hospedando governança canônica e serviços piggyback SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - prefixo de rede de staging `testus`, espelhando a configuração da mainnet para testes de integração e validação de pré-lançamento (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - prefixo de rede de staging `testus`, espelhando a configuração da mainnet para testes de integração e validação de pré-lançamento (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Manter arquivos separados de gênese, chaves de governança e pegadas de infraestrutura para cada ambiente. Testus atua como campo de testes para lançamentos SoraFS/SoraNet antes de promoção para Nexus.
 - Pipelines de CI/CD devem ser implantados primeiro em Testus, executar testes de fumaça automatizados e exigir manual de promoção para Nexus quando as verificações passarem.
 - Bundles de configuração de referência residem em `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet), cada um contendo `config.toml`, `genesis.json` e diretórios de admissão Torii de exemplo.

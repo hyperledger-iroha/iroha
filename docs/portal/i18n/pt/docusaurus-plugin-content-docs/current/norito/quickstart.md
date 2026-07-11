@@ -17,10 +17,10 @@ O contrato de exemplo grava um par chave/valor na conta do chamador para que voc
 
 - [Docker](https://docs.docker.com/engine/install/) com Compose V2 habilitado (usado para iniciar o peer de exemplo definido em `defaults/docker-compose.single.yml`).
 - Toolchain Rust (1.76+) para compilar os binarios auxiliares se voce nao baixar os publicados.
-- Binarios `koto_compile`, `ivm_run` e `iroha_cli`. Voce pode compila-los a partir do checkout do workspace como mostrado abaixo ou baixar os artifacts de release correspondentes:
+- Binarios `koto build`, `ivm_run` e `iroha_cli`. Voce pode compila-los a partir do checkout do workspace como mostrado abaixo ou baixar os artifacts de release correspondentes:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -44,22 +44,22 @@ Crie um diretorio de trabalho e salve o exemplo minimo de Kotodama:
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -71,15 +71,14 @@ KO
 Compile o contrato para bytecode IVM/Norito (`.to`) e execute-o localmente para confirmar que os syscalls do host funcionam antes de tocar a rede:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-O runner imprime o log `info("Hello from Kotodama")` e executa o syscall `SET_ACCOUNT_DETAIL` contra o host mockado. Se o binario opcional `ivm_tool` estiver disponivel, `ivm_tool inspect target/quickstart/hello.to` mostra o ABI header, os feature bits e os entrypoints exportados.
+O runner imprime o log `debug::info("Hello from Kotodama")` e executa o syscall `SET_ACCOUNT_DETAIL` contra o host mockado. Se o binario opcional `ivm_tool` estiver disponivel, `ivm_tool inspect target/quickstart/hello.to` mostra o ABI header, os feature bits e os entrypoints exportados.
 
 ## 4. Envie o bytecode via Torii
 

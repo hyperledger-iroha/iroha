@@ -49,8 +49,8 @@ translator: machine-google-reviewed
 ### Kotodama → IVM
 - توجد قطع الواجهة الأمامية (lexer/parser/minimal semantics/IR/regalloc).
 - يُصدر Codegen (`kotodama::compiler`) مجموعة فرعية من IVM ops ويستخدم `SCALL` لعمليات الأصول:
-  - `MintAsset` → set x10=account, x11=asset, x12=&NoritoBytes(Numeric); `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` مماثل (تم تمرير المبلغ كمؤشر NoritoBytes (رقمي)).
+  - `MintAsset` → set x10=account, x11=asset, x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` مماثل (تم تمرير المبلغ كمؤشر Amount).
 - تظهر العروض التوضيحية `koto_*_demo.rs` باستخدام `WsvHost` مع مؤشرات الأعداد الصحيحة المعينة للمعرفات لإجراء اختبار سريع.
 
 ---
@@ -130,9 +130,9 @@ translator: machine-google-reviewed
 مجموعة فرعية تمثيلية - يتم الانتهاء منها وتوسيعها أثناء تنفيذ المضيف.- SYSCALL_REGISTER_DOMAIN(المعرف: ptr DomainId) → تسجيل ISI
 - SYSCALL_REGISTER_ACCOUNT(المعرف: ptr AccountId) → تسجيل ISI
 - SYSCALL_REGISTER_ASSET(المعرف: ptr AssetDefinitionId، mintable: u8) → تسجيل ISI
-- SYSCALL_MINT_ASSET(الحساب: ptr AccountId، الأصل: ptr AssetDefinitionId، المبلغ: ptr NoritoBytes(Numeric)) → ISI Mint
-- SYSCALL_BURN_ASSET(الحساب: ptr AccountId، الأصل: ptr AssetDefinitionId، المبلغ: ptr NoritoBytes(Numeric)) → ISI Burn
-- SYSCALL_TRANSFER_ASSET(من: ptr AccountId، إلى: ptr AccountId، الأصل: ptr AssetDefinitionId، المبلغ: ptr NoritoBytes(Numeric)) → ISI Transfer
+- SYSCALL_MINT_ASSET(الحساب: ptr AccountId، الأصل: ptr AssetDefinitionId، المبلغ: ptr Amount) → ISI Mint
+- SYSCALL_BURN_ASSET(الحساب: ptr AccountId، الأصل: ptr AssetDefinitionId، المبلغ: ptr Amount) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(من: ptr AccountId، إلى: ptr AccountId، الأصل: ptr AssetDefinitionId، المبلغ: ptr Amount) → ISI Transfer
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (فتح/إغلاق النطاق؛ يتم تخفيض الإدخالات الفردية عبر `transfer_asset`)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → إرسال دفعة مشفرة مسبقًا عندما تقوم العقود بالفعل بتسلسل الإدخالات خارج السلسلة
 - SYSCALL_NFT_MINT_ASSET(المعرف: ptr NftId، المالك: ptr AccountId) → تسجيل ISI

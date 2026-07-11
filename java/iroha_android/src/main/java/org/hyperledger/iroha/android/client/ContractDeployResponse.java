@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
 import java.util.List;
+import java.util.Map;
 
 /** Successful response emitted by `POST /v1/contracts/deploy`. */
 public final class ContractDeployResponse {
@@ -12,7 +13,7 @@ public final class ContractDeployResponse {
   private final List<String> completedStages;
   private final String failurePoint;
   private final List<ContractReceipt> contracts;
-  private final List<InitCallReceipt> initCalls;
+  private final List<HajimariCallReceipt> hajimariCalls;
   private final List<AssertionReceipt> assertions;
 
   public ContractDeployResponse(
@@ -24,7 +25,7 @@ public final class ContractDeployResponse {
       final List<String> completedStages,
       final String failurePoint,
       final List<ContractReceipt> contracts,
-      final List<InitCallReceipt> initCalls,
+      final List<HajimariCallReceipt> hajimariCalls,
       final List<AssertionReceipt> assertions) {
     this.ok = ok;
     this.bundleName = bundleName;
@@ -34,7 +35,7 @@ public final class ContractDeployResponse {
     this.completedStages = completedStages;
     this.failurePoint = failurePoint;
     this.contracts = contracts;
-    this.initCalls = initCalls;
+    this.hajimariCalls = hajimariCalls;
     this.assertions = assertions;
   }
 
@@ -46,7 +47,7 @@ public final class ContractDeployResponse {
   public List<String> completedStages() { return completedStages; }
   public String failurePoint() { return failurePoint; }
   public List<ContractReceipt> contracts() { return contracts; }
-  public List<InitCallReceipt> initCalls() { return initCalls; }
+  public List<HajimariCallReceipt> hajimariCalls() { return hajimariCalls; }
   public List<AssertionReceipt> assertions() { return assertions; }
 
   public static final class ContractReceipt {
@@ -54,10 +55,11 @@ public final class ContractDeployResponse {
     private final String contractAlias;
     private final String contractAddress;
     private final String previousContractAddress;
-    private final boolean upgraded;
+    private final boolean kaizen;
     private final String dataspace;
     private final Long deployNonce;
     private final String txHashHex;
+    private final Map<String, Object> pipelineStatus;
     private final String codeHashHex;
     private final String abiHashHex;
     private final String status;
@@ -67,10 +69,11 @@ public final class ContractDeployResponse {
         final String contractAlias,
         final String contractAddress,
         final String previousContractAddress,
-        final boolean upgraded,
+        final boolean kaizen,
         final String dataspace,
         final Long deployNonce,
         final String txHashHex,
+        final Map<String, Object> pipelineStatus,
         final String codeHashHex,
         final String abiHashHex,
         final String status) {
@@ -78,10 +81,11 @@ public final class ContractDeployResponse {
       this.contractAlias = contractAlias;
       this.contractAddress = contractAddress;
       this.previousContractAddress = previousContractAddress;
-      this.upgraded = upgraded;
+      this.kaizen = kaizen;
       this.dataspace = dataspace;
       this.deployNonce = deployNonce;
       this.txHashHex = txHashHex;
+      this.pipelineStatus = pipelineStatus;
       this.codeHashHex = codeHashHex;
       this.abiHashHex = abiHashHex;
       this.status = status;
@@ -91,32 +95,36 @@ public final class ContractDeployResponse {
     public String contractAlias() { return contractAlias; }
     public String contractAddress() { return contractAddress; }
     public String previousContractAddress() { return previousContractAddress; }
-    public boolean upgraded() { return upgraded; }
+    public boolean kaizen() { return kaizen; }
     public String dataspace() { return dataspace; }
     public Long deployNonce() { return deployNonce; }
     public String txHashHex() { return txHashHex; }
+    public Map<String, Object> pipelineStatus() { return pipelineStatus; }
     public String codeHashHex() { return codeHashHex; }
     public String abiHashHex() { return abiHashHex; }
     public String status() { return status; }
   }
 
-  public static final class InitCallReceipt {
+  public static final class HajimariCallReceipt {
     private final String id;
     private final String contractAlias;
     private final String entrypoint;
     private final String txHashHex;
+    private final Map<String, Object> pipelineStatus;
     private final String status;
 
-    public InitCallReceipt(
+    public HajimariCallReceipt(
         final String id,
         final String contractAlias,
         final String entrypoint,
         final String txHashHex,
+        final Map<String, Object> pipelineStatus,
         final String status) {
       this.id = id;
       this.contractAlias = contractAlias;
       this.entrypoint = entrypoint;
       this.txHashHex = txHashHex;
+      this.pipelineStatus = pipelineStatus;
       this.status = status;
     }
 
@@ -124,6 +132,7 @@ public final class ContractDeployResponse {
     public String contractAlias() { return contractAlias; }
     public String entrypoint() { return entrypoint; }
     public String txHashHex() { return txHashHex; }
+    public Map<String, Object> pipelineStatus() { return pipelineStatus; }
     public String status() { return status; }
   }
 

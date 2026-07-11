@@ -9,7 +9,9 @@ pub const EXECUTION_PROOF_VERSION_V1: u16 = 1;
 /// from the VM's recorded trace, constraint, memory, register, and Merkle-root
 /// logs. Full cryptographic proof systems can use these commitments as stable
 /// public material while preserving identical output across hardware.
-#[derive(Debug, Clone, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize,
+)]
 pub struct ExecutionProof {
     /// Summary format version.
     pub version: u16,
@@ -63,4 +65,65 @@ pub struct ExecutionProof {
     pub halted: bool,
     /// Whether a constraint failure had been observed when the summary was created.
     pub constraint_failed: bool,
+}
+
+impl ExecutionProof {
+    /// Return the exact framed Norito length of a v1 proof summary.
+    ///
+    /// Every v1 field has a fixed-width representation. Deriving the length
+    /// through the canonical encoder keeps gas preparation coupled to the
+    /// schema instead of duplicating a numeric ceiling that can drift.
+    pub(crate) fn encoded_len_v1() -> Result<usize, norito::Error> {
+        norito::to_bytes(&Self::default()).map(|bytes| bytes.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_encoded_length_is_value_independent_and_exact() {
+        let empty = ExecutionProof::default();
+        let populated = ExecutionProof {
+            version: EXECUTION_PROOF_VERSION_V1,
+            code_hash: [0x01; 32],
+            final_register_root: [0x02; 32],
+            final_memory_root: [0x03; 32],
+            output_hash: [0x04; 32],
+            pc_trace_hash: [0x05; 32],
+            delta_trace_hash: [0x06; 32],
+            register_trace_hash: [0x07; 32],
+            constraint_hash: [0x08; 32],
+            memory_log_hash: [0x09; 32],
+            register_log_hash: [0x0a; 32],
+            step_log_hash: [0x0b; 32],
+            cycles: u64::MAX,
+            max_cycles: u64::MAX - 1,
+            gas_used: u64::MAX - 2,
+            gas_remaining: u64::MAX - 3,
+            pc_trace_len: u64::MAX - 4,
+            delta_trace_len: u64::MAX - 5,
+            register_trace_len: u64::MAX - 6,
+            constraint_len: u64::MAX - 7,
+            memory_log_len: u64::MAX - 8,
+            register_log_len: u64::MAX - 9,
+            step_log_len: u64::MAX - 10,
+            zk_mode: true,
+            halted: true,
+            constraint_failed: true,
+        };
+
+        let expected = ExecutionProof::encoded_len_v1().expect("fixed proof schema encodes");
+        assert_eq!(
+            norito::to_bytes(&empty).expect("encode empty").len(),
+            expected
+        );
+        assert_eq!(
+            norito::to_bytes(&populated)
+                .expect("encode populated")
+                .len(),
+            expected
+        );
+    }
 }

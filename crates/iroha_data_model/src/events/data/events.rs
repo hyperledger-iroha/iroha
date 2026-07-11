@@ -2321,6 +2321,42 @@ mod config {
     mod model {
         use super::*;
 
+        /// Kind of atomic SCCP registry mutation.
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+        )]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub enum SccpRegistryOperation {
+            /// Register one complete staged immutable route revision.
+            RegisterRoute,
+            /// Compare-and-swap one route revision's activation state.
+            SetRouteActivation,
+            /// Atomically stop one revision and enable its staged successor.
+            SwitchRouteRevision,
+            /// Compare-and-swap an absent lane checkpoint to its first value.
+            InitializeLaneTrustAnchor,
+            /// Compare-and-swap the single native checkpoint for a lane.
+            AdvanceLaneTrustAnchor,
+            /// Remove a never-used staged route revision.
+            RemoveStagedRoute,
+        }
+
+        /// Bounded lifecycle event for a journaled SCCP registry mutation.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct SccpRegistryChanged {
+            /// Mutation kind.
+            pub operation: SccpRegistryOperation,
+            /// Exact lane affected by the mutation.
+            pub lane_id: crate::bridge::SccpLaneIdV1,
+            /// Affected route identity for route-local operations.
+            pub route: Option<crate::bridge::SccpRouteKeyV1>,
+            /// Digest of the previous registry payload, or zero when absent.
+            pub old_digest: [u8; 32],
+            /// Digest of the newly installed registry payload.
+            pub new_digest: [u8; 32],
+        }
+
         /// Changed parameter event
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -2349,12 +2385,19 @@ mod config {
         pub enum ConfigurationEvent {
             /// Configuration parameter value changed.
             Changed(ParameterChanged),
+            /// Journaled SCCP registry changed without embedding its potentially large payload.
+            SccpRegistryChanged(SccpRegistryChanged),
         }
     }
 }
 
 #[cfg(feature = "json")]
-impl_json_via_norito_bytes!(ParameterChanged, ConfigurationEvent);
+impl_json_via_norito_bytes!(
+    ParameterChanged,
+    SccpRegistryOperation,
+    SccpRegistryChanged,
+    ConfigurationEvent,
+);
 
 mod executor {
     use iroha_data_model_derive::model;
@@ -2545,7 +2588,10 @@ pub mod prelude {
             ConfidentialEvent, ConfidentialEventSet, ConfidentialShielded, ConfidentialTransferred,
             ConfidentialUnshielded,
         },
-        config::{ConfigurationEvent, ConfigurationEventSet, ParameterChanged},
+        config::{
+            ConfigurationEvent, ConfigurationEventSet, ParameterChanged, SccpRegistryChanged,
+            SccpRegistryOperation,
+        },
         domain::{
             AccountDomainLinkChanged, DomainEvent, DomainEventSet, DomainOwnerChanged,
             KaigiRelayHealthSummary, KaigiRelayManifestSummary, KaigiRelayRegistrationSummary,

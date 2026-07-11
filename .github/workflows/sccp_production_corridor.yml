@@ -19,30 +19,51 @@ on:
           - java-android
           - dotnet-sdk
           - contract-smoke
+          - tvm-contract-smoke
           - core-admission
   pull_request:
     branches: [main]
     paths:
       - ".github/workflows/sccp_production_corridor.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "contracts/evm/sccp/**"
+      - "contracts/bsc/sccp/**"
+      - "contracts/ethereum/sccp/**"
       - "contracts/tron/sccp/**"
+      - "crates/iroha/**"
+      - "crates/iroha_cli/**"
+      - "crates/iroha_config/**"
       - "crates/iroha_sccp/**"
-      - "crates/iroha_core/src/bridge.rs"
-      - "crates/iroha_core/tests/bridge_proofs.rs"
+      - "crates/iroha_core/**"
+      - "crates/iroha_data_model/**"
+      - "crates/iroha_js_host/**"
+      - "crates/iroha_torii/**"
       - "csharp/**"
       - "docs/source/bridge_proofs.md"
+      - "fixtures/sccp/**"
+      - "integration_tests/**"
       - "IrohaSwift/**"
       - "java/iroha_android/**"
       - "javascript/iroha_js/**"
       - "kotlin/**"
       - "python/iroha_torii_client/**"
+      - "docs/portal/static/openapi/**"
       - "pytests/scripts/check_sccp_production_corridor_test.py"
       - "pytests/scripts/sccp_release_readiness_report_test.py"
       - "pytests/scripts/sccp_*"
       - "roadmap.md"
-      - "rust-toolchain.toml"
       - "scripts/check_sccp_production_corridor.sh"
       - "scripts/sccp_evm_contract_smoke.sh"
+      - "scripts/contract_artifact_corridor.py"
+      - "scripts/contract_soljson_runner.js"
+      - "scripts/contract_tvm_runner.sh"
+      - "scripts/contract_tvm_receipts.mjs"
+      - "scripts/contract_tvm_smoke.mjs"
+      - "scripts/contract_tooling/**"
+      - "scripts/tests/contract_artifact_corridor_test.py"
+      - "scripts/tests/contract_tvm_receipts_test.mjs"
       - "scripts/sccp_release_readiness_report.py"
       - "scripts/sccp_*"
       - "status.md"
@@ -78,12 +99,15 @@ jobs:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
+      - name: Rust SCCP no-default feature matrix
+        run: |
+          cargo test -p iroha_sccp --lib --no-default-features
       - name: Rust SCCP verifier corridor
         run: |
           set -o pipefail
@@ -100,12 +124,18 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all' || github.event.inputs.phase == 'evidence-scripts' }}
     needs: runner-self-check
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Full local evidence suites currently take roughly 100 minutes. Keep enough
+    # headroom for shared-runner variance and continued adversarial coverage.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
       - name: Install evidence script dependencies
         run: |
           python3 -m pip install --upgrade pip pytest
@@ -270,7 +300,7 @@ jobs:
           if-no-files-found: error
 
   contract-smoke:
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all' || github.event.inputs.phase == 'contract-smoke' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all' || github.event.inputs.phase == 'contract-smoke' || github.event.inputs.phase == 'tvm-contract-smoke' }}
     needs: runner-self-check
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -278,8 +308,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-      - name: EVM and TRON contract smoke corridor
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build authenticated EVM and TVM artifact manifest
+        run: |
+          python3 scripts/contract_artifact_corridor.py build \
+            --repo-root . \
+            --output-dir "$RUNNER_TEMP/sccp-contract-artifacts" \
+            --node node
+      - name: Authenticated EVM and TVM compiler artifact corridor
+        env:
+          SCCP_CONTRACT_ARTIFACT_DIR: ${{ runner.temp }}/sccp-contract-artifacts
         run: |
           set -o pipefail
           mkdir -p dist/sccp-production-corridor
@@ -290,6 +331,45 @@ jobs:
           name: sccp-production-corridor-contract-smoke
           path: dist/sccp-production-corridor/contract-smoke.log
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sccp-production-corridor-contract-manifest
+          path: ${{ runner.temp }}/sccp-contract-artifacts/sccp-contract-artifacts-v1.json
+          if-no-files-found: error
+
+  tvm-contract-smoke:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all' || github.event.inputs.phase == 'tvm-contract-smoke' }}
+    needs: [runner-self-check, contract-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SCCP_TVM_IMAGE: tronbox/tre@sha256:e57deeb0d8201498549dbec28e7c329d8647ef0976b547cfbb6fa6a41a10f491
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: sccp-production-corridor-contract-manifest
+          path: ${{ runner.temp }}/sccp-contract-artifacts
+      - name: Execute locked TRON artifact on official TRE TVM
+        run: |
+          set -o pipefail
+          mkdir -p dist/sccp-production-corridor
+          bash scripts/contract_tvm_runner.sh \
+            --manifest "$RUNNER_TEMP/sccp-contract-artifacts/sccp-contract-artifacts-v1.json" \
+            2>&1 | tee dist/sccp-production-corridor/tvm-contract-smoke.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sccp-production-corridor-tvm-contract-smoke
+          path: dist/sccp-production-corridor/tvm-contract-smoke.log
+          if-no-files-found: error
 
   core-admission:
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all' || github.event.inputs.phase == 'core-admission' }}
@@ -297,13 +377,13 @@ jobs:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
-      - name: Core bridge-proof admission corridor
+      - name: Core SCCP governance, bridge-proof, and four-peer admission corridor
         run: |
           set -o pipefail
           mkdir -p dist/sccp-production-corridor
@@ -317,7 +397,7 @@ jobs:
 
   sccp-production-corridor:
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all') }}
-    needs: [runner-self-check, rust-sccp, evidence-scripts, js-sdk, python-sdk, swift-sdk, kotlin-sdk, java-android, dotnet-sdk, contract-smoke, core-admission]
+    needs: [runner-self-check, rust-sccp, evidence-scripts, js-sdk, python-sdk, swift-sdk, kotlin-sdk, java-android, dotnet-sdk, contract-smoke, tvm-contract-smoke, core-admission]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -95,6 +95,10 @@ struct PermissiveHost {
 }
 
 impl IVMHost for PermissiveHost {
+    fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        Ok(0)
+    }
+
     fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         self.called = true;
         Ok(0)

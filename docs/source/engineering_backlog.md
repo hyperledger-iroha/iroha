@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-07-09
+Last updated: 2026-07-11
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -121,21 +121,54 @@ the last default run before the quorum-history hardening exited `ok` with only
 3/10 soak iterations passing, so it remains a stress signal rather than release
 evidence.
 
-## SCCP launch-scope note
+## SCCP V1 release follow-ups
 
-The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON.
-Retired runtime-network families outside that launch scope are not supported for now.
-SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
-Treat that sentence as a current-release support boundary, not a deferred SCCP
-launch task.
-That exclusion is intentional current-launch scope, not a hidden compatibility
-lane.
-Do not track that family as remaining SCCP launch work in this cycle.
-Keep any future compatibility research for that retired family outside SCCP
-launch readiness until governance explicitly re-opens support.
-Backlog notes for unsupported network families are diagnostic only; they should
-not be treated as release blockers or advertised as production network support
-unless governance explicitly re-opens that scope.
+The current first-release scope is exactly the public SORA Taira Sumeragi-v2 chain
+`fc56984b-2be7-431d-840e-21514d1883f0` (canonical I105 discriminant `369`,
+`0x0171`) paired with Ethereum mainnet, BNB Smart Chain mainnet, and TRON
+mainnet. The archived pre-v2 Taira chain is not a settlement target. Testnet
+variants exist for exact integration testing; Nexus, Solana,
+TON, generic backends, arbitrary assets, and compatibility manifests are not
+SCCP V1 launch work.
+
+The implementation uses one consensus-owned `SccpRegistryV1` and typed,
+compare-and-swap `ApplySccpRouteGovernance` actions. Each route binds the exact
+transfer-only XOR settlement, revision, source identity, native trust anchor,
+destination deployment, full BN254 key, audited semantic-profile commitments,
+Taira checkpoint, destination binding, and route-configuration hash. Old route
+manifests, node-local policy, generic submit shapes, private-key-bearing or
+caller-route-selected HTTP DTOs, and transparent SCCP proof paths are retired.
+Bridge admission accepts only the two closed SCCP proof variants, whose payloads
+own their typed route-configuration binding; generic ICS and transparent-ZK
+payloads cannot impersonate SCCP. Native BLS-dependent finality fails closed in
+every build because SCCP has no BLS feature switch or no-verification fallback.
+Torii submission is a two-state detached-signing
+flow: preparation omits both signature and transaction payload, while direct
+submission supplies both plus a positive creation time.
+
+The code-side semantic release gate is complete: production evidence must carry
+the closed seven-role content-addressed artifact set per profile, two
+independently signed canonical reports over the same exact eleven-signal honest
+proof claim, and an authenticated Rust receipt that re-derives the governed
+claim and verifies the BN254 pairing. Every SDK submission path also binds the
+exact endpoint schema with zero Norito header padding.
+
+Remaining work is final integrated validation and externally produced release
+evidence: finish the clean cross-workspace test matrix; obtain the independent
+audits and reproducible production artifacts required by the implemented gate;
+deploy and authenticate exact source and destination material; apply the
+governed routes; complete bidirectional value-moving canaries; and publish a
+signed bundle accepted by the Rust release validator. Signal-binding fixtures,
+proof-controlled rosters, unavailable lanes, synthetic receipts, and
+self-authored substitute audits cannot satisfy those gates.
+
+### Superseded SCCP work log
+
+Everything below this heading up to the next top-level backlog section records
+historical implementation iterations. It is non-normative and must not be used
+to infer current network scope, API shape, governance authority, proof policy,
+or remaining release work.
+
 The retired-network surface scan now rejects separator-, zero-width-, nested
 HTML-entity-, URL-percent-, Unicode-confusable-, compatibility-form-, and
 combining-mark-obfuscated references to that family, so slash-, colon-, table-,
@@ -1094,8 +1127,8 @@ mutations. Core admission now also rejects noncanonical source verifier
 material and source-adapter deployment hex
 spellings, including uppercase hash/address text and repeated `0x` prefixes,
 before decoded bytes can satisfy governed production material matching.
-User-level SCCP route
-manifest admission now applies the same canonical spelling rule to BSC/TRON
+On-chain SCCP route-manifest admission applies the same canonical spelling rule
+to BSC/TRON
 route hashes, BSC EVM addresses, chain ids, optional proof/deployment evidence
 hashes, and BSC explorer transaction hashes, so uppercase, padded, or repeated
 prefix operator input cannot be normalized into production readiness. EVM
@@ -2452,8 +2485,8 @@ rendering, and the strict release/source-inventory gates pin the implementation
 plus direct adversarial tests.
 BSC/TRON production route manifests must also keep deployment evidence hashes
 role-separated from verifier code, verifier key, destination binding, proof
-artifact, and proving-key hashes before runtime config admission or route
-manifest ISI execution can accept a production-ready route.
+artifact, and proving-key hashes before route-manifest ISI execution can accept
+a production-ready route.
 BSC/TRON runtime route-manifest admission also rejects copied post-deploy
 source/route-canary evidence roles: `post_deploy_route_canary_evidence_hash`
 cannot replay `post_deploy_source_bridge_config_hash`, and
@@ -2464,10 +2497,10 @@ state. TRON route-manifest ISI coverage now also proves production-ready
 mainnet binding reaches the on-chain registry only for the canonical
 `taira_tron_xor`/TRON-domain route, and wrong route ids, wrong domains, or
 copied post-deploy canary hashes leave existing state untouched.
-TRON runtime route-manifest admission also mirrors the generated
-postDeployLiveEvidence blocker boundary at config load: scalar or non-string
-TOML blocker containers fail before parsing, empty/padded/non-ASCII/duplicate
-blocker entries fail during route normalization, and production-ready TRON
+TRON on-chain route-manifest admission also mirrors the generated
+`postDeployLiveEvidence` blocker boundary: scalar or non-string blocker
+containers fail before semantic validation, empty/padded/non-ASCII/duplicate
+blocker entries fail without normalization, and production-ready TRON
 routes cannot carry non-empty post-deploy blocker lists. The release inventory
 now pins the exact non-empty, padded, non-ASCII, and duplicate blocker
 diagnostics so those runtime guards cannot silently lose coverage.
@@ -6358,9 +6391,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  in-memory controller keys return `MalformedPublicKey` or
 	  `InvalidPublicKey` on result-returning paths instead of reaching
 	  compatibility invariant accessors; trusted-peer PoP config parsing,
-	  trusted-roster validation, daemon NPoS validator status counting, genesis
-	  trusted-peer PoP verification, and Torii Sumeragi BLS-key operator views
-	  now also classify BLS-normal keys through checked accessors, turning
+	  trusted-roster validation, staged Sumeragi v2 genesis voter validation,
+	  genesis trusted-peer PoP verification, and Torii Sumeragi BLS-key operator
+	  views now also classify BLS-normal keys through checked accessors, turning
 	  malformed in-memory keys into config errors or non-BLS status entries
 	  instead of compatibility accessor panics; SCCP Nexus BLS commit-QC
 	  verification and fraud assessment attester preflights now also classify
@@ -9288,7 +9321,7 @@ redistributable schemas, and official trust/revocation bundles.
     `cargo test -p ivm --lib run_with_host_accepts_non_sync_host`, and
     `cargo test -p ivm --lib block_height_syscall_uses_configured_deterministic_value`
     is green with `CARGO_TARGET_DIR=target/codex-ivm-scallx`. Core host
-    coverage for `dedicated_query_syscalls_return_norito_payloads`,
+    coverage for `core_queries_return_typed_handles_and_specialists_remain_norito`,
     `block_height_sysvar_uses_attached_transaction_context`, and scoped
     durable-state `STATE_KEYS`/`STATE_HAS`/`STATE_LEN`/`STATE_COUNT`
     tombstone resolution is
@@ -9297,12 +9330,12 @@ redistributable schemas, and official trust/revocation bundles.
     `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib` plus
     targeted integration batches for gas/opcode/vector, metadata/pointer ABI,
     predecoder/doc sync, syscalls, WSV-host flows, VRF, and ZK verifier gates.
-  - Dedicated `QUERY_GET_ACCOUNT`, `QUERY_GET_ASSET`,
-    `QUERY_GET_ASSET_DEFINITION`, `QUERY_GET_DOMAIN`,
-    `QUERY_GET_CONTRACT_MANIFEST`, `QUERY_GET_NFT`, `QUERY_GET_PARAMETER`,
-    and `QUERY_GET_CONTRACT_INSTANCE` are implemented. The helpers either use
-    the validated query engine or deterministic attached-state snapshots, and
-    all charge the singular query gas model in code and generated docs.
+  - Typed `CORE_QUERY_GET`/`CORE_QUERY_PAGE` cover account, asset,
+    asset-definition, domain, and NFT projections through the validated query
+    engine and typed V1 handles. `QUERY_GET_CONTRACT_MANIFEST`,
+    `QUERY_GET_PARAMETER`, and `QUERY_GET_CONTRACT_INSTANCE` remain specialist
+    canonical-Norito APIs; all paths charge the documented deterministic query
+    gas model.
     `SYSVAR_BLOCK_HEIGHT` is threaded through default hosts and attached core
     query-state contexts. `STATE_KEYS` now provides deterministic durable-state
     prefix enumeration with pagination and contract-scope prefix stripping.

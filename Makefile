@@ -13,8 +13,9 @@
 .PHONY: python-release-smoke
 .PHONY: python-fixtures python-fixtures-check
 .PHONY: build build-i2
+.PHONY: kotodama-goldens kotodama-goldens-check
 
-KOTO?=koto_compile
+KOTO?=koto
 IVM?=ivm_run
 # Default downstream crate for Norito feature matrix local runs
 CRATE?=iroha_data_model
@@ -108,6 +109,12 @@ check-proc-macro-ui:
 build-i2:
 	@bash scripts/build_line.sh --i2
 
+kotodama-goldens:
+	@python3 scripts/regenerate_kotodama_goldens.py --write
+
+kotodama-goldens-check:
+	@python3 scripts/regenerate_kotodama_goldens.py --check
+
 examples:
 	@echo "Available examples:"
 	@echo "  - examples/hello/hello.ko"
@@ -117,11 +124,11 @@ examples-run:
 	@command -v $(KOTO) >/dev/null 2>&1 || { echo "Missing $(KOTO). Set KOTO=<path> or install on PATH."; exit 1; }
 	@command -v $(IVM) >/dev/null 2>&1 || { echo "Missing $(IVM). Set IVM=<path> or install on PATH."; exit 1; }
 	@mkdir -p target/examples
-	$(KOTO) examples/hello/hello.ko -o target/examples/hello.to --abi 1 --max-cycles 0
+	$(KOTO) build examples/hello/hello.ko --out target/examples/hello.to
 	$(IVM) target/examples/hello.to --args '{}'
-	$(KOTO) examples/transfer/transfer.ko -o target/examples/transfer.to --abi 1
+	$(KOTO) build examples/transfer/transfer.ko --out target/examples/transfer.to
 	$(IVM) target/examples/transfer.to --args '{}'
-	$(KOTO) examples/nft/nft.ko -o target/examples/nft.to --abi 1
+	$(KOTO) build examples/nft/nft.ko --out target/examples/nft.to
 	$(IVM) target/examples/nft.to --args '{}'
 
 examples-inspect: examples-run

@@ -912,11 +912,12 @@ mod tests {
         let flag = Arc::clone(&materialized);
 
         let prepared = PreparedQueryStart {
-            first_batch: QueryOutputBatchBoxTuple {
-                tuple: vec![iroha_data_model::query::QueryOutputBatchBox::Permission(
-                    vec![Permission::new("p0".to_owned(), Json::from(false))],
-                )],
-            },
+            first_batch: QueryOutputBatchBoxTuple::from_batch(
+                iroha_data_model::query::QueryOutputBatchBox::Permission(vec![Permission::new(
+                    "p0".to_owned(),
+                    Json::from(false),
+                )]),
+            ),
             remaining_items: Some(1),
             deferred_continuation: Some(DeferredQueryContinuation::new(
                 nonzero!(1_u64),
@@ -1437,13 +1438,13 @@ mod tests {
     }
 
     fn permission_batch(names: impl IntoIterator<Item = &'static str>) -> QueryOutputBatchBoxTuple {
-        QueryOutputBatchBoxTuple {
-            tuple: vec![iroha_data_model::query::QueryOutputBatchBox::Permission(
+        QueryOutputBatchBoxTuple::from_batch(
+            iroha_data_model::query::QueryOutputBatchBox::Permission(
                 names
                     .into_iter()
                     .map(|name| Permission::new(name.to_owned(), Json::from(false)))
                     .collect(),
-            )],
-        }
+            ),
+        )
     }
 }

@@ -89,6 +89,8 @@ and HTM retries are applied on top of these base values as noted above.
 | memory | 0x31 | `STORE64` | 3 |
 | memory | 0x32 | `LOAD128` | 5 |
 | memory | 0x33 | `STORE128` | 5 |
+| memory | 0x34 | `LDLIT` | 1 |
+| memory | 0x35 | `LDI64` | 1 |
 | control | 0x40 | `BEQ` | 1 |
 | control | 0x41 | `BNE` | 1 |
 | control | 0x42 | `BLT` | 1 |
@@ -103,6 +105,7 @@ and HTM retries are applied on top of these base values as noted above.
 | control | 0x49 | `HALT` | 0 |
 | system | 0x60 | `SCALL` | 5 |
 | system | 0x61 | `GETGAS` | 0 |
+| system | 0x62 | `SYSTEM` (`SCALLX`) | 5 |
 | crypto | 0x70 | `VADD32` | 2 |
 | crypto | 0x71 | `VADD64` | 2 |
 | crypto | 0x72 | `VAND` | 1 |
@@ -135,4 +138,3 @@ and HTM retries are applied on top of these base values as noted above.
 | zk | 0xA4 | `FMUL` | 3 |
 | zk | 0xA5 | `FINV` | 5 |
 | zk | 0xA6 | `ASSERT_RANGE` | 1 |
-

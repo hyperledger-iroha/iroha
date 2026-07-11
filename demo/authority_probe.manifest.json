@@ -1,39 +1,46 @@
 {
-  "code_hash": "hash:ADAA4B424806CE38B03B49652273645FB6AABC74F8BAE60A03DBC87006CF144F#3495",
-  "abi_hash": "hash:BA1786031C3D0CDBD607DEBDAE1CC611A0807BF9CF49ED349A0632855724969F#FBDF",
-  "compiler_fingerprint": null,
-  "features_bitmap": null,
+  "seiyaku_name": "AuthorityProbe",
+  "code_hash": "hash:9A461BEBC906AEC0F18D5F92661944E8334795C1C1F8C062434D5511BE973175#CE9E",
+  "abi_hash": "hash:05E6F898ECC5C88B11E2DD7F784F2C90E730B5D8A0825901FD2F35502AD8AD09#B33A",
+  "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
+  "features_bitmap": 0,
   "access_set_hints": {
     "read_keys": [
-      "*"
+      "account.detail:$authority:authority_probe",
+      "account:$authority"
     ],
     "write_keys": [
-      "*"
-    ]
+      "account.detail:$authority:authority_probe"
+    ],
+    "dynamic_reads": [],
+    "dynamic_writes": []
   },
   "entrypoints": [
     {
       "name": "main",
       "kind": {
-        "kind": "Public",
+        "kind": "Kotoage",
         "value": null
       },
+      "params": [],
+      "argument_schema": null,
+      "return_type": null,
+      "return_schema": null,
       "permission": "Admin",
       "read_keys": [
-        "*"
+        "account:$authority",
+        "account.detail:$authority:authority_probe"
       ],
       "write_keys": [
-        "*"
+        "account.detail:$authority:authority_probe"
       ],
       "access_hints_complete": true,
-      "access_hints_skipped": [
-        
-      ],
-      "triggers": [
-        
-      ]
+      "access_hints_skipped": [],
+      "triggers": []
     }
   ],
+  "states": [],
+  "error_codes": null,
   "kotoba": null,
   "provenance": null
 }

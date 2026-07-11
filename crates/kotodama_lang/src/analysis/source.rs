@@ -114,8 +114,9 @@ fn detect_division_by_zero(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
 
 fn literal_i64(expr: &TypedExpr) -> Option<i64> {
     match &expr.expr {
-        ExprKind::Number(n) => Some(*n),
+        ExprKind::IntLiteral(n) => n.try_to_i64(),
         ExprKind::NumericCast { expr } => literal_i64(expr),
+        ExprKind::NumericTryCast { .. } => None,
         ExprKind::Unary {
             op: crate::ast::UnaryOp::Neg,
             expr,
@@ -147,6 +148,9 @@ fn analyze_block_reentrancy(
         state_before =
             analyze_statement_reentrancy(stmt, state_names, state_before, func_name, findings);
     }
+    if let Some(tail) = &block.tail {
+        visit_expr_for_host_calls(tail, state_before, func_name, findings);
+    }
     state_before
 }
 
@@ -158,6 +162,9 @@ fn analyze_statement_reentrancy(
     findings: &mut Vec<AnalysisFinding>,
 ) -> bool {
     match stmt {
+        Statement::Source { statement, .. } | Statement::Resolved { statement, .. } => {
+            analyze_statement_reentrancy(statement, state_names, state_before, func_name, findings)
+        }
         Statement::Let { value, .. } => {
             visit_expr_for_host_calls(value, state_before, func_name, findings);
             state_before
@@ -194,6 +201,25 @@ fn analyze_statement_reentrancy(
             else_branch,
         } => {
             visit_expr_for_host_calls(cond, state_before, func_name, findings);
+            let then_state = analyze_block_reentrancy(
+                then_branch,
+                state_names,
+                state_before,
+                func_name,
+                findings,
+            );
+            let else_state = else_branch.as_ref().map_or(state_before, |block| {
+                analyze_block_reentrancy(block, state_names, state_before, func_name, findings)
+            });
+            state_before || then_state || else_state
+        }
+        Statement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            visit_expr_for_host_calls(value, state_before, func_name, findings);
             let then_state = analyze_block_reentrancy(
                 then_branch,
                 state_names,
@@ -262,13 +288,16 @@ fn visit_expr_for_host_calls(
     findings: &mut Vec<AnalysisFinding>,
 ) {
     match expr {
-        Expr::Call { name, args } => {
+        Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
+            visit_expr_for_host_calls(expression, state_before, func_name, findings);
+        }
+        Expr::Call { name, args, .. } => {
             if state_before && is_external_call(name) {
                 findings.push(AnalysisFinding::warning(
                     AnalysisCategory::StaticSource,
                     "static-reentrancy-risk",
                     format!(
-                        "function `{func_name}` writes contract state before calling `{name}`; review for reentrancy"
+                        "function `{func_name}` writes seiyaku state before calling `{name}`; review for reentrancy"
                     ),
                 ));
             }
@@ -280,7 +309,11 @@ fn visit_expr_for_host_calls(
             visit_expr_for_host_calls(left, state_before, func_name, findings);
             visit_expr_for_host_calls(right, state_before, func_name, findings);
         }
-        Expr::Unary { expr, .. } => {
+        Expr::Unary { expr, .. }
+        | Expr::OptionSome(expr)
+        | Expr::ResultOk(expr)
+        | Expr::ResultErr(expr)
+        | Expr::Propagate(expr) => {
             visit_expr_for_host_calls(expr, state_before, func_name, findings)
         }
         Expr::Conditional {
@@ -292,6 +325,65 @@ fn visit_expr_for_host_calls(
             visit_expr_for_host_calls(then_expr, state_before, func_name, findings);
             visit_expr_for_host_calls(else_expr, state_before, func_name, findings);
         }
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            visit_expr_for_host_calls(condition, state_before, func_name, findings);
+            analyze_block_reentrancy(
+                then_branch,
+                &HashSet::new(),
+                state_before,
+                func_name,
+                findings,
+            );
+            if let Some(branch) = else_branch {
+                analyze_block_reentrancy(
+                    branch,
+                    &HashSet::new(),
+                    state_before,
+                    func_name,
+                    findings,
+                );
+            }
+        }
+        Expr::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            visit_expr_for_host_calls(value, state_before, func_name, findings);
+            analyze_block_reentrancy(
+                then_branch,
+                &HashSet::new(),
+                state_before,
+                func_name,
+                findings,
+            );
+            if let Some(branch) = else_branch {
+                analyze_block_reentrancy(
+                    branch,
+                    &HashSet::new(),
+                    state_before,
+                    func_name,
+                    findings,
+                );
+            }
+        }
+        Expr::Match { value, arms } => {
+            visit_expr_for_host_calls(value, state_before, func_name, findings);
+            for arm in arms {
+                analyze_block_reentrancy(
+                    &arm.body,
+                    &HashSet::new(),
+                    state_before,
+                    func_name,
+                    findings,
+                );
+            }
+        }
         Expr::Member { object, .. } => {
             visit_expr_for_host_calls(object, state_before, func_name, findings);
         }
@@ -299,14 +391,42 @@ fn visit_expr_for_host_calls(
             visit_expr_for_host_calls(target, state_before, func_name, findings);
             visit_expr_for_host_calls(index, state_before, func_name, findings);
         }
-        Expr::Tuple(items) => {
+        Expr::Tuple(items) | Expr::List(items) => {
             for item in items {
                 visit_expr_for_host_calls(item, state_before, func_name, findings);
             }
         }
+        Expr::JsonObject(entries) => {
+            for entry in entries {
+                visit_expr_for_host_calls(&entry.value, state_before, func_name, findings);
+            }
+        }
+        Expr::JsonArray(elements) => {
+            for element in elements {
+                visit_expr_for_host_calls(element, state_before, func_name, findings);
+            }
+        }
+        Expr::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            visit_expr_for_host_calls(source, state_before, func_name, findings);
+            visit_expr_for_host_calls(expression, state_before, func_name, findings);
+            if let Some(condition) = condition {
+                visit_expr_for_host_calls(condition, state_before, func_name, findings);
+            }
+        }
+        Expr::StructLiteral { fields, .. } => {
+            for field in fields {
+                visit_expr_for_host_calls(&field.value, state_before, func_name, findings);
+            }
+        }
         Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
+        | Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
+        | Expr::OptionNone
         | Expr::String(_)
         | Expr::Bytes(_)
         | Expr::Ident(_) => {}
@@ -315,20 +435,52 @@ fn visit_expr_for_host_calls(
 
 fn expr_targets_state(expr: &Expr, state_names: &HashSet<String>) -> bool {
     match expr {
+        Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
+            expr_targets_state(expression, state_names)
+        }
         Expr::Ident(name) => state_names.contains(name),
         Expr::Member { object, .. } | Expr::Index { target: object, .. } => {
             expr_targets_state(object, state_names)
         }
-        Expr::Tuple(items) => items
+        Expr::Tuple(items) | Expr::List(items) => items
             .iter()
             .any(|item| expr_targets_state(item, state_names)),
+        Expr::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            expr_targets_state(expression, state_names)
+                || expr_targets_state(source, state_names)
+                || condition
+                    .as_deref()
+                    .is_some_and(|condition| expr_targets_state(condition, state_names))
+        }
+        Expr::StructLiteral { fields, .. } => fields
+            .iter()
+            .any(|field| expr_targets_state(&field.value, state_names)),
+        Expr::JsonObject(entries) => entries
+            .iter()
+            .any(|entry| expr_targets_state(&entry.value, state_names)),
+        Expr::JsonArray(elements) => elements
+            .iter()
+            .any(|element| expr_targets_state(element, state_names)),
         Expr::Call { .. }
         | Expr::Binary { .. }
         | Expr::Unary { .. }
         | Expr::Conditional { .. }
+        | Expr::If { .. }
+        | Expr::IfLet { .. }
+        | Expr::Match { .. }
+        | Expr::OptionSome(_)
+        | Expr::OptionNone
+        | Expr::ResultOk(_)
+        | Expr::ResultErr(_)
+        | Expr::Propagate(_)
         | Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
+        | Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
         | Expr::String(_)
         | Expr::Bytes(_) => false,
     }
@@ -356,9 +508,12 @@ fn detect_infinite_loops(program: &Program, findings: &mut Vec<AnalysisFinding>)
 
 fn inspect_block_for_loop(block: &Block, func_name: &str, findings: &mut Vec<AnalysisFinding>) {
     for stmt in &block.statements {
-        match stmt {
+        match stmt.kind() {
+            Statement::Source { .. } | Statement::Resolved { .. } => {
+                unreachable!("kind() strips provenance wrappers")
+            }
             Statement::While { cond, body } => {
-                if matches!(cond, Expr::Bool(true)) && !block_contains_escape(body) {
+                if matches!(cond.kind(), Expr::Bool(true)) && !block_contains_escape(body) {
                     findings.push(AnalysisFinding::warning(
                         AnalysisCategory::StaticSource,
                         "static-infinite-loop",
@@ -370,6 +525,16 @@ fn inspect_block_for_loop(block: &Block, func_name: &str, findings: &mut Vec<Ana
                 inspect_block_for_loop(body, func_name, findings);
             }
             Statement::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                inspect_block_for_loop(then_branch, func_name, findings);
+                if let Some(else_branch) = else_branch {
+                    inspect_block_for_loop(else_branch, func_name, findings);
+                }
+            }
+            Statement::IfLet {
                 then_branch,
                 else_branch,
                 ..
@@ -398,9 +563,26 @@ fn inspect_block_for_loop(block: &Block, func_name: &str, findings: &mut Vec<Ana
 
 fn block_contains_escape(block: &Block) -> bool {
     for stmt in &block.statements {
-        match stmt {
+        match stmt.kind() {
+            Statement::Source { .. } | Statement::Resolved { .. } => {
+                unreachable!("kind() strips provenance wrappers")
+            }
             Statement::Return(_) | Statement::Break => return true,
             Statement::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                if block_contains_escape(then_branch) {
+                    return true;
+                }
+                if let Some(else_branch) = else_branch
+                    && block_contains_escape(else_branch)
+                {
+                    return true;
+                }
+            }
+            Statement::IfLet {
                 then_branch,
                 else_branch,
                 ..
@@ -448,6 +630,10 @@ where
     for stmt in &block.statements {
         visit_statement_exprs(stmt, func_name, visitor);
     }
+    if let Some(tail) = &block.tail {
+        visitor(func_name, tail);
+        visit_expr_children(tail, func_name, visitor);
+    }
 }
 
 fn visit_statement_exprs<F>(stmt: &TypedStatement, func_name: &str, visitor: &mut F)
@@ -475,6 +661,19 @@ where
         } => {
             visitor(func_name, cond);
             visit_expr_children(cond, func_name, visitor);
+            visit_block_exprs(then_branch, func_name, visitor);
+            if let Some(block) = else_branch {
+                visit_block_exprs(block, func_name, visitor);
+            }
+        }
+        TypedStatement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            visitor(func_name, value);
+            visit_expr_children(value, func_name, visitor);
             visit_block_exprs(then_branch, func_name, visitor);
             if let Some(block) = else_branch {
                 visit_block_exprs(block, func_name, visitor);
@@ -531,11 +730,13 @@ where
             visitor(func_name, right);
             visit_expr_children(right, func_name, visitor);
         }
-        ExprKind::Unary { expr, .. } => {
-            visitor(func_name, expr);
-            visit_expr_children(expr, func_name, visitor);
-        }
-        ExprKind::NumericCast { expr } => {
+        ExprKind::Unary { expr, .. }
+        | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
+        | ExprKind::OptionSome { value: expr }
+        | ExprKind::ResultOk { value: expr }
+        | ExprKind::ResultErr { error: expr }
+        | ExprKind::Propagate { value: expr } => {
             visitor(func_name, expr);
             visit_expr_children(expr, func_name, visitor);
         }
@@ -551,16 +752,77 @@ where
             visitor(func_name, else_expr);
             visit_expr_children(else_expr, func_name, visitor);
         }
-        ExprKind::Call { args, .. } => {
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            visitor(func_name, condition);
+            visit_expr_children(condition, func_name, visitor);
+            visit_block_exprs(then_branch, func_name, visitor);
+            visit_block_exprs(else_branch, func_name, visitor);
+        }
+        ExprKind::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            visitor(func_name, value);
+            visit_expr_children(value, func_name, visitor);
+            visit_block_exprs(then_branch, func_name, visitor);
+            visit_block_exprs(else_branch, func_name, visitor);
+        }
+        ExprKind::Match { value, arms } => {
+            visitor(func_name, value);
+            visit_expr_children(value, func_name, visitor);
+            for arm in arms {
+                visit_block_exprs(&arm.body, func_name, visitor);
+            }
+        }
+        ExprKind::Call { args, .. } | ExprKind::NamedCall { args, .. } => {
             for arg in args {
                 visitor(func_name, arg);
                 visit_expr_children(arg, func_name, visitor);
             }
         }
-        ExprKind::Tuple(items) => {
+        ExprKind::Tuple(items) | ExprKind::List(items) => {
             for item in items {
                 visitor(func_name, item);
                 visit_expr_children(item, func_name, visitor);
+            }
+        }
+        ExprKind::JsonObject(entries) => {
+            for (_, value) in entries {
+                visitor(func_name, value);
+                visit_expr_children(value, func_name, visitor);
+            }
+        }
+        ExprKind::JsonArray(elements) => {
+            for element in elements {
+                visitor(func_name, element);
+                visit_expr_children(element, func_name, visitor);
+            }
+        }
+        ExprKind::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            visitor(func_name, source);
+            visit_expr_children(source, func_name, visitor);
+            visitor(func_name, expression);
+            visit_expr_children(expression, func_name, visitor);
+            if let Some(condition) = condition {
+                visitor(func_name, condition);
+                visit_expr_children(condition, func_name, visitor);
+            }
+        }
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, value) in fields {
+                visitor(func_name, value);
+                visit_expr_children(value, func_name, visitor);
             }
         }
         ExprKind::Member { object, .. } => {
@@ -573,8 +835,9 @@ where
             visitor(func_name, index);
             visit_expr_children(index, func_name, visitor);
         }
-        ExprKind::Number(_)
-        | ExprKind::Decimal(_)
+        ExprKind::IntLiteral(_)
+        | ExprKind::DecimalLiteral { .. }
+        | ExprKind::OptionNone
         | ExprKind::Bool(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
@@ -585,7 +848,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse;
+    use crate::parser::parse_test_fragment as parse;
 
     fn analyze_static(source: &str) -> Vec<AnalysisFinding> {
         let program = parse(source).expect("parse");
@@ -625,38 +888,32 @@ mod tests {
     }
 
     #[test]
-    fn detects_reentrancy_pattern() {
-        let findings = analyze_static(
+    fn raw_contract_calls_are_rejected_before_static_analysis() {
+        let program = parse(
             r#"
-            state Map<int, int> balances;
+            state StateMap<int, int> balances;
 
             fn withdraw() {
                 balances[1] = 0;
-                host::call_contract("target", "entrypoint", json!{});
+                host::call_contract("target", "entrypoint", Json::parse("{}"));
             }
         "#,
         );
+        let program = program.expect("raw host call still has ordinary call syntax");
+        let error = semantic::analyze(&program)
+            .expect_err("raw host and contract-call capabilities are not V1 source APIs");
         assert!(
-            findings.iter().any(|f| f.code == "static-reentrancy-risk"),
-            "expected reentrancy finding, got {findings:?}"
+            error.message.contains("unknown function or builtin")
+                || error.message.contains("compiler-internal"),
+            "unexpected raw-call diagnostic: {error:?}"
         );
     }
 
     #[test]
-    fn detects_infinite_loop() {
-        let findings = analyze_static(
-            r#"
-            fn spin() {
-                while true {
-                    let x = 1;
-                }
-            }
-        "#,
-        );
-        assert!(
-            findings.iter().any(|f| f.code == "static-infinite-loop"),
-            "expected loop finding, got {findings:?}"
-        );
+    fn rejects_unbounded_loop_source() {
+        let err = parse("fn spin() { while true {} }")
+            .expect_err("canonical source must reject unbounded loops");
+        assert!(err.contains("`while` is not supported"));
     }
 
     #[test]
@@ -672,35 +929,25 @@ mod tests {
     }
 
     #[test]
-    fn reentrancy_warning_only_when_write_precedes_call() {
+    fn ordinary_state_writes_do_not_create_reentrancy_findings() {
         let findings = analyze_static(
             r#"
-            state Map<int, int> balances;
+            state StateMap<int, int> balances;
 
             fn withdraw() {
-                balances[1] = balances[1] - 1;
-                host::call_contract("target", "entrypoint", json!{});
+                balances[1] = balances.get(1).unwrap_or(0) - 1;
             }
         "#,
         );
         assert!(
-            findings.iter().any(|f| f.code == "static-reentrancy-risk"),
-            "expected reentrancy finding, got {findings:?}"
+            !findings.iter().any(|f| f.code == "static-reentrancy-risk"),
+            "state-only code must not be labeled reentrant: {findings:?}"
         );
     }
 
     #[test]
-    fn reentrancy_not_reported_when_call_is_before_write() {
-        let findings = analyze_static(
-            r#"
-            state Map<int, int> balances;
-
-            fn withdraw_safe() {
-                host::call_contract("target", "entrypoint", json!{});
-                balances[1] = balances[1] - 1;
-            }
-        "#,
-        );
+    fn namespaced_pure_calls_do_not_create_reentrancy_findings() {
+        let findings = analyze_static("fn hash() { crypto::sha256(b\"payload\"); }");
         assert!(
             !findings.iter().any(|f| f.code == "static-reentrancy-risk"),
             "unexpected reentrancy finding: {findings:?}"

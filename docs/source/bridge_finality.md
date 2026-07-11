@@ -4,112 +4,173 @@ SPDX-License-Identifier: Apache-2.0
 
 # Bridge finality proofs
 
-This document describes the initial bridge finality proof surface for Iroha.
-The goal is to let external chains or light clients verify that an Iroha block
-is finalized without off‑chain computation or trusted relays.
+This document defines the first-release bridge finality surface. It carries the
+exact durable finality evidence produced by Sumeragi v2. The proof envelope has
+schema version `1`, while the consensus protocol inside it is version `2`.
+There is no Sumeragi-v1 certificate projection, decoder, or fallback path.
 
-## Proof format
+## Exact proof format
 
-`BridgeFinalityProof` (Norito/JSON) contains:
+`BridgeFinalityProof` is encoded with Norito or Norito JSON and has exactly four
+fields:
 
-- `height`: block height.
-- `chain_id`: Iroha chain identifier to prevent cross-chain replay.
-- `block_header`: canonical `BlockHeader`.
-- `block_hash`: hash of the header (clients recompute to validate).
-- `commit_certificate`: validator set + signatures that finalized the block.
-- `validator_set_pops`: Proof-of-Possession bytes aligned with the validator set
-  order (required for BLS aggregate verification).
+```text
+{
+  version,
+  block_header,
+  finality_artifact,
+  validator_set_pops
+}
+```
 
-The proof is self‑contained; no external manifests or opaque blobs are required.
-Retention: Torii serves finality proofs for the recent commit-certificate window
-(bounded by the configured history cap; defaults to 512 entries via
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). Clients
-should cache or anchor proofs if they need longer horizons.
-The canonical tuple is `(block_header, block_hash, commit_certificate)`: the
-hash of the header must match the hash inside the commit certificate, and the
-chain id binds the proof to a single ledger. Servers reject and log a
-`CommitCertificateHashMismatch` when the certificate points to a different block
-hash.
+- `version` must equal `BRIDGE_FINALITY_PROOF_VERSION_V1` (`1`).
+- `block_header` is the canonical `BlockHeader` selected by the requested
+  height.
+- `finality_artifact` is the exact `V2FinalityArtifact` persisted by the
+  Sumeragi-v2 apply path for that block.
+- `validator_set_pops` contains BLS-normal proofs of possession in the exact
+  order of `finality_artifact.height_context.roster`.
 
-## Commitment bundle
+The durable artifact is the single source of consensus truth in the proof. It
+contains its format and protocol versions, height, complete immutable
+`HeightContext`, exact `BlockSubject`, block hash, Commit quorum certificate,
+and the finalized next-epoch snapshot when the block ends an epoch. The height
+context freezes the chain id, epoch bounds, consensus mode, parent CommitQC,
+ordered `ValidatorPower` roster, canonical `DualQuorum`, Nexus/AMX context
+commitment, data-availability layout, and leader seed. The subject binds the
+parent block hash, block hash, and canonical payload hash.
 
-`BridgeFinalityBundle` (Norito/JSON) extends the basic proof with an explicit
-commitment and justification:
+There are deliberately no duplicate proof-level height, chain, block hash,
+roster hash, or certificate fields. A malformed sidecar therefore cannot ask a
+verifier to choose between competing copies of the same consensus fact.
 
-- `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: signatures from the authority set over the commitment
-  payload (reuses the commit-certificate signatures).
-- `block_header`, `commit_certificate`: same as the basic proof.
+## Durable production source
 
-Current placeholder: `mmr_root`/`mmr_peaks` are derived by recomputing a
-block-hash MMR in memory; inclusion proofs are not yet returned. Clients can
-still verify the same hash via the commitment payload today.
+The Sumeragi-v2 apply service constructs the artifact from the frozen height
+context, exact decided subject, and exact CommitQC, validates it, and stores it
+as an immutable Kura sidecar after applying the block. The write is idempotent;
+Kura rejects a conflicting artifact at the same height. Restart recovery can
+finish a missing sidecar without re-executing an already applied block.
 
-MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
-from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+`build_finality_proof` reads the canonical block and its sidecar by height,
+checks their height/hash/chain association, obtains roster-aligned PoPs from
+committed state, and runs the same cryptographic verifier used by consumers.
+It never reconstructs historical consensus evidence from mutable world state
+or projects a retired certificate format. Proof availability follows the
+durable block and sidecar; it is not a recent in-memory certificate window.
+Missing, corrupt, conflicting, or unverifiable sidecars fail closed.
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+## Canonical verification
 
-Verification is analogous to the basic proof: recompute `block_hash` from the
-header, verify the commit-certificate signatures, and check the commitment
-fields match the certificate and block hash. The bundle adds a commitment/
-justification wrapper for bridge protocols that prefer the separation.
+`iroha_data_model::bridge::verify_bridge_finality_proof` performs the stateless
+structural and cryptographic checks:
 
-## Verification steps
+1. Require proof schema version `1`, artifact format version `1`, and Sumeragi
+   protocol version `2` in both the artifact and height context.
+2. Validate the height context, its ordered powered roster, canonical dual
+   quorum, parent certificate rules, DA layout, and epoch bounds.
+3. Require the artifact height, context id, block subject, repeated block hash,
+   CommitQC round, and Commit phase to agree exactly. A next-epoch snapshot is
+   mandatory at an epoch boundary and forbidden elsewhere.
+4. Require the artifact chain id to equal the caller's expected chain id.
+5. Recompute the block-header height and hash and require both to match the
+   artifact.
+6. Require one BLS-normal PoP per roster entry and verify every PoP against the
+   corresponding public key.
+7. Require strictly increasing, in-range signer indices. The certificate must
+   satisfy both quorum thresholds: at least `floor(2n/3) + 1` distinct roster
+   members and signed voting power strictly greater than two thirds of total
+   power.
+8. Reconstruct the exact Sumeragi-v2 vote preimage and verify the selected-key
+   BLS aggregate signature.
 
-1. Recompute `block_hash` from `block_header`; reject on mismatch.
-2. Check `commit_certificate.block_hash` matches the recomputed `block_hash`;
-   reject mismatched header/commit certificate pairs.
-3. Check `chain_id` matches the expected Iroha chain.
-4. Recompute `validator_set_hash` from `commit_certificate.validator_set` and
-   check it matches the recorded hash/version.
-5. Ensure `validator_set_pops` length matches the validator set and validate
-   each PoP against its BLS public key.
-6. Verify signatures in the commit certificate against the canonical Sumeragi
-   `Vote` v2 preimage, which binds the header hash, state roots, chain-order
-   hash, rechain sequence, height/view/epoch, phase, and mode tag; enforce
-   quorum (`2f+1` when `n>3`, else `n`) and reject duplicate/out‑of‑range
-   indices.
-7. Bind to a trusted validator-set hash anchor (weak-subjectivity anchor).
-8. Bind to an expected epoch anchor so proofs from older/newer epochs are
-   rejected until the anchor is rotated intentionally.
+The vote preimage is domain-separated by `iroha:sumeragi:v2:vote` and encodes
+the following Norito payload:
 
-`BridgeFinalityVerifier` (in `iroha_data_model::bridge`) applies these checks,
-rejecting chain-id/height drift, validator-set hash/version mismatches, missing
-or invalid PoPs, duplicate/out-of-range signers, invalid signatures, and
-unexpected epochs before counting quorum so light clients can reuse a single
-verifier.
+```text
+{
+  protocol_version: 2,
+  round: { context_id, height, view },
+  phase: Commit,
+  subject: { parent_block_hash, block_hash, payload_hash }
+}
+```
 
-## Reference verifier
+The signer index and individual signature are not part of the same-message
+preimage. The CommitQC's strictly ordered signer list selects the BLS keys and
+their aligned PoPs. BLS and PoP verification is mandatory in every production
+build; structural validity alone is never finality.
 
-`BridgeFinalityVerifier` accepts an expected `chain_id` plus explicit trusted
-validator-set and epoch anchors. It enforces the header/block-hash/
-commit-certificate tuple, validates validator-set hash/version, checks
-signatures/quorum against the advertised validator roster, and tracks the latest
-height to reject stale/skipped proofs. When anchors are supplied it rejects
-replays across epochs/rosters with explicit `UnexpectedEpoch`/
-`UnexpectedValidatorSet` errors. Proofs without both anchors are rejected with
-`MissingEpochAnchor` / `MissingValidatorSetAnchor`; the verifier no longer
-bootstraps trust from the first observed proof.
+## Trust anchor and successor verification
+
+A standalone proof can establish that its header, artifact, powered roster,
+PoPs, and aggregate signature are internally consistent. It cannot establish
+that a proof-carried roster is the canonical roster for the intended chain.
+Callers must supply trust independently.
+
+`BridgeFinalityVerifier` therefore requires an explicitly trusted
+`HeightContextId` before accepting its first proof; it never learns trust from
+that proof. It also binds every proof to the configured chain id. After the
+first proof it accepts only the immediate next height and verifies that:
+
+- the child context carries a valid parent CommitQC for the previously accepted
+  committed decision;
+- that parent certificate verifies under the previous frozen roster and PoPs;
+- chain, consensus mode, and DA layout obey the v2 transition rules; and
+- epoch, roster, dual quorum, and leader seed either remain frozen or match the
+  previous artifact's authenticated `next_epoch_snapshot` at an epoch boundary.
+
+Stale and skipped heights, unlinked parents, and unauthorized context
+transitions are rejected. Applications that start from a later checkpoint must
+pin that checkpoint's context id through governance or another authenticated
+channel, then verify every immediate successor.
+
+## SCCP trust boundary
+
+`TairaSccpMessageProofV1.finality_proof` is the canonical Norito encoding of the
+same `BridgeFinalityProof`; SCCP does not maintain a second consensus transcript
+or quorum implementation. Structural message checks bind the selected SCCP
+commitment and Merkle path to the commitment root in the finalized block
+header. Cryptographic verification then establishes self-consistency under the
+artifact's frozen roster.
+
+Self-consistency is not the SCCP trust decision. Each governed outbound route
+pins an `SccpSoraFinalityAnchorV1` containing the exact Taira source network,
+protocol version `2`, Taira chain-id hash, checkpoint height and block hash,
+checkpoint `HeightContextId`, and a domain-separated hash of the canonical
+checkpoint finality artifact. The governed semantic circuit exposes the hash of
+this typed anchor as its final public signal.
+
+Admission must resolve that anchor from historical governed route state,
+authenticate the checkpoint artifact, and establish an immediate-successor
+chain from the checkpoint to the message artifact (or compare against the same
+trusted local artifacts). Merely accepting a valid aggregate signature under a
+roster supplied by the message would not establish Taira finality.
+
+## Commitment bundle and MMR
+
+`BridgeFinalityBundle` wraps the exact proof with:
+
+- `commitment`: `{ chain_id, height_context_id, block_height, block_hash,
+  mmr_root?, mmr_leaf_index?, mmr_peaks? }`;
+- `justification`: the separate historical block-signature list, currently
+  empty because finality is authenticated by the embedded v2 CommitQC; and
+- `finality_proof`: the complete proof described above.
+
+The optional MMR fields are a root-checkpoint aid, not a finality substitute.
+The endpoint recomputes the block-hash MMR and returns its peaks but does not
+return a membership path. Peaks are ordered left to right and bagged from right
+to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`. SCCP uses its own typed
+message Merkle branch and governed finality anchor instead of this optional MMR
+surface.
 
 ## API surface
 
-- `GET /v1/bridge/finality/{height}` – returns `BridgeFinalityProof` for the
-  requested block height. Content negotiation via `Accept` supports Norito or
-  JSON.
-- `GET /v1/bridge/finality/bundle/{height}` – returns `BridgeFinalityBundle`
-  (commitment + justification + header/certificate) for the requested height.
+- `GET /v1/bridge/finality/{height}` returns `BridgeFinalityProof` as Norito by
+  default or Norito JSON through `Accept` negotiation.
+- `GET /v1/bridge/finality/bundle/{height}` returns `BridgeFinalityBundle`.
 
-## Notes and follow‑ups
-
-- Proofs are currently derived from stored commit certificates. The bounded
-  history follows the commit certificate retention window; clients should cache
-  anchor proofs if they need longer horizons. Requests outside the window return
-  `CommitCertificateNotFound(height)`; surface the error and fall back to an
-  anchored checkpoint.
-- A replayed or forged proof with mismatched `block_hash` (header vs.
-  certificate) is rejected with `CommitCertificateHashMismatch`; clients should
-  perform the same tuple check before signature verification and discard
-  mismatched payloads.
-- Future work can add MMR/authority‑set commitment chains to reduce proof size
-  the commit certificate inside richer commitment envelopes.
+Both endpoints fail closed when the block or exact durable v2 artifact is
+absent or invalid. First-release consumers must reject unknown fields,
+unsupported proof/artifact versions, and any retired proof shape; there is no
+compatibility fallback.

@@ -77,15 +77,6 @@
         }
       ]
     },
-    "sccpRouteManifestDraft": {
-      "ok": true,
-      "proposal_id": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
-      "tx_instructions": [
-        {
-          "wire_id": "ProposeSccpRouteManifest"
-        }
-      ]
-    },
     "plainBallotResponse": {
       "ok": true,
       "accepted": true,

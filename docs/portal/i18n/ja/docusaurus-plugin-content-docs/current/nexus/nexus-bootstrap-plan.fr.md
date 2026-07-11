@@ -33,7 +33,7 @@ Cette ページは `docs/source/soranexus_bootstrap_plan.md` を反映します�
 ## 環境調査
 - 動作環境 Nexus の詳細な接頭辞の詳細:
 - **Sora Nexus (メインネット)** - プレフィックス reseau deproduction `nexus`、hebergeant la gouvernance canonique et les services piggyback SoraFS/SoraNet (チェーン ID `0x02F1` / UUID) `00000000-0000-0000-0000-000000000753`)。
-- **Sora Testus (テストネット)** - プレフィックス reseau de staging `testus`、メインネット構成のミロワールは、テストと統合および検証プレリリースを提供します (チェーン UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`)。
+- **Sora Testus (テストネット)** - プレフィックス reseau de staging `testus`、メインネット構成のミロワールは、テストと統合および検証プレリリースを提供します (チェーン UUID `fc56984b-2be7-431d-840e-21514d1883f0`)。
 - インフラストラクチャの起源、管理および運用環境を分離します。 Testus sert de terrain de preuve pour tous les rollouts SoraFS/SoraNet アバント プロモーション 対 Nexus。
 - パイプライン CI/CD は、デプロイ担当者がテストを実行し、実行担当者がスモーク テストを自動化し、要求者がプロモーション マニュアルと Nexus のパスをチェックします。
 - `configs/soranexus/nexus/` (メインネット) と `configs/soranexus/testus/` (テストネット) の構成および参照セットのバンドル、例 `config.toml`、`genesis.json` および入場 Torii のレパートリー。

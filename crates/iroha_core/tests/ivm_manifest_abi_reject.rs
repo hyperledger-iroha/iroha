@@ -106,8 +106,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
 
     // Prepare a minimal IVM program and its hashes
     let prog = minimal_ivm_program(1);
-    let parsed = ProgramMetadata::parse(&prog).expect("valid header");
-    let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+    let code_hash = ivm::contract_code_hash(&prog);
     let policy = ivm::SyscallPolicy::AbiV1;
     let correct_abi = ivm::syscalls::compute_abi_hash(policy);
     let mut wrong_abi = correct_abi;
@@ -128,6 +127,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
 
     // Register manifest with wrong abi_hash
     let manifest = manifest::ContractManifest {
+        seiyaku_name: None,
         code_hash: Some(code_hash),
         abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
         compiler_fingerprint: None,
@@ -136,6 +136,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_codes: None,
         provenance: None,
     }
     .signed(&kp);
@@ -194,8 +195,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
 
     // Prepare a minimal IVM program and its hashes
     let prog = minimal_ivm_program(1);
-    let parsed = ProgramMetadata::parse(&prog).expect("valid header");
-    let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+    let code_hash = ivm::contract_code_hash(&prog);
     let policy = ivm::SyscallPolicy::AbiV1;
     let correct_abi = ivm::syscalls::compute_abi_hash(policy);
 
@@ -214,6 +214,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
 
     // Register manifest with correct abi_hash
     let manifest = manifest::ContractManifest {
+        seiyaku_name: None,
         code_hash: Some(code_hash),
         abi_hash: Some(iroha_crypto::Hash::prehashed(correct_abi)),
         compiler_fingerprint: None,
@@ -222,6 +223,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_codes: None,
         provenance: None,
     }
     .signed(&kp);
@@ -273,8 +275,7 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
 
     // Prepare a minimal IVM program (v1) and its hashes
     let prog = minimal_ivm_program(1);
-    let parsed = ProgramMetadata::parse(&prog).expect("valid header");
-    let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+    let code_hash = ivm::contract_code_hash(&prog);
 
     // Block 1: grant permission and register a manifest with only code_hash (no abi_hash)
     let header1 =
@@ -291,6 +292,7 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
 
     // Register manifest with code_hash only
     let manifest = manifest::ContractManifest {
+        seiyaku_name: None,
         code_hash: Some(code_hash),
         abi_hash: None,
         compiler_fingerprint: None,
@@ -299,6 +301,7 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_codes: None,
         provenance: None,
     }
     .signed(&kp);
@@ -348,8 +351,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     let state = State::new_for_testing(world, kura, query_handle);
 
     let prog = minimal_ivm_program(1);
-    let parsed = ProgramMetadata::parse(&prog).expect("valid header");
-    let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+    let code_hash = ivm::contract_code_hash(&prog);
     let abi_current = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
 
     // Block 1: grant permission and register manifest with v1 abi_hash
@@ -364,6 +366,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         .expect("grant permission");
 
     let manifest = manifest::ContractManifest {
+        seiyaku_name: None,
         code_hash: Some(code_hash),
         abi_hash: Some(iroha_crypto::Hash::prehashed(abi_current)),
         compiler_fingerprint: None,
@@ -372,6 +375,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_codes: None,
         provenance: None,
     }
     .signed(&kp);
@@ -422,8 +426,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
 
     let unknown_syscall = unlisted_syscall_number();
     let prog = minimal_ivm_program_with_syscall(1, unknown_syscall);
-    let parsed = ProgramMetadata::parse(&prog).expect("valid header");
-    let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+    let code_hash = ivm::contract_code_hash(&prog);
     let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
 
     // Block 1: grant permission and register the manifest with the correct abi_hash.
@@ -438,6 +441,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
         .expect("grant permission");
 
     let manifest = manifest::ContractManifest {
+        seiyaku_name: None,
         code_hash: Some(code_hash),
         abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
         compiler_fingerprint: None,
@@ -446,6 +450,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
         entrypoints: None,
         states: None,
         kotoba: None,
+        error_codes: None,
         provenance: None,
     }
     .signed(&kp);

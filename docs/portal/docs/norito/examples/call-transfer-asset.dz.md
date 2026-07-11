@@ -36,3 +36,22 @@ Kotodama འཛུལ་སྒོ་ཅིག་གིས་ ནང་འཁོ�
 [Kotodama འབྱུང་ཁུངས་](I18NU0000009X) ཕབ་ལེན།
 
 I18NF0000004X
+
+```kotodama
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+    kotoage fn pay() authorize("AssetTransferRole") {
+        ledger::asset::transfer(
+            source: AccountId::parse(
+                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            ),
+            destination: AccountId::parse(
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+            ),
+            asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            amount: 10,
+            dataspace: DataSpaceId::parse("0"),
+        );
+    }
+}
+```

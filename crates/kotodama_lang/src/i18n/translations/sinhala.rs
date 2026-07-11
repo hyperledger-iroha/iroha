@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "`{func}` ක්‍රියාවලියේ `{name}` පරාමිතිය කිසිදා භාවිතා නොකරයි",
     lint_unreachable_after_return: "{context} තුළ නොහැකි ප්‍රකාශයක් අනාවරණය විය: return පසු ඇති කේතය කිසිදා ක්‍රියාත්මක නොවේ",
     lint_ok: "හරි",
-    lint_usage: "භාවිතය: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "භාවිතය: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "සපයා ඇති මූලාශ්‍ර මත Kotodama lint පරීක්ෂණ ක්‍රියාත්මක කරයි.",
     ..english::MESSAGES
 };

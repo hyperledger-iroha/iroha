@@ -1,5 +1,5 @@
-import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
+import { Buffer } from "buffer";
+import { createHash } from "./cryptoHash.js";
 import {
   noritoEncodeInstruction,
   noritoDecodePrivacyProofEnvelope,
@@ -22,6 +22,8 @@ import {
   ValidationErrorCode,
 } from "./validationError.js";
 import { getNativeBinding } from "./native.js";
+import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
+import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -9744,10 +9746,15 @@ function normalizeRegisterRelayInput(options) {
 
 function normalizeContractManifest(manifest) {
   const source = assertPlainObject(manifest, "manifest");
+  const seiyakuName = source.seiyaku_name ?? source.seiyakuName;
   const compilerFingerprint = source.compiler_fingerprint ?? source.compilerFingerprint;
   const featuresBitmap = source.features_bitmap ?? source.featuresBitmap;
   const entrypoints = source.entrypoints ?? source.entryPoints;
   const normalized = {
+    seiyaku_name:
+      seiyakuName === undefined || seiyakuName === null
+        ? null
+        : assertString(seiyakuName, "manifest.seiyakuName"),
     code_hash: normalizeOptionalHash(
       source.code_hash ?? source.codeHash,
       "manifest.codeHash",
@@ -9775,19 +9782,20 @@ function normalizeContractManifest(manifest) {
       "manifest.accessSetHints",
     ),
     entrypoints: normalizeEntrypoints(entrypoints, "manifest.entrypoints"),
+    states: normalizeManifestStates(source.states, "manifest.states"),
+    error_codes: normalizeManifestErrorCodes(
+      source.error_codes ?? source.errorCodes,
+      "manifest.errorCodes",
+    ),
+    kotoba:
+      source.kotoba === undefined || source.kotoba === null
+        ? null
+        : normalizeContractKotobaEntries(source.kotoba, "manifest.kotoba"),
+    provenance:
+      source.provenance === undefined || source.provenance === null
+        ? null
+        : normalizeManifestProvenance(source.provenance, "manifest.provenance"),
   };
-  if (Object.prototype.hasOwnProperty.call(source, "kotoba")) {
-    normalized.kotoba =
-      source.kotoba === null
-        ? null
-        : normalizeContractKotobaEntries(source.kotoba, "manifest.kotoba");
-  }
-  if (Object.prototype.hasOwnProperty.call(source, "provenance")) {
-    normalized.provenance =
-      source.provenance === null
-        ? null
-        : normalizeManifestProvenance(source.provenance, "manifest.provenance");
-  }
   return normalized;
 }
 
@@ -9806,10 +9814,27 @@ function normalizeContractKotobaEntries(value, name) {
         normalizedEntry.msg_id ?? normalizedEntry.msgId,
         `${name}[${index}].msg_id`,
       ),
-      translations: normalizeJsonValue(
+      translations: normalizeContractKotobaTranslations(
         normalizedEntry.translations,
         `${name}[${index}].translations`,
       ),
+    };
+  });
+}
+
+function normalizeContractKotobaTranslations(value, name) {
+  if (!Array.isArray(value)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be an array of translations`,
+      name,
+    );
+  }
+  return value.map((translation, index) => {
+    const source = assertPlainObject(translation, `${name}[${index}]`);
+    return {
+      lang: assertString(source.lang, `${name}[${index}].lang`),
+      text: assertString(source.text, `${name}[${index}].text`),
     };
   });
 }
@@ -9895,17 +9920,18 @@ function normalizeManifestPublicKeyLiteral(value, name) {
 }
 
 function normalizeManifestSignatureLiteral(value, name) {
+  let body;
   if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
-    return Buffer.from(value).toString("hex").toUpperCase();
+    body = Buffer.from(value).toString("hex");
+  } else if (Array.isArray(value)) {
+    body = normalizeBytesLikeToBuffer(value, name).toString("hex");
+  } else {
+    const literal = assertString(value, name).trim();
+    body =
+      literal.includes(":") && literal.indexOf(":") > 0
+        ? literal.slice(literal.indexOf(":") + 1)
+        : literal;
   }
-  if (Array.isArray(value)) {
-    return normalizeBytesLikeToBuffer(value, name).toString("hex").toUpperCase();
-  }
-  const literal = assertString(value, name).trim();
-  const body =
-    literal.includes(":") && literal.indexOf(":") > 0
-      ? literal.slice(literal.indexOf(":") + 1)
-      : literal;
   if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9A-Fa-f]+$/u.test(body)) {
     fail(
       ValidationErrorCode.INVALID_HEX,
@@ -9913,7 +9939,15 @@ function normalizeManifestSignatureLiteral(value, name) {
       name,
     );
   }
-  return body.toUpperCase();
+  const canonical = body.toUpperCase();
+  if (/^0+$/u.test(canonical)) {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must not be all zero`,
+      name,
+    );
+  }
+  return canonical;
 }
 
 function normalizeManifestProvenance(value, name) {
@@ -9943,13 +9977,7 @@ function normalizeEntrypoints(value, name) {
 
 function normalizeEntrypoint(entry, name) {
   const source = assertPlainObject(entry, name);
-  const rawName =
-    source.name ??
-    source.entrypoint ??
-    source.entryPoint ??
-    source.symbol ??
-    source.id;
-  const entrypointName = assertString(rawName, `${name}.name`).trim();
+  const entrypointName = assertString(source.name, `${name}.name`).trim();
   if (!entrypointName) {
     fail(
       ValidationErrorCode.INVALID_STRING,
@@ -9957,45 +9985,420 @@ function normalizeEntrypoint(entry, name) {
       `${name}.name`,
     );
   }
-  const rawPermission =
-    source.permission ?? source.permission_id ?? source.permissionId;
+  const rawPermission = source.permission;
   const permission =
     rawPermission === undefined || rawPermission === null
       ? null
       : assertString(rawPermission, `${name}.permission`).trim();
   const kind = normalizeEntrypointKind(
-    source.kind ?? source.type ?? source.variant ?? "Public",
+    source.kind,
     `${name}.kind`,
   );
   return {
     name: entrypointName,
     kind,
+    params: normalizeEntrypointParams(source.params, `${name}.params`),
+    argument_schema: normalizeEntrypointArgumentSchema(
+      source.argument_schema ?? source.argumentSchema,
+      `${name}.argument_schema`,
+    ),
+    return_type: normalizeOptionalManifestString(
+      source.return_type ?? source.returnType,
+      `${name}.return_type`,
+    ),
+    return_schema: normalizeEntrypointValueType(
+      source.return_schema ?? source.returnSchema,
+      `${name}.return_schema`,
+    ),
     permission,
+    read_keys: normalizeManifestStringArray(
+      source.read_keys ?? source.readKeys,
+      `${name}.read_keys`,
+    ),
+    write_keys: normalizeManifestStringArray(
+      source.write_keys ?? source.writeKeys,
+      `${name}.write_keys`,
+    ),
+    access_hints_complete: normalizeOptionalManifestBoolean(
+      source.access_hints_complete ?? source.accessHintsComplete,
+      `${name}.access_hints_complete`,
+    ),
+    access_hints_skipped: normalizeManifestStringArray(
+      source.access_hints_skipped ?? source.accessHintsSkipped,
+      `${name}.access_hints_skipped`,
+    ),
+    triggers: normalizeManifestTriggers(source.triggers, `${name}.triggers`),
   };
 }
 
 function normalizeEntrypointKind(value, name) {
-  const normalized = String(value ?? "")
+  const raw =
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? value.kind
+      : value;
+  const normalized = String(raw ?? "")
     .trim()
     .toLowerCase();
   switch (normalized) {
-    case "public":
     case "kotoage":
-      return { kind: "Public" };
+      return { kind: "Kotoage", value: null };
+    case "view":
+      return { kind: "View", value: null };
     case "hajimari":
-    case "init":
-    case "initializer":
-      return { kind: "Hajimari" };
+      return { kind: "Hajimari", value: null };
     case "kaizen":
-    case "upgrade":
-      return { kind: "Kaizen" };
+      return { kind: "Kaizen", value: null };
     default:
       fail(
         ValidationErrorCode.INVALID_STRING,
-        `${name} must be one of 'Public', 'Hajimari', or 'Kaizen'`,
+        `${name} must be one of 'Kotoage', 'View', 'Hajimari', or 'Kaizen'`,
         name,
       );
   }
+}
+
+function normalizeOptionalManifestString(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const normalized = assertString(value, name).trim();
+  if (normalized.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must not be empty`, name);
+  }
+  return normalized;
+}
+
+function normalizeOptionalManifestBoolean(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "boolean") {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be a boolean`, name);
+  }
+  return value;
+}
+
+function normalizeManifestStringArray(value, name) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array`, name);
+  }
+  return value.map((entry, index) => {
+    const normalized = assertString(entry, `${name}[${index}]`).trim();
+    if (normalized.length === 0) {
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name}[${index}] must not be empty`,
+        `${name}[${index}]`,
+      );
+    }
+    return normalized;
+  });
+}
+
+function normalizeEntrypointParams(value, name) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array`, name);
+  }
+  return value.map((param, index) => {
+    const source = assertPlainObject(param, `${name}[${index}]`);
+    return {
+      name: normalizeRequiredManifestString(source.name, `${name}[${index}].name`),
+      type_name: normalizeRequiredManifestString(
+        source.type_name ?? source.typeName,
+        `${name}[${index}].type_name`,
+      ),
+    };
+  });
+}
+
+function normalizeRequiredManifestString(value, name) {
+  const normalized = assertString(value, name).trim();
+  if (normalized.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must not be empty`, name);
+  }
+  return normalized;
+}
+
+function normalizeEntrypointArgumentSchema(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const source = assertPlainObject(value, name);
+  if (!Array.isArray(source.fields)) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name}.fields must be an array`, name);
+  }
+  return {
+    fields: source.fields.map((field, index) => {
+      const fieldSource = assertPlainObject(field, `${name}.fields[${index}]`);
+      return {
+        name: normalizeRequiredManifestString(
+          fieldSource.name,
+          `${name}.fields[${index}].name`,
+        ),
+        ty: normalizeRequiredEntrypointValueType(
+          fieldSource.ty,
+          `${name}.fields[${index}].ty`,
+        ),
+      };
+    }),
+  };
+}
+
+function normalizeEntrypointValueType(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return normalizeRequiredEntrypointValueType(value, name);
+}
+
+function normalizeRequiredEntrypointValueType(value, name) {
+  const source = assertPlainObject(value, name);
+  if (!Array.isArray(source.nodes)) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name}.nodes must be an array`, name);
+  }
+  const normalized = {
+    nodes: source.nodes.map((node, index) =>
+      normalizeEntrypointValueTypeNode(node, `${name}.nodes[${index}]`),
+    ),
+  };
+  analyzeEntrypointValueTypeV1(normalized, name);
+  return normalized;
+}
+
+function normalizeEntrypointValueTypeNode(value, name) {
+  const source = assertPlainObject(value, name);
+  const kind = normalizeRequiredManifestString(source.kind, `${name}.kind`);
+  switch (kind) {
+    case "Struct": {
+      const struct = assertPlainObject(source.value, `${name}.value`);
+      return {
+        kind,
+        value: {
+          name: normalizeRequiredManifestString(struct.name, `${name}.value.name`),
+          fields: normalizeManifestStringArray(struct.fields, `${name}.value.fields`),
+        },
+      };
+    }
+    case "Tuple":
+      return { kind, value: normalizeU16(source.value, `${name}.value`) };
+    case "Option":
+    case "Result":
+      requireManifestNull(source.value, `${name}.value`);
+      return { kind, value: null };
+    case "List": {
+      const list = assertPlainObject(source.value, `${name}.value`);
+      const keys = Object.keys(list);
+      if (keys.length !== 1 || keys[0] !== "capacity") {
+        fail(
+          ValidationErrorCode.INVALID_OBJECT,
+          `${name}.value must contain only capacity; the element subtree follows in the enclosing node tape`,
+          `${name}.value`,
+        );
+      }
+      const capacity = asByte(list.capacity, `${name}.value.capacity`);
+      if (capacity < 1 || capacity > 64) {
+        fail(
+          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          `${name}.value.capacity must be in 1..64`,
+          `${name}.value.capacity`,
+        );
+      }
+      return {
+        kind,
+        value: { capacity },
+      };
+    }
+    case "Leaf":
+      return {
+        kind,
+        value: normalizeEntrypointValueKind(source.value, `${name}.value`),
+      };
+    default:
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name}.kind is not a V1 entrypoint value-type node`,
+        `${name}.kind`,
+      );
+  }
+}
+
+function normalizeEntrypointValueKind(value, name) {
+  const source = assertPlainObject(value, name);
+  const kind = normalizeRequiredManifestString(source.kind, `${name}.kind`);
+  const allowed = new Set([
+    "Int",
+    "Decimal",
+    "Quantity",
+    "Bool",
+    "String",
+    "Json",
+    "Name",
+    "AccountId",
+    "AssetDefinitionId",
+    "AssetId",
+    "DomainId",
+    "NftId",
+    "DataSpaceId",
+    "Blob",
+  ]);
+  if (!allowed.has(kind)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name}.kind is not a V1 entrypoint value kind`,
+      `${name}.kind`,
+    );
+  }
+  requireManifestNull(source.value, `${name}.value`);
+  return { kind, value: null };
+}
+
+function normalizeU16(value, name) {
+  const normalized = asNonNegativeInteger(value, name);
+  if (normalized > 0xffff) {
+    fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in u16`, name);
+  }
+  return normalized;
+}
+
+function requireManifestNull(value, name) {
+  if (value !== undefined && value !== null) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be null`, name);
+  }
+}
+
+function normalizeManifestStates(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!Array.isArray(value)) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array`, name);
+  }
+  return value.map((state, index) => {
+    const source = assertPlainObject(state, `${name}[${index}]`);
+    return {
+      name: normalizeRequiredManifestString(source.name, `${name}[${index}].name`),
+      type_name: normalizeRequiredManifestString(
+        source.type_name ?? source.typeName,
+        `${name}[${index}].type_name`,
+      ),
+    };
+  });
+}
+
+function normalizeManifestErrorCodes(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!Array.isArray(value)) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array`, name);
+  }
+  return value.map((errorCode, index) => {
+    const source = assertPlainObject(errorCode, `${name}[${index}]`);
+    const code = asNonNegativeInteger(source.code, `${name}[${index}].code`);
+    if (code > 0xffff_ffff) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name}[${index}].code must fit in u32`,
+        `${name}[${index}].code`,
+      );
+    }
+    return {
+      namespace: normalizeRequiredManifestString(
+        source.namespace,
+        `${name}[${index}].namespace`,
+      ),
+      name: normalizeRequiredManifestString(source.name, `${name}[${index}].name`),
+      code,
+    };
+  });
+}
+
+function normalizeManifestTriggers(value, name) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array`, name);
+  }
+  return value.map((trigger, index) => {
+    const source = assertPlainObject(trigger, `${name}[${index}]`);
+    const callback = assertPlainObject(
+      source.callback,
+      `${name}[${index}].callback`,
+    );
+    const metadata = source.metadata ?? {};
+    if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}[${index}].metadata must be an object`,
+        `${name}[${index}].metadata`,
+      );
+    }
+    return {
+      id: normalizeRequiredManifestString(source.id, `${name}[${index}].id`),
+      repeats: normalizeManifestTriggerRepeats(
+        source.repeats,
+        `${name}[${index}].repeats`,
+      ),
+      filter: normalizeOptionalExactBase64String(
+        source.filter,
+        `${name}[${index}].filter`,
+      ),
+      authority:
+        source.authority === undefined || source.authority === null
+          ? null
+          : normalizeAccountId(source.authority, `${name}[${index}].authority`),
+      metadata: normalizeJsonValue(metadata, `${name}[${index}].metadata`),
+      callback: {
+        namespace: normalizeOptionalManifestString(
+          callback.namespace,
+          `${name}[${index}].callback.namespace`,
+        ),
+        entrypoint: normalizeRequiredManifestString(
+          callback.entrypoint,
+          `${name}[${index}].callback.entrypoint`,
+        ),
+      },
+    };
+  });
+}
+
+function normalizeManifestTriggerRepeats(value, name) {
+  const source = assertPlainObject(value, name);
+  const keys = Object.keys(source);
+  if (keys.length !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must contain exactly one repeat variant`,
+      name,
+    );
+  }
+  if (keys[0] === "Indefinitely") {
+    requireManifestNull(source.Indefinitely, `${name}.Indefinitely`);
+    return { Indefinitely: null };
+  }
+  if (keys[0] === "Exactly") {
+    const count = asNonNegativeInteger(source.Exactly, `${name}.Exactly`);
+    if (count > 0xffff_ffff) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name}.Exactly must fit in u32`,
+        `${name}.Exactly`,
+      );
+    }
+    return { Exactly: count };
+  }
+  fail(
+    ValidationErrorCode.INVALID_STRING,
+    `${name} must be Indefinitely or Exactly`,
+    name,
+  );
 }
 
 function normalizeAtWindow(value, name) {
@@ -10025,17 +10428,8 @@ function normalizeVotingMode(value, name) {
   if (value === undefined || value === null) {
     return null;
   }
-  const normalized = String(value).trim().toLowerCase();
-  if (normalized === "zk" || normalized === "zero-knowledge" || normalized === "zkp") {
-    return "Zk";
-  }
-  if (
-    normalized === "plain" ||
-    normalized === "plaintext" ||
-    normalized === "plain_text" ||
-    normalized === "quadratic"
-  ) {
-    return "Plain";
+  if (value === "Zk" || value === "Plain") {
+    return value;
   }
   fail(ValidationErrorCode.INVALID_STRING, `${name} must be either 'Zk' or 'Plain'`, name);
 }
@@ -11550,21 +11944,24 @@ export function buildProposeDeployContractInstruction(options) {
 }
 
 /**
- * Build a `ProposeSccpRouteManifest` instruction payload.
+ * Build a `ProposeSccpRouteGovernance` instruction payload.
  * @param {object} options
- * @returns {{ProposeSccpRouteManifest: object}}
+ * @returns {{ProposeSccpRouteGovernance: object}}
  */
-export function buildProposeSccpRouteManifestInstruction(options) {
-  const source = assertPlainObject(options, "proposeSccpRouteManifest");
-  const manifest = assertPlainObject(
-    source.manifest ?? source.routeManifest ?? source.route_manifest,
-    "proposeSccpRouteManifest.manifest",
-  );
+export function buildProposeSccpRouteGovernanceInstruction(options) {
+  const source = assertPlainObject(options, "proposeSccpRouteGovernance");
+  for (const key of Object.keys(source)) {
+    if (!["action", "window", "mode"].includes(key)) {
+      throw new TypeError(
+        `proposeSccpRouteGovernance contains unknown or retired field \`${key}\``,
+      );
+    }
+  }
   return {
-    ProposeSccpRouteManifest: {
-      manifest: { ...manifest },
+    ProposeSccpRouteGovernance: {
+      action: normalizeSccpRouteGovernanceAction(source.action),
       window: normalizeAtWindow(source.window, "window"),
-      mode: normalizeVotingMode(source.votingMode ?? source.mode, "votingMode"),
+      mode: normalizeVotingMode(source.mode, "mode"),
     },
   };
 }

@@ -49,8 +49,8 @@ translator: machine-google-reviewed
 ### Kotodama → IVM
 - წინა ნაწილი არსებობს (lexer/parser/მინიმალური სემანტიკა/IR/regalloc).
 - Codegen (`kotodama::compiler`) ასხივებს IVM ოპერაციების ქვეჯგუფს და იყენებს `SCALL` აქტივების ოპერაციებისთვის:
-  - `MintAsset` → კომპლექტი x10=ანგარიში, x11=აქტივი, x12=&NoritoBytes(რიცხვითი); `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` მსგავსი (თანხა გადაცემულია როგორც NoritoBytes(რიცხვითი) მაჩვენებელი).
+  - `MintAsset` → კომპლექტი x10=ანგარიში, x11=აქტივი, x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` მსგავსი (თანხა გადაცემულია როგორც Amount მაჩვენებელი).
 - დემო `koto_*_demo.rs` აჩვენებს `WsvHost`-ის გამოყენებით ID-ებზე დატანილი მთელი რიცხვების ინდექსებით სწრაფი ტესტირებისთვის.
 
 ---
@@ -130,9 +130,9 @@ translator: machine-google-reviewed
 წარმომადგენლობითი ქვეჯგუფი - დასრულება და გაფართოება მასპინძლის განხორციელების დროს.- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ISI რეგისტრაცია
 - SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId) → ISI რეგისტრაცია
 - SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8) → ISI რეგისტრაცია
-- SYSCALL_MINT_ASSET(ანგარიში: ptr AccountId, აქტივი: ptr AssetDefinitionId, თანხა: ptr NoritoBytes(Numeric)) → ISI Mint
-- SYSCALL_BURN_ASSET(ანგარიში: ptr AccountId, აქტივი: ptr AssetDefinitionId, თანხა: ptr NoritoBytes(Numeric)) → ISI Burn
-- SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, აქტივი: ptr AssetDefinitionId, თანხა: ptr NoritoBytes(რიცხვი)) → ISI Transfer
+- SYSCALL_MINT_ASSET(ანგარიში: ptr AccountId, აქტივი: ptr AssetDefinitionId, თანხა: ptr Amount) → ISI Mint
+- SYSCALL_BURN_ASSET(ანგარიში: ptr AccountId, აქტივი: ptr AssetDefinitionId, თანხა: ptr Amount) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, აქტივი: ptr AssetDefinitionId, თანხა: ptr Amount) → ISI Transfer
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (გახსენით/დახურეთ ფარგლები; ინდივიდუალური ჩანაწერები იკლებს `transfer_asset`-ის საშუალებით)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → გაგზავნეთ წინასწარ დაშიფრული პარტია, როდესაც კონტრაქტები უკვე სერიულები არიან ჩანაწერების ჯაჭვის გარეშე
 - SYSCALL_NFT_MINT_ASSET(id: ptr NftId, მფლობელი: ptr AccountId) → ISI რეგისტრაცია

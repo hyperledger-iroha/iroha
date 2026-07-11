@@ -49,8 +49,8 @@ translator: machine-google-reviewed
 ### Kotodama → IVM
 - Frontend хэсгүүд байдаг (lexer/parser/minimal semantics/IR/regalloc).
 - Codegen (`kotodama::compiler`) нь IVM үйлдлийн дэд багцыг ялгаруулж, хөрөнгийн үйл ажиллагаанд `SCALL` ашигладаг:
-  - `MintAsset` → set x10=акаунт, x11=хөрөнгө, x12=&NoritoBytes(Тоон); `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` ижил төстэй (тоон үзүүлэлтийг NoritoBytes(Тоон) заагчаар дамжуулсан).
+  - `MintAsset` → set x10=акаунт, x11=хөрөнгө, x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` ижил төстэй (тоон үзүүлэлтийг Amount заагчаар дамжуулсан).
 - `koto_*_demo.rs` үзүүлбэрүүд нь `WsvHost`-ийг ашиглан ID-д дүрслэгдсэн бүхэл тоон индексүүдийг хурдан турших зорилгоор харуулж байна.
 
 ---
@@ -130,9 +130,9 @@ translator: machine-google-reviewed
 Төлөөлөгчийн дэд хэсэг - хостыг хэрэгжүүлэх явцад эцэслэж, өргөжүүлэх.- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ISI Бүртгэл
 - SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId) → ISI Бүртгэл
 - SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, нэрийн хуудас: u8) → ISI Бүртгэл
-- SYSCALL_MINT_ASSET(данс: ptr AccountId, хөрөнгө: ptr AssetDefinitionId, дүн: ptr NoritoBytes(Тоон)) → ISI Mint
-- SYSCALL_BURN_ASSET(данс: ptr AccountId, хөрөнгө: ptr AssetDefinitionId, дүн: ptr NoritoBytes(Тоон)) → ISI Burn
-- SYSCALL_TRANSFER_ASSET(аас: ptr AccountId, руу: ptr AccountId, хөрөнгө: ptr AssetDefinitionId, дүн: ptr NoritoBytes(Тоон)) → ISI Transfer
+- SYSCALL_MINT_ASSET(данс: ptr AccountId, хөрөнгө: ptr AssetDefinitionId, дүн: ptr Amount) → ISI Mint
+- SYSCALL_BURN_ASSET(данс: ptr AccountId, хөрөнгө: ptr AssetDefinitionId, дүн: ptr Amount) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(аас: ptr AccountId, руу: ptr AccountId, хөрөнгө: ptr AssetDefinitionId, дүн: ptr Amount) → ISI Transfer
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (хамрах хүрээг нээх/хаах; бие даасан оруулгуудыг `transfer_asset`-ээр бууруулна)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → Гэрээнүүд хэлхээнээс гадуур оролтуудыг цуваа болгосон үед урьдчилан кодлогдсон багцыг илгээх.
 - SYSCALL_NFT_MINT_ASSET(id: ptr NftId, эзэмшигч: ptr AccountId) → ISI Бүртгэл

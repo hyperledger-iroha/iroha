@@ -20,7 +20,7 @@ translator: machine-google-reviewed
 
 1. Տեղադրեք Rust գործիքների շղթան (1.76 կամ ավելի նոր) և ստուգեք այս պահոցը:
 2. Կառուցեք կամ ներբեռնեք աջակցող երկուականները.
-   - `koto_compile` – Kotodama կոմպիլյատոր, որը թողարկում է IVM/Norito բայթկոդ
+   - `koto build` – Kotodama կոմպիլյատոր, որը թողարկում է IVM/Norito բայթկոդ
    - `ivm_run` և `ivm_tool` – տեղական կատարման և ստուգման կոմունալ ծառայություններ
    - `iroha` – օգտագործվում է Torii-ի միջոցով պայմանագրային տեղակայման համար
 
@@ -29,7 +29,7 @@ translator: machine-google-reviewed
    Toolchain-ը տեղայնորեն, ուղղեք Makefile օգնականները երկուականների վրա.
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Համոզվեք, որ Iroha հանգույցն աշխատում է, երբ հասնեք տեղակայման քայլին: Այն
@@ -43,17 +43,16 @@ translator: machine-google-reviewed
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Հիմնական դրոշներ.
 
-- `--abi 1`-ը կողպում է պայմանագիրը ABI տարբերակի 1-ին (միակ աջակցվող տարբերակը՝
+- `ABI V1`-ը կողպում է պայմանագիրը ABI տարբերակի 1-ին (միակ աջակցվող տարբերակը՝
   գրելու ժամանակը):
-- `--max-cycles 0`-ը պահանջում է անսահմանափակ կատարում; Սահմանել դրական թիվ, որը կապված է
+- `--max-cycles 1000000`-ը պահանջում է անսահմանափակ կատարում; Սահմանել դրական թիվ, որը կապված է
   ցիկլի լիցք զրոյական գիտելիքների ապացույցների համար:
 
 ## 2. Ստուգեք Norito արտեֆակտը (ըստ ցանկության)
@@ -87,7 +86,7 @@ ivm_run target/examples/hello.to --args '{}'
 Base64 ծանրաբեռնվածություն.
 
 ```sh
-iroha app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -98,13 +97,13 @@ iroha app contracts deploy \
 Պատասխանում ցուցադրված հեշը կարող է օգտագործվել մանիֆեստները կամ օրինակները ցուցակագրելու համար.
 
 ```sh
-iroha app contracts manifest get --code-hash 0x<hash>
+iroha contract manifest get --code-hash 0x<hash>
 ```
 
 ## 5. Վազիր Torii-ի դեմ
 
 Գրանցված բայթկոդով կարող եք այն կանչել՝ հրահանգ ներկայացնելով
-որը վկայակոչում է պահված կոդը (օրինակ՝ `iroha app contracts call --contract-address <contract-address> --entrypoint main --wait`-ի միջոցով
+որը վկայակոչում է պահված կոդը (օրինակ՝ `iroha contract call --contract-address <contract-address> --entrypoint main --wait`-ի միջոցով
 կամ ձեր դիմումի հաճախորդը): Համոզվեք, որ հաշվի թույլտվությունները թույլ են տալիս ցանկալիին
 syscals (`set_account_detail`, `transfer_asset` և այլն):
 
@@ -113,8 +112,8 @@ syscals (`set_account_detail`, `transfer_asset` և այլն):
 - Օգտագործեք `make examples-run`՝ տրված օրինակները մեկում կազմելու և գործարկելու համար
   կրակոց. Անտեսեք `KOTO`/`IVM` միջավայրի փոփոխականները, եթե երկուականները միացված չեն
   `PATH`.
-- Եթե `koto_compile`-ը մերժում է ABI տարբերակը, ստուգեք, որ կոմպիլյատորը և հանգույցը
-  երկուսն էլ թիրախ են ABI v1 (գործարկել `koto_compile --abi` առանց արգումենտների ցուցակման
+- Եթե `koto build`-ը մերժում է ABI տարբերակը, ստուգեք, որ կոմպիլյատորը և հանգույցը
+  երկուսն էլ թիրախ են ABI v1 (գործարկել `koto build --help` առանց արգումենտների ցուցակման
   աջակցություն):
 - CLI-ն ընդունում է վեցանկյուն կամ Base64 ստորագրման բանալիներ: Փորձարկման համար կարող եք օգտագործել
   բանալիներ, որոնք թողարկվել են `kagami keys --json`-ի կողմից:

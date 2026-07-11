@@ -18537,6 +18537,7 @@ mod tests {
             height,
             epoch: 0,
             epoch_end_height: 100,
+            next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
@@ -18568,7 +18569,8 @@ mod tests {
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xA5; 48],
         };
-        V2FinalityArtifact::new(context, subject, commit_qc, None)
+        let validator_set_pops = vec![vec![0x5B]; context.roster.len()];
+        V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
     }
 
     #[test]

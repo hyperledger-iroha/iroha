@@ -1,11 +1,11 @@
 //! Verify durable map path hashing and pointer Norito encoding helpers align with CoreHost.
 
-use std::fmt::Write;
-
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::prelude::*;
-use ivm::{CoreHost, PointerType};
+use ivm::{CoreHost, PointerType, pointer_abi::validate_tlv_bytes};
+use ivm_abi::state_value::StateValueKindV1;
 use norito::to_bytes;
+mod common;
 
 fn encode_pointer_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + 1 + 4 + payload.len() + IrohaHash::LENGTH);
@@ -33,34 +33,28 @@ fn account_pointer_tlvs(id: &str) -> (Vec<u8>, Vec<u8>) {
 }
 
 fn map_path(base: &str, pointer_payload: &[u8]) -> String {
-    let hash: [u8; 32] = IrohaHash::new(pointer_payload).into();
-    let mut s = String::with_capacity(base.len() + 1 + 64);
-    let _ = write!(&mut s, "{base}/");
-    for b in &hash {
-        let _ = write!(&mut s, "{b:02x}");
-    }
-    s
+    format!("{base}/{}", hex::encode(pointer_payload))
 }
 
 fn encode_int_norito(value: i64) -> Vec<u8> {
-    let payload = to_bytes(&value).expect("encode i64");
+    let payload = common::encode_i64_state_value(value);
     encode_pointer_tlv(PointerType::NoritoBytes, &payload)
 }
 
 #[test]
-fn durable_map_account_id_path_hashes() {
+fn durable_map_account_id_path_is_reversible_canonical_hex() {
     const OWNER_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     let (raw_ptr, _norito_ptr) = account_pointer_tlvs(OWNER_ID);
     let path = map_path("balances", &raw_ptr);
     assert!(path.starts_with("balances/"));
-    assert_eq!(path.len(), "balances/".len() + 64);
+    assert_eq!(path, format!("balances/{}", hex::encode(raw_ptr)));
 
     let mut host = CoreHost::new();
     host.insert_state_value(&path, encode_int_norito(5));
     let stored = host
         .state_bytes(&path)
         .expect("stored value should be present");
-    let payload = to_bytes(&5_i64).expect("encode i64");
+    let payload = common::encode_i64_state_value(5);
     assert_eq!(stored.len(), 7 + payload.len() + IrohaHash::LENGTH);
 }
 
@@ -71,20 +65,32 @@ fn durable_map_name_value_roundtrip() {
     let payload = to_bytes(&name).expect("encode name");
     host.insert_state_value(
         "aliases/42",
-        encode_pointer_tlv(PointerType::Name, &payload),
+        common::encode_pointer_state_value(StateValueKindV1::Name, PointerType::Name, &payload),
     );
     let stored = host.state_bytes("aliases/42").expect("name pointer stored");
-    assert_eq!(stored.len(), 7 + payload.len() + IrohaHash::LENGTH);
+    let envelope = common::decode_pointer_state_value(&stored, StateValueKindV1::Name);
+    let decoded = validate_tlv_bytes(&envelope).expect("stored Name envelope");
+    assert_eq!(decoded.type_id, PointerType::Name);
+    assert_eq!(decoded.payload, payload);
 }
 
 #[test]
 fn durable_map_account_id_value_roundtrip() {
     const OWNER_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-    let (_raw_ptr, norito_ptr) = account_pointer_tlvs(OWNER_ID);
+    let (raw_ptr, _norito_ptr) = account_pointer_tlvs(OWNER_ID);
+    let raw = validate_tlv_bytes(&raw_ptr).expect("AccountId pointer envelope");
     let mut host = CoreHost::new();
-    host.insert_state_value("owners/7", norito_ptr.clone());
+    host.insert_state_value(
+        "owners/7",
+        common::encode_pointer_state_value(
+            StateValueKindV1::AccountId,
+            PointerType::AccountId,
+            raw.payload,
+        ),
+    );
     let stored = host
         .state_bytes("owners/7")
         .expect("account pointer stored");
-    assert_eq!(stored, &norito_ptr[..]);
+    let envelope = common::decode_pointer_state_value(&stored, StateValueKindV1::AccountId);
+    assert_eq!(envelope, raw_ptr);
 }

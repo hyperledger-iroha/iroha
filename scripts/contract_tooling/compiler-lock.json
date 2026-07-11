@@ -1,0 +1,76 @@
+{
+  "schema": "iroha.sccp.contract-compiler-lock.v1",
+  "compilers": {
+    "evm": {
+      "identity": "solc-evm-0.7.4+commit.3f05b770",
+      "reported_version": "0.7.4+commit.3f05b770.Emscripten.clang",
+      "sha256": "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2",
+      "url": "https://binaries.soliditylang.org/wasm/soljson-v0.7.4+commit.3f05b770.js"
+    },
+    "tron": {
+      "identity": "tron-solc-tvm-0.7.4+commit.3f05b770",
+      "reported_version": "0.7.4+commit.3f05b770.Emscripten.clang",
+      "sha256": "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2",
+      "url": "https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/bin/soljson-v0.7.4+commit.3f05b770.js"
+    }
+  },
+  "settings": {
+    "evmVersion": "istanbul",
+    "metadata": {
+      "bytecodeHash": "ipfs",
+      "useLiteralContent": true
+    },
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "metadata",
+          "evm.bytecode.object",
+          "evm.bytecode.linkReferences",
+          "evm.deployedBytecode.object",
+          "evm.deployedBytecode.immutableReferences",
+          "evm.deployedBytecode.linkReferences"
+        ]
+      }
+    }
+  },
+  "sources": {
+    "evm": [
+      "contracts/bsc/sccp/TairaXOR.sol",
+      "contracts/bsc/sccp/TairaXorBscSccpBridge.sol",
+      "contracts/ethereum/sccp/TairaXOR.sol",
+      "contracts/ethereum/sccp/TairaXorEthereumSccpBridge.sol",
+      "contracts/evm/sccp/ISccpMessageVerifier.sol",
+      "contracts/evm/sccp/SccpExactTransferCodec.sol",
+      "contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol",
+      "contracts/evm/sccp/TairaXorEvmToken.sol",
+      "contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol"
+    ],
+    "tron": [
+      "contracts/evm/sccp/ISccpMessageVerifier.sol",
+      "contracts/evm/sccp/SccpExactTransferCodec.sol",
+      "contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol",
+      "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol",
+      "contracts/tron/sccp/TairaXOR.sol",
+      "contracts/tron/sccp/TairaXorSccpBridge.sol"
+    ]
+  },
+  "size_limits": {
+    "evm": {
+      "creation_bytecode_bytes": 49152,
+      "runtime_bytecode_bytes": 24576
+    },
+    "tron": {
+      "creation_bytecode_bytes": 49152,
+      "runtime_bytecode_bytes": 24576
+    }
+  },
+  "tvm_runner": {
+    "image": "tronbox/tre@sha256:e57deeb0d8201498549dbec28e7c329d8647ef0976b547cfbb6fa6a41a10f491",
+    "platform": "linux/amd64"
+  }
+}

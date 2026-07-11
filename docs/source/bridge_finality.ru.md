@@ -4,113 +4,115 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
-source_last_modified: "2026-01-08T21:52:45.509525+00:00"
-translation_last_reviewed: 2026-01-08
+source_hash: 4fba587c1baea74a2af3829c89a9aea82699ebf8837e2ed397d32e54b792ac72
+source_last_modified: "2026-07-11T18:13:35+00:00"
+translation_last_reviewed: 2026-07-11
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Bridge finality proofs
+# Доказательства финальности моста
 
-Этот документ описывает начальную поверхность bridge finality proofs для Iroha.
-Цель - позволить внешним цепочкам или light clients проверять, что блок Iroha
-финализирован без off-chain вычислений или доверенных реле.
+Документ определяет формат первого выпуска. Доказательство переносит точные
+долговечные данные финальности, созданные Sumeragi v2. Версия схемы оболочки —
+`1`, а версия протокола консенсуса внутри неё — `2`. Проекции, декодера и
+резервного пути для Sumeragi v1 нет.
 
-## Формат proof
+## Точный формат
 
-`BridgeFinalityProof` (Norito/JSON) содержит:
+`BridgeFinalityProof` (Norito или Norito JSON) содержит ровно четыре поля:
 
-- `height`: высота блока.
-- `chain_id`: идентификатор цепочки Iroha для предотвращения кросс-чейн replay.
-- `block_header`: канонический `BlockHeader`.
-- `block_hash`: hash заголовка (клиенты пересчитывают для валидации).
-- `commit_certificate`: набор валидаторов + подписи, финализирующие блок.
-- `validator_set_pops`: доказательства владения (PoP), выровненные с порядком validator set
-  (нужны для проверки BLS aggregate).
+```text
+{ version, block_header, finality_artifact, validator_set_pops }
+```
 
-Proof самодостаточен; внешние manifests или непрозрачные blobs не требуются.
-Retention: Torii отдает finality proofs для недавнего окна commit-certificate
-(ограничено configured history cap; по умолчанию 512 записей через
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). Клиенты
-должны кешировать или якорить proofs, если нужны более длинные горизонты.
-Канонический tuple - `(block_header, block_hash, commit_certificate)`: hash заголовка
-должен совпадать с hash внутри commit certificate, а chain id привязывает proof к
-одному ledger. Серверы отклоняют и логируют `CommitCertificateHashMismatch`, когда
-certificate указывает на другой block hash.
+- `version` должна быть равна `1`;
+- `block_header` — канонический `BlockHeader`;
+- `finality_artifact` — точный неизменяемый `V2FinalityArtifact`, сохранённый
+  путём применения Sumeragi v2;
+- `validator_set_pops` содержит по одному BLS-normal PoP на запись в порядке
+  `finality_artifact.height_context.roster`.
 
-## Commitment bundle
+Артефакт — единственный источник сведений о консенсусе. Он включает версии
+формата и протокола, высоту, полный неизменяемый `HeightContext`, точный
+`BlockSubject`, хеш блока, CommitQC и только на границе эпохи — заверенный
+снимок следующей эпохи. Контекст фиксирует chain id, границы эпохи, режим,
+родительский CommitQC, упорядоченный реестр `ValidatorPower`, `DualQuorum`,
+обязательство Nexus/AMX, параметры DA и seed лидера. Subject связывает
+`parent_block_hash`, `block_hash` и `payload_hash`. Дублирующие поля высоты,
+цепочки, хеша, реестра или сертификата в доказательстве не допускаются.
 
-`BridgeFinalityBundle` (Norito/JSON) расширяет базовый proof явным commitment и justification:
+## Долговечный источник и проверка
 
-- `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: подписи authority set над payload commitment
-  (переиспользует подписи commit certificate).
-- `block_header`, `commit_certificate`: как в базовом proof.
+После применения блока Sumeragi v2 проверяет артефакт и записывает его как
+неизменяемый sidecar Kura. Запись идемпотентна, а конфликтующий артефакт на той
+же высоте отклоняется. Восстановление может дописать отсутствующий sidecar без
+повторного исполнения блока. Построитель читает блок и sidecar по высоте,
+проверяет их связь, получает PoP из зафиксированного состояния и запускает
+канонический верификатор. Исторические данные не восстанавливаются из
+изменяемого состояния и не ограничены недавним окном сертификатов.
 
-Текущий placeholder: `mmr_root`/`mmr_peaks` выводятся путем пересчета block-hash MMR в памяти;
-inclusion proofs пока не возвращаются. Клиенты все еще могут проверить тот же hash через
-payload commitment сегодня.
+`verify_bridge_finality_proof` требует:
 
-MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
-from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+1. схему `1`, формат артефакта `1` и протокол Sumeragi `2`;
+2. корректные контекст, взвешенный реестр, quorum, родителя и переход эпохи;
+3. точное совпадение высоты, context id, subject, повторного хеша и CommitQC в
+   фазе `Commit`;
+4. ожидаемый chain id и пересчитанные из header высоту и хеш;
+5. действительный BLS-normal PoP для каждого участника реестра;
+6. строго возрастающие индексы подписантов в допустимом диапазоне;
+7. одновременно не менее `floor(2n/3) + 1` разных подписантов и подписанную
+   мощность строго больше двух третей общей мощности;
+8. агрегированную BLS-подпись точного preimage голоса v2.
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+Preimage разделён доменом `iroha:sumeragi:v2:vote` и кодирует Norito-структуру
+`{ protocol_version: 2, round: { context_id, height, view }, phase: Commit,
+subject: { parent_block_hash, block_hash, payload_hash } }`. Индекс и отдельная
+подпись в него не входят; упорядоченный список CommitQC выбирает ключи и PoP.
+Проверка BLS и PoP обязательна всегда.
 
-Верификация аналогична базовому proof: пересчитать `block_hash` из header, проверить подписи
-commit certificate, и убедиться, что поля commitment соответствуют certificate и hash блока.
-Bundle добавляет commitment/justification wrapper для bridge протоколов, предпочитающих разделение.
+## Якорь доверия и последовательность
 
-## Шаги проверки
+Отдельное доказательство подтверждает криптографическую согласованность под
+переданным им реестром, но не каноничность этого реестра. Поэтому
+`BridgeFinalityVerifier` до первой проверки требует явно доверенный
+`HeightContextId` и никогда не получает доверие из самой первой proof. Затем он
+принимает только непосредственную следующую высоту, проверяет родительский
+CommitQC по предыдущему контексту и PoP и применяет правила перехода v2. Внутри
+эпохи epoch, roster, quorum и seed остаются фиксированными; на границе они
+должны совпасть с заверенным `next_epoch_snapshot`. Старые, пропущенные и не
+связанные высоты отклоняются.
 
-1. Пересчитать `block_hash` из `block_header`; отклонить при mismatch.
-2. Проверить, что `commit_certificate.block_hash` совпадает с пересчитанным `block_hash`;
-   отклонить пары header/commit certificate с несовпадением.
-3. Проверить, что `chain_id` соответствует ожидаемой цепочке Iroha.
-4. Пересчитать `validator_set_hash` из `commit_certificate.validator_set` и проверить совпадение
-   с записанным hash/version.
-5. Проверить, что длина `validator_set_pops` совпадает с validator set, и валидировать каждый PoP
-   против соответствующего публичного BLS ключа.
-6. Проверить подписи в commit certificate против hash заголовка с использованием публичных ключей
-   и индексов валидаторов; применять quorum (`2f+1` когда `n>3`, иначе `n`) и отклонять
-   дубли/индексы вне диапазона.
-7. Опционально привязать к trusted checkpoint, сравнив hash validator set с anchored значением
-   (weak-subjectivity anchor).
-8. Опционально привязать к ожидаемому epoch anchor, чтобы proofs из старых/новых epochs
-   отклонялись до намеренной ротации anchor.
+## Граница доверия SCCP
 
-`BridgeFinalityVerifier` (в `iroha_data_model::bridge`) применяет эти проверки, отклоняя
-chain-id/height drift, mismatch hash/version validator set, отсутствующие или невалидные PoP,
-дубли/индексы вне диапазона, невалидные подписи и неожиданные epochs до подсчета quorum, чтобы
-light clients могли использовать единый verifier.
+`TairaSccpMessageProofV1.finality_proof` — Norito-кодировка того же типа; у SCCP
+нет отдельного транскрипта или алгоритма quorum. Header, корень SCCP и ветвь
+Merkle заверяют сообщение. Сырое доказательство подтверждает лишь
+согласованность под своим фиксированным реестром.
 
-## Reference verifier
+Доверие задаёт управляемый `SccpSoraFinalityAnchorV1`: точная сеть Taira,
+протокол `2`, хеш chain id, высота и хеш checkpoint,
+`checkpoint_context_id` и разделённый доменом хеш долговечного артефакта.
+Семантическая схема выставляет хеш этого якоря последним публичным сигналом.
+Приём должен заверить артефакт checkpoint и проверить каждый непосредственный
+переход до артефакта сообщения либо свериться с теми же доверенными локальными
+артефактами. Действительная подпись под реестром из сообщения сама по себе не
+доказывает финальность Taira.
 
-`BridgeFinalityVerifier` принимает ожидаемый `chain_id` плюс опциональные anchors validator set
-и epoch. Он обеспечивает tuple header/block-hash/commit-certificate, валидирует hash/version
-validator set, проверяет подписи/quorum против объявленного roster валидаторов и отслеживает
-последнюю высоту, отклоняя stale/skipped proofs. Когда anchors заданы, он отклоняет replays
-между epochs/rosters с ошибками `UnexpectedEpoch`/`UnexpectedValidatorSet`; без anchors он
-принимает hash validator set и epoch из первого proof перед продолжением детерминированного
-отклонения дубли/вне диапазона/недостаточных подписей.
+## Bundle и API
 
-## Surface API
+`BridgeFinalityBundle` содержит точное доказательство, обязательство
+`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
+mmr_leaf_index?, mmr_peaks? }` и отдельный список исторических подписей, пока
+пустой. Необязательный MMR помогает закрепить корень, но не заменяет финальность
+и не содержит путь включения. SCCP использует типизированную ветвь Merkle и
+управляемый якорь.
 
-- `GET /v1/bridge/finality/{height}` - возвращает `BridgeFinalityProof` для запрошенной
-  высоты блока. Content negotiation через `Accept` поддерживает Norito или JSON.
-- `GET /v1/bridge/finality/bundle/{height}` - возвращает `BridgeFinalityBundle`
-  (commitment + justification + header/certificate) для запрошенной высоты.
+- `GET /v1/bridge/finality/{height}` возвращает `BridgeFinalityProof`.
+- `GET /v1/bridge/finality/bundle/{height}` возвращает `BridgeFinalityBundle`.
 
-## Notes and follow-ups
-
-- Proofs сейчас выводятся из сохраненных commit certificates. Ограниченная история следует
-  окну retention commit certificate; клиенты должны кешировать anchor proofs для более
-  длинных горизонтов. Запросы вне окна возвращают `CommitCertificateNotFound(height)`;
-  показывайте ошибку и используйте anchored checkpoint.
-- Replay или forged proof с mismatch `block_hash` (header vs. certificate) отклоняется
-  с `CommitCertificateHashMismatch`; клиенты должны выполнять ту же tuple проверку до
-  проверки подписей и отбрасывать mismatch payloads.
-- В будущем можно добавить MMR/authority-set commitment chains для уменьшения размера proofs
-  в более богатые commitment envelopes.
+Оба маршрута закрыто отклоняют запрос, если точный блок или v2-sidecar
+отсутствует либо неверен. Клиенты первого выпуска обязаны отклонять неизвестные
+формы и версии; совместимого резервного пути нет.

@@ -7,13 +7,17 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { verifyNativeBinding } from "../src/native.js";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..", "..");
@@ -48,40 +52,63 @@ const destDir = configuredDestDir
 mkdirSync(destDir, { recursive: true });
 const dest = join(destDir, "iroha_js_host.node");
 const checksumManifestPath = join(destDir, "iroha_js_host.checksums.json");
+const stagingDir = mkdtempSync(join(destDir, ".iroha-js-host-"));
+const stagedNative = join(stagingDir, "iroha_js_host.node");
+const stagedManifest = join(stagingDir, "iroha_js_host.checksums.json");
 
-copyFileSync(source, dest);
-console.log(`Copied native module to ${dest}`);
+try {
+  copyFileSync(source, stagedNative);
 
-if (platform === "darwin") {
-  const sign = spawnSync("codesign", ["--force", "--sign", "-", dest], {
-    cwd: repoRoot,
-    stdio: "inherit",
-    env: process.env,
-  });
-  if (sign.status !== 0) {
-    throw new Error(
-      `Failed to ad-hoc sign ${dest}; macOS requires a valid signature for Node.js native addons.`,
-    );
+  if (platform === "darwin") {
+    const sign = spawnSync("codesign", ["--force", "--sign", "-", stagedNative], {
+      cwd: repoRoot,
+      stdio: "inherit",
+      env: process.env,
+    });
+    if (sign.status !== 0) {
+      throw new Error(
+        `Failed to ad-hoc sign ${stagedNative}; macOS requires a valid signature for Node.js native addons.`,
+      );
+    }
   }
-  console.log(`Ad-hoc signed native module at ${dest}`);
-}
 
-const sha256 = createHash("sha256")
-  .update(readFileSync(dest))
-  .digest("hex");
-const platformKey = `${process.platform}-${process.arch}`.toLowerCase();
-writeFileSync(
-  checksumManifestPath,
-  `${JSON.stringify(
-    {
-      entries: {
-        [platformKey]: {
-          sha256,
+  const sha256 = createHash("sha256")
+    .update(readFileSync(stagedNative))
+    .digest("hex");
+  const platformKey = `${process.platform}-${process.arch}`.toLowerCase();
+  writeFileSync(
+    stagedManifest,
+    `${JSON.stringify(
+      {
+        entries: {
+          [platformKey]: {
+            sha256,
+          },
         },
       },
-    },
-    null,
-    2,
-  )}\n`,
-);
-console.log(`Wrote checksum manifest to ${checksumManifestPath}`);
+      null,
+      2,
+    )}\n`,
+    { flag: "wx", mode: 0o600 },
+  );
+
+  // Both files are fully staged and authenticated before either public path
+  // changes. A process interruption between the two renames can only produce
+  // a checksum mismatch, which the loader rejects closed.
+  renameSync(stagedNative, dest);
+  renameSync(stagedManifest, checksumManifestPath);
+
+  const verification = verifyNativeBinding(dest, {
+    manifestPath: checksumManifestPath,
+    platformKey,
+  });
+  if (!verification.ok) {
+    throw new Error(
+      `Published native binding failed checksum verification (${verification.status}).`,
+    );
+  }
+  console.log(`Published verified native module to ${dest}`);
+  console.log(`Wrote checksum manifest to ${checksumManifestPath}`);
+} finally {
+  rmSync(stagingDir, { recursive: true, force: true });
+}

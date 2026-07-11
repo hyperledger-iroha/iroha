@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-12-29T18:16:35.135788+00:00"
 translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan

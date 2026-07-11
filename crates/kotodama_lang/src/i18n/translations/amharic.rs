@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "ፓራሜትር `{name}` በ`{func}` ፋንክሽን ውስጥ ምንም ጊዜ አይጠቀምም",
     lint_unreachable_after_return: "በ{context} ውስጥ የማይደረስ መግለጫ ተገኘ፤ return በኋላ ያለው ኮድ በፍላጎት አይሰራም",
     lint_ok: "እሺ",
-    lint_usage: "መጠቀም: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "መጠቀም: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "የKotodama lint ምርመራዎችን በተሰጡት ምንጮች ላይ ይከናውኑ.",
     ..english::MESSAGES
 };

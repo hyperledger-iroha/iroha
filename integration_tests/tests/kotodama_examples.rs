@@ -2,7 +2,7 @@
 //! Kotodama + IVM example runner with optional external tool coverage.
 //!
 //! This integration test attempts to compile and run the example in `examples/hello/hello.ko`
-//! if the external tools `koto_compile` and `ivm_run` are available on PATH (or specified via
+//! if the external tools `koto` and `ivm_run` are available on PATH (or specified via
 //! environment variables `KOTO_BIN` and `IVM_BIN`). The tests self-skip when those tools are not
 //! present, so they do not fail CI on hosts without the local Kotodama toolchain.
 //!
@@ -54,9 +54,9 @@ fn compile_and_run_hello() {
     let koto_bin = env::var("KOTO_BIN")
         .ok()
         .map(PathBuf::from)
-        .or_else(|| on_path("koto_compile"));
+        .or_else(|| on_path("koto"));
     if koto_bin.is_none() {
-        eprintln!("Skipping: KOTO_BIN not set and koto_compile not found on PATH");
+        eprintln!("Skipping: KOTO_BIN not set and koto not found on PATH");
         return;
     }
     let koto_bin = koto_bin.unwrap();
@@ -81,10 +81,10 @@ fn compile_and_run_hello() {
 
     // Compile
     let mut command = Command::new(&koto_bin);
-    command.arg(&src).arg("-o").arg(&out).arg("--abi").arg("1");
+    command.arg("build").arg(&src).arg("--out").arg(&out);
     let status =
-        status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto_compile");
-    assert!(status.success(), "koto_compile failed: {status:?}");
+        status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto");
+    assert!(status.success(), "koto build failed: {status:?}");
 
     // Run
     let mut command = Command::new(&ivm_bin);
@@ -151,9 +151,9 @@ fn compile_and_run_nft() {
     let koto_bin = env::var("KOTO_BIN")
         .ok()
         .map(PathBuf::from)
-        .or_else(|| on_path("koto_compile"));
+        .or_else(|| on_path("koto"));
     if koto_bin.is_none() {
-        eprintln!("Skipping: KOTO_BIN not set and koto_compile not found on PATH");
+        eprintln!("Skipping: KOTO_BIN not set and koto not found on PATH");
         return;
     }
     let koto_bin = koto_bin.unwrap();
@@ -176,10 +176,10 @@ fn compile_and_run_nft() {
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
 
     let mut command = Command::new(&koto_bin);
-    command.arg(&src).arg("-o").arg(&out).arg("--abi").arg("1");
+    command.arg("build").arg(&src).arg("--out").arg(&out);
     let status =
-        status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto_compile");
-    assert!(status.success(), "koto_compile failed: {status:?}");
+        status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto");
+    assert!(status.success(), "koto build failed: {status:?}");
 
     let mut command = Command::new(&ivm_bin);
     command.arg(&out).arg("--args").arg("{}");

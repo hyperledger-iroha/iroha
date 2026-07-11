@@ -22,10 +22,10 @@ Faça o download do seu cartão/filme no site da empresa para obter informaçõe
 
 - [Docker](https://docs.docker.com/engine/install/) no Compose V2 (é o peer do peer no `defaults/docker-compose.single.yml`).
 - سلسلة ادوات Rust (1.76+) لبناء الثنائيات المساعدة اذا لم تقم بتنزيل المنشورة.
-- Números `koto_compile` e `ivm_run` e `iroha_cli`. Você pode verificar o espaço de trabalho do checkout e criar artefatos no local:
+- Números `koto build` e `ivm_run` e `iroha_cli`. Você pode verificar o espaço de trabalho do checkout e criar artefatos no local:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -49,22 +49,22 @@ A configuração do modelo Kotodama é:
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -76,15 +76,14 @@ KO
 Use o bytecode IVM/Norito (`.to`) para obter syscalls Para obter mais informações:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-O executor é `info("Hello from Kotodama")` e o syscall `SET_ACCOUNT_DETAIL` é a solução. No caso do `ivm_tool`, o `ivm_tool inspect target/quickstart/hello.to` contém cabeçalho ABI, bits de recurso e pontos de entrada.
+O executor é `debug::info("Hello from Kotodama")` e o syscall `SET_ACCOUNT_DETAIL` é a solução. No caso do `ivm_tool`, o `ivm_tool inspect target/quickstart/hello.to` contém cabeçalho ABI, bits de recurso e pontos de entrada.
 
 ## 4. Transfira o bytecode para Torii
 

@@ -756,9 +756,7 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpMessageProofBundles.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SourceSccpProofs.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionActionRequest.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionActionResponse.java",
@@ -842,8 +840,6 @@ SOURCE_PATHS = (
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tools/PendingQueueInspectorTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
     "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
     "java/iroha_android/src/test/resources/transaction_payloads.json",
@@ -976,9 +972,7 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SccpMessageProofBundles.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionActionRequest.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionActionResponse.kt",
@@ -1048,9 +1042,7 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoColumnarTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoHeaderTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
-    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt",
-    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
@@ -1994,10 +1986,6 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "mobile OpenVerifyEnvelope public-input hash exactness negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-open-verify-public-input-hash-exactness",
-    ),
-    (
-        "TON SCCP public-input validation-order negative control",
-        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-ton-sccp-public-input-validation-ordering",
     ),
     (
         "Rust recursive compact unavailable classifier negative control",
@@ -7836,8 +7824,6 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest",
         "org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest",
         "org.hyperledger.iroha.sdk.sccp.TronSccpProverTest",
-        "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
-        "org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest",
         "org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest",
         "org.hyperledger.iroha.sdk.norito.NoritoHeaderTest",
         "org.hyperledger.iroha.sdk.norito.NoritoColumnarTest",
@@ -7888,8 +7874,6 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
             "org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifierTests,"
             "org.hyperledger.iroha.android.sccp.EvmSccpProverTests,"
             "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,"
-            "org.hyperledger.iroha.android.sccp.SolanaSccpProverTests,"
-            "org.hyperledger.iroha.android.sccp.TonSccpProverTests,"
             "org.hyperledger.iroha.android.sccp.TronSccpProverTests,"
             "org.hyperledger.iroha.android.address.AccountIdLiteralTests,"
             "org.hyperledger.iroha.android.address.AccountAddressTests,"
@@ -13253,60 +13237,6 @@ def check_mobile_sccp_runner_coverage(texts, errors):
             ),
         ),
         (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt",
-            "Kotlin SCCP TON prover",
-            (
-                "object SccpTon",
-                "MESSAGE_BODY_BOC_V1",
-                "SOURCE_STATE_MAX_PROOF_BYTES",
-                "canonicalRouteCanaryEvidenceBytes",
-                "routeCanaryEvidenceHash",
-                "buildProofRequest",
-                "wrapProofResult",
-            ),
-        ),
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java",
-            "Android SCCP TON prover",
-            (
-                "class TonSccpProver",
-                "MESSAGE_BODY_BOC_V1",
-                "SOURCE_STATE_MAX_PROOF_BYTES",
-                "canonicalRouteCanaryEvidenceBytes",
-                "routeCanaryEvidenceHash",
-                "buildProofRequest",
-                "wrapProofResult",
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt",
-            "Kotlin SCCP Solana prover",
-            (
-                "object SccpSolana",
-                "RECURSIVE_PROOF_BACKEND_V1",
-                "SOURCE_STATE_MAX_PROOF_BYTES",
-                "canonicalRouteCanaryEvidenceBytes",
-                "routeCanaryEvidenceHash",
-                "buildProofRequest",
-                "wrapProofResult",
-                "BORSH_INSTRUCTION_V1",
-            ),
-        ),
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java",
-            "Android SCCP Solana prover",
-            (
-                "class SolanaSccpProver",
-                "RECURSIVE_PROOF_BACKEND_V1",
-                "SOURCE_STATE_MAX_PROOF_BYTES",
-                "canonicalRouteCanaryEvidenceBytes",
-                "routeCanaryEvidenceHash",
-                "buildProofRequest",
-                "wrapProofResult",
-                "BORSH_INSTRUCTION_V1",
-            ),
-        ),
-        (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt",
             "Kotlin SCCP source proof hashes",
             (
@@ -13395,64 +13325,6 @@ def check_mobile_sccp_runner_coverage(texts, errors):
                 "sourceProofBytes must be empty for SORA source bundle",
                 "submission must reject extraneous wrapped proof-result source proof bytes",
                 'ex.getMessage().contains("sourceProofBytes")',
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
-            "Kotlin SCCP TON prover tests",
-            (
-                "derivesTonRouteCanaryEvidenceHash",
-                "buildsTonMessageBodyBoc",
-                "derivesTonBocRootHashFromOrdinaryCells",
-                "derivesTonShardProofHashFromWitnessMaterial",
-                "buildsTonFullLightClientAuditRoleProofRequests",
-                "proofRequestBindsRelayContextAndDeployment",
-                "proofRequestRejectsNoncanonicalOrMismatchedBundleBytes",
-                "proofRequestHashMatchesCrossSdkVector",
-                "sourceProofBytes must be empty for SORA source bundle",
-            ),
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
-            "Android SCCP TON prover tests",
-            (
-                "derivesTonRouteCanaryEvidenceHash",
-                "buildsTonMessageBodyBoc",
-                "derivesTonBocRootHashFromOrdinaryCells",
-                "derivesTonShardProofHashFromWitnessMaterial",
-                "buildsTonFullLightClientAuditRoleProofRequests",
-                "proofRequestBindsRelayContextAndDeployment",
-                "proofRequestRejectsNoncanonicalOrMismatchedBundleBytes",
-                "proofRequestHashMatchesCrossSdkVector",
-                "TON request hash must bind bundle finality proof bytes",
-                "sourceProofBytes must be empty for SORA source bundle",
-                "TON proof requests must reject source proof bytes for SORA bundles",
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt",
-            "Kotlin SCCP Solana prover tests",
-            (
-                "derivesSolanaRouteCanaryEvidenceHash",
-                "buildsSolanaSccpProofRequest",
-                "buildsMessageProofHashFromInclusionWitness",
-                "buildsSolanaFullLightClientAuditRoleProofRequests",
-                "bindsSourceAdapterDeploymentContextForUiProvers",
-                "buildsSolanaProgramInstructionSubmission",
-                "proverWrapsExternalProofBytes",
-            ),
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
-            "Android SCCP Solana prover tests",
-            (
-                "derivesSolanaRouteCanaryEvidenceHash",
-                "normalizesWitnessAndBuildsDeterministicRequest",
-                "buildsMessageProofHashFromInclusionWitness",
-                "buildsSolanaFullLightClientAuditRoleProofRequests",
-                "bindsSourceAdapterDeploymentContextForUiProvers",
-                "buildsSolanaProgramInstructionSubmission",
-                "proverWrapsExternalProofBytes",
             ),
         ),
         (
@@ -25480,8 +25352,6 @@ def check_java_kotlin(texts, errors):
     kotlin_offline_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
     java_offline_v2_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"
     kotlin_offline_v2_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"
-    java_ton_sccp_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java"
-    kotlin_ton_sccp_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt"
     require_contains(
         texts,
         kotlin_request_codecs_test,
@@ -25656,29 +25526,6 @@ def check_java_kotlin(texts, errors):
             "authority must not contain surrounding whitespace",
         ),
         "Android Java recursive spend top-up init transaction helper tests",
-        errors,
-    )
-    require_contains(
-        texts,
-        kotlin_ton_sccp_test,
-        (
-            "val publicInputOrder = assertFailsWith<IllegalArgumentException>",
-            "payloadHash = \"0x\" + \"AA\".repeat(32)",
-            "assertFalse(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
-        ),
-        "Kotlin TON SCCP public-input validation ordering coverage",
-        errors,
-    )
-    require_contains(
-        texts,
-        java_ton_sccp_test,
-        (
-            "malformedPublicInputsBeforeSourceProof",
-            "ex.getMessage().contains(\"payloadHash must be canonical hex\")",
-            "&& !ex.getMessage().contains(\"sourceProofBytes\")",
-            "TON proof requests must validate public inputs before source-proof matching",
-        ),
-        "Android Java TON SCCP public-input validation ordering coverage",
         errors,
     )
     require_contains(
@@ -38641,51 +38488,6 @@ if mode == "--negative-control-jvm-recursive-compact-shape-classifier":
         print(detected_message)
     raise SystemExit(0)
 
-if mode == "--negative-control-ton-sccp-public-input-validation-ordering":
-    mutated_texts = dict(texts)
-    mutations = (
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
-            "assertFalse(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
-            "assertTrue(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
-            "Kotlin TON SCCP public-input validation ordering coverage",
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
-            "&& !ex.getMessage().contains(\"sourceProofBytes\")",
-            "&& ex.getMessage().contains(\"sourceProofBytes\")",
-            "Android Java TON SCCP public-input validation ordering coverage",
-        ),
-    )
-    detected_messages = []
-    for target, old, new, expected in mutations:
-        original = mutated_texts[target]
-        mutated = original.replace(old, new, 1)
-        if mutated == original:
-            raise SystemExit(
-                "negative control failed: unable to mutate TON SCCP validation-order coverage in "
-                + target
-            )
-        mutated_texts[target] = mutated
-        try:
-            detected_messages.extend(
-                detect_negative_control(
-                    mutated_texts,
-                    (expected,),
-                    "TON SCCP public-input validation-order drift",
-                )
-            )
-        finally:
-            mutated_texts[target] = original
-    if not detected_messages:
-        raise SystemExit(
-            "negative control failed: TON SCCP public-input validation-order drift was not detected"
-        )
-    print("negative control rejected TON SCCP public-input validation-order drift")
-    for detected_message in detected_messages:
-        print(detected_message)
-    raise SystemExit(0)
-
 if mode == "--negative-control-mobile-recursive-spend-native-output-headers":
     mutated_texts = dict(texts)
     targets = (
@@ -44246,26 +44048,6 @@ if mode == "--negative-control-mobile-sccp-runner-coverage":
             "derivesTronRouteCanaryEvidenceHash",
         ),
         (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
-            "Kotlin SCCP TON prover tests",
-            "derivesTonRouteCanaryEvidenceHash",
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
-            "Android SCCP TON prover tests",
-            "derivesTonRouteCanaryEvidenceHash",
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt",
-            "Kotlin SCCP Solana prover tests",
-            "derivesSolanaRouteCanaryEvidenceHash",
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
-            "Android SCCP Solana prover tests",
-            "derivesSolanaRouteCanaryEvidenceHash",
-        ),
-        (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt",
             "Kotlin SCCP source proof hash tests",
             "derivesSourceAdapterVerifierVkHashesForUiTooling",
@@ -44290,14 +44072,6 @@ if mode == "--negative-control-mobile-sccp-runner-coverage":
                 "tronRouteCanaryEvidenceHashDrifts",
             ),
             (
-                "derivesTonRouteCanaryEvidenceHash",
-                "tonRouteCanaryEvidenceHashDrifts",
-            ),
-            (
-                "derivesSolanaRouteCanaryEvidenceHash",
-                "solanaRouteCanaryEvidenceHashDrifts",
-            ),
-            (
                 "derivesSourceAdapterVerifierVkHashesForUiTooling",
                 "sourceAdapterVerifierVkHashesDriftForUiTooling",
             ),
@@ -44320,10 +44094,6 @@ if mode == "--negative-control-mobile-sccp-runner-coverage":
             (
                 "sourceProofBytes must be empty for SORA source bundle",
                 "requestHash",
-            ),
-            (
-                "TON request hash must bind bundle finality proof bytes",
-                "TON request hash must bind bundle/source-proof byte boundaries",
             ),
         ):
             mutated = mutated.replace(old, new)

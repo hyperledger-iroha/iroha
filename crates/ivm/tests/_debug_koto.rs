@@ -8,7 +8,7 @@ use ivm::{
 
 #[test]
 fn debug_create_nfts_and_set_detail_words() {
-    let src = "fn main() { create_nfts_for_all_users(); set_execution_depth(111); set_account_detail(authority(), name(\"cursor\"), json(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); }";
+    let src = "seiyaku DebugHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";
     let compiler = Compiler::new_with_options(CompilerOptions {
         mode: CompilerMode::Test,
         ..CompilerOptions::default()
@@ -27,10 +27,6 @@ fn debug_create_nfts_and_set_detail_words() {
         encoding::wide::encode_sys(
             scall,
             ivm::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS as u8,
-        ),
-        encoding::wide::encode_sys(
-            scall,
-            ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH as u8,
         ),
         encoding::wide::encode_sys(scall, ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8),
     ];

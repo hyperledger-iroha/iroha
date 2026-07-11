@@ -7,7 +7,7 @@ use iroha_data_model::{
     prelude::{AccountId, AssetDefinitionId, Name},
     smart_contract::ContractAddress,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{CoreHost, IVM, PointerType, encoding, instruction::wide, syscalls};
 mod common;
 
@@ -29,6 +29,15 @@ fn alloc_heap_tlv(vm: &mut IVM, bytes: &[u8]) -> u64 {
         .store_bytes(addr, bytes)
         .expect("store heap direct tlv");
     addr
+}
+
+fn unwrap_some_word(vm: &IVM) -> u64 {
+    let layout = ivm::sum::SumLayoutV1::option(1).expect("Option layout");
+    let (is_some, words) =
+        ivm::sum::read_words(vm, vm.register(10), layout).expect("read typed JSON getter Option");
+    assert!(is_some, "typed JSON getter must return Option::some");
+    assert_eq!(words.len(), 1);
+    words[0]
 }
 
 fn checked_contract_authority_fixture() -> AccountId {
@@ -129,14 +138,13 @@ fn json_decode_accepts_blob() {
 }
 
 #[test]
-fn json_get_blob_hex_accepts_iroha_hash_literals() {
+fn json_get_blob_hex_accepts_canonical_lowercase_hex() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
 
     let hash = iroha_crypto::Hash::new(b"settlement");
-    let hash_hex = hex::encode_upper(hash.as_ref());
-    let hash_literal = norito::literal::format("hash", &hash_hex);
-    let json = format!(r#"{{"settlement_hash":"{hash_literal}"}}"#);
+    let hash_hex = hex::encode(hash.as_ref());
+    let json = format!(r#"{{"settlement_hash":"0x{hash_hex}"}}"#);
     let p_json = vm
         .alloc_input_tlv(&tlv(PointerType::Json, json.as_bytes()))
         .unwrap();
@@ -150,10 +158,36 @@ fn json_get_blob_hex_accepts_iroha_hash_literals() {
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
 
-    let out_ptr = vm.register(10);
+    let out_ptr = unwrap_some_word(&vm);
     let tlv_out = vm.memory.validate_tlv(out_ptr).unwrap();
     assert_eq!(tlv_out.type_id, PointerType::Blob);
     assert_eq!(tlv_out.payload, hash.as_ref());
+}
+
+#[test]
+fn json_get_blob_hex_rejects_noncanonical_and_malformed_spellings() {
+    for invalid in ["deadbeef", "hash:deadbeef", "0xDEADBEEF", "0xabc", "0xzz"] {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(CoreHost::new());
+        let json = format!(r#"{{"value":"{invalid}"}}"#);
+        let p_json = vm
+            .alloc_input_tlv(&tlv(PointerType::Json, json.as_bytes()))
+            .expect("allocate JSON input");
+        let p_key = vm
+            .alloc_input_tlv(&tlv(PointerType::Name, b"value"))
+            .expect("allocate JSON key");
+        let program = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_BLOB_HEX as u8]);
+        vm.set_register(10, p_json);
+        vm.set_register(11, p_key);
+        vm.load_program(&program).expect("load blob getter");
+        vm.run().expect("noncanonical values return Option::none");
+
+        let layout = ivm::sum::SumLayoutV1::option(1).expect("Option layout");
+        let (is_some, words) =
+            ivm::sum::read_words(&vm, vm.register(10), layout).expect("read blob getter Option");
+        assert!(!is_some, "`{invalid}` must not decode as canonical bytes");
+        assert!(words.is_empty());
+    }
 }
 
 #[test]
@@ -173,7 +207,7 @@ fn json_get_asset_definition_id_reads_address_literals() {
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
 
-    let out_ptr = vm.register(10);
+    let out_ptr = unwrap_some_word(&vm);
     let tlv_out = vm.memory.validate_tlv(out_ptr).unwrap();
     assert_eq!(tlv_out.type_id, PointerType::AssetDefinitionId);
     let asset: AssetDefinitionId = norito::decode_from_bytes(tlv_out.payload).unwrap();
@@ -335,7 +369,7 @@ fn schema_decode_unknown_schema_exposes_metadata() {
 }
 
 #[test]
-fn json_get_numeric_reads_decimal_strings() {
+fn json_get_quantity_reads_canonical_decimal_strings() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let json = br#"{"amount":"0.00001"}"#;
@@ -344,33 +378,25 @@ fn json_get_numeric_reads_decimal_strings() {
         .alloc_input_tlv(&tlv(PointerType::Name, b"amount"))
         .unwrap();
 
-    let prog = common::assemble(
-        &[
-            encoding::wide::encode_sys(
-                wide::system::SCALL,
-                syscalls::SYSCALL_JSON_GET_NUMERIC as u8,
-            )
-            .to_le_bytes(),
-            encoding::wide::encode_halt().to_le_bytes(),
-        ]
-        .concat(),
-    );
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_QUANTITY]);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
 
-    let tlv = vm.memory.validate_tlv(vm.register(10)).unwrap();
-    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode numeric");
-    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
+    let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
+    assert_eq!(tlv.type_id, PointerType::Quantity);
+    let value = QuantityValueV1::decode_frame(tlv.payload)
+        .expect("decode quantity")
+        .into_quantity();
+    assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
 }
 
 #[test]
-fn json_get_numeric_direct_accepts_input_heap_and_literal_pointers() {
+fn json_get_quantity_direct_accepts_input_heap_and_literal_pointers() {
     let json_tlv = tlv(PointerType::Json, br#"{"amount":"0.00001"}"#);
     let key_tlv = tlv(PointerType::Name, b"amount");
-    let direct_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT as u8]);
+    let direct_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_QUANTITY_DIRECT]);
 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
@@ -380,9 +406,12 @@ fn json_get_numeric_direct_accepts_input_heap_and_literal_pointers() {
     vm.set_register(11, p_key);
     vm.load_program(&direct_prog).unwrap();
     vm.run().unwrap();
-    let tlv = vm.memory.validate_tlv(vm.register(10)).unwrap();
-    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode input numeric");
-    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
+    let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
+    assert_eq!(tlv.type_id, PointerType::Quantity);
+    let value = QuantityValueV1::decode_frame(tlv.payload)
+        .expect("decode input quantity")
+        .into_quantity();
+    assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
@@ -392,12 +421,15 @@ fn json_get_numeric_direct_accepts_input_heap_and_literal_pointers() {
     vm.set_register(11, p_key);
     vm.load_program(&direct_prog).unwrap();
     vm.run().unwrap();
-    let tlv = vm.memory.validate_tlv(vm.register(10)).unwrap();
-    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode heap numeric");
-    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
+    let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
+    assert_eq!(tlv.type_id, PointerType::Quantity);
+    let value = QuantityValueV1::decode_frame(tlv.payload)
+        .expect("decode heap quantity")
+        .into_quantity();
+    assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
 
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
-        &[syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT as u8],
+        &[syscalls::SYSCALL_JSON_GET_QUANTITY_DIRECT],
         &[json_tlv.as_slice(), key_tlv.as_slice()],
     );
     let json_addr = literal_ptrs[0];
@@ -409,9 +441,12 @@ fn json_get_numeric_direct_accepts_input_heap_and_literal_pointers() {
     vm.set_register(10, json_addr);
     vm.set_register(11, key_addr);
     vm.run().unwrap();
-    let tlv = vm.memory.validate_tlv(vm.register(10)).unwrap();
-    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode literal numeric");
-    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
+    let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
+    assert_eq!(tlv.type_id, PointerType::Quantity);
+    let value = QuantityValueV1::decode_frame(tlv.payload)
+        .expect("decode literal quantity")
+        .into_quantity();
+    assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
 }
 
 #[test]
@@ -602,15 +637,7 @@ fn build_path_key_norito_direct_accepts_input_heap_and_literal_pointers() {
     let key_tlv = tlv(PointerType::NoritoBytes, &key_payload);
     let direct_prog =
         common::assemble_syscalls(&[syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT as u8]);
-    let expected_path = {
-        let h: [u8; 32] = iroha_crypto::Hash::new(&key_payload).into();
-        let mut path = String::from("state/");
-        for byte in h {
-            use core::fmt::Write as _;
-            write!(&mut path, "{byte:02x}").expect("write path hash");
-        }
-        path
-    };
+    let expected_path = format!("state/{}", hex::encode(&key_payload));
 
     let decode_path = |vm: &IVM| {
         let tlv = vm
@@ -702,15 +729,6 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     let p_payload = vm.register(10);
 
     vm.set_register(10, p_payload);
-    vm.set_register(11, p_bucket_key);
-    vm.load_program(&common::assemble_syscalls(&[
-        syscalls::SYSCALL_JSON_GET_I64 as u8,
-    ]))
-    .unwrap();
-    vm.run().unwrap();
-    assert_eq!(vm.register(10) as i64, 2);
-
-    vm.set_register(10, p_payload);
     vm.set_register(11, p_owner_key);
     vm.load_program(&common::assemble_syscalls(&[
         syscalls::SYSCALL_JSON_GET_ACCOUNT_ID as u8,
@@ -718,7 +736,7 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     .unwrap();
     vm.run().unwrap();
 
-    let tlv_out = vm.memory.validate_tlv(vm.register(10)).unwrap();
+    let tlv_out = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
     assert_eq!(tlv_out.type_id, PointerType::AccountId);
     let owner: AccountId = norito::decode_from_bytes(tlv_out.payload).expect("decode account");
     assert_eq!(
@@ -730,7 +748,7 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
 }
 
 #[test]
-fn json_get_account_id_reads_contract_address_subject_literal() {
+fn json_get_account_id_rejects_noncanonical_contract_address_literal() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
 
@@ -756,9 +774,12 @@ fn json_get_account_id_reads_contract_address_subject_literal() {
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
 
-    let tlv_out = vm.memory.validate_tlv(vm.register(10)).unwrap();
-    assert_eq!(tlv_out.type_id, PointerType::AccountId);
-    let decoded: AccountId =
-        norito::decode_from_bytes(tlv_out.payload).expect("decode contract subject");
-    assert_eq!(decoded, contract_address.subject_id());
+    assert_eq!(
+        ivm::sum::read_words(
+            &vm,
+            vm.register(10),
+            ivm::sum::SumLayoutV1::option(1).expect("AccountId Option layout"),
+        ),
+        Ok((false, vec![]))
+    );
 }

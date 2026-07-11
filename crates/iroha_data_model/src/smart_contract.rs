@@ -146,6 +146,19 @@ pub mod payloads {
 /// Metadata key tracking the next public contract deploy nonce for an account.
 pub const CONTRACT_DEPLOY_NONCE_METADATA_KEY: &str = "contract_deploy_nonce";
 
+/// Runtime permission required to invoke a contract's `hajimari`/`始まり` lifecycle entrypoint.
+///
+/// Lifecycle authorization is deliberately defined by the host rather than by
+/// source-level `authorize(...)` declarations. For ABI V1, running `hajimari`/`始まり`
+/// for a deployed contract requires the same authority as registering contract code.
+pub const CONTRACT_HAJIMARI_PERMISSION_NAME: &str = "CanRegisterSmartContractCode";
+
+/// Runtime permission required to invoke a contract's `kaizen`/`改善` lifecycle entrypoint.
+///
+/// ABI V1 uses the contract-code registration authority for both deployment
+/// lifecycle operations so callers cannot weaken lifecycle policy in source.
+pub const CONTRACT_KAIZEN_PERMISSION_NAME: &str = "CanRegisterSmartContractCode";
+
 /// Default mainnet contract HRP used for Bech32m-encoded contract addresses.
 pub const CONTRACT_ADDRESS_HRP_MAINNET: &str = "sorac";
 /// Default Taira/testnet contract HRP used for Bech32m-encoded contract addresses.
@@ -918,6 +931,9 @@ mod contract_address_tests {
         assert!(err.to_string().contains("invalid contract address"));
     }
 }
+/// Exact recursive schemas for public Kotodama entrypoint boundaries.
+pub mod entrypoint;
+
 // Smart contract manifest types and helpers.
 pub mod manifest {
     //! Manifest metadata for IVM smart contracts.
@@ -934,6 +950,7 @@ pub mod manifest {
         account::AccountId,
         events::EventFilterBox,
         metadata::Metadata,
+        smart_contract::entrypoint::{EntrypointArgumentSchemaV1, EntrypointValueTypeV1},
         trigger::{TriggerId, action::Repeats},
     };
 
@@ -957,6 +974,9 @@ pub mod manifest {
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractManifest {
+        /// Canonical source-level seiyaku name embedded by the compiler.
+        #[norito(default)]
+        pub seiyaku_name: Option<String>,
         /// Content-addressed hash of the compiled `.to` bytecode.
         /// If present, nodes compare it to the hash computed from the submitted bytecode.
         pub code_hash: Option<Hash>,
@@ -965,7 +985,11 @@ pub mod manifest {
         pub abi_hash: Option<Hash>,
         /// Optional compiler fingerprint (e.g., rustc/LLVM versions).
         pub compiler_fingerprint: Option<String>,
-        /// Feature bitmap used during compilation (e.g., SIMD/CUDA flags).
+        /// Compiler-derived, hash-covered execution capability bitmap.
+        ///
+        /// V1 mirrors the artifact's ZK and VECTOR execution-mode bits. This is
+        /// not source-selectable metadata and never describes host SIMD, Metal,
+        /// or CUDA availability.
         pub features_bitmap: Option<u64>,
         /// Optional advisory access-set hints for scheduler.
         ///
@@ -982,6 +1006,9 @@ pub mod manifest {
         /// Optional durable state schema advertised by the compiler.
         #[norito(default)]
         pub states: Option<Vec<StateDescriptor>>,
+        /// Stable application error codes advertised by the compiler.
+        #[norito(default)]
+        pub error_codes: Option<Vec<ContractErrorCodeDescriptor>>,
         /// Optional localization tables extracted from `kotoba { ... }` blocks.
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
@@ -1152,14 +1179,23 @@ pub mod manifest {
     pub struct EntrypointDescriptor {
         /// Symbol name as declared in the Kotodama source file.
         pub name: String,
-        /// Logical kind: `kotoage`, `hajimari`, or `kaizen`.
+        /// Logical kind: `kotoage`/`言挙げ`, view, `hajimari`/`始まり`, or
+        /// `kaizen`/`改善`. Trigger declarations attach to one of these
+        /// descriptors through [`EntrypointDescriptor::triggers`].
         pub kind: EntryPointKind,
         /// Ordered public parameters advertised by the compiler.
         #[norito(default)]
         pub params: Vec<EntrypointParamDescriptor>,
+        /// Exact recursive schema for the complete public argument record.
+        /// Zero-parameter entrypoints have no argument schema.
+        #[norito(default)]
+        pub argument_schema: Option<EntrypointArgumentSchemaV1>,
         /// Declared return type for this entrypoint, when present.
         #[norito(default)]
         pub return_type: Option<String>,
+        /// Exact recursive schema for a non-unit public return value.
+        #[norito(default)]
+        pub return_schema: Option<EntrypointValueTypeV1>,
         /// Permission required by the dispatcher before invoking this entrypoint.
         #[norito(default)]
         pub permission: Option<String>,
@@ -1216,6 +1252,27 @@ pub mod manifest {
         pub name: String,
         /// Canonical durable value type stored under this key.
         pub type_name: String,
+    }
+
+    /// Stable application error code exposed by a compiled contract.
+    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveFastJson,
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct ContractErrorCodeDescriptor {
+        /// Error enum namespace declared in Kotodama source.
+        pub namespace: String,
+        /// Variant name within the namespace.
+        pub name: String,
+        /// Explicit non-zero numeric code returned on abort.
+        pub code: u32,
     }
 
     /// Localized message text for a specific language tag.
@@ -1319,13 +1376,13 @@ pub mod manifest {
     #[norito(tag = "kind", content = "value")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub enum EntryPointKind {
-        /// Public dispatcher entrypoint (`kotoage fn`).
-        Public,
+        /// Transaction dispatcher entrypoint (`kotoage`/`言挙げ fn`).
+        Kotoage,
         /// Read-only query entrypoint (`view fn`).
         View,
-        /// Deployment initializer (`hajimari`).
+        /// Deployment `hajimari`/`始まり` declaration.
         Hajimari,
-        /// Upgrade hook (`kaizen`).
+        /// `kaizen`/`改善` lifecycle declaration.
         Kaizen,
     }
 
@@ -1342,13 +1399,19 @@ pub mod manifest {
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractManifestSignaturePayload {
+        /// Canonical source-level seiyaku name.
+        #[norito(default)]
+        pub seiyaku_name: Option<String>,
         /// Content-addressed hash of the compiled `.to` bytecode.
         pub code_hash: Option<Hash>,
         /// ABI hash computed by the node for the `abi_version` policy.
         pub abi_hash: Option<Hash>,
         /// Optional compiler fingerprint (e.g., rustc/LLVM versions).
         pub compiler_fingerprint: Option<String>,
-        /// Feature bitmap used during compilation (e.g., SIMD/CUDA flags).
+        /// Compiler-derived, hash-covered ZK/VECTOR execution capability bitmap.
+        ///
+        /// This mirrors the signed manifest field and is unrelated to host
+        /// hardware acceleration availability.
         pub features_bitmap: Option<u64>,
         /// Optional advisory access-set hints for scheduler.
         #[norito(default)]
@@ -1359,6 +1422,9 @@ pub mod manifest {
         /// Optional durable state schema advertised by the compiler.
         #[norito(default)]
         pub states: Option<Vec<StateDescriptor>>,
+        /// Stable application error codes advertised by the compiler.
+        #[norito(default)]
+        pub error_codes: Option<Vec<ContractErrorCodeDescriptor>>,
         /// Optional localization tables extracted from `kotoba { ... }` blocks.
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
@@ -1367,6 +1433,7 @@ pub mod manifest {
     impl From<&ContractManifest> for ContractManifestSignaturePayload {
         fn from(manifest: &ContractManifest) -> Self {
             Self {
+                seiyaku_name: manifest.seiyaku_name.clone(),
                 code_hash: manifest.code_hash,
                 abi_hash: manifest.abi_hash,
                 compiler_fingerprint: manifest.compiler_fingerprint.clone(),
@@ -1374,6 +1441,7 @@ pub mod manifest {
                 access_set_hints: manifest.access_set_hints.clone(),
                 entrypoints: manifest.entrypoints.clone(),
                 states: manifest.states.clone(),
+                error_codes: manifest.error_codes.clone(),
                 kotoba: manifest.kotoba.clone(),
             }
         }
@@ -1442,6 +1510,28 @@ pub mod manifest {
         }
 
         #[test]
+        fn entrypoint_kind_json_uses_only_branded_v1_names() {
+            for (kind, name) in [
+                (EntryPointKind::Kotoage, "Kotoage"),
+                (EntryPointKind::View, "View"),
+                (EntryPointKind::Hajimari, "Hajimari"),
+                (EntryPointKind::Kaizen, "Kaizen"),
+            ] {
+                let json = norito::json::to_json(&kind).expect("serialize entrypoint kind");
+                assert_eq!(json, format!(r#"{{"kind":"{name}","value":null}}"#));
+                let decoded: EntryPointKind =
+                    norito::json::from_str(&json).expect("deserialize branded entrypoint kind");
+                assert_eq!(decoded, kind);
+            }
+
+            for retired in ["Public", "public", "Init", "init", "Upgrade", "upgrade"] {
+                let json = format!(r#"{{"kind":"{retired}","value":null}}"#);
+                norito::json::from_str::<EntryPointKind>(&json)
+                    .expect_err("retired English entrypoint kind must be rejected");
+            }
+        }
+
+        #[test]
         fn entrypoint_descriptor_includes_triggers() {
             use crate::{events::EventFilterBox, trigger::action::Repeats};
 
@@ -1460,13 +1550,30 @@ pub mod manifest {
             };
             let entrypoint = EntrypointDescriptor {
                 name: "run".to_string(),
-                kind: EntryPointKind::Public,
+                kind: EntryPointKind::Kotoage,
                 params: vec![EntrypointParamDescriptor {
                     name: "amount".to_string(),
-                    type_name: "Amount".to_string(),
+                    type_name: "quantity".to_string(),
                 }],
+                argument_schema: Some(EntrypointArgumentSchemaV1 {
+                    fields: vec![
+                        crate::smart_contract::entrypoint::EntrypointArgumentFieldV1 {
+                            name: "amount".to_string(),
+                            ty: EntrypointValueTypeV1 {
+                                nodes: vec![crate::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(
+                                    crate::smart_contract::entrypoint::EntrypointValueKindV1::Quantity,
+                                )],
+                            },
+                        },
+                    ],
+                }),
                 return_type: Some("int".to_string()),
-                permission: None,
+                return_schema: Some(EntrypointValueTypeV1 {
+                    nodes: vec![crate::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(
+                        crate::smart_contract::entrypoint::EntrypointValueKindV1::Int,
+                    )],
+                }),
+                permission: Some("ExecuteContract".to_owned()),
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
                 access_hints_complete: Some(true),
@@ -1511,6 +1618,7 @@ pub mod manifest {
         fn signature_payload_excludes_provenance_and_verifies() {
             let kp = checked_random_keypair();
             let mut manifest = ContractManifest {
+                seiyaku_name: None,
                 code_hash: Some(Hash::new(b"code-bytes")),
                 abi_hash: Some(Hash::new(b"abi-bytes")),
                 compiler_fingerprint: Some("rustc-1.78".to_owned()),
@@ -1519,6 +1627,11 @@ pub mod manifest {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: Some(vec![ContractErrorCodeDescriptor {
+                    namespace: "PaymentError".to_owned(),
+                    name: "Unauthorized".to_owned(),
+                    code: 1001,
+                }]),
                 provenance: None,
             };
 
@@ -1535,12 +1648,21 @@ pub mod manifest {
             signature
                 .verify(kp.public_key(), &payload)
                 .expect("signature must verify");
+
+            manifest.error_codes.as_mut().expect("error codes")[0].code = 1002;
+            assert!(
+                signature
+                    .verify(kp.public_key(), &manifest.signature_payload_bytes())
+                    .is_err(),
+                "manifest provenance must bind stable error codes"
+            );
         }
 
         #[test]
         fn try_signed_attaches_verifiable_provenance() {
             let kp = checked_random_keypair();
             let manifest = ContractManifest {
+                seiyaku_name: None,
                 code_hash: Some(Hash::new(b"contract-code")),
                 abi_hash: Some(Hash::new(b"contract-abi")),
                 compiler_fingerprint: Some("kotodama-test".to_owned()),
@@ -1549,6 +1671,7 @@ pub mod manifest {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             };
 

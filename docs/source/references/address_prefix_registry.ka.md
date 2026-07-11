@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/references/address_prefix_registry.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 95d764f52f9b0bbaeb7dc20e31debd76f2636404fef5aabdd3e8d9114a7f00dc
+source_hash: fc9952eb19566b3148e8b9037ff54e7d5e419c309f44e1456547ab955f51cbc2
 source_last_modified: "2026-01-05T09:28:12.037623+00:00"
 translation_last_reviewed: 2026-02-07
 title: i105 Network Prefix Registry
@@ -30,7 +30,7 @@ changes.
 | Network | Chain ID | Chain Discriminant | i105 Prefix | Status | Notes |
 |---------|----------|--------------------|-------------|--------|-------|
 | Sora Nexus (Global) | `sora:nexus:global` | `0x02F1` (753) | `0x02F1` (753) | Production | Canonical prefix for the global Nexus network. Matches the Sora `chain_discriminant`; all production SDK builds MUST default to this value. |
-| Sora Taira (Testnet) | `809574f5-fee7-5e69-bfcf-52451e42d50f` | `0x0171` (369) | `0x0171` (369) | Testnet | Canonical prefix for the public Taira network. Use this prefix when validating addresses and emitting i105 strings for Taira deployments. |
+| Sora Taira (Testnet) | `fc56984b-2be7-431d-840e-21514d1883f0` | `0x0171` (369) | `0x0171` (369) | Testnet | Canonical prefix for the public Taira network. Use this prefix when validating addresses and emitting i105 strings for Taira deployments. |
 | Development (local) | `dev.local` | `0x0000` (0) | `0x0000` (0) | Reserved | Convenience prefix for single-node or CI environments. Never use on public networks; collisions are expected. |
 
 ### Usage Guidelines

@@ -107,32 +107,25 @@ o'tish, ularni CI darvoza ishlari uchun mos qilish.
 
 ### ISO taxallus yordamchisi
 
-`recipes/iso_alias.mjs` ISO taxallusning so'nggi nuqtalarini maqsad qilib qo'yadi, shuning uchun mashg'ulotlar qamrab olinishi mumkin
-maxsus asboblarni yozmasdan ko'r-ko'rona elementlarni xeshlash va taxalluslarni qidirish. Bu
-qo'ng'iroq qiladi `ToriiClient.evaluateAliasVoprf` plus `resolveAlias` / `resolveAliasByIndex`
-va backend, dayjest, hisob ulanishi, manba va deterministik indeksni chop etadi
-Torii tomonidan qaytarildi.
+`recipes/iso_alias.mjs` maxsus vositalarni talab qilmasdan ISO taxallus qidiruvlarini tekshiradi.
+U `resolveAlias` va `resolveAliasByIndex` ni chaqiradi, so‘ng Torii qaytargan hisob bog‘lanishi, manba va deterministik indeksni chop etadi.
 
 Atrof-muhit o'zgaruvchilari:
 
 - `TORII_URL` — Torii so'nggi nuqta yordamchi nomli yordamchilarni ochib beradi.
-- `ISO_VOPRF_INPUT` - olti burchakli kodlangan ko'r element (birlamchi `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — faqat qidiruvlarni sinab ko'rayotganda VOPRF chaqiruvini o'tkazib yuboring.
 - `ISO_ALIAS_LABEL` — hal qilish uchun literal taxallus (masalan, IBAN uslubidagi satrlar).
 - `ISO_ALIAS_INDEX` - o'nlik yoki `0x`-prefiksli indeks `resolveAliasByIndex` ga o'tkazildi.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` - xavfsiz Torii joylashtirishlari uchun ixtiyoriy sarlavhalar.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

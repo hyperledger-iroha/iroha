@@ -36,13 +36,13 @@ translator: machine-google-reviewed
 ཀེ་ནོ་ནིག་སི་ཀཱལ་ཐིག་ཁྲམ་ (ཡན་ལག་ཆ་ཚན་)།| ཧེགསི་ | མིང | གྲོས་བསྡུར་ (`r10+` ནང་) | སླར་ལོག་ཚུ་ | རླངས་རྫས་ (གཞི་རྟེན་ + འགྱུར་ཅན་) | དྲན་ཐོ། |
 |--|-|-|-|-|-|-|-|-|-|-|-|-|-|   --|-|-|                                                 ----------------------------|-------------|------------------------------|-------|
 | 0x1A | SET_ACCOUNT_DETAIL | `&AccountId`, `&Name`, `&Json`, `u64=0` | `G_set_detail + bytes(val)` | རྩིས་ཐོ་གི་དོན་ལུ་ཁ་གསལ་ཅིག་བྲིས། |
-| ༠x༢༢ | MINT_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`, `u64=0` | `G_mint` | རྩིས་ཁྲ་ `amount` རྩིས་ཁྲའི་རྒྱུ་དངོས་ |
-| ༠x༢༣ | BURN_ASSET | `&AccountId`, Norito, `&NoritoBytes(Numeric)` | `u64=0` | `G_burn` | རྩིས་ཁྲ་ནང་ལས་ `amount` འདི་ |
-| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
+| ༠x༢༢ | MINT_ASSET | `&AccountId`, `&AssetDefinitionId`, `&Amount`, `u64=0` | `G_mint` | རྩིས་ཁྲ་ `amount` རྩིས་ཁྲའི་རྒྱུ་དངོས་ |
+| ༠x༢༣ | BURN_ASSET | `&AccountId`, Norito, `&Amount` | `u64=0` | `G_burn` | རྩིས་ཁྲ་ནང་ལས་ `amount` འདི་ |
+| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
 | ༠x༢༩ | TRANSFER_V1_BATCH_BEGIN | – | `u64=0` | `G_transfer` | Begin FASTTPQ སྤོ་བཤུད་བེཆ་ཁྱབ་ཁོངས། |
 | 0x2A | TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` | ཕུལཤ་བསྡུ་གསོག་འབད་ཡོད་པའི་ FASTTPQ གནས་སོར་གྱི་བཀག་ཆ་ |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | syscall གཅིག་ནང་ Norito-encoded batch ཅིག་འཇུག་སྤྱོད་འབད། |
-| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
+| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
 | ༠x༢༥ | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | NFT གསརཔ་ཅིག་ཐོ་བཀོད་འབད། |
 | ༠x༢༦ | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)`, `u64=0` | `G_nft_transfer_asset` | NFT གི་བདག་དབང་སྤོ་བཤུད་འབདཝ་ཨིན། |
 | ༠x༢༧ | NFT_SET_METATA | `&NftId`, `&Name`, `&Json` | Iroha | `G_nft_set_metadata` | ཨེན་ཨེཕ་ཊི་ མེ་ཊ་ཌེ་ཊ་ |

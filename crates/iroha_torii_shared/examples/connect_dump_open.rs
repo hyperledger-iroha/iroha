@@ -21,7 +21,7 @@ fn main() {
                 icon_hash: None,
             }),
             constraints: Constraints {
-                chain_id: "809574f5-fee7-5e69-bfcf-52451e42d50f".into(),
+                chain_id: "fc56984b-2be7-431d-840e-21514d1883f0".into(),
             },
             permissions: Some(PermissionsV1 {
                 methods: vec!["SIGN_REQUEST_TX".into(), "SIGN_REQUEST_RAW".into()],

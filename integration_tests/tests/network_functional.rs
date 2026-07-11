@@ -7,3 +7,5 @@ mod concurrency;
 mod extra_functional;
 #[path = "observer_sync.rs"]
 mod observer_sync;
+#[path = "sccp_route_governance.rs"]
+mod sccp_route_governance;

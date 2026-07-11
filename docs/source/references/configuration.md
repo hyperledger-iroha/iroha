@@ -95,7 +95,7 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   - `ivm_proved.enabled`: enable/disable `Executable::IvmProved` admission.
   - `ivm_proved.skip_replay` (default: `false`): when `ivm-execution-v1` semantics are fully enforced by proofs, skip the deterministic VM replay step in admission. Keep `false` while proofs are still commitment-only.
   - `ivm_proved.allowed_circuits`: list of allowed proof circuit IDs. Empty list disables all proved execution admission.
-  - `ivm_max_cycles_upper_bound` caps the `max_cycles` header value accepted from Kotodama bytecode. Set to `0` to disable the admission guard (still clamped at execution time by the VM).
+  - `ivm_max_cycles_upper_bound` is the mandatory positive ceiling for the `max_cycles` header value accepted from Kotodama bytecode. The default is `1000000`; `0` is rejected during configuration loading. This consensus-relevant value is read only from the configuration file and has no environment-variable alias.
   - `ivm_max_decoded_instructions` limits the number of decoded VM instructions per contract. `0` disables the check.
   - `ivm_max_decoded_bytes` limits the decoded byte length after instruction expansion. `0` disables the check.
   - `query_max_fetch_size` caps iterable query `fetch_size` for IVM query syscalls (0 clamps to 1). Torii endpoints continue to use `torii.app_api.max_fetch_size`.
@@ -163,7 +163,14 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   - `connect_timeout_ms` / `request_timeout_ms` (defaults: 500 / 1500): HTTP timeouts for the verifier; zero collapses to the default.
   - `missing_assessment_grace_secs` (default: 0): deterministic fallback window; non-zero values allow temporary pass-through while emitting a warning.
   - `required_minimum_band` (default: `null`): required severity band (`low`, `medium`, `high`, or `critical`). Transactions missing the band or below the threshold are rejected when `enabled` is true.
-- `[zk]`: Zero-knowledge verification settings (backend, curve, budgets). Not consensus-critical; guardrails enforced.
+- `[zk]`: Zero-knowledge and SCCP verification settings. Worker counts, queue sizes, and timing
+  knobs are operator-local; acceptance limits are consensus-critical and are committed into the
+  block ZK/SCCP policy digest, so every validator must use the same file-backed values.
+  - `[zk.sccp]`: mandatory non-zero per-proof, per-transaction, and per-block limits for closed
+    SCCP proof bytes, proof count, native headers, Ethereum light-client updates, native header
+    bytes, secp256k1 recoveries, BLS aggregate checks/key contributions, and BN254 pairing-product
+    checks. Transaction limits may not exceed block limits, and the per-proof byte limit may not
+    exceed the transaction byte limit. These fields deliberately have no environment aliases.
   - `halo2.verifier_worker_threads` / `halo2.verifier_queue_cap` (defaults: `0` / `0`): size the ZK lane verifier worker pool and ingress queue. Zero keeps auto-derivation (`available_parallelism`, queue headroom scaled by workers).
   - `halo2.verifier_enqueue_wait_ms` (default: `25`): bounded enqueue wait used before classifying a saturated admission as timeout.
   - `halo2.verifier_retry_ring_cap` / `halo2.verifier_retry_max_attempts` / `halo2.verifier_retry_tick_ms` (defaults: `2048` / `3` / `5`): in-memory replay policy for important ZK lane tasks (`tx_hash` present). Saturated important tasks enter the retry ring and are replayed opportunistically; exhausted entries increment `iroha_zk_lane_retry_exhausted_total`.

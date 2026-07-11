@@ -1,3 +1,5 @@
+//! Optional wrapper-level Kotodama integration tests.
+
 fn should_run_wrappers() -> bool {
     std::env::var("IROHA_RUN_ZK_WRAPPERS").ok().as_deref() == Some("1")
 }

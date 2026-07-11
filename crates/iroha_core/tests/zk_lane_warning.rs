@@ -40,7 +40,7 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
     let job = zk_lane::ZkTask {
         tx_hash: None,
         code_hash: [0xCD; 32],
-        program: Arc::new(vec![0x01, 0x00, 0x00, 0x00]),
+        program: Arc::from(vec![0x01, 0x00, 0x00, 0x00]),
         header: Some(iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(5).unwrap(),
             None,
@@ -108,7 +108,7 @@ fn zk_task_digest_reflects_transport_metadata() {
     let base = zk_lane::ZkTask {
         tx_hash: None,
         code_hash: [0xAB; 32],
-        program: Arc::new(vec![0x01, 0x00, 0x00, 0x00]),
+        program: Arc::from(vec![0x01, 0x00, 0x00, 0x00]),
         header: None,
         trace,
         constraints: Vec::new(),

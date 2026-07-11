@@ -268,7 +268,7 @@ enum Command {
     #[command(subcommand)]
     App(app::Command),
     /// Contract app bundles, deploys, calls, and alias tooling
-    #[command(subcommand, alias = "contracts")]
+    #[command(subcommand)]
     Contract(crate::contracts::Command),
     /// Developer utilities and diagnostics
     #[command(subcommand)]
@@ -567,15 +567,19 @@ impl Command {
             | Self::Ledger(_)
             | Self::Trigger(_)
             | Self::Ops(_)
-            | Self::Contract(_)
             | Self::Taira(_) => false,
+            Self::Contract(command) => command.allows_fallback_config(),
             Self::Offline(command) => command.allows_fallback_config(),
             Self::Soracloud(command) => command.allows_fallback_config(),
         }
     }
 
     fn allows_fallback_config_in_machine_mode(&self) -> bool {
-        matches!(self, Self::Offline(command) if command.allows_fallback_config())
+        match self {
+            Self::Offline(command) => command.allows_fallback_config(),
+            Self::Contract(command) => command.allows_fallback_config(),
+            _ => false,
+        }
     }
 }
 
@@ -699,9 +703,6 @@ mod app {
         /// Governance helpers (app API convenience)
         #[command(subcommand)]
         Gov(crate::gov::Command),
-        /// Contracts helpers (code storage)
-        #[command(subcommand)]
-        Contracts(crate::contracts::Command),
         /// Zero-knowledge helpers (roots, etc.)
         #[command(subcommand)]
         Zk(crate::zk::Command),
@@ -772,7 +773,6 @@ mod app {
             use self::Command::*;
             match self {
                 Gov(variant) => Run::run(variant, context),
-                Contracts(variant) => Run::run(variant, context),
                 Zk(variant) => Run::run(variant, context),
                 Confidential(variant) => Run::run(variant, context),
                 Taikai(variant) => Run::run(variant, context),
@@ -814,7 +814,6 @@ mod app {
                     | crate::space_directory::ManifestCommand::Scaffold(_),
                 )) => true,
                 Self::Gov(_)
-                | Self::Contracts(_)
                 | Self::Confidential(_)
                 | Self::Content(_)
                 | Self::Da(_)
@@ -8381,6 +8380,20 @@ mod tests {
     }
 
     #[test]
+    fn contract_developer_workflow_has_one_canonical_command_path() {
+        Args::try_parse_from(["iroha", "contract", "dev", "doctor"])
+            .expect("parse canonical contract developer command");
+        assert!(
+            Args::try_parse_from(["iroha", "app", "contracts", "dev", "doctor"]).is_err(),
+            "the retired nested contract command must not remain as a compatibility surface"
+        );
+        assert!(
+            Args::try_parse_from(["iroha", "contracts", "dev", "doctor"]).is_err(),
+            "the retired plural alias must not remain as a compatibility surface"
+        );
+    }
+
+    #[test]
     fn fallback_config_derives_checked_signing_key() {
         let config = fallback_config();
         let payload = b"offline fallback config signing smoke";
@@ -8504,6 +8517,92 @@ mod tests {
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         ])
         .expect("parse runtime tx status");
+        assert!(!args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "--machine",
+            "contract",
+            "manifest",
+            "build",
+            "--code-file",
+            "contract.to",
+            "--out",
+            "contract.manifest.json",
+        ])
+        .expect("parse local contract manifest build");
+        assert!(args.command.allows_fallback_config());
+        assert!(args.command.allows_fallback_config_in_machine_mode());
+
+        for command in [
+            vec!["iroha", "--machine", "contract", "app", "build"],
+            vec!["iroha", "--machine", "contract", "dev", "check"],
+            vec!["iroha", "--machine", "contract", "dev", "build"],
+            vec!["iroha", "--machine", "contract", "dev", "test"],
+            vec!["iroha", "--machine", "contract", "dev", "schema"],
+            vec![
+                "iroha",
+                "--machine",
+                "contract",
+                "derive-address",
+                "--authority",
+                "fixture-authority",
+                "--deploy-nonce",
+                "1",
+            ],
+            vec![
+                "iroha",
+                "--machine",
+                "contract",
+                "debug-view",
+                "--code-file",
+                "contract.to",
+                "--entrypoint",
+                "show",
+            ],
+            vec![
+                "iroha",
+                "--machine",
+                "contract",
+                "debug-call",
+                "--code-file",
+                "contract.to",
+                "--entrypoint",
+                "run",
+            ],
+            vec![
+                "iroha",
+                "--machine",
+                "contract",
+                "simulate",
+                "--authority",
+                "fixture-authority",
+                "--private-key",
+                "fixture-private-key",
+                "--code-file",
+                "contract.to",
+                "--gas-limit",
+                "1",
+            ],
+        ] {
+            let args = Args::try_parse_from(command).expect("parse local contract command");
+            assert!(args.command.allows_fallback_config());
+            assert!(args.command.allows_fallback_config_in_machine_mode());
+        }
+
+        let args = Args::try_parse_from(["iroha", "contract", "dev", "doctor"])
+            .expect("parse network-aware contract doctor");
+        assert!(!args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "contract",
+            "manifest",
+            "get",
+            "--code-hash",
+            "hash:0000000000000000000000000000000000000000000000000000000000000000#0000",
+        ])
+        .expect("parse on-chain contract manifest query");
         assert!(!args.command.allows_fallback_config());
     }
 
@@ -9041,7 +9140,7 @@ mod tests {
                     .parse()
                     .expect("contract address"),
                 entrypoint: "call".to_owned(),
-                payload: None,
+                arguments: None,
             },
         );
         let err = validate_executable_metadata(&executable, &Metadata::default())
@@ -9802,9 +9901,7 @@ mod cli_integration_harness_tests {
         {
             // Return an empty Domain batch to satisfy type expectations
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Domain(vec![])],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(vec![])),
                 Some(0),
                 None,
             ))
@@ -9981,9 +10078,7 @@ mod cli_integration_harness_tests {
             }
 
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Domain(v)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(v)),
                 Some(0),
                 None,
             ))
@@ -10096,9 +10191,7 @@ mod cli_integration_harness_tests {
             }
 
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Account(v)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(v)),
                 Some(0),
                 None,
             ))
@@ -10264,9 +10357,7 @@ mod cli_integration_harness_tests {
             }
 
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::AssetDefinition(v)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(v)),
                 Some(0),
                 None,
             ))
@@ -10399,9 +10490,7 @@ mod cli_integration_harness_tests {
                 None
             };
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Domain(first)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(first)),
                 Some(remaining),
                 next,
             ))
@@ -10433,9 +10522,7 @@ mod cli_integration_harness_tests {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::Domain(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(batch)),
                         Some(remaining),
                         next,
                     ))
@@ -10557,9 +10644,7 @@ mod cli_integration_harness_tests {
                 None
             };
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Domain(first)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(first)),
                 Some(remaining),
                 next,
             ))
@@ -10591,9 +10676,7 @@ mod cli_integration_harness_tests {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::Domain(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(batch)),
                         Some(remaining),
                         next,
                     ))
@@ -10685,9 +10768,7 @@ mod cli_integration_harness_tests {
                 None
             };
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Domain(first)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(first)),
                 Some(remaining),
                 next,
             ))
@@ -10719,9 +10800,7 @@ mod cli_integration_harness_tests {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::Domain(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(batch)),
                         Some(remaining),
                         next,
                     ))
@@ -10885,9 +10964,7 @@ mod cli_integration_harness_tests {
                 None
             };
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Account(first)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(first)),
                 Some(remaining),
                 next,
             ))
@@ -10919,9 +10996,7 @@ mod cli_integration_harness_tests {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::Account(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(batch)),
                         Some(remaining),
                         next,
                     ))
@@ -11018,9 +11093,7 @@ mod cli_integration_harness_tests {
                 None
             };
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Account(first)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(first)),
                 Some(remaining),
                 next,
             ))
@@ -11052,9 +11125,7 @@ mod cli_integration_harness_tests {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::Account(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(batch)),
                         Some(remaining),
                         next,
                     ))
@@ -11238,9 +11309,7 @@ mod cli_integration_harness_tests {
                 None
             };
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::AssetDefinition(first)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(first)),
                 Some(remaining),
                 next,
             ))
@@ -11272,9 +11341,9 @@ mod cli_integration_harness_tests {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::AssetDefinition(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(
+                            batch,
+                        )),
                         Some(remaining),
                         next,
                     ))
@@ -11425,9 +11494,9 @@ mod cli_integration_harness_tests {
                     None
                 };
                 Ok((
-                    QueryOutputBatchBoxTuple {
-                        tuple: vec![QueryOutputBatchBox::AssetDefinition(first)],
-                    },
+                    QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(
+                        first,
+                    )),
                     Some(remaining),
                     next,
                 ))
@@ -11459,9 +11528,9 @@ mod cli_integration_harness_tests {
                             None
                         };
                         Ok((
-                            QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::AssetDefinition(batch)],
-                            },
+                            QueryOutputBatchBoxTuple::from_batch(
+                                QueryOutputBatchBox::AssetDefinition(batch),
+                            ),
                             Some(remaining),
                             next,
                         ))
@@ -11563,9 +11632,7 @@ mod cli_integration_harness_tests {
             }
 
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Nft(v)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Nft(v)),
                 Some(0),
                 None,
             ))
@@ -11729,9 +11796,7 @@ mod cli_integration_harness_tests {
                 None
             };
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Nft(first)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Nft(first)),
                 Some(remaining),
                 next,
             ))
@@ -11763,9 +11828,7 @@ mod cli_integration_harness_tests {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::Nft(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Nft(batch)),
                         Some(remaining),
                         next,
                     ))
@@ -11898,9 +11961,7 @@ mod cli_integration_harness_tests {
                     None
                 };
                 Ok((
-                    QueryOutputBatchBoxTuple {
-                        tuple: vec![QueryOutputBatchBox::Nft(first)],
-                    },
+                    QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Nft(first)),
                     Some(remaining),
                     next,
                 ))
@@ -11932,9 +11993,7 @@ mod cli_integration_harness_tests {
                             None
                         };
                         Ok((
-                            QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::Nft(batch)],
-                            },
+                            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Nft(batch)),
                             Some(remaining),
                             next,
                         ))
@@ -12043,9 +12102,7 @@ mod cli_integration_harness_tests {
                 None
             };
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Account(first)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(first)),
                 Some(remaining),
                 next,
             ))
@@ -12076,9 +12133,7 @@ mod cli_integration_harness_tests {
                 None
             };
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::Account(batch)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(batch)),
                 Some(remaining),
                 next,
             ))
@@ -12200,9 +12255,7 @@ mod cli_integration_harness_tests {
                 None
             };
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::AssetDefinition(first)],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(first)),
                 Some(remaining),
                 next,
             ))
@@ -12234,9 +12287,9 @@ mod cli_integration_harness_tests {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::AssetDefinition(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(
+                            batch,
+                        )),
                         Some(remaining),
                         next,
                     ))
@@ -12627,9 +12680,9 @@ mod cli_integration_harness {
                         None
                     };
                     return Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::DomainId(first_ids)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::DomainId(
+                            first_ids,
+                        )),
                         Some(remaining),
                         next,
                     ));
@@ -12644,9 +12697,7 @@ mod cli_integration_harness {
                     None
                 };
                 return Ok((
-                    QueryOutputBatchBoxTuple {
-                        tuple: vec![QueryOutputBatchBox::Domain(first)],
-                    },
+                    QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(first)),
                     Some(remaining),
                     next,
                 ));
@@ -12688,9 +12739,9 @@ mod cli_integration_harness {
                         None
                     };
                     return Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::AccountId(first_ids)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AccountId(
+                            first_ids,
+                        )),
                         Some(remaining),
                         next,
                     ));
@@ -12705,9 +12756,7 @@ mod cli_integration_harness {
                     None
                 };
                 return Ok((
-                    QueryOutputBatchBoxTuple {
-                        tuple: vec![QueryOutputBatchBox::Account(first)],
-                    },
+                    QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(first)),
                     Some(remaining),
                     next,
                 ));
@@ -12749,9 +12798,9 @@ mod cli_integration_harness {
                         None
                     };
                     return Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::AssetDefinitionId(first_ids)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(
+                            QueryOutputBatchBox::AssetDefinitionId(first_ids),
+                        ),
                         Some(remaining),
                         next,
                     ));
@@ -12766,17 +12815,15 @@ mod cli_integration_harness {
                     None
                 };
                 return Ok((
-                    QueryOutputBatchBoxTuple {
-                        tuple: vec![QueryOutputBatchBox::AssetDefinition(first)],
-                    },
+                    QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(
+                        first,
+                    )),
                     Some(remaining),
                     next,
                 ));
             }
             Ok((
-                QueryOutputBatchBoxTuple {
-                    tuple: vec![QueryOutputBatchBox::String(vec![])],
-                },
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(vec![])),
                 Some(0),
                 None,
             ))
@@ -12801,9 +12848,7 @@ mod cli_integration_harness {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::Domain(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(batch)),
                         Some(remaining),
                         next,
                     ))
@@ -12822,9 +12867,7 @@ mod cli_integration_harness {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::Account(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(batch)),
                         Some(remaining),
                         next,
                     ))
@@ -12843,9 +12886,9 @@ mod cli_integration_harness {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::AssetDefinition(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(
+                            batch,
+                        )),
                         Some(remaining),
                         next,
                     ))
@@ -12865,9 +12908,7 @@ mod cli_integration_harness {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::DomainId(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::DomainId(batch)),
                         Some(remaining),
                         next,
                     ))
@@ -12887,9 +12928,7 @@ mod cli_integration_harness {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::AccountId(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AccountId(batch)),
                         Some(remaining),
                         next,
                     ))
@@ -12909,9 +12948,9 @@ mod cli_integration_harness {
                         None
                     };
                     Ok((
-                        QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::AssetDefinitionId(batch)],
-                        },
+                        QueryOutputBatchBoxTuple::from_batch(
+                            QueryOutputBatchBox::AssetDefinitionId(batch),
+                        ),
                         Some(remaining),
                         next,
                     ))
@@ -13430,6 +13469,7 @@ mod cli_integration_harness {
         let mut server = MockQueryServer::default();
         let code_hash = Hash::new(b"manifest-demo");
         let manifest = ContractManifest {
+            seiyaku_name: None,
             code_hash: Some(code_hash.clone()),
             abi_hash: None,
             compiler_fingerprint: Some("kotodama-compiler".into()),
@@ -13438,6 +13478,7 @@ mod cli_integration_harness {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         };
         server.manifests.insert(code_hash.clone(), manifest.clone());

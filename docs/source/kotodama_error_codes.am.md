@@ -10,17 +10,10 @@ translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
 ---
 
-# Kotodama የማጠናከሪያ ስህተት ኮዶች
+# Kotodama Compiler Error Codes
 
-የ Kotodama ማጠናከሪያ መሳሪያ እና የ CLI ተጠቃሚዎች የተረጋጋ የስህተት ኮዶችን ያወጣል
-የውድቀት መንስኤን በፍጥነት ይረዱ። `koto_compile --explain <code>` ይጠቀሙ
-ተጓዳኝ ፍንጭ ለማተም.
+The canonical V1 diagnostic registry and reference are maintained in
+[`kotodama_error_codes.md`](./kotodama_error_codes.md).
 
-| ኮድ | መግለጫ | የተለመደ ማስተካከያ |
-|-------|-------------|------------|
-| `E0001` | የቅርንጫፍ ኢላማ ለIVM ዝላይ ኢንኮዲንግ ከክልል ውጭ ነው። | በጣም ትልቅ ተግባራትን ይከፋፍሉ ወይም ውስጠ-ግንቡ ይቀንሱ ስለዚህ መሰረታዊ የማገጃ ርቀቶች በ± 1ሚቢ ውስጥ ይቆያሉ። |
-| `E0002` | የጥሪ ጣቢያዎች ፈጽሞ ያልተገለጸ ተግባርን ይጠቅሳሉ። | ጠሪውን ያስወገዱ የትየባ፣ የታይነት ማስተካከያዎች ወይም የባህሪ ባንዲራዎች ካሉ ያረጋግጡ። |
-| `E0003` | ABI v1 ሳይነቃ የሚበረክት የስቴት ሲካሎች ተለቀቁ። | `CompilerOptions::abi_version = 1` ያቀናብሩ ወይም `meta { abi_version: 1 }` በ `seiyaku` ውል ውስጥ ይጨምሩ። |
-| `E0004` | ከንብረት ጋር የተገናኙ ሲሳይሎች ቀጥተኛ ያልሆኑ ጠቋሚዎችን ተቀብለዋል። | `account_id(...)`፣ `asset_definition(...)` ወዘተ ይጠቀሙ ወይም 0 sentinels ለአስተናጋጅ ነባሪዎች ይለፉ። |
-| `E0005` | `for`-loop ማስጀመሪያ ዛሬ ከሚደገፈው የበለጠ ውስብስብ ነው። | ከሉፕ በፊት ውስብስብ ማዋቀርን ያንቀሳቅሱ; ቀላል `let`/መግለጫ ማስጀመሪያዎች ብቻ በአሁኑ ጊዜ ተቀባይነት አላቸው። |
-| `E0006` | `for`-loop የእርምጃ አንቀጽ ዛሬ ከሚደገፈው የበለጠ ውስብስብ ነው። | የሉፕ ቆጣሪውን በቀላል አገላለጽ ያዘምኑ (ለምሳሌ `i = i + 1`)። |
+This former translation is retained as a stable link only. `koto explain
+<code>` reads the same registry used by the compiler.

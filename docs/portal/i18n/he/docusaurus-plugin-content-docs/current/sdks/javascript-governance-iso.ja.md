@@ -106,32 +106,27 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 שני הסקריפטים יוצאים עם קוד סטטוס `1` אם Torii אף פעם לא מדווח על מסוף
 מעבר, מה שהופך אותם מתאימים לעבודות שער CI.
 
-### עוזר כינוי ISO`recipes/iso_alias.mjs` מכוון לנקודות הקצה הכינוי של ISO כך שהחזרות יכולות לכסות
-חיפושי גיבוב של אלמנטים מעוורים וחיפושי כינוי מבלי לכתוב כלי עבודה מותאמים אישית. זה
-שיחות `ToriiClient.evaluateAliasVoprf` בתוספת `resolveAlias` / `resolveAliasByIndex`
-ומדפיס את הקצה האחורי, התקציר, כריכת החשבון, המקור והאינדקס הדטרמיניסטי
-הוחזר על ידי Torii.
+### עוזר כינוי ISO
+
+`recipes/iso_alias.mjs` בודק חיפושי כינויים של ISO בלי לדרוש כלים ייעודיים.
+הוא קורא ל־`resolveAlias` ול־`resolveAliasByIndex`, ולאחר מכן מדפיס את קישור החשבון, המקור והאינדקס הדטרמיניסטי שמחזיר Torii.
 
 משתני סביבה:
 
 - `TORII_URL` — נקודת קצה Torii חושפת את עוזרי הכינוי.
-- `ISO_VOPRF_INPUT` - אלמנט מעוור מקודד משושה (ברירת המחדל היא `deadbeef`).
-- `ISO_SKIP_VOPRF=1` - דלג על שיחת VOPRF כאשר רק בודקים חיפושים.
 - `ISO_ALIAS_LABEL` - כינוי מילולי לפתרון (לדוגמה, מחרוזות בסגנון IBAN).
 - `ISO_ALIAS_INDEX` - אינדקס עשרוני או `0x` עם קידומת מועבר ל-`resolveAliasByIndex`.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` - כותרות אופציונליות לפריסות Torii מאובטחות.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

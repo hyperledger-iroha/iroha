@@ -2937,9 +2937,11 @@ mod tests {
         };
         let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
             name: "payout".to_owned(),
-            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -2948,6 +2950,7 @@ mod tests {
             triggers: Vec::new(),
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            seiyaku_name: "ValidationFeeBoundContract".to_owned(),
             compiler_fingerprint: "validation-fee-bound-contract-test".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
@@ -2956,7 +2959,9 @@ mod tests {
                 name: entrypoint.name.clone(),
                 kind: entrypoint.kind,
                 params: entrypoint.params.clone(),
+                argument_schema: entrypoint.argument_schema.clone(),
                 return_type: entrypoint.return_type.clone(),
+                return_schema: entrypoint.return_schema.clone(),
                 permission: entrypoint.permission.clone(),
                 read_keys: entrypoint.read_keys.clone(),
                 write_keys: entrypoint.write_keys.clone(),
@@ -2966,6 +2971,7 @@ mod tests {
                 entry_pc: 0,
             }],
             states: Vec::new(),
+            error_codes: Vec::new(),
         };
         let mut instructions = Vec::new();
         instructions.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
@@ -3073,7 +3079,7 @@ mod tests {
                     .parse()
                     .expect("contract address"),
                 entrypoint: "send_transfer".to_owned(),
-                payload: None,
+                arguments: None,
             }))
             .with_metadata(metadata)
             .sign(key_pair.private_key())
@@ -3246,6 +3252,7 @@ mod tests {
             .into(),
             RegisterSmartContractCode {
                 manifest: ContractManifest {
+                    seiyaku_name: None,
                     code_hash: Some(code_hash),
                     abi_hash: None,
                     compiler_fingerprint: None,
@@ -3254,6 +3261,7 @@ mod tests {
                     entrypoints: None,
                     states: None,
                     kotoba: None,
+                    error_codes: None,
                     provenance: None,
                 },
             }

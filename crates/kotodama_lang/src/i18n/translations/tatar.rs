@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "`{func}` функциясендәге `{name}` параметры бөтенләй кулланылмый",
     lint_unreachable_after_return: "{context} эчендә үтәлми торган оператор табылды: return-нан соң код эшләми",
     lint_ok: "яхшы",
-    lint_usage: "Куллану: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Куллану: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Бирелгән чыганаклар өчен Kotodama lint-ларын эшләтегез.",
     ..english::MESSAGES
 };

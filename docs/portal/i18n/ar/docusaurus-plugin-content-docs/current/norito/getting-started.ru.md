@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 
 1. قم بتثبيت سلسلة أدوات Rust (1.76 أو جديدة) وقم باستنساخ هذا المستودع.
 2. تعلم أو قم بتنزيل الدروس التعليمية الرائعة:
-   - `koto_compile` - المترجم Kotodama، الذي أنشأ كود البيتكود IVM/Norito
+   - `koto build` - المترجم Kotodama، الذي أنشأ كود البيتكود IVM/Norito
    - `ivm_run` و `ivm_tool` - أدوات الفحص والفحص المحلية
    - `iroha_cli` - يستخدم لعقد النشر من خلال Torii
 
    يُضيف مستودع Makefile هذه الثنائيات إلى `PATH`. يمكنك تنزيل هذه القطع الأثرية أو اكتشافها من المصادر. إذا قمت بتجميع سلسلة الأدوات محليًا، فاطلب من Makefile المساعدة في الدخول إلى البرنامج التعليمي:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. تأكد من أن Iroha قد تم إيقافه بعد لحظة النشر. تقترح الأمثلة أنه يمكن الوصول إلى Torii عبر عنوان URL من ملف التعريف `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -34,14 +34,13 @@ translation_last_reviewed: 2026-02-07
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
-أعلام رئيسية:- `--abi 1` عقد التصديق على نسخة ABI 1 (نسخة ملحقة واحدة في لحظة كتابة النص).
-- `--max-cycles 0` يتم إغلاقه بالتشغيل غير المضمون؛ قم بتثبيت أداة مفيدة لتتمكن من تقليل حشوة الحشو لتوزيع المعرفة الصفرية.
+أعلام رئيسية:- `ABI V1` عقد التصديق على نسخة ABI 1 (نسخة ملحقة واحدة في لحظة كتابة النص).
+- `--max-cycles 1000000` يتم إغلاقه بالتشغيل غير المضمون؛ قم بتثبيت أداة مفيدة لتتمكن من تقليل حشوة الحشو لتوزيع المعرفة الصفرية.
 
 ## 2. التحقق من القطعة الأثرية Norito (اختياري)
 
@@ -68,7 +67,7 @@ ivm_run target/examples/hello.to --args '{}'
 عندما تنتهي من العقد، قم باستغلاله من خلال CLI. قم بتمكين مفوض الحساب، ورسالته الرئيسية، وملفه `.to`، وحمولة Base64:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -77,8 +76,8 @@ iroha_cli app contracts deploy \
 قم بإدارة بيان الحزمة Norito + بايتكود من خلال Torii وتتبع حالة المعاملات. بعد إرسال اللجنة للإجابة على هذا الرمز، يمكن استخدامها للحصول على البيان أو حالة السجل:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. اتصل عبر Toriiبعد تسجيل رمز البيتكودا، يمكنك اكتشاف نفسك، وتنفيذ التعليمات التي تستخدم الكود المحلي (على سبيل المثال، من خلال `iroha_cli ledger transaction submit` أو تطبيقات العميل الخاص بك). تأكد من أن الحساب الصحيح يقوم بإعادة مكالمات النظام الجديدة (`set_account_detail`، `transfer_asset` وما إلى ذلك).
@@ -86,7 +85,7 @@ iroha_cli app contracts instances --namespace apps --table
 ## مشكلة النصائح والتجديد
 
 - استخدم `make examples-run` للتعرف على التمهيدي الأول واستخدامه. قم بإعادة اقتراح الدعم المؤقت `KOTO`/`IVM`، إذا لم يتم إدخال البرامج التعليمية في `PATH`.
-- إذا قمت بإلغاء استنساخ إصدار ABI `koto_compile`، فتأكد من المترجم واستخدام ABI v1 (أغلق `koto_compile --abi` بدون الحجج لمشاهدة العرض).
+- إذا قمت بإلغاء استنساخ إصدار ABI `koto build`، فتأكد من المترجم واستخدام ABI v1 (أغلق `koto build --help` بدون الحجج لمشاهدة العرض).
 - CLI يبدأ المفاتيح في السداسي أو Base64. يمكن استخدام المفاتيح المميزة `iroha_cli tools crypto keypair` للاختبار.
 - عند نقل الحمولات النافعة Norito، يتم استخدام الأمر الزائد `ivm_tool disassemble`، والتي يمكن أن توفر لك التعليمات اللازمة Kotodama.
 

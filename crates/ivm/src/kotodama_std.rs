@@ -64,7 +64,8 @@ pub fn zk_verify_with_env(
 ) -> u64 {
     let ptr = input_tlv_norito_bytes(vm, env_bytes);
     vm.set_register(10, ptr);
-    let _ = host.syscall(number, vm).expect("syscall ok");
+    vm.execute_metered_syscall_with_host(host, number)
+        .expect("syscall ok");
     vm.register(10)
 }
 
@@ -89,8 +90,10 @@ pub fn vendor_execute_instruction_bytes(
 ) -> u64 {
     let ptr = input_tlv_norito_bytes(vm, instr_bytes);
     vm.set_register(10, ptr);
-    host.syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, vm)
-        .expect("syscall ok")
+    let gas_before = vm.remaining_gas();
+    vm.execute_metered_syscall_with_host(host, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
+        .expect("syscall ok");
+    gas_before.saturating_sub(vm.remaining_gas())
 }
 
 /// Vendor bridge helper for queries. Accepts Norito-encoded `QueryRequest`
@@ -98,8 +101,10 @@ pub fn vendor_execute_instruction_bytes(
 pub fn vendor_execute_query_bytes(host: &mut dyn IVMHost, vm: &mut IVM, query_bytes: &[u8]) -> u64 {
     let ptr = input_tlv_norito_bytes(vm, query_bytes);
     vm.set_register(10, ptr);
-    host.syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, vm)
-        .expect("syscall ok")
+    let gas_before = vm.remaining_gas();
+    vm.execute_metered_syscall_with_host(host, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY)
+        .expect("syscall ok");
+    gas_before.saturating_sub(vm.remaining_gas())
 }
 
 /// ZK batch verify helper: serialize a slice of `OpenVerifyEnvelope` and invoke
@@ -120,8 +125,7 @@ pub fn zk_verify_batch_envs(
     let payload = norito::to_bytes(&envs.to_vec()).expect("encode envelopes");
     let ptr = input_tlv_norito_bytes(vm, &payload);
     vm.set_register(10, ptr);
-    let _ = host
-        .syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, vm)
+    vm.execute_metered_syscall_with_host(host, syscalls::SYSCALL_ZK_VERIFY_BATCH)
         .expect("syscall ok");
     (vm.register(11), vm.register(10))
 }

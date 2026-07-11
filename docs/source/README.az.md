@@ -44,7 +44,7 @@ Bu indeks IVM, Kotodama və IVM-birinci boru kəməri üçün əsas dizayn və i
 - Docker qurucu təsvirindən istifadə: `docker_build.md`
 
 İstifadə məsləhətləri
-- Xarici alətlərdən (`koto_compile`, `ivm_run`) istifadə edərək `examples/`-də nümunələr yaradın və işlədin:
+- Xarici alətlərdən (`koto build`, `ivm_run`) istifadə edərək `examples/`-də nümunələr yaradın və işlədin:
   - `make examples-run` (və `ivm_tool` varsa, `make examples-inspect`)
 - Nümunələr və başlıq yoxlamaları üçün əlavə inteqrasiya testləri (standart olaraq nəzərə alınmır) `integration_tests/tests/`-də işləyir.Boru kəmərinin konfiqurasiyası
 - Bütün iş zamanı davranışı `iroha_config` faylları vasitəsilə konfiqurasiya edilir. Ətraf mühit dəyişənləri operatorlar üçün istifadə edilmir.

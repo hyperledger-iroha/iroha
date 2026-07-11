@@ -49,8 +49,8 @@ Terminologie
 ### Kotodama → IVM
 - Des éléments frontend existent (lexer/analyseur/sémantique minimale/IR/regalloc).
 - Codegen (`kotodama::compiler`) émet un sous-ensemble d'opérations IVM et utilise `SCALL` pour les opérations sur les actifs :
-  - `MintAsset` → définir x10=compte, x11=actif, x12=&NoritoBytes (Numérique) ; `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` similaire (montant transmis comme pointeur NoritoBytes (numérique)).
+  - `MintAsset` → définir x10=compte, x11=actif, x12=&Amount ; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` similaire (montant transmis comme pointeur Amount).
 - Les démos `koto_*_demo.rs` montrent l'utilisation de `WsvHost` avec des indices entiers mappés sur des identifiants pour des tests rapides.
 
 ---
@@ -130,9 +130,9 @@ Terminologie
 Sous-ensemble représentatif : finaliser et développer pendant la mise en œuvre de l'hôte.- SYSCALL_REGISTER_DOMAIN (id : ptr DomainId) → Registre ISI
 - SYSCALL_REGISTER_ACCOUNT (id : ptr AccountId) → Registre ISI
 - SYSCALL_REGISTER_ASSET(id : ptr AssetDefinitionId, mintable : u8) → Registre ISI
-- SYSCALL_MINT_ASSET (compte : ptr AccountId, actif : ptr AssetDefinitionId, montant : ptr NoritoBytes (Numeric)) → ISI Mint
-- SYSCALL_BURN_ASSET (compte : ptr AccountId, actif : ptr AssetDefinitionId, montant : ptr NoritoBytes (Numeric)) → ISI Burn
-- SYSCALL_TRANSFER_ASSET (de : ptr AccountId, à : ptr AccountId, actif : ptr AssetDefinitionId, montant : ptr NoritoBytes(Numeric)) → ISI Transfer
+- SYSCALL_MINT_ASSET (compte : ptr AccountId, actif : ptr AssetDefinitionId, montant : ptr Amount) → ISI Mint
+- SYSCALL_BURN_ASSET (compte : ptr AccountId, actif : ptr AssetDefinitionId, montant : ptr Amount) → ISI Burn
+- SYSCALL_TRANSFER_ASSET (de : ptr AccountId, à : ptr AccountId, actif : ptr AssetDefinitionId, montant : ptr Amount) → ISI Transfer
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (ouvrir/fermer la portée ; les entrées individuelles sont réduites via `transfer_asset`)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → Soumettre un lot pré-codé lorsque les contrats ont déjà sérialisé les entrées hors chaîne
 - SYSCALL_NFT_MINT_ASSET (id : ptr NftId, propriétaire : ptr AccountId) → Registre ISI

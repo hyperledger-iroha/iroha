@@ -3434,6 +3434,7 @@ mod tests {
             height,
             epoch: 4,
             epoch_end_height: height.saturating_add(11),
+            next_epoch_snapshot: None,
             mode,
             parent_commit_qc: (height > 1).then(|| wire::QuorumCertificate {
                 round: wire::ConsensusRound {

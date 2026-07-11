@@ -19,6 +19,49 @@ const REQUIRED_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_redeem",
   "connect_norito_kagemusha_recursive_spend_topup",
   "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
+  "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
+  "connect_norito_kagemusha_recursive_spend_init_v2",
+  "connect_norito_kagemusha_recursive_spend_topup_v2",
+  "connect_norito_kagemusha_recursive_spend_append_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
+  "connect_norito_kagemusha_recursive_spend_verify_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_v2",
+]);
+
+const REQUIRED_KAGEMUSHA_V2_PROOF_SYMBOLS = Object.freeze([
+  "connect_norito_kagemusha_recursive_spend_init_v2",
+  "connect_norito_kagemusha_recursive_spend_topup_v2",
+  "connect_norito_kagemusha_recursive_spend_append_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
+  "connect_norito_kagemusha_recursive_spend_verify_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_v2",
+]);
+
+const REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS = Object.freeze([
+  "connect_norito_kagemusha_receiver_key_reference_v2",
+  "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
+  "connect_norito_kagemusha_recipient_payment_request_create_v2",
+  "connect_norito_kagemusha_recipient_payment_request_verify_v2",
+  "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
+  "connect_norito_kagemusha_request_authorization_create_v2",
+  "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
+  "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
+  "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
+  "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
+  "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
+]);
+
+const REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS = Object.freeze([
+  ...REQUIRED_KAGEMUSHA_V2_PROOF_SYMBOLS,
+  ...REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS,
 ]);
 
 const REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS = Object.freeze([
@@ -81,6 +124,14 @@ const REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS = Object.freeze([
 const REQUIRED_HEADER_NEGATIVE_CONTROL_MODES = Object.freeze([
   "--negative-control-missing-recursive-header",
   "--negative-control-bad-recursive-signature",
+  "--negative-control-bad-recursive-v2-signature",
+  "--negative-control-bad-recursive-v2-artifact-signature",
+  "--negative-control-missing-recursive-v2-export-pair",
+  "--negative-control-missing-kagemusha-v2-protocol-export-pair",
+  "--negative-control-bad-kagemusha-v2-receiver-key-signature",
+  "--negative-control-bad-kagemusha-v2-verify-at-time-signature",
+  "--negative-control-bad-kagemusha-v2-ack-create-signature",
+  "--negative-control-bad-connect-norito-free-signature",
   "--negative-control-missing-rust-export",
   "--negative-control-umbrella-drift",
 ]);
@@ -504,7 +555,7 @@ function assertSameSet(actual, expected, label) {
   );
 }
 
-test("recursive Kagemusha ABI-6 C exports and shipped headers stay in parity", () => {
+test("recursive Kagemusha ABI-17 C exports and shipped headers stay in parity", () => {
   const rustBridge = source("crates/connect_norito_bridge/src/lib.rs");
   const header = source("crates/connect_norito_bridge/include/connect_norito_bridge.h");
   const headerGuard = source("ci/check_connect_norito_bridge_header.sh");
@@ -542,9 +593,169 @@ test("recursive Kagemusha ABI-6 C exports and shipped headers stay in parity", (
   );
 });
 
-test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity", () => {
+test("recursive Kagemusha ABI-17 native host and SDK method names stay in parity", () => {
+  const rustBridge = source("crates/connect_norito_bridge/src/lib.rs");
+  const header = source("crates/connect_norito_bridge/include/connect_norito_bridge.h");
+  const headerGuard = source("ci/check_connect_norito_bridge_header.sh");
   const androidJavaProver = source("java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java");
   const kotlinProver = source("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt");
+  const swiftNativeBridgeCore = source("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift");
+  const swiftRecursiveSpendV2 = source("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift");
+  const swiftRecursiveSpendV2Native = source("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift");
+  const swiftNativeBridge = [
+    swiftNativeBridgeCore,
+    swiftRecursiveSpendV2,
+    swiftRecursiveSpendV2Native,
+  ].join("\n");
+  const swiftV2Inventory = (name) => {
+    const match = swiftRecursiveSpendV2.match(
+      new RegExp(`public static let ${name} = \\[([\\s\\S]*?)\\n    \\]`, "u"),
+    );
+    assert.ok(match, `Swift V2 inventory missing ${name}`);
+    return namesFromMatches(match[1], /"([^"]+)"/gu);
+  };
+  const swiftV2ProofInventory = swiftV2Inventory("requiredProofSymbols");
+  const swiftV2ProtocolInventory = swiftV2Inventory("requiredProtocolSymbols");
+  const swiftV2NativeInventory = [
+    ...swiftV2ProofInventory,
+    ...swiftV2ProtocolInventory,
+  ];
+  const kagemushaV2InventoryFamily = String.raw`connect_norito_kagemusha_(?:receiver_key_reference_v2|recipient_payment_request_(?:signing_bytes|create|verify)_v2|request_authorization_(?:signing_bytes|create)_v2|receiver_acknowledgement_(?:payload|signing_bytes|create|verify)_v2|recursive_spend_(?:bundle_summary|artifact_(?:begin|write|finalize|cancel)|init|topup|append|redeem_change|verify|redeem)_v2)`;
+  const rustV2Inventory = new Set(
+    namesFromMatches(
+      rustBridge,
+      new RegExp(
+        `#\\[unsafe\\(no_mangle\\)\\]\\s*pub\\s+unsafe\\s+extern\\s+"C"\\s+fn\\s+(${kagemushaV2InventoryFamily})\\s*\\(`,
+        "gu",
+      ),
+    ),
+  );
+  const headerV2Inventory = new Set(
+    namesFromMatches(
+      header,
+      new RegExp(`int32_t\\s+(${kagemushaV2InventoryFamily})\\s*\\(`, "gu"),
+    ),
+  );
+
+  assert.equal(
+    REQUIRED_KAGEMUSHA_V2_PROOF_SYMBOLS.length,
+    6,
+    "ABI-17 must pin exactly six Kagemusha V2 proof symbols",
+  );
+  assert.equal(
+    REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS.length,
+    15,
+    "ABI-17 must pin exactly fifteen Kagemusha V2 protocol symbols",
+  );
+  assert.equal(
+    new Set(swiftV2NativeInventory).size,
+    swiftV2NativeInventory.length,
+    "Swift V2 required native symbol inventory must not contain duplicates",
+  );
+  assertSameSet(
+    new Set(swiftV2ProofInventory),
+    REQUIRED_KAGEMUSHA_V2_PROOF_SYMBOLS,
+    "Swift V2 required proof symbol inventory",
+  );
+  assertSameSet(
+    new Set(swiftV2ProtocolInventory),
+    REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS,
+    "Swift V2 required protocol symbol inventory",
+  );
+  assertSameSet(
+    rustV2Inventory,
+    REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS,
+    "Rust ABI-17 Kagemusha V2 export inventory",
+  );
+  assertSameSet(
+    headerV2Inventory,
+    REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS,
+    "C header ABI-17 Kagemusha V2 declaration inventory",
+  );
+  assert.match(
+    swiftRecursiveSpendV2,
+    /requiredNativeSymbols = requiredProofSymbols \+ requiredProtocolSymbols/u,
+    "Swift V2 availability inventory must combine proof and protocol symbols",
+  );
+  const swiftV2Availability = swiftNativeBridgeCore.slice(
+    swiftNativeBridgeCore.indexOf("public var isKagemushaRecursiveSpendV2StubAvailable"),
+    swiftNativeBridgeCore.indexOf("public var isPrivacyNativeAvailable"),
+  );
+  assert.match(
+    swiftV2Availability,
+    /KagemushaRecursiveSpendV2\.requiredNativeSymbols \+ \["connect_norito_free"\][\s\S]*?\.allSatisfy \{ hasKagemushaV2Symbol\(\$0\) \}/u,
+    "Swift V2 availability must require every declared native symbol and the free function",
+  );
+  assert.doesNotMatch(
+    swiftV2Availability,
+    /unsafeBitCast/u,
+    "Swift V2 availability must probe symbol presence without casting function pointers",
+  );
+  assert.match(
+    rustBridge,
+    /#\[unsafe\(no_mangle\)\]\s*pub\s+extern\s+"C"\s+fn\s+connect_norito_free\s*\(\s*ptr_\s*:\s*\*mut\s+c_uchar\s*,?\s*\)\s*\{/u,
+    "Rust bridge must expose the exact mutable-byte connect_norito_free deallocator",
+  );
+  assert.match(
+    header,
+    /void\s+connect_norito_free\s*\(\s*uint8_t\s*\*\s*ptr\s*\)\s*;/u,
+    "C header must declare the exact mutable-byte connect_norito_free deallocator",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /typealias KagemushaV2FreeFn = @convention\(c\) \(UnsafeMutablePointer<UInt8>\?\) -> Void/u,
+    "Swift V2 bridge must resolve connect_norito_free with the exact mutable-byte signature",
+  );
+  assertContainsAll(
+    headerGuard,
+    REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS,
+    "NoritoBridge header guard ABI-17 Kagemusha V2 inventories",
+  );
+  assert.match(
+    headerGuard,
+    /len\(required_kagemusha_v2_proof_exports\) != 6[\s\S]*len\(required_kagemusha_v2_protocol_exports\) != 15[\s\S]*len\(expected_kagemusha_v2_signatures\) != 21[\s\S]*len\(expected_kagemusha_v2_rust_signatures\) != 21/u,
+    "NoritoBridge header guard must pin exact six-proof and fifteen-protocol signature inventories",
+  );
+  assert.match(
+    headerGuard,
+    /expected_connect_norito_free_header_signature[\s\S]*expected_connect_norito_free_rust_signature[\s\S]*Rust connect_norito_free export has wrong signature[\s\S]*C header connect_norito_free declaration has wrong signature/u,
+    "NoritoBridge header guard must reject Rust and C connect_norito_free signature drift",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /typealias KagemushaV2KeyReferenceFn = @convention\(c\) \(\s*UInt8, UnsafePointer<UInt8>\?, CUnsignedLong,\s*UnsafeMutablePointer<UnsafeMutablePointer<UInt8>\?>\?, UnsafeMutablePointer<CUnsignedLong>\?\s*\) -> Int32/u,
+    "Swift V2 receiver-key resolver must preserve the UInt8 algorithm ABI shape",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /func kagemushaRecipientPaymentRequestVerifyV2\(\s*requestArchive: Data,\s*verifiedAtMilliseconds: UInt64\s*\) throws -> Data\?[\s\S]*?callKagemushaV2ArchiveAtTime\(\s*symbol: "connect_norito_kagemusha_recipient_payment_request_verify_v2",\s*archive: requestArchive,\s*milliseconds: verifiedAtMilliseconds\s*\)/u,
+    "Swift V2 request verification must preserve the authoritative UInt64 time ABI shape",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /func kagemushaReceiverAcknowledgementCreateV2\(\s*payloadArchive: Data,\s*signature: Data,\s*requestArchive: Data,\s*recipientBundleArchive: Data\s*\) throws -> Data\?[\s\S]*?callKagemushaV2FourArchives\(\s*symbol: "connect_norito_kagemusha_receiver_acknowledgement_create_v2",\s*first: payloadArchive,\s*second: signature,\s*third: requestArchive,\s*fourth: recipientBundleArchive\s*\)/u,
+    "Swift V2 ACK creation must preserve all four archive arguments",
+  );
+  assert.doesNotMatch(
+    swiftNativeBridgeCore,
+    /kagemushaRecursiveSpend(?:Init|Append)V2Fn/u,
+    "Swift bridge must not cache init_v2 or append_v2 under the one-archive C function type",
+  );
+  assert.doesNotMatch(
+    swiftNativeBridgeCore,
+    /func kagemushaRecursiveSpend(?:Init|Append)V2\(requestArchive: Data\)/u,
+    "Swift bridge must not expose one-archive init_v2 or append_v2 overloads",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /func kagemushaRecursiveSpendInitV2\(\s*requestArchive: Data,\s*topUpAnchorArchive: Data\s*\)/u,
+    "Swift V2 init wrapper must retain the exact two-archive shape",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /func kagemushaRecursiveSpendAppendV2\(\s*requestArchive: Data,\s*recipientRequestArchive: Data,\s*verifiedAtMilliseconds: UInt64\s*\)/u,
+    "Swift V2 append wrapper must retain the exact two-archive-plus-time shape",
+  );
 
   assertContainsAll(
     source("crates/iroha_js_host/src/lib.rs"),
@@ -584,9 +795,9 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
   );
 
   assertContainsAll(
-    source("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"),
+    swiftNativeBridge,
     REQUIRED_C_SYMBOLS,
-    "Swift native bridge loader",
+    "Swift native bridge loaders",
   );
   assertContainsAll(
     source("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"),
@@ -11249,7 +11460,7 @@ test("recursive Kagemusha policy negative controls pin non-C# native output guar
   );
   assert.match(
     abi7ArchiveBranch,
-    /e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0[\s\S]*?003ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?is missing shared recursive spend ABI-7 fixture coverage[\s\S]*?expected not in message/u,
+    /42c7b1b0e2dc838a6660b3691e08474bb936fa001e446310930d387b00ba686b[\s\S]*?00c7b1b0e2dc838a6660b3691e08474bb936fa001e446310930d387b00ba686b[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?is missing shared recursive spend ABI-7 fixture coverage[\s\S]*?expected not in message/u,
     "ABI-7 archive fixture negative control must mutate the archive and require the exact hash diagnostic",
   );
   const abi7SdkCoverageBranch = guard.slice(
@@ -12225,6 +12436,45 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     "Offline vector platform alias negative control must not unconditionally pass after run_checks",
   );
 
+  const toriiKagemushaRouteBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-route":'),
+    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-exact-fields":'),
+  );
+  assertContainsAll(
+    workflow,
+    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-route"],
+    "Kagemusha payload workflow must run the Torii redeem route/telemetry negative control",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Torii offline-v2 Kagemusha redeem route/telemetry negative control",
+      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-route",
+    ],
+    "policy negative-control inventory must include the Torii redeem route/telemetry command",
+  );
+  assertContainsAll(
+    toriiKagemushaRouteBranch,
+    [
+      'const ENDPOINT_NOTES_REDEEM: &str = "v1/offline/v2/notes/redeem";',
+      'const PATH_NOTES_REDEEM: &str = "/v1/offline/v2/notes/redeem";',
+      "/v1/offline/v2/kagemusha/redeem",
+      "for before, after in cases:",
+      "contains stale Kagemusha V2 redeem route/telemetry path",
+    ],
+    "Torii redeem route negative control must mutate both dispatch and telemetry constants",
+  );
+  assert.match(
+    toriiKagemushaRouteBranch,
+    /for before, after in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?text_overrides\.pop\(target, None\)/u,
+    "Torii redeem route negative control must validate each mutated source snapshot",
+  );
+  assert.match(
+    toriiKagemushaRouteBranch,
+    /route\/telemetry drift was not detected for[\s\S]*?print\("negative control rejected Torii offline-v2 Kagemusha route\/telemetry drift"\)[\s\S]*?raise SystemExit\(0\)/u,
+    "Torii redeem route negative control must only pass after both route mutations are detected",
+  );
+
   const toriiKagemushaExactFieldsBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-exact-fields":'),
     guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-archive-field-shape":'),
@@ -12232,12 +12482,13 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   assertContainsAll(
     toriiKagemushaExactFieldsBranch,
     [
-      "if encoded != encoded.trim() {",
-      "raw.trim().is_empty() || raw != raw.trim()",
-      "if parsed.to_string() != raw {",
+      "if object.len() != 1 || !object.contains_key(field) {",
+      "if encoded.is_empty() || encoded.trim() != encoded {",
+      "if BASE64_STANDARD.encode(&bytes) != encoded {",
+      "if canonical != bytes {",
       "for before, after, expected_marker in cases:",
     ],
-    "Torii offline-v2 Kagemusha exact-field negative control must mutate every canonical string check",
+    "Torii offline-v2 Kagemusha exact-field negative control must mutate every strict V2 envelope check",
   );
   assert.match(
     toriiKagemushaExactFieldsBranch,
@@ -12267,9 +12518,10 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   assertContainsAll(
     toriiKagemushaArchiveFieldShapeBranch,
     [
-      "must be a canonical base64 string",
-      "must not contain surrounding whitespace",
-      "must use canonical Numeric text",
+      "must contain exactly `{{{field}}}`",
+      "must be non-empty with no surrounding whitespace",
+      "is not canonical standard base64",
+      "does not round-trip to identical canonical Norito",
       "for before, after, expected_marker in cases:",
     ],
     "Torii offline-v2 Kagemusha archive-field shape negative control must mutate every pinned diagnostic marker",
@@ -12302,20 +12554,19 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   assertContainsAll(
     toriiKagemushaRetiredFieldsBranch,
     [
-      "retired_field_block = (",
-      "reject_kagemusha_retired_redeem_fields",
-      "reject_kagemusha_retired_redeem_fields(&request.value)?;",
-      "retired Offline Note V2 field",
-      "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
-      '"input_nullifiers",',
-      "retired_field_block.replace",
-      "for before, after, expected_marker, replace_all in cases:",
+      "crates/iroha_torii/src/openapi.rs",
+      "docs/portal/static/openapi/torii.json",
+      "docs/portal/static/openapi/versions/current/torii.json",
+      "docs/source/offline_kagemusha.md",
+      "Unknown, compact-projection, and retired Offline Note fields are rejected.",
+      "Retired Offline Note, compact-token, projection-verifier, echo, and unknown fields",
+      "for target, before, after, expected_marker in cases:",
     ],
-    "Torii offline-v2 Kagemusha retired-field negative control must mutate every retired rejection marker",
+    "Torii offline-v2 Kagemusha retired-field negative control must mutate every V2 public contract surface",
   );
   assert.match(
     toriiKagemushaRetiredFieldsBranch,
-    /for before, after, expected_marker, replace_all in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?text_overrides\.pop\(target, None\)/u,
+    /for target, before, after, expected_marker in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?text_overrides\.pop\(target, None\)/u,
     "Torii offline-v2 Kagemusha retired-field negative control must validate each mutated text snapshot",
   );
   assert.match(
@@ -12392,19 +12643,18 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   assertContainsAll(
     toriiKagemushaAuxiliaryFieldsBranch,
     [
-      "reject_kagemusha_auxiliary_redeem_fields",
-      "reject_kagemusha_auxiliary_redeem_fields(&request.value)?;",
-      "ignored auxiliary field",
-      "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
-      "let auxiliary_field_values =",
-      "Value::Null, Value::Array(Vec::new())",
-      "for before, after, expected_marker, replace_all in cases:",
+      "fn parse_strict_kagemusha_v2_archive<T>(",
+      "if object.len() != 1 || !object.contains_key(field) {",
+      '"KagemushaRedeemRequestV2Body".to_owned()',
+      '"additionalProperties": false',
+      "exactly one non-empty `redeem_request_norito_base64` string and no other fields",
+      "for target, anchor, before, after, expected_marker in cases:",
     ],
-    "Torii offline-v2 Kagemusha auxiliary-field negative control must mutate every auxiliary rejection marker",
+    "Torii offline-v2 Kagemusha auxiliary-field negative control must mutate strict one-field V2 enforcement",
   );
   assert.match(
     toriiKagemushaAuxiliaryFieldsBranch,
-    /for before, after, expected_marker, replace_all in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?text_overrides\.pop\(target, None\)/u,
+    /for target, anchor, before, after, expected_marker in cases:[\s\S]*?anchor_index\s*=\s*source\.find\(anchor\)[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?text_overrides\.pop\(target, None\)/u,
     "Torii offline-v2 Kagemusha auxiliary-field negative control must validate each mutated text snapshot",
   );
   assert.match(
@@ -12433,44 +12683,35 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
       "crates/iroha_torii/src/openapi.rs",
       "docs/portal/static/openapi/torii.json",
       "docs/portal/static/openapi/versions/current/torii.json",
-      "Classic Offline V2 note issuance is retired and this retired route fails closed.",
-      "Classic Offline V2 note issuance is retired and this compatibility route fails closed.",
-      "Classic Offline V2 audit is retired and this retired route fails closed.",
-      "Classic Offline V2 audit is retired and this compatibility route fails closed.",
-      "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
-      "Legacy X-Iroha-* app-auth headers are rejected on this endpoint",
-      "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
-      "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
-      "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
-      'assert!(redeem_description.contains("source_note_commitment"));',
-      "Optional amount and source_note_commitment echo fields",
-      "for target, before, after, expected_marker in cases:",
+      "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive",
+      "Reserved lineage data without a lineage witness",
+      "Reserved or verified semantic lineage data",
+      "KagemushaV2TerminalFinalityResponse",
+      '"pattern": "^[0-9a-f]{64}$"',
+      '"minimum": 1',
+      '"additionalProperties": false',
+      "for target, anchor, before, after, expected_marker, diagnostic_kind in cases:",
     ],
-    "Torii offline-v2 Kagemusha OpenAPI negative control must mutate source and portal contract markers",
+    "Torii offline-v2 Kagemusha OpenAPI negative control must mutate strict V2 request/finality contracts",
   );
   assert.match(
     toriiKagemushaOpenApiBranch,
-    /for target, before, after, expected_marker in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?text_overrides\.pop\(target, None\)/u,
+    /for target, anchor, before, after, expected_marker, diagnostic_kind in cases:[\s\S]*?anchor_index\s*=\s*source\.find\(anchor\)[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?text_overrides\.pop\(target, None\)/u,
     "Torii offline-v2 Kagemusha OpenAPI negative control must validate each mutated contract snapshot",
   );
   assert.match(
     toriiKagemushaOpenApiBranch,
-    /Torii offline-v2 Kagemusha redeem ingress coverage:[\s\S]*?\+ expected_marker[\s\S]*?if expected not in message:/u,
-    "Torii offline-v2 Kagemusha OpenAPI negative control must require exact ingress diagnostics",
+    /diagnostic_kind == "coverage"[\s\S]*?else f"\{target\} \{expected_marker\}"[\s\S]*?if expected not in message:/u,
+    "Torii offline-v2 Kagemusha OpenAPI negative control must distinguish exact coverage and structural diagnostics",
   );
   assert.match(
     toriiKagemushaOpenApiBranch,
-    /Retired X-Iroha-\* app-auth headers are rejected on this endpoint[\s\S]*?contains stale Offline V2 X-Iroha header wording/u,
-    "Torii offline-v2 Kagemusha OpenAPI negative control must require the stale X-Iroha wording diagnostic",
+    /Kagemusha V2 routes must return KagemushaV2TerminalFinalityResponse[\s\S]*?Kagemusha V2 finality operation_id must be lowercase 64-hex/u,
+    "Torii offline-v2 Kagemusha OpenAPI negative control must pin typed finality response integrity",
   );
   assert.match(
     toriiKagemushaOpenApiBranch,
-    /compatibility route fails closed[\s\S]*?contains stale Offline V2 retired route wording/u,
-    "Torii offline-v2 Kagemusha OpenAPI negative control must require the stale retired-route wording diagnostic",
-  );
-  assert.match(
-    toriiKagemushaOpenApiBranch,
-    /Torii offline-v2 Kagemusha OpenAPI drift was not detected for[\s\S]*?print\("negative control rejected Torii offline-v2 Kagemusha OpenAPI drift"\)[\s\S]*?raise SystemExit\(0\)/u,
+    /Torii offline-v2 Kagemusha V2 OpenAPI drift was not detected for[\s\S]*?print\("negative control rejected Torii offline-v2 Kagemusha V2 OpenAPI drift"\)[\s\S]*?raise SystemExit\(0\)/u,
     "Torii offline-v2 Kagemusha OpenAPI negative control must only pass after all injected drift is detected",
   );
   assert.doesNotMatch(
@@ -12501,20 +12742,17 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     [
       'target = "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"',
       "offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request",
-      "redeem_request_norito_base64",
-      "required_kagemusha_redeem_archive_string",
-      "optional_kagemusha_echo_string",
-      "parse_kagemusha_amount_echo",
-      "reject_kagemusha_retired_redeem_fields",
-      "reject_kagemusha_auxiliary_redeem_fields",
-      "OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH",
-      "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
-      "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
-      "offline_v2_notes_redeem_rejects_kagemusha_optional_echo_field_shapes",
-      "offline_v2_notes_redeem_rejects_compact_token_without_recursive_redeem_request",
+      "offline_v2_notes_redeem_rejects_noncanonical_or_ambiguous_v2_envelopes",
+      "offline_v2_notes_redeem_uses_direct_receipts_and_preserves_finality_integrity",
+      "parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>(",
+      "optional_finalized_kagemusha_v2_anchor",
+      "load_kagemusha_v2_redeem_operation_receipt",
+      "pipeline_status_terminal_or_state_entry",
+      "OFFLINE_KAGEMUSHA_FINALITY_INCOMPLETE",
+      "refreshed_kagemusha_v2_authorization_keeps_direct_anchor_lookup_key",
       "for before, after, expected_marker in cases:",
     ],
-    "Torii offline-v2 Kagemusha redeem smoke negative control must mutate every smoke assertion marker",
+    "Torii offline-v2 Kagemusha redeem smoke negative control must mutate strict parser, direct receipt, and finality markers",
   );
   assert.match(
     toriiKagemushaSmokeBranch,
@@ -12528,7 +12766,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     toriiKagemushaSmokeBranch,
-    /Torii offline-v2 Kagemusha redeem smoke drift was not detected for[\s\S]*?print\("negative control rejected Torii offline-v2 Kagemusha redeem smoke drift"\)[\s\S]*?raise SystemExit\(0\)/u,
+    /Torii offline-v2 Kagemusha V2 redeem smoke drift was not detected for[\s\S]*?print\("negative control rejected Torii offline-v2 Kagemusha V2 redeem smoke drift"\)[\s\S]*?raise SystemExit\(0\)/u,
     "Torii offline-v2 Kagemusha redeem smoke negative control must only pass after all injected drift is detected",
   );
   assert.doesNotMatch(
@@ -15279,7 +15517,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-unanchored-compact-token-symbol-removal",
     "--negative-control-mobile-halo2-vk-hash",
     "--negative-control-mobile-open-verify-public-input-hash-exactness",
-    "--negative-control-ton-sccp-public-input-validation-ordering",
     "--negative-control-rust-recursive-compact-unavailable-classifier",
     "--negative-control-rust-kagemusha-hop-public-instance-shape",
     "--negative-control-rust-kagemusha-fold-root-transition",
@@ -28338,22 +28575,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileSccpBranch,
-    /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?proofRequestSkipsRelayContextBinding[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?tronRouteCanaryEvidenceHashDrifts[\s\S]*?derivesTonRouteCanaryEvidenceHash[\s\S]*?tonRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSolanaRouteCanaryEvidenceHash[\s\S]*?solanaRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?sourceAdapterVerifierVkHashesDriftForUiTooling/u,
-    "mobile SCCP negative control must mutate EVM, TRON, TON, Solana, and source proof hash coverage",
+    /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?proofRequestSkipsRelayContextBinding[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?tronRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?sourceAdapterVerifierVkHashesDriftForUiTooling/u,
+    "mobile SCCP negative control must mutate EVM, TRON, and source proof hash coverage",
   );
   assert.match(
     mobileSccpBranch,
-    /extraneousSourceProofError[\s\S]*?staleRequestError[\s\S]*?sourceProofBytes"\) == true[\s\S]*?requestHash"\) == true[\s\S]*?ex\.getMessage\(\)\.contains\("sourceProofBytes"\)[\s\S]*?ex\.getMessage\(\)\.contains\("requestHash"\)[\s\S]*?submission must reject extraneous wrapped proof-result source proof bytes[\s\S]*?submission must reject stale wrapped proof-result request context[\s\S]*?sourceProofBytes must be empty for SORA source bundle[\s\S]*?TON request hash must bind bundle finality proof bytes[\s\S]*?TON request hash must bind bundle\/source-proof byte boundaries/u,
+    /extraneousSourceProofError[\s\S]*?staleRequestError[\s\S]*?sourceProofBytes"\) == true[\s\S]*?requestHash"\) == true[\s\S]*?ex\.getMessage\(\)\.contains\("sourceProofBytes"\)[\s\S]*?ex\.getMessage\(\)\.contains\("requestHash"\)[\s\S]*?submission must reject extraneous wrapped proof-result source proof bytes[\s\S]*?submission must reject stale wrapped proof-result request context[\s\S]*?sourceProofBytes must be empty for SORA source bundle[\s\S]*?requestHash/u,
     "mobile SCCP negative control must mutate sourceProofBytes fail-fast coverage",
   );
   assert.match(
     mobileSccpBranch,
-    /Kotlin SCCP EVM prover tests[\s\S]*?Android SCCP EVM prover tests[\s\S]*?Kotlin SCCP TRON prover tests[\s\S]*?Android SCCP TRON prover tests[\s\S]*?Kotlin SCCP TON prover tests[\s\S]*?Android SCCP TON prover tests[\s\S]*?Kotlin SCCP Solana prover tests[\s\S]*?Android SCCP Solana prover tests[\s\S]*?Kotlin SCCP source proof hash tests[\s\S]*?Android SCCP source proof hash tests/u,
+    /Kotlin SCCP EVM prover tests[\s\S]*?Android SCCP EVM prover tests[\s\S]*?Kotlin SCCP TRON prover tests[\s\S]*?Android SCCP TRON prover tests[\s\S]*?Kotlin SCCP source proof hash tests[\s\S]*?Android SCCP source proof hash tests/u,
     "mobile SCCP negative control must require all SCCP labels",
   );
   assert.match(
     mobileSccpBranch,
-    /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?derivesTonRouteCanaryEvidenceHash[\s\S]*?derivesSolanaRouteCanaryEvidenceHash[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?expected = f"\{label\} missing \{expected_marker\}"[\s\S]*?if expected not in message:[\s\S]*?mobile SCCP runner coverage drift was rejected for the wrong reason/u,
+    /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?expected = f"\{label\} missing \{expected_marker\}"[\s\S]*?if expected not in message:[\s\S]*?mobile SCCP runner coverage drift was rejected for the wrong reason/u,
     "mobile SCCP negative control must require exact missing-test diagnostics",
   );
   assert.match(

@@ -37,7 +37,6 @@ import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTag
-import org.hyperledger.iroha.sdk.sccp.SccpSourceProofs
 
 /**
  * HTTP-based client implementation that will forward transactions to an Iroha Torii endpoint.
@@ -84,18 +83,20 @@ class HttpClientTransport(
         return executeAccepted(request, "transaction JSON submit", 202)
     }
 
-    override fun postBridgeProofSubmitJson(encodedBridgeProofSubmitJson: ByteArray): CompletableFuture<ClientResponse> =
-        executeAccepted(
-            buildBridgeJsonPostRequest("/v1/bridge/proofs/submit", encodedBridgeProofSubmitJson),
-            "bridge proof submit",
-            200,
+    override fun submitSccpDestinationProof(
+        request: SccpDestinationProofSubmitRequest,
+    ): CompletableFuture<ClientResponse> =
+        executeSccpJsonAccepted(
+            buildBridgeJsonPostRequest("/v1/bridge/proofs/submit", request.toJsonBytes()),
+            "SCCP destination proof submit",
         )
 
-    override fun postBridgeMessageSubmitJson(encodedBridgeMessageSubmitJson: ByteArray): CompletableFuture<ClientResponse> =
-        executeAccepted(
-            buildBridgeJsonPostRequest("/v1/bridge/messages", encodedBridgeMessageSubmitJson),
-            "bridge message submit",
-            200,
+    override fun submitSccpNativeMessage(
+        request: SccpNativeMessageSubmitRequest,
+    ): CompletableFuture<ClientResponse> =
+        executeSccpJsonAccepted(
+            buildBridgeJsonPostRequest("/v1/bridge/messages", request.toJsonBytes()),
+            "SCCP native message submit",
         )
 
     override fun submitTransactionEntrypoint(encodedVersionedEntrypoint: ByteArray): CompletableFuture<ClientResponse> {
@@ -144,7 +145,14 @@ class HttpClientTransport(
 
     override fun waitForTransactionStatus(hashHex: String, options: PipelineStatusOptions?): CompletableFuture<Map<String, Any>> {
         val resolved = PipelineStatusOptions.resolve(options)
-        val deadline = if (resolved.timeoutMillis == null) Long.MAX_VALUE else System.currentTimeMillis() + maxOf(0L, resolved.timeoutMillis!!)
+        val timeoutMillis = resolved.timeoutMillis
+        val deadline = if (timeoutMillis == null) {
+            Long.MAX_VALUE
+        } else {
+            val now = System.currentTimeMillis()
+            val delay = maxOf(0L, timeoutMillis)
+            if (delay > Long.MAX_VALUE - now) Long.MAX_VALUE else now + delay
+        }
         val future = CompletableFuture<Map<String, Any>>()
         pollPipelineStatus(hashHex, resolved, deadline, 0, null, future)
         return future
@@ -186,6 +194,89 @@ class HttpClientTransport(
 
     fun listIdentifierPolicies(): CompletableFuture<IdentifierPolicyListResponse> = fetchJson(buildJsonGetRequest("/v1/identifier-policies", emptyMap()), IdentifierJsonParser::parsePolicyList, "identifier policy list")
     fun listRamLfeProgramPolicies(): CompletableFuture<RamLfeProgramPolicyListResponse> = fetchJson(buildJsonGetRequest("/v1/ram-lfe/program-policies", emptyMap()), RamLfeJsonParser::parsePolicyList, "ram-lfe program policy list")
+
+    /** Fetch and strictly decode exact-lane SCCP capability discovery. */
+    fun getSccpCapabilities(): CompletableFuture<SccpCapabilities> =
+        fetchSccpJson(
+            buildJsonGetRequest(
+                "/v1/sccp/capabilities",
+                emptyMap(),
+                SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
+            ),
+            SccpJsonParser::parseCapabilities,
+            "SCCP capabilities",
+        )
+
+    /** Fetch and strictly decode the authoritative typed SCCP route registry. */
+    fun getSccpRegistry(): CompletableFuture<SccpRegistryV1> =
+        fetchSccpJson(
+            buildJsonGetRequest(
+                "/v1/sccp/registry",
+                emptyMap(),
+                SCCP_JSON_RESPONSE_MAX_BYTES,
+            ),
+            SccpJsonParser::parseRegistry,
+            "SCCP registry",
+        )
+
+    /** Fetch one query-free finalized SCCP message bundle by canonical message id. */
+    fun getSccpMessageBundle(messageIdHex: String): CompletableFuture<SccpMessageBundleV1> {
+        val messageId = normalizeExactNonZeroEvenLengthHex(messageIdHex, "messageIdHex", 32)
+        return fetchSccpJson(
+            buildJsonGetRequest(
+                "/v1/sccp/proofs/message/$messageId",
+                emptyMap(),
+                SCCP_JSON_RESPONSE_MAX_BYTES,
+            ),
+            Function { bytes ->
+                SccpJsonParser.parseMessageBundle(bytes).also {
+                    require(it.messageIdHex == messageId) {
+                        "SCCP bundle message id does not match the requested id"
+                    }
+                }
+            },
+            "SCCP message bundle",
+        )
+    }
+
+    /** Fetch one query-free state-derived Groth16 request by canonical message id. */
+    fun getSccpProofRequest(messageIdHex: String): CompletableFuture<SccpGroth16ProofRequestV1> {
+        val messageId = normalizeExactNonZeroEvenLengthHex(messageIdHex, "messageIdHex", 32)
+        return fetchSccpJson(
+            buildJsonGetRequest(
+                "/v1/sccp/proof-requests/$messageId",
+                emptyMap(),
+                SCCP_JSON_RESPONSE_MAX_BYTES,
+            ),
+            Function { bytes ->
+                SccpJsonParser.parseProofRequest(bytes).also {
+                    require(it.messageIdHex == messageId) {
+                        "SCCP proof request message id does not match the requested id"
+                    }
+                }
+            },
+            "SCCP proof request",
+        )
+    }
+
+    /** Fetch newest-first exact-context SCCP outbound messages. */
+    @JvmOverloads
+    fun getSccpRecentMessages(from: Long? = null, limit: Int? = null): CompletableFuture<SccpRecentMessages> {
+        require(from == null || from > 0) { "from must be a positive height" }
+        require(limit == null || limit in 1..50) { "limit must be between 1 and 50" }
+        val query = linkedMapOf<String, String>()
+        from?.let { query["from"] = it.toString() }
+        limit?.let { query["limit"] = it.toString() }
+        return fetchSccpJson(
+            buildJsonGetRequest(
+                "/v1/sccp/messages/recent",
+                query,
+                SCCP_RECENT_RESPONSE_MAX_BYTES,
+            ),
+            SccpJsonParser::parseRecentMessages,
+            "SCCP recent messages",
+        )
+    }
 
     fun getIdentifierClaimByReceiptHash(receiptHash: String): CompletableFuture<Optional<IdentifierClaimRecord>> {
         val normalizedReceiptHash = normalizeHex32(receiptHash, "receiptHash")
@@ -304,7 +395,7 @@ class HttpClientTransport(
         gasLimit: Long,
         contractAddress: String? = null,
         contractAlias: String? = null,
-        entrypoint: String? = null,
+        entrypoint: String,
         payload: Any? = null,
         gasAssetId: String? = null,
     ): CompletableFuture<ContractCallResponse> {
@@ -334,6 +425,19 @@ class HttpClientTransport(
             buildJsonGetRequest("/v1/gov/contracts/${encodePathSegment(normalizedAddress)}", emptyMap()),
             ContractJsonParser::parseGovernanceContractResponse,
             "governance contract"
+        )
+    }
+
+    override fun getContractManifest(codeHash: String): CompletableFuture<ContractManifestRecord> {
+        require(codeHash.length == 64) { "codeHash must contain exactly 64 hex characters" }
+        val normalizedCodeHash = normalizeExactEvenLengthHex(codeHash, "codeHash")
+        return fetchJson(
+            buildJsonGetRequest(
+                "/v1/contracts/code/${encodePathSegment(normalizedCodeHash)}",
+                emptyMap(),
+            ),
+            ContractJsonParser::parseManifestRecord,
+            "contract manifest",
         )
     }
 
@@ -442,7 +546,7 @@ class HttpClientTransport(
     private fun emitDeviceProfileTelemetry() {
         if (!config.telemetryOptions().enabled || !deviceProfileEmitted.compareAndSet(false, true)) return
         val sink = config.telemetrySink().orElse(null) ?: return
-        val provider = config.deviceProfileProvider() ?: return
+        val provider = config.deviceProfileProvider()
         val profile = provider.snapshot().orElse(null) ?: return
         sink.emitSignal("android.telemetry.device_profile", mapOf("profile_bucket" to profile.bucket))
     }
@@ -479,13 +583,14 @@ class HttpClientTransport(
 
     private fun pollPipelineStatus(hashHex: String, options: PipelineStatusOptions, deadline: Long, attemptsSoFar: Int, lastPayload: Map<String, Any>?, future: CompletableFuture<Map<String, Any>>) {
         if (future.isDone) return
-        if (options.maxAttempts != null && attemptsSoFar >= options.maxAttempts!!) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status after $attemptsSoFar attempts", hashHex, attemptsSoFar, lastPayload)); return }
+        val configuredMaxAttempts = options.maxAttempts
+        if (configuredMaxAttempts != null && attemptsSoFar >= configuredMaxAttempts) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status after $attemptsSoFar attempts", hashHex, attemptsSoFar, lastPayload)); return }
         val request = ToriiRequestBuilder.buildStatusRequest(config.baseUri(), hashHex, config.requestTimeout(), config.defaultHeaders())
         notifyRequest(request)
         executor.execute(request).whenComplete { response, throwable ->
             try {
                 if (future.isDone) return@whenComplete
-                if (throwable != null) { val cause = if (throwable is CompletionException) throwable.cause else throwable; notifyFailure(request, cause!!); future.completeExceptionally(cause); return@whenComplete }
+                if (throwable != null) { val cause = if (throwable is CompletionException) throwable.cause ?: throwable else throwable; notifyFailure(request, cause); future.completeExceptionally(cause); return@whenComplete }
                 val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
                 notifyResponse(request, clientResponse)
                 val statusCode = clientResponse.statusCode
@@ -500,7 +605,7 @@ class HttpClientTransport(
                 if (options.observer != null) { try { options.observer.onStatus(statusLiteral ?: "", payload ?: emptyMap(), nextAttempts) } catch (observerError: RuntimeException) { future.completeExceptionally(observerError); return@whenComplete } }
                 if (isSuccess) { future.complete(payload ?: emptyMap()); return@whenComplete }
                 if (isFailure) { val rejectionReason = PipelineStatusExtractor.extractRejectionReason(payload).orElse(null); future.completeExceptionally(TransactionStatusException(hashHex, statusLiteral, rejectionReason, payload)); return@whenComplete }
-                if (options.maxAttempts != null && nextAttempts >= options.maxAttempts!!) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status after $nextAttempts attempts", hashHex, nextAttempts, payload)); return@whenComplete }
+                if (configuredMaxAttempts != null && nextAttempts >= configuredMaxAttempts) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status after $nextAttempts attempts", hashHex, nextAttempts, payload)); return@whenComplete }
                 if (deadline != Long.MAX_VALUE && System.currentTimeMillis() >= deadline) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status within the configured timeout", hashHex, nextAttempts, payload)); return@whenComplete }
                 scheduleNextPoll(hashHex, options, deadline, nextAttempts, payload, future)
             } catch (e: Exception) { if (!future.isDone) future.completeExceptionally(e) }
@@ -528,22 +633,32 @@ class HttpClientTransport(
     private fun notifyResponse(request: TransportRequest, response: ClientResponse) { for (o in config.observers()) o.onResponse(request, response) }
     private fun notifyFailure(request: TransportRequest, error: Throwable) { for (o in config.observers()) o.onFailure(request, error) }
 
-    private fun buildJsonGetRequest(path: String, queryParams: Map<String, String>): TransportRequest {
+    private fun buildJsonGetRequest(
+        path: String,
+        queryParams: Map<String, String>,
+        maximumResponseBytes: Long? = null,
+    ): TransportRequest {
         val target = appendQuery(resolvePath(path), queryParams)
         val builder = TransportRequest.builder().setUri(target).setMethod("GET").addHeader("Accept", "application/json").setTimeout(config.requestTimeout())
+        if (maximumResponseBytes != null) builder.setMaximumResponseBytes(maximumResponseBytes)
         for ((k, v) in config.defaultHeaders()) builder.addHeader(k, v)
         return builder.build()
     }
 
-    private fun buildJsonPostRequest(path: String, body: ByteArray): TransportRequest {
+    private fun buildJsonPostRequest(
+        path: String,
+        body: ByteArray,
+        maximumResponseBytes: Long? = null,
+    ): TransportRequest {
         val builder = TransportRequest.builder().setUri(resolvePath(path)).setMethod("POST").setBody(body).addHeader("Content-Type", "application/json").addHeader("Accept", "application/json").setTimeout(config.requestTimeout())
+        if (maximumResponseBytes != null) builder.setMaximumResponseBytes(maximumResponseBytes)
         for ((k, v) in config.defaultHeaders()) builder.addHeader(k, v)
         return builder.build()
     }
 
     private fun buildBridgeJsonPostRequest(path: String, body: ByteArray): TransportRequest {
         preflightSccpBridgeSubmitJson(body, path)
-        return buildJsonPostRequest(path, body)
+        return buildJsonPostRequest(path, body, SCCP_JSON_RESPONSE_MAX_BYTES)
     }
 
     private fun buildVpnRequest(method: String, path: String, body: ByteArray?, canonicalAuth: ToriiCanonicalRequestAuth): TransportRequest {
@@ -588,6 +703,40 @@ class HttpClientTransport(
         }; return future
     }
 
+    private fun <T> fetchSccpJson(
+        request: TransportRequest,
+        parser: Function<ByteArray, T>,
+        errorContext: String,
+    ): CompletableFuture<T> {
+        notifyRequest(request)
+        val future = CompletableFuture<T>()
+        executor.execute(request).whenComplete { response, throwable ->
+            if (throwable != null) {
+                val cause = if (throwable is CompletionException) throwable.cause else throwable
+                notifyFailure(request, cause!!)
+                future.completeExceptionally(RuntimeException("$errorContext request failed", cause))
+                return@whenComplete
+            }
+            val clientResponse = ClientResponse(
+                response.statusCode,
+                response.body,
+                response.message,
+                null,
+                extractRejectCode(response),
+            )
+            try {
+                requireExactSccpJsonResponse(response, errorContext)
+                val parsed = parser.apply(response.body)
+                notifyResponse(request, clientResponse)
+                future.complete(parsed)
+            } catch (ex: RuntimeException) {
+                notifyFailure(request, ex)
+                future.completeExceptionally(ex)
+            }
+        }
+        return future
+    }
+
     private fun executeAccepted(request: TransportRequest, errorContext: String, acceptedStatus: Int): CompletableFuture<ClientResponse> {
         notifyRequest(request); val future = CompletableFuture<ClientResponse>()
         executor.execute(request).whenComplete { response, throwable ->
@@ -607,6 +756,59 @@ class HttpClientTransport(
             notifyResponse(request, clientResponse)
             future.complete(clientResponse)
         }; return future
+    }
+
+    private fun executeSccpJsonAccepted(
+        request: TransportRequest,
+        errorContext: String,
+    ): CompletableFuture<ClientResponse> {
+        notifyRequest(request)
+        val future = CompletableFuture<ClientResponse>()
+        executor.execute(request).whenComplete { response, throwable ->
+            if (throwable != null) {
+                val cause = if (throwable is CompletionException) throwable.cause else throwable
+                notifyFailure(request, cause!!)
+                future.completeExceptionally(RuntimeException("$errorContext request failed", cause))
+                return@whenComplete
+            }
+            val clientResponse = ClientResponse(
+                response.statusCode,
+                response.body,
+                response.message,
+                null,
+                extractRejectCode(response),
+            )
+            try {
+                requireExactSccpJsonResponse(response, errorContext)
+                notifyResponse(request, clientResponse)
+                future.complete(clientResponse)
+            } catch (ex: RuntimeException) {
+                notifyFailure(request, ex)
+                future.completeExceptionally(ex)
+            }
+        }
+        return future
+    }
+
+    private fun requireExactSccpJsonResponse(
+        response: TransportResponse,
+        errorContext: String,
+    ) {
+        if (response.statusCode != 200) {
+            throw RuntimeException(
+                "$errorContext request failed with status ${response.statusCode}",
+            )
+        }
+        val contentTypes = response.headers.entries
+            .asSequence()
+            .filter { (name, _) -> name.equals("Content-Type", ignoreCase = true) }
+            .flatMap { (_, values) -> values.asSequence() }
+            .toList()
+        if (contentTypes.size != 1 || contentTypes[0] != "application/json") {
+            throw RuntimeException(
+                "$errorContext response Content-Type must be exactly application/json",
+            )
+        }
     }
 
     private fun <T : Any> fetchJsonAllowingNotFound(request: TransportRequest, parser: Function<ByteArray, T>, errorContext: String): CompletableFuture<Optional<T>> {
@@ -634,20 +836,13 @@ class HttpClientTransport(
     }
 
     companion object {
-        private const val TRON_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-
         private const val RETRY_SIGNAL_ID = "android.torii.http.retry"
         private const val PIPELINE_STATUS_SIGNAL = "android.torii.pipeline.status"
         private const val REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure"
-        private const val SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384
         private const val U32_MAX = 4_294_967_295L
-        private const val SCCP_DOMAIN_SORA = 0
-        private val SCCP_GROTH16_BN254_BASE_FIELD_MODULUS =
-            BigInteger("30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47", 16)
-        private val SCCP_GROTH16_BN254_G2_B_C0 =
-            BigInteger("2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5", 16)
-        private val SCCP_GROTH16_BN254_G2_B_C1 =
-            BigInteger("009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2", 16)
+        private const val SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
+        private const val SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L
+        private const val SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L
 
         @JvmStatic fun createDefault(config: ClientConfig): HttpClientTransport = HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config)
         @JvmStatic fun withExecutor(executor: HttpTransportExecutor, config: ClientConfig): HttpClientTransport = HttpClientTransport(executor, config)
@@ -706,7 +901,7 @@ class HttpClientTransport(
             return normalized.lowercase(Locale.ROOT)
         }
         private fun resolveAuthority(request: TransportRequest?): String {
-            if (request == null) return ""; val uri = request.uri; if (uri != null && uri.authority != null) return uri.authority
+            if (request == null) return ""; val authority = request.uri.authority; if (authority != null) return authority
             val host = request.headers["Host"]; return if (host.isNullOrEmpty()) "" else host[0]
         }
         private fun emitRedactionFailure(sink: TelemetrySink, signalId: String, reason: String) { sink.emitSignal(REDACTION_FAILURE_SIGNAL, mapOf("signal_id" to signalId, "reason" to reason)) }
@@ -821,16 +1016,16 @@ class HttpClientTransport(
             gasLimit: Long,
             contractAddress: String?,
             contractAlias: String?,
-            entrypoint: String?,
+            entrypoint: String,
             payload: Any?,
             gasAssetId: String?,
         ): Map<String, Any> {
-            require(gasLimit >= 0) { "gasLimit must be non-negative" }
+            require(gasLimit > 0) { "gasLimit must be positive" }
             val normalized = LinkedHashMap<String, Any>()
             normalized["authority"] = normalizeNonBlank(authority, "authority")
             normalized["private_key"] = normalizeNonBlank(privateKey, "privateKey")
             normalized.putAll(buildContractTargetSelector(contractAddress, contractAlias))
-            if (entrypoint != null) normalized["entrypoint"] = normalizeNonBlank(entrypoint, "entrypoint")
+            normalized["entrypoint"] = normalizeNonBlank(entrypoint, "entrypoint")
             if (payload != null) normalized["payload"] = payload
             if (gasAssetId != null) normalized["gas_asset_id"] = normalizeNonBlank(gasAssetId, "gasAssetId")
             normalized["gas_limit"] = gasLimit
@@ -988,8 +1183,11 @@ class HttpClientTransport(
             val hasContractAddress = contractAddress != null
             val hasContractAlias = contractAlias != null
             require(hasContractAddress != hasContractAlias) { "Exactly one of contractAddress or contractAlias must be provided" }
-            return if (hasContractAddress) mapOf("contract_address" to normalizeNonBlank(contractAddress!!, "contractAddress"))
-            else mapOf("contract_alias" to normalizeNonBlank(contractAlias!!, "contractAlias"))
+            return if (contractAddress != null) {
+                mapOf("contract_address" to normalizeNonBlank(contractAddress, "contractAddress"))
+            } else {
+                mapOf("contract_alias" to normalizeNonBlank(requireNotNull(contractAlias), "contractAlias"))
+            }
         }
 
         @JvmStatic internal fun normalizeRequiredBase64Payload(value: String, field: String): String {
@@ -1056,63 +1254,77 @@ class HttpClientTransport(
             require(normalized.length == expectedByteLength * 2) { "$field must be a $expectedByteLength-byte hex string" }
             return normalized
         }
-        @JvmStatic internal fun normalizeTronBase58CheckAddress(value: String, field: String): String {
-            val normalized = normalizeNonBlank(value, field)
-            require(normalized == value) { "$field must be a TRON Base58Check address" }
-            val decoded = decodeBase58(normalized, field)
-            require(decoded.size == 25) { "$field must be a TRON Base58Check address" }
-            val payload = decoded.copyOfRange(0, 21)
-            val checksum = decoded.copyOfRange(21, 25)
-            val expectedChecksum = sha256(sha256(payload)).copyOfRange(0, 4)
-            require(checksum.contentEquals(expectedChecksum)) { "$field must be a TRON Base58Check address" }
-            require((payload[0].toInt() and 0xff) == 0x41 && payload.copyOfRange(1, payload.size).any { it.toInt() != 0 }) {
-                "$field must be a TRON Base58Check address"
-            }
-            return normalized
-        }
-        private fun decodeBase58(value: String, field: String): ByteArray {
-            val decoded = ArrayList<Int>()
-            for (character in value) {
-                val digit = TRON_BASE58_ALPHABET.indexOf(character)
-                require(digit >= 0) { "$field must be a TRON Base58Check address" }
-                var carry = digit
-                for (index in decoded.size - 1 downTo 0) {
-                    val next = decoded[index] * 58 + carry
-                    decoded[index] = next and 0xff
-                    carry = next ushr 8
-                }
-                while (carry > 0) {
-                    decoded.add(0, carry and 0xff)
-                    carry = carry ushr 8
-                }
-            }
-            val leadingZeroes = value.takeWhile { it == '1' }.length
-            val result = ByteArray(leadingZeroes + decoded.size)
-            for (index in decoded.indices) {
-                result[leadingZeroes + index] = decoded[index].toByte()
-            }
-            return result
-        }
-        private fun sha256(value: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(value)
         @JvmStatic internal fun preflightSccpBridgeSubmitJson(body: ByteArray, path: String) {
+            require(String(body, StandardCharsets.UTF_8).toByteArray(StandardCharsets.UTF_8).contentEquals(body)) {
+                "SCCP bridge submit payload must be UTF-8 JSON"
+            }
             val parsed = try {
                 JsonParser.parse(String(body, StandardCharsets.UTF_8))
-            } catch (_: RuntimeException) {
-                return
+            } catch (ex: RuntimeException) {
+                throw IllegalArgumentException("bridge submit payload must be valid JSON", ex)
             }
-            val fields = parsed as? Map<*, *> ?: return
-            val proofBytesHex = fields["proof_bytes_hex"]
-            if (proofBytesHex != null) {
-                require(proofBytesHex is String) { "proof_bytes_hex must be an even-length hex string" }
-                val normalizedProofBytesHex = normalizeExactNonZeroEvenLengthHex(
-                    proofBytesHex,
-                    "proof_bytes_hex",
-                    SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
-                )
-                validateSccpGroth16ProofHexForMessageBundle(normalizedProofBytesHex, fields)
+            val fields = parsed as? Map<*, *>
+                ?: throw IllegalArgumentException("bridge submit payload must be a JSON object")
+            val allowed = when (path) {
+                "/v1/bridge/proofs/submit" -> SCCP_PROOF_SUBMIT_FIELDS
+                "/v1/bridge/messages" -> SCCP_MESSAGE_SUBMIT_FIELDS
+                else -> throw IllegalArgumentException("unsupported SCCP bridge submit path")
             }
-            validateSccpDestinationProofMaterialRelationship(fields)
-            preflightSccpBridgeSubmitBundleSelection(fields, path)
+            val unknown = fields.keys.firstOrNull { it !is String || it !in allowed }
+            require(unknown == null) { "unknown or retired bridge submit field `$unknown`" }
+            val authority = fields["authority"] as? String
+                ?: throw IllegalArgumentException("authority is required and must be canonical")
+            requireCanonicalSccpAuthority(authority)
+            val hasSignature = fields.containsKey("signature_b64")
+            val signature = fields["signature_b64"]
+            if (hasSignature) {
+                require(signature is String) { "signature_b64 must be canonical padded base64" }
+                normalizeOptionalSignature(signature)
+            }
+            val hasTransactionPayload = fields.containsKey("transaction_payload_b64")
+            val transactionPayload = fields["transaction_payload_b64"]
+            if (hasTransactionPayload) {
+                require(transactionPayload is String) {
+                    "transaction_payload_b64 must be canonical padded base64"
+                }
+            }
+            var creationTimeMs: Long? = null
+            if (fields.containsKey("creation_time_ms")) {
+                val value = fields["creation_time_ms"]
+                require(value is Number && value.toLong() > 0 && value.toString() == value.toLong().toString()) {
+                    "creation_time_ms must be a positive integer"
+                }
+                creationTimeMs = value.toLong()
+            }
+            validateSccpDetachedSigningState(
+                signature as? String,
+                transactionPayload as? String,
+                creationTimeMs,
+            )
+            if (transactionPayload is String) {
+                normalizeOptionalTransactionPayload(transactionPayload, creationTimeMs, authority)
+            }
+            val artifactField = if (path == "/v1/bridge/messages") {
+                "native_proof_b64"
+            } else {
+                "destination_proof_b64"
+            }
+            val artifact = optionalSccpArtifact(fields, artifactField)
+                ?: throw IllegalArgumentException("$artifactField is required")
+            validateCanonicalSccpNoritoBase64(
+                artifact,
+                artifactField,
+                if (artifactField == "destination_proof_b64") {
+                    SCCP_MAX_DESTINATION_ARTIFACT_BYTES
+                } else {
+                    SCCP_MAX_NATIVE_PROOF_BYTES
+                },
+                if (artifactField == "destination_proof_b64") {
+                    SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME
+                } else {
+                    SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME
+                },
+            )
         }
         @JvmStatic internal fun normalizeHex32(value: String, field: String): String { val normalized = normalizeEvenLengthHex(value, field); require(normalized.length == 64) { "$field must contain 64 hex characters" }; return normalized }
         @JvmStatic internal fun normalizeOptionalHex32(value: String?, field: String): String? = if (value == null || value.trim().isEmpty()) null else normalizeHex32(value, field)
@@ -1242,286 +1454,25 @@ class HttpClientTransport(
             return out.toString()
         }
 
-        private fun abiWordU32Hex(value: Int): String {
-            require(value >= 0) { "SCCP ABI word value must be a u32" }
-            return value.toString(16).padStart(64, '0')
-        }
-
-        private fun optionalSccpMessageProofContext(fields: Map<*, *>): Pair<String, String>? {
-            val messageBundleValue = fields["message_bundle"] ?: return null
-            val messageBundle = messageBundleValue as? Map<*, *>
-                ?: throw IllegalArgumentException("message_bundle must contain commitment metadata")
-            val commitment = messageBundle["commitment"] as? Map<*, *>
-                ?: throw IllegalArgumentException("message_bundle.commitment.message_id is required")
-            val messageIdValue = commitment["message_id"] ?: commitment["messageId"]
-                ?: throw IllegalArgumentException(
-                    "message_bundle.commitment.message_id and message_bundle.commitment_root are required"
-                )
-            val commitmentRootValue = messageBundle["commitment_root"] ?: messageBundle["commitmentRoot"]
-                ?: throw IllegalArgumentException(
-                    "message_bundle.commitment.message_id and message_bundle.commitment_root are required"
-                )
-            require(messageIdValue is String) {
-                "message_bundle.commitment.message_id must contain 64 hex characters"
-            }
-            require(commitmentRootValue is String) {
-                "message_bundle.commitment_root must contain 64 hex characters"
-            }
-            return Pair(
-                normalizeHex32(messageIdValue, "message_bundle.commitment.message_id"),
-                normalizeHex32(commitmentRootValue, "message_bundle.commitment_root"),
-            )
-        }
-
-        private fun validateSccpGroth16ProofHexForMessageBundle(proofHex: String, fields: Map<*, *>) {
-            validateSccpGroth16ProofHex(proofHex)
-            val proofContext = optionalSccpMessageProofContext(fields) ?: return
-            fun word(index: Int): String = proofHex.substring(index * 64, (index + 1) * 64)
-            require(word(0) == abiWordU32Hex(1)) { "proof_bytes_hex.version must be 1" }
-            require(word(1) == proofContext.first) {
-                "proof_bytes_hex.message_id must match message_bundle.commitment.message_id"
-            }
-            require(word(2) == abiWordU32Hex(SCCP_DOMAIN_SORA)) {
-                "proof_bytes_hex.source_domain must be SORA"
-            }
-            require(word(3) == proofContext.second) {
-                "proof_bytes_hex.commitment_root must match message_bundle.commitment_root"
-            }
-        }
-
-        private fun proofWordValue(proofHex: String, index: Int): BigInteger =
-            BigInteger(proofHex.substring(index * 64, (index + 1) * 64), 16)
-
-        private fun proofWordIsZero(proofHex: String, index: Int): Boolean =
-            proofWordValue(proofHex, index) == BigInteger.ZERO
-
-        private fun requireBaseFieldWord(proofHex: String, index: Int, label: String) {
-            require(proofWordValue(proofHex, index) < SCCP_GROTH16_BN254_BASE_FIELD_MODULUS) {
-                "$label must be a BN254 base-field element"
-            }
-        }
-
-        private fun requireNonZeroPoint(proofHex: String, indexes: List<Int>, label: String) {
-            require(indexes.any { !proofWordIsZero(proofHex, it) }) { "$label must not be zero" }
-        }
-
-        private fun fq(value: BigInteger): BigInteger =
-            value.mod(SCCP_GROTH16_BN254_BASE_FIELD_MODULUS)
-
-        private fun fq2Mul(left: Pair<BigInteger, BigInteger>, right: Pair<BigInteger, BigInteger>): Pair<BigInteger, BigInteger> =
-            Pair(
-                fq(left.first * right.first - left.second * right.second),
-                fq(left.first * right.second + left.second * right.first),
-            )
-
-        private fun requireG1Point(proofHex: String, xIndex: Int, yIndex: Int, label: String) {
-            requireNonZeroPoint(proofHex, listOf(xIndex, yIndex), label)
-            val x = proofWordValue(proofHex, xIndex)
-            val y = proofWordValue(proofHex, yIndex)
-            val left = fq(y * y)
-            val right = fq(x * x * x + BigInteger.valueOf(3))
-            require(left == right) { "$label must be a BN254 G1 point" }
-        }
-
-        private fun requireG2Point(
-            proofHex: String,
-            x0Index: Int,
-            x1Index: Int,
-            y0Index: Int,
-            y1Index: Int,
-            label: String,
-        ) {
-            requireNonZeroPoint(proofHex, listOf(x0Index, x1Index, y0Index, y1Index), label)
-            val x = Pair(proofWordValue(proofHex, x0Index), proofWordValue(proofHex, x1Index))
-            val y = Pair(proofWordValue(proofHex, y0Index), proofWordValue(proofHex, y1Index))
-            val left = fq2Mul(y, y)
-            val x3 = fq2Mul(fq2Mul(x, x), x)
-            val right = Pair(fq(x3.first + SCCP_GROTH16_BN254_G2_B_C0), fq(x3.second + SCCP_GROTH16_BN254_G2_B_C1))
-            require(left == right) { "$label must be a BN254 G2 point" }
-        }
-
-        @JvmStatic internal fun validateSccpGroth16ProofHex(proofHex: String) {
-            require(proofWordValue(proofHex, 0) == BigInteger.ONE) { "proof_bytes_hex.version must be 1" }
-            require(!proofWordIsZero(proofHex, 1)) { "proof_bytes_hex.message_id must not be zero" }
-            val sourceDomain = proofWordValue(proofHex, 2)
-            require(sourceDomain <= BigInteger.valueOf(0xffff_ffffL)) {
-                "proof_bytes_hex.source_domain must fit u32"
-            }
-            require(sourceDomain == BigInteger.valueOf(SCCP_DOMAIN_SORA.toLong())) {
-                "proof_bytes_hex.source_domain must be SORA"
-            }
-            require(!proofWordIsZero(proofHex, 3)) { "proof_bytes_hex.commitment_root must not be zero" }
-            listOf("a.x", "a.y", "b.x0", "b.x1", "b.y0", "b.y1", "c.x", "c.y")
-                .forEachIndexed { offset, field ->
-                    requireBaseFieldWord(proofHex, 4 + offset, "proof_bytes_hex.$field")
-                }
-            requireG1Point(proofHex, 4, 5, "proof_bytes_hex.a")
-            requireG2Point(proofHex, 6, 7, 8, 9, "proof_bytes_hex.b")
-            requireG1Point(proofHex, 10, 11, "proof_bytes_hex.c")
-        }
-
-        private val sccpDestinationProofMaterialHexFields = mapOf(
-            "network_id_hex" to 32,
-            "verifier_address_hex" to 20,
-            "bridge_address_hex" to 20,
-            "verifier_code_hash_hex" to 32,
-            "verifier_key_hash_hex" to 32,
-            "expected_destination_binding_hash_hex" to 32,
+        private val SCCP_PROOF_SUBMIT_FIELDS = setOf(
+            "authority", "signature_b64", "transaction_payload_b64",
+            "destination_proof_b64", "creation_time_ms",
         )
+        private val SCCP_MESSAGE_SUBMIT_FIELDS = setOf(
+            "authority", "signature_b64", "transaction_payload_b64",
+            "native_proof_b64", "creation_time_ms",
+        )
+        private const val SCCP_MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024
+        private const val SCCP_MAX_DESTINATION_ARTIFACT_BYTES =
+            SCCP_MAX_NATIVE_PROOF_BYTES + 64 * 1024
 
-        private fun validateSccpDestinationProofMaterialRelationship(fields: Map<*, *>) {
-            val hasDestinationMaterial = preflightSccpDestinationProofMaterial(fields)
-            val hasProofBytes = fields["proof_bytes_hex"] != null
-            require(!hasDestinationMaterial || hasProofBytes) {
-                "proof_bytes_hex is required when SCCP destination proof parameters are supplied"
-            }
-            require(!hasProofBytes || hasDestinationMaterial) {
-                "deployment destination fields are required when proof_bytes_hex is supplied"
-            }
-            if (hasDestinationMaterial && hasProofBytes) {
-                requireSccpDestinationProofMaterialTuple(fields)
-            }
-        }
-
-        private fun preflightSccpDestinationProofMaterial(fields: Map<*, *>): Boolean {
-            var hasDestinationMaterial = false
-            for ((field, expectedByteLength) in sccpDestinationProofMaterialHexFields) {
-                if (!fields.containsKey(field)) continue
-                val value = fields[field] ?: continue
-                require(value is String) { "$field must be a $expectedByteLength-byte hex string" }
-                normalizeExactNonZeroEvenLengthHex(value, field, expectedByteLength)
-                hasDestinationMaterial = true
-            }
-            if (fields.containsKey("tron_verifier_address")) {
-                val value = fields["tron_verifier_address"]
-                if (value != null) {
-                    require(value is String) { "tron_verifier_address must be a non-empty string" }
-                    normalizeTronBase58CheckAddress(value, "tron_verifier_address")
-                    hasDestinationMaterial = true
-                }
-            }
-            return hasDestinationMaterial
-        }
-
-        private fun requireSccpDestinationProofMaterialTuple(fields: Map<*, *>) {
-            val hasEvmFields =
-                hasSccpDestinationField(fields, "verifier_address_hex") ||
-                    hasSccpDestinationField(fields, "bridge_address_hex")
-            val hasTronFields = hasSccpDestinationField(fields, "tron_verifier_address")
-            require(!(hasEvmFields && hasTronFields)) {
-                "EVM and TRON SCCP destination fields cannot be mixed"
-            }
-
-            val sharedFields = listOf(
-                "network_id_hex",
-                "verifier_code_hash_hex",
-                "verifier_key_hash_hex",
-                "expected_destination_binding_hash_hex",
-            )
-            val hasSharedFields = sharedFields.any { hasSccpDestinationField(fields, it) }
-            if (hasTronFields) {
-                val required = listOf(
-                    "network_id_hex",
-                    "tron_verifier_address",
-                    "verifier_code_hash_hex",
-                    "verifier_key_hash_hex",
-                    "expected_destination_binding_hash_hex",
+        private fun optionalSccpArtifact(fields: Map<*, *>, field: String): String? =
+            when (val value = fields[field]) {
+                null -> null
+                is String -> value
+                else -> throw IllegalArgumentException(
+                    "$field must be a canonical padded base64 string"
                 )
-                val missing = required.filter { !hasSccpDestinationField(fields, it) }
-                require(missing.isEmpty()) {
-                    "complete TRON SCCP deployment destination fields are required; missing ${missing.joinToString(", ")}"
-                }
-                requireTronSccpDestinationBindingHashMatches(fields)
-                return
             }
-
-            if (hasEvmFields) {
-                val required = listOf(
-                    "network_id_hex",
-                    "verifier_address_hex",
-                    "bridge_address_hex",
-                    "verifier_code_hash_hex",
-                    "verifier_key_hash_hex",
-                    "expected_destination_binding_hash_hex",
-                )
-                val missing = required.filter { !hasSccpDestinationField(fields, it) }
-                require(missing.isEmpty()) {
-                    "complete EVM SCCP deployment destination fields are required; missing ${missing.joinToString(", ")}"
-                }
-                requireEvmSccpDestinationBindingHashMatches(fields)
-                return
-            }
-
-            require(!hasSharedFields) {
-                "complete EVM or TRON SCCP deployment destination fields are required"
-            }
-        }
-
-        private fun requireEvmSccpDestinationBindingHashMatches(fields: Map<*, *>) {
-            val actual = normalizeExactNonZeroEvenLengthHex(
-                fields["expected_destination_binding_hash_hex"] as String,
-                "expected_destination_binding_hash_hex",
-                32,
-            )
-            val expectedHashes = listOf(SccpSourceProofs.DOMAIN_ETH, SccpSourceProofs.DOMAIN_BSC)
-                .map { targetDomain ->
-                    SccpSourceProofs.evmDestinationBindingHash(
-                        sourceDomain = SccpSourceProofs.DOMAIN_SORA,
-                        targetDomain = targetDomain,
-                        networkId = fields["network_id_hex"] as String,
-                        verifierAddress = fields["verifier_address_hex"] as String,
-                        bridgeAddress = fields["bridge_address_hex"] as String,
-                        verifierCodeHash = fields["verifier_code_hash_hex"] as String,
-                        verifierKeyHash = fields["verifier_key_hash_hex"] as String,
-                    ).removePrefix("0x")
-                }
-            require(actual in expectedHashes) {
-                "expected_destination_binding_hash_hex must match canonical EVM destination binding"
-            }
-        }
-
-        private fun requireTronSccpDestinationBindingHashMatches(fields: Map<*, *>) {
-            val expected = SccpSourceProofs.tronDestinationBindingHash(
-                networkId = fields["network_id_hex"] as String,
-                verifierAddress = fields["tron_verifier_address"] as String,
-                verifierCodeHash = fields["verifier_code_hash_hex"] as String,
-                verifierKeyHash = fields["verifier_key_hash_hex"] as String,
-            ).removePrefix("0x")
-            val actual = normalizeExactNonZeroEvenLengthHex(
-                fields["expected_destination_binding_hash_hex"] as String,
-                "expected_destination_binding_hash_hex",
-                32,
-            )
-            require(actual == expected) {
-                "expected_destination_binding_hash_hex must match canonical TRON destination binding"
-            }
-        }
-
-        private fun hasSccpDestinationField(fields: Map<*, *>, field: String): Boolean =
-            fields[field] != null
-
-        private fun preflightSccpBridgeSubmitBundleSelection(fields: Map<*, *>, path: String) {
-            val hasBurnBundle = hasSccpDestinationField(fields, "burn_bundle")
-            val hasMessageBundle = hasSccpDestinationField(fields, "message_bundle")
-            if (path == "/v1/bridge/proofs/submit") {
-                val bundleCount = (if (hasBurnBundle) 1 else 0) + (if (hasMessageBundle) 1 else 0)
-                require(bundleCount == 1) {
-                    "bridge proof submit must provide exactly one of burn_bundle or message_bundle"
-                }
-                require(!(hasBurnBundle && hasSccpDestinationProofOrMaterial(fields))) {
-                    "SCCP destination fields and proof_bytes_hex are only valid for message_bundle submissions"
-                }
-            } else if (path == "/v1/bridge/messages") {
-                require(hasMessageBundle) { "bridge message submit requires message_bundle" }
-                require(!hasBurnBundle) { "bridge message submit does not accept burn_bundle" }
-            }
-        }
-
-        private fun hasSccpDestinationProofOrMaterial(fields: Map<*, *>): Boolean {
-            if (hasSccpDestinationField(fields, "proof_bytes_hex")) return true
-            return sccpDestinationProofMaterialHexFields.keys.any {
-                hasSccpDestinationField(fields, it)
-            } || hasSccpDestinationField(fields, "tron_verifier_address")
-        }
     }
 }

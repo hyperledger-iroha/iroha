@@ -51,6 +51,14 @@ pub mod gpu_zstd;
 /// provide an explicit configuration.
 const DEFAULT_MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
 
+/// Maximum number of recursively owned values reconstructed by one decoder.
+///
+/// `Box`, `Rc`, and `Arc` make it possible for a wire value to have a
+/// data-dependent recursive depth even though its Rust type is finite. Keeping
+/// this limit in the codec prevents an untrusted archive from exhausting the
+/// native stack before the decoded value reaches its domain validator.
+pub const MAX_OWNED_VALUE_DECODE_DEPTH: usize = 256;
+
 static MAX_ARCHIVE_LEN: AtomicU64 = AtomicU64::new(DEFAULT_MAX_ARCHIVE_LEN);
 
 fn serialize_owned<W: Write, T: NoritoSerialize>(mut writer: W, value: &T) -> Result<(), Error> {
@@ -652,6 +660,35 @@ pub(crate) fn take_last_header_flags() -> Option<u8> {
 thread_local! {
     static DECODE_PAYLOAD_CTX: RefCell<Option<PayloadCtxState>> = const { RefCell::new(None) };
     static DECODE_ROOT_SPAN: RefCell<Option<(usize, usize)>> = const { RefCell::new(None) };
+    static OWNED_VALUE_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+struct OwnedValueDecodeDepthGuard;
+
+impl OwnedValueDecodeDepthGuard {
+    fn enter() -> Result<Self, Error> {
+        OWNED_VALUE_DECODE_DEPTH.with(|depth| {
+            let next = depth.get().saturating_add(1);
+            if next > MAX_OWNED_VALUE_DECODE_DEPTH {
+                return Err(Error::NestingDepthExceeded {
+                    depth: next,
+                    limit: MAX_OWNED_VALUE_DECODE_DEPTH,
+                    context: "owned Norito value",
+                });
+            }
+            depth.set(next);
+            Ok(Self)
+        })
+    }
+}
+
+impl Drop for OwnedValueDecodeDepthGuard {
+    fn drop(&mut self) {
+        OWNED_VALUE_DECODE_DEPTH.with(|depth| {
+            debug_assert!(depth.get() > 0, "owned-value decode depth underflow");
+            depth.set(depth.get().saturating_sub(1));
+        });
+    }
 }
 
 /// Record the root payload span for the current thread.
@@ -4007,6 +4044,7 @@ where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
+        let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
         let (payload, used) = parse_owned_payload(bytes)?;
         let (value, consumed) = decode_field_canonical::<T>(payload)?;
         if consumed != payload.len() {
@@ -4021,6 +4059,7 @@ where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
+        let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
         let (payload, used) = parse_owned_payload(bytes)?;
         let (value, consumed) = decode_field_canonical::<T>(payload)?;
         if consumed != payload.len() {
@@ -4035,6 +4074,7 @@ where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
+        let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
         let (payload, used) = parse_owned_payload(bytes)?;
         let (value, consumed) = decode_field_canonical::<T>(payload)?;
         if consumed != payload.len() {
@@ -4323,6 +4363,13 @@ pub enum Error {
     /// Archive length exceeds the supported limit for this build.
     #[error("archive length {length} exceeds limit {limit}")]
     ArchiveLengthExceeded { length: u64, limit: u64 },
+    /// A data-dependent recursive value exceeded the deterministic decode bound.
+    #[error("{context} nesting depth {depth} exceeds limit {limit}")]
+    NestingDepthExceeded {
+        depth: usize,
+        limit: usize,
+        context: &'static str,
+    },
     /// Checksum verification failed.
     #[error("checksum mismatch")]
     ChecksumMismatch,
@@ -8339,6 +8386,24 @@ mod tests {
         NoritoDeserialize, NoritoSerialize, codec,
         codec::{encode_adaptive, encode_with_header_flags},
     };
+
+    #[test]
+    fn owned_value_decode_depth_guard_is_bounded_and_restores() {
+        let guards = (0..MAX_OWNED_VALUE_DECODE_DEPTH)
+            .map(|_| OwnedValueDecodeDepthGuard::enter().expect("depth within codec limit"))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            OwnedValueDecodeDepthGuard::enter(),
+            Err(Error::NestingDepthExceeded {
+                depth,
+                limit: MAX_OWNED_VALUE_DECODE_DEPTH,
+                context: "owned Norito value",
+            }) if depth == MAX_OWNED_VALUE_DECODE_DEPTH + 1
+        ));
+
+        drop(guards);
+        OwnedValueDecodeDepthGuard::enter().expect("failed guard must restore decode depth");
+    }
 
     #[test]
     fn crc64_matches_digest() {

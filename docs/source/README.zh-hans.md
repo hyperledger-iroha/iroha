@@ -44,7 +44,7 @@ translator: machine-google-reviewed
 - Docker 构建器映像使用：`docker_build.md`
 
 使用技巧
-- 使用外部工具（`koto_compile`、`ivm_run`）在 `examples/` 中构建并运行示例：
+- 使用外部工具（`koto build`、`ivm_run`）在 `examples/` 中构建并运行示例：
   - `make examples-run`（如果 `ivm_tool` 可用，则为 `make examples-inspect`）
 - `integration_tests/tests/` 中的示例和标头检查的可选集成测试（默认情况下忽略）。管道配置
 - 所有运行时行为均通过 `iroha_config` 文件进行配置。环境变量不用于操作员。

@@ -43,14 +43,17 @@ use super::{
         V2CandidateAssembler,
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
-    v2_effects::{EffectExecutorStep, EffectQueueConfig, EffectTransportError, V2EffectExecutor},
+    v2_effects::{
+        EffectExecutorStep, EffectQueueConfig, EffectTransportError, PostFinalityCleanupOutcome,
+        PostFinalityCleanupTarget, V2EffectExecutor,
+    },
     v2_lane_work::{
         MergeSidecarDeferralDisposition, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
         V2LaneWorkLimits,
     },
     v2_recovery::{build_verified_successor, recover_active_height},
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
-    v2_worker::ProductionV2Services,
+    v2_worker::{ProductionV2Services, V2CleanupSupervisor},
 };
 use crate::{block::BlockBuilder, kura::Kura, queue::Queue, state::State};
 
@@ -161,12 +164,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
     let mut block_sync_server = None;
+    let post_finality_cleanup_timeout = config.persistence.post_finality_cleanup_timeout;
+    let mut cleanup_supervisor = V2CleanupSupervisor::default();
 
     loop {
+        cleanup_supervisor.reap_finished();
         if shutdown_signal.is_sent() {
             return Ok(());
         }
         let context = verified_context.context().clone();
+        let validator_set_pops = verified_context.proofs_of_possession().to_vec();
         let block_cadence = state.sumeragi_effective_block_time();
         let shared_config = config.v2_config(block_cadence, context.mode)?;
         let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
@@ -224,6 +231,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         }
         let mut services = ProductionV2Services::start(
             context.clone(),
+            validator_set_pops,
             local_peer.clone(),
             local_validator,
             common_config.key_pair.clone(),
@@ -288,6 +296,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         )> = None;
 
         let finality = loop {
+            cleanup_supervisor.reap_finished();
             if shutdown_signal.is_sent() {
                 return Ok(());
             }
@@ -419,12 +428,25 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
                 let (runtime, receipt, artifact) = executor.into_finalized_parts()?;
                 let finalized = runtime.into_driver().finish_height(&receipt, &artifact)?;
+                let mut cleanup = PostFinalityCleanupOutcome::default();
                 if let Some(warning) = finalized.wal_retirement_warning() {
-                    iroha_logger::warn!(warning, "retained finalized Sumeragi v2 WAL");
+                    cleanup.record(PostFinalityCleanupTarget::SafetyWal, warning);
                 }
-                services
-                    .finish_height(receipt.clone())
-                    .map_err(V2RunnerError::Service)?;
+                cleanup.append(services.finish_height(
+                    receipt.clone(),
+                    post_finality_cleanup_timeout,
+                    &mut cleanup_supervisor,
+                ));
+                for warning in cleanup.warnings() {
+                    iroha_logger::warn!(
+                        height = receipt.height(),
+                        context_id = ?receipt.context_id(),
+                        block_hash = %receipt.block_hash(),
+                        cleanup_target = warning.target().as_str(),
+                        reason = warning.reason(),
+                        "Sumeragi v2 finalized with retained local cleanup state"
+                    );
+                }
                 break (receipt, artifact);
             }
 
@@ -1341,6 +1363,7 @@ mod tests {
                 height: 1,
                 epoch: 0,
                 epoch_end_height: u64::MAX,
+                next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),

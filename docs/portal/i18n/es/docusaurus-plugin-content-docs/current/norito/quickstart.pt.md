@@ -22,10 +22,10 @@ O contrato de exemplo grava um par chave/valor na conta do chamador para que voc
 
 - [Docker](https://docs.docker.com/engine/install/) con Compose V2 habilitado (usado para iniciar o par de ejemplo definido en `defaults/docker-compose.single.yml`).
 - Toolchain Rust (1.76+) para compilar los binarios auxiliares y descargar los publicados.
-- Binarios `koto_compile`, `ivm_run` e `iroha_cli`. Puedes compilar los archivos a partir del checkout del espacio de trabajo como mostrar abajo o bajar los artefactos de lanzamiento correspondientes:
+- Binarios `koto build`, `ivm_run` e `iroha_cli`. Puedes compilar los archivos a partir del checkout del espacio de trabajo como mostrar abajo o bajar los artefactos de lanzamiento correspondientes:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -47,22 +47,22 @@ Llame a un directorio de trabajo y salve el ejemplo mínimo de Kotodama:
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -74,15 +74,14 @@ KO
 Compile el contrato para el código de bytes IVM/Norito (`.to`) y ejecútelo localmente para confirmar que las llamadas al sistema del host funcionan antes de tocar una red:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-El corredor imprime el registro `info("Hello from Kotodama")` y ejecuta la llamada al sistema `SET_ACCOUNT_DETAIL` contra el host simulado. Se o binario opcional `ivm_tool` estiver disponivel, `ivm_tool inspect target/quickstart/hello.to` muestra el encabezado ABI, los bits de características y los puntos de entrada exportados.
+El corredor imprime el registro `debug::info("Hello from Kotodama")` y ejecuta la llamada al sistema `SET_ACCOUNT_DETAIL` contra el host simulado. Se o binario opcional `ivm_tool` estiver disponivel, `ivm_tool inspect target/quickstart/hello.to` muestra el encabezado ABI, los bits de características y los puntos de entrada exportados.
 
 ## 4. Envíe el código de bytes a través de ToriiComo nodo todavía rodando, envie el código de bytes compilado para Torii usando la CLI. A identidade desenvolvimento padrao e derivada da chave publica em `defaults/client.toml`, portanto o ID de conta e
 ```

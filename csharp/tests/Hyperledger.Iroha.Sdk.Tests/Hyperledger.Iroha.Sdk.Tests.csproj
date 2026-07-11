@@ -29,6 +29,7 @@
     <None Include="../../../IrohaSwift/Fixtures/swift_parity_manifest.json" Link="Fixtures/swift_parity_manifest.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../IrohaSwift/Fixtures/swift_parity_payloads.json" Link="Fixtures/swift_parity_payloads.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../IrohaSwift/Fixtures/swift_*.norito" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sccp/native_transfer_event_v1.json" Link="Fixtures/sccp/native_transfer_event_v1.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

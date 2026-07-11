@@ -25,6 +25,15 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 
+fn unwrap_some_word(vm: &IVM) -> u64 {
+    let layout = ivm::sum::SumLayoutV1::option(1).expect("Option layout");
+    let (is_some, words) =
+        ivm::sum::read_words(vm, vm.register(10), layout).expect("read typed JSON getter Option");
+    assert!(is_some, "typed JSON getter must return Option::some");
+    assert_eq!(words.len(), 1);
+    words[0]
+}
+
 fn account(_domain: &str, public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().expect("public key");
     AccountId::new(public_key)
@@ -104,7 +113,7 @@ fn wsv_host_json_get_asset_definition_id_reads_address_literals() {
     vm.load_program(&prog).expect("load program");
     vm.run().expect("json get asset definition id");
 
-    let out_ptr = vm.register(10);
+    let out_ptr = unwrap_some_word(&vm);
     let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
     assert_eq!(tlv.type_id, PointerType::AssetDefinitionId);
     let asset: AssetDefinitionId = norito::decode_from_bytes(tlv.payload).expect("decode asset");
@@ -134,7 +143,7 @@ fn wsv_host_json_get_asset_definition_id_direct_reads_address_literals() {
     vm.load_program(&prog).expect("load program");
     vm.run().expect("json get asset definition id");
 
-    let out_ptr = vm.register(10);
+    let out_ptr = unwrap_some_word(&vm);
     let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
     assert_eq!(tlv.type_id, PointerType::AssetDefinitionId);
     let asset: AssetDefinitionId = norito::decode_from_bytes(tlv.payload).expect("decode asset");

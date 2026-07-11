@@ -122,3 +122,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   (`namespace.name@semver`) Пожалуйста, проверьте.
 - **أتمتة CI** – أضف الأوامر أعلاه إلى خطوط إصدار النشر حتى تنشر المستندات والـ светильники
   Он был убит Джоном Джонсом и Беннетом в Нью-Йорке.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

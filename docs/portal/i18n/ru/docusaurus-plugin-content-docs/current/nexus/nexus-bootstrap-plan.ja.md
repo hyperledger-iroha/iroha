@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7b28e744b37c1ee32a6d0c84652eee40f83bf7e8d1cceee42a420d14f0f26336
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -39,7 +39,7 @@ description: Операционный план вывода базового к�
 ## Сетевые окружения
 - Эксплуатируйте два окружения Nexus с разными сетевыми префиксами:
 - **Sora Nexus (mainnet)** - префикс продакшн сети `nexus`, размещает каноническое управление и piggyback сервисы SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - префикс staging сети `testus`, зеркалирует mainnet конфигурацию для интеграционных тестов и pre-release валидации (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - префикс staging сети `testus`, зеркалирует mainnet конфигурацию для интеграционных тестов и pre-release валидации (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Держите отдельные genesis файлы, governance keys и инфраструктурные footprints для каждого окружения. Testus служит полигоном для всех rollouts SoraFS/SoraNet перед продвижением в Nexus.
 - CI/CD pipelines должны сначала деплоить в Testus, выполнять автоматические smoke tests и требовать ручной промоушн в Nexus после прохождения проверок.
 - Референсные конфигурационные bundles лежат в `configs/soranexus/nexus/` (mainnet) и `configs/soranexus/testus/` (testnet), каждая содержит образцы `config.toml`, `genesis.json` и каталоги admission Torii.

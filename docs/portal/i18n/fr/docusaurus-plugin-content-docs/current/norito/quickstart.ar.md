@@ -22,10 +22,10 @@ limace : /norito/quickstart
 
 - [Docker](https://docs.docker.com/engine/install/) avec Compose V2 (pour les homologues de `defaults/docker-compose.single.yml`).
 - سلسلة ادوات Rust (1.76+) ثنائيات المساعدة اذا لم تقم بتنزيل المنشورة.
-- Paramètres `koto_compile` et `ivm_run` et `iroha_cli`. Vous pouvez également utiliser la caisse pour l'espace de travail et créer des artefacts :
+- Paramètres `koto build` et `ivm_run` et `iroha_cli`. Vous pouvez également utiliser la caisse pour l'espace de travail et créer des artefacts :
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -47,22 +47,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -74,15 +74,14 @@ KO
 Vous pouvez utiliser le bytecode IVM/Norito (`.to`) pour utiliser les appels système. للمضيف قبل لمس الشبكة:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-يطبع runner سجل `info("Hello from Kotodama")` et syscall `SET_ACCOUNT_DETAIL` على المضيف الوهمي. Il s'agit de l'en-tête ABI, des bits de fonctionnalité et des points d'entrée.
+يطبع runner سجل `debug::info("Hello from Kotodama")` et syscall `SET_ACCOUNT_DETAIL` على المضيف الوهمي. Il s'agit de l'en-tête ABI, des bits de fonctionnalité et des points d'entrée.
 
 ## 4. Utiliser le bytecode Torii
 

@@ -120,3 +120,23 @@ carga útil اگر manifiesto سے ہٹے تو فوراً fail ہو جائے۔
   ترجیح دینی چاہیے۔
 - **Automatización de CI** – اوپر دی گئی کمانڈز کو canalizaciones de lanzamiento میں شامل کریں تاکہ docs،
   accesorios، اور artefactos metadatos firmados کے ساتھ manifiestos deterministas شائع کریں۔
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

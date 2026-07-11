@@ -67,9 +67,9 @@ translator: machine-google-reviewed
 
 ## CARGO_BIN_EXE_ኮቶ_ማጠናቀር (ሙከራ፡ 3)
 
-- ሙከራ፡ ሳጥኖች/ivm/tests/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- ሙከራ፡ crates/ivm/tests/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- ሙከራ፡ crates/ivm/tests/cli_smoke.rs:88 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
+- ሙከራ፡ ሳጥኖች/ivm/tests/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto build");`
+- ሙከራ፡ crates/ivm/tests/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto build");`
+- ሙከራ፡ crates/ivm/tests/cli_smoke.rs:88 — `let bin = env!("CARGO_BIN_EXE_koto build");`
 
 ## CARGO_BIN_EXE_sorafs_chunk_mump (ሙከራ፡ 1)
 
@@ -653,7 +653,7 @@ translator: machine-google-reviewed
 
 ## LANG (ሙከራ፡ 3)
 
-- ሙከራ: crates/ivm/src/bin/koto_lint.rs:702 — `let previous = env::var("LANG").ok();`
+- ሙከራ: crates/ivm/src/bin/koto check.rs:702 — `let previous = env::var("LANG").ok();`
 ሙከራ፡ ሳጥኖች/ivm/tess/i18n.rs:11 — `let old_lang = env::var("LANG").ok();`
 ሙከራ፡ ሳጥኖች/ivm/tess/i18n.rs:69 — `let old_lang = env::var("LANG").ok();`
 
@@ -744,10 +744,6 @@ translator: machine-google-reviewed
 - ፕሮድ፡ crates/ivm/src/cuda.rs:22 — `static BITONIC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx"));`
 ሙከራ፡ crates/ivm/src/ptx_tests.rs:7 — `let out_dir = match std::env::var("OUT_DIR") {`
 ሙከራ፡ crates/ivm/tests/ptx_kernels.rs:5 — `let out_dir = env!("OUT_DIR");`
-
-## P2P_TURN (ምርት: 1)
-
-- ፕሮድ፡ crates/iroha_p2p/src/transport.rs:296 — `let endpoint = std::env::var("P2P_TURN")`
 
 ## PATH (ምርት፡ 2፣ ሙከራ፡ 1)
 

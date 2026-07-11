@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "paramita `{name}` mubasa `{func}` haishandiswe zvachose",
     lint_unreachable_after_return: "chirevo chisvikike chawanikwa mu {context}: kodhi iri mushure me return haitombomhanya",
     lint_ok: "zvakanaka",
-    lint_usage: "Mashandisiro: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Mashandisiro: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Mhanya ongororo dze lint dzeKotodama pamafaira akapiwa.",
     ..english::MESSAGES
 };

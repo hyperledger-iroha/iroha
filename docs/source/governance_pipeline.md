@@ -1,5 +1,10 @@
 % Governance Pipeline (Iroha 2 and SORA Parliament)
 
+The broader target doctrine, economic model, and mechanism maturity matrix are
+defined in [`sora_adversarial_constitution.md`](./sora_adversarial_constitution.md).
+This document records current runtime behavior; aspirational mechanisms in the
+constitution are not active until implemented and separately enacted.
+
 # Current state (v1)
 - Governance proposals run as: proposer → Parliament stage ballots → enactment. Referendum records remain as scheduling/audit envelopes, but SORA Parliament decisions are made by equal signed ballots from seated body members.
 - Parliament selection uses deterministic, domain-separated draws over bonded citizens; the citizenship bond is an anti-Sybil/collateral floor and does not increase draw odds above the minimum. When no persisted roster exists, Torii derives fallback rosters from the bonded citizen registry.

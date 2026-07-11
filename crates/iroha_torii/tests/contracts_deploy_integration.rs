@@ -238,7 +238,7 @@ async fn contracts_redeploy_same_alias_rotates_address_and_deactivates_previous(
     );
     assert_eq!(
         first_contract
-            .get("upgraded")
+            .get("kaizen")
             .and_then(norito::json::Value::as_bool),
         Some(false)
     );
@@ -333,7 +333,7 @@ async fn contracts_redeploy_same_alias_rotates_address_and_deactivates_previous(
     );
     assert_eq!(
         second_contract
-            .get("upgraded")
+            .get("kaizen")
             .and_then(norito::json::Value::as_bool),
         Some(true)
     );

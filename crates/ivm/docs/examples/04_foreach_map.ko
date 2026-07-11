@@ -1,8 +1,9 @@
-// Map reads using direct indexing (bounded) inside a contract.
+// Presence-aware StateMap reads inside a seiyaku.
 seiyaku MapIndexing {
-  kotoage fn sum_two(m: Map<int, int>) -> int {
-    let a = m[1];
-    let b = m[2];
-    return a + b;
-  }
+    state StateMap<int, int> values;
+    kotoage fn sum_two() -> int authorize("Entry") {
+        let a = values.get(1).unwrap_or(0);
+        let b = values.get(2).unwrap_or(0);
+        return a + b;
+    }
 }

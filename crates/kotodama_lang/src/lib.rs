@@ -12,19 +12,33 @@
 //! This module provides the building blocks for a compiler that translates
 //! Kotodama source programs into IVM bytecode.
 
+mod abi_schema;
 pub mod analysis;
 pub mod ast;
 pub mod builtins;
+mod checked_arithmetic;
 pub mod compiler;
+pub mod diagnostic;
 mod doc_consistency;
+pub mod driver;
+pub mod formatter;
 pub mod i18n;
 pub mod ir;
 pub mod lexer;
+pub mod linker;
 pub mod lint;
 pub mod parser;
 pub mod policy;
 pub mod regalloc;
+pub mod resolved;
+mod secret;
 pub mod semantic;
+mod semantic_diagnostics;
+pub mod session;
+pub mod source;
+pub mod spanned_ast;
+mod ssa;
+pub mod syntax;
 pub mod wide;
 
 pub use ivm_abi::{

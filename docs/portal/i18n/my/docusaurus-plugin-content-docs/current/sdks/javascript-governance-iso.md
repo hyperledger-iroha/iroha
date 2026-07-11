@@ -105,32 +105,25 @@ Torii သည် terminal ကိုဘယ်တော့မှအစီရင်�
 
 ### ISO alias အကူအညီပေးသူ
 
-`recipes/iso_alias.mjs` သည် ISO alias အဆုံးမှတ်များကို ပစ်မှတ်ထားသောကြောင့် လေ့ကျင့်မှုများသည် အကျုံးဝင်သည်
-စိတ်ကြိုက်တူးလ်ကို မရေးဘဲ မျက်စိကွယ်နေသော ဒြပ်စင်ကို ဟက်ခြင်း နှင့် နံပတ်ရှာရှာဖွေခြင်း ။ အဲဒါ
-`ToriiClient.evaluateAliasVoprf` နှင့် `resolveAlias` / `resolveAliasByIndex`
-နောက်ကွယ်မှ၊ အချေအတင်၊ အကောင့်ချိတ်ဆက်မှု၊ အရင်းအမြစ်နှင့် သတ်မှတ်အညွှန်းကိန်းတို့ကို ပရင့်ထုတ်သည်။
-Torii ဖြင့် ပြန်ပေးခဲ့သည်။
+`recipes/iso_alias.mjs` သည် သီးသန့်ကိရိယာများ မလိုအပ်ဘဲ ISO alias ရှာဖွေမှုများကို စမ်းသပ်သည်။
+၎င်းသည် `resolveAlias` နှင့် `resolveAliasByIndex` ကို ခေါ်ပြီးနောက် Torii က ပြန်ပေးသည့် အကောင့်ချိတ်ဆက်မှု၊ ရင်းမြစ်နှင့် သတ်မှတ်ညွှန်းကိန်းကို ပရင့်ထုတ်သည်။
 
 ပတ်ဝန်းကျင် ပြောင်းလဲမှုများ-
 
 - `TORII_URL` — Torii alias helpers များကို ဖော်ထုတ်ပြသသည့် အဆုံးမှတ်။
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element (`deadbeef` သို့ ပုံသေများ)။
-- `ISO_SKIP_VOPRF=1` — စမ်းသပ်ရှာဖွေမှုများသာရှိသည့်အခါ VOPRF ခေါ်ဆိုမှုကို ကျော်လိုက်ပါ။
 - `ISO_ALIAS_LABEL` — ဖြေရှင်းရန် ပကတိအမည်များ (ဥပမာ၊ IBAN ပုံစံစာကြောင်းများ)။
 - `ISO_ALIAS_INDEX` — ဒဿမ သို့မဟုတ် `0x`-ရှေ့ဆက်အညွှန်းကို `resolveAliasByIndex` သို့ ကျော်သွားသည်။
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — လုံခြုံသော Torii ဖြန့်ကျက်မှုအတွက် ရွေးချယ်နိုင်သော ခေါင်းစီးများ။
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

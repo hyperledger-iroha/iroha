@@ -27,11 +27,11 @@ Norito և Kotodama առաջին անգամ. գործարկեք դետերմին�
   սկսելու համար `defaults/docker-compose.single.yml`-ում սահմանված օրինակելի հավասարումը):
 - Rust Toolchain (1.76+) օգնական երկուական սարքեր ստեղծելու համար, եթե չներբեռնեք
   հրապարակվածները։
-- `koto_compile`, `ivm_run` և `iroha` երկուականներ: Դուք կարող եք դրանք կառուցել
+- `koto build`, `ivm_run` և `iroha` երկուականներ: Դուք կարող եք դրանք կառուցել
   Աշխատանքային տարածքի վճարում, ինչպես ցույց է տրված ստորև, կամ ներբեռնեք համապատասխան թողարկման արտեֆակտները.
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -58,28 +58,22 @@ CLI-ի հաջորդ զանգերը ուղղված են այս հասակակից
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
-  kotoage fn main() permission(Admin) {
-    info("Hello from Kotodama");
-    write_detail();
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() permission(Admin) {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -94,15 +88,14 @@ KO
 հաստատեք, որ հյուրընկալող համակարգային զանգերը հաջողվում են նախքան ցանցին դիպչելը.
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-Վազողը տպում է `info("Hello from Kotodama")` մատյանը և կատարում
+Վազողը տպում է `debug::info("Hello from Kotodama")` մատյանը և կատարում
 `SET_ACCOUNT_DETAIL` syscall ընդդեմ ծաղրված հյուրընկալողի: Եթե ընտրովի `ivm_tool`
 Երկուական հասանելի է, `ivm_tool inspect target/quickstart/hello.to` ցուցադրում է
 ABI վերնագիր, հատկանիշի բիթեր և արտահանվող մուտքի կետեր:

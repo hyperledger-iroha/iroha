@@ -1,12 +1,12 @@
 ---
 lang: mn
 direction: ltr
-source: docs/portal/versioned_docs/version-2025-q2/norito/getting-started.md
+source: docs/portal/docs/norito/getting-started.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8e153602cfb465bd5f65bab0cf97c44604bba982a7a7f1edc8d5af8fd67a9e29
-source_last_modified: "2026-01-22T16:26:46.562262+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 3754b8549f90a4f325bb58a6b4e24bc052ec65d46a6352995c13555a8d5544bf
+source_last_modified: "2026-04-08T09:18:21.504260+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -20,21 +20,21 @@ Iroha зангилаа руу.
 
 1. Rust toolchain (1.76 ба түүнээс дээш) суулгаад энэ агуулахыг шалгана уу.
 2. Дэмжих хоёртын файлуудыг бүтээх буюу татаж авах:
-   - `koto_compile` – Kotodama хөрвүүлэгч IVM/Norito байт кодыг ялгаруулдаг
+   - `koto build` – Kotodama хөрвүүлэгч IVM/Norito байт кодыг ялгаруулдаг
    - `ivm_run` ба `ivm_tool` - орон нутгийн гүйцэтгэл, хяналтын хэрэгслүүд
-   - `iroha_cli` – Torii-ээр дамжуулан гэрээгээр байршуулахад ашигладаг
+   - `iroha` – Torii-ээр дамжуулан гэрээгээр байршуулахад ашигладаг
 
    Makefile репозитор эдгээр хоёртын файлуудыг `PATH` дээр хүлээж байна. Та аль нь ч болно
    Урьдчилан бүтээгдсэн олдворуудыг татаж авах эсвэл эх сурвалжаас бүтээх. Хэрэв та эмхэтгэсэн бол
    toolchain локал дээр Makefile туслахуудыг хоёртын файл руу чиглүүлнэ:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Байршуулах алхамд хүрэх үед Iroha зангилаа ажиллаж байгаа эсэхийг шалгаарай. The
    Доорх жишээнүүд нь Torii нь таны тохиргоонд тохируулсан URL хаягаар холбогдох боломжтой гэж үздэг.
-   `iroha_cli` профайл (`~/.config/iroha/cli.toml`).
+   `iroha` профайл (`~/.config/iroha/cli.toml`).
 
 ## 1. Kotodama гэрээг эмхэтгэ
 
@@ -43,17 +43,16 @@ Iroha зангилаа руу.
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Түлхүүр тугнууд:
 
-- `--abi 1` нь гэрээг ABI хувилбар 1-д (зөвхөн дэмжигдсэн хувилбар дээр) түгждэг.
+- `ABI V1` нь гэрээг ABI хувилбар 1-д (зөвхөн дэмжигдсэн хувилбар дээр) түгждэг.
   бичих цаг).
-- `--max-cycles 0` хязгааргүй гүйцэтгэлийн хүсэлт; эерэг тоог хязгаарлах
+- `--max-cycles 1000000` хязгааргүй гүйцэтгэлийн хүсэлт; эерэг тоог хязгаарлах
   0-мэдлэгийн нотолгоонд зориулсан мөчлөгийн дэвсгэр.
 
 ## 2. Norito олдворыг шалгах (заавал биш)
@@ -80,14 +79,14 @@ ivm_run target/examples/hello.to --args '{}'
 Нийтлэхээсээ өмнө гэрээний логикийг давтах үед орон нутагт ажиллах нь ашигтай
 энэ нь гинж дээр.
 
-## 4. `iroha_cli`-ээр дамжуулан байршуулах
+## 4. `iroha`-ээр дамжуулан байршуулах
 
 Хэрэв та гэрээнд сэтгэл хангалуун байвал CLI ашиглан зангилаа руу байрлуулна уу.
 Эрх бүхий бүртгэл, гарын үсэг зурах түлхүүр, `.to` файл эсвэл
 Үндсэн 64 ачаалал:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -98,14 +97,13 @@ iroha_cli app contracts deploy \
 Хариултад үзүүлсэн хэшийг манифест эсвэл жагсаалтын жишээг сэргээхэд ашиглаж болно:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
 ```
 
 ## 5. Torii-ийн эсрэг ажиллуул
 
 Бүртгэгдсэн байт кодтой бол та заавар илгээж дуудаж болно
-Энэ нь хадгалагдсан кодыг иш татдаг (жишээ нь, `iroha_cli ledger transaction submit`
+Энэ нь хадгалагдсан кодыг иш татдаг (жишээ нь, `iroha contract call --contract-address <contract-address> --entrypoint main --wait`
 эсвэл таны програмын үйлчлүүлэгч). Бүртгэлийн зөвшөөрөл нь хүссэн зүйлээ зөвшөөрч байгаа эсэхийг шалгаарай
 системийн дуудлага (`set_account_detail`, `transfer_asset` гэх мэт).
 
@@ -114,11 +112,11 @@ iroha_cli app contracts instances --namespace apps --table
 - Өгөгдсөн жишээнүүдийг нэг дор эмхэтгэж гүйцэтгэхийн тулд `make examples-run`-г ашиглана уу.
   буудсан. Хоёртын файлууд идэвхгүй байгаа бол `KOTO`/`IVM` орчны хувьсагчдыг хүчингүй болгох
   `PATH`.
-- Хэрэв `koto_compile` ABI хувилбараас татгалзвал хөрвүүлэгч болон зангилаа
-  хоёуланг нь зорилтот ABI v1 (жагсаалтын аргументгүйгээр `koto_compile --abi` ажиллуулна уу
+- Хэрэв `koto build` ABI хувилбараас татгалзвал хөрвүүлэгч болон зангилаа
+  хоёуланг нь зорилтот ABI v1 (жагсаалтын аргументгүйгээр `koto build --help` ажиллуулна уу
   дэмжлэг).
 - CLI нь hex эсвэл Base64 гарын үсэг зурах түлхүүрүүдийг хүлээн зөвшөөрдөг. Туршилтын хувьд та ашиглаж болно
-  `iroha_cli tools crypto keypair`-аас ялгарсан түлхүүрүүд.
+  `kagami keys --json`-аас ялгарсан түлхүүрүүд.
 - Norito ачааллыг дибаг хийх үед `ivm_tool disassemble` дэд команд тусална.
   зааврыг Kotodama эх сурвалжтай холбоно уу.
 

@@ -27,7 +27,6 @@ iroha_crypto = { workspace = true, features = ["std", "rand", "sm", "gost", "bls
 iroha_core = { workspace = true, features = ["iroha-core-tests", "zk-halo2-ipa"] }
 iroha_data_model = { workspace = true, features = ["std", "json", "transparent_api", "gost", "sm", "bls"] }
 iroha_primitives = { workspace = true }
-iroha_sccp = { workspace = true }
 iroha_schema = { workspace = true }
 iroha_version = { workspace = true }
 iroha_zkp_halo2 = { workspace = true }
@@ -42,11 +41,11 @@ sorafs_chunker = { workspace = true }
 sorafs_orchestrator = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 iroha = { workspace = true }
+kotodama_lang = { workspace = true }
 kaigi_zk = { path = "../kaigi_zk" }
 zk_ace_prover = { path = "../zk_ace_prover" }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
 bs58 = "0.5.1"
 
 [dev-dependencies]
-iroha_sccp = { workspace = true, features = ["test-fixtures"] }
 tempfile = { workspace = true }

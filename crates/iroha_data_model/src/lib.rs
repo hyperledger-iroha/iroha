@@ -336,7 +336,7 @@ pub mod prelude {
     };
     pub use iroha_primitives::{
         json::Json,
-        numeric::{Numeric, NumericSpec, numeric},
+        numeric::{Numeric, NumericOperationError, NumericSpec, Quantity, numeric},
     };
 
     pub use super::{

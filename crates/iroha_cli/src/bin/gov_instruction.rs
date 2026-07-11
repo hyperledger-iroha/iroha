@@ -1,4 +1,4 @@
-//! Encode governance instructions and proof-gated governance helper transactions.
+//! Encode governance instructions and submit consensus-governed helper transactions.
 
 use std::{
     fs,
@@ -10,36 +10,29 @@ use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     account_address::parse_account_address,
-    client::{Client, TransactionWaitOptions, TransactionWaitTerminalStatus},
+    client::Client,
     config::{Config, LoadPath},
     data_model::{
-        account::address::ChainDiscriminantGuard,
         isi::{
             InstructionBox,
-            bridge::{RecordSccpMessage, SccpRouteManifest, UpsertSccpRouteManifest},
+            bridge::{ApplySccpRouteGovernance, RecordSccpMessage, SccpRouteGovernanceActionV1},
             decode_instruction_from_pair,
             governance::RegisterCitizen,
             verifying_keys,
         },
         metadata::Metadata,
         name::Name,
-        proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId},
-        transaction::{Executable, IvmBytecode, IvmProved, SignedTransaction, TransactionBuilder},
+        proof::VerifyingKeyId,
+        transaction::{SignedTransaction, TransactionBuilder},
     },
 };
-use iroha_crypto::Hash;
 use iroha_primitives::json::Json;
 use iroha_sccp::{
-    SccpPayloadV1, TransferPayloadV1, canonical_sccp_payload_bytes, sccp_message_id,
-    verify_sccp_payload_structure,
+    SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1, SccpPayloadV1, TransferPayloadV1,
+    canonical_sccp_payload_bytes, hub_commitment_from_sccp_payload, verify_sccp_payload_structure,
 };
 
 const DEFAULT_LEDGER_GAS_LIMIT: u64 = 2_000_000;
-const DEFAULT_IVM_GAS_LIMIT: u64 = 50_000_000;
-const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
-const LITERAL_DATA_START: i16 = 16;
-const WIDE_IMM_MIN: i8 = -128;
-const WIDE_IMM_MAX: i8 = 127;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -67,12 +60,23 @@ enum Command {
     },
     /// Encode a `RecordSccpMessage` instruction from an SCCP transfer payload.
     RecordSccpTransfer {
+        /// Canonical first-release SORA source profile: exactly `sora-taira`.
         #[arg(long)]
-        source_domain: u32,
+        source_profile: String,
+        /// Canonical exact external destination profile, such as `ethereum-mainnet`.
         #[arg(long)]
-        dest_domain: u32,
+        target_profile: String,
+        /// Governed destination binding hash active for this message.
+        #[arg(long)]
+        destination_binding_hash: String,
+        /// Immutable governed route-configuration hash active for this message.
+        #[arg(long)]
+        route_configuration_hash: String,
         #[arg(long)]
         nonce: u64,
+        /// Nonzero immutable governed route revision.
+        #[arg(long)]
+        route_revision: u32,
         #[arg(long)]
         asset_home_domain: u32,
         #[arg(long)]
@@ -105,107 +109,16 @@ enum Command {
         #[arg(long, default_value_t = DEFAULT_LEDGER_GAS_LIMIT)]
         gas_limit: u64,
     },
-    /// Record an SCCP transfer through proof-gated `Executable::IvmProved` admission.
-    RecordSccpTransferIvmProved {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long, default_value = "ivm_execution")]
-        vk_name: String,
-        #[arg(long)]
-        gas_asset_id: Option<String>,
-        #[arg(long, default_value_t = DEFAULT_IVM_GAS_LIMIT)]
-        gas_limit: u64,
-        #[arg(long, default_value_t = DEFAULT_MAX_CYCLES)]
-        max_cycles: u64,
-        #[arg(long)]
-        source_domain: u32,
-        #[arg(long)]
-        dest_domain: u32,
-        #[arg(long)]
-        nonce: u64,
-        #[arg(long)]
-        asset_home_domain: u32,
-        #[arg(long)]
-        asset_id_codec: u8,
-        #[arg(long)]
-        asset_id: String,
-        #[arg(long)]
-        amount: u128,
-        #[arg(long)]
-        sender_codec: u8,
-        #[arg(long)]
-        sender: String,
-        #[arg(long)]
-        recipient_codec: u8,
-        #[arg(long)]
-        recipient: String,
-        #[arg(long)]
-        route_id_codec: u8,
-        #[arg(long)]
-        route_id: String,
-    },
-    /// Build the JSON body used for `/v1/zk/ivm/derive` without submitting it.
-    BuildSccpTransferIvmDeriveRequest {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long, default_value = "ivm_execution")]
-        vk_name: String,
-        #[arg(long)]
-        gas_asset_id: Option<String>,
-        #[arg(long, default_value_t = DEFAULT_IVM_GAS_LIMIT)]
-        gas_limit: u64,
-        #[arg(long, default_value_t = DEFAULT_MAX_CYCLES)]
-        max_cycles: u64,
-        #[arg(long)]
-        source_domain: u32,
-        #[arg(long)]
-        dest_domain: u32,
-        #[arg(long)]
-        nonce: u64,
-        #[arg(long)]
-        asset_home_domain: u32,
-        #[arg(long)]
-        asset_id_codec: u8,
-        #[arg(long)]
-        asset_id: String,
-        #[arg(long)]
-        amount: u128,
-        #[arg(long)]
-        sender_codec: u8,
-        #[arg(long)]
-        sender: String,
-        #[arg(long)]
-        recipient_codec: u8,
-        #[arg(long)]
-        recipient: String,
-        #[arg(long)]
-        route_id_codec: u8,
-        #[arg(long)]
-        route_id: String,
-    },
-    /// Publish an on-chain SCCP route manifest from a route upsert JSON artifact.
-    PublishSccpRouteManifest {
+    /// Apply one exact on-chain SCCP route-governance action from canonical JSON.
+    ApplySccpRouteGovernance {
         #[arg(long)]
         config: PathBuf,
         #[arg(long)]
-        manifest: PathBuf,
+        action: PathBuf,
         #[arg(long)]
         gas_asset_id: Option<String>,
         #[arg(long, default_value_t = DEFAULT_LEDGER_GAS_LIMIT)]
         gas_limit: u64,
-        #[arg(long)]
-        expected_route_id: Option<String>,
-        #[arg(long)]
-        expected_asset_key: Option<String>,
-    },
-    /// Build a local TAIRA/TRON XOR diagnostic SCCP message bundle for public smoke tests.
-    BuildTairaTronXorDiagnosticMessageBundle {
-        #[arg(long)]
-        nonce: u64,
-        #[arg(long)]
-        amount: u128,
-        #[arg(long)]
-        recipient: String,
     },
 }
 
@@ -221,109 +134,6 @@ fn print_json_value(value: &norito::json::Value) -> Result<()> {
     Ok(())
 }
 
-fn make_tlv(type_id: u16, payload: &[u8]) -> Result<Vec<u8>> {
-    let payload_len =
-        u32::try_from(payload.len()).map_err(|_| eyre!("TLV payload length exceeds u32::MAX"))?;
-    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
-    out.extend_from_slice(&type_id.to_be_bytes());
-    out.push(1);
-    out.extend_from_slice(&payload_len.to_be_bytes());
-    out.extend_from_slice(payload);
-    let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
-    out.extend_from_slice(&h);
-    Ok(out)
-}
-
-fn norito_tlv<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>> {
-    let payload = norito::to_bytes(value)?;
-    make_tlv(ivm::PointerType::NoritoBytes as u16, &payload)
-}
-
-fn push_word(code: &mut Vec<u8>, word: u32) {
-    code.extend_from_slice(&word.to_le_bytes());
-}
-
-fn chunk_immediate(value: i64) -> i8 {
-    let clamped = value.clamp(i64::from(WIDE_IMM_MIN), i64::from(WIDE_IMM_MAX));
-    i8::try_from(clamped).expect("clamped immediate must fit in i8")
-}
-
-fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, mut value: i64) {
-    if rd != rs1 {
-        push_word(
-            code,
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, rd, rs1, 0),
-        );
-    }
-    while value != 0 {
-        let chunk = chunk_immediate(value);
-        push_word(
-            code,
-            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, rd, rd, chunk),
-        );
-        value -= i64::from(chunk);
-    }
-}
-
-fn push_syscall(code: &mut Vec<u8>, syscall: u32) -> Result<()> {
-    push_word(
-        code,
-        ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(syscall).map_err(|_| eyre!("syscall id does not fit in u8"))?,
-        ),
-    );
-    Ok(())
-}
-
-fn assemble_program_with_literals(
-    code: &[u8],
-    literal_data: &[u8],
-    max_cycles: u64,
-) -> Result<Vec<u8>> {
-    let metadata = ivm::ProgramMetadata {
-        max_cycles,
-        mode: ivm::ivm_mode::ZK,
-        vector_length: 4,
-        ..Default::default()
-    };
-    let mut program = metadata.encode();
-    if !literal_data.is_empty() {
-        let literal_data_len = u32::try_from(literal_data.len())
-            .map_err(|_| eyre!("literal table data length exceeds u32::MAX"))?;
-        let unpadded_literal_len = literal_data
-            .len()
-            .checked_add(16)
-            .ok_or_else(|| eyre!("literal table length overflow"))?;
-        let post_pad = (4 - (unpadded_literal_len % 4)) % 4;
-        let post_pad_u32 = u32::try_from(post_pad).expect("post-padding is at most three bytes");
-        program.extend_from_slice(b"LTLB");
-        program.extend_from_slice(&0u32.to_le_bytes());
-        program.extend_from_slice(&post_pad_u32.to_le_bytes());
-        program.extend_from_slice(&literal_data_len.to_le_bytes());
-        program.extend_from_slice(literal_data);
-        program.extend(std::iter::repeat_n(0u8, post_pad));
-    }
-    program.extend_from_slice(code);
-    Ok(program)
-}
-
-fn build_record_instruction_program(
-    instruction: &InstructionBox,
-    max_cycles: u64,
-) -> Result<Vec<u8>> {
-    let tlv = norito_tlv(instruction)?;
-    let mut code = Vec::new();
-    emit_addi(&mut code, 10, 0, i64::from(LITERAL_DATA_START));
-    push_syscall(&mut code, ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)?;
-    push_syscall(
-        &mut code,
-        ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
-    )?;
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    assemble_program_with_literals(&code, &tlv, max_cycles)
-}
-
 fn insert_string_metadata(
     metadata: &mut Metadata,
     key: &str,
@@ -334,6 +144,9 @@ fn insert_string_metadata(
 }
 
 fn tx_metadata(gas_asset_id: Option<&str>, gas_limit: u64) -> Result<Metadata> {
+    if gas_limit == 0 {
+        return Err(eyre!("gas_limit must be a positive integer"));
+    }
     let mut metadata = Metadata::default();
     if let Some(asset_id) = gas_asset_id.filter(|value| !value.trim().is_empty()) {
         insert_string_metadata(&mut metadata, "gas_asset_id", asset_id.trim().to_owned())?;
@@ -342,50 +155,15 @@ fn tx_metadata(gas_asset_id: Option<&str>, gas_limit: u64) -> Result<Metadata> {
     Ok(metadata)
 }
 
-fn sccp_route_manifest_value_from_artifact(
-    value: norito::json::Value,
-) -> Result<norito::json::Value> {
-    let Some(object) = value.as_object() else {
-        return Err(eyre!("SCCP route manifest artifact must be a JSON object"));
-    };
-
-    if object.contains_key("route_id") {
-        return Ok(value);
-    }
-
-    if let Some(manifest) = object.get("manifest") {
-        return Ok(manifest.clone());
-    }
-
-    let Some(instruction) = object
-        .get("instruction")
-        .and_then(norito::json::Value::as_object)
-    else {
-        return Err(eyre!(
-            "SCCP route manifest artifact must contain `route_id`, `manifest`, or `instruction.UpsertSccpRouteManifest.manifest`"
-        ));
-    };
-    let Some(upsert) = instruction
-        .get("UpsertSccpRouteManifest")
-        .and_then(norito::json::Value::as_object)
-    else {
-        return Err(eyre!(
-            "SCCP route manifest artifact missing `instruction.UpsertSccpRouteManifest`"
-        ));
-    };
-    upsert
-        .get("manifest")
-        .cloned()
-        .ok_or_else(|| eyre!("SCCP route upsert artifact missing `manifest`"))
-}
-
-fn read_sccp_route_manifest_artifact(path: &Path) -> Result<SccpRouteManifest> {
+fn read_sccp_route_governance_action(path: &Path) -> Result<SccpRouteGovernanceActionV1> {
     let raw = fs::read_to_string(path)
-        .wrap_err_with(|| format!("failed to read SCCP route manifest `{}`", path.display()))?;
-    let value: norito::json::Value =
-        norito::json::from_str(&raw).wrap_err("failed to parse SCCP route manifest JSON")?;
-    let manifest_value = sccp_route_manifest_value_from_artifact(value)?;
-    norito::json::from_value(manifest_value).wrap_err("failed to decode SCCP route manifest")
+        .wrap_err_with(|| format!("failed to read SCCP governance action `{}`", path.display()))?;
+    let action: SccpRouteGovernanceActionV1 = norito::json::from_str(&raw)
+        .wrap_err("failed to decode canonical SCCP route-governance action JSON")?;
+    action
+        .validate_static()
+        .map_err(|error| eyre!("invalid SCCP route-governance action: {error}"))?;
+    Ok(action)
 }
 
 fn load_config(path: &Path) -> Result<Config> {
@@ -517,361 +295,143 @@ fn ensure_ivm_execution_vk(
     Ok(id)
 }
 
-fn submit_sccp_route_manifest_transaction(
+fn submit_sccp_route_governance_transaction(
     client: &Client,
-    config: &Config,
     tx: &SignedTransaction,
-) -> Result<(String, &'static str)> {
-    let tx_hash = match client.submit_transaction_blocking(tx) {
-        Ok(hash) => return Ok((hash.to_string(), "single")),
-        Err(err) if err.to_string().contains("length mismatch") => {
-            let payload = client.prepare_transaction_payload(tx);
-            let hash = payload.hash();
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .wrap_err("failed to create Tokio runtime for SCCP route batch submit")?;
-            runtime
-                .block_on(client.submit_prepared_transaction_payload_batch_async(&[payload]))
-                .wrap_err(
-                    "failed to submit SCCP route manifest upsert as one-item transaction batch",
-                )?;
-            let wait = client
-                .wait_for_transaction_terminal_status(
-                    hash,
-                    TransactionWaitOptions {
-                        timeout: config.transaction_status_timeout,
-                        poll_interval: std::time::Duration::from_millis(500),
-                        terminal_statuses: vec![TransactionWaitTerminalStatus::Applied],
-                    },
-                )
-                .wrap_err("SCCP route manifest batch submit did not reach Applied status")?;
-            if wait.terminal_kind != TransactionWaitTerminalStatus::Applied.as_str() {
-                return Err(eyre!(
-                    "SCCP route manifest batch submit stopped at `{}`: {}",
-                    wait.terminal_kind,
-                    wait.summary
-                ));
-            }
-            hash
-        }
-        Err(err) => {
-            return Err(err).wrap_err("failed to submit SCCP route manifest upsert transaction");
-        }
-    };
-    Ok((tx_hash.to_string(), "batch"))
+) -> Result<String> {
+    submit_sccp_route_governance_once(|| client.submit_transaction_blocking(tx))
+        .map(|hash| hash.to_string())
 }
 
-fn print_sccp_route_manifest_publish_output(
+fn submit_sccp_route_governance_once<T>(submit: impl FnOnce() -> Result<T>) -> Result<T> {
+    submit().wrap_err("failed to submit SCCP route-governance transaction")
+}
+
+fn sccp_route_governance_action_label(action: &SccpRouteGovernanceActionV1) -> &'static str {
+    match action {
+        SccpRouteGovernanceActionV1::Register(_) => "register",
+        SccpRouteGovernanceActionV1::SetActivation(_) => "set_activation",
+        SccpRouteGovernanceActionV1::SwitchRevision(_) => "switch_revision",
+        SccpRouteGovernanceActionV1::InitializeTrustAnchor(_) => "initialize_trust_anchor",
+        SccpRouteGovernanceActionV1::AdvanceTrustAnchor(_) => "advance_trust_anchor",
+        SccpRouteGovernanceActionV1::Remove(_) => "remove",
+    }
+}
+
+fn print_sccp_route_governance_output(
     tx_hash: &str,
     submit_mode: &str,
-    manifest: &SccpRouteManifest,
+    action: &SccpRouteGovernanceActionV1,
 ) -> Result<()> {
     let mut output = norito::json::Map::new();
     output.insert("tx_hash".to_owned(), tx_hash.into());
     output.insert("submit_mode".to_owned(), submit_mode.into());
-    output.insert("route_id".to_owned(), manifest.route_id.clone().into());
-    output.insert("asset_key".to_owned(), manifest.asset_key.clone().into());
     output.insert(
-        "source_verifier_material".to_owned(),
-        manifest.source_verifier_material.is_some().into(),
-    );
-    output.insert(
-        "source_adapter_engine_deployment".to_owned(),
-        manifest.source_adapter_engine_deployment.is_some().into(),
-    );
-    output.insert(
-        "source_adapter_engine".to_owned(),
-        manifest.source_adapter_engine.is_some().into(),
+        "governance_action".to_owned(),
+        sccp_route_governance_action_label(action).into(),
     );
     print_json_value(&norito::json::Value::Object(output))
 }
 
-fn build_taira_tron_xor_diagnostic_message_bundle(
-    nonce: u64,
-    amount: u128,
-    recipient: String,
-) -> Result<()> {
-    let bundle = iroha_sccp::test_fixtures::sample_taira_tron_xor_diagnostic_transfer_bundle(
-        nonce,
-        amount,
-        recipient.into_bytes(),
-    )
-    .ok_or_else(|| eyre!("failed to build TAIRA/TRON XOR diagnostic transfer bundle"))?;
-    if !iroha_sccp::sccp_taira_tron_xor_diagnostic_message_bundle_structure(&bundle) {
-        return Err(eyre!(
-            "TAIRA/TRON XOR diagnostic transfer bundle failed structure validation"
-        ));
-    }
-
-    let message_id = hex::encode(bundle.commitment.message_id);
-    let selected_recent_item = norito::json!({
-        "message_id_hex": (message_id.clone()),
-        "kind": "transfer",
-        "target_domain": (iroha_sccp::SCCP_DOMAIN_SORA),
-        "counterparty_domain": (iroha_sccp::SCCP_DOMAIN_TRON),
-        "route_id": (iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1),
-        "diagnostic": true,
-        "source": "local_taira_tron_xor"
-    });
-    let output = norito::json!({
-        "message_id": (message_id),
-        "route": (iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1),
-        "bundle": (norito::json::to_value(&bundle)?),
-        "proof_submit_fields": null,
-        "selected_recent_item": (selected_recent_item)
-    });
-    print_json_value(&output)
-}
-
-fn publish_sccp_route_manifest(
+fn apply_sccp_route_governance(
     config_path: &Path,
-    manifest_path: &Path,
+    action_path: &Path,
     gas_asset_id: Option<&str>,
     gas_limit: u64,
-    expected_route_id: Option<&str>,
-    expected_asset_key: Option<&str>,
 ) -> Result<()> {
     let config = load_config(config_path)?;
     let client = Client::new(config.clone());
-    let manifest = read_sccp_route_manifest_artifact(manifest_path)?;
-
-    if let Some(expected) = expected_route_id
-        && manifest.route_id != expected
-    {
-        return Err(eyre!(
-            "route manifest id mismatch: expected `{expected}`, found `{}`",
-            manifest.route_id
-        ));
-    }
-    if let Some(expected) = expected_asset_key
-        && manifest.asset_key != expected
-    {
-        return Err(eyre!(
-            "route manifest asset mismatch: expected `{expected}`, found `{}`",
-            manifest.asset_key
-        ));
-    }
-    if !manifest.production_ready {
-        return Err(eyre!(
-            "route manifest `{}` is not marked production_ready",
-            manifest.route_id
-        ));
-    }
+    let action = read_sccp_route_governance_action(action_path)?;
 
     let mut metadata = tx_metadata(gas_asset_id, gas_limit)?;
-    insert_string_metadata(&mut metadata, "action", "publish_sccp_route_manifest")?;
-    insert_string_metadata(&mut metadata, "route_id", manifest.route_id.clone())?;
-    insert_string_metadata(&mut metadata, "asset_key", manifest.asset_key.clone())?;
+    insert_string_metadata(&mut metadata, "action", "apply_sccp_route_governance")?;
+    insert_string_metadata(
+        &mut metadata,
+        "sccp_governance_action",
+        sccp_route_governance_action_label(&action),
+    )?;
 
     let tx = TransactionBuilder::new(config.chain.clone(), config.account.clone())
         .with_metadata(metadata)
-        .with_instructions([InstructionBox::from(UpsertSccpRouteManifest::new(
-            manifest.clone(),
+        .with_instructions([InstructionBox::from(ApplySccpRouteGovernance::new(
+            action.clone(),
         ))]);
     let tx = sign_governance_transaction(
         tx,
         &config,
-        "failed to sign SCCP route manifest upsert transaction",
+        "failed to sign SCCP route-governance transaction",
     )?;
     let versioned_tx_bytes =
         <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
     <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
         &versioned_tx_bytes,
     )
-    .wrap_err("locally encoded SCCP route manifest transaction does not decode")?;
-    let (tx_hash, submit_mode) = submit_sccp_route_manifest_transaction(&client, &config, &tx)?;
-    print_sccp_route_manifest_publish_output(&tx_hash, submit_mode, &manifest)
+    .wrap_err("locally encoded SCCP route-governance transaction does not decode")?;
+    let tx_hash = submit_sccp_route_governance_transaction(&client, &tx)?;
+    print_sccp_route_governance_output(&tx_hash, "single", &action)
 }
 
-fn ivm_request_value(
-    vk_ref: &VerifyingKeyId,
-    config: &Config,
-    metadata: &Metadata,
-    bytecode: &IvmBytecode,
-) -> Result<norito::json::Value> {
-    let _chain_discriminant = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
-    let mut object = norito::json::Map::new();
-    object.insert("vk_ref".to_owned(), norito::json::to_value(vk_ref)?);
-    object.insert(
-        "authority".to_owned(),
-        norito::json::to_value(&config.account)?,
-    );
-    object.insert("metadata".to_owned(), norito::json::to_value(metadata)?);
-    object.insert("bytecode".to_owned(), norito::json::to_value(bytecode)?);
-    Ok(norito::json::Value::Object(object))
+fn parse_canonical_hex32_argument(name: &str, value: &str) -> Result<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(eyre!(
+            "{name} must be exactly 64 unprefixed lowercase hexadecimal characters"
+        ));
+    }
+    let bytes = hex::decode(value).expect("validated lowercase hexadecimal input");
+    bytes
+        .try_into()
+        .map_err(|_| eyre!("{name} must decode to exactly 32 bytes"))
 }
 
-fn proved_from_derive_response(value: &norito::json::Value) -> Result<IvmProved> {
-    let proved = value
-        .as_object()
-        .and_then(|object| object.get("proved"))
-        .cloned()
-        .ok_or_else(|| eyre!("derive response missing `proved`"))?;
-    norito::json::from_value(proved).wrap_err("failed to decode derived IvmProved")
-}
-
-fn prove_ivm_execution_attachment(
-    vk_ref: VerifyingKeyId,
-    proved: &IvmProved,
-) -> Result<ProofAttachment> {
-    let parsed = ivm::ProgramMetadata::parse(proved.bytecode.as_ref())
-        .map_err(|_| eyre!("invalid IVM header in derived proved payload"))?;
-    let body = proved
-        .bytecode
-        .as_ref()
-        .get(parsed.header_len..)
-        .ok_or_else(|| eyre!("invalid IVM header in derived proved payload"))?;
-    let code_hash = Hash::new(body);
-    let overlay_bytes =
-        norito::to_bytes(&proved.overlay).wrap_err("failed to encode proved overlay")?;
-    let overlay_hash = Hash::new(&overlay_bytes);
-    let vk_box = iroha_core::zk::halo2_ipa_ivm_execution_vk_box()
-        .map_err(|err| eyre!("failed to build ivm-execution-v1 VK: {err}"))?;
-    let proof = iroha_core::zk::prove_halo2_ipa_ivm_execution_envelope(
-        iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
-        &vk_box,
-        code_hash,
-        overlay_hash,
-        proved.events_commitment,
-        proved.gas_policy_commitment,
-        None,
-    )
-    .map_err(|err| eyre!("failed to prove ivm-execution-v1 envelope: {err}"))?;
-    Ok(ProofAttachment::new_ref(
-        iroha_core::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
-        proof,
-        vk_ref,
-    ))
-}
-
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-fn submit_sccp_transfer_ivm_proved(
-    config_path: PathBuf,
-    vk_name: String,
-    gas_asset_id: Option<String>,
-    gas_limit: u64,
-    max_cycles: u64,
-    source_domain: u32,
-    dest_domain: u32,
-    nonce: u64,
-    asset_home_domain: u32,
-    asset_id_codec: u8,
-    asset_id: String,
-    amount: u128,
-    sender_codec: u8,
-    sender: String,
-    recipient_codec: u8,
-    recipient: String,
-    route_id_codec: u8,
-    route_id: String,
-) -> Result<()> {
-    let config = load_config(&config_path)?;
-    let client = Client::new(config.clone());
-    let vk_ref = ensure_ivm_execution_vk(
-        &client,
-        &config,
-        &vk_name,
-        gas_asset_id.as_deref(),
-        DEFAULT_LEDGER_GAS_LIMIT,
-    )?;
-    let (message_id, payload_bytes) = record_sccp_transfer_payload_bytes(
-        source_domain,
-        dest_domain,
-        nonce,
-        asset_home_domain,
-        asset_id_codec,
-        asset_id,
-        amount,
-        sender_codec,
-        sender,
-        recipient_codec,
-        recipient,
-        route_id_codec,
-        route_id,
-    )?;
-    let instruction = InstructionBox::from(RecordSccpMessage::new(payload_bytes));
-    let program = build_record_instruction_program(&instruction, max_cycles)?;
-    let bytecode = IvmBytecode::from_compiled(program);
-    let metadata = tx_metadata(gas_asset_id.as_deref(), gas_limit)?;
-    let request = ivm_request_value(&vk_ref, &config, &metadata, &bytecode)?;
-    let derive_response = client
-        .post_zk_ivm_derive_json(&request)
-        .wrap_err("failed to derive IVM proved payload via Torii")?;
-    let proved = proved_from_derive_response(&derive_response)?;
-    let attachment = prove_ivm_execution_attachment(vk_ref, &proved)?;
-    let tx = TransactionBuilder::new(config.chain.clone(), config.account.clone())
-        .with_metadata(metadata)
-        .with_executable(Executable::IvmProved(proved))
-        .with_attachments(ProofAttachmentList(vec![attachment]));
-    let tx =
-        sign_governance_transaction(tx, &config, "failed to sign SCCP IVM-proved transaction")?;
-    let tx_hash = client
-        .submit_transaction_blocking(&tx)
-        .wrap_err("failed to submit SCCP IVM-proved transaction")?;
-
-    let mut output = norito::json::Map::new();
-    output.insert("message_id".to_owned(), message_id.into());
-    output.insert("tx_hash".to_owned(), tx_hash.to_string().into());
-    output.insert("vk_name".to_owned(), vk_name.into());
-    print_json_value(&norito::json::Value::Object(output))
-}
-
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-fn build_sccp_transfer_ivm_derive_request(
-    config_path: PathBuf,
-    vk_name: String,
-    gas_asset_id: Option<String>,
-    gas_limit: u64,
-    max_cycles: u64,
-    source_domain: u32,
-    dest_domain: u32,
-    nonce: u64,
-    asset_home_domain: u32,
-    asset_id_codec: u8,
-    asset_id: String,
-    amount: u128,
-    sender_codec: u8,
-    sender: String,
-    recipient_codec: u8,
-    recipient: String,
-    route_id_codec: u8,
-    route_id: String,
-) -> Result<()> {
-    let config = load_config(&config_path)?;
-    let vk_ref = ivm_execution_vk_id(&vk_name);
-    let (message_id, payload_bytes) = record_sccp_transfer_payload_bytes(
-        source_domain,
-        dest_domain,
-        nonce,
-        asset_home_domain,
-        asset_id_codec,
-        asset_id,
-        amount,
-        sender_codec,
-        sender,
-        recipient_codec,
-        recipient,
-        route_id_codec,
-        route_id,
-    )?;
-    let instruction = InstructionBox::from(RecordSccpMessage::new(payload_bytes));
-    let program = build_record_instruction_program(&instruction, max_cycles)?;
-    let bytecode = IvmBytecode::from_compiled(program);
-    let metadata = tx_metadata(gas_asset_id.as_deref(), gas_limit)?;
-    let request = ivm_request_value(&vk_ref, &config, &metadata, &bytecode)?;
-
-    let mut output = norito::json::Map::new();
-    output.insert("message_id".to_owned(), message_id.into());
-    output.insert("request".to_owned(), request);
-    print_json_value(&norito::json::Value::Object(output))
+fn parse_sccp_codec_argument(name: &str, codec: u8, value: &str) -> Result<Vec<u8>> {
+    match codec {
+        iroha_sccp::SCCP_CODEC_CANONICAL_TEXT => Ok(value.as_bytes().to_vec()),
+        iroha_sccp::SCCP_CODEC_EVM_ADDRESS20 => {
+            if value.len() != 40
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            {
+                return Err(eyre!(
+                    "{name} using evm_address20 must be exactly 40 unprefixed lowercase hexadecimal characters"
+                ));
+            }
+            hex::decode(value).wrap_err_with(|| format!("failed to decode {name}"))
+        }
+        iroha_sccp::SCCP_CODEC_TRON_ADDRESS21 => {
+            if value.len() != 42
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            {
+                return Err(eyre!(
+                    "{name} using tron_address21 must be exactly 42 unprefixed lowercase hexadecimal characters"
+                ));
+            }
+            let bytes = hex::decode(value).wrap_err_with(|| format!("failed to decode {name}"))?;
+            if bytes.first() != Some(&0x41) || bytes[1..].iter().all(|byte| *byte == 0) {
+                return Err(eyre!(
+                    "{name} using tron_address21 must start with 41 and have a nonzero 20-byte payload"
+                ));
+            }
+            Ok(bytes)
+        }
+        _ => Err(eyre!("{name} uses unsupported SCCP codec {codec}")),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn record_sccp_transfer_payload_bytes(
-    source_domain: u32,
-    dest_domain: u32,
+    source_profile: String,
+    target_profile: String,
+    destination_binding_hash: String,
+    route_configuration_hash: String,
     nonce: u64,
+    route_revision: u32,
     asset_home_domain: u32,
     asset_id_codec: u8,
     asset_id: String,
@@ -882,31 +442,94 @@ fn record_sccp_transfer_payload_bytes(
     recipient: String,
     route_id_codec: u8,
     route_id: String,
-) -> Result<(String, Vec<u8>)> {
+) -> Result<(String, SccpOutboundMessageContextV1, Vec<u8>)> {
+    let source = SccpNetworkV1::from_profile_key(&source_profile).ok_or_else(|| {
+        eyre!(
+            "--source-profile must be an exact canonical SCCP profile key, got `{source_profile}`"
+        )
+    })?;
+    let target = SccpNetworkV1::from_profile_key(&target_profile).ok_or_else(|| {
+        eyre!(
+            "--target-profile must be an exact canonical SCCP profile key, got `{target_profile}`"
+        )
+    })?;
+    if source != SccpNetworkV1::SoraTaira || !target.is_external() {
+        return Err(eyre!(
+            "SCCP record context must select the exact sora-taira to Ethereum, BSC, or TRON lane"
+        ));
+    }
+    let (expected_route_id, expected_recipient_codec) = match target {
+        SccpNetworkV1::EthereumMainnet | SccpNetworkV1::EthereumSepolia => (
+            iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1,
+            iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
+        ),
+        SccpNetworkV1::BscMainnet | SccpNetworkV1::BscTestnet => (
+            iroha_sccp::SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+            iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
+        ),
+        SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta => (
+            iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+            iroha_sccp::SCCP_CODEC_TRON_ADDRESS21,
+        ),
+        SccpNetworkV1::SoraTaira => {
+            unreachable!("SORA target rejected above")
+        }
+    };
+    if asset_home_domain != iroha_sccp::SCCP_DOMAIN_SORA
+        || asset_id_codec != iroha_sccp::SCCP_CODEC_CANONICAL_TEXT
+        || asset_id != iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1
+        || sender_codec != iroha_sccp::SCCP_CODEC_CANONICAL_TEXT
+        || recipient_codec != expected_recipient_codec
+        || route_id_codec != iroha_sccp::SCCP_CODEC_CANONICAL_TEXT
+        || route_id != expected_route_id
+    {
+        return Err(eyre!(
+            "SCCP record payload must use the exact Taira XOR asset, family route, sender, and recipient codecs"
+        ));
+    }
+    let destination_binding_hash =
+        parse_canonical_hex32_argument("--destination-binding-hash", &destination_binding_hash)?;
+    let route_configuration_hash =
+        parse_canonical_hex32_argument("--route-configuration-hash", &route_configuration_hash)?;
+    let context = SccpOutboundMessageContextV1::new(
+        SccpLaneIdV1 { source, target },
+        destination_binding_hash,
+        route_configuration_hash,
+    )
+    .ok_or_else(|| {
+        eyre!(
+            "SCCP record context must be an exact Taira-to-external lane with nonzero distinct destination-binding and route-configuration hashes"
+        )
+    })?;
     let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
         version: 1,
-        source_domain,
-        dest_domain,
+        source_domain: source.domain_id(),
+        dest_domain: target.domain_id(),
         nonce,
+        route_revision,
         asset_home_domain,
         asset_id_codec,
-        asset_id: asset_id.into_bytes(),
+        asset_id: parse_sccp_codec_argument("--asset-id", asset_id_codec, &asset_id)?,
         amount,
         sender_codec,
-        sender: sender.into_bytes(),
+        sender: parse_sccp_codec_argument("--sender", sender_codec, &sender)?,
         recipient_codec,
-        recipient: recipient.into_bytes(),
+        recipient: parse_sccp_codec_argument("--recipient", recipient_codec, &recipient)?,
         route_id_codec,
-        route_id: route_id.into_bytes(),
+        route_id: parse_sccp_codec_argument("--route-id", route_id_codec, &route_id)?,
     });
     if !verify_sccp_payload_structure(&payload) {
         return Err(eyre!(
             "SCCP transfer payload failed structural verification"
         ));
     }
-    let message_id = hex::encode(sccp_message_id(&payload));
-    let payload_bytes = canonical_sccp_payload_bytes(&payload);
-    Ok((message_id, payload_bytes))
+    let commitment = hub_commitment_from_sccp_payload(context, &payload).ok_or_else(|| {
+        eyre!(
+            "SCCP transfer payload, exact lane, and destination binding do not form a valid commitment"
+        )
+    })?;
+    let payload_bytes = canonical_sccp_payload_bytes(&payload)?;
+    Ok((hex::encode(commitment.message_id), context, payload_bytes))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -941,9 +564,12 @@ fn main() -> Result<()> {
             print_tx_stdin_json(&encoded);
         }
         Command::RecordSccpTransfer {
-            source_domain,
-            dest_domain,
+            source_profile,
+            target_profile,
+            destination_binding_hash,
+            route_configuration_hash,
             nonce,
+            route_revision,
             asset_home_domain,
             asset_id_codec,
             asset_id,
@@ -955,10 +581,13 @@ fn main() -> Result<()> {
             route_id_codec,
             route_id,
         } => {
-            let (message_id, payload_bytes) = record_sccp_transfer_payload_bytes(
-                source_domain,
-                dest_domain,
+            let (message_id, context, payload_bytes) = record_sccp_transfer_payload_bytes(
+                source_profile,
+                target_profile,
+                destination_binding_hash,
+                route_configuration_hash,
                 nonce,
+                route_revision,
                 asset_home_domain,
                 asset_id_codec,
                 asset_id,
@@ -971,7 +600,7 @@ fn main() -> Result<()> {
                 route_id,
             )?;
             eprintln!("message_id={message_id}");
-            let instruction = InstructionBox::from(RecordSccpMessage::new(payload_bytes));
+            let instruction = InstructionBox::from(RecordSccpMessage::new(context, payload_bytes));
             let bytes = norito::to_bytes(&instruction).wrap_err("failed to encode instruction")?;
             print_tx_stdin_json(&bytes);
         }
@@ -995,104 +624,12 @@ fn main() -> Result<()> {
             output.insert("name".to_owned(), id.name.into());
             print_json_value(&norito::json::Value::Object(output))?;
         }
-        Command::RecordSccpTransferIvmProved {
+        Command::ApplySccpRouteGovernance {
             config,
-            vk_name,
+            action,
             gas_asset_id,
             gas_limit,
-            max_cycles,
-            source_domain,
-            dest_domain,
-            nonce,
-            asset_home_domain,
-            asset_id_codec,
-            asset_id,
-            amount,
-            sender_codec,
-            sender,
-            recipient_codec,
-            recipient,
-            route_id_codec,
-            route_id,
-        } => submit_sccp_transfer_ivm_proved(
-            config,
-            vk_name,
-            gas_asset_id,
-            gas_limit,
-            max_cycles,
-            source_domain,
-            dest_domain,
-            nonce,
-            asset_home_domain,
-            asset_id_codec,
-            asset_id,
-            amount,
-            sender_codec,
-            sender,
-            recipient_codec,
-            recipient,
-            route_id_codec,
-            route_id,
-        )?,
-        Command::BuildSccpTransferIvmDeriveRequest {
-            config,
-            vk_name,
-            gas_asset_id,
-            gas_limit,
-            max_cycles,
-            source_domain,
-            dest_domain,
-            nonce,
-            asset_home_domain,
-            asset_id_codec,
-            asset_id,
-            amount,
-            sender_codec,
-            sender,
-            recipient_codec,
-            recipient,
-            route_id_codec,
-            route_id,
-        } => build_sccp_transfer_ivm_derive_request(
-            config,
-            vk_name,
-            gas_asset_id,
-            gas_limit,
-            max_cycles,
-            source_domain,
-            dest_domain,
-            nonce,
-            asset_home_domain,
-            asset_id_codec,
-            asset_id,
-            amount,
-            sender_codec,
-            sender,
-            recipient_codec,
-            recipient,
-            route_id_codec,
-            route_id,
-        )?,
-        Command::PublishSccpRouteManifest {
-            config,
-            manifest,
-            gas_asset_id,
-            gas_limit,
-            expected_route_id,
-            expected_asset_key,
-        } => publish_sccp_route_manifest(
-            &config,
-            &manifest,
-            gas_asset_id.as_deref(),
-            gas_limit,
-            expected_route_id.as_deref(),
-            expected_asset_key.as_deref(),
-        )?,
-        Command::BuildTairaTronXorDiagnosticMessageBundle {
-            nonce,
-            amount,
-            recipient,
-        } => build_taira_tron_xor_diagnostic_message_bundle(nonce, amount, recipient)?,
+        } => apply_sccp_route_governance(&config, &action, gas_asset_id.as_deref(), gas_limit)?,
     }
     Ok(())
 }
@@ -1100,7 +637,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::{cell::Cell, time::Duration};
 
     use iroha::data_model::{ChainId, account::AccountId};
     use iroha_config::parameters::{
@@ -1176,6 +713,41 @@ mod tests {
     }
 
     #[test]
+    fn retired_sccp_ivm_proof_commands_are_not_parseable() {
+        for command in [
+            "record-sccp-transfer-ivm-proved",
+            "build-sccp-transfer-ivm-derive-request",
+            "publish-sccp-route-manifest",
+        ] {
+            assert!(
+                Args::try_parse_from(["gov_instruction", command]).is_err(),
+                "retired SCCP IVM wrapper `{command}` must not remain in the CLI grammar"
+            );
+        }
+    }
+
+    #[test]
+    fn transaction_metadata_rejects_zero_gas_before_signing() {
+        let error = tx_metadata(Some("xor#sora"), 0)
+            .expect_err("zero gas must fail before transaction construction");
+        assert!(error.to_string().contains("positive"));
+    }
+
+    #[test]
+    fn sccp_governance_submission_never_retries_ambiguous_errors() {
+        let attempts = Cell::new(0_u8);
+        let error = submit_sccp_route_governance_once::<()>(|| {
+            attempts.set(attempts.get() + 1);
+            Err(eyre!(
+                "length mismatch after an ambiguous remote acceptance"
+            ))
+        })
+        .expect_err("submission error must propagate without a second mutation attempt");
+        assert_eq!(attempts.get(), 1);
+        assert!(error.to_string().contains("failed to submit"));
+    }
+
+    #[test]
     fn sign_governance_transaction_checked_helper_verifies() -> Result<()> {
         let config = test_config_with_chain_discriminant(369);
         let tx_builder = TransactionBuilder::new(config.chain.clone(), config.account.clone())
@@ -1191,112 +763,289 @@ mod tests {
     }
 
     #[test]
-    fn ivm_request_value_uses_config_chain_discriminant_for_authority() {
-        let config = test_config_with_chain_discriminant(369);
-        let metadata = tx_metadata(None, 50_000_000).expect("metadata");
-        let program = ivm::ProgramMetadata {
-            mode: ivm::ivm_mode::ZK,
-            ..Default::default()
-        }
-        .encode();
-        let request = ivm_request_value(
-            &ivm_execution_vk_id("ivm_execution"),
-            &config,
-            &metadata,
-            &IvmBytecode::from_compiled(program),
-        )
-        .expect("request");
-        let authority = request
-            .as_object()
-            .and_then(|object| object.get("authority"))
-            .and_then(norito::json::Value::as_str)
-            .expect("authority string");
+    fn route_governance_action_reader_is_strict_and_validates_static_invariants() -> Result<()> {
+        use iroha::data_model::{
+            bridge::{SccpLaneIdV1, SccpNetworkV1, SccpRouteKeyV1},
+            isi::bridge::SccpRouteGovernanceActionV1,
+        };
 
+        let action = SccpRouteGovernanceActionV1::Remove(SccpRouteKeyV1 {
+            lane_id: SccpLaneIdV1 {
+                source: SccpNetworkV1::EthereumMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            route_id: "taira_eth_xor".to_owned(),
+            asset_key: "xor".to_owned(),
+            revision: 1,
+        });
+        let canonical = norito::json::to_string(&action)?;
+        let file = tempfile::NamedTempFile::new()?;
+        std::fs::write(file.path(), &canonical)?;
+        assert_eq!(read_sccp_route_governance_action(file.path())?, action);
+
+        let unknown = canonical.replacen(
+            "\"revision\":1",
+            "\"revision\":1,\"future_authority\":true",
+            1,
+        );
+        assert_ne!(
+            unknown, canonical,
+            "fixture JSON must expose route revision"
+        );
+        std::fs::write(file.path(), unknown)?;
         assert!(
-            authority.starts_with("test"),
-            "expected Taira/testnet I105 prefix, got {authority}"
+            read_sccp_route_governance_action(file.path()).is_err(),
+            "unknown governance fields must fail closed"
         );
-        let _chain_discriminant = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
-        let parsed = AccountId::parse_encoded(authority)
-            .expect("authority should parse under config discriminant")
-            .into_account_id();
-        assert_eq!(parsed, config.account);
+
+        let invalid = canonical.replacen("\"revision\":1", "\"revision\":0", 1);
+        assert_ne!(
+            invalid, canonical,
+            "fixture JSON must expose route revision"
+        );
+        std::fs::write(file.path(), invalid)?;
+        assert!(
+            read_sccp_route_governance_action(file.path()).is_err(),
+            "statically invalid governance actions must reject before signing"
+        );
+        Ok(())
     }
 
     #[test]
-    fn record_instruction_program_publishes_literal_tlv_before_execute_instruction() {
-        let instruction = InstructionBox::from(RecordSccpMessage::new(vec![0xCA, 0xFE]));
-        let program =
-            build_record_instruction_program(&instruction, DEFAULT_MAX_CYCLES).expect("program");
-        let parsed = ivm::ProgramMetadata::parse(&program).expect("valid IVM metadata");
-        let code = &program[parsed.code_offset..];
-
-        let mut syscalls = Vec::new();
-        for word_bytes in code.chunks_exact(4) {
-            let word = u32::from_le_bytes(word_bytes.try_into().expect("word-sized chunk"));
-            let (op, syscall) = ivm::encoding::wide::decode_sys(word);
-            if op == ivm::instruction::wide::system::SCALL {
-                syscalls.push(u32::from(syscall));
-            }
-        }
-
+    fn canonical_hash_arguments_reject_aliases_and_malformed_values() {
+        let valid = "ab".repeat(32);
         assert_eq!(
-            syscalls,
-            vec![
-                ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
-                ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
-            ]
+            parse_canonical_hex32_argument("--hash", &valid).expect("canonical hash"),
+            [0xab; 32]
         );
-        let halt = u32::from_le_bytes(
-            code[code.len() - 4..]
-                .try_into()
-                .expect("program ends with a full word"),
-        );
-        assert_eq!(halt, ivm::encoding::wide::encode_halt());
+        for value in [
+            format!("0x{valid}"),
+            valid.to_uppercase(),
+            format!(" {valid}"),
+            format!("{valid} "),
+            "ab".repeat(31),
+            "ag".repeat(32),
+        ] {
+            assert!(
+                parse_canonical_hex32_argument("--hash", &value).is_err(),
+                "noncanonical hash alias `{value}` must reject"
+            );
+        }
     }
 
     #[test]
-    fn record_sccp_transfer_payload_rejects_noncanonical_evm_recipient() {
+    fn record_sccp_transfer_rejects_zero_revision_and_aliased_context_commitments() {
+        let build = |binding: String, configuration: String, revision| {
+            record_sccp_transfer_payload_bytes(
+                "sora-taira".to_owned(),
+                "ethereum-mainnet".to_owned(),
+                binding,
+                configuration,
+                7,
+                revision,
+                0,
+                iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                "xor".to_owned(),
+                42,
+                iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                "sora:bridge".to_owned(),
+                iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
+                "11".repeat(20),
+                iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                "taira_eth_xor".to_owned(),
+            )
+        };
+
+        assert!(build("11".repeat(32), "12".repeat(32), 0).is_err());
+        assert!(build("11".repeat(32), "11".repeat(32), 1).is_err());
+        assert!(build("00".repeat(32), "12".repeat(32), 1).is_err());
+        assert!(build("11".repeat(32), "00".repeat(32), 1).is_err());
+    }
+
+    #[test]
+    fn record_sccp_transfer_payload_rejects_prefixed_evm_recipient() {
         let err = record_sccp_transfer_payload_bytes(
-            0,
-            1,
+            "sora-taira".to_owned(),
+            "ethereum-mainnet".to_owned(),
+            "11".repeat(32),
+            "12".repeat(32),
             7,
+            1,
             0,
             1,
-            "xor#universal".to_owned(),
+            "xor".to_owned(),
             42,
             1,
             "sora:bridge".to_owned(),
             2,
             "0x52908400098527886e0f7030069857d2e4169ee7".to_owned(),
             1,
-            "nexus:eth:xor".to_owned(),
+            "taira_eth_xor".to_owned(),
         )
-        .expect_err("noncanonical EVM recipient should be rejected");
+        .expect_err("prefixed EVM recipient should be rejected");
 
-        assert!(err.to_string().contains("structural verification"));
+        assert!(err.to_string().contains("unprefixed lowercase hexadecimal"));
     }
 
     #[test]
-    fn record_sccp_transfer_payload_accepts_canonical_ton_recipient() {
-        let (message_id, payload_bytes) = record_sccp_transfer_payload_bytes(
-            0,
-            4,
+    fn record_sccp_transfer_payload_accepts_canonical_tron_recipient() {
+        let (message_id, context, payload_bytes) = record_sccp_transfer_payload_bytes(
+            "sora-taira".to_owned(),
+            "tron-mainnet".to_owned(),
+            "22".repeat(32),
+            "23".repeat(32),
             7,
+            1,
             0,
             1,
-            "xor#universal".to_owned(),
+            "xor".to_owned(),
             42,
             1,
             "sora:bridge".to_owned(),
-            4,
-            "0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
+            iroha_sccp::SCCP_CODEC_TRON_ADDRESS21,
+            format!("41{}", "12".repeat(20)),
             1,
-            "nexus:ton:xor".to_owned(),
+            "taira_tron_xor".to_owned(),
         )
-        .expect("canonical TON recipient should be accepted");
+        .expect("canonical TRON recipient should be accepted");
 
         assert_eq!(message_id.len(), 64);
+        assert_eq!(context.lane.source, SccpNetworkV1::SoraTaira);
+        assert_eq!(context.lane.target, SccpNetworkV1::TronMainnet);
         assert!(!payload_bytes.is_empty());
+    }
+
+    #[test]
+    fn record_sccp_transfer_payload_rejects_cross_family_or_non_xor_identity() {
+        let build =
+            |target: &str, asset: &str, recipient_codec: u8, recipient: String, route: &str| {
+                record_sccp_transfer_payload_bytes(
+                    "sora-taira".to_owned(),
+                    target.to_owned(),
+                    "21".repeat(32),
+                    "22".repeat(32),
+                    7,
+                    1,
+                    iroha_sccp::SCCP_DOMAIN_SORA,
+                    iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    asset.to_owned(),
+                    42,
+                    iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    "sora:bridge".to_owned(),
+                    recipient_codec,
+                    recipient,
+                    iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    route.to_owned(),
+                )
+            };
+
+        assert!(
+            build(
+                "ethereum-mainnet",
+                "not-xor",
+                iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
+                "11".repeat(20),
+                iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1,
+            )
+            .is_err()
+        );
+        assert!(
+            build(
+                "ethereum-mainnet",
+                "xor",
+                iroha_sccp::SCCP_CODEC_TRON_ADDRESS21,
+                format!("41{}", "11".repeat(20)),
+                iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1,
+            )
+            .is_err()
+        );
+        assert!(
+            build(
+                "bsc-mainnet",
+                "xor",
+                iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
+                "11".repeat(20),
+                iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1,
+            )
+            .is_err()
+        );
+        assert!(
+            build(
+                "tron-mainnet",
+                "xor",
+                iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
+                "11".repeat(20),
+                iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn record_sccp_transfer_payload_rejects_aliases_wrong_direction_and_zero_binding() {
+        let cases = [
+            (
+                "sora",
+                "ethereum-mainnet",
+                "11".repeat(32),
+                "exact canonical SCCP profile key",
+            ),
+            (
+                " sora-nexus",
+                "ethereum-mainnet",
+                "11".repeat(32),
+                "exact canonical SCCP profile key",
+            ),
+            (
+                "ethereum-mainnet",
+                "sora-nexus",
+                "11".repeat(32),
+                "exact sora-taira",
+            ),
+            (
+                "sora-nexus",
+                "ethereum-mainnet",
+                "11".repeat(32),
+                "exact sora-taira",
+            ),
+            (
+                "sora-taira",
+                "sora-nexus",
+                "11".repeat(32),
+                "exact sora-taira",
+            ),
+            (
+                "sora-taira",
+                "ethereum-mainnet",
+                "00".repeat(32),
+                "nonzero distinct destination-binding",
+            ),
+        ];
+
+        for (source, target, binding, expected) in cases {
+            let error = record_sccp_transfer_payload_bytes(
+                source.to_owned(),
+                target.to_owned(),
+                binding,
+                "12".repeat(32),
+                7,
+                1,
+                0,
+                1,
+                "xor".to_owned(),
+                42,
+                1,
+                "sora:bridge".to_owned(),
+                2,
+                "52908400098527886e0f7030069857d2e4169ee7".to_owned(),
+                1,
+                "taira_eth_xor".to_owned(),
+            )
+            .expect_err("invalid exact SCCP context must fail before instruction construction");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error for {source}->{target}: {error:?}"
+            );
+        }
     }
 }

@@ -125,3 +125,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 - **Автоматизация CI** – добавление команд, выполняемых в конвейеры выпуска, для того, чтобы
   документация, приспособления и публичные манифесты, детерминированные junto com
   метададос ассинадос.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

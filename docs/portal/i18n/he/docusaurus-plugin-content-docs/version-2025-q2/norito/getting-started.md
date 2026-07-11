@@ -20,7 +20,7 @@ translator: machine-google-reviewed
 
 1. התקן את שרשרת הכלים Rust (1.76 ומעלה) ובדוק את המאגר הזה.
 2. בנה או הורד את הקבצים הבינאריים התומכים:
-   - `koto_compile` - מהדר Kotodama שפולט קוד בתים IVM/Norito
+   - `koto build` - מהדר Kotodama שפולט קוד בתים IVM/Norito
    - `ivm_run` ו-`ivm_tool` - כלי עזר מקומיים לביצוע ובדיקה
    - `iroha_cli` - משמש לפריסת חוזה דרך Torii
 
@@ -29,7 +29,7 @@ translator: machine-google-reviewed
    צרור הכלים באופן מקומי, כוון את עוזרי Makefile אל הקבצים הבינאריים:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. ודא שצומת Iroha פועל כאשר אתה מגיע לשלב הפריסה. ה
@@ -43,17 +43,16 @@ translator: machine-google-reviewed
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 דגלי מפתח:
 
-- `--abi 1` נועל את החוזה לגרסה 1 של ABI (הגרסה הנתמכת היחידה בכתובת
+- `ABI V1` נועל את החוזה לגרסה 1 של ABI (הגרסה הנתמכת היחידה בכתובת
   זמן הכתיבה).
-- `--max-cycles 0` מבקש ביצוע בלתי מוגבל; הגדר מספר חיובי לתחום
+- `--max-cycles 1000000` מבקש ביצוע בלתי מוגבל; הגדר מספר חיובי לתחום
   ריפוד מחזור להוכחות אפס ידע.
 
 ## 2. בדוק את חפץ Norito (אופציונלי)
@@ -87,7 +86,7 @@ ivm_run target/examples/hello.to --args '{}'
 מטען Base64:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -98,8 +97,8 @@ iroha_cli app contracts deploy \
 ניתן להשתמש ב-hash המוצג בתגובה כדי לאחזר מניפסטים או רשימה של מופעים:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. הפעל נגד Torii
@@ -112,8 +111,8 @@ syscalls (`set_account_detail`, `transfer_asset` וכו').
 ## טיפים ופתרון בעיות- השתמש ב-`make examples-run` כדי לקמפל ולהפעיל את הדוגמאות שסופקו באחת
   ירייה. עקוף משתני סביבה `KOTO`/`IVM` אם הקבצים הבינאריים אינם פועלים
   `PATH`.
-- אם `koto_compile` דוחה את גרסת ה-ABI, ודא שהמהדר והצומת
-  שניהם יעד ABI v1 (הפעל `koto_compile --abi` ללא ארגומנטים לרשימה
+- אם `koto build` דוחה את גרסת ה-ABI, ודא שהמהדר והצומת
+  שניהם יעד ABI v1 (הפעל `koto build --help` ללא ארגומנטים לרשימה
   תמיכה).
 - ה-CLI מקבל מפתחות חתימה hex או Base64. לבדיקה, אתה יכול להשתמש
   מפתחות הנפלטים על ידי `iroha_cli tools crypto keypair`.

@@ -22,10 +22,10 @@ translation_last_reviewed: 2026-02-07
 
 - [Docker](https://docs.docker.com/engine/install/) Compose V2 (サンプル ピア、`defaults/docker-compose.single.yml`) を実行します。
 - Rust ツールチェーン (1.76 以降) がサポートされています。
-- Бинарники `koto_compile`、`ivm_run`、`iroha_cli`。チェックアウト ワークスペース、リリース アーティファクトの説明:
+- Бинарники `koto build`、`ivm_run`、`iroha_cli`。チェックアウト ワークスペース、リリース アーティファクトの説明:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -49,22 +49,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -76,15 +76,14 @@ KO
 Скомпилируйте контракт в байткод IVM/Norito (`.to`) и запустите его локально, чтобы必要なシステムコールの数:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-ランナーは `info("Hello from Kotodama")` とシステムコール `SET_ACCOUNT_DETAIL` を実行します。 ABI ヘッダー、機能ビット、およびエントリ ポイントをサポートします。
+ランナーは `debug::info("Hello from Kotodama")` とシステムコール `SET_ACCOUNT_DETAIL` を実行します。 ABI ヘッダー、機能ビット、およびエントリ ポイントをサポートします。
 
 ## 4. Отправьте байткод через Torii
 

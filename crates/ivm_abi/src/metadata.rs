@@ -13,12 +13,29 @@ use std::io::Write;
 
 use crate::error::VMError;
 use iroha_data_model::smart_contract::manifest::{
-    AccessSetHints, EntryPointKind, EntrypointDescriptor, KotobaTranslationEntry, TriggerDescriptor,
+    AccessSetHints, ContractErrorCodeDescriptor, EntryPointKind, EntrypointDescriptor,
+    KotobaTranslationEntry, TriggerDescriptor,
 };
 use norito::{
     Decode, Encode,
     core::{Archived, DecodeFromSlice, Error as NoritoError, NoritoDeserialize, NoritoSerialize},
 };
+
+/// Domain separator for the canonical deployable contract artifact hash.
+///
+/// The hash deliberately covers the complete `.to` image, including the fixed
+/// execution header. Contract debug information belongs in a sidecar and is
+/// therefore not part of a deployable artifact.
+pub const CONTRACT_CODE_HASH_DOMAIN: &[u8] = b"iroha:ivm:contract-artifact:v1\0";
+
+/// Compute the canonical identity of a deployable IVM contract artifact.
+///
+/// Unlike the pre-release body-only hash, this binds every execution-relevant
+/// header field as well as embedded interface metadata, literals, and code.
+#[must_use]
+pub fn contract_code_hash(artifact: &[u8]) -> iroha_crypto::Hash {
+    iroha_crypto::Hash::new_from_chunks(&[CONTRACT_CODE_HASH_DOMAIN, artifact])
+}
 
 /// Maximum accepted logical vector length for admission.
 pub const VECTOR_LENGTH_MAX: u8 = 64;
@@ -30,15 +47,61 @@ pub const HEADER_SIZE: usize = 17;
 /// Literal table section marker placed immediately after the metadata header
 /// when compiled bytecode includes literal fixups.
 pub const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
+/// Bit shift of the ABI-v1 literal kind in an `LTLB` table descriptor.
+pub const LITERAL_KIND_SHIFT: u32 = 56;
+/// Mask selecting the section-relative offset in an ABI-v1 literal descriptor.
+pub const LITERAL_OFFSET_MASK: u64 = (1_u64 << LITERAL_KIND_SHIFT) - 1;
+
+/// Canonical kinds carried by ABI-v1 indexed-literal table descriptors.
+///
+/// Each descriptor is one little-endian `u64`: the high byte is this kind and
+/// the low 56 bits are an offset relative to the `LTLB` marker. Keeping the
+/// kind in the authenticated table prevents `LDLIT` and `LDI64` from giving
+/// the same bytes two incompatible interpretations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum LiteralKindV1 {
+    /// A complete pointer-ABI TLV envelope.
+    PointerTlv = 0,
+    /// Exactly eight little-endian bytes representing a signed `i64`.
+    I64 = 1,
+}
+
+impl TryFrom<u8> for LiteralKindV1 {
+    type Error = VMError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::PointerTlv),
+            1 => Ok(Self::I64),
+            _ => Err(VMError::InvalidMetadata),
+        }
+    }
+}
+
+/// Encode one canonical ABI-v1 `LTLB` table descriptor.
+#[must_use]
+pub const fn encode_literal_descriptor(kind: LiteralKindV1, relative_offset: u64) -> Option<u64> {
+    if relative_offset > LITERAL_OFFSET_MASK {
+        return None;
+    }
+    Some(((kind as u64) << LITERAL_KIND_SHIFT) | relative_offset)
+}
+
+/// Decode one canonical ABI-v1 `LTLB` table descriptor.
+pub fn decode_literal_descriptor(raw: u64) -> Result<(LiteralKindV1, u64), VMError> {
+    let kind = LiteralKindV1::try_from((raw >> LITERAL_KIND_SHIFT) as u8)?;
+    Ok((kind, raw & LITERAL_OFFSET_MASK))
+}
 /// Embedded contract interface section marker used by self-describing contract artifacts.
 pub const CONTRACT_INTERFACE_SECTION_MAGIC: [u8; 4] = *b"CNTR";
 /// Embedded contract debug section marker used by self-describing contract artifacts.
 pub const CONTRACT_DEBUG_SECTION_MAGIC: [u8; 4] = *b"DBG1";
-/// Embedded contract feature bit: zero-knowledge mode.
+/// Embedded contract execution-capability bit: zero-knowledge mode.
 pub const CONTRACT_FEATURE_BIT_ZK: u64 = 1 << 0;
-/// Embedded contract feature bit: vector mode.
+/// Embedded contract execution-capability bit: deterministic IVM vector mode.
 pub const CONTRACT_FEATURE_BIT_VECTOR: u64 = 1 << 1;
-/// Bitmask of all currently supported embedded contract feature bits.
+/// Bitmask of all currently supported embedded execution-capability bits.
 pub const CONTRACT_FEATURE_KNOWN_BITS: u64 = CONTRACT_FEATURE_BIT_ZK | CONTRACT_FEATURE_BIT_VECTOR;
 
 const CONTRACT_INTERFACE_SECTION_HEADER_SIZE: usize = 8;
@@ -50,7 +113,12 @@ pub struct EmbeddedEntrypointDescriptor {
     pub name: String,
     pub kind: EntryPointKind,
     pub params: Vec<iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor>,
+    /// Exact schema used to encode a parameterized V1 public argument record.
+    /// Zero-parameter entrypoints have no record and therefore no schema.
+    pub argument_schema: Option<crate::entrypoint::EntrypointArgumentSchemaV1>,
     pub return_type: Option<String>,
+    /// Exact recursive schema for a non-unit public return value.
+    pub return_schema: Option<crate::entrypoint::EntrypointValueTypeV1>,
     pub permission: Option<String>,
     pub read_keys: Vec<String>,
     pub write_keys: Vec<String>,
@@ -68,7 +136,9 @@ impl EmbeddedEntrypointDescriptor {
             name: self.name.clone(),
             kind: self.kind,
             params: self.params.clone(),
+            argument_schema: self.argument_schema.clone(),
             return_type: self.return_type.clone(),
+            return_schema: self.return_schema.clone(),
             permission: self.permission.clone(),
             read_keys: self.read_keys.clone(),
             write_keys: self.write_keys.clone(),
@@ -90,12 +160,10 @@ pub struct EmbeddedStateFieldDescriptor {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EmbeddedStateType {
     Int,
-    FixedU128,
-    Amount,
-    Balance,
+    Decimal,
+    Quantity,
     Bool,
     String,
-    Blob,
     Bytes,
     DataSpaceId,
     AccountId,
@@ -110,31 +178,121 @@ pub enum EmbeddedStateType {
         name: String,
         fields: Vec<EmbeddedStateFieldDescriptor>,
     },
-    Map {
+    StateMap {
         key: Box<EmbeddedStateType>,
         value: Box<EmbeddedStateType>,
+    },
+    Option(Box<EmbeddedStateType>),
+    Result {
+        ok: Box<EmbeddedStateType>,
+        err: Box<EmbeddedStateType>,
+    },
+    /// Bounded contiguous list whose capacity is part of the V1 schema.
+    List {
+        element: Box<EmbeddedStateType>,
+        capacity: u8,
     },
 }
 
 const EMBEDDED_STATE_TYPE_TAG_INT: u8 = 0;
-const EMBEDDED_STATE_TYPE_TAG_FIXED_U128: u8 = 1;
-const EMBEDDED_STATE_TYPE_TAG_AMOUNT: u8 = 2;
-const EMBEDDED_STATE_TYPE_TAG_BALANCE: u8 = 3;
-const EMBEDDED_STATE_TYPE_TAG_BOOL: u8 = 4;
-const EMBEDDED_STATE_TYPE_TAG_STRING: u8 = 5;
-const EMBEDDED_STATE_TYPE_TAG_BLOB: u8 = 6;
-const EMBEDDED_STATE_TYPE_TAG_BYTES: u8 = 7;
-const EMBEDDED_STATE_TYPE_TAG_DATASPACE_ID: u8 = 8;
-const EMBEDDED_STATE_TYPE_TAG_ACCOUNT_ID: u8 = 9;
-const EMBEDDED_STATE_TYPE_TAG_ASSET_DEFINITION_ID: u8 = 10;
-const EMBEDDED_STATE_TYPE_TAG_ASSET_ID: u8 = 11;
-const EMBEDDED_STATE_TYPE_TAG_NFT_ID: u8 = 12;
-const EMBEDDED_STATE_TYPE_TAG_DOMAIN_ID: u8 = 13;
-const EMBEDDED_STATE_TYPE_TAG_NAME: u8 = 14;
-const EMBEDDED_STATE_TYPE_TAG_JSON: u8 = 15;
-const EMBEDDED_STATE_TYPE_TAG_TUPLE: u8 = 16;
-const EMBEDDED_STATE_TYPE_TAG_STRUCT: u8 = 17;
-const EMBEDDED_STATE_TYPE_TAG_MAP: u8 = 18;
+const EMBEDDED_STATE_TYPE_TAG_DECIMAL: u8 = 1;
+const EMBEDDED_STATE_TYPE_TAG_QUANTITY: u8 = 2;
+const EMBEDDED_STATE_TYPE_TAG_BOOL: u8 = 3;
+const EMBEDDED_STATE_TYPE_TAG_STRING: u8 = 4;
+const EMBEDDED_STATE_TYPE_TAG_BYTES: u8 = 5;
+const EMBEDDED_STATE_TYPE_TAG_DATASPACE_ID: u8 = 6;
+const EMBEDDED_STATE_TYPE_TAG_ACCOUNT_ID: u8 = 7;
+const EMBEDDED_STATE_TYPE_TAG_ASSET_DEFINITION_ID: u8 = 8;
+const EMBEDDED_STATE_TYPE_TAG_ASSET_ID: u8 = 9;
+const EMBEDDED_STATE_TYPE_TAG_NFT_ID: u8 = 10;
+const EMBEDDED_STATE_TYPE_TAG_DOMAIN_ID: u8 = 11;
+const EMBEDDED_STATE_TYPE_TAG_NAME: u8 = 12;
+const EMBEDDED_STATE_TYPE_TAG_JSON: u8 = 13;
+const EMBEDDED_STATE_TYPE_TAG_TUPLE: u8 = 14;
+const EMBEDDED_STATE_TYPE_TAG_STRUCT: u8 = 15;
+const EMBEDDED_STATE_TYPE_TAG_STATE_MAP: u8 = 16;
+const EMBEDDED_STATE_TYPE_TAG_OPTION: u8 = 17;
+const EMBEDDED_STATE_TYPE_TAG_RESULT: u8 = 18;
+const EMBEDDED_STATE_TYPE_TAG_LIST: u8 = 19;
+const MAX_EMBEDDED_STATE_TYPE_DEPTH: usize = 256;
+
+fn embedded_state_type_depth_error(operation: &str) -> NoritoError {
+    NoritoError::Message(format!(
+        "embedded state type {operation} nesting exceeds {MAX_EMBEDDED_STATE_TYPE_DEPTH} levels"
+    ))
+}
+
+fn validate_embedded_state_type_iterative(
+    root: &EmbeddedStateType,
+    operation: &str,
+) -> Result<(), NoritoError> {
+    let mut pending = vec![(root, 1_usize, false)];
+    while let Some((value, depth, inside_list)) = pending.pop() {
+        if depth > MAX_EMBEDDED_STATE_TYPE_DEPTH {
+            return Err(embedded_state_type_depth_error(operation));
+        }
+        let child_depth = depth
+            .checked_add(1)
+            .ok_or_else(|| embedded_state_type_depth_error(operation))?;
+        match value {
+            EmbeddedStateType::Tuple(items) => {
+                pending.extend(
+                    items
+                        .iter()
+                        .rev()
+                        .map(|item| (item, child_depth, inside_list)),
+                );
+            }
+            EmbeddedStateType::Struct { fields, .. } => {
+                pending.extend(
+                    fields
+                        .iter()
+                        .rev()
+                        .map(|field| (&field.ty, child_depth, inside_list)),
+                );
+            }
+            EmbeddedStateType::StateMap { key, value } => {
+                if inside_list {
+                    return Err(NoritoError::Message(
+                        "embedded List elements cannot contain resource handles".to_owned(),
+                    ));
+                }
+                pending.push((value, child_depth, false));
+                pending.push((key, child_depth, false));
+            }
+            EmbeddedStateType::Option(value) => {
+                pending.push((value, child_depth, inside_list));
+            }
+            EmbeddedStateType::Result { ok, err } => {
+                pending.push((err, child_depth, inside_list));
+                pending.push((ok, child_depth, inside_list));
+            }
+            EmbeddedStateType::List { element, capacity } => {
+                if !(1..=64).contains(capacity) {
+                    return Err(NoritoError::Message(format!(
+                        "embedded List capacity must be in 1..=64, got {capacity}"
+                    )));
+                }
+                pending.push((element, child_depth, true));
+            }
+            EmbeddedStateType::Int
+            | EmbeddedStateType::Decimal
+            | EmbeddedStateType::Quantity
+            | EmbeddedStateType::Bool
+            | EmbeddedStateType::String
+            | EmbeddedStateType::Bytes
+            | EmbeddedStateType::DataSpaceId
+            | EmbeddedStateType::AccountId
+            | EmbeddedStateType::AssetDefinitionId
+            | EmbeddedStateType::AssetId
+            | EmbeddedStateType::NftId
+            | EmbeddedStateType::DomainId
+            | EmbeddedStateType::Name
+            | EmbeddedStateType::Json => {}
+        }
+    }
+    Ok(())
+}
 
 fn expect_payload_consumed(
     consumed: usize,
@@ -147,6 +305,35 @@ fn expect_payload_consumed(
     Err(NoritoError::Message(format!(
         "trailing bytes in {context} payload"
     )))
+}
+
+fn encode_embedded_state_owned_child(
+    encoded: &[u8],
+    writer: &mut Vec<u8>,
+) -> Result<(), NoritoError> {
+    let encoded_len = u64::try_from(encoded.len()).map_err(|_| NoritoError::LengthMismatch)?;
+    let owned_payload_len = encoded
+        .len()
+        .checked_add(core::mem::size_of::<u64>())
+        .and_then(|len| u64::try_from(len).ok())
+        .ok_or(NoritoError::LengthMismatch)?;
+    norito::core::write_len_header(writer, owned_payload_len)?;
+    norito::core::write_seq_len(writer, encoded_len)?;
+    writer.write_all(encoded)?;
+    Ok(())
+}
+
+fn decode_embedded_state_owned_child(encoded: &[u8]) -> Result<(Vec<u8>, usize), NoritoError> {
+    let (owned_payload_len, header_len) = norito::core::read_len_from_slice(encoded)?;
+    let end = header_len
+        .checked_add(owned_payload_len)
+        .ok_or(NoritoError::LengthMismatch)?;
+    let owned_payload = encoded
+        .get(header_len..end)
+        .ok_or(NoritoError::LengthMismatch)?;
+    let (child, used) = <Vec<u8> as DecodeFromSlice>::decode_from_slice(owned_payload)?;
+    expect_payload_consumed(used, owned_payload.len(), "EmbeddedStateType owned child")?;
+    Ok((child, end))
 }
 
 fn encode_embedded_state_field_payload(
@@ -173,104 +360,504 @@ fn decode_embedded_state_field_payload(
 }
 
 fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u8>, NoritoError> {
-    let mut payload = Vec::new();
-    match value {
-        EmbeddedStateType::Int => EMBEDDED_STATE_TYPE_TAG_INT.serialize(&mut payload)?,
-        EmbeddedStateType::FixedU128 => {
-            EMBEDDED_STATE_TYPE_TAG_FIXED_U128.serialize(&mut payload)?
-        }
-        EmbeddedStateType::Amount => EMBEDDED_STATE_TYPE_TAG_AMOUNT.serialize(&mut payload)?,
-        EmbeddedStateType::Balance => EMBEDDED_STATE_TYPE_TAG_BALANCE.serialize(&mut payload)?,
-        EmbeddedStateType::Bool => EMBEDDED_STATE_TYPE_TAG_BOOL.serialize(&mut payload)?,
-        EmbeddedStateType::String => EMBEDDED_STATE_TYPE_TAG_STRING.serialize(&mut payload)?,
-        EmbeddedStateType::Blob => EMBEDDED_STATE_TYPE_TAG_BLOB.serialize(&mut payload)?,
-        EmbeddedStateType::Bytes => EMBEDDED_STATE_TYPE_TAG_BYTES.serialize(&mut payload)?,
-        EmbeddedStateType::DataSpaceId => {
-            EMBEDDED_STATE_TYPE_TAG_DATASPACE_ID.serialize(&mut payload)?
-        }
-        EmbeddedStateType::AccountId => {
-            EMBEDDED_STATE_TYPE_TAG_ACCOUNT_ID.serialize(&mut payload)?
-        }
-        EmbeddedStateType::AssetDefinitionId => {
-            EMBEDDED_STATE_TYPE_TAG_ASSET_DEFINITION_ID.serialize(&mut payload)?
-        }
-        EmbeddedStateType::AssetId => EMBEDDED_STATE_TYPE_TAG_ASSET_ID.serialize(&mut payload)?,
-        EmbeddedStateType::NftId => EMBEDDED_STATE_TYPE_TAG_NFT_ID.serialize(&mut payload)?,
-        EmbeddedStateType::DomainId => EMBEDDED_STATE_TYPE_TAG_DOMAIN_ID.serialize(&mut payload)?,
-        EmbeddedStateType::Name => EMBEDDED_STATE_TYPE_TAG_NAME.serialize(&mut payload)?,
-        EmbeddedStateType::Json => EMBEDDED_STATE_TYPE_TAG_JSON.serialize(&mut payload)?,
-        EmbeddedStateType::Tuple(values) => {
-            EMBEDDED_STATE_TYPE_TAG_TUPLE.serialize(&mut payload)?;
-            values.serialize(&mut payload)?;
-        }
-        EmbeddedStateType::Struct { name, fields } => {
-            EMBEDDED_STATE_TYPE_TAG_STRUCT.serialize(&mut payload)?;
-            name.serialize(&mut payload)?;
-            fields.serialize(&mut payload)?;
-        }
-        EmbeddedStateType::Map { key, value } => {
-            EMBEDDED_STATE_TYPE_TAG_MAP.serialize(&mut payload)?;
-            key.serialize(&mut payload)?;
-            value.serialize(&mut payload)?;
+    enum Event<'a> {
+        Enter(&'a EmbeddedStateType),
+        Finish(&'a EmbeddedStateType),
+    }
+
+    validate_embedded_state_type_iterative(value, "encoding")?;
+    let mut pending = vec![Event::Enter(value)];
+    let mut encoded_values = Vec::<Vec<u8>>::new();
+    while let Some(event) = pending.pop() {
+        match event {
+            Event::Enter(value) => {
+                pending.push(Event::Finish(value));
+                match value {
+                    EmbeddedStateType::Tuple(items) => {
+                        pending.extend(items.iter().rev().map(Event::Enter));
+                    }
+                    EmbeddedStateType::Struct { fields, .. } => {
+                        pending.extend(fields.iter().rev().map(|field| Event::Enter(&field.ty)));
+                    }
+                    EmbeddedStateType::StateMap { key, value } => {
+                        pending.push(Event::Enter(value));
+                        pending.push(Event::Enter(key));
+                    }
+                    EmbeddedStateType::Option(value) => pending.push(Event::Enter(value)),
+                    EmbeddedStateType::Result { ok, err } => {
+                        pending.push(Event::Enter(err));
+                        pending.push(Event::Enter(ok));
+                    }
+                    EmbeddedStateType::List { element, .. } => {
+                        pending.push(Event::Enter(element));
+                    }
+                    EmbeddedStateType::Int
+                    | EmbeddedStateType::Decimal
+                    | EmbeddedStateType::Quantity
+                    | EmbeddedStateType::Bool
+                    | EmbeddedStateType::String
+                    | EmbeddedStateType::Bytes
+                    | EmbeddedStateType::DataSpaceId
+                    | EmbeddedStateType::AccountId
+                    | EmbeddedStateType::AssetDefinitionId
+                    | EmbeddedStateType::AssetId
+                    | EmbeddedStateType::NftId
+                    | EmbeddedStateType::DomainId
+                    | EmbeddedStateType::Name
+                    | EmbeddedStateType::Json => {}
+                }
+            }
+            Event::Finish(value) => {
+                let child_count = match value {
+                    EmbeddedStateType::Tuple(items) => items.len(),
+                    EmbeddedStateType::Struct { fields, .. } => fields.len(),
+                    EmbeddedStateType::StateMap { .. } | EmbeddedStateType::Result { .. } => 2,
+                    EmbeddedStateType::Option(_) | EmbeddedStateType::List { .. } => 1,
+                    EmbeddedStateType::Int
+                    | EmbeddedStateType::Decimal
+                    | EmbeddedStateType::Quantity
+                    | EmbeddedStateType::Bool
+                    | EmbeddedStateType::String
+                    | EmbeddedStateType::Bytes
+                    | EmbeddedStateType::DataSpaceId
+                    | EmbeddedStateType::AccountId
+                    | EmbeddedStateType::AssetDefinitionId
+                    | EmbeddedStateType::AssetId
+                    | EmbeddedStateType::NftId
+                    | EmbeddedStateType::DomainId
+                    | EmbeddedStateType::Name
+                    | EmbeddedStateType::Json => 0,
+                };
+                let children_start =
+                    encoded_values
+                        .len()
+                        .checked_sub(child_count)
+                        .ok_or_else(|| {
+                            NoritoError::Message(
+                                "invalid iterative embedded state encoder state".to_owned(),
+                            )
+                        })?;
+                let children = encoded_values.split_off(children_start);
+                let mut child = children.into_iter();
+                let mut payload = Vec::new();
+                match value {
+                    EmbeddedStateType::Int => {
+                        EMBEDDED_STATE_TYPE_TAG_INT.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::Decimal => {
+                        EMBEDDED_STATE_TYPE_TAG_DECIMAL.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::Quantity => {
+                        EMBEDDED_STATE_TYPE_TAG_QUANTITY.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::Bool => {
+                        EMBEDDED_STATE_TYPE_TAG_BOOL.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::String => {
+                        EMBEDDED_STATE_TYPE_TAG_STRING.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::Bytes => {
+                        EMBEDDED_STATE_TYPE_TAG_BYTES.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::DataSpaceId => {
+                        EMBEDDED_STATE_TYPE_TAG_DATASPACE_ID.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::AccountId => {
+                        EMBEDDED_STATE_TYPE_TAG_ACCOUNT_ID.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::AssetDefinitionId => {
+                        EMBEDDED_STATE_TYPE_TAG_ASSET_DEFINITION_ID.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::AssetId => {
+                        EMBEDDED_STATE_TYPE_TAG_ASSET_ID.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::NftId => {
+                        EMBEDDED_STATE_TYPE_TAG_NFT_ID.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::DomainId => {
+                        EMBEDDED_STATE_TYPE_TAG_DOMAIN_ID.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::Name => {
+                        EMBEDDED_STATE_TYPE_TAG_NAME.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::Json => {
+                        EMBEDDED_STATE_TYPE_TAG_JSON.serialize(&mut payload)?
+                    }
+                    EmbeddedStateType::Tuple(_) => {
+                        EMBEDDED_STATE_TYPE_TAG_TUPLE.serialize(&mut payload)?;
+                        child.by_ref().collect::<Vec<_>>().serialize(&mut payload)?;
+                    }
+                    EmbeddedStateType::Struct { name, fields } => {
+                        EMBEDDED_STATE_TYPE_TAG_STRUCT.serialize(&mut payload)?;
+                        name.serialize(&mut payload)?;
+                        let mut encoded_fields = Vec::with_capacity(fields.len());
+                        for field in fields {
+                            let mut encoded_field = Vec::new();
+                            field.name.serialize(&mut encoded_field)?;
+                            child
+                                .next()
+                                .ok_or_else(|| {
+                                    NoritoError::Message(
+                                        "missing iterative embedded state field value".to_owned(),
+                                    )
+                                })?
+                                .serialize(&mut encoded_field)?;
+                            encoded_fields.push(encoded_field);
+                        }
+                        encoded_fields.serialize(&mut payload)?;
+                    }
+                    EmbeddedStateType::StateMap { .. } => {
+                        EMBEDDED_STATE_TYPE_TAG_STATE_MAP.serialize(&mut payload)?;
+                        let key = child.next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state map key".to_owned(),
+                            )
+                        })?;
+                        encode_embedded_state_owned_child(&key, &mut payload)?;
+                        let value = child.next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state map value".to_owned(),
+                            )
+                        })?;
+                        encode_embedded_state_owned_child(&value, &mut payload)?;
+                    }
+                    EmbeddedStateType::Option(_) => {
+                        EMBEDDED_STATE_TYPE_TAG_OPTION.serialize(&mut payload)?;
+                        let value = child.next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state option value".to_owned(),
+                            )
+                        })?;
+                        encode_embedded_state_owned_child(&value, &mut payload)?;
+                    }
+                    EmbeddedStateType::Result { .. } => {
+                        EMBEDDED_STATE_TYPE_TAG_RESULT.serialize(&mut payload)?;
+                        let ok = child.next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state result ok value".to_owned(),
+                            )
+                        })?;
+                        encode_embedded_state_owned_child(&ok, &mut payload)?;
+                        let err = child.next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state result error value".to_owned(),
+                            )
+                        })?;
+                        encode_embedded_state_owned_child(&err, &mut payload)?;
+                    }
+                    EmbeddedStateType::List { capacity, .. } => {
+                        EMBEDDED_STATE_TYPE_TAG_LIST.serialize(&mut payload)?;
+                        let element = child.next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state list element".to_owned(),
+                            )
+                        })?;
+                        encode_embedded_state_owned_child(&element, &mut payload)?;
+                        capacity.serialize(&mut payload)?;
+                    }
+                }
+                if child.next().is_some() {
+                    return Err(NoritoError::Message(
+                        "extra iterative embedded state encoder child".to_owned(),
+                    ));
+                }
+                encoded_values.push(payload);
+            }
         }
     }
-    Ok(payload)
+    if encoded_values.len() != 1 {
+        return Err(NoritoError::Message(
+            "invalid iterative embedded state encoder result".to_owned(),
+        ));
+    }
+    encoded_values.pop().ok_or(NoritoError::LengthMismatch)
 }
 
 fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateType, NoritoError> {
-    let (tag, tag_used) = <u8 as DecodeFromSlice>::decode_from_slice(encoded)?;
-    let payload = &encoded[tag_used..];
-    let (value, consumed) = match tag {
-        EMBEDDED_STATE_TYPE_TAG_INT => (EmbeddedStateType::Int, 0),
-        EMBEDDED_STATE_TYPE_TAG_FIXED_U128 => (EmbeddedStateType::FixedU128, 0),
-        EMBEDDED_STATE_TYPE_TAG_AMOUNT => (EmbeddedStateType::Amount, 0),
-        EMBEDDED_STATE_TYPE_TAG_BALANCE => (EmbeddedStateType::Balance, 0),
-        EMBEDDED_STATE_TYPE_TAG_BOOL => (EmbeddedStateType::Bool, 0),
-        EMBEDDED_STATE_TYPE_TAG_STRING => (EmbeddedStateType::String, 0),
-        EMBEDDED_STATE_TYPE_TAG_BLOB => (EmbeddedStateType::Blob, 0),
-        EMBEDDED_STATE_TYPE_TAG_BYTES => (EmbeddedStateType::Bytes, 0),
-        EMBEDDED_STATE_TYPE_TAG_DATASPACE_ID => (EmbeddedStateType::DataSpaceId, 0),
-        EMBEDDED_STATE_TYPE_TAG_ACCOUNT_ID => (EmbeddedStateType::AccountId, 0),
-        EMBEDDED_STATE_TYPE_TAG_ASSET_DEFINITION_ID => (EmbeddedStateType::AssetDefinitionId, 0),
-        EMBEDDED_STATE_TYPE_TAG_ASSET_ID => (EmbeddedStateType::AssetId, 0),
-        EMBEDDED_STATE_TYPE_TAG_NFT_ID => (EmbeddedStateType::NftId, 0),
-        EMBEDDED_STATE_TYPE_TAG_DOMAIN_ID => (EmbeddedStateType::DomainId, 0),
-        EMBEDDED_STATE_TYPE_TAG_NAME => (EmbeddedStateType::Name, 0),
-        EMBEDDED_STATE_TYPE_TAG_JSON => (EmbeddedStateType::Json, 0),
-        EMBEDDED_STATE_TYPE_TAG_TUPLE => {
-            let (values, values_used) =
-                <Vec<EmbeddedStateType> as DecodeFromSlice>::decode_from_slice(payload)?;
-            (EmbeddedStateType::Tuple(values), values_used)
+    enum Constructor {
+        Tuple(usize),
+        Struct {
+            name: String,
+            field_names: Vec<String>,
+        },
+        StateMap,
+        Option,
+        Result,
+        List(u8),
+    }
+
+    impl Constructor {
+        fn child_count(&self) -> usize {
+            match self {
+                Self::Tuple(count) => *count,
+                Self::Struct { field_names, .. } => field_names.len(),
+                Self::StateMap | Self::Result => 2,
+                Self::Option | Self::List(_) => 1,
+            }
         }
-        EMBEDDED_STATE_TYPE_TAG_STRUCT => {
-            let (name, name_used) = <String as DecodeFromSlice>::decode_from_slice(payload)?;
-            let (fields, fields_used) =
-                <Vec<EmbeddedStateFieldDescriptor> as DecodeFromSlice>::decode_from_slice(
-                    &payload[name_used..],
-                )?;
-            (
-                EmbeddedStateType::Struct { name, fields },
-                name_used + fields_used,
-            )
+    }
+
+    enum Event {
+        Decode { encoded: Vec<u8>, depth: usize },
+        Finish(Constructor),
+    }
+
+    struct DecodedValue {
+        value: EmbeddedStateType,
+        contains_resource_handle: bool,
+    }
+
+    let mut pending = vec![Event::Decode {
+        encoded: encoded.to_vec(),
+        depth: 1,
+    }];
+    let mut decoded_values = Vec::<DecodedValue>::new();
+    while let Some(event) = pending.pop() {
+        match event {
+            Event::Decode { encoded, depth } => {
+                if depth > MAX_EMBEDDED_STATE_TYPE_DEPTH {
+                    return Err(embedded_state_type_depth_error("decoding"));
+                }
+                let child_depth = depth
+                    .checked_add(1)
+                    .ok_or_else(|| embedded_state_type_depth_error("decoding"))?;
+                let (tag, tag_used) = <u8 as DecodeFromSlice>::decode_from_slice(&encoded)?;
+                let payload = &encoded[tag_used..];
+                let (constructor, children, consumed) = match tag {
+                    EMBEDDED_STATE_TYPE_TAG_INT
+                    | EMBEDDED_STATE_TYPE_TAG_DECIMAL
+                    | EMBEDDED_STATE_TYPE_TAG_QUANTITY
+                    | EMBEDDED_STATE_TYPE_TAG_BOOL
+                    | EMBEDDED_STATE_TYPE_TAG_STRING
+                    | EMBEDDED_STATE_TYPE_TAG_BYTES
+                    | EMBEDDED_STATE_TYPE_TAG_DATASPACE_ID
+                    | EMBEDDED_STATE_TYPE_TAG_ACCOUNT_ID
+                    | EMBEDDED_STATE_TYPE_TAG_ASSET_DEFINITION_ID
+                    | EMBEDDED_STATE_TYPE_TAG_ASSET_ID
+                    | EMBEDDED_STATE_TYPE_TAG_NFT_ID
+                    | EMBEDDED_STATE_TYPE_TAG_DOMAIN_ID
+                    | EMBEDDED_STATE_TYPE_TAG_NAME
+                    | EMBEDDED_STATE_TYPE_TAG_JSON => {
+                        expect_payload_consumed(0, payload.len(), "EmbeddedStateType")?;
+                        let value = match tag {
+                            EMBEDDED_STATE_TYPE_TAG_INT => EmbeddedStateType::Int,
+                            EMBEDDED_STATE_TYPE_TAG_DECIMAL => EmbeddedStateType::Decimal,
+                            EMBEDDED_STATE_TYPE_TAG_QUANTITY => EmbeddedStateType::Quantity,
+                            EMBEDDED_STATE_TYPE_TAG_BOOL => EmbeddedStateType::Bool,
+                            EMBEDDED_STATE_TYPE_TAG_STRING => EmbeddedStateType::String,
+                            EMBEDDED_STATE_TYPE_TAG_BYTES => EmbeddedStateType::Bytes,
+                            EMBEDDED_STATE_TYPE_TAG_DATASPACE_ID => EmbeddedStateType::DataSpaceId,
+                            EMBEDDED_STATE_TYPE_TAG_ACCOUNT_ID => EmbeddedStateType::AccountId,
+                            EMBEDDED_STATE_TYPE_TAG_ASSET_DEFINITION_ID => {
+                                EmbeddedStateType::AssetDefinitionId
+                            }
+                            EMBEDDED_STATE_TYPE_TAG_ASSET_ID => EmbeddedStateType::AssetId,
+                            EMBEDDED_STATE_TYPE_TAG_NFT_ID => EmbeddedStateType::NftId,
+                            EMBEDDED_STATE_TYPE_TAG_DOMAIN_ID => EmbeddedStateType::DomainId,
+                            EMBEDDED_STATE_TYPE_TAG_NAME => EmbeddedStateType::Name,
+                            EMBEDDED_STATE_TYPE_TAG_JSON => EmbeddedStateType::Json,
+                            other => {
+                                return Err(NoritoError::invalid_tag(
+                                    "EmbeddedStateType::try_deserialize",
+                                    other,
+                                ));
+                            }
+                        };
+                        decoded_values.push(DecodedValue {
+                            value,
+                            contains_resource_handle: false,
+                        });
+                        continue;
+                    }
+                    EMBEDDED_STATE_TYPE_TAG_TUPLE => {
+                        let (children, used) =
+                            <Vec<Vec<u8>> as DecodeFromSlice>::decode_from_slice(payload)?;
+                        (Constructor::Tuple(children.len()), children, used)
+                    }
+                    EMBEDDED_STATE_TYPE_TAG_STRUCT => {
+                        let (name, name_used) =
+                            <String as DecodeFromSlice>::decode_from_slice(payload)?;
+                        let (encoded_fields, fields_used) =
+                            <Vec<Vec<u8>> as DecodeFromSlice>::decode_from_slice(
+                                &payload[name_used..],
+                            )?;
+                        let mut field_names = Vec::with_capacity(encoded_fields.len());
+                        let mut children = Vec::with_capacity(encoded_fields.len());
+                        for encoded_field in encoded_fields {
+                            let (field_name, field_name_used) =
+                                <String as DecodeFromSlice>::decode_from_slice(&encoded_field)?;
+                            let (field_type, field_type_used) =
+                                <Vec<u8> as DecodeFromSlice>::decode_from_slice(
+                                    &encoded_field[field_name_used..],
+                                )?;
+                            expect_payload_consumed(
+                                field_name_used + field_type_used,
+                                encoded_field.len(),
+                                "EmbeddedStateFieldDescriptor",
+                            )?;
+                            field_names.push(field_name);
+                            children.push(field_type);
+                        }
+                        (
+                            Constructor::Struct { name, field_names },
+                            children,
+                            name_used + fields_used,
+                        )
+                    }
+                    EMBEDDED_STATE_TYPE_TAG_STATE_MAP => {
+                        let (key, key_used) = decode_embedded_state_owned_child(payload)?;
+                        let (value, value_used) =
+                            decode_embedded_state_owned_child(&payload[key_used..])?;
+                        (
+                            Constructor::StateMap,
+                            vec![key, value],
+                            key_used + value_used,
+                        )
+                    }
+                    EMBEDDED_STATE_TYPE_TAG_OPTION => {
+                        let (value, value_used) = decode_embedded_state_owned_child(payload)?;
+                        (Constructor::Option, vec![value], value_used)
+                    }
+                    EMBEDDED_STATE_TYPE_TAG_RESULT => {
+                        let (ok, ok_used) = decode_embedded_state_owned_child(payload)?;
+                        let (err, err_used) =
+                            decode_embedded_state_owned_child(&payload[ok_used..])?;
+                        (Constructor::Result, vec![ok, err], ok_used + err_used)
+                    }
+                    EMBEDDED_STATE_TYPE_TAG_LIST => {
+                        let (element, element_used) = decode_embedded_state_owned_child(payload)?;
+                        let (capacity, capacity_used) =
+                            <u8 as DecodeFromSlice>::decode_from_slice(&payload[element_used..])?;
+                        if !(1..=64).contains(&capacity) {
+                            return Err(NoritoError::Message(format!(
+                                "embedded List capacity must be in 1..=64, got {capacity}"
+                            )));
+                        }
+                        (
+                            Constructor::List(capacity),
+                            vec![element],
+                            element_used + capacity_used,
+                        )
+                    }
+                    other => {
+                        return Err(NoritoError::invalid_tag(
+                            "EmbeddedStateType::try_deserialize",
+                            other,
+                        ));
+                    }
+                };
+                expect_payload_consumed(consumed, payload.len(), "EmbeddedStateType")?;
+                pending.push(Event::Finish(constructor));
+                pending.extend(children.into_iter().rev().map(|encoded| Event::Decode {
+                    encoded,
+                    depth: child_depth,
+                }));
+            }
+            Event::Finish(constructor) => {
+                let child_count = constructor.child_count();
+                let children_start =
+                    decoded_values
+                        .len()
+                        .checked_sub(child_count)
+                        .ok_or_else(|| {
+                            NoritoError::Message(
+                                "invalid iterative embedded state decoder state".to_owned(),
+                            )
+                        })?;
+                let children = decoded_values.split_off(children_start);
+                let contains_resource_handle =
+                    children.iter().any(|child| child.contains_resource_handle);
+                let value = match constructor {
+                    Constructor::Tuple(_) => EmbeddedStateType::Tuple(
+                        children.into_iter().map(|child| child.value).collect(),
+                    ),
+                    Constructor::Struct { name, field_names } => EmbeddedStateType::Struct {
+                        name,
+                        fields: field_names
+                            .into_iter()
+                            .zip(children)
+                            .map(|(name, child)| EmbeddedStateFieldDescriptor {
+                                name,
+                                ty: child.value,
+                            })
+                            .collect(),
+                    },
+                    Constructor::StateMap => {
+                        let mut child = children.into_iter();
+                        let key = child.next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state map key".to_owned(),
+                            )
+                        })?;
+                        let value = child.next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state map value".to_owned(),
+                            )
+                        })?;
+                        EmbeddedStateType::StateMap {
+                            key: Box::new(key.value),
+                            value: Box::new(value.value),
+                        }
+                    }
+                    Constructor::Option => {
+                        let value = children.into_iter().next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state option value".to_owned(),
+                            )
+                        })?;
+                        EmbeddedStateType::Option(Box::new(value.value))
+                    }
+                    Constructor::Result => {
+                        let mut child = children.into_iter();
+                        let ok = child.next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state result ok value".to_owned(),
+                            )
+                        })?;
+                        let err = child.next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state result error value".to_owned(),
+                            )
+                        })?;
+                        EmbeddedStateType::Result {
+                            ok: Box::new(ok.value),
+                            err: Box::new(err.value),
+                        }
+                    }
+                    Constructor::List(capacity) => {
+                        if contains_resource_handle {
+                            return Err(NoritoError::Message(
+                                "embedded List elements cannot contain resource handles".to_owned(),
+                            ));
+                        }
+                        let element = children.into_iter().next().ok_or_else(|| {
+                            NoritoError::Message(
+                                "missing iterative embedded state list element".to_owned(),
+                            )
+                        })?;
+                        EmbeddedStateType::List {
+                            element: Box::new(element.value),
+                            capacity,
+                        }
+                    }
+                };
+                decoded_values.push(DecodedValue {
+                    contains_resource_handle: matches!(value, EmbeddedStateType::StateMap { .. })
+                        || contains_resource_handle,
+                    value,
+                });
+            }
         }
-        EMBEDDED_STATE_TYPE_TAG_MAP => {
-            let (key, key_used) =
-                <Box<EmbeddedStateType> as DecodeFromSlice>::decode_from_slice(payload)?;
-            let (value, value_used) =
-                <Box<EmbeddedStateType> as DecodeFromSlice>::decode_from_slice(
-                    &payload[key_used..],
-                )?;
-            (EmbeddedStateType::Map { key, value }, key_used + value_used)
-        }
-        other => {
-            return Err(NoritoError::invalid_tag(
-                "EmbeddedStateType::try_deserialize",
-                other,
-            ));
-        }
-    };
-    expect_payload_consumed(consumed, payload.len(), "EmbeddedStateType")?;
-    Ok(value)
+    }
+    if decoded_values.len() != 1 {
+        return Err(NoritoError::Message(
+            "invalid iterative embedded state decoder result".to_owned(),
+        ));
+    }
+    decoded_values
+        .pop()
+        .map(|decoded| decoded.value)
+        .ok_or(NoritoError::LengthMismatch)
 }
 
 impl NoritoSerialize for EmbeddedStateFieldDescriptor {
@@ -325,7 +912,7 @@ impl<'a> DecodeFromSlice<'a> for EmbeddedStateType {
     }
 }
 
-/// Contract-level durable state declaration descriptor.
+/// Seiyaku-level durable state declaration descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedStateDescriptor {
     pub name: String,
@@ -335,24 +922,38 @@ pub struct EmbeddedStateDescriptor {
 /// Decoded payload of the required `CNTR` section carried by contract artifacts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedContractInterfaceV1 {
+    /// Canonical source-level seiyaku identity.
+    pub seiyaku_name: String,
     pub compiler_fingerprint: String,
+    /// Compiler-derived ZK/VECTOR capability bits mirrored from the execution header.
+    ///
+    /// The complete `CNTR` section is covered by the artifact hash. These bits
+    /// are unrelated to optional host hardware acceleration.
     pub features_bitmap: u64,
     pub access_set_hints: Option<AccessSetHints>,
     pub kotoba: Vec<KotobaTranslationEntry>,
     pub entrypoints: Vec<EmbeddedEntrypointDescriptor>,
     pub states: Vec<EmbeddedStateDescriptor>,
+    /// Stable application error codes accepted by `require`.
+    pub error_codes: Vec<ContractErrorCodeDescriptor>,
 }
 
-/// Source location emitted for function-level compiler debug metadata.
+/// Exact source location emitted for hash-keyed compiler debug sidecars.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedSourceLocation {
     #[norito(default)]
     pub source_path: Option<String>,
+    /// Stable source identity inside the compiler graph.
+    pub source_id: u32,
+    /// First included UTF-8 byte offset in the source.
+    pub byte_start: u32,
+    /// First excluded UTF-8 byte offset in the source.
+    pub byte_end: u32,
     pub line: u32,
     pub column: u32,
 }
 
-/// Function-level source mapping emitted inside the optional `DBG1` section.
+/// One exact bytecode/source segment in compiler debug metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedSourceMapEntryV1 {
     pub function_name: String,
@@ -451,17 +1052,31 @@ pub struct ParsedProgramMetadata {
     pub contract_interface: Option<EmbeddedContractInterfaceV1>,
     /// Optional compiler debug metadata for self-describing 1.1 contract artifacts.
     pub contract_debug: Option<EmbeddedContractDebugInfoV1>,
+    /// Validated location metadata for the optional indexed literal table.
+    pub literal_section: Option<ParsedLiteralSection>,
+}
+
+/// Structurally validated byte ranges for an `LTLB` indexed literal section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParsedLiteralSection {
+    /// Absolute artifact offset of the `LTLB` marker.
+    pub start: usize,
+    /// Absolute artifact offset of the first `u64` literal-table descriptor.
+    pub entries_start: usize,
+    /// Absolute artifact offset of the first typed literal payload.
+    pub data_start: usize,
+    /// Exclusive absolute artifact offset of literal data, before alignment padding.
+    pub data_end: usize,
+    /// Number of indexed literal entries.
+    pub count: usize,
+    /// Absolute artifact offset where executable code begins.
+    pub code_offset: usize,
 }
 
 impl ParsedProgramMetadata {
     /// Length of the ordered prefix sections placed between the header and executable code.
     pub fn prefix_len(&self) -> usize {
         self.code_offset.saturating_sub(self.header_len)
-    }
-
-    /// Backward-compatible alias for callers that still refer to the old literal-only prefix.
-    pub fn literal_prefix_len(&self) -> usize {
-        self.prefix_len()
     }
 }
 
@@ -510,6 +1125,7 @@ impl ProgramMetadata {
         let mut code_offset = header_len;
         let mut contract_interface = None;
         let mut contract_debug = None;
+        let mut literal_section = None;
 
         if bytes.len() >= code_offset + 4
             && bytes[code_offset..code_offset + 4] == CONTRACT_INTERFACE_SECTION_MAGIC
@@ -529,12 +1145,14 @@ impl ProgramMetadata {
         }
 
         // Optional literal section begins immediately after the header for
-        // generic 1.1 artifacts, or immediately after the `CNTR` section when
+        // generic 1.1 artifacts, or after the ordered `CNTR`/`DBG1` sections
         // present in self-describing contract artifacts.
         if bytes.len() >= code_offset + 4
             && bytes[code_offset..code_offset + 4] == LITERAL_SECTION_MAGIC
         {
-            code_offset = parse_literal_section_end(bytes, code_offset, header_len)?;
+            let parsed = parse_literal_section(bytes, code_offset, header_len)?;
+            code_offset = parsed.code_offset;
+            literal_section = Some(parsed);
         } else if bytes.len() >= header_len + 4 {
             // Reject prefixed layouts that insert zero padding before the literal table marker.
             let max_scan = header_len + 32;
@@ -567,6 +1185,7 @@ impl ProgramMetadata {
             code_offset,
             contract_interface,
             contract_debug,
+            literal_section,
         })
     }
 
@@ -665,11 +1284,11 @@ fn parse_contract_debug_section(
     Ok((decoded, payload_end))
 }
 
-fn parse_literal_section_end(
+fn parse_literal_section(
     bytes: &[u8],
     start: usize,
     header_len: usize,
-) -> Result<usize, VMError> {
+) -> Result<ParsedLiteralSection, VMError> {
     if bytes.len() < start + 16 {
         return Err(VMError::InvalidMetadata);
     }
@@ -685,7 +1304,7 @@ fn parse_literal_section_end(
     let lit_count = u32::from_le_bytes(count_bytes) as usize;
     let post_pad = u32::from_le_bytes(post_bytes) as usize;
     let data_len = u32::from_le_bytes(data_bytes) as usize;
-    if post_pad > 3 {
+    if lit_count > usize::from(u16::MAX) + 1 || post_pad > 3 {
         return Err(VMError::InvalidMetadata);
     }
     let entries_len = lit_count.checked_mul(8).ok_or(VMError::InvalidMetadata)?;
@@ -715,12 +1334,73 @@ fn parse_literal_section_end(
     if bytes[data_end..code_offset].iter().any(|byte| *byte != 0) {
         return Err(VMError::InvalidMetadata);
     }
-    Ok(code_offset)
+    Ok(ParsedLiteralSection {
+        start,
+        entries_start: start + 16,
+        data_start,
+        data_end,
+        count: lit_count,
+        code_offset,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_descriptors_roundtrip_kind_and_full_offset_domain() {
+        for kind in [LiteralKindV1::PointerTlv, LiteralKindV1::I64] {
+            for offset in [0, 1, 0x00ff_ffff, LITERAL_OFFSET_MASK] {
+                let raw = encode_literal_descriptor(kind, offset).expect("encodable offset");
+                assert_eq!(decode_literal_descriptor(raw), Ok((kind, offset)));
+            }
+        }
+        assert!(encode_literal_descriptor(LiteralKindV1::I64, LITERAL_OFFSET_MASK + 1).is_none());
+        assert!(decode_literal_descriptor(0xff00_0000_0000_0000).is_err());
+    }
+
+    #[test]
+    fn contract_code_hash_binds_header_and_body() {
+        let mut artifact = vec![0_u8; HEADER_SIZE + 4];
+        let original = contract_code_hash(&artifact);
+
+        artifact[7] ^= 1;
+        assert_ne!(contract_code_hash(&artifact), original);
+        artifact[7] ^= 1;
+
+        artifact[HEADER_SIZE] ^= 1;
+        assert_ne!(contract_code_hash(&artifact), original);
+        artifact[HEADER_SIZE] ^= 1;
+
+        assert_eq!(contract_code_hash(&artifact), original);
+        assert_ne!(original, iroha_crypto::Hash::new(&artifact));
+    }
+
+    #[test]
+    fn literal_section_parse_reports_validated_ranges() {
+        let mut artifact = ProgramMetadata::default().encode();
+        let start = artifact.len();
+        artifact.extend_from_slice(&LITERAL_SECTION_MAGIC);
+        artifact.extend_from_slice(&1u32.to_le_bytes());
+        artifact.extend_from_slice(&1u32.to_le_bytes());
+        artifact.extend_from_slice(&3u32.to_le_bytes());
+        artifact.extend_from_slice(&24u64.to_le_bytes());
+        artifact.extend_from_slice(&[1, 2, 3]);
+        artifact.push(0);
+        artifact.extend_from_slice(&0x4900_0000u32.to_le_bytes());
+
+        let parsed = ProgramMetadata::parse(&artifact).expect("literal section parses");
+        let section = parsed.literal_section.expect("literal section metadata");
+        assert_eq!(section.start, start);
+        assert_eq!(section.entries_start, start + 16);
+        assert_eq!(section.data_start, start + 24);
+        assert_eq!(section.data_end, start + 27);
+        assert_eq!(section.code_offset, start + 28);
+        assert_eq!(section.count, 1);
+        assert_eq!(parsed.code_offset, section.code_offset);
+        assert_eq!(parsed.prefix_len(), section.code_offset - HEADER_SIZE);
+    }
 
     fn nested_state_type() -> EmbeddedStateType {
         EmbeddedStateType::Struct {
@@ -728,22 +1408,34 @@ mod tests {
             fields: vec![
                 EmbeddedStateFieldDescriptor {
                     name: "balances".to_owned(),
-                    ty: EmbeddedStateType::Map {
+                    ty: EmbeddedStateType::StateMap {
                         key: Box::new(EmbeddedStateType::AccountId),
                         value: Box::new(EmbeddedStateType::Tuple(vec![
                             EmbeddedStateType::AssetDefinitionId,
-                            EmbeddedStateType::Balance,
+                            EmbeddedStateType::Quantity,
                         ])),
                     },
                 },
                 EmbeddedStateFieldDescriptor {
                     name: "metadata".to_owned(),
-                    ty: EmbeddedStateType::Struct {
+                    ty: EmbeddedStateType::Option(Box::new(EmbeddedStateType::Struct {
                         name: "Metadata".to_owned(),
                         fields: vec![EmbeddedStateFieldDescriptor {
                             name: "active".to_owned(),
-                            ty: EmbeddedStateType::Bool,
+                            ty: EmbeddedStateType::Result {
+                                ok: Box::new(EmbeddedStateType::Bool),
+                                err: Box::new(EmbeddedStateType::String),
+                            },
                         }],
+                    })),
+                },
+                EmbeddedStateFieldDescriptor {
+                    name: "recent_amounts".to_owned(),
+                    ty: EmbeddedStateType::List {
+                        element: Box::new(EmbeddedStateType::Option(Box::new(
+                            EmbeddedStateType::Quantity,
+                        ))),
+                        capacity: 16,
                     },
                 },
             ],
@@ -776,17 +1468,145 @@ mod tests {
     }
 
     #[test]
+    fn embedded_state_type_nesting_is_bounded_before_recursive_work() {
+        std::thread::Builder::new()
+            .name("embedded-state-depth-boundary".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                fn option_chain(wrappers: usize) -> EmbeddedStateType {
+                    (0..wrappers).fold(EmbeddedStateType::Bool, |inner, _| {
+                        EmbeddedStateType::Option(Box::new(inner))
+                    })
+                }
+
+                fn raw_option_payload(wrappers: usize) -> Vec<u8> {
+                    let mut payload = vec![EMBEDDED_STATE_TYPE_TAG_BOOL];
+                    for _ in 0..wrappers {
+                        let mut outer = vec![EMBEDDED_STATE_TYPE_TAG_OPTION];
+                        encode_embedded_state_owned_child(&payload, &mut outer)
+                            .expect("serialize adversarial nested payload");
+                        payload = outer;
+                    }
+                    payload
+                }
+
+                let accepted_wrappers = MAX_EMBEDDED_STATE_TYPE_DEPTH - 1;
+                encode_embedded_state_type_payload(&option_chain(accepted_wrappers))
+                    .expect("the exact nesting budget remains valid");
+                decode_embedded_state_type_payload(&raw_option_payload(accepted_wrappers))
+                    .expect("the exact decoding budget remains valid");
+
+                let error = encode_embedded_state_type_payload(&option_chain(
+                    MAX_EMBEDDED_STATE_TYPE_DEPTH,
+                ))
+                .expect_err("encoding above the state-type nesting budget must fail");
+                assert!(error.to_string().contains("nesting exceeds 256 levels"));
+
+                let error = decode_embedded_state_type_payload(&raw_option_payload(
+                    MAX_EMBEDDED_STATE_TYPE_DEPTH,
+                ))
+                .expect_err(
+                    "decoding above the state-type nesting budget must fail before admission",
+                );
+                assert!(error.to_string().contains("nesting exceeds 256 levels"));
+                decode_embedded_state_type_payload(&[EMBEDDED_STATE_TYPE_TAG_BOOL])
+                    .expect("a rejected payload must not poison the next decode");
+            })
+            .expect("spawn constrained-stack state-schema test")
+            .join()
+            .expect("state-schema depth checks must not overflow the native stack");
+    }
+
+    #[test]
+    fn iterative_state_decoder_rejects_malformed_or_forbidden_nested_children() {
+        fn option_payload(child: Vec<u8>) -> Vec<u8> {
+            let mut payload = vec![EMBEDDED_STATE_TYPE_TAG_OPTION];
+            encode_embedded_state_owned_child(&child, &mut payload)
+                .expect("serialize adversarial option child");
+            payload
+        }
+
+        for child in [
+            Vec::new(),
+            vec![EMBEDDED_STATE_TYPE_TAG_BOOL, 0],
+            vec![u8::MAX],
+        ] {
+            decode_embedded_state_type_payload(&option_payload(child))
+                .expect_err("malformed nested type payload must reject");
+        }
+
+        let state_map = EmbeddedStateType::StateMap {
+            key: Box::new(EmbeddedStateType::AccountId),
+            value: Box::new(EmbeddedStateType::Quantity),
+        };
+        let encoded_map =
+            encode_embedded_state_type_payload(&state_map).expect("encode root StateMap");
+        let mut forbidden_list = vec![EMBEDDED_STATE_TYPE_TAG_LIST];
+        encode_embedded_state_owned_child(&encoded_map, &mut forbidden_list)
+            .expect("embed StateMap payload without invoking List validation");
+        1_u8.serialize(&mut forbidden_list)
+            .expect("serialize List capacity");
+        let error = decode_embedded_state_type_payload(&forbidden_list)
+            .expect_err("decoded List element cannot hide a StateMap resource handle");
+        assert!(error.to_string().contains("resource handles"));
+
+        decode_embedded_state_type_payload(&[EMBEDDED_STATE_TYPE_TAG_QUANTITY])
+            .expect("rejections must not poison a later valid decode");
+    }
+
+    #[test]
+    fn embedded_list_uses_stable_tag_and_validates_capacity() {
+        let value = EmbeddedStateType::List {
+            element: Box::new(EmbeddedStateType::Quantity),
+            capacity: 64,
+        };
+        let mut payload = encode_embedded_state_type_payload(&value).expect("encode List schema");
+        assert_eq!(payload[0], EMBEDDED_STATE_TYPE_TAG_LIST);
+
+        *payload.last_mut().expect("capacity byte") = 0;
+        let err = decode_embedded_state_type_payload(&payload).expect_err("reject zero capacity");
+        assert!(err.to_string().contains("capacity must be in 1..=64"));
+
+        let invalid = EmbeddedStateType::List {
+            element: Box::new(EmbeddedStateType::Bool),
+            capacity: 65,
+        };
+        let err = encode_embedded_state_type_payload(&invalid).expect_err("reject capacity 65");
+        assert!(err.to_string().contains("capacity must be in 1..=64"));
+    }
+
+    #[test]
+    fn embedded_list_rejects_nested_resource_handles() {
+        let value = EmbeddedStateType::List {
+            element: Box::new(EmbeddedStateType::Option(Box::new(
+                EmbeddedStateType::StateMap {
+                    key: Box::new(EmbeddedStateType::AccountId),
+                    value: Box::new(EmbeddedStateType::Quantity),
+                },
+            ))),
+            capacity: 4,
+        };
+
+        let err = encode_embedded_state_type_payload(&value)
+            .expect_err("nested StateMap cannot cross a List boundary");
+        assert!(err.to_string().contains("resource handles"));
+    }
+
+    #[test]
     fn contract_interface_section_roundtrips_nested_states() {
         let interface = EmbeddedContractInterfaceV1 {
+            seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "metadata-tests".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![EmbeddedEntrypointDescriptor {
                 name: "main".to_owned(),
-                kind: EntryPointKind::Public,
+                kind: EntryPointKind::View,
                 params: Vec::new(),
+                argument_schema: None,
                 return_type: None,
+                return_schema: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -794,6 +1614,11 @@ mod tests {
                 access_hints_skipped: Vec::new(),
                 triggers: Vec::new(),
                 entry_pc: 0,
+            }],
+            error_codes: vec![ContractErrorCodeDescriptor {
+                namespace: "PaymentError".to_owned(),
+                name: "Unauthorized".to_owned(),
+                code: 1001,
             }],
             states: vec![EmbeddedStateDescriptor {
                 name: "wallet".to_owned(),
@@ -807,5 +1632,13 @@ mod tests {
 
         assert_eq!(next_offset, section.len());
         assert_eq!(decoded, interface);
+
+        let mut artifact = ProgramMetadata::default().encode();
+        artifact.extend_from_slice(&section);
+        artifact.extend_from_slice(&0x4900_0000_u32.to_le_bytes());
+        let parsed = ProgramMetadata::parse(&artifact).expect("parse artifact with CNTR prefix");
+        assert_eq!(parsed.header_len, HEADER_SIZE);
+        assert_eq!(parsed.prefix_len(), section.len());
+        assert_eq!(parsed.code_offset, HEADER_SIZE + section.len());
     }
 }

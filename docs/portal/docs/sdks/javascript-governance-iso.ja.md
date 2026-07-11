@@ -107,41 +107,34 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 Both scripts exit with status code `1` if Torii never reports a terminal
 transition, making them suitable for CI gate jobs.
 
-### ISO alias helper
+### ISO エイリアス ヘルパー
 
-`recipes/iso_alias.mjs` targets the ISO alias endpoints so rehearsals can cover
-blinded-element hashing and alias lookups without writing bespoke tooling. It
-calls `ToriiClient.evaluateAliasVoprf` plus `resolveAlias` / `resolveAliasByIndex`
-and prints the backend, digest, account binding, source, and deterministic index
-returned by Torii.
+`recipes/iso_alias.mjs` は、専用ツールを必要とせずに ISO エイリアス検索を検証します。
+`resolveAlias` と `resolveAliasByIndex` を呼び出し、Torii が返したアカウントのバインディング、ソース、決定論的インデックスを出力します。
 
-Environment variables:
+環境変数:
 
-- `TORII_URL` — Torii endpoint exposing the alias helpers.
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element (defaults to `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — skip the VOPRF call when only testing lookups.
-- `ISO_ALIAS_LABEL` — literal alias to resolve (e.g., IBAN-style strings).
-- `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index passed to `resolveAliasByIndex`.
-- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for secured Torii deployments.
+- `TORII_URL` — エイリアス ヘルパーを公開する Torii エンドポイント。
+- `ISO_ALIAS_LABEL` — 解決するリテラル エイリアス (IBAN スタイルの文字列など)。
+- `ISO_ALIAS_INDEX` — `resolveAliasByIndex` に渡される 10 進数または `0x` という接頭辞が付いたインデックス。
+- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — 安全な Torii 展開用のオプションのヘッダー。
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```
 
-The helper mirrors Torii’s behaviour: it surfaces 404s when aliases are missing
-and treats runtime-disabled errors as soft skips so CI flows can tolerate bridge
-maintenance windows.
+ヘルパーは Torii の動作を反映しており、エイリアスが欠落している場合に 404 を表示します。
+ランタイム無効エラーをソフト スキップとして扱うため、CI フローはブリッジを許容できます。
+メンテナンスウィンドウ。
 
 ## Governance workflows
 

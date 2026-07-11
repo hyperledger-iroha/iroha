@@ -7,6 +7,7 @@
  *
  *   TORII_URL (required)                — Base Torii URL (http://127.0.0.1:8080)
  *   TORII_AUTH_TOKEN / TORII_API_TOKEN  — Optional headers for locked-down nodes
+ *   TORII_ALLOW_INSECURE=1              — Explicit dev-only HTTP opt-in
  *   AUTHORITY (required)                — Account id with the relevant permissions
  *   PRIVATE_KEY / PRIVATE_KEY_HEX       — Signer key (ed25519:<hex> or raw hex)
  *   CONTRACT_CODE_PATH (required)       — Path to .to bytecode
@@ -14,7 +15,7 @@
  *   CONTRACT_LEASE_EXPIRY_MS            — Optional alias lease expiry
  *
  * Examples:
- *   AUTHORITY=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
+ *   AUTHORITY=sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB \
  *   PRIVATE_KEY_HEX=fedcba... \
  *   CONTRACT_CODE_PATH=./artifacts/contract.to \
  *   CONTRACT_ALIAS=router::universal \
@@ -39,6 +40,17 @@ function trimToNull(value) {
   }
   const trimmed = String(value).trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+function readBooleanFlag(name) {
+  const value = trimToNull(process.env[name]);
+  if (value === null || value === "0") {
+    return false;
+  }
+  if (value === "1") {
+    return true;
+  }
+  fail(`${name} must be exactly 0 or 1`);
 }
 
 function resolvePrivateKey() {
@@ -101,6 +113,9 @@ async function main() {
   if (apiToken) {
     clientOptions.apiToken = apiToken;
   }
+  if (readBooleanFlag("TORII_ALLOW_INSECURE")) {
+    clientOptions.allowInsecure = true;
+  }
   const client = new ToriiClient(toriiUrl, clientOptions);
 
   console.log("[contracts] deploying bytecode via /v1/contracts/deploy");
@@ -119,8 +134,8 @@ async function main() {
       response.contract_address ?? "<unspecified>",
       "previous_contract_address:",
       response.previous_contract_address ?? "<none>",
-      "upgraded:",
-      response.upgraded,
+      "kaizen:",
+      response.kaizen,
       "dataspace:",
       response.dataspace ?? "<unspecified>",
       "tx_hash_hex:",

@@ -15,6 +15,10 @@ This crate hosts cross-component tests for Iroha.
 - Target a single test with `cargo test -p integration_tests --test <harness> <filter> -- --nocapture`.
 - Exact test filters are now module-qualified inside the grouped harnesses; for example:
   `cargo test -p integration_tests --test core_api asset::client_add_asset_quantities_should_increase_asset_amounts -- --exact --nocapture`
+- Release acceptance must require its network fixtures instead of accepting sandbox-related skips.
+  Run the dynamic-access serialization gate with
+  `IROHA_TEST_REQUIRE_NETWORK=1 cargo test -p integration_tests --test core_api contracts::dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers -- --exact --nocapture`.
+  The pull-request test job sets this switch; ordinary developer runs keep the existing sandbox-skip behavior.
 - Feature flags: `telemetry` (default), `fault_injection`, `norito_streaming_fec`, `js_host_parity`. Enable with `cargo test -p integration_tests --features "<feature list>"`.
 - Ignored/long cases (e.g., adversarial network, flaky trigger paths): `IROHA_RUN_IGNORED=1 cargo test -p integration_tests -- --ignored --nocapture`.
 - The workspace Cargo config and dev/test profiles keep plain `cargo test` conservative by default (`build.jobs=1`, `profile.{dev,test}.debug=0`, `profile.test.incremental=false`, `RUST_TEST_THREADS=1`) so WSL and memory-constrained VMs do not fan out across every logical CPU, emit debug-heavy Linux artifacts, or retain large incremental-cache working sets. Override with `cargo test --jobs <N>`, `CARGO_PROFILE_TEST_DEBUG=line-tables-only`, `CARGO_INCREMENTAL=1`, and/or `RUST_TEST_THREADS=<N>` on high-memory hosts.

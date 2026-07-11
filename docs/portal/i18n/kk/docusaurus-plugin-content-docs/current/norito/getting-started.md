@@ -18,7 +18,7 @@ Iroha түйініне.
 
 1. Rust құралдар тізбегін (1.76 немесе одан жаңа) орнатыңыз және осы репозиторийді тексеріңіз.
 2. Қолдау көрсететін екілік файлдарды құрастырыңыз немесе жүктеңіз:
-   - `koto_compile` – Kotodama компиляторы, IVM/Norito байт кодын шығаратын
+   - `koto build` – Kotodama компиляторы, IVM/Norito байт кодын шығаратын
    - `ivm_run` және `ivm_tool` – жергілікті орындау және тексеру утилиталары
    - `iroha_cli` – Torii арқылы келісім-шартты орналастыру үшін пайдаланылады
 
@@ -27,7 +27,7 @@ Iroha түйініне.
    жергілікті құралдар тізбегі үшін Makefile көмекшілерін екілік файлдарға бағыттаңыз:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Орналастыру қадамына жеткенде Iroha түйінінің жұмыс істеп тұрғанына көз жеткізіңіз. The
@@ -41,17 +41,16 @@ Iroha түйініне.
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Негізгі жалаушалар:
 
-- `--abi 1` келісім-шартты ABI 1 нұсқасына құлыптайды (жалғыз қолдау көрсетілетін нұсқа:
+- `ABI V1` келісім-шартты ABI 1 нұсқасына құлыптайды (жалғыз қолдау көрсетілетін нұсқа:
   жазу уақыты).
-- `--max-cycles 0` шектеусіз орындауды сұрайды; шектелетін оң санды орнатыңыз
+- `--max-cycles 1000000` шектеусіз орындауды сұрайды; шектелетін оң санды орнатыңыз
   нөлдік білім дәлелдемелері үшін цикл толтыру.
 
 ## 2. Norito артефактін тексеріңіз (қосымша)
@@ -85,7 +84,7 @@ ivm_run target/examples/hello.to --args '{}'
 Base64 пайдалы жүктемесі:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -96,8 +95,8 @@ iroha_cli app contracts deploy \
 Жауапта көрсетілген хэш манифесттерді немесе тізім даналарын алу үшін пайдаланылуы мүмкін:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Torii қарсы орындаңыз
@@ -112,8 +111,8 @@ iroha_cli app contracts instances --namespace apps --table
 - Берілген мысалдарды құрастыру және орындау үшін `make examples-run` пайдаланыңыз.
   ату. Екілік файлдар қосулы болмаса, `KOTO`/`IVM` ортасының айнымалы мәндерін қайта анықтау
   `PATH`.
-- `koto_compile` ABI нұсқасын қабылдамаса, компилятор мен түйін
-  екеуі де мақсатты ABI v1 (тізімде аргументсіз `koto_compile --abi` іске қосыңыз
+- `koto build` ABI нұсқасын қабылдамаса, компилятор мен түйін
+  екеуі де мақсатты ABI v1 (тізімде аргументсіз `koto build --help` іске қосыңыз
   қолдау).
 - CLI он алтылық немесе Base64 қол қою кілттерін қабылдайды. Тестілеу үшін пайдалануға болады
   `iroha_cli tools crypto keypair` шығаратын кілттер.

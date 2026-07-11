@@ -3,7 +3,11 @@
 mod common;
 
 use instruction::wide;
-use ivm::{IVM, VMError, cost_of as cost_of_opt, instruction};
+use ivm::{
+    IVM, VMError, cost_of as cost_of_opt,
+    host::{DefaultHost, IVMHost},
+    instruction,
+};
 
 fn push32(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());
@@ -129,6 +133,12 @@ fn gas_branches_always_one() {
 }
 
 #[test]
+fn indexed_scalar_load_has_one_gas_base_cost() {
+    let load = ivm::encoding::wide::encode_literal(wide::memory::LDI64, 7, u16::MAX);
+    assert_eq!(cost_of(load), 1);
+}
+
+#[test]
 fn gas_getgas_and_jumps_and_vector_sha() {
     // Property: sum(cost_of) over a linear sequence equals runtime gas
     // Build a linear sequence with ALU + LOAD/STORE + GETGAS and compare sums
@@ -186,7 +196,7 @@ fn gas_getgas_and_jumps_and_vector_sha() {
 
 #[test]
 fn schedule_vs_runtime_syscall_extra() {
-    // Sequence with a syscall that charges extra (ALLOC returns +1 extra gas)
+    // Sequence with a syscall that charges by contiguous eight-byte ABI words.
     // Program: MOV r10=16; SCALL ALLOC; HALT
     let mut code = Vec::new();
     // ADDI r10 = r0 + 16 (wide: opcode 0x20 → rd=10, rs1=0, imm=16)
@@ -197,20 +207,46 @@ fn schedule_vs_runtime_syscall_extra() {
     push32(&mut code, scall);
     halt32(&mut code);
 
-    // Sum base schedule; extra (1) from host must be added
+    // Sum base schedule; 16 bytes cost base 1 + two ABI words.
     let words: Vec<u32> = code
         .chunks(4)
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let program = common::assemble(&code);
     let base: u64 = words.iter().map(|&w| cost_of(w)).sum();
-    let expected = base + 1; // ALLOC extra cost
+    let expected = base + 3;
 
     let start = 10_000u64;
     let mut vm = IVM::new(start);
     vm.load_program(&program).unwrap();
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
+}
+
+#[test]
+fn v1_numeric_syscalls_use_staged_metering_without_a_quote() {
+    let vm = IVM::new(10_000);
+    assert_eq!(
+        DefaultHost::new()
+            .prepare_syscall(ivm::syscalls::SYSCALL_QUANTITY_ADD, &vm)
+            .expect("prepare quantity addition"),
+        0,
+        "numeric calls debit each bounded phase immediately and never reserve/refund a quote",
+    );
+}
+
+#[test]
+fn v1_json_build_charge_golden() {
+    assert_eq!(
+        ivm::json::build_json_gas(11, 7, 3, 2, 19),
+        74,
+        "JSON_BUILD charges its base plus schema, source, word, collection, and output bytes"
+    );
+    assert_eq!(
+        ivm::json::typed_getter_gas(11, 19),
+        46,
+        "typed JSON getters charge their base plus inspected and materialized bytes"
+    );
 }
 
 fn run_gas(code: &[u8]) -> u64 {
@@ -775,8 +811,8 @@ fn vector_sequence_cumulative_gas() {
 
 #[test]
 fn poseidon_cost_property() {
-    // Build POSEIDON2 (load two u64 words) and HALT
-    let word = wide_load(wide::crypto::POSEIDON2, 6, 2, 0); // base=r2, rd=r6, imm=0
+    // Build register-form POSEIDON2 and HALT.
+    let word = ivm::encoding::wide::encode_poseidon2(6, 2, 3);
     let mut code = Vec::new();
     push32(&mut code, word);
     halt32(&mut code);
@@ -785,11 +821,8 @@ fn poseidon_cost_property() {
     let mut vm = IVM::new(start);
     let program = common::assemble(&code);
     vm.load_program(&program).unwrap();
-    let base = ivm::Memory::HEAP_START + 0xA00;
-    vm.registers.set(2, base);
-    // Store two 64-bit inputs at base
-    vm.memory.store_u64(base, 1234).unwrap();
-    vm.memory.store_u64(base + 8, 5678).unwrap();
+    vm.registers.set(2, 1234);
+    vm.registers.set(3, 5678);
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }

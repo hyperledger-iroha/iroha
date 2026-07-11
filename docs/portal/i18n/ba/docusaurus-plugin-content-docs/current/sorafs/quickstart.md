@@ -127,3 +127,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 - **CI автоматлаштырыу** – өҫтәге командаларҙы өҫтәп, торбалар сығарыу өсөн шулай docs,
   ҡоролмалары, һәм артефакттар детерминистик манифесттар менән бер рәттән баҫтырып сығара
   метамағлүмәттәр.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

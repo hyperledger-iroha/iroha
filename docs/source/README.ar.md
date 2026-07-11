@@ -50,7 +50,7 @@ translation_last_reviewed: 2025-11-14
 نصائح الاستخدام
 
 - قم ببناء وتشغيل الأمثلة الموجودة في ‎`examples/`‎ باستخدام الأدوات الخارجية
-  ‎(`koto_compile`, `ivm_run`)‎:
+  ‎(`koto build`, `ivm_run`)‎:
   - ‎`make examples-run`‎ (و‎`make examples-inspect`‎ إذا كانت أداة ‎`ivm_tool`‎ متاحة)
 - توجد اختبارات تكامل اختيارية (تُتجاهل افتراضيًا) للأمثلة وفحوصات الترويسة
   في ‎`integration_tests/tests/`‎.

@@ -120,3 +120,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   ترجيح ديني جہیے۔
 - **أتمتة CI** – تتضمن هذه الخطوة الأولى التحكم في إصدار خطوط الأنابيب التي تتضمن إنشاء المستندات،
   التركيبات والمصنوعات الموقعة البيانات الوصفية کے ساتھ المظاهر الحتمية شاع کریں۔
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

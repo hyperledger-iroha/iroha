@@ -33,7 +33,7 @@ Cette page reflete `docs/source/soranexus_bootstrap_plan.md`. Gardez les deux co
 ## מרכז סביבה
 - Operator deux environnements Nexus עם קידומות רזולוציה מבדילים:
 - **Sora Nexus (mainnet)** - קידומת reseau de production `nexus`, hebergeant la governance canonique et les services piggyback SoraFS/SoraNet (מזהה שרשרת Grafana Grafana /Grafana).
-- **Sora Testus (testnet)** - קידומת reseau de staging `testus`, miroir de la configuration mainnet pour les tests d'integration et la validation pre-release (שרשרת UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - קידומת reseau de staging `testus`, miroir de la configuration mainnet pour les tests d'integration et la validation pre-release (שרשרת UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Maintenir des fichiers genesis, des cles de governance et des empreintes d'infrastructure מפרידים את סביבת צ'אקה. Testus sert de terrain de preuve pour tous les rollouts SoraFS/SoraNet avant promotion vers Nexus.
 - Les pipelines CI/CD doivent deployer d'abord sur Testus, executer des tests עשן אוטומציה, ודרשו קידום מכירות מנואלי לעומת Nexus une fois les checks עובר.
 - Les bundles de configuration de reference se trouvent sous `configs/soranexus/nexus/` (mainnet) et `configs/soranexus/testus/` (testnet), chacun contenant un exemple `config.toml`, `genesis.json` et desmission000X I1000x repertoirs d'1000X.

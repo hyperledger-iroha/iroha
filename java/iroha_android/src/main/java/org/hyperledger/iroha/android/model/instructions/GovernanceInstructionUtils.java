@@ -53,11 +53,10 @@ public final class GovernanceInstructionUtils {
       if (raw == null || raw.isBlank()) {
         throw new IllegalArgumentException("mode must not be blank");
       }
-      final String normalised = raw.trim().toLowerCase(Locale.ROOT);
-      if ("zk".equals(normalised)) {
+      if ("Zk".equals(raw)) {
         return ZK;
       }
-      if ("plain".equals(normalised)) {
+      if ("Plain".equals(raw)) {
         return PLAIN;
       }
       throw new IllegalArgumentException("Unknown voting mode: " + raw);

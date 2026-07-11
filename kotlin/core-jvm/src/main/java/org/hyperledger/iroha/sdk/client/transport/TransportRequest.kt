@@ -11,9 +11,32 @@ class TransportRequest(
     body: ByteArray,
     /** Optional per-request timeout. A `null` value indicates executor defaults should apply. */
     @JvmField val timeout: Duration? = null,
+    /** Optional inclusive buffered response-body limit. A `null` value uses the executor limit. */
+    @JvmField val maximumResponseBytes: Long? = null,
 ) {
     private val _headers: Map<String, List<String>> = copyHeaders(headers)
     private val _body: ByteArray = body.copyOf()
+
+    init {
+        require(maximumResponseBytes == null || maximumResponseBytes in 1..Int.MAX_VALUE.toLong()) {
+            "maximumResponseBytes must be between 1 and ${Int.MAX_VALUE}"
+        }
+    }
+
+    constructor(
+        method: String,
+        uri: URI,
+        headers: Map<String, List<String>>,
+        body: ByteArray,
+    ) : this(method, uri, headers, body, null, null)
+
+    constructor(
+        method: String,
+        uri: URI,
+        headers: Map<String, List<String>>,
+        body: ByteArray,
+        timeout: Duration?,
+    ) : this(method, uri, headers, body, timeout, null)
 
     val headers: Map<String, List<String>> get() = _headers
     val body: ByteArray get() = _body.copyOf()
@@ -37,6 +60,7 @@ class TransportRequest(
         private val headers: MutableMap<String, MutableList<String>> = LinkedHashMap()
         private var body: ByteArray = ByteArray(0)
         private var timeout: Duration? = null
+        private var maximumResponseBytes: Long? = null
 
         fun setMethod(method: String): Builder {
             this.method = method
@@ -57,7 +81,7 @@ class TransportRequest(
             this.headers.clear()
             if (headers != null) {
                 for ((key, value) in headers) {
-                    this.headers[key] = value?.toMutableList() ?: mutableListOf()
+                    this.headers[key] = value.toMutableList()
                 }
             }
             return this
@@ -76,12 +100,28 @@ class TransportRequest(
             return this
         }
 
+        fun setMaximumResponseBytes(maximumResponseBytes: Long?): Builder {
+            require(
+                maximumResponseBytes == null ||
+                    maximumResponseBytes in 1..Int.MAX_VALUE.toLong(),
+            ) { "maximumResponseBytes must be between 1 and ${Int.MAX_VALUE}" }
+            this.maximumResponseBytes = maximumResponseBytes
+            return this
+        }
+
         fun build(): TransportRequest {
             val headersCopy = LinkedHashMap<String, List<String>>()
             for ((key, value) in headers) {
                 headersCopy[key] = value.toList()
             }
-            return TransportRequest(method, uri, headersCopy, body, timeout)
+            return TransportRequest(
+                method,
+                uri,
+                headersCopy,
+                body,
+                timeout,
+                maximumResponseBytes,
+            )
         }
     }
 }

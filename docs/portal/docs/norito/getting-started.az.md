@@ -20,7 +20,7 @@ Iroha qovşağına.
 
 1. Rust alətlər silsiləsi (1.76 və ya daha yeni) quraşdırın və bu anbarı yoxlayın.
 2. Dəstəkləyən ikili faylları yaradın və ya endirin:
-   - `koto_compile` – Kotodama kompilyatoru IVM/Norito bayt kodunu yayan
+   - `koto build` – Kotodama kompilyatoru IVM/Norito bayt kodunu yayan
    - `ivm_run` və `ivm_tool` - yerli icra və yoxlama kommunalları
    - `iroha` - Torii vasitəsilə müqavilə yerləşdirilməsi üçün istifadə olunur
 
@@ -29,7 +29,7 @@ Iroha qovşağına.
    alətlər silsiləsi yerli olaraq, Makefile köməkçilərini binarlara yönəldin:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Yerləşdirmə mərhələsinə çatdığınız zaman Iroha qovşağının işlədiyinə əmin olun. The
@@ -43,17 +43,16 @@ Depo minimal "salam dünya" müqaviləsini göndərir
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Əsas bayraqlar:
 
-- `--abi 1` müqaviləni ABI versiyası 1-ə bağlayır (yalnız dəstəklənən versiyada
+- `ABI V1` müqaviləni ABI versiyası 1-ə bağlayır (yalnız dəstəklənən versiyada
   yazı vaxtı).
-- `--max-cycles 0` məhdudiyyətsiz icra tələb edir; bağlamaq üçün müsbət ədəd təyin edin
+- `--max-cycles 1000000` məhdudiyyətsiz icra tələb edir; bağlamaq üçün müsbət ədəd təyin edin
   sıfır bilik sübutları üçün dövrü doldurma.
 
 ## 2. Norito artefaktını yoxlayın (isteğe bağlı)
@@ -87,7 +86,7 @@ Səlahiyyət hesabını, onun imza açarını və ya `.to` faylını və ya
 Base64 faydalı yükü:
 
 ```sh
-iroha app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -98,13 +97,13 @@ nəticədə əməliyyat statusu. Əməliyyat həyata keçirildikdən sonra kod
 Cavabda göstərilən hash manifestləri və ya siyahı nümunələrini əldə etmək üçün istifadə edilə bilər:
 
 ```sh
-iroha app contracts manifest get --code-hash 0x<hash>
+iroha contract manifest get --code-hash 0x<hash>
 ```
 
 ## 5. Torii-ə qarşı işləyin
 
 Qeydə alınmış bayt kodu ilə siz təlimat təqdim etməklə onu işə sala bilərsiniz
-saxlanılan koda istinad edir (məsələn, `iroha app contracts call --contract-address <contract-address> --entrypoint main --wait` vasitəsilə
+saxlanılan koda istinad edir (məsələn, `iroha contract call --contract-address <contract-address> --entrypoint main --wait` vasitəsilə
 və ya proqram müştəriniz). Hesab icazələrinin istədiyinizə icazə verdiyinə əmin olun
 sistem zəngləri (`set_account_detail`, `transfer_asset` və s.).
 
@@ -113,8 +112,8 @@ sistem zəngləri (`set_account_detail`, `transfer_asset` və s.).
 - Təqdim olunan nümunələri bir yerdə tərtib etmək və icra etmək üçün `make examples-run` istifadə edin
   vuruldu. İkili fayllar aktiv deyilsə, `KOTO`/`IVM` mühit dəyişənlərini ləğv edin
   `PATH`.
-- `koto_compile` ABI versiyasını rədd edərsə, tərtibçi və node
-  hər ikisi ABI v1-i hədəfləyir (siyahı üçün arqumentlər olmadan `koto_compile --abi`-i işə salın
+- `koto build` ABI versiyasını rədd edərsə, tərtibçi və node
+  hər ikisi ABI v1-i hədəfləyir (siyahı üçün arqumentlər olmadan `koto build --help`-i işə salın
   dəstək).
 - CLI hex və ya Base64 imza açarlarını qəbul edir. Test üçün istifadə edə bilərsiniz
   `kagami keys --json` tərəfindən buraxılan açarlar.

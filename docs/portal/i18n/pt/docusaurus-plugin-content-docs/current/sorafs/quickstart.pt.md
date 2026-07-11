@@ -125,3 +125,23 @@ rapidamente quando o payload reconstruído divergir do manifesto.
 - **Automação de CI** – adiciona os comandos acima aos pipelines de lançamento para que a
   documentos, luminárias e artefatos públicos manifestos determinísticos junto com
   metadados assinados.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
