@@ -279,7 +279,6 @@ pub(crate) fn signed_finality_proof(commitment_root: H256) -> Vec<u8> {
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
         parent_commit_qc: None,
-        next_epoch_snapshot: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid powered SCCP fixture roster"),
         roster,
         nexus_amx_context_hash: Hash::new(b"exact SCCP fixture Nexus/AMX context"),
