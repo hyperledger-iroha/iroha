@@ -33,7 +33,7 @@ description: Nexus کے بنیادی validator cluster کو آن لائن لان
 ## نیٹ ورک ماحول
 - В средах Nexus есть несколько префиксов, которые можно использовать:
 - **Sora Nexus (mainnet)** - پروڈکشن نیٹ ورک prefix `nexus` جو canonical governance اور SoraFS/SoraNet piggyback services میزبان بناتا ہے (идентификатор цепи `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - промежуточный префикс `testus`, конфигурация основной сети, интеграционное тестирование, предварительная проверка и зеркало (цепочка UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - промежуточный префикс `testus`, конфигурация основной сети, интеграционное тестирование, предварительная проверка и зеркало (цепочка UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Среда, файлы Genesis, ключи управления, следы инфраструктуры. Testus تمام SoraFS/SoraNet развертывает испытательный полигон ہے، Nexus میں продвигает کرنے سے پہلے۔
 - Конвейеры CI/CD в Testus, развертывание автоматических дымовых тестов, проверка и проверка Nexus, ручное продвижение.
 - Reference configuration bundles `configs/soranexus/nexus/` (mainnet) اور `configs/soranexus/testus/` (testnet) کے تحت ہیں، ہر ایک میں نمونہ `config.toml`, `genesis.json` اور Torii каталоги приема شامل ہیں۔

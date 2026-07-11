@@ -15,7 +15,7 @@ use iroha_data_model::{
     query::{QueryRequest, SingularQueryBox},
 };
 
-use super::ast::{Block, Expr, Item, Pattern, Program, Statement};
+use super::ast::{Block, Expr, Item, Pattern, PatternBinding, Program, Statement};
 use crate::builtins::{Builtin, PointerConstructor};
 use crate::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
 use crate::pointer_abi::{self, PointerType};
@@ -49,6 +49,22 @@ impl LintWarning {
     /// Render the lint message in the requested language.
     pub fn localized_message(&self, lang: Language) -> String {
         self.message.translate(lang)
+    }
+
+    /// Stable unified diagnostic code used by `koto check`, LSP, and SDK tools.
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self.code {
+            "unused-state" => "K5001",
+            "state-shadowed" => "K5002",
+            "unused-parameter" => "K5003",
+            "unreachable-return" => "K5004",
+            "duplicate-pointer-literal" => "K5005",
+            "unused-pointer-constructor" => "K5006",
+            "nonliteral-trigger-spec" => "K5007",
+            "nonliteral-state-path" => "K5008",
+            "opaque-access-hints" => "K5009",
+            _ => "K5099",
+        }
     }
 }
 
@@ -175,41 +191,41 @@ pub fn lint_program(program: &Program) -> Vec<LintWarning> {
 }
 
 const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
-    "escrow_open_offer",
-    "escrow_accept",
-    "escrow_mark_payment_sent",
-    "escrow_release",
-    "escrow_cancel",
-    "escrow_open_dispute",
-    "escrow_resolve_dispute",
-    "anonymous_escrow_open_offer",
-    "anonymous_escrow_accept",
-    "anonymous_escrow_mark_payment_sent",
-    "anonymous_escrow_release",
-    "anonymous_escrow_cancel",
-    "anonymous_escrow_open_dispute",
-    "anonymous_escrow_resolve_dispute",
-    "soracloud_read_committed_state",
-    "soracloud_emit_state_mutation",
-    "soracloud_emit_mailbox_message",
-    "soracloud_append_journal",
-    "soracloud_publish_checkpoint",
-    "soracloud_read_secret",
-    "soracloud_read_credential",
-    "soracloud_egress_fetch",
-    "soracloud_read_config",
-    "soracloud_read_secret_envelope",
-    "transfer_domain",
-    "register_peer",
-    "unregister_peer",
-    "sc_execute_submit_ballot",
-    "sc_execute_unshield",
-    "resolve_account_alias",
-    "axt_begin",
-    "axt_touch",
-    "verify_ds_proof",
-    "use_asset_handle",
-    "axt_commit",
+    Builtin::EscrowOpenOffer.source_name(),
+    Builtin::EscrowAccept.source_name(),
+    Builtin::EscrowMarkPaymentSent.source_name(),
+    Builtin::EscrowRelease.source_name(),
+    Builtin::EscrowCancel.source_name(),
+    Builtin::EscrowOpenDispute.source_name(),
+    Builtin::EscrowResolveDispute.source_name(),
+    Builtin::AnonymousEscrowOpenOffer.source_name(),
+    Builtin::AnonymousEscrowAccept.source_name(),
+    Builtin::AnonymousEscrowMarkPaymentSent.source_name(),
+    Builtin::AnonymousEscrowRelease.source_name(),
+    Builtin::AnonymousEscrowCancel.source_name(),
+    Builtin::AnonymousEscrowOpenDispute.source_name(),
+    Builtin::AnonymousEscrowResolveDispute.source_name(),
+    Builtin::SoracloudReadCommittedState.source_name(),
+    Builtin::SoracloudEmitStateMutation.source_name(),
+    Builtin::SoracloudEmitMailboxMessage.source_name(),
+    Builtin::SoracloudAppendJournal.source_name(),
+    Builtin::SoracloudPublishCheckpoint.source_name(),
+    Builtin::SoracloudReadSecret.source_name(),
+    Builtin::SoracloudReadCredential.source_name(),
+    Builtin::SoracloudEgressFetch.source_name(),
+    Builtin::SoracloudReadConfig.source_name(),
+    Builtin::SoracloudReadSecretEnvelope.source_name(),
+    Builtin::TransferDomain.source_name(),
+    Builtin::RegisterPeer.source_name(),
+    Builtin::UnregisterPeer.source_name(),
+    Builtin::ScExecuteSubmitBallot.source_name(),
+    Builtin::ScExecuteUnshield.source_name(),
+    Builtin::ResolveAccountAlias.source_name(),
+    Builtin::AxtBegin.source_name(),
+    Builtin::AxtTouch.source_name(),
+    Builtin::VerifyDsProof.source_name(),
+    Builtin::UseAssetHandle.source_name(),
+    Builtin::AxtCommit.source_name(),
 ];
 
 const EXECUTE_INSTRUCTION_CALL: &str = "execute_instruction";
@@ -232,15 +248,21 @@ fn decode_hex_or_raw_bytes(raw: &str) -> Option<Vec<u8>> {
 }
 
 fn decode_norito_bytes_literal(expr: &Expr) -> Option<Vec<u8>> {
-    let Expr::Call { name, args } = expr else {
-        return None;
-    };
-    if name != "norito_bytes" || args.len() != 1 {
-        return None;
-    }
-    let raw = match &args[0] {
-        Expr::String(value) => decode_hex_or_raw_bytes(value)?,
+    let raw = match expr.kind() {
+        Expr::Source { .. } | Expr::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
         Expr::Bytes(value) => value.clone(),
+        Expr::Call { name, args, .. } if name == "norito_bytes" && args.len() == 1 => {
+            match args[0].kind() {
+                Expr::Source { .. } | Expr::Resolved { .. } => {
+                    unreachable!("kind() strips provenance wrappers")
+                }
+                Expr::String(value) => decode_hex_or_raw_bytes(value)?,
+                Expr::Bytes(value) => value.clone(),
+                _ => return None,
+            }
+        }
         _ => return None,
     };
     let payload = match pointer_abi::validate_tlv_bytes(&raw) {
@@ -352,9 +374,11 @@ fn query_request_is_hintable(request: &QueryRequest) -> bool {
 
 fn is_literal_name_expr(expr: &Expr) -> bool {
     matches!(
-        expr,
-        Expr::Call { name, args }
-            if name == "name" && args.len() == 1 && matches!(args.first(), Some(Expr::String(_)))
+        expr.kind(),
+        Expr::Call { name, args, .. }
+            if name == Builtin::PointerConstructor(PointerConstructor::Name).source_name()
+                && args.len() == 1
+                && args.first().is_some_and(|argument| matches!(argument.kind(), Expr::String(_)))
     )
 }
 
@@ -365,16 +389,16 @@ fn anonymous_escrow_request_literal_is_hintable(name: &str, args: &[Expr]) -> bo
         return false;
     };
     match name {
-        "anonymous_escrow_open_offer" => {
+        name if name == Builtin::AnonymousEscrowOpenOffer.source_name() => {
             norito::decode_from_bytes::<DMEscrow::OpenAnonymousAssetEscrow>(&payload).is_ok()
         }
-        "anonymous_escrow_release" => {
+        name if name == Builtin::AnonymousEscrowRelease.source_name() => {
             norito::decode_from_bytes::<DMEscrow::ReleaseAnonymousAssetEscrow>(&payload).is_ok()
         }
-        "anonymous_escrow_cancel" => {
+        name if name == Builtin::AnonymousEscrowCancel.source_name() => {
             norito::decode_from_bytes::<DMEscrow::CancelAnonymousAssetEscrow>(&payload).is_ok()
         }
-        "anonymous_escrow_resolve_dispute" => {
+        name if name == Builtin::AnonymousEscrowResolveDispute.source_name() => {
             norito::decode_from_bytes::<DMEscrow::ResolveAnonymousEscrowDispute>(&payload).is_ok()
         }
         _ => false,
@@ -382,54 +406,62 @@ fn anonymous_escrow_request_literal_is_hintable(name: &str, args: &[Expr]) -> bo
 }
 
 fn escrow_call_is_hintable(name: &str, args: &[Expr]) -> Option<bool> {
-    match name {
-        "escrow_open_offer"
-        | "escrow_accept"
-        | "escrow_mark_payment_sent"
-        | "escrow_release"
-        | "escrow_cancel"
-        | "escrow_open_dispute"
-        | "escrow_resolve_dispute"
-        | "anonymous_escrow_accept"
-        | "anonymous_escrow_mark_payment_sent"
-        | "anonymous_escrow_open_dispute" => Some(args.first().is_some_and(is_literal_name_expr)),
-        "anonymous_escrow_open_offer"
-        | "anonymous_escrow_release"
-        | "anonymous_escrow_cancel"
-        | "anonymous_escrow_resolve_dispute" => {
-            Some(anonymous_escrow_request_literal_is_hintable(name, args))
-        }
-        _ => None,
+    if [
+        Builtin::EscrowOpenOffer,
+        Builtin::EscrowAccept,
+        Builtin::EscrowMarkPaymentSent,
+        Builtin::EscrowRelease,
+        Builtin::EscrowCancel,
+        Builtin::EscrowOpenDispute,
+        Builtin::EscrowResolveDispute,
+        Builtin::AnonymousEscrowAccept,
+        Builtin::AnonymousEscrowMarkPaymentSent,
+        Builtin::AnonymousEscrowOpenDispute,
+    ]
+    .into_iter()
+    .any(|builtin| builtin.source_name() == name)
+    {
+        Some(args.first().is_some_and(is_literal_name_expr))
+    } else if [
+        Builtin::AnonymousEscrowOpenOffer,
+        Builtin::AnonymousEscrowRelease,
+        Builtin::AnonymousEscrowCancel,
+        Builtin::AnonymousEscrowResolveDispute,
+    ]
+    .into_iter()
+    .any(|builtin| builtin.source_name() == name)
+    {
+        Some(anonymous_escrow_request_literal_is_hintable(name, args))
+    } else {
+        None
     }
 }
 
 fn is_literal_domain_expr(expr: &Expr) -> bool {
-    let Expr::Call { name, args } = expr else {
+    let Expr::Call { name, args, .. } = expr.kind() else {
         return false;
     };
-    matches!(name.as_str(), "domain" | "domain_id")
+    name == Builtin::PointerConstructor(PointerConstructor::DomainId).source_name()
         && args.len() == 1
-        && matches!(
-            args.first(),
-            Some(Expr::String(raw))
-                if iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok()
-        )
+        && args.first().is_some_and(|argument| {
+            matches!(argument.kind(), Expr::String(raw)
+                if iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok())
+        })
 }
 
 fn is_account_access_hint_expr(expr: &Expr) -> bool {
-    let Expr::Call { name, args } = expr else {
+    let Expr::Call { name, args, .. } = expr.kind() else {
         return false;
     };
-    if name == "authority" && args.is_empty() {
+    if name == Builtin::Authority.source_name() && args.is_empty() {
         return true;
     }
-    name == "account_id"
+    name == Builtin::PointerConstructor(PointerConstructor::AccountId).source_name()
         && args.len() == 1
-        && matches!(
-            args.first(),
-            Some(Expr::String(raw))
-                if iroha_data_model::account::AccountId::parse_encoded(raw).is_ok()
-        )
+        && args.first().is_some_and(|argument| {
+            matches!(argument.kind(), Expr::String(raw)
+                if iroha_data_model::account::AccountId::parse_encoded(raw).is_ok())
+        })
 }
 
 fn transfer_domain_call_is_hintable(args: &[Expr]) -> bool {
@@ -448,10 +480,16 @@ fn lint_state_path_block(block: &Block, warnings: &mut Vec<LintWarning>) {
     for stmt in &block.statements {
         lint_state_path_stmt(stmt, warnings);
     }
+    if let Some(tail) = &block.tail {
+        lint_state_path_expr(tail, warnings);
+    }
 }
 
 fn lint_state_path_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
-    match stmt {
+    match stmt.kind() {
+        Statement::Source { .. } | Statement::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
         Statement::Let { value, .. } => lint_state_path_expr(value, warnings),
         Statement::Assign { value, .. } => lint_state_path_expr(value, warnings),
         Statement::AssignExpr { target, value, .. } => {
@@ -470,6 +508,18 @@ fn lint_state_path_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
             lint_state_path_block(then_branch, warnings);
             if let Some(b) = else_branch {
                 lint_state_path_block(b, warnings);
+            }
+        }
+        Statement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            lint_state_path_expr(value, warnings);
+            lint_state_path_block(then_branch, warnings);
+            if let Some(block) = else_branch {
+                lint_state_path_block(block, warnings);
             }
         }
         Statement::While { cond, body } => {
@@ -502,10 +552,15 @@ fn lint_state_path_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
 }
 
 fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
-    match expr {
-        Expr::Call { name, args } => {
-            if matches!(name.as_str(), "state_get" | "state_set" | "state_del")
-                && let Some(path) = args.first()
+    match expr.kind() {
+        Expr::Source { .. } | Expr::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
+        Expr::Call { name, args, .. } => {
+            if matches!(
+                Builtin::from_source_name(name),
+                Some(Builtin::StateGet | Builtin::StateSet | Builtin::StateDel)
+            ) && let Some(path) = args.first()
                 && !is_literal_state_path(path)
             {
                 warnings.push(LintWarning::new(
@@ -525,7 +580,11 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
             lint_state_path_expr(left, warnings);
             lint_state_path_expr(right, warnings);
         }
-        Expr::Unary { expr, .. } => lint_state_path_expr(expr, warnings),
+        Expr::Unary { expr, .. }
+        | Expr::OptionSome(expr)
+        | Expr::ResultOk(expr)
+        | Expr::ResultErr(expr)
+        | Expr::Propagate(expr) => lint_state_path_expr(expr, warnings),
         Expr::Conditional {
             cond,
             then_expr,
@@ -535,7 +594,63 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
             lint_state_path_expr(then_expr, warnings);
             lint_state_path_expr(else_expr, warnings);
         }
-        Expr::Tuple(items) => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            lint_state_path_expr(condition, warnings);
+            lint_state_path_block(then_branch, warnings);
+            if let Some(block) = else_branch {
+                lint_state_path_block(block, warnings);
+            }
+        }
+        Expr::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            lint_state_path_expr(value, warnings);
+            lint_state_path_block(then_branch, warnings);
+            if let Some(block) = else_branch {
+                lint_state_path_block(block, warnings);
+            }
+        }
+        Expr::Match { value, arms } => {
+            lint_state_path_expr(value, warnings);
+            for arm in arms {
+                lint_state_path_block(&arm.body, warnings);
+            }
+        }
+        Expr::Tuple(items) | Expr::List(items) => {
+            for item in items {
+                lint_state_path_expr(item, warnings);
+            }
+        }
+        Expr::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            lint_state_path_expr(source, warnings);
+            lint_state_path_expr(expression, warnings);
+            if let Some(condition) = condition {
+                lint_state_path_expr(condition, warnings);
+            }
+        }
+        Expr::StructLiteral { fields, .. } => {
+            for field in fields {
+                lint_state_path_expr(&field.value, warnings);
+            }
+        }
+        Expr::JsonObject(entries) => {
+            for entry in entries {
+                lint_state_path_expr(&entry.value, warnings);
+            }
+        }
+        Expr::JsonArray(items) => {
             for item in items {
                 lint_state_path_expr(item, warnings);
             }
@@ -545,8 +660,9 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
             lint_state_path_expr(target, warnings);
             lint_state_path_expr(index, warnings);
         }
-        Expr::Number(_)
-        | Expr::Decimal(_)
+        Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
+        | Expr::OptionNone
         | Expr::Bool(_)
         | Expr::String(_)
         | Expr::Bytes(_)
@@ -569,10 +685,16 @@ fn lint_opaque_access_block(block: &Block, warnings: &mut Vec<LintWarning>) {
     for stmt in &block.statements {
         lint_opaque_access_stmt(stmt, warnings);
     }
+    if let Some(tail) = &block.tail {
+        lint_opaque_access_expr(tail, warnings);
+    }
 }
 
 fn lint_opaque_access_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
-    match stmt {
+    match stmt.kind() {
+        Statement::Source { .. } | Statement::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
         Statement::Let { value, .. } => lint_opaque_access_expr(value, warnings),
         Statement::Assign { value, .. } => lint_opaque_access_expr(value, warnings),
         Statement::AssignExpr { target, value, .. } => {
@@ -591,6 +713,18 @@ fn lint_opaque_access_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
             lint_opaque_access_block(then_branch, warnings);
             if let Some(b) = else_branch {
                 lint_opaque_access_block(b, warnings);
+            }
+        }
+        Statement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            lint_opaque_access_expr(value, warnings);
+            lint_opaque_access_block(then_branch, warnings);
+            if let Some(block) = else_branch {
+                lint_opaque_access_block(block, warnings);
             }
         }
         Statement::While { cond, body } => {
@@ -623,8 +757,11 @@ fn lint_opaque_access_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
 }
 
 fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
-    match expr {
-        Expr::Call { name, args } => {
+    match expr.kind() {
+        Expr::Source { .. } | Expr::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
+        Expr::Call { name, args, .. } => {
             let warn = if name == EXECUTE_INSTRUCTION_CALL {
                 !decode_instruction_box_literal(args)
                     .map(|isi| instruction_box_is_hintable(&isi))
@@ -633,7 +770,7 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
                 !decode_query_request_literal(args)
                     .map(|query| query_request_is_hintable(&query))
                     .unwrap_or(false)
-            } else if name == "transfer_domain" {
+            } else if name == Builtin::TransferDomain.source_name() {
                 !transfer_domain_call_is_hintable(args)
             } else if let Some(hintable) = escrow_call_is_hintable(name, args) {
                 !hintable
@@ -658,7 +795,11 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
             lint_opaque_access_expr(left, warnings);
             lint_opaque_access_expr(right, warnings);
         }
-        Expr::Unary { expr, .. } => lint_opaque_access_expr(expr, warnings),
+        Expr::Unary { expr, .. }
+        | Expr::OptionSome(expr)
+        | Expr::ResultOk(expr)
+        | Expr::ResultErr(expr)
+        | Expr::Propagate(expr) => lint_opaque_access_expr(expr, warnings),
         Expr::Conditional {
             cond,
             then_expr,
@@ -668,7 +809,63 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
             lint_opaque_access_expr(then_expr, warnings);
             lint_opaque_access_expr(else_expr, warnings);
         }
-        Expr::Tuple(items) => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            lint_opaque_access_expr(condition, warnings);
+            lint_opaque_access_block(then_branch, warnings);
+            if let Some(block) = else_branch {
+                lint_opaque_access_block(block, warnings);
+            }
+        }
+        Expr::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            lint_opaque_access_expr(value, warnings);
+            lint_opaque_access_block(then_branch, warnings);
+            if let Some(block) = else_branch {
+                lint_opaque_access_block(block, warnings);
+            }
+        }
+        Expr::Match { value, arms } => {
+            lint_opaque_access_expr(value, warnings);
+            for arm in arms {
+                lint_opaque_access_block(&arm.body, warnings);
+            }
+        }
+        Expr::Tuple(items) | Expr::List(items) => {
+            for item in items {
+                lint_opaque_access_expr(item, warnings);
+            }
+        }
+        Expr::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            lint_opaque_access_expr(source, warnings);
+            lint_opaque_access_expr(expression, warnings);
+            if let Some(condition) = condition {
+                lint_opaque_access_expr(condition, warnings);
+            }
+        }
+        Expr::StructLiteral { fields, .. } => {
+            for field in fields {
+                lint_opaque_access_expr(&field.value, warnings);
+            }
+        }
+        Expr::JsonObject(entries) => {
+            for entry in entries {
+                lint_opaque_access_expr(&entry.value, warnings);
+            }
+        }
+        Expr::JsonArray(items) => {
             for item in items {
                 lint_opaque_access_expr(item, warnings);
             }
@@ -678,8 +875,9 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
             lint_opaque_access_expr(target, warnings);
             lint_opaque_access_expr(index, warnings);
         }
-        Expr::Number(_)
-        | Expr::Decimal(_)
+        Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
+        | Expr::OptionNone
         | Expr::Bool(_)
         | Expr::String(_)
         | Expr::Bytes(_)
@@ -688,16 +886,21 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
 }
 
 fn is_literal_state_key(expr: &Expr) -> bool {
-    match expr {
-        Expr::Number(_) | Expr::Decimal(_) | Expr::String(_) | Expr::Bytes(_) => true,
-        Expr::Call { name, args } => {
-            let literal_arg = matches!(args.first(), Some(Expr::String(_)) | Some(Expr::Bytes(_)));
+    match expr.kind() {
+        Expr::Source { .. } | Expr::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
+        Expr::IntLiteral(_) | Expr::DecimalLiteral(_) | Expr::String(_) | Expr::Bytes(_) => true,
+        Expr::Call { name, args, .. } => {
+            let literal_arg = args.first().is_some_and(|argument| {
+                matches!(argument.kind(), Expr::String(_) | Expr::Bytes(_))
+            });
             if !literal_arg || args.len() != 1 {
                 return false;
             }
             name == "account"
                 || matches!(
-                    Builtin::from_name(name),
+                    Builtin::from_source_name(name),
                     Some(Builtin::PointerConstructor(
                         PointerConstructor::AccountId
                             | PointerConstructor::AssetDefinition
@@ -721,19 +924,25 @@ fn is_literal_state_key(expr: &Expr) -> bool {
 }
 
 fn is_literal_state_path(expr: &Expr) -> bool {
-    match expr {
+    match expr.kind() {
+        Expr::Source { .. } | Expr::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
         Expr::String(_) | Expr::Bytes(_) => true,
-        Expr::Call { name, args } => match Builtin::from_name(name) {
+        Expr::Call { name, args, .. } => match Builtin::from_source_name(name) {
             Some(Builtin::PointerConstructor(PointerConstructor::Name)) => {
                 args.len() == 1
-                    && matches!(args.first(), Some(Expr::String(_)) | Some(Expr::Bytes(_)))
+                    && args.first().is_some_and(|argument| {
+                        matches!(argument.kind(), Expr::String(_) | Expr::Bytes(_))
+                    })
             }
             Some(Builtin::Path) => {
                 if args.len() != 2 {
                     return false;
                 }
                 is_literal_state_path(&args[0])
-                    && (matches!(args[1], Expr::Number(_)) || is_literal_state_key(&args[1]))
+                    && (matches!(args[1].kind(), Expr::IntLiteral(_))
+                        || is_literal_state_key(&args[1]))
             }
             _ => false,
         },
@@ -758,13 +967,19 @@ fn lint_unused_state(program: &Program, warnings: &mut Vec<LintWarning>) {
     let mut stmt_stack: Vec<&Statement> = Vec::new();
     for item in &program.items {
         if let Item::Function(func) = item {
+            if let Some(tail) = &func.body.tail {
+                record_expr_idents(tail, &state_lookup, &mut used);
+            }
             for stmt in func.body.statements.iter().rev() {
                 stmt_stack.push(stmt);
             }
         }
     }
     while let Some(stmt) = stmt_stack.pop() {
-        match stmt {
+        match stmt.kind() {
+            Statement::Source { .. } | Statement::Resolved { .. } => {
+                unreachable!("kind() strips provenance wrappers")
+            }
             Statement::Let { value, .. } => {
                 record_expr_idents(value, &state_lookup, &mut used);
             }
@@ -795,6 +1010,34 @@ fn lint_unused_state(program: &Program, warnings: &mut Vec<LintWarning>) {
                     stmt_stack.push(stmt);
                 }
                 if let Some(else_block) = else_branch {
+                    if let Some(tail) = &else_block.tail {
+                        record_expr_idents(tail, &state_lookup, &mut used);
+                    }
+                    for stmt in else_block.statements.iter().rev() {
+                        stmt_stack.push(stmt);
+                    }
+                }
+                if let Some(tail) = &then_branch.tail {
+                    record_expr_idents(tail, &state_lookup, &mut used);
+                }
+            }
+            Statement::IfLet {
+                value,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                record_expr_idents(value, &state_lookup, &mut used);
+                if let Some(tail) = &then_branch.tail {
+                    record_expr_idents(tail, &state_lookup, &mut used);
+                }
+                for stmt in then_branch.statements.iter().rev() {
+                    stmt_stack.push(stmt);
+                }
+                if let Some(else_block) = else_branch {
+                    if let Some(tail) = &else_block.tail {
+                        record_expr_idents(tail, &state_lookup, &mut used);
+                    }
                     for stmt in else_block.statements.iter().rev() {
                         stmt_stack.push(stmt);
                     }
@@ -894,7 +1137,10 @@ fn lint_statement_state_shadowing(
     warnings: &mut Vec<LintWarning>,
     func_name: &str,
 ) {
-    match stmt {
+    match stmt.kind() {
+        Statement::Source { .. } | Statement::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
         Statement::Let { pat, .. } => {
             let mut bound_names = Vec::new();
             collect_pattern_names(pat, &mut bound_names);
@@ -922,6 +1168,30 @@ fn lint_statement_state_shadowing(
             else_branch,
             ..
         } => {
+            lint_statement_shadowing_block(then_branch, state_names, warnings, func_name);
+            if let Some(else_block) = else_branch {
+                lint_statement_shadowing_block(else_block, state_names, warnings, func_name);
+            }
+        }
+        Statement::IfLet {
+            pattern,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            if let Some(PatternBinding::Name(name)) = &pattern.binding
+                && state_names.contains(name)
+                && !name.starts_with('_')
+            {
+                warnings.push(LintWarning::new(
+                    "state-shadowed",
+                    LintMessage::StateShadowed {
+                        func: func_name.to_owned(),
+                        name: name.clone(),
+                        context: StateShadowContext::Binding,
+                    },
+                ));
+            }
             lint_statement_shadowing_block(then_branch, state_names, warnings, func_name);
             if let Some(else_block) = else_branch {
                 lint_statement_shadowing_block(else_block, state_names, warnings, func_name);
@@ -987,11 +1257,17 @@ fn lint_unused_parameters(program: &Program, warnings: &mut Vec<LintWarning>) {
             let lookup: HashSet<String> = param_names.iter().cloned().collect();
             let mut used: HashSet<String> = HashSet::new();
             let mut stmt_stack: Vec<&Statement> = Vec::new();
+            if let Some(tail) = &func.body.tail {
+                record_expr_idents(tail, &lookup, &mut used);
+            }
             for stmt in func.body.statements.iter().rev() {
                 stmt_stack.push(stmt);
             }
             while let Some(stmt) = stmt_stack.pop() {
-                match stmt {
+                match stmt.kind() {
+                    Statement::Source { .. } | Statement::Resolved { .. } => {
+                        unreachable!("kind() strips provenance wrappers")
+                    }
                     Statement::Let { value, .. } => {
                         record_expr_idents(value, &lookup, &mut used);
                     }
@@ -1022,6 +1298,34 @@ fn lint_unused_parameters(program: &Program, warnings: &mut Vec<LintWarning>) {
                             stmt_stack.push(stmt);
                         }
                         if let Some(else_block) = else_branch {
+                            if let Some(tail) = &else_block.tail {
+                                record_expr_idents(tail, &lookup, &mut used);
+                            }
+                            for stmt in else_block.statements.iter().rev() {
+                                stmt_stack.push(stmt);
+                            }
+                        }
+                        if let Some(tail) = &then_branch.tail {
+                            record_expr_idents(tail, &lookup, &mut used);
+                        }
+                    }
+                    Statement::IfLet {
+                        value,
+                        then_branch,
+                        else_branch,
+                        ..
+                    } => {
+                        record_expr_idents(value, &lookup, &mut used);
+                        if let Some(tail) = &then_branch.tail {
+                            record_expr_idents(tail, &lookup, &mut used);
+                        }
+                        for stmt in then_branch.statements.iter().rev() {
+                            stmt_stack.push(stmt);
+                        }
+                        if let Some(else_block) = else_branch {
+                            if let Some(tail) = &else_block.tail {
+                                record_expr_idents(tail, &lookup, &mut used);
+                            }
                             for stmt in else_block.statements.iter().rev() {
                                 stmt_stack.push(stmt);
                             }
@@ -1093,7 +1397,10 @@ fn lint_unreachable_after_return(program: &Program, warnings: &mut Vec<LintWarni
                         ));
                         break;
                     }
-                    match stmt {
+                    match stmt.kind() {
+                        Statement::Source { .. } | Statement::Resolved { .. } => {
+                            unreachable!("kind() strips provenance wrappers")
+                        }
                         Statement::Return(_) => {
                             saw_return = true;
                         }
@@ -1103,6 +1410,16 @@ fn lint_unreachable_after_return(program: &Program, warnings: &mut Vec<LintWarni
                             ..
                         } => {
                             stack.push((then_branch, format!("{context} then-branch")));
+                            if let Some(else_block) = else_branch {
+                                stack.push((else_block, format!("{context} else-branch")));
+                            }
+                        }
+                        Statement::IfLet {
+                            then_branch,
+                            else_branch,
+                            ..
+                        } => {
+                            stack.push((then_branch, format!("{context} if-let branch")));
                             if let Some(else_block) = else_branch {
                                 stack.push((else_block, format!("{context} else-branch")));
                             }
@@ -1143,7 +1460,10 @@ fn collect_pattern_names<'a>(pattern: &'a Pattern, out: &mut Vec<&'a str>) {
 fn record_expr_idents(expr: &Expr, state_lookup: &HashSet<String>, hits: &mut HashSet<String>) {
     let mut stack = vec![expr];
     while let Some(e) = stack.pop() {
-        match e {
+        match e.kind() {
+            Expr::Source { .. } | Expr::Resolved { .. } => {
+                unreachable!("kind() strips provenance wrappers")
+            }
             Expr::Ident(name) => {
                 if state_lookup.contains(name) {
                     hits.insert(name.clone());
@@ -1153,7 +1473,11 @@ fn record_expr_idents(expr: &Expr, state_lookup: &HashSet<String>, hits: &mut Ha
                 stack.push(left);
                 stack.push(right);
             }
-            Expr::Unary { expr, .. } => {
+            Expr::Unary { expr, .. }
+            | Expr::OptionSome(expr)
+            | Expr::ResultOk(expr)
+            | Expr::ResultErr(expr)
+            | Expr::Propagate(expr) => {
                 stack.push(expr);
             }
             Expr::Conditional {
@@ -1165,14 +1489,70 @@ fn record_expr_idents(expr: &Expr, state_lookup: &HashSet<String>, hits: &mut Ha
                 stack.push(then_expr);
                 stack.push(else_expr);
             }
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                stack.push(condition);
+                record_block_idents(then_branch, state_lookup, hits);
+                if let Some(block) = else_branch {
+                    record_block_idents(block, state_lookup, hits);
+                }
+            }
+            Expr::IfLet {
+                value,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                stack.push(value);
+                record_block_idents(then_branch, state_lookup, hits);
+                if let Some(block) = else_branch {
+                    record_block_idents(block, state_lookup, hits);
+                }
+            }
+            Expr::Match { value, arms } => {
+                stack.push(value);
+                for arm in arms {
+                    record_block_idents(&arm.body, state_lookup, hits);
+                }
+            }
             Expr::Call { args, .. } => {
                 for arg in args {
                     stack.push(arg);
                 }
             }
-            Expr::Tuple(values) => {
+            Expr::Tuple(values) | Expr::List(values) => {
                 for elem in values {
                     stack.push(elem);
+                }
+            }
+            Expr::ListComprehension {
+                expression,
+                source,
+                condition,
+                ..
+            } => {
+                stack.push(source);
+                stack.push(expression);
+                if let Some(condition) = condition {
+                    stack.push(condition);
+                }
+            }
+            Expr::StructLiteral { fields, .. } => {
+                for field in fields {
+                    stack.push(&field.value);
+                }
+            }
+            Expr::JsonObject(entries) => {
+                for entry in entries {
+                    stack.push(&entry.value);
+                }
+            }
+            Expr::JsonArray(items) => {
+                for item in items {
+                    stack.push(item);
                 }
             }
             Expr::Member { object, .. } => {
@@ -1183,11 +1563,91 @@ fn record_expr_idents(expr: &Expr, state_lookup: &HashSet<String>, hits: &mut Ha
                 stack.push(index);
             }
             Expr::Bool(_)
-            | Expr::Number(_)
-            | Expr::Decimal(_)
+            | Expr::IntLiteral(_)
+            | Expr::DecimalLiteral(_)
+            | Expr::OptionNone
             | Expr::String(_)
             | Expr::Bytes(_) => {}
         }
+    }
+}
+
+fn record_block_idents(block: &Block, lookup: &HashSet<String>, hits: &mut HashSet<String>) {
+    for statement in &block.statements {
+        record_statement_idents(statement, lookup, hits);
+    }
+    if let Some(tail) = &block.tail {
+        record_expr_idents(tail, lookup, hits);
+    }
+}
+
+fn record_statement_idents(
+    statement: &Statement,
+    lookup: &HashSet<String>,
+    hits: &mut HashSet<String>,
+) {
+    match statement.kind() {
+        Statement::Source { .. } | Statement::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
+        Statement::Let { value, .. }
+        | Statement::Assign { value, .. }
+        | Statement::Expr(value)
+        | Statement::Return(Some(value)) => record_expr_idents(value, lookup, hits),
+        Statement::AssignExpr { target, value, .. } => {
+            record_expr_idents(target, lookup, hits);
+            record_expr_idents(value, lookup, hits);
+        }
+        Statement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            record_expr_idents(cond, lookup, hits);
+            record_block_idents(then_branch, lookup, hits);
+            if let Some(block) = else_branch {
+                record_block_idents(block, lookup, hits);
+            }
+        }
+        Statement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            record_expr_idents(value, lookup, hits);
+            record_block_idents(then_branch, lookup, hits);
+            if let Some(block) = else_branch {
+                record_block_idents(block, lookup, hits);
+            }
+        }
+        Statement::While { cond, body } => {
+            record_expr_idents(cond, lookup, hits);
+            record_block_idents(body, lookup, hits);
+        }
+        Statement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            if let Some(statement) = init {
+                record_statement_idents(statement, lookup, hits);
+            }
+            if let Some(cond) = cond {
+                record_expr_idents(cond, lookup, hits);
+            }
+            if let Some(statement) = step {
+                record_statement_idents(statement, lookup, hits);
+            }
+            record_block_idents(body, lookup, hits);
+        }
+        Statement::ForEachMap { map, body, .. } => {
+            record_expr_idents(map, lookup, hits);
+            record_block_idents(body, lookup, hits);
+        }
+        Statement::Return(None) | Statement::Break | Statement::Continue => {}
     }
 }
 
@@ -1196,23 +1656,16 @@ const POINTER_CONSTRUCTORS: &[PointerConstructor] = &[
     PointerConstructor::AssetDefinition,
     PointerConstructor::AssetId,
     PointerConstructor::NftId,
-    PointerConstructor::Domain,
+    PointerConstructor::Name,
     PointerConstructor::DomainId,
     PointerConstructor::Json,
-    PointerConstructor::Blob,
-    PointerConstructor::NoritoBytes,
     PointerConstructor::DataSpaceId,
-    PointerConstructor::AxtDescriptor,
-    PointerConstructor::AssetHandle,
-    PointerConstructor::ProofBlob,
-    PointerConstructor::SoracloudRequest,
-    PointerConstructor::SoracloudResponse,
 ];
 
 fn lint_pointer_constructor_usage(program: &Program, warnings: &mut Vec<LintWarning>) {
     let constructors: HashSet<&str> = POINTER_CONSTRUCTORS
         .iter()
-        .map(|constructor| constructor.name())
+        .map(|constructor| Builtin::PointerConstructor(*constructor).source_name())
         .collect();
     let mut literal_counts: HashMap<String, usize> = HashMap::new();
 
@@ -1229,7 +1682,7 @@ fn lint_pointer_constructor_usage(program: &Program, warnings: &mut Vec<LintWarn
                 "duplicate-pointer-literal",
                 LintMessage::Custom {
                     message: format!(
-                        "literal `{literal}` appears multiple times in pointer constructors; bind it once (for example, `let id = account!(\"{literal}\");`) and reuse the binding"
+                        "literal `{literal}` appears multiple times in pointer constructors; bind it once (for example, `let id = AccountId::parse(\"{literal}\");`) and reuse the binding"
                     ),
                 },
             ));
@@ -1249,10 +1702,16 @@ fn lint_trigger_specs_in_block(block: &Block, func_name: &str, warnings: &mut Ve
     for stmt in &block.statements {
         lint_trigger_specs_in_stmt(stmt, func_name, warnings);
     }
+    if let Some(tail) = &block.tail {
+        lint_trigger_specs_in_expr(tail, func_name, warnings);
+    }
 }
 
 fn lint_trigger_specs_in_stmt(stmt: &Statement, func_name: &str, warnings: &mut Vec<LintWarning>) {
-    match stmt {
+    match stmt.kind() {
+        Statement::Source { .. } | Statement::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
         Statement::Let { value, .. }
         | Statement::Assign { value, .. }
         | Statement::Expr(value)
@@ -1269,6 +1728,18 @@ fn lint_trigger_specs_in_stmt(stmt: &Statement, func_name: &str, warnings: &mut 
             else_branch,
         } => {
             lint_trigger_specs_in_expr(cond, func_name, warnings);
+            lint_trigger_specs_in_block(then_branch, func_name, warnings);
+            if let Some(else_block) = else_branch {
+                lint_trigger_specs_in_block(else_block, func_name, warnings);
+            }
+        }
+        Statement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            lint_trigger_specs_in_expr(value, func_name, warnings);
             lint_trigger_specs_in_block(then_branch, func_name, warnings);
             if let Some(else_block) = else_branch {
                 lint_trigger_specs_in_block(else_block, func_name, warnings);
@@ -1305,16 +1776,21 @@ fn lint_trigger_specs_in_stmt(stmt: &Statement, func_name: &str, warnings: &mut 
 }
 
 fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<LintWarning>) {
-    match expr {
-        Expr::Call { name, args } => {
-            if matches!(name.as_str(), "create_trigger" | "register_trigger") {
+    match expr.kind() {
+        Expr::Source { .. } | Expr::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
+        Expr::Call { name, args, .. } => {
+            if name == Builtin::CreateTrigger.source_name()
+                || name == Builtin::RegisterTrigger.source_name()
+            {
                 let literal = args.first().is_some_and(is_literal_trigger_spec);
                 if !literal {
                     warnings.push(LintWarning::new(
                         "nonliteral-trigger-spec",
                         LintMessage::Custom {
                             message: format!(
-                                "trigger spec in `{func_name}` is non-literal; production access metadata requires json!(...) or json(\"...\") literals"
+                                "trigger spec in `{func_name}` is non-literal; production access metadata requires a canonical Json::parse(\"...\") literal"
                             ),
                         },
                     ));
@@ -1328,7 +1804,11 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
             lint_trigger_specs_in_expr(left, func_name, warnings);
             lint_trigger_specs_in_expr(right, func_name, warnings);
         }
-        Expr::Unary { expr, .. } => lint_trigger_specs_in_expr(expr, func_name, warnings),
+        Expr::Unary { expr, .. }
+        | Expr::OptionSome(expr)
+        | Expr::ResultOk(expr)
+        | Expr::ResultErr(expr)
+        | Expr::Propagate(expr) => lint_trigger_specs_in_expr(expr, func_name, warnings),
         Expr::Conditional {
             cond,
             then_expr,
@@ -1338,9 +1818,65 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
             lint_trigger_specs_in_expr(then_expr, func_name, warnings);
             lint_trigger_specs_in_expr(else_expr, func_name, warnings);
         }
-        Expr::Tuple(values) => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            lint_trigger_specs_in_expr(condition, func_name, warnings);
+            lint_trigger_specs_in_block(then_branch, func_name, warnings);
+            if let Some(block) = else_branch {
+                lint_trigger_specs_in_block(block, func_name, warnings);
+            }
+        }
+        Expr::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            lint_trigger_specs_in_expr(value, func_name, warnings);
+            lint_trigger_specs_in_block(then_branch, func_name, warnings);
+            if let Some(block) = else_branch {
+                lint_trigger_specs_in_block(block, func_name, warnings);
+            }
+        }
+        Expr::Match { value, arms } => {
+            lint_trigger_specs_in_expr(value, func_name, warnings);
+            for arm in arms {
+                lint_trigger_specs_in_block(&arm.body, func_name, warnings);
+            }
+        }
+        Expr::Tuple(values) | Expr::List(values) => {
             for value in values {
                 lint_trigger_specs_in_expr(value, func_name, warnings);
+            }
+        }
+        Expr::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            lint_trigger_specs_in_expr(source, func_name, warnings);
+            lint_trigger_specs_in_expr(expression, func_name, warnings);
+            if let Some(condition) = condition {
+                lint_trigger_specs_in_expr(condition, func_name, warnings);
+            }
+        }
+        Expr::StructLiteral { fields, .. } => {
+            for field in fields {
+                lint_trigger_specs_in_expr(&field.value, func_name, warnings);
+            }
+        }
+        Expr::JsonObject(entries) => {
+            for entry in entries {
+                lint_trigger_specs_in_expr(&entry.value, func_name, warnings);
+            }
+        }
+        Expr::JsonArray(items) => {
+            for item in items {
+                lint_trigger_specs_in_expr(item, func_name, warnings);
             }
         }
         Expr::Member { object, .. } => lint_trigger_specs_in_expr(object, func_name, warnings),
@@ -1349,8 +1885,9 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
             lint_trigger_specs_in_expr(index, func_name, warnings);
         }
         Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
+        | Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
+        | Expr::OptionNone
         | Expr::String(_)
         | Expr::Bytes(_)
         | Expr::Ident(_) => {}
@@ -1358,9 +1895,15 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
 }
 
 fn is_literal_trigger_spec(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call { name, args } if name == "json" => {
-            matches!(args.first(), Some(Expr::String(_)))
+    match expr.kind() {
+        Expr::Source { .. } | Expr::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
+        Expr::Call { name, args, .. }
+            if name == Builtin::PointerConstructor(PointerConstructor::Json).source_name() =>
+        {
+            args.first()
+                .is_some_and(|argument| matches!(argument.kind(), Expr::String(_)))
         }
         _ => false,
     }
@@ -1371,7 +1914,10 @@ fn collect_pointer_literals_from_stmt(
     constructors: &HashSet<&str>,
     counts: &mut HashMap<String, usize>,
 ) {
-    match stmt {
+    match stmt.kind() {
+        Statement::Source { .. } | Statement::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
         Statement::Let { value, .. } => {
             collect_pointer_literals_from_expr(value, constructors, counts);
         }
@@ -1395,6 +1941,18 @@ fn collect_pointer_literals_from_stmt(
             else_branch,
         } => {
             collect_pointer_literals_from_expr(cond, constructors, counts);
+            collect_pointer_literals_from_block(then_branch, constructors, counts);
+            if let Some(else_block) = else_branch {
+                collect_pointer_literals_from_block(else_block, constructors, counts);
+            }
+        }
+        Statement::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_pointer_literals_from_expr(value, constructors, counts);
             collect_pointer_literals_from_block(then_branch, constructors, counts);
             if let Some(else_block) = else_branch {
                 collect_pointer_literals_from_block(else_block, constructors, counts);
@@ -1437,6 +1995,9 @@ fn collect_pointer_literals_from_block(
     for stmt in &block.statements {
         collect_pointer_literals_from_stmt(stmt, constructors, counts);
     }
+    if let Some(tail) = &block.tail {
+        collect_pointer_literals_from_expr(tail, constructors, counts);
+    }
 }
 
 fn collect_pointer_literals_from_expr(
@@ -1444,14 +2005,29 @@ fn collect_pointer_literals_from_expr(
     constructors: &HashSet<&str>,
     counts: &mut HashMap<String, usize>,
 ) {
-    match expr {
-        Expr::Call { name, args } => {
+    match expr.kind() {
+        Expr::Source { .. } | Expr::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
+        Expr::Call { name, args, .. } => {
             if constructors.contains(name.as_str())
-                && let Some(Expr::String(lit)) = args.first()
+                && let Some(lit) = args.first().and_then(|argument| match argument.kind() {
+                    Expr::String(literal) => Some(literal),
+                    Expr::Source { .. } | Expr::Resolved { .. } => {
+                        unreachable!("kind() strips provenance wrappers")
+                    }
+                    _ => None,
+                })
             {
                 *counts.entry(lit.clone()).or_default() += 1;
             }
-            for arg in args {
+            for (index, arg) in args.iter().enumerate() {
+                if index == 1
+                    && (name == Builtin::JsonSetInt.source_name()
+                        || name == Builtin::JsonSetAccountId.source_name())
+                {
+                    continue;
+                }
                 collect_pointer_literals_from_expr(arg, constructors, counts);
             }
         }
@@ -1459,7 +2035,11 @@ fn collect_pointer_literals_from_expr(
             collect_pointer_literals_from_expr(left, constructors, counts);
             collect_pointer_literals_from_expr(right, constructors, counts);
         }
-        Expr::Unary { expr, .. } => collect_pointer_literals_from_expr(expr, constructors, counts),
+        Expr::Unary { expr, .. }
+        | Expr::OptionSome(expr)
+        | Expr::ResultOk(expr)
+        | Expr::ResultErr(expr)
+        | Expr::Propagate(expr) => collect_pointer_literals_from_expr(expr, constructors, counts),
         Expr::Conditional {
             cond,
             then_expr,
@@ -1469,6 +2049,35 @@ fn collect_pointer_literals_from_expr(
             collect_pointer_literals_from_expr(then_expr, constructors, counts);
             collect_pointer_literals_from_expr(else_expr, constructors, counts);
         }
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_pointer_literals_from_expr(condition, constructors, counts);
+            collect_pointer_literals_from_block(then_branch, constructors, counts);
+            if let Some(block) = else_branch {
+                collect_pointer_literals_from_block(block, constructors, counts);
+            }
+        }
+        Expr::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_pointer_literals_from_expr(value, constructors, counts);
+            collect_pointer_literals_from_block(then_branch, constructors, counts);
+            if let Some(block) = else_branch {
+                collect_pointer_literals_from_block(block, constructors, counts);
+            }
+        }
+        Expr::Match { value, arms } => {
+            collect_pointer_literals_from_expr(value, constructors, counts);
+            for arm in arms {
+                collect_pointer_literals_from_block(&arm.body, constructors, counts);
+            }
+        }
         Expr::Member { object, .. } => {
             collect_pointer_literals_from_expr(object, constructors, counts);
         }
@@ -1476,14 +2085,42 @@ fn collect_pointer_literals_from_expr(
             collect_pointer_literals_from_expr(target, constructors, counts);
             collect_pointer_literals_from_expr(index, constructors, counts);
         }
-        Expr::Tuple(values) => {
+        Expr::Tuple(values) | Expr::List(values) => {
             for value in values {
                 collect_pointer_literals_from_expr(value, constructors, counts);
             }
         }
+        Expr::ListComprehension {
+            expression,
+            source,
+            condition,
+            ..
+        } => {
+            collect_pointer_literals_from_expr(source, constructors, counts);
+            collect_pointer_literals_from_expr(expression, constructors, counts);
+            if let Some(condition) = condition {
+                collect_pointer_literals_from_expr(condition, constructors, counts);
+            }
+        }
+        Expr::StructLiteral { fields, .. } => {
+            for field in fields {
+                collect_pointer_literals_from_expr(&field.value, constructors, counts);
+            }
+        }
+        Expr::JsonObject(entries) => {
+            for entry in entries {
+                collect_pointer_literals_from_expr(&entry.value, constructors, counts);
+            }
+        }
+        Expr::JsonArray(items) => {
+            for item in items {
+                collect_pointer_literals_from_expr(item, constructors, counts);
+            }
+        }
         Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
+        | Expr::IntLiteral(_)
+        | Expr::DecimalLiteral(_)
+        | Expr::OptionNone
         | Expr::String(_)
         | Expr::Bytes(_)
         | Expr::Ident(_) => {}
@@ -1496,7 +2133,10 @@ fn lint_unused_pointer_constructor(
     func_name: &str,
     warnings: &mut Vec<LintWarning>,
 ) {
-    match stmt {
+    match stmt.kind() {
+        Statement::Source { .. } | Statement::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
         Statement::Expr(expr) => {
             warn_if_unused_pointer_call(expr, constructors, func_name, warnings)
         }
@@ -1504,6 +2144,21 @@ fn lint_unused_pointer_constructor(
             warn_if_unused_pointer_call(expr, constructors, func_name, warnings)
         }
         Statement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            lint_unused_pointer_constructor_block(then_branch, constructors, func_name, warnings);
+            if let Some(else_block) = else_branch {
+                lint_unused_pointer_constructor_block(
+                    else_block,
+                    constructors,
+                    func_name,
+                    warnings,
+                );
+            }
+        }
+        Statement::IfLet {
             then_branch,
             else_branch,
             ..
@@ -1549,9 +2204,11 @@ fn warn_if_unused_pointer_call(
     func_name: &str,
     warnings: &mut Vec<LintWarning>,
 ) {
-    if let Expr::Call { name, args } = expr
+    if let Expr::Call { name, args, .. } = expr.kind()
         && constructors.contains(name.as_str())
-        && matches!(args.first(), Some(Expr::String(_)))
+        && args
+            .first()
+            .is_some_and(|argument| matches!(argument.kind(), Expr::String(_)))
     {
         warnings.push(LintWarning::new(
             "unused-pointer-constructor",
@@ -1567,7 +2224,7 @@ fn warn_if_unused_pointer_call(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{i18n::Language, parser::parse};
+    use crate::{i18n::Language, parser::parse_test_fragment as parse};
     use iroha_data_model::DomainId;
 
     #[test]
@@ -1612,7 +2269,7 @@ mod tests {
 
     #[test]
     fn lint_state_shadowing_flags_parameter() {
-        let program = parse("state int balance; fn main(balance: int) {}").unwrap();
+        let program = parse("state int balance; fn main(int balance) {}").unwrap();
         let warnings = lint_program(&program);
         assert!(
             warnings.iter().any(|w| w.code == "state-shadowed"),
@@ -1622,17 +2279,18 @@ mod tests {
 
     #[test]
     fn lint_unused_parameters_flags_param() {
-        let program = parse("fn main(amount: int) { return; }").unwrap();
+        let program = parse("fn main(int amount) { return; }").unwrap();
         let warnings = lint_program(&program);
-        assert!(
-            warnings.iter().any(|w| w.code == "unused-parameter"),
-            "expected unused-parameter lint for unused argument"
-        );
+        let warning = warnings
+            .iter()
+            .find(|warning| warning.code == "unused-parameter")
+            .expect("expected unused-parameter lint for unused argument");
+        assert_eq!(warning.diagnostic_code(), "K5003");
     }
 
     #[test]
     fn lint_unused_parameters_ignores_underscore() {
-        let program = parse("fn main(_unused: int) {}").unwrap();
+        let program = parse("fn main(int _unused) {}").unwrap();
         let warnings = lint_program(&program);
         assert!(
             !warnings.iter().any(|w| w.code == "unused-parameter"),
@@ -1658,7 +2316,7 @@ mod tests {
     #[test]
     fn lint_duplicate_pointer_literals_warns() {
         let program = parse(
-            "fn main() { let a = account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); let b = account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); }",
+            "fn main() { let a = AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); let b = AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); }",
         )
         .unwrap();
         let warnings = lint_program(&program);
@@ -1671,10 +2329,9 @@ mod tests {
 
     #[test]
     fn lint_duplicate_json_name_literals_are_allowed() {
-        let program = parse(
-            r#"fn main() { let p = json_object(); let p = json_set_int(p, name("amount"), 1); let q = json_object(); let q = json_set_int(q, name("amount"), 2); }"#,
-        )
-        .unwrap();
+        let program =
+            parse(r#"fn main() { let p = json { amount: 1 }; let q = json { amount: 2 }; }"#)
+                .unwrap();
         let warnings = lint_program(&program);
         assert!(
             !warnings
@@ -1687,7 +2344,7 @@ mod tests {
     #[test]
     fn lint_unused_pointer_constructor_warns() {
         let program = parse(
-            "fn main() { account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); }",
+            "fn main() { AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); }",
         )
         .unwrap();
         let warnings = lint_program(&program);
@@ -1700,31 +2357,34 @@ mod tests {
 
     #[test]
     fn lint_nonliteral_trigger_spec_warns() {
-        let program = parse("fn main() { let spec = json(\"{}\"); create_trigger(spec); }")
-            .expect("parse trigger");
+        let program =
+            parse("fn main() { let spec = Json::parse(\"{}\"); ledger::trigger::create(spec); }")
+                .expect("parse trigger");
         let warnings = lint_program(&program);
         assert!(warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
     }
 
     #[test]
     fn lint_literal_trigger_spec_is_silent() {
-        let program = parse("fn main() { create_trigger(json(\"{}\")); }").expect("parse trigger");
+        let program = parse("fn main() { ledger::trigger::create(Json::parse(\"{}\")); }")
+            .expect("parse trigger");
         let warnings = lint_program(&program);
         assert!(!warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
     }
 
     #[test]
     fn lint_nonliteral_state_map_key_is_silent() {
-        let program = parse("state Foo: Map<int, int>; fn main() { let k = 1; let _x = Foo[k]; }")
-            .expect("parse map");
+        let program =
+            parse("state StateMap<int, int> Foo; fn main() { let k = 1; let _x = Foo.get(k); }")
+                .expect("parse map");
         let warnings = lint_program(&program);
         assert!(warnings.is_empty());
     }
 
     #[test]
     fn lint_literal_state_map_key_is_silent() {
-        let program =
-            parse("state Foo: Map<int, int>; fn main() { let _x = Foo[1]; }").expect("parse map");
+        let program = parse("state StateMap<int, int> Foo; fn main() { let _x = Foo.get(1); }")
+            .expect("parse map");
         let warnings = lint_program(&program);
         assert!(warnings.is_empty());
     }
@@ -1732,9 +2392,9 @@ mod tests {
     #[test]
     fn lint_nonliteral_state_map_key_with_explicit_access_is_rejected() {
         let err = parse(
-            r#"state Foo: Map<Name, int>;
+            r#"state StateMap<Name, int> Foo;
 #[access(read="*", write="*")]
-fn main(k: Name) { let _x = Foo[k]; }"#,
+fn main(Name k) { let _x = Foo.get(k); }"#,
         )
         .expect_err("manual access hints should be rejected");
         assert!(err.contains("access metadata is generated by the compiler"));
@@ -1742,24 +2402,39 @@ fn main(k: Name) { let _x = Foo[k]; }"#,
 
     #[test]
     fn lint_nonliteral_state_path_warns() {
-        let program =
-            parse("fn main() { let p = name(\"foo\"); state_get(p); }").expect("parse state path");
-        let warnings = lint_program(&program);
-        assert!(warnings.iter().any(|w| w.code == "nonliteral-state-path"));
+        for call in ["state::get(p)", "state::set(p, 1)", "state::delete(p)"] {
+            let program = parse(&format!(
+                "fn main() {{ let p = Name::parse(\"foo\"); {call}; }}"
+            ))
+            .expect("parse state path");
+            let warnings = lint_program(&program);
+            assert!(
+                warnings.iter().any(|w| w.code == "nonliteral-state-path"),
+                "missing canonical state-path warning for {call}"
+            );
+        }
     }
 
     #[test]
     fn lint_literal_state_path_is_silent() {
-        let program =
-            parse("fn main() { let _x = state_get(name(\"foo\")); }").expect("parse state path");
-        let warnings = lint_program(&program);
-        assert!(!warnings.iter().any(|w| w.code == "nonliteral-state-path"));
+        for call in [
+            "state::get(Name::parse(\"foo\"))",
+            "state::set(Name::parse(\"foo\"), 1)",
+            "state::delete(Name::parse(\"foo\"))",
+        ] {
+            let program = parse(&format!("fn main() {{ {call}; }}")).expect("parse state path");
+            let warnings = lint_program(&program);
+            assert!(
+                !warnings.iter().any(|w| w.code == "nonliteral-state-path"),
+                "literal canonical state path unexpectedly warned for {call}"
+            );
+        }
     }
 
     #[test]
     fn lint_opaque_access_hints_warns() {
         let program =
-            parse("fn main() { execute_query(json(\"{}\")); }").expect("parse opaque call");
+            parse("fn main() { execute_query(Json::parse(\"{}\")); }").expect("parse opaque call");
         let warnings = lint_program(&program);
         assert!(warnings.iter().any(|w| w.code == "opaque-access-hints"));
     }
@@ -1768,7 +2443,7 @@ fn main(k: Name) { let _x = Foo[k]; }"#,
     fn lint_nft_set_metadata_is_precise_access() {
         let program = parse(
             r#"fn main() {
-  nft_set_metadata(nft_id("n0$wonderland.universal"), name("dpn_metadata"), json("{}"));
+  nft_set_metadata(NftId::parse("n0$wonderland.universal"), Name::parse("dpn_metadata"), Json::parse("{}"));
 }"#,
         )
         .expect("parse nft_set_metadata call");
@@ -1780,7 +2455,7 @@ fn main(k: Name) { let _x = Foo[k]; }"#,
     fn lint_asset_registration_helpers_are_precise_access() {
         let program = parse(
             r#"
-fn main(asset: AssetDefinitionId, owner: AccountId) {
+fn main(AssetDefinitionId asset, AccountId owner) {
   register_asset(asset, "ROSE", 0, 1);
   create_new_asset(asset, "ROSE", 1, owner, 1);
 }
@@ -1826,7 +2501,7 @@ fn main() {
     blob("vk")
   );
   let _unshield = build_unshield_inline(
-    asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
     authority(),
     1,
     blob("0000000000000000000000000000000000000000000000000000000000000000"),
@@ -1850,10 +2525,10 @@ fn main() {
         let program = parse(
             r#"
 fn main() {
-  transfer_domain(
-    authority(),
-    domain("wonderland.universal"),
-    account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+  ledger::domain::transfer(
+    source: context::authority(),
+    domain: DomainId::parse("wonderland.universal"),
+    destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
   );
 }
 "#,
@@ -1871,8 +2546,8 @@ fn main() {
         let program = parse(
             r#"
 fn main() {
-  let target = authority();
-  transfer_domain(authority(), domain("wonderland.universal"), target);
+  let target = context::authority();
+  ledger::domain::transfer(source: context::authority(), domain: DomainId::parse("wonderland.universal"), destination: target);
 }
 "#,
         )
@@ -1889,13 +2564,13 @@ fn main() {
         let program = parse(
             r#"
 fn main() {
-  escrow_open_offer(name("aitai_offer"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 10);
-  escrow_accept(name("aitai_offer"));
-  escrow_mark_payment_sent(name("aitai_offer"));
-  escrow_release(name("aitai_offer"));
-  escrow_cancel(name("aitai_offer"));
-  escrow_open_dispute(name("aitai_offer"));
-  escrow_resolve_dispute(name("aitai_offer"), 6, 4);
+  ledger::escrow::open_offer(offer: Name::parse("aitai_offer"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 10);
+  ledger::escrow::accept(Name::parse("aitai_offer"));
+  ledger::escrow::mark_payment_sent(Name::parse("aitai_offer"));
+  ledger::escrow::release(Name::parse("aitai_offer"));
+  ledger::escrow::cancel(Name::parse("aitai_offer"));
+  ledger::escrow::open_dispute(Name::parse("aitai_offer"));
+  ledger::escrow::resolve_dispute(offer: Name::parse("aitai_offer"), buyer_amount: 6, seller_amount: 4);
 }
 "#,
         )
@@ -1912,8 +2587,8 @@ fn main() {
         let program = parse(
             r#"
 fn main() {
-  let deal = name("aitai_offer");
-  escrow_accept(deal);
+  let deal = Name::parse("aitai_offer");
+  ledger::escrow::accept(deal);
 }
 "#,
         )
@@ -1930,9 +2605,9 @@ fn main() {
         let program = parse(
             r#"
 fn main() {
-  anonymous_escrow_accept(name("shielded_offer"));
-  anonymous_escrow_mark_payment_sent(name("shielded_offer"));
-  anonymous_escrow_open_dispute(name("shielded_offer"));
+  ledger::escrow::anonymous::accept(Name::parse("shielded_offer"));
+  ledger::escrow::anonymous::mark_payment_sent(Name::parse("shielded_offer"));
+  ledger::escrow::anonymous::open_dispute(Name::parse("shielded_offer"));
 }
 "#,
         )
@@ -1972,12 +2647,13 @@ fn main() {
             proof,
             None,
         );
-        let request_hex = format!(
-            "0x{}",
-            hex::encode(norito::to_bytes(&request).expect("encode anonymous escrow request"))
-        );
+        let request_literal = norito::to_bytes(&request)
+            .expect("encode anonymous escrow request")
+            .into_iter()
+            .map(|byte| format!("\\x{byte:02x}"))
+            .collect::<String>();
         let src = format!(
-            r#"fn main() {{ anonymous_escrow_open_offer(norito_bytes("{request_hex}")); }}"#
+            r#"fn main() {{ ledger::escrow::anonymous::open_offer(b"{request_literal}"); }}"#
         );
         let program = parse(&src).expect("parse anonymous escrow request helper");
         let warnings = lint_program(&program);
@@ -1989,7 +2665,7 @@ fn main() {
 
     #[test]
     fn lint_anonymous_escrow_malformed_request_still_warns() {
-        let program = parse(r#"fn main() { anonymous_escrow_open_offer(norito_bytes("00")); }"#)
+        let program = parse(r#"fn main() { ledger::escrow::anonymous::open_offer(b"\x00"); }"#)
             .expect("parse malformed anonymous escrow request helper");
         let warnings = lint_program(&program);
         assert!(

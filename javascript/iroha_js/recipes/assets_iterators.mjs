@@ -7,26 +7,48 @@ function parsePositiveInt(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseBooleanFlag(value, fallback, context) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  if (value === "1") return true;
+  if (value === "0") return false;
+  throw new TypeError(`${context} must be exactly 0 or 1`);
+}
+
 const toriiUrl = process.env.TORII_URL ?? "http://localhost:8080";
 const accountId =
   process.env.ACCOUNT_ID ??
-  "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4";
+  "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
 const nftId = process.env.NFT_ID ?? null;
 const pageSize = parsePositiveInt(process.env.PAGE_SIZE, 25);
 const maxItemsEnv = parsePositiveInt(process.env.MAX_ITEMS, null);
 const maxItems = Number.isFinite(maxItemsEnv) ? maxItemsEnv : undefined;
+const hasCredentials = Boolean(
+  process.env.TORII_API_TOKEN || process.env.TORII_AUTH_TOKEN,
+);
+const requirePermissions = parseBooleanFlag(
+  process.env.TORII_REQUIRE_PERMISSIONS,
+  hasCredentials,
+  "TORII_REQUIRE_PERMISSIONS",
+);
+const allowInsecure = parseBooleanFlag(
+  process.env.TORII_ALLOW_INSECURE,
+  false,
+  "TORII_ALLOW_INSECURE",
+);
 
 const client = new ToriiClient(toriiUrl, {
   apiToken: process.env.TORII_API_TOKEN,
   authToken: process.env.TORII_AUTH_TOKEN,
-  allowInsecure: process.env.ALLOW_INSECURE === "1",
+  allowInsecure,
 });
 
 async function listAccountAssets() {
   console.log(`\nAccount assets for ${accountId} (pageSize=${pageSize}, maxItems=${maxItems ?? "∞"})`);
   const seen = [];
   for await (const holding of client.iterateAccountAssets(accountId, {
-    requirePermissions: true,
+    requirePermissions,
     pageSize,
     maxItems,
     sort: [{ key: "asset_id", order: "asc" }],
@@ -46,7 +68,7 @@ async function listNfts() {
   console.log(`\nNFTs${nftId ? ` matching ${nftId}` : ""} (pageSize=${pageSize}, maxItems=${maxItems ?? "∞"})`);
   const ids = [];
   for await (const nft of client.iterateNftsQuery({
-    requirePermissions: true,
+    requirePermissions,
     pageSize,
     maxItems,
     filter: nftId ? { Eq: ["id", nftId] } : undefined,

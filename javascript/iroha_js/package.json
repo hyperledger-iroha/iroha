@@ -34,6 +34,11 @@
       "import": "./dist/blake2b.js",
       "types": "./index.d.ts"
     },
+    "./ivm-artifact": {
+      "browser": "./dist/ivmArtifact.js",
+      "import": "./dist/ivmArtifact.js",
+      "types": "./ivm-artifact.d.ts"
+    },
     "./instruction-builders": {
       "import": "./dist/instructionBuilders.js",
       "types": "./index.d.ts"
@@ -48,14 +53,18 @@
       "browser": "./dist/toriiBrowserClient.js",
       "types": "./index.d.ts"
     },
-    "./norito": "./dist/norito.js",
+    "./norito": {
+      "import": "./dist/norito.js",
+      "types": "./index.d.ts"
+    },
     "./offline-cash": {
       "import": "./dist/offlineCashLifecycle.js",
       "types": "./index.d.ts"
     },
     "./canonical-request": {
+      "browser": "./dist/canonicalRequest.js",
       "import": "./dist/canonicalRequest.js",
-      "types": "./index.d.ts"
+      "types": "./canonical-request.d.ts"
     },
     "./sccp": {
       "import": "./dist/sccp.js",
@@ -80,9 +89,9 @@
       "types": "./nexus-app.d.ts"
     },
     "./kotodama-compiler": {
-      "import": "./dist/kotodamaCompiler/index.js",
-      "browser": "./dist/kotodamaCompiler/index.js",
-      "types": "./kotodama-compiler.d.ts"
+      "types": "./kotodama-compiler.d.ts",
+      "browser": "./dist/kotodamaCompiler/browser.js",
+      "import": "./dist/kotodamaCompiler/index.js"
     }
   },
   "typesVersions": {
@@ -102,6 +111,9 @@
       "blake2b": [
         "./index.d.ts"
       ],
+      "ivm-artifact": [
+        "./ivm-artifact.d.ts"
+      ],
       "instruction-builders": [
         "./index.d.ts"
       ],
@@ -118,7 +130,7 @@
         "./index.d.ts"
       ],
       "canonical-request": [
-        "./index.d.ts"
+        "./canonical-request.d.ts"
       ],
       "sccp": [
         "./index.d.ts"
@@ -148,14 +160,15 @@
     "bundle:check": "node ./scripts/bundle-size-check.mjs",
     "test": "npm run build:native && node --test",
     "test:dist": "npm run build:dist && node --test",
+    "test:pack-install": "node ./scripts/package-install-smoke.mjs",
     "check:changelog": "node ./scripts/check-changelog.mjs",
     "release:update-docs": "node ./scripts/update-release-docs.mjs",
     "release:provenance": "node ./scripts/record-release-provenance.mjs",
     "release:verify": "node ./scripts/verify-release-tarball.mjs",
     "fixtures:axt": "node ./scripts/refresh-axt-fixtures.mjs",
     "release:matrix": "node ./scripts/release-matrix.mjs",
-    "release:publish": "npm run check:changelog && npm run lint:test && npm run release:provenance && npm publish --access public --provenance",
-    "prepublishOnly": "npm run check:changelog && npm run lint:test && npm run build:dist && npm run bundle:check",
+    "release:publish": "npm publish --access public --provenance",
+    "prepublishOnly": "npm run check:changelog && npm run build:dist && npm run lint:test && npm run bundle:check && npm run test:pack-install && npm run release:provenance",
     "test:integration": "node ./scripts/run_integration.mjs",
     "telemetry:capture": "node ./scripts/capture_sumeragi_telemetry.mjs",
     "report:bundle-size": "node ./scripts/report-bundle-size.mjs"
@@ -181,6 +194,8 @@
   "files": [
     "README.md",
     "index.d.ts",
+    "canonical-request.d.ts",
+    "ivm-artifact.d.ts",
     "transaction-codec.d.ts",
     "connect.browser.d.ts",
     "nexus-app.d.ts",
@@ -188,12 +203,14 @@
     "package.json",
     "native/iroha_js_host.checksums.json",
     "dist",
-    "recipes",
+    "recipes/iso_bridge_builder.mjs",
+    "recipes/nexus_app_transfer.mjs",
     "scripts",
     "src"
   ],
   "browser": {
     "./dist/crypto.js": "./dist/crypto.browser.js",
+    "./dist/cryptoHash.js": "./dist/cryptoHash.browser.js",
     "./dist/native.js": "./dist/native.browser.js"
   },
   "publishConfig": {

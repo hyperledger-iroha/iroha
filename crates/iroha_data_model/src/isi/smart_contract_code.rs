@@ -4,8 +4,8 @@ use crate::smart_contract::manifest::ContractManifest;
 isi! {
     /// Register a smart contract manifest keyed by `code_hash` into the WSV.
     ///
-    /// Note: current implementation stores only the manifest. Large code
-    /// artifacts may be referenced off-chain by `code_hash`.
+    /// The authority must hold `CanRegisterSmartContractCode`. The corresponding
+    /// verified bytecode must already be present under the manifest's `code_hash`.
     pub struct RegisterSmartContractCode {
         /// Manifest containing `code_hash` (required) and `abi_hash`.
         pub manifest: ContractManifest,
@@ -17,9 +17,9 @@ impl crate::seal::Instruction for RegisterSmartContractCode {}
 isi! {
     /// Deactivate a contract instance by removing the `contract_address` binding.
     ///
-    /// Deactivation acts as a governance kill-switch for compromised deployments. The address
-    /// becomes unavailable immediately, while provenance information (caller and optional reason)
-    /// is emitted via the data event stream.
+    /// The authority must hold `CanRegisterSmartContractCode`. Deactivation acts as a kill-switch
+    /// for compromised deployments. The address becomes unavailable immediately, while provenance
+    /// information (caller and optional reason) is emitted via the data event stream.
     pub struct DeactivateContractInstance {
         /// Canonical contract address.
         pub contract_address: crate::smart_contract::ContractAddress,
@@ -32,14 +32,17 @@ isi! {
 impl crate::seal::Instruction for DeactivateContractInstance {}
 
 isi! {
-    /// Activate a contract instance by binding `contract_address` to a `code_hash`.
+    /// Activate or perform `kaizen`/`改善` on a contract instance by binding
+    /// `contract_address` to a `code_hash`.
     ///
-    /// This creates or updates the canonical routing for a contract address. Nodes use this
-    /// mapping to resolve which bytecode to execute for calls into that address.
+    /// The authority must hold `CanRegisterSmartContractCode`. A new binding stages its declared
+    /// `hajimari`/`始まり` hook. Rebinding an active address to different code additionally requires
+    /// `CanEnactGovernance`; it is an in-place `kaizen`/`改善` and stages the new artifact's declared
+    /// `kaizen`/`改善` hook. Until that exact hook succeeds, ordinary calls are rejected.
     pub struct ActivateContractInstance {
         /// Canonical contract address.
         pub contract_address: crate::smart_contract::ContractAddress,
-        /// Content-addressed code hash (Blake2b-32) of the `.to` bytecode to bind.
+        /// Domain-separated canonical hash of the complete `.to` artifact to bind.
         pub code_hash: iroha_crypto::Hash,
     }
 }
@@ -50,10 +53,12 @@ isi! {
     /// Register compiled contract bytecode on-chain keyed by its `code_hash`.
     ///
     /// The bytecode is the full compiled `.to` image including the IVM header.
-    /// Nodes verify that `code_hash` equals the Blake2b-32 digest of the program body
-    /// (bytes after the IVM header) before storing.
+    /// Nodes verify that `code_hash` equals the domain-separated canonical hash of the
+    /// complete deployable `.to` artifact, including the execution header, `CNTR`,
+    /// literals, and code, before storing. The authority must hold
+    /// `CanRegisterSmartContractCode`.
     pub struct RegisterSmartContractBytes {
-        /// Hash of the program body bytes (after IVM header).
+        /// Domain-separated canonical hash of the complete deployable `.to` artifact.
         pub code_hash: iroha_crypto::Hash,
         /// Full compiled `.to` image (including IVM header).
         pub code: Vec<u8>,
@@ -65,9 +70,9 @@ impl crate::seal::Instruction for RegisterSmartContractBytes {}
 isi! {
     /// Remove compiled contract bytecode from on-chain storage.
     ///
-    /// Removal succeeds only when no manifests or active instances reference the supplied
-    /// `code_hash`. Governance operators can provide an optional audit reason that surfaces
-    /// alongside the emitted removal event.
+    /// The authority must hold `CanRegisterSmartContractCode`. Removal succeeds only when no
+    /// manifests or active instances reference the supplied `code_hash`. An optional audit reason
+    /// surfaces alongside the emitted removal event.
     pub struct RemoveSmartContractBytes {
         /// Hash of the program body bytes (after the IVM header) identifying the artifact to delete.
         pub code_hash: iroha_crypto::Hash,
@@ -242,6 +247,7 @@ mod tests {
 
     fn manifest() -> ContractManifest {
         ContractManifest {
+            seiyaku_name: None,
             code_hash: Some(code_hash()),
             abi_hash: Some(Hash::new(b"abi-policy")),
             compiler_fingerprint: Some("kotodama-1.2.3".to_owned()),
@@ -250,6 +256,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
+            error_codes: None,
             provenance: None,
         }
     }

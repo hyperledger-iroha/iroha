@@ -180,6 +180,32 @@ public sealed class OfflineToriiApiTests
     }
 
     [Fact]
+    public void AppliedResultsRejectZeroFinalityFields()
+    {
+        var applied = Assert.IsType<OfflineOperationStatus.Applied>(
+            OfflineOperationCodec.DecodeStatus(
+                AppliedTopUpStatusArchive(OperationId, TransactionHash)));
+        var anchor = Assert.IsType<OfflineOperationResult.TopUp>(applied.Result).Value.Anchor;
+
+        foreach (var (finalizedBlockHeight, serverTimeMs) in new[]
+                 {
+                     (0UL, 1UL),
+                     (1UL, 0UL),
+                 })
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new OfflineTopUpResult(
+                TransactionHash,
+                finalizedBlockHeight,
+                serverTimeMs,
+                anchor));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new OfflineRedeemResult(
+                TransactionHash,
+                finalizedBlockHeight,
+                serverTimeMs));
+        }
+    }
+
+    [Fact]
     public void OperationStatusDecodesClosedTypedRejectionDetails()
     {
         var rejected = Assert.IsType<OfflineOperationStatus.Rejected>(

@@ -20,6 +20,12 @@ mod implementation;
 #[path = "implementation_blstrs.rs"]
 mod implementation;
 
+mod ethereum;
+pub use ethereum::{
+    ETHEREUM_BLS_POP_DST, ethereum_bls_pop_fast_aggregate_verify,
+    ethereum_bls_pop_validate_public_key,
+};
+
 /// This version is the "normal" BLS signature scheme
 /// with the public key group in G1 and signature group in G2.
 /// 192 byte signatures and 97 byte public keys

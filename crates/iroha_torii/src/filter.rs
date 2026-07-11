@@ -7,6 +7,8 @@
 //! - Map to an internal validated form; mapping to typed predicates is left for
 //!   endpoint-specific adapters.
 
+use std::collections::BTreeSet;
+
 use norito::{
     Error as NoritoError,
     codec::{Decode, Encode},
@@ -255,7 +257,64 @@ fn parse_filter_expr_option(
     opt_val.map(filter_expr_from_value).transpose()
 }
 
+/// Maximum nesting accepted in an app-facing filter expression.
+pub(crate) const FILTER_EXPR_MAX_DEPTH: usize = 10;
+/// Maximum operator nodes accepted in an app-facing filter expression.
+pub(crate) const FILTER_EXPR_MAX_NODES: usize = 1_024;
+/// Maximum literals accepted by one membership operator.
+pub(crate) const FILTER_EXPR_MAX_MEMBERSHIP_VALUES: usize = 1_024;
+/// Maximum membership literals accepted across one expression tree.
+pub(crate) const FILTER_EXPR_MAX_TOTAL_MEMBERSHIP_VALUES: usize = 4_096;
+
+#[derive(Default)]
+struct FilterExprBudget {
+    nodes: usize,
+    membership_values: usize,
+}
+
+impl FilterExprBudget {
+    fn enter(&mut self, depth: usize) -> Result<(), norito::json::Error> {
+        if depth > FILTER_EXPR_MAX_DEPTH {
+            return Err(filter_expr_error("filter expression exceeds depth limit"));
+        }
+        self.nodes = self.nodes.saturating_add(1);
+        if self.nodes > FILTER_EXPR_MAX_NODES {
+            return Err(filter_expr_error("filter expression exceeds node limit"));
+        }
+        Ok(())
+    }
+
+    fn add_membership(&mut self, count: usize) -> Result<(), norito::json::Error> {
+        if count == 0 {
+            return Err(filter_expr_error(
+                "membership operator values must not be empty",
+            ));
+        }
+        if count > FILTER_EXPR_MAX_MEMBERSHIP_VALUES {
+            return Err(filter_expr_error(
+                "membership operator exceeds per-set limit",
+            ));
+        }
+        self.membership_values = self.membership_values.saturating_add(count);
+        if self.membership_values > FILTER_EXPR_MAX_TOTAL_MEMBERSHIP_VALUES {
+            return Err(filter_expr_error(
+                "filter expression exceeds total membership limit",
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn filter_expr_from_value(val: Value) -> Result<FilterExpr, norito::json::Error> {
+    filter_expr_from_value_inner(val, 0, &mut FilterExprBudget::default())
+}
+
+fn filter_expr_from_value_inner(
+    val: Value,
+    depth: usize,
+    budget: &mut FilterExprBudget,
+) -> Result<FilterExpr, norito::json::Error> {
+    budget.enter(depth)?;
     match val {
         Value::Object(mut obj) => {
             let op_value = obj
@@ -266,33 +325,47 @@ fn filter_expr_from_value(val: Value) -> Result<FilterExpr, norito::json::Error>
                 _ => return Err(filter_expr_error("filter expression op must be string")),
             };
             let args = obj.remove("args").unwrap_or(Value::Null);
+            if !obj.is_empty() {
+                return Err(filter_expr_error(
+                    "filter expression contains unknown fields",
+                ));
+            }
             match op.as_str() {
                 "and" => match args {
-                    Value::Array(values) => {
+                    Value::Array(values) if !values.is_empty() => {
+                        if values.len() > FILTER_EXPR_MAX_NODES.saturating_sub(budget.nodes) {
+                            return Err(filter_expr_error("filter expression exceeds node limit"));
+                        }
                         let mut out = Vec::with_capacity(values.len());
                         for value in values {
-                            out.push(filter_expr_from_value(value)?);
+                            out.push(filter_expr_from_value_inner(value, depth + 1, budget)?);
                         }
                         Ok(FilterExpr::And(out))
                     }
-                    _ => Err(filter_expr_error("and expects array args")),
+                    _ => Err(filter_expr_error("and expects non-empty array args")),
                 },
                 "or" => match args {
-                    Value::Array(values) => {
+                    Value::Array(values) if !values.is_empty() => {
+                        if values.len() > FILTER_EXPR_MAX_NODES.saturating_sub(budget.nodes) {
+                            return Err(filter_expr_error("filter expression exceeds node limit"));
+                        }
                         let mut out = Vec::with_capacity(values.len());
                         for value in values {
-                            out.push(filter_expr_from_value(value)?);
+                            out.push(filter_expr_from_value_inner(value, depth + 1, budget)?);
                         }
                         Ok(FilterExpr::Or(out))
                     }
-                    _ => Err(filter_expr_error("or expects array args")),
+                    _ => Err(filter_expr_error("or expects non-empty array args")),
                 },
                 "not" => match args {
                     Value::Array(mut values) if values.len() == 1 => {
-                        let inner = filter_expr_from_value(values.remove(0))?;
+                        let inner =
+                            filter_expr_from_value_inner(values.remove(0), depth + 1, budget)?;
                         Ok(FilterExpr::Not(Box::new(inner)))
                     }
-                    _ => Err(filter_expr_error("not expects array args")),
+                    _ => Err(filter_expr_error(
+                        "not expects exactly one predicate in array args",
+                    )),
                 },
                 "eq" => {
                     let (field, value) = parse_binop_args(args)?;
@@ -320,10 +393,12 @@ fn filter_expr_from_value(val: Value) -> Result<FilterExpr, norito::json::Error>
                 }
                 "in" => {
                     let (field, values) = parse_membership_args(args)?;
+                    budget.add_membership(values.len())?;
                     Ok(FilterExpr::In(field, values))
                 }
                 "nin" => {
                     let (field, values) = parse_membership_args(args)?;
+                    budget.add_membership(values.len())?;
                     Ok(FilterExpr::Nin(field, values))
                 }
                 "exists" => {
@@ -343,7 +418,10 @@ fn filter_expr_from_value(val: Value) -> Result<FilterExpr, norito::json::Error>
 
 fn parse_field_arg(arg: Value) -> Result<FieldPath, norito::json::Error> {
     match arg {
-        Value::String(s) => Ok(FieldPath(s)),
+        Value::Array(mut values) if values.len() == 1 => match values.remove(0) {
+            Value::String(s) => Ok(FieldPath(s)),
+            _ => Err(filter_expr_error("filter field must be string")),
+        },
         _ => Err(filter_expr_error("filter field must be string")),
     }
 }
@@ -367,11 +445,41 @@ fn parse_binop_args(args: Value) -> Result<(FieldPath, Value), norito::json::Err
 fn parse_membership_args(args: Value) -> Result<(FieldPath, Vec<Value>), norito::json::Error> {
     let (field, values) = parse_binop_args(args)?;
     match values {
-        Value::Array(items) => Ok((field, items)),
+        Value::Array(items) => {
+            if items.is_empty() {
+                return Err(filter_expr_error(
+                    "membership operator values must not be empty",
+                ));
+            }
+            if items.len() > FILTER_EXPR_MAX_MEMBERSHIP_VALUES {
+                return Err(filter_expr_error(
+                    "membership operator exceeds per-set limit",
+                ));
+            }
+            if !membership_values_are_unique(&items) {
+                return Err(filter_expr_error(
+                    "membership operator values must be unique canonical JSON literals",
+                ));
+            }
+            Ok((field, items))
+        }
         _ => Err(filter_expr_error(
             "membership operator expects array values",
         )),
     }
+}
+
+fn membership_values_are_unique(values: &[Value]) -> bool {
+    let mut seen = BTreeSet::new();
+    for value in values {
+        let Ok(canonical) = json::to_json(value) else {
+            return false;
+        };
+        if !seen.insert(canonical) {
+            return false;
+        }
+    }
+    true
 }
 
 fn filter_expr_error(msg: &'static str) -> norito::json::Error {
@@ -569,6 +677,103 @@ mod tests {
         ]);
         let expr: FilterExpr = json::from_value(json).expect("parse");
         validate_filter(&expr).expect("validate");
+    }
+
+    #[test]
+    fn filter_expr_rejects_unknown_fields_empty_sets_and_malformed_logical_arity() {
+        let invalid = [
+            norito::json!({"op": "eq", "args": ["result_ok", true], "extra": 1}),
+            norito::json!({"op": "and", "args": []}),
+            norito::json!({"op": "or", "args": []}),
+            norito::json!({"op": "not", "args": []}),
+            norito::json!({"op": "in", "args": ["result_ok", []]}),
+            norito::json!({"op": "nin", "args": ["result_ok", [true, true]]}),
+            norito::json!({"op": "exists", "args": "result_ok"}),
+        ];
+
+        for value in invalid {
+            assert!(
+                json::from_value::<FilterExpr>(value).is_err(),
+                "malformed filter expression must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn filter_expr_presence_roundtrip_uses_canonical_single_argument_array() {
+        for expr in [
+            FilterExpr::Exists(FieldPath("result_ok".into())),
+            FilterExpr::IsNull(FieldPath("metadata.note".into())),
+        ] {
+            let value = filter_expr_to_value(&expr);
+            let decoded: FilterExpr = json::from_value(value).expect("presence roundtrip");
+            assert_eq!(decoded, expr);
+        }
+    }
+
+    #[test]
+    fn filter_expr_binary_wire_roundtrips_and_rejects_noncanonical_json_replay() {
+        let expr = FilterExpr::Eq(FieldPath("result_ok".into()), Value::Bool(true));
+        let bytes = norito::to_bytes(&expr).expect("encode valid FilterExpr");
+        assert_eq!(
+            norito::decode_from_bytes::<FilterExpr>(&bytes).expect("decode valid FilterExpr"),
+            expr
+        );
+
+        let canonical = json::to_string(&filter_expr_to_value(&expr)).expect("canonical filter");
+        let replay = format!(" {canonical}");
+        let (payload, flags) = norito::codec::encode_with_header_flags(&replay);
+        let framed = norito::core::frame_bare_with_header_flags::<FilterExpr>(&payload, flags)
+            .expect("frame replayed FilterExpr string");
+
+        assert!(norito::decode_from_bytes::<FilterExpr>(&framed).is_err());
+    }
+
+    #[test]
+    fn filter_expr_parser_enforces_depth_node_and_membership_budgets() {
+        let mut deep = norito::json!({"op": "eq", "args": ["result_ok", true]});
+        for _ in 0..=FILTER_EXPR_MAX_DEPTH {
+            deep = norito::json!({"op": "not", "args": [deep]});
+        }
+        assert!(json::from_value::<FilterExpr>(deep).is_err());
+
+        let nodes = Value::Array(
+            (0..FILTER_EXPR_MAX_NODES)
+                .map(|_| norito::json!({"op": "eq", "args": ["result_ok", true]}))
+                .collect(),
+        );
+        let mut root = Map::new();
+        root.insert("op".into(), Value::String("and".into()));
+        root.insert("args".into(), nodes);
+        assert!(json::from_value::<FilterExpr>(Value::Object(root)).is_err());
+
+        let oversized = Value::Array(
+            (0..=FILTER_EXPR_MAX_MEMBERSHIP_VALUES)
+                .map(|value| Value::from(value as u64))
+                .collect(),
+        );
+        let mut membership = Map::new();
+        membership.insert("op".into(), Value::String("in".into()));
+        membership.insert(
+            "args".into(),
+            Value::Array(vec![Value::String("timestamp_ms".into()), oversized]),
+        );
+        assert!(json::from_value::<FilterExpr>(Value::Object(membership)).is_err());
+    }
+
+    #[test]
+    fn query_envelope_rejects_empty_negative_membership_instead_of_passing() {
+        let envelope = norito::json!({
+            "filter": {"op": "nin", "args": ["result_ok", []]}
+        });
+        assert!(json::from_value::<QueryEnvelope>(envelope).is_err());
+
+        let programmatic = FilterExpr::Nin(FieldPath("result_ok".into()), Vec::new());
+        assert!(matches!(
+            validate_filter(&programmatic),
+            Err(ValidateError::TypeMismatch(field)) if field == "result_ok"
+        ));
+        assert!(norito::to_bytes(&programmatic).is_err());
     }
 
     #[test]
@@ -816,28 +1021,42 @@ fn is_supported_field(path: &str) -> bool {
 
 /// Validate a filter expression structurally.
 ///
-/// Ensures field paths use supported prefixes and nesting depth stays within
-/// the allowed maximum.
+/// Ensures field paths use supported prefixes; logical and membership operands
+/// are non-empty; membership values are unique; and depth, node, and set sizes
+/// stay within deterministic bounds.
 ///
 /// # Errors
 ///
-/// Returns `ValidateError::UnsupportedField` when a predicate targets an
-/// unsupported field path, or `ValidateError::TypeMismatch` when the expression
-/// tree exceeds the maximum depth or uses an unsupported comparison target.
+/// Returns `ValidateError::UnsupportedField` for unsupported paths and
+/// `ValidateError::TypeMismatch` for invalid operand types, malformed
+/// programmatic trees, resource exhaustion, or duplicate/empty membership.
 pub fn validate_filter(expr: &FilterExpr) -> Result<(), ValidateError> {
-    const MAX_DEPTH: usize = 10;
-    fn validate_rec(expr: &FilterExpr, depth: usize) -> Result<(), ValidateError> {
-        if depth > MAX_DEPTH {
-            return Err(ValidateError::TypeMismatch("depth".into()));
+    fn validate_rec(
+        expr: &FilterExpr,
+        depth: usize,
+        nodes: &mut usize,
+        membership_values: &mut usize,
+    ) -> Result<(), ValidateError> {
+        if depth > FILTER_EXPR_MAX_DEPTH {
+            return Err(ValidateError::TypeMismatch("depth limit".into()));
+        }
+        *nodes = nodes.saturating_add(1);
+        if *nodes > FILTER_EXPR_MAX_NODES {
+            return Err(ValidateError::TypeMismatch("node limit".into()));
         }
         match expr {
             FilterExpr::And(list) | FilterExpr::Or(list) => {
+                if list.is_empty() {
+                    return Err(ValidateError::TypeMismatch(
+                        "logical operators require at least one child".into(),
+                    ));
+                }
                 for e in list {
-                    validate_rec(e, depth + 1)?;
+                    validate_rec(e, depth + 1, nodes, membership_values)?;
                 }
                 Ok(())
             }
-            FilterExpr::Not(inner) => validate_rec(inner, depth + 1),
+            FilterExpr::Not(inner) => validate_rec(inner, depth + 1, nodes, membership_values),
             FilterExpr::Eq(f, _)
             | FilterExpr::Ne(f, _)
             | FilterExpr::Exists(f)
@@ -863,20 +1082,39 @@ pub fn validate_filter(expr: &FilterExpr) -> Result<(), ValidateError> {
                 if !is_supported_field(&f.0) {
                     return Err(ValidateError::UnsupportedField(f.0.clone()));
                 }
+                if vals.is_empty() {
+                    return Err(ValidateError::TypeMismatch(f.0.clone()));
+                }
+                if vals.len() > FILTER_EXPR_MAX_MEMBERSHIP_VALUES {
+                    return Err(ValidateError::TypeMismatch(format!(
+                        "membership values for {}",
+                        f.0
+                    )));
+                }
+                if !membership_values_are_unique(vals) {
+                    return Err(ValidateError::TypeMismatch(f.0.clone()));
+                }
+                *membership_values = membership_values.saturating_add(vals.len());
+                if *membership_values > FILTER_EXPR_MAX_TOTAL_MEMBERSHIP_VALUES {
+                    return Err(ValidateError::TypeMismatch(
+                        "total membership values".into(),
+                    ));
+                }
                 // For membership checks, require homogeneous primitive types (strings or numbers).
-                // Empty list is allowed and simply matches nothing/everything depending on op semantics downstream.
-                if !vals.is_empty() {
-                    let all_strings = vals.iter().all(norito::json::Value::is_string);
-                    let all_numbers = vals.iter().all(norito::json::Value::is_number);
-                    if !(all_strings || all_numbers) {
-                        return Err(ValidateError::TypeMismatch(f.0.clone()));
-                    }
+                let all_strings = vals.iter().all(norito::json::Value::is_string);
+                let all_numbers = vals.iter().all(norito::json::Value::is_number);
+                let all_bools = vals.iter().all(norito::json::Value::is_bool);
+                let metadata_values = f.0.starts_with("metadata.");
+                if !metadata_values && !(all_strings || all_numbers || all_bools) {
+                    return Err(ValidateError::TypeMismatch(f.0.clone()));
                 }
                 Ok(())
             }
         }
     }
-    validate_rec(expr, 0)
+    let mut nodes = 0;
+    let mut membership_values = 0;
+    validate_rec(expr, 0, &mut nodes, &mut membership_values)
 }
 
 impl norito::core::NoritoSerialize for FieldPath {
@@ -977,6 +1215,8 @@ impl<'de> norito::core::NoritoDeserialize<'de> for SortKey {
 
 impl norito::core::NoritoSerialize for FilterExpr {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        validate_filter(self)
+            .map_err(|err| norito::core::Error::Message(format!("invalid FilterExpr: {err}")))?;
         let json = norito::json::to_string(&filter_expr_to_value(self))
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         <String as norito::core::NoritoSerialize>::serialize(&json, writer)
@@ -989,8 +1229,18 @@ impl<'de> norito::core::NoritoDeserialize<'de> for FilterExpr {
     ) -> Result<Self, norito::core::Error> {
         let archived_str: &norito::core::Archived<String> = archived.cast();
         let json = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_str)?;
-        norito::json::from_str::<FilterExpr>(&json)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))
+        let expr = norito::json::from_str::<FilterExpr>(&json)
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
+        validate_filter(&expr)
+            .map_err(|err| norito::core::Error::Message(format!("invalid FilterExpr: {err}")))?;
+        let canonical = norito::json::to_string(&filter_expr_to_value(&expr))
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
+        if json != canonical {
+            return Err(norito::core::Error::Message(
+                "FilterExpr binary payload must contain canonical JSON".into(),
+            ));
+        }
+        Ok(expr)
     }
 
     fn deserialize(archived: &'de norito::core::Archived<FilterExpr>) -> Self {

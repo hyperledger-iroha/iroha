@@ -1,13 +1,20 @@
 import {
   NexusAppClient,
+  type NexusAppErrorContext,
   type NexusBytes,
+  type NexusFinalizeOptions,
+  type NexusNoWaitFinalizeOptions,
   type NexusTransactionPayloadResult,
   type NexusTransactionCodec,
+  type NexusWaitFinalizeOptions,
 } from "@iroha/iroha-js/nexus-app";
 import {
   browserTransactionCodec,
   buildBrowserTransferPayload,
+  validateBrowserTransferSignable,
+  type BrowserTransactionSignable,
   type BrowserTransferInput,
+  type ValidatedBrowserTransactionSignable,
 } from "@iroha/iroha-js/transaction-codec";
 
 const codec: NexusTransactionCodec = browserTransactionCodec;
@@ -25,6 +32,33 @@ const input: BrowserTransferInput = {
 const stronglyTypedPayload: Buffer = buildBrowserTransferPayload(input);
 const codecPayload: NexusBytes | NexusTransactionPayloadResult =
   codec.buildTransferPayload(input as unknown as Record<string, unknown>);
+declare const signable: BrowserTransactionSignable;
+const validated: Readonly<ValidatedBrowserTransactionSignable> =
+  validateBrowserTransferSignable(signable);
+const waitOptions: NexusWaitFinalizeOptions = {
+  wait: true,
+  successStatuses: new Set(["Committed"]),
+  signal: new AbortController().signal,
+};
+const noWaitOptions: NexusNoWaitFinalizeOptions = { wait: false };
+const finalizeOptions: readonly NexusFinalizeOptions[] = [
+  waitOptions,
+  noWaitOptions,
+];
+const submittedErrorContext: NexusAppErrorContext = {
+  phase: "status_wait",
+  submissionState: "submitted",
+  signedTransactionHashHex: "0".repeat(64),
+};
+// @ts-expect-error no-wait submissions must reject status-only options.
+const invalidNoWaitOptions: NexusFinalizeOptions = {
+  wait: false,
+  signal: new AbortController().signal,
+};
 
 void stronglyTypedPayload;
 void codecPayload;
+void validated;
+void finalizeOptions;
+void submittedErrorContext;
+void invalidNoWaitOptions;

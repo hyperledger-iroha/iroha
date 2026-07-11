@@ -4,7 +4,10 @@
 //! frames six reviewed Pasta inputs, validates one canonical finality-roster
 //! artifact, and writes the exact release manifest consumed by deploy tooling.
 //! This is an unsigned staging step: it validates content and records evidence
-//! digests, but it does not authenticate release signatures. Production
+//! digests, but it does not authenticate release signatures. The same typed
+//! manifest is published as canonical JSON for operators and canonical Norito
+//! for native consumers; downstream release loading must require semantic
+//! equality between both representations. Production
 //! readiness remains governed by the fail-closed native capability record and
 //! a separately authenticated manifest/release envelope.
 
@@ -12,6 +15,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env,
     error::Error,
+    ffi::{OsStr, OsString},
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -28,7 +32,7 @@ use iroha_data_model::{
     offline::{
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3, KAGEMUSHA_RECURSIVE_SPEND_MODE_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3, KAGEMUSHA_RECURSIVE_SPEND_MODE_V2,
         KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
@@ -73,11 +77,13 @@ Usage:
 
 The output directory must not already exist. Each source must be a non-empty
 regular file within its role-specific bound. The command writes six KRV3KEY
-files, the exact validated finality-roster archive, and manifest.json atomically
-with respect to final manifest publication. Inputs are preflighted before the
-owner-only output directory is created. A write failure retains a manifest-less
-or incomplete directory for inspection instead of recursively deleting a path.
-This command does not authenticate the evidence or sign the manifest.
+files, the exact validated finality-roster archive, manifest.norito, its
+manifest.norito.sha256 content identifier, and manifest.json in an owner-only
+staging directory. After every staged byte is read back and verified, the
+complete directory is promoted atomically without replacing an existing path.
+The publication corridor currently requires Unix directory durability and
+fails closed on unsupported targets. This command does not authenticate the
+evidence or sign the manifest.
 ";
 
 const REQUIRED_OPTIONS: &[&str] = &[
@@ -101,6 +107,10 @@ const REQUIRED_OPTIONS: &[&str] = &[
     "state-verifying-key",
     "topup-finality-roster",
 ];
+
+const MANIFEST_JSON_FILE_NAME: &str = "manifest.json";
+const MANIFEST_NORITO_FILE_NAME: &str = "manifest.norito";
+const MANIFEST_NORITO_SHA256_FILE_NAME: &str = "manifest.norito.sha256";
 
 #[derive(Clone, Copy)]
 struct InputSpec {
@@ -354,17 +364,25 @@ fn parse_digest(
 }
 
 fn build_bundle(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+    #[cfg(not(unix))]
+    return Err(
+        "Kagemusha V3 bundle publication requires Unix directory fsync and no-replace rename"
+            .into(),
+    );
+
+    #[cfg(unix)]
+    {
+        build_bundle_unix(options)
+    }
+}
+
+#[cfg(unix)]
+fn build_bundle_unix(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
     let out_dir = PathBuf::from(required(options, "out-dir"));
     if out_dir.exists() {
         return Err(format!("output directory already exists: {}", out_dir.display()).into());
     }
-    let parent = out_dir
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    if !parent.is_dir() {
-        return Err(format!("output parent is not a directory: {}", parent.display()).into());
-    }
+    let trusted_parent = TrustedOutputParent::open(&out_dir)?;
     let metadata = prepare_bundle_metadata(options)?;
     let evidence_digests = BTreeSet::from([
         metadata.benchmark_evidence_sha256,
@@ -423,20 +441,36 @@ fn build_bundle(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>
     let (roster_bytes, topup_finality_roster_artifact) =
         prepare_topup_finality_roster(&mut roster_input, &metadata)?;
 
-    create_output_directory(&out_dir)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".kagemusha-v3-staging-")
+        .tempdir_in(&trusted_parent.path)?;
+    let staging_name = staging
+        .path()
+        .file_name()
+        .ok_or("temporary publication directory has no file name")?
+        .to_owned();
+    let staging_dir = PublicationDirectory::open_at(
+        &trusted_parent.file,
+        staging.path().to_owned(),
+        &staging_name,
+    )?;
     if let Err(error) = write_bundle(
-        &out_dir,
+        &staging_dir,
         metadata,
         prepared_inputs,
         &roster_bytes,
         topup_finality_roster_artifact,
     ) {
         return Err(format!(
-            "bundle publication did not complete; the owner-only directory {} was retained for inspection and must not be consumed unless manifest.json is present and independently verified: {error}",
+            "bundle publication did not complete; no output was published at {}: {error}",
             out_dir.display()
         )
         .into());
     }
+    staging_dir.verify_inventory()?;
+    staging_dir.sync()?;
+    trusted_parent.publish(&staging_name)?;
+    let _published_staging_path = staging.keep();
     Ok(())
 }
 
@@ -498,7 +532,7 @@ fn prepare_bundle_metadata(
 }
 
 fn write_bundle(
-    out_dir: &Path,
+    publication: &PublicationDirectory,
     metadata: BundleMetadata,
     prepared_inputs: Vec<PreparedKeyInput>,
     roster_bytes: &[u8],
@@ -508,7 +542,7 @@ fn write_bundle(
     let mut state_artifacts = Vec::with_capacity(3);
     let mut headers = Vec::with_capacity(prepared_inputs.len());
     for prepared in prepared_inputs {
-        let (header, descriptor) = package_prepared_input(prepared, out_dir)?;
+        let (header, descriptor) = package_prepared_input(prepared, publication)?;
         match header.parity {
             KagemushaPastaCycleParityV1::TransitionEq => transition_artifacts.push(descriptor),
             KagemushaPastaCycleParityV1::StateEp => state_artifacts.push(descriptor),
@@ -516,16 +550,21 @@ fn write_bundle(
         headers.push(header);
     }
     let mut roster_output =
-        create_output_file(&out_dir.join(KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2))?;
+        publication.create_file(KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2)?;
     roster_output.write_all(roster_bytes)?;
     roster_output.sync_all()?;
     drop(roster_output);
+    publication.verify_exact_file(
+        KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2,
+        roster_bytes,
+        KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
+    )?;
 
     let manifest = KagemushaRecursiveSpendArtifactManifestV3 {
         schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
         version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
         bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-        mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V1.to_owned(),
+        mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
         proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
         transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
         generation: metadata.generation,
@@ -571,19 +610,38 @@ fn write_bundle(
             .map_err(io::Error::other)?;
     }
 
+    let manifest_norito = norito::to_bytes(&manifest)?;
+    let decoded_manifest: KagemushaRecursiveSpendArtifactManifestV3 =
+        norito::decode_from_bytes(&manifest_norito)?;
+    if decoded_manifest != manifest || norito::to_bytes(&decoded_manifest)? != manifest_norito {
+        return Err("canonical Norito manifest round-trip changed its typed value or bytes".into());
+    }
+
     let mut rendered = norito::json::to_string_pretty(&manifest)?;
     rendered.push('\n');
-    let temporary_manifest = out_dir.join("manifest.json.tmp");
-    let final_manifest = out_dir.join("manifest.json");
-    let mut output = create_output_file(&temporary_manifest)?;
+    let mut output = publication.create_file(MANIFEST_NORITO_FILE_NAME)?;
+    output.write_all(&manifest_norito)?;
+    output.sync_all()?;
+    drop(output);
+
+    let manifest_sha256: [u8; 32] = Sha256::digest(&manifest_norito).into();
+    let manifest_sha256_text = format!("{}\n", hex::encode(manifest_sha256));
+    let mut output = publication.create_file(MANIFEST_NORITO_SHA256_FILE_NAME)?;
+    output.write_all(manifest_sha256_text.as_bytes())?;
+    output.sync_all()?;
+    drop(output);
+
+    let mut output = publication.create_file(MANIFEST_JSON_FILE_NAME)?;
     output.write_all(rendered.as_bytes())?;
     output.sync_all()?;
     drop(output);
-    sync_directory(out_dir)?;
-    fs::hard_link(&temporary_manifest, &final_manifest)?;
-    sync_directory(out_dir)?;
-    fs::remove_file(temporary_manifest)?;
-    sync_directory(out_dir)?;
+    publication.verify_exact_file(MANIFEST_NORITO_FILE_NAME, &manifest_norito, 1024 * 1024)?;
+    publication.verify_exact_file(
+        MANIFEST_NORITO_SHA256_FILE_NAME,
+        manifest_sha256_text.as_bytes(),
+        65,
+    )?;
+    publication.verify_exact_file(MANIFEST_JSON_FILE_NAME, rendered.as_bytes(), 1024 * 1024)?;
     Ok(())
 }
 
@@ -644,6 +702,7 @@ fn prepare_topup_finality_roster(
     Ok((bytes, descriptor))
 }
 
+#[cfg(test)]
 fn package_input(
     source_path: &Path,
     out_dir: &Path,
@@ -657,7 +716,8 @@ fn package_input(
         "Pasta-cycle input",
     )?;
     let prepared = prepare_key_input(input, *spec, generation, parameter_generation)?;
-    package_prepared_input(prepared, out_dir).map(|(_, descriptor)| descriptor)
+    let publication = PublicationDirectory::open_existing(out_dir.to_owned())?;
+    package_prepared_input(prepared, &publication).map(|(_, descriptor)| descriptor)
 }
 
 fn prepare_key_input(
@@ -713,7 +773,7 @@ fn prepare_key_input(
 
 fn package_prepared_input(
     mut prepared: PreparedKeyInput,
-    out_dir: &Path,
+    publication: &PublicationDirectory,
 ) -> Result<
     (
         KagemushaRecursiveSpendPastaCycleArtifactsV3,
@@ -723,9 +783,7 @@ fn package_prepared_input(
 > {
     let header: KagemushaRecursiveSpendPastaCycleArtifactsV3 =
         norito::decode_from_bytes(&prepared.header_bytes)?;
-    let final_path = out_dir.join(prepared.spec.file_name);
-    let mut output = create_output_file(&final_path)?;
-    let mut framed_hasher = Sha256::new();
+    let mut output = publication.create_file(prepared.spec.file_name)?;
     let header_len_bytes = u32::try_from(prepared.header_bytes.len())?.to_le_bytes();
     for bytes in [
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3.as_slice(),
@@ -733,7 +791,6 @@ fn package_prepared_input(
         prepared.header_bytes.as_slice(),
     ] {
         output.write_all(bytes)?;
-        framed_hasher.update(bytes);
     }
 
     let mut copied = 0_u64;
@@ -756,7 +813,6 @@ fn package_prepared_input(
         }
         output.write_all(&buffer[..read])?;
         copy_hasher.update(&buffer[..read]);
-        framed_hasher.update(&buffer[..read]);
     }
     let copied_digest: [u8; 32] = copy_hasher.finalize().into();
     if copied != prepared.input.size_bytes || copied_digest != prepared.input.sha256 {
@@ -770,14 +826,13 @@ fn package_prepared_input(
     output.sync_all()?;
     drop(output);
 
-    let descriptor = KagemushaPastaCycleArtifactV3 {
-        kind: prepared.spec.kind,
-        file_name: prepared.spec.file_name.to_owned(),
-        size_bytes: prepared.total_size,
-        sha256: framed_hasher.finalize().into(),
-        payload_size_bytes: prepared.input.size_bytes,
-        payload_sha256: prepared.input.sha256,
-    };
+    let descriptor = publication.verify_artifact(
+        prepared.spec,
+        &prepared.header_bytes,
+        prepared.total_size,
+        prepared.input.size_bytes,
+        prepared.input.sha256,
+    )?;
     descriptor
         .validate()
         .map_err(|error| io::Error::other(error.to_string()))?;
@@ -891,34 +946,356 @@ impl OpenedInput {
     }
 }
 
-fn create_output_directory(path: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        builder.mode(0o700);
-    }
-    builder.create(path)
-}
-
-fn create_output_file(path: &Path) -> io::Result<File> {
-    let mut options = File::options();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    options.open(path)
+#[cfg(unix)]
+struct TrustedOutputParent {
+    path: PathBuf,
+    file: File,
+    output_name: OsString,
 }
 
 #[cfg(unix)]
-fn sync_directory(path: &Path) -> io::Result<()> {
-    File::open(path)?.sync_all()
+impl TrustedOutputParent {
+    fn open(out_dir: &Path) -> Result<Self, Box<dyn Error>> {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let output_name = out_dir
+            .file_name()
+            .filter(|name| !name.is_empty())
+            .ok_or("--out-dir must end in one directory name")?
+            .to_owned();
+        let parent = out_dir
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let path = fs::canonicalize(parent)?;
+        for ancestor in path.ancestors() {
+            let metadata = fs::symlink_metadata(ancestor)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(format!(
+                    "output parent chain contains a non-directory: {}",
+                    ancestor.display()
+                )
+                .into());
+            }
+            let mode = metadata.permissions().mode();
+            if mode & 0o022 != 0 && mode & 0o1000 == 0 {
+                return Err(format!(
+                    "output parent chain is writable by another principal without sticky protection: {}",
+                    ancestor.display()
+                )
+                .into());
+            }
+        }
+        let final_path = path.join(&output_name);
+        match fs::symlink_metadata(&final_path) {
+            Ok(_) => {
+                return Err(format!(
+                    "output directory already exists: {}",
+                    final_path.display()
+                )
+                .into());
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let file = File::open(&path)?;
+        let opened = file.metadata()?;
+        let current = fs::metadata(&path)?;
+        if !opened.is_dir()
+            || opened.dev() != current.dev()
+            || opened.ino() != current.ino()
+        {
+            return Err("output parent changed while it was opened".into());
+        }
+        Ok(Self {
+            path,
+            file,
+            output_name,
+        })
+    }
+
+    fn publish(&self, staging_name: &OsStr) -> io::Result<()> {
+        rustix::fs::renameat_with(
+            &self.file,
+            staging_name,
+            &self.file,
+            &self.output_name,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )?;
+        self.file.sync_all()
+    }
 }
 
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> io::Result<()> {
+struct PublicationDirectory {
+    path: PathBuf,
+    file: File,
+}
+
+impl PublicationDirectory {
+    #[cfg(unix)]
+    fn open_at(parent: &File, path: PathBuf, name: &OsStr) -> io::Result<Self> {
+        use rustix::fs::{Mode, OFlags};
+
+        let file = File::from(rustix::fs::openat(
+            parent,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?);
+        Self::validate(path, file)
+    }
+
+    #[cfg(test)]
+    fn open_existing(path: PathBuf) -> io::Result<Self> {
+        let before = fs::symlink_metadata(&path)?;
+        if before.file_type().is_symlink() || !before.is_dir() {
+            return Err(io::Error::other("publication directory is not a real directory"));
+        }
+        let file = File::open(&path)?;
+        Self::validate(path, file)
+    }
+
+    fn validate(path: PathBuf, file: File) -> io::Result<Self> {
+        let opened = file.metadata()?;
+        if !opened.is_dir() {
+            return Err(io::Error::other("publication descriptor is not a directory"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+            let current = fs::metadata(&path)?;
+            if opened.dev() != current.dev()
+                || opened.ino() != current.ino()
+                || opened.permissions().mode() & 0o077 != 0
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "publication directory must be the same owner-private directory",
+                ));
+            }
+        }
+        Ok(Self { path, file })
+    }
+
+    fn create_file(&self, name: &str) -> io::Result<File> {
+        validate_publication_file_name(name)?;
+        #[cfg(unix)]
+        {
+            use rustix::fs::{Mode, OFlags};
+
+            let file = File::from(rustix::fs::openat(
+                &self.file,
+                name,
+                OFlags::WRONLY
+                    | OFlags::CREATE
+                    | OFlags::EXCL
+                    | OFlags::NOFOLLOW
+                    | OFlags::CLOEXEC,
+                Mode::from_raw_mode(0o600),
+            )?);
+            verify_owner_private_regular_file(&file)?;
+            Ok(file)
+        }
+        #[cfg(not(unix))]
+        {
+            File::options()
+                .write(true)
+                .create_new(true)
+                .open(self.path.join(name))
+        }
+    }
+
+    fn open_file(&self, name: &str) -> io::Result<File> {
+        validate_publication_file_name(name)?;
+        #[cfg(unix)]
+        {
+            use rustix::fs::{Mode, OFlags};
+
+            let file = File::from(rustix::fs::openat(
+                &self.file,
+                name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?);
+            verify_owner_private_regular_file(&file)?;
+            Ok(file)
+        }
+        #[cfg(not(unix))]
+        {
+            File::open(self.path.join(name))
+        }
+    }
+
+    fn verify_exact_file(&self, name: &str, expected: &[u8], maximum: u64) -> io::Result<()> {
+        let mut file = self.open_file(name)?;
+        let expected_len = u64::try_from(expected.len())
+            .map_err(|_| io::Error::other("staged file length does not fit u64"))?;
+        let metadata = file.metadata()?;
+        if metadata.len() != expected_len || metadata.len() > maximum {
+            return Err(io::Error::other(format!(
+                "staged file has an unexpected length: {name}"
+            )));
+        }
+        let capacity = usize::try_from(metadata.len())
+            .map_err(|_| io::Error::other("staged file is too large for this host"))?;
+        let mut actual = Vec::with_capacity(capacity);
+        file.read_to_end(&mut actual)?;
+        if actual != expected {
+            return Err(io::Error::other(format!(
+                "staged file changed after its write: {name}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn verify_artifact(
+        &self,
+        spec: InputSpec,
+        expected_header: &[u8],
+        expected_total_size: u64,
+        expected_payload_size: u64,
+        expected_payload_sha256: [u8; 32],
+    ) -> Result<KagemushaPastaCycleArtifactV3, Box<dyn Error>> {
+        let mut file = self.open_file(spec.file_name)?;
+        let metadata = file.metadata()?;
+        if metadata.len() != expected_total_size
+            || metadata.len() > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3
+        {
+            return Err(format!("staged artifact has an unexpected length: {}", spec.file_name).into());
+        }
+        let mut magic = [0_u8; 8];
+        let mut header_len_bytes = [0_u8; 4];
+        file.read_exact(&mut magic)?;
+        file.read_exact(&mut header_len_bytes)?;
+        let header_len = usize::try_from(u32::from_le_bytes(header_len_bytes))?;
+        if magic != *KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3
+            || header_len == 0
+            || header_len > 64 * 1024
+            || header_len != expected_header.len()
+        {
+            return Err(format!("staged artifact has invalid framing: {}", spec.file_name).into());
+        }
+        let mut header_bytes = vec![0_u8; header_len];
+        file.read_exact(&mut header_bytes)?;
+        if header_bytes != expected_header {
+            return Err(format!("staged artifact header changed: {}", spec.file_name).into());
+        }
+        let decoded: KagemushaRecursiveSpendPastaCycleArtifactsV3 =
+            norito::decode_from_bytes(&header_bytes)?;
+        if norito::to_bytes(&decoded)? != header_bytes {
+            return Err(format!("staged artifact header is noncanonical: {}", spec.file_name).into());
+        }
+        decoded.validate_header().map_err(io::Error::other)?;
+        if decoded.parity != spec.parity
+            || decoded.kind != spec.kind
+            || decoded.payload_size_bytes != expected_payload_size
+            || decoded.payload_sha256 != expected_payload_sha256
+        {
+            return Err(format!("staged artifact header binding changed: {}", spec.file_name).into());
+        }
+
+        let mut framed_hasher = Sha256::new();
+        framed_hasher.update(magic);
+        framed_hasher.update(header_len_bytes);
+        framed_hasher.update(&header_bytes);
+        let mut payload_hasher = Sha256::new();
+        let mut payload_size = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            payload_size = payload_size
+                .checked_add(u64::try_from(read)?)
+                .ok_or_else(|| io::Error::other("staged artifact payload length overflow"))?;
+            if payload_size > expected_payload_size {
+                return Err(format!("staged artifact payload grew: {}", spec.file_name).into());
+            }
+            framed_hasher.update(&buffer[..read]);
+            payload_hasher.update(&buffer[..read]);
+        }
+        let payload_sha256: [u8; 32] = payload_hasher.finalize().into();
+        if payload_size != expected_payload_size || payload_sha256 != expected_payload_sha256 {
+            return Err(format!("staged artifact payload changed: {}", spec.file_name).into());
+        }
+        let descriptor = KagemushaPastaCycleArtifactV3 {
+            kind: spec.kind,
+            file_name: spec.file_name.to_owned(),
+            size_bytes: metadata.len(),
+            sha256: framed_hasher.finalize().into(),
+            payload_size_bytes: payload_size,
+            payload_sha256,
+        };
+        descriptor
+            .validate()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        Ok(descriptor)
+    }
+
+    fn verify_inventory(&self) -> io::Result<()> {
+        let expected = INPUTS
+            .iter()
+            .map(|spec| spec.file_name)
+            .chain([
+                KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2,
+                MANIFEST_NORITO_FILE_NAME,
+                MANIFEST_NORITO_SHA256_FILE_NAME,
+                MANIFEST_JSON_FILE_NAME,
+            ])
+            .collect::<BTreeSet<_>>();
+        let mut actual = BTreeSet::new();
+        for entry in fs::read_dir(&self.path)? {
+            let entry = entry?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| io::Error::other("publication contains a non-UTF-8 file name"))?;
+            let metadata = fs::symlink_metadata(entry.path())?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() || !actual.insert(name) {
+                return Err(io::Error::other("publication contains an invalid directory entry"));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                if metadata.nlink() != 1 {
+                    return Err(io::Error::other("publication file has an external hard link"));
+                }
+            }
+        }
+        if actual != expected.into_iter().map(str::to_owned).collect() {
+            return Err(io::Error::other("publication file inventory is incomplete or excessive"));
+        }
+        Ok(())
+    }
+
+    fn sync(&self) -> io::Result<()> {
+        self.file.sync_all()
+    }
+}
+
+fn validate_publication_file_name(name: &str) -> io::Result<()> {
+    let mut components = Path::new(name).components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+    {
+        return Err(io::Error::other("publication file name must be one normal component"));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn verify_owner_private_regular_file(file: &File) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "publication file must be an owner-private regular file",
+        ));
+    }
     Ok(())
 }
 
@@ -1106,7 +1483,22 @@ mod tests {
         let manifest: KagemushaRecursiveSpendArtifactManifestV3 =
             norito::json::from_str(&manifest_text).expect("decode generated manifest");
         manifest.validate().expect("validate generated manifest");
-        assert_eq!(manifest.mode, KAGEMUSHA_RECURSIVE_SPEND_MODE_V1);
+        assert_eq!(manifest.mode, KAGEMUSHA_RECURSIVE_SPEND_MODE_V2);
+        let manifest_norito =
+            fs::read(out_dir.join(MANIFEST_NORITO_FILE_NAME)).expect("read Norito manifest");
+        let manifest_from_norito: KagemushaRecursiveSpendArtifactManifestV3 =
+            norito::decode_from_bytes(&manifest_norito).expect("decode Norito manifest");
+        assert_eq!(manifest_from_norito, manifest);
+        assert_eq!(
+            norito::to_bytes(&manifest).expect("re-encode Norito manifest"),
+            manifest_norito
+        );
+        let manifest_sha256: [u8; 32] = Sha256::digest(&manifest_norito).into();
+        assert_eq!(
+            fs::read_to_string(out_dir.join(MANIFEST_NORITO_SHA256_FILE_NAME))
+                .expect("read manifest SHA-256"),
+            format!("{}\n", hex::encode(manifest_sha256))
+        );
 
         let artifacts = manifest
             .profiles
@@ -1193,8 +1585,6 @@ mod tests {
         assert_eq!(roster.chain_id, manifest.chain_id);
         assert_eq!(roster.artifact_generation, manifest.generation);
 
-        let manifest_sha256: [u8; 32] =
-            Sha256::digest(norito::to_bytes(&manifest).expect("encode manifest")).into();
         for profile in &manifest.profiles {
             let envelope = KagemushaPastaCycleProofEnvelopeV1 {
                 version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
@@ -1228,6 +1618,8 @@ mod tests {
             );
         }
         assert!(!out_dir.join("manifest.json.tmp").exists());
+        assert!(!out_dir.join("manifest.norito.tmp").exists());
+        assert!(!out_dir.join("manifest.norito.sha256.tmp").exists());
         assert!(
             fs::read_dir(out_dir)
                 .expect("read output directory")

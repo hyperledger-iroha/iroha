@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-12-29T18:16:35.135788+00:00"
 translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan
@@ -32,7 +32,7 @@ Bu sahifa `docs/source/soranexus_bootstrap_plan.md`ni aks ettiradi. Mahalliylash
 ## Tarmoq muhitlari
 - Ikkita Nexus muhitini alohida tarmoq prefikslari bilan boshqaring:
 - **Sora Nexus (mainnet)** – kanonik boshqaruv va SoraFS/SoraNet piggyback xizmatlarini o'z ichiga olgan `nexus` ishlab chiqarish tarmog'i prefiksi (zanjir ID `0x02F1` / UUU028X / UUU02).
-- **Sora Taira (testnet)** – bosqichli tarmoq prefiksi `taira`, integratsiya sinovi va relizdan oldin tekshirish uchun asosiy tarmoq konfiguratsiyasini aks ettiradi (zanjir UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Taira (testnet)** – bosqichli tarmoq prefiksi `taira`, integratsiya sinovi va relizdan oldin tekshirish uchun asosiy tarmoq konfiguratsiyasini aks ettiradi (zanjir UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Har bir muhit uchun alohida genezis fayllari, boshqaruv kalitlari va infratuzilma izlarini saqlang. Taira Nexus ga ko'tarilishdan oldin barcha SoraFS/SoraNet prokatlari uchun sinov asosi bo'lib xizmat qiladi.
 - CI/CD quvurlari avval Taira-ga joylashtirilishi, avtomatlashtirilgan tutun sinovlarini o'tkazishi va tekshiruvdan o'tgandan keyin Nexus ga qo'lda ko'tarilishi kerak.
 - Yo'naltiruvchi konfiguratsiya to'plamlari `configs/soranexus/nexus/` (asosiy tarmoq) va `configs/soranexus/taira/` (testnet) ostida ishlaydi, ularning har birida `config.toml`, `genesis.json` va Torii namunalari mavjud.

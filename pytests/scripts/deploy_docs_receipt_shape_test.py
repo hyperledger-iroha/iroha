@@ -5,12 +5,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 STALE_DEPLOY_RESPONSE = (
     '{ "ok": true, "contract_alias": "router::universal", '
     '"contract_address": "tairac1…", "previous_contract_address": "tairac1…"? , '
-    '"upgraded": false, "dataspace": "universal", "deploy_nonce": 0, '
+    '"kaizen": false, "dataspace": "universal", "deploy_nonce": 0, '
     '"tx_hash_hex": "…", "code_hash_hex": "…", "abi_hash_hex": "…" }'
 )
 STALE_CONTRACT_DEPLOYMENT_RESPONSE = (
     "{ ok, contract_alias, contract_address, previous_contract_address?, "
-    "upgraded, dataspace, deploy_nonce, tx_hash_hex, code_hash_hex, abi_hash_hex }"
+    "kaizen, dataspace, deploy_nonce, tx_hash_hex, code_hash_hex, abi_hash_hex }"
 )
 
 

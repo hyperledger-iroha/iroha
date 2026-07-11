@@ -60,9 +60,9 @@ impl MusubiNamespace {
     /// # Errors
     ///
     /// Returns [`ParseError`] when the contract name is invalid.
-    pub fn contract_alias(&self, contract_name: &str) -> Result<ContractAlias, ParseError> {
+    pub fn contract_alias(&self, seiyaku_name: &str) -> Result<ContractAlias, ParseError> {
         ContractAlias::from_components(
-            contract_name,
+            seiyaku_name,
             self.domain_segment(),
             self.dataspace_segment(),
         )

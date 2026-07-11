@@ -71,6 +71,10 @@ const SIGNABLE_FIELDS = new Set([
   "signingPublicKey",
   "signatureAlgorithm",
 ]);
+const SIGNABLE_CONSTRAINT_FIELDS = new Set([
+  "authority",
+  "signingPublicKey",
+]);
 const SIGNATURE_FIELDS = new Set([
   "algorithm",
   "alg",
@@ -1007,14 +1011,10 @@ function irohaHash(value) {
 }
 
 function exactHashHex(value, context) {
-  if (typeof value !== "string" || value.length > 66) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
     fail("invalid_hash", `${context} must be a 32-byte hexadecimal string`);
   }
-  const literal = value.startsWith("0x") ? value.slice(2) : value;
-  if (!/^[0-9a-f]{64}$/u.test(literal)) {
-    fail("invalid_hash", `${context} must be 64 lowercase hexadecimal characters`);
-  }
-  return literal;
+  return value;
 }
 
 function validateStringArchive(payload, context, { maxBytes } = {}) {
@@ -1168,6 +1168,13 @@ function validateNumericArchive(payload, context) {
   }
   if (scalePayload.length !== 4 || scalePayload.readUInt32LE(0) > MAX_NUMERIC_SCALE) {
     fail("malformed_payload", `${context}.scale is outside the supported range`);
+  }
+  const scale = scalePayload.readUInt32LE(0);
+  if (scale > 0 && mantissa % 10n === 0n) {
+    fail(
+      "malformed_payload",
+      `${context} has a non-canonical fractional trailing zero`,
+    );
   }
 }
 
@@ -1465,6 +1472,99 @@ export function browserTransactionPayloadHashHex(payloadBytes) {
 }
 
 /**
+ * Snapshot and validate one exact canonical Transfer::Asset signable.
+ *
+ * This is intended for wallet and hardware-signer trust boundaries: the
+ * returned buffers are detached copies, the payload hash is recomputed, and
+ * both the asserted and optional expected authority/public key are bound to
+ * the authority encoded in the payload.
+ *
+ * @param {object} signable
+ * @param {{authority?: string | null, signingPublicKey?: ArrayBufferView | ArrayBuffer | Buffer | string | null}} constraints
+ * @returns {{payloadBytes: Buffer, payloadHashHex: string, authority: string, signingPublicKey: Buffer, signatureAlgorithm: "ed25519"}}
+ */
+export function validateBrowserTransferSignable(signable, constraints = {}) {
+  signable = snapshotAllowedFields(signable, SIGNABLE_FIELDS, "signable");
+  constraints = snapshotAllowedFields(
+    constraints,
+    SIGNABLE_CONSTRAINT_FIELDS,
+    "signable constraints",
+  );
+  if (
+    signable.signatureAlgorithm !== undefined &&
+    signable.signatureAlgorithm !== "ed25519" &&
+    signable.signatureAlgorithm !== "0" &&
+    signable.signatureAlgorithm !== 0
+  ) {
+    fail("unsupported_algorithm", "signable.signatureAlgorithm must be ed25519");
+  }
+  const payload = bytes(signable.payloadBytes, "signable.payloadBytes", {
+    maxBytes: MAX_PAYLOAD_BYTES,
+  });
+  const authorityLiteral = exactString(signable.authority, "signable.authority", {
+    maxBytes: 512,
+  });
+  const authority = validateTransactionPayload(payload, authorityLiteral);
+  const payloadHashHex = irohaHash(payload).toString("hex");
+  const assertedPayloadHashHex = exactHashHex(
+    signable.payloadHashHex,
+    "signable.payloadHashHex",
+  );
+  if (assertedPayloadHashHex !== payloadHashHex) {
+    fail("payload_hash_mismatch", "signable.payloadHashHex does not match payloadBytes");
+  }
+  const signingPublicKey = bytes(
+    signable.signingPublicKey,
+    "signable.signingPublicKey",
+    { hex: true, maxBytes: 32 },
+  );
+  if (signingPublicKey.length !== 32) {
+    fail("invalid_public_key", "signable.signingPublicKey must be exactly 32 bytes");
+  }
+  if (!signingPublicKey.equals(authority.publicKey)) {
+    fail(
+      "authority_mismatch",
+      "signable.signingPublicKey does not control signable.authority",
+    );
+  }
+  if (constraints.authority !== undefined && constraints.authority !== null) {
+    const expectedAuthority = accountInfo(
+      constraints.authority,
+      "signable constraints.authority",
+    );
+    if (expectedAuthority.literal !== authorityLiteral) {
+      fail(
+        "authority_mismatch",
+        "signable.authority does not match the expected approved authority",
+      );
+    }
+  }
+  if (
+    constraints.signingPublicKey !== undefined &&
+    constraints.signingPublicKey !== null
+  ) {
+    const expectedPublicKey = bytes(
+      constraints.signingPublicKey,
+      "signable constraints.signingPublicKey",
+      { hex: true, maxBytes: 32 },
+    );
+    if (expectedPublicKey.length !== 32 || !expectedPublicKey.equals(signingPublicKey)) {
+      fail(
+        "authority_mismatch",
+        "signable.signingPublicKey does not match the expected approved signing key",
+      );
+    }
+  }
+  return Object.freeze({
+    payloadBytes: payload,
+    payloadHashHex,
+    authority: authorityLiteral,
+    signingPublicKey,
+    signatureAlgorithm: "ed25519",
+  });
+}
+
+/**
  * Verify and finalize an externally signed transparent transfer.
  *
  * @param {object} signable
@@ -1595,6 +1695,7 @@ export const browserTransactionCodec = Object.freeze({
   buildTransferPayload: buildBrowserTransferPayload,
   payloadHashHex: browserTransactionPayloadHashHex,
   finalizeSignedTransaction: finalizeBrowserSignedTransaction,
+  validateSignable: validateBrowserTransferSignable,
 });
 
 export { BrowserTransactionCodecError };

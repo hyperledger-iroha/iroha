@@ -33,7 +33,7 @@ use crate::{
         consensus::{
             NPOS_TAG, PERMISSIONED_TAG, Phase, QcAggregate, ValidatorIndex, qc_signer_count,
         },
-        network_topology::Topology,
+        network_topology::{Topology, commit_quorum_from_len},
         stake_snapshot::{CommitStakeSnapshot, stake_quorum_reached_for_snapshot},
         status,
     },
@@ -2474,15 +2474,6 @@ impl BlockSynchronizer {
         bitmap
     }
 
-    /// Compute the minimum votes required for a commit for a roster of length `len`.
-    const fn min_votes_for_len(len: usize) -> usize {
-        if len > 3 {
-            ((len.saturating_sub(1)) / 3) * 2 + 1
-        } else {
-            len
-        }
-    }
-
     fn signer_peers_from_bitmap(qc: &Qc) -> Option<BTreeSet<PeerId>> {
         let roster = &qc.validator_set;
         if roster.is_empty() {
@@ -2566,9 +2557,16 @@ impl BlockSynchronizer {
         if aggregate_signature.is_empty() {
             return None;
         }
+        if signers.iter().any(|signer| {
+            usize::try_from(*signer)
+                .map(|index| index >= roster_len)
+                .unwrap_or(true)
+        }) {
+            return None;
+        }
         match consensus_mode {
             ConsensusMode::Permissioned => {
-                let required = Self::min_votes_for_len(roster_len);
+                let required = commit_quorum_from_len(roster_len);
                 if signers.len() < required {
                     return None;
                 }
@@ -3979,6 +3977,85 @@ mod qc_build_tests {
             vec![0xAA; 48],
         );
         assert!(partial.is_none(), "insufficient signers must be rejected");
+    }
+
+    #[test]
+    fn qc_from_signers_matches_live_quorum_and_rejects_out_of_range_signers() {
+        const MAX_ROSTER_LEN: usize = 64;
+
+        let peers: Vec<_> = (1_u8..=u8::try_from(MAX_ROSTER_LEN).expect("test bound fits u8"))
+            .map(|seed| {
+                let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("nonzero deterministic BLS seed");
+                PeerId::new(keypair.public_key().clone())
+            })
+            .collect();
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x61; Hash::LENGTH]));
+        let zero_root = Hash::prehashed([0_u8; Hash::LENGTH]);
+        let make_qc = |roster_len: usize, signers: BTreeSet<ValidatorIndex>| {
+            BlockSynchronizer::qc_from_signers(
+                ConsensusMode::Permissioned,
+                None,
+                PERMISSIONED_TAG,
+                peers[..roster_len].to_vec(),
+                block_hash,
+                zero_root,
+                zero_root,
+                1,
+                0,
+                0,
+                crate::sumeragi::consensus::default_chain_order_hash(),
+                0,
+                signers,
+                vec![0xA5],
+            )
+        };
+        let signer_prefix = |count: usize| {
+            (0..count)
+                .map(|index| ValidatorIndex::try_from(index).expect("test signer index fits"))
+                .collect::<BTreeSet<_>>()
+        };
+        let retired_quorum = |len: usize| {
+            if len > 3 {
+                ((len - 1) / 3) * 2 + 1
+            } else {
+                len
+            }
+        };
+
+        let mut divergent = 0;
+        for roster_len in 1..=MAX_ROSTER_LEN {
+            let required = commit_quorum_from_len(roster_len);
+            assert!(
+                make_qc(roster_len, signer_prefix(required)).is_some(),
+                "exact live quorum must construct a cached QC for roster_len={roster_len}"
+            );
+            assert!(
+                make_qc(roster_len, signer_prefix(required - 1)).is_none(),
+                "threshold-minus-one must fail for roster_len={roster_len}"
+            );
+
+            let retired_required = retired_quorum(roster_len);
+            if retired_required < required {
+                divergent += 1;
+                assert!(
+                    make_qc(roster_len, signer_prefix(retired_required)).is_none(),
+                    "retired weaker quorum must fail for roster_len={roster_len}"
+                );
+            }
+
+            let mut aliased = signer_prefix(required.saturating_sub(1));
+            aliased.insert(
+                ValidatorIndex::try_from(roster_len).expect("first out-of-range index fits"),
+            );
+            assert_eq!(aliased.len(), required);
+            assert!(
+                make_qc(roster_len, aliased).is_none(),
+                "an out-of-range signer must not pad quorum for roster_len={roster_len}"
+            );
+        }
+        assert_eq!(divergent, 40);
     }
 
     #[test]

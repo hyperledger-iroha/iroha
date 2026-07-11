@@ -99,29 +99,29 @@ fn durable_state_overlay_persists_and_restores() {
     let store_path = base.join("state.json");
 
     let mut wsv = MockWorldStateView::with_state_store(store_path.clone()).expect("persisted wsv");
-    let tlv = make_tlv(PointerType::NoritoBytes, b"abc");
-    wsv.sc_set("counter", tlv.clone()).expect("set state");
-    assert_eq!(wsv.sc_get("counter"), Some(tlv.clone()));
+    let payload = b"abc".to_vec();
+    wsv.sc_set("counter", payload.clone()).expect("set state");
+    assert_eq!(wsv.sc_get("counter"), Some(payload.clone()));
 
     drop(wsv);
     let wsv_reloaded =
         MockWorldStateView::with_state_store(store_path.clone()).expect("reload persisted");
-    assert_eq!(wsv_reloaded.sc_get("counter"), Some(tlv.clone()));
+    assert_eq!(wsv_reloaded.sc_get("counter"), Some(payload.clone()));
 
     let mut wsv_mut = wsv_reloaded;
     let snap = wsv_mut.sc_snapshot();
-    let tlv_new = make_tlv(PointerType::NoritoBytes, b"new");
+    let payload_new = b"new".to_vec();
     wsv_mut
-        .sc_set("counter", tlv_new.clone())
+        .sc_set("counter", payload_new.clone())
         .expect("set newer value");
-    assert_eq!(wsv_mut.sc_get("counter"), Some(tlv_new.clone()));
+    assert_eq!(wsv_mut.sc_get("counter"), Some(payload_new));
     wsv_mut.sc_restore(&snap).expect("restore snapshot");
-    assert_eq!(wsv_mut.sc_get("counter"), Some(tlv.clone()));
+    assert_eq!(wsv_mut.sc_get("counter"), Some(payload.clone()));
     drop(wsv_mut);
 
     let persisted =
         MockWorldStateView::with_state_store(store_path.clone()).expect("reload after restore");
-    assert_eq!(persisted.sc_get("counter"), Some(tlv));
+    assert_eq!(persisted.sc_get("counter"), Some(payload));
     let _ = fs::remove_dir_all(base);
 }
 
@@ -271,33 +271,21 @@ fn wsv_host_overlay_state_get_spills_to_heap_when_input_bump_is_full() {
 }
 
 #[test]
-fn wsv_host_state_get_rejects_wrapped_non_norito_bytes_payload() {
+fn wsv_state_ingress_rejects_oversized_raw_payload() {
     let mut wsv = MockWorldStateView::new();
-    wsv.sc_set("bad", make_tlv(PointerType::Name, b"wrong"))
-        .expect("seed malformed wrapped state");
-    let caller = account(
-        "wonderland",
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    assert_eq!(
+        wsv.sc_set(
+            "bad",
+            vec![0u8; syscalls::STATE_MAX_VALUE_BYTES.saturating_add(1)],
+        ),
+        Err(VMError::NoritoInvalid)
     );
-    let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, caller, Default::default());
-    vm.set_host(host);
-
-    let path_tlv = make_tlv(PointerType::Name, b"bad");
-    let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
-    let get_prog = assemble_syscalls(&[syscalls::SYSCALL_STATE_GET as u8]);
-    vm.set_register(10, p_path);
-    vm.load_program(&get_prog).expect("load get");
-    let err = vm
-        .run()
-        .expect_err("malformed wrapped payload should be rejected");
-    assert!(matches!(err, VMError::NoritoInvalid));
 }
 
 #[test]
 fn wsv_host_overlay_delete_shadows_base_value_during_tx() {
     let mut wsv = MockWorldStateView::new();
-    wsv.sc_set("shadowed", make_tlv(PointerType::NoritoBytes, b"persisted"))
+    wsv.sc_set("shadowed", b"persisted".to_vec())
         .expect("seed base state");
     let caller = account(
         "wonderland",
@@ -326,7 +314,7 @@ fn wsv_host_overlay_delete_shadows_base_value_during_tx() {
 #[test]
 fn wsv_host_overlay_delete_persists_base_removal_after_finish_tx() {
     let mut wsv = MockWorldStateView::new();
-    wsv.sc_set("shadowed", make_tlv(PointerType::NoritoBytes, b"persisted"))
+    wsv.sc_set("shadowed", b"persisted".to_vec())
         .expect("seed base state");
     let caller = account(
         "wonderland",
@@ -356,7 +344,7 @@ fn wsv_host_overlay_delete_persists_base_removal_after_finish_tx() {
 #[test]
 fn wsv_host_overlay_set_overrides_and_persists_base_value() {
     let mut wsv = MockWorldStateView::new();
-    wsv.sc_set("shadowed", make_tlv(PointerType::NoritoBytes, b"persisted"))
+    wsv.sc_set("shadowed", b"persisted".to_vec())
         .expect("seed base state");
     let caller = account(
         "wonderland",
@@ -401,11 +389,11 @@ fn wsv_host_overlay_set_overrides_and_persists_base_value() {
 #[test]
 fn wsv_host_state_count_uses_overlay_and_tombstones() {
     let mut wsv = MockWorldStateView::new();
-    wsv.sc_set("orders/1", make_tlv(PointerType::NoritoBytes, b"one"))
+    wsv.sc_set("orders/1", b"one".to_vec())
         .expect("seed first order");
-    wsv.sc_set("orders/2", make_tlv(PointerType::NoritoBytes, b"two"))
+    wsv.sc_set("orders/2", b"two".to_vec())
         .expect("seed second order");
-    wsv.sc_set("accounts/1", make_tlv(PointerType::NoritoBytes, b"account"))
+    wsv.sc_set("accounts/1", b"account".to_vec())
         .expect("seed unrelated state");
     let caller = account(
         "wonderland",

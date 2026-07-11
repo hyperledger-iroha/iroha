@@ -1,4 +1,4 @@
-//! Verify raw Kotodama startup enters `main` and reaches `write_detail`.
+//! Verify explicit Kotodama CNTR selection enters `main` and reaches `write_detail`.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::{
@@ -9,7 +9,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{account::NewAccount, prelude::*};
-use ivm::{IVM, KotodamaCompiler};
+use ivm::{IVM, KotodamaCompiler, ProgramMetadata};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
@@ -19,8 +19,24 @@ fn seeded_authority(seed: u8) -> AccountId {
     AccountId::new(keypair.public_key().clone())
 }
 
+fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
+    let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
+    let entrypoint = metadata
+        .contract_interface
+        .as_ref()
+        .expect("Kotodama V1 artifact must embed CNTR")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == name)
+        .unwrap_or_else(|| panic!("missing Kotodama V1 entrypoint `{name}`"));
+    let entrypoint_pc = u64::try_from(metadata.prefix_len()).expect("program prefix fits u64")
+        + entrypoint.entry_pc;
+    vm.set_program_counter(entrypoint_pc)
+        .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
+}
+
 #[test]
-fn raw_kotodama_hello_main_entrypoint_writes_expected_detail() {
+fn selected_kotodama_hello_main_entrypoint_writes_expected_detail() {
     let program = KotodamaCompiler::new()
         .compile_source(include_str!("../../../examples/hello/hello.ko"))
         .expect("compile hello contract");
@@ -29,6 +45,7 @@ fn raw_kotodama_hello_main_entrypoint_writes_expected_detail() {
     let mut vm = IVM::new(5_000_000);
     vm.set_host(CoreHost::new(authority.clone()));
     vm.load_program(&program).expect("load hello contract");
+    select_kotodama_entrypoint(&mut vm, &program, "main");
     vm.run().expect("run hello contract");
 
     let kura = Kura::blank_kura_for_testing();
@@ -53,7 +70,7 @@ fn raw_kotodama_hello_main_entrypoint_writes_expected_detail() {
         assert_eq!(
             queued.len(),
             1,
-            "expected raw startup to queue exactly one detail write",
+            "expected selected `main` to queue exactly one detail write",
         );
 
         tx.apply();

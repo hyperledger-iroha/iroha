@@ -10,6 +10,13 @@ ABI policy
 - V1 (1): allows the canonical ABI surface listed here and in `abi_syscall_list()`; unknown numbers
   are rejected uniformly across all hosts. The list is kept sorted/deduplicated and the golden test
   fails if ordering or contents drift.
+- `abi_hash` commits to every sorted allowed syscall number, its canonical argument and return
+  signatures, its conservative host-access class, and every sorted allowed pointer-ABI type ID.
+  Display names and gas prices are not part of this digest. `ivm::gas::schedule_hash()` commits to
+  the canonical gas schedule independently.
+- Every allowed syscall must have exactly one explicit row in `spec/syscalls.toml`. Documentation
+  generation rejects missing, duplicate, or extra rows instead of inventing an ABI signature from
+  naming heuristics.
 - First release: ABI v1 is the only supported policy. `abi_version != 1` is rejected at admission,
   and runtime upgrades must keep `abi_version = 1` without expanding the syscall or pointer‑ABI surface.
 
@@ -24,11 +31,15 @@ Admission/host guardrails
   surfaces the failure during validation so contracts cannot rely on undefined syscalls. Allowed
   syscall numbers that are not meaningful for a specific host return a metered
   `VMError::NotImplemented` instead.
+- Every runtime host must compute a deterministic, side-effect-free upper gas quote before
+  dispatch. The VM debits that quote before invoking the host, so an unaffordable syscall returns
+  `OutOfGas` without entering host code. After dispatch, the VM refunds the difference between the
+  quote and the reported actual cost; an actual cost above the quote is a host invariant failure.
 - Regression tests cover host-side `UnknownSyscall` rejections, admission-time `SCALL` gating
   (including manifest-backed programs), and manifest `abi_hash` enforcement across both metadata and
   WSV manifests to keep the ABI surface deterministic end-to-end.
 
-`SCALL` carries an 8-bit syscall number in bytecode. `SYSTEM` is the extended `SCALLX` form and carries a 24-bit syscall number for the first-release ABI surface that does not fit in the legacy byte slot. The host receives all syscall numbers as `u32`, and admission checks both encodings before execution. Structured arguments use the pointer‑ABI (Norito TLV in INPUT); scalar values are passed in `r10+`. Return values are `u64` unless noted; pointer results are returned in `r10`.
+`SCALL` carries an 8-bit syscall number in bytecode. `SYSTEM` is the extended `SCALLX` form and carries a 24-bit syscall number for the first-release ABI surface that does not fit in the legacy byte slot. The host receives all syscall numbers as `u32`, and admission checks both encodings before execution. Structured arguments use the pointer‑ABI: canonical Norito TLVs may reside in INPUT, the allocated HEAP prefix, or at an exact loader-validated literal start. Stack, OUTPUT, unallocated HEAP, and arbitrary code offsets are not valid pointer provenance. Scalar values are passed in `r10+`. Return values are `u64` unless noted; pointer results are returned in `r10` and host-produced TLVs prefer INPUT before spilling to allocated HEAP.
 
 Query syscall (Norito)
 - `0xA1` and extended `0x010000` expect `r10=&NoritoBytes(QueryRequest)` and return `r10=&NoritoBytes(QueryResponse)`. The authority is always the calling contract; embedded authorities are ignored.
@@ -37,7 +48,7 @@ Query syscall (Norito)
 - Gas is `base + per_item + per_byte`, with per-item cost multiplied when sorting is requested and an offset penalty applied for large pagination skips.
 
 Vendor syscall (Norito)
-- `0xA0` expects `r10=&NoritoBytes(InstructionBox)` to enqueue a built-in instruction.
+- `0xA0` expects `r10=&NoritoBytes(InstructionBox)` and a mandatory operation tag in `r11`: `1` for `SubmitBallot`, `2` for `Unshield`, or `3` for `RecordSccpMessage`. Tag `0`, unknown tags, mismatched instruction types, and other instruction types are rejected.
 
 Examples (dev envelopes; mock WSV host only)
 - Execute query (JSON envelope) `0xA1`: set `r10` to a `&Json` TLV with `{ "type": "wsv.get_balance", "payload": { "account_id": "…", "asset_id": "…" } }`. On success, `r10` receives a pointer to a `&Json` TLV like `{ "balance": 42 }` in INPUT.
@@ -71,11 +82,16 @@ Ordering and OUTPUT
 - Host lifecycle: `begin_tx`/`finish_tx` return `Result`; hosts must surface overlay flush errors (e.g., durable state writes) instead of swallowing them, clear staged overlays on failure, and rely on checkpoints to restore pre-tx state when a VM run aborts.
 
 Legend
-- Args: registers and pointer types; `&Type` indicates a pointer to a Norito TLV in INPUT.
+- Args: registers and pointer types; `&Type` indicates a provenance-valid pointer to a canonical Norito TLV.
 - Return: `u64` or `ptr` (pointer in `r10`).
 - Gas: base component name; variable components are added for byte or item counts.
 
 Gas enforcement (CoreHost)
+- Syscall quotes are reserved before host effects. The reserved amount remains visible to host
+  budget checks, but nested contract bytecode can spend only the unreserved parent gas. Unused
+  reserve is refunded after the host reports the actual deterministic cost.
+- `JSON_GET_JSON` reserves against the HEAP-capable pointer payload bound plus its sum handle, so
+  a valid result that spills beyond the fixed INPUT arena cannot exceed its pre-dispatch quote.
 - ISI syscalls charge extra gas using the native ISI schedule (`iroha_core::gas::meter_instruction`).
 - FASTPQ transfer batch scope syscalls charge the fixed gas. Gas: `G_fastpq_batch`; batch
   entries are charged separately with the transfer gas family when applied.
@@ -84,11 +100,23 @@ Gas enforcement (CoreHost)
   the parent VM; child execution gas is consumed by the child VM.
 - Native and anonymous escrow bridge syscalls charge `G_escrow + bytes`.
 - Soracloud runtime syscalls charge `G_soracloud + request bytes + response bytes`.
-- ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
+- ZK verification uses the immutable `ZkGasScheduleV1` snapshot selected when
+  the host is constructed: `proof_base` per proof, `per_public_input` per
+  canonical 32-byte public-input unit, and `per_proof_byte` for encoded request
+  and bounded response bytes. The ABI-v1 defaults are `250_000`, `2_000`, and
+  `5`. A request may contain at most 1 MiB of encoded payload, and
+  `ZK_VERIFY_BATCH` accepts at most 16 proofs. The formula version, caps,
+  response layout, and default schedule subhash are part of the hashed gas
+  schedule; production rate selection is also bound by the ZK policy hash.
 - GET_PUBLIC_INPUT charges a base plus a per-byte cost based on the returned TLV length.
-- `JSON_OBJECT` helper — Gas: `G_json_object + bytes`.
-- `JSON_GET_*` helpers and their direct variants — Gas: `G_json_get + bytes`.
-- `JSON_SET_I64`, `JSON_SET_ACCOUNT_ID`, and their direct variants — Gas: `G_json_set + bytes`.
+- `JSON_OBJECT` helper — Gas: `G_json + bytes`.
+- `JSON_GET_*` helpers and their direct variants return compiler-owned
+  `Option<T>` sum handles. Missing keys, non-object roots, and type/conversion
+  mismatches are `Option::none`; malformed TLVs remain VM errors. Gas: `G_json_get + input bytes + active payload + sum allocation`.
+- `JSON_BUILD` converts one compiler-emitted `JsonConstructionSchemaV1` and a
+  flattened word table into one canonical `Json` payload. Gas is charged by
+  schema bytes, source bytes, words, collection elements, and encoded bytes.
+- `JSON_SET_I64`, `JSON_SET_ACCOUNT_ID`, and their direct variants — Gas: `G_json + bytes`.
 - SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost. Pagination offsets add an extra per-item penalty for unsorted queries; for sorted queries, the per-item charge is based on all items scanned before pagination (so offsets are already included). Query materialization aborts with OutOfGas when the per-item budget is exhausted, and responses that exceed the per-byte budget are rejected before encoding when exact Norito sizing is available (otherwise after encoding).
 
 Lifecycle / Utility
@@ -120,13 +148,44 @@ Kotodama intrinsics
 - ``current_time_ms() -> int`` issues `CURRENT_TIME_MS` and returns the host-provided block time in milliseconds. `CoreHost` binds this to block time; test/default hosts use deterministic configured time and default to `0`.
 - ``block_height() -> int`` issues `SYSVAR_BLOCK_HEIGHT` and returns the host-provided committed block height. `CoreHost` binds this to the attached transaction context; test/default hosts default to `0`.
 
-Numeric helpers (Norito)
-- 0x69 NUMERIC_FROM_INT — Args: `r10=value:i64` (non‑negative) → `r10=&NoritoBytes(Numeric)` (scale = 0).
-- 0x6A NUMERIC_TO_INT — Args: `r10=&NoritoBytes(Numeric)` → `r10=value:i64`. Rejects negative values, fractional scales, or values outside `i64`.
-- 0x6B..0x70 NUMERIC_{ADD,SUB,MUL,DIV,REM,NEG} — Args: `r10=&NoritoBytes(lhs)`, `r11=&NoritoBytes(rhs)` (NEG uses `r10` only) → `r10=&NoritoBytes(result)`. Inputs must be unsigned with scale = 0; SUB rejects underflow and NEG rejects non‑zero values. DIV/REM reject division by zero.
-- 0x71..0x76 NUMERIC_{EQ,NE,LT,LE,GT,GE} — Args: `r10=&NoritoBytes(lhs)`, `r11=&NoritoBytes(rhs)` → `r10=0/1` with the comparison result (inputs must be unsigned scale = 0).
-- Numeric helper gas is the fixed charge. Gas: G_numeric. Numeric operands are bounded by the canonical `Numeric` representation, so the first-release ABI keeps arithmetic pricing fixed and deterministic.
-- Kotodama numeric aliases (`fixed_u128`, `Amount`, `Balance`) lower to these syscalls for deterministic unsigned, scale‑0 arithmetic.
+Exact numeric helpers
+- `0x010100..0x010113` implement signed checked and explicit modulo-`2^512`
+  `int` operations; `0x010120..0x01012F` implement exact `decimal` operations;
+  and `0x010140..0x01014F` implement nominal non-negative `quantity`
+  operations. The generated table below is the signature source of truth.
+- Numeric operands are schema-bound, uncompressed Norito frames in pointer
+  types `Quantity=0x0010`, `Int=0x0011`, and `Decimal=0x0012`. Pointer ID
+  `0x0013` is unassigned and rejected as unknown.
+- The domain is `-2^511..=2^511-1`; decimal and quantity scale is `0..=28`.
+  Exact division distinguishes division by zero, repeating expansion, and a
+  terminating result whose minimum scale exceeds 28. Rounded operations name
+  one of all seven signed rounding modes.
+- Numeric syscalls use quote-free staged gas:
+  `16 + input_envelope_bytes + output_envelope_bytes + 4 * logical_limb_work`.
+  The entry weight covers dispatch, staged bookkeeping, and at most four
+  bounded control-register checks. Each logical base-`2^64` work cell receives
+  four units for operand access, arithmetic/carry or quotient trial, result
+  access, and deterministic loop control; multiplication and division formulas
+  enumerate every cell they perform. `cargo bench -p ivm --bench
+  gas_calibration` pins work denominators for 1..=8 input limbs, 10-limb scale
+  alignment, and 16-limb products. Release calibration requires a 25% safety
+  margin on every supported baseline tier; failure changes the gas formula
+  version/hash rather than selecting hardware-dependent semantics.
+
+Native JSON construction
+- 0x01004E `JSON_BUILD` takes
+  `r10=&NoritoBytes(JsonConstructionSchemaV1)`, `r11=aligned word table`, and
+  `r12=exact word count`, returning `r10=&Json`.
+- Native construction uses Gas: `G_json_build`; typed getters use Gas: `G_json_get`.
+- Object keys are canonicalized by lexical key order, duplicate keys and
+  malformed schemas are rejected, and nested `Option`/`List` handles are read
+  recursively. Booleans remain JSON primitives; `int`, `decimal`, and
+  `quantity` always render as canonical base-10 strings, while bytes are
+  lowercase `0x` hex. No floating-point conversion occurs.
+- Products, `Result`, and resource handles are not accepted as implicit JSON
+  values. Typed getters materialize active payloads only. The exact numeric
+  getters at `0x010160..0x010165` accept canonical strings only; JSON number
+  tokens and alternate spellings return `Option::none`.
 
 Domains / Peers
 - 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain
@@ -155,16 +214,16 @@ Notes:
 Assets (FT)
 - 0x20 REGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_reg_asset
 - 0x21 UNREGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_unreg_asset
-- 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_mint
-- 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_burn
-- 0x24 TRANSFER_V1 — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)` → 0 — Gas: G_transfer. Batch-internal only; rejected outside an active FASTPQ batch.
+- 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity` → 0 — Gas: G_mint
+- 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity` → 0 — Gas: G_burn
+- 0x24 TRANSFER_V1 — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity` → 0 — Gas: G_transfer. Batch-internal only; rejected outside an active FASTPQ batch.
 
 NFTs
 - 0x25 NFT_MINT_ASSET — Args: `r10=&NftId, r11=&AccountId(owner)` → 0 — Gas: G_nft_mint_asset
 - 0x26 NFT_TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)` → 0 — Gas: G_nft_transfer_asset
 - 0x27 NFT_SET_METADATA — Args: `r10=&NftId, r11=&Name, r12=&Json` → 0 — Gas: G_nft_set_metadata
 - 0x28 NFT_BURN_ASSET — Args: `r10=&NftId` → 0 — Gas: G_nft_burn_asset
-- 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric), r14=&DataSpaceId` → 0 — Gas: G_transfer. Queues a transfer using the asset definition's balance-scope policy: global definitions use a global source balance, and dataspace-restricted definitions use `Dataspace(r14)`.
+- 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity, r14=&DataSpaceId` → 0 — Gas: G_transfer. Queues a transfer using the asset definition's balance-scope policy: global definitions use a global source balance, and dataspace-restricted definitions use `Dataspace(r14)`.
 
 Zero‑knowledge (verification/state‑read)
 - 0x60 ZK_VERIFY_TRANSFER — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
@@ -176,9 +235,11 @@ Zero‑knowledge (verification/state‑read)
 
 ZK gating & determinism
 - `CoreHost` performs full proof verification through the configured backend verifier (`iroha_core::zk::verify_backend_with_timing`), not the legacy polynomial-opening helper.
-- `DefaultHost` verifies standalone Halo2 IPA/Pasta envelopes for the single
-  ZK verify syscalls and `ZK_VERIFY_BATCH`, enforcing the configured backend,
-  curve, max-k, per-envelope size, proof-size, and batch-size gates.
+- `DefaultHost` has no verifier-key registry or cryptographic backend. It
+  canonical-validates `iroha_data_model::zk::OpenVerifyEnvelope`, enforces
+  configured size/batch gates, and then fails closed with `ERR_BACKEND`.
+  Batch responses contain one zero byte per item (`1 = verified`, `0 = not
+  verified`), set `r11=ERR_BACKEND`, and set `r12=0` for the first failed item.
 - `CoreHost` additionally binds each envelope to the on-chain VK registry
   before verification; batch items then run through
   `iroha_core::zk::verify_backend_with_timing_guardrails`.
@@ -225,26 +286,31 @@ Durable state
 - 0x50 STATE_GET — Args: `r10=&Name(path)` → `ptr (&NoritoBytes)` or `0` — Gas: G_state_get + bytes
 - 0x51 STATE_SET — Args: `r10=&Name(path), r11=&NoritoBytes(value)` → 0 — Gas: G_state_set + bytes
 - 0x52 STATE_DEL — Args: `r10=&Name(path)` → 0 — Gas: G_state_del
+- Deployed-contract execution scopes every path to `sc/<contract-address-hash>/`.
+  Scoped operations never read, enumerate, overwrite, or delete legacy
+  unscoped keys. Raw IVM programs without a contract runtime context continue
+  to use the exact path supplied by the program, except that the reserved `sc`
+  namespace is rejected so raw bytecode cannot address deployed-contract state.
 - State gas is deterministic and byte-counted: present reads and writes charge
   the `NoritoBytes` payload length, misses and tombstones charge only the fixed
   base, and key enumeration adds the returned-key count plus encoded result
   bytes.
 
 Smart‑contract helpers (Norito)
-- 0xA0 EXECUTE_INSTRUCTION — Args: `r10=&NoritoBytes(InstructionBox)` → 0 — Gas: G_sci
+- 0xA0 EXECUTE_INSTRUCTION — Args: `r10=&NoritoBytes(InstructionBox)`, `r11=operation_tag` (`1=SubmitBallot`, `2=Unshield`, `3=RecordSccpMessage`) → 0 — Gas: G_sci
 - 0xA5 SUBSCRIPTION_BILL — Args: none → 0 — Gas: G_sub_bill
   - Uses trigger metadata `subscription_ref` to locate the subscription NFT, computes charges, updates subscription metadata (including `subscription_invoice`), and reschedules the billing trigger.
 - 0xA6 SUBSCRIPTION_RECORD_USAGE — Args: none → 0 — Gas: G_sub_usage
   - Parses `SubscriptionUsageDelta` from trigger args, increments usage counters, and updates subscription metadata.
-- 0xA9 CALL_CONTRACT — Args: `r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload)` → `r10=ptr (&NoritoBytes(return))` or `0` — Gas: G_call_contract + request bytes + return bytes
-  - Executes a public or view callee entrypoint in a child VM. Top-level transaction dispatch remains restricted to public entrypoints. View execution returns its value but rolls back every host-side effect, including effects attempted through further nested calls. The parent pays only the fixed request/return overhead; child instructions and child syscalls consume the child VM budget.
-  - If the callee entrypoint manifest declares `permission(...)`, the host checks the caller contract subject for the named direct or role-derived permission before launching the child VM; missing permission rejects the syscall with `PermissionDenied`.
-  - Pointer-shaped manifest returns (`Numeric`, `Json`, `Name`, account/asset/domain/NFT IDs, `Blob`/`bytes`, `DataSpaceId`, `AxtDescriptor`, and `AssetHandle`) are transported as a complete validated pointer-ABI TLV inside the outer `NoritoBytes`. These bytes are identical to `pointer_to_norito(value)` in the caller and can be compared with `TLV_EQ` or decoded with `POINTER_FROM_NORITO`.
-  - Scalar `int` and `bool` returns remain canonical Norito scalar bytes; unit returns set `r10=0`.
+- 0xA9 CALL_CONTRACT — Args: `r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&NoritoBytes(EntrypointArgumentRecordV1) or 0` → `r10=ptr (&NoritoBytes(EntrypointReturnRecordV1))` or `0` — Gas: G_call_contract + request bytes + return bytes + child gas
+  - Executes the callee in a child VM. The parent escrows the available syscall gas and is charged the fixed request/return overhead plus all gas consumed by child instructions and child syscalls; unused escrow is refunded.
+  - If the callee source declares `authorize("PermissionName")`, its manifest carries that caller-authorization requirement. The host checks the caller contract subject for the named direct or role-derived permission before launching the child VM; missing permission rejects the syscall with `PermissionDenied`.
 
 Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010000 QUERY_EXECUTE_NORITO — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr (&NoritoBytes(QueryResponse))` — Gas: G_scq
-- 0x010001..0x010008 provide dedicated read helpers for account, asset, asset definition, domain, NFT, named parameter, contract manifest, and contract instance reads. Account/asset/domain/manifest helpers route through the validated query engine; NFT, parameter, and contract-instance helpers read the attached state snapshot directly where no singular query type exists yet. All dedicated reads use the same singular query gas schedule.
+- 0x010001 CORE_QUERY_GET — Args: `r10=CoreQueryEntityTagV1`, `r11=&typed entity id` → `r10=Option<View>` sum handle. The active projection is flattened in declaration order and contains exact typed leaf TLVs.
+- 0x010002 CORE_QUERY_PAGE — Args: `r10=CoreQueryEntityTagV1`, `r11=offset:i64 bits`, `r12=limit:1..=64` → `r10=List<View,64>` handle, `r11=Option<i64>` sum handle. Pages preserve canonical ID order and expose a next offset only after a one-item lookahead proves another page exists.
+- 0x010006..0x010008 retain the canonical-Norito specialist reads for named parameters, contract manifests, and contract instances. Core and specialist reads use deterministic item/byte gas schedules.
 - `QUERY_GET_PARAMETER` accepts canonical system parameter names such as `block.max_transactions`, `transaction.max_instructions`, `smart_contract.fuel`, and exact custom parameter names.
 - 0x010020 SYSVAR_CHAIN_ID — Args: none → `ptr (&Blob(chain_id))` or `0` — Gas: G_sysvar + bytes
 - 0x010021 SYSVAR_BLOCK_HEIGHT — Args: none → `u64=height` — Gas: G_sysvar
@@ -252,14 +318,21 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010023 SYSVAR_AUTHORITY — Args: none → `ptr (&AccountId)` — Gas: G_get_auth + bytes
 - 0x010024 SYSVAR_CONTRACT_ADDRESS — Args: none → `ptr (&NoritoBytes(ContractAddress))` or `0` — Gas: G_sysvar + bytes
 - 0x010025 SYSVAR_ENTRYPOINT — Args: none → `ptr (&Blob(entrypoint))` or `0` — Gas: G_sysvar + bytes
-- 0x010030 STATE_KEYS — Args: `r10=&Name(prefix), r11=offset, r12=limit` → `ptr (&NoritoBytes(Vec<Name>))`, `r11=total`, `r12=count` — Gas: G_state_keys + count + bytes
-  - Enumerates durable-state keys in canonical sorted order. In contract-runtime scope, internal storage prefixes are stripped before return, and staged tombstones are applied before pagination.
+- 0x010026 DECODE_ARGUMENT_RECORD — Args: raw hosts use `r10=&NoritoBytes(EntrypointArgumentRecordV1)`; prepared contract calls use the exact host-issued `&NoritoBytes(domain-separated record binding)`; `r11=&NoritoBytes(EntrypointArgumentSchemaV1)` → `r10=&Blob(pad:u8 then [u64; word_count])` — Gas: G_argument_decode + record + schema + materialized output. Prepared calls first validate the trusted flat schema and derive its conservative maximum aggregate and pointer-allocation bound; that bound must be affordable before the untrusted canonical record is decoded. Raw syscall quoting authenticates neither payload: it uses only bounded record/schema envelope lengths and reserves the full HEAP before schema and record authentication. For prepared calls, the complete signed record remains host-owned and the guest sees only its domain-separated binding. Before any allocation, the host preflights the complete aligned TLV sequence plus raw aggregate storage. Pointer TLVs and the output word table prefer INPUT and spill into owned HEAP, while raw `List` and sum storage is always owned HEAP. The record limit is inclusive at 1 MiB. Raw hosts then validate the schema hash, canonical flat atoms, inactive sum payloads, and every embedded typed pointer. JSON-to-record conversion occurs only at Torii/CLI tooling boundaries.
+- 0x010030 STATE_KEYS — Args: `r10=&Name(prefix), r11=offset, r12=limit` (`0..=64`, where `0` returns an empty page) → `ptr (&NoritoBytes(Vec<Name>))`, `r11=total`, `r12=count` — Gas: G_state_keys + count + bytes
+  - Enumerates durable-state keys in canonical sorted order. In contract-runtime scope, internal storage prefixes are stripped before return, and staged tombstones are applied before pagination. The ledger host seeks directly to the scoped ordered prefix and does not materialize unrelated global keys; its `count` gas component conservatively includes every textual-prefix candidate examined across persisted state and the transaction overlay. Limits above 64 are rejected by every host.
 - 0x010031 STATE_HAS — Args: `r10=&Name(path)` → `r10=present` — Gas: G_state_has
   - Tests durable-state key presence with the same scoped overlay, base-state, and tombstone resolution as `STATE_GET`.
 - 0x010032 STATE_LEN — Args: `r10=&Name(path)` → `r10=len`, `r11=found` — Gas: G_state_len + bytes
   - Returns the `NoritoBytes` payload length for present values, excluding the TLV envelope. Missing values return `len=0, found=0`.
 - 0x010033 STATE_COUNT — Args: `r10=&Name(prefix)` → `r10=total` — Gas: G_state_count + count
-  - Counts durable-state keys with the same canonical sorted prefix matching, scope stripping, overlay, and tombstone resolution as `STATE_KEYS`, without copying or returning the key list.
+  - Counts durable-state keys with the same canonical sorted prefix matching, scope stripping, overlay, and tombstone resolution as `STATE_KEYS`, without cloning or returning the key list. The ledger host charges for every ordered-range candidate examined, including candidates rejected by path-segment matching and overlay tombstones.
+- 0x010034 STATE_MAP_KEY_AT — Args: `r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index` → `ptr (&NoritoBytes(canonical key))` or `0` — Gas: G_path + bytes
+  - Compiler-internal decoder for bounded `StateMap` iteration. It accepts at most 64 paths in a 1 MiB page, requires an exact `base/<lowercase hex>` child, and rejects malformed, non-canonical, or over-4-KiB keys.
+- 0x010035 STATE_VALUE_ENCODE — Args: `r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count` → `ptr (&NoritoBytes(StateValueRecordV1))` — Gas: G_state_value + schema + words + pointers + output
+  - Compiler-internal encoder for one canonical typed durable value. The schema is validated, active pointer leaves must carry canonical payloads of their declared ABI types, inactive `Option`/`Result` branches must be all-zero/null, and the stored record is bound to the exact schema by a domain-separated hash.
+- 0x010036 STATE_VALUE_DECODE — Args: `r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1)` → `ptr (&Blob(pad:u8 then [u64; word_count]))` — Gas: G_state_value + schema + record + pointers + output
+  - Compiler-internal decoder for scalars, structs, tuples, `Option`, and `Result`. Missing map entries are handled by the caller's outer `Option`; a zero record pointer, non-canonical inactive branch, malformed typed leaf, or different schema hash is rejected.
 
 JSON envelope support for EXECUTE_INSTRUCTION
 - The mock host accepts a JSON “envelope” in INPUT for `EXECUTE_INSTRUCTION` to execute a subset of instructions directly without relying on Norito bytes.
@@ -298,13 +371,13 @@ AXT host flow
 - Default and WSV hosts enforce descriptor membership, capability binding equality, budget checks, and proof presence before permitting commit.
 
 Native asset escrow
-- 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&NoritoBytes(Numeric)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
+- 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&Quantity`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
 - 0xB9 ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `AcceptAssetEscrow` for the buyer authority.
 - 0xBA ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `MarkEscrowPaymentSent` for the accepted buyer.
 - 0xBB ESCROW_RELEASE — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `ReleaseAssetEscrow` for the seller authority after payment is marked.
 - 0xBC ESCROW_CANCEL — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `CancelAssetEscrow`; cancellation is rejected once payment is marked.
 - 0xBD ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenEscrowDispute` for the seller or accepted buyer.
-- 0xBE ESCROW_RESOLVE_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Numeric buyer_amount)`, `r12=&NoritoBytes(Numeric seller_amount)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `ResolveEscrowDispute`; core enforces `CanResolveEscrowDispute` and that the split sums to the held amount.
+- 0xBE ESCROW_RESOLVE_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&Quantity(buyer_amount)`, `r12=&Quantity(seller_amount)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `ResolveEscrowDispute`; core enforces `CanResolveEscrowDispute` and that the split sums to the held amount.
 - 0xAA ANONYMOUS_ESCROW_OPEN_OFFER — Args: `r10=&NoritoBytes(OpenAnonymousAssetEscrow)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow opening ISI.
 - 0xAB ANONYMOUS_ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `AcceptAnonymousAssetEscrow`.
 - 0xAC ANONYMOUS_ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `MarkAnonymousEscrowPaymentSent`.
@@ -336,7 +409,7 @@ Soracloud runtime host surface
   validation.
 
 ZK Helpers
-- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&NoritoBytes(Numeric))` — Gas: G_get_bal
+- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&Quantity)` — Gas: G_get_bal
 - 0xFB USE_NULLIFIER — Args: `r10=nullifier:u64` → `u64=0` — Gas: G_use_null
 - 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig + bytes
 
@@ -396,13 +469,16 @@ node enforces that policy unconditionally.
 - ABI goldens (syscall list, ABI hash, pointer type IDs) are pinned to the current
   v1 surface and must be updated in the same change whenever the first-release
   surface intentionally changes.
+- Pointer provenance tests pin INPUT, allocated HEAP, and exact indexed literals as the only
+  accepted V1 object stores. Asset mutation fixtures pin canonical `QuantityValueV1` frames;
+  scalar and legacy `NoritoBytes(Numeric)` amount arguments remain invalid.
 - Any future post-release ABI break must be delivered through a new policy/version
   with updated tests and docs.
 
 <!-- BEGIN GENERATED SYSCALLS -->
 | Number | Name | Args | Return | Gas |
 |---|---|---|---|---|
-| 0x00 | DEBUG_PRINT | - | - | asset:gas/G_debug@ivm.core/v2 |
+| 0x00 | DEBUG_PRINT | r10=value:u64 | - | asset:gas/G_debug@ivm.core/v2 |
 | 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v2 |
 | 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v2 |
 | 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v2 |
@@ -419,9 +495,9 @@ node enforces that policy unconditionally.
 | 0x1A | SET_ACCOUNT_DETAIL | r10=&AccountId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_set_detail@ivm.core/v2 + bytes(val) |
 | 0x20 | REGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_reg_asset@ivm.core/v2 |
 | 0x21 | UNREGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_unreg_asset@ivm.core/v2 |
-| 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_mint@ivm.core/v2 |
-| 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_burn@ivm.core/v2 |
-| 0x24 | TRANSFER_V1 | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric); batch-internal only | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
+| 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount | u64=0 | asset:gas/G_mint@ivm.core/v2 |
+| 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount | u64=0 | asset:gas/G_burn@ivm.core/v2 |
+| 0x24 | TRANSFER_V1 | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount; batch-internal only | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
 | 0x25 | NFT_MINT_ASSET | r10=&NftId, r11=&AccountId(owner) | u64=0 | asset:gas/G_nft_mint_asset@ivm.core/v2 |
 | 0x26 | NFT_TRANSFER_ASSET | r10=&AccountId(from), r11=&NftId, r12=&AccountId(to) | u64=0 | asset:gas/G_nft_transfer_asset@ivm.core/v2 |
 | 0x27 | NFT_SET_METADATA | r10=&NftId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_nft_set_metadata@ivm.core/v2 |
@@ -429,7 +505,7 @@ node enforces that policy unconditionally.
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
 | 0x2A | TRANSFER_V1_BATCH_END | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | r10=&NoritoBytes(TransferAssetBatch) | u64=0 | asset:gas/G_transfer@ivm.core/v2 per entry |
-| 0x2C | TRANSFER_ASSET_SCOPED | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric), r14=&DataSpaceId | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
+| 0x2C | TRANSFER_ASSET_SCOPED | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount, r14=&DataSpaceId | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
 | 0x30 | CREATE_ROLE | r10=&Name, r11=&Json(perms) | u64=0 | asset:gas/G_create_role@ivm.core/v2 |
 | 0x31 | DELETE_ROLE | r10=&Name | u64=0 | asset:gas/G_delete_role@ivm.core/v2 |
 | 0x32 | GRANT_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_role@ivm.core/v2 |
@@ -468,7 +544,7 @@ node enforces that policy unconditionally.
 | 0x65 | ZK_VOTE_GET_TALLY | r10=&NoritoBytes(VoteGetTallyRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_vote_get@ivm.core/v2 + bytes |
 | 0x66 | VRF_VERIFY | r10=&NoritoBytes(VrfVerifyRequest) | r10=ptr (&Blob(32-byte output)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
 | 0x67 | VRF_VERIFY_BATCH | r10=&NoritoBytes(VrfVerifyBatchRequest) | r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
-| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
+| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | configured V1 proof + public-input-unit + encoded request/response byte schedule |
 | 0x69 | NUMERIC_FROM_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
 | 0x6A | NUMERIC_TO_INT | r10=&NoritoBytes(Numeric) | r10=value:i64 | asset:gas/G_numeric@ivm.core/v2 |
 | 0x6B | NUMERIC_ADD | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
@@ -484,28 +560,28 @@ node enforces that policy unconditionally.
 | 0x75 | NUMERIC_GT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
 | 0x76 | NUMERIC_GE | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | asset:gas/G_numeric@ivm.core/v2 |
 | 0x77 | TLV_LEN | r10=&Tlv | r10=payload_len:u64 | asset:gas/G_tlv_len@ivm.core/v2 + bytes |
-| 0x78 | JSON_GET_I64 | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x79 | JSON_GET_JSON | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x7A | JSON_GET_NAME | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x7B | JSON_GET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x7C | JSON_GET_NFT_ID | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x7D | JSON_GET_BLOB_HEX | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
+| 0x78 | JSON_GET_I64 | r10=&Json(object), r11=&Name(key) | r10=Option<i64> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x79 | JSON_GET_JSON | r10=&Json(object), r11=&Name(key) | r10=Option<Json> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x7A | JSON_GET_NAME | r10=&Json(object), r11=&Name(key) | r10=Option<Name> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x7B | JSON_GET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key) | r10=Option<AccountId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x7C | JSON_GET_NFT_ID | r10=&Json(object), r11=&Name(key) | r10=Option<NftId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x7D | JSON_GET_BLOB_HEX | r10=&Json(object), r11=&Name(key) | r10=Option<bytes> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x7E | VRF_EPOCH_SEED | r10=&NoritoBytes(VrfEpochSeedRequest) | r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64 | asset:gas/G_vote_get@ivm.core/v2 + bytes |
-| 0x7F | JSON_GET_NUMERIC | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x80 | JSON_GET_ASSET_DEFINITION_ID | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x81 | JSON_OBJECT | - | ptr (&Json({})) | asset:gas/G_json_object@ivm.core/v2 + bytes |
-| 0x82 | JSON_SET_I64 | r10=&Json(object), r11=&Name(key), r12=value:i64 | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 + bytes |
-| 0x83 | JSON_SET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key), r12=&AccountId | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 + bytes |
-| 0x84 | JSON_GET_I64_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x85 | JSON_GET_JSON_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x86 | JSON_GET_NAME_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x87 | JSON_GET_ACCOUNT_ID_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x88 | JSON_GET_NFT_ID_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x89 | JSON_GET_BLOB_HEX_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x8A | JSON_GET_NUMERIC_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x8B | JSON_GET_ASSET_DEFINITION_ID_DIRECT | r10=&Json(object), r11=&Name(key) | r10=value or ptr | asset:gas/G_json_get@ivm.core/v2 + bytes |
-| 0x8C | JSON_SET_I64_DIRECT | r10=&Json(object), r11=&Name(key), r12=value:i64 | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 + bytes |
-| 0x8D | JSON_SET_ACCOUNT_ID_DIRECT | r10=&Json(object), r11=&Name(key), r12=&AccountId | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 + bytes |
+| 0x7F | JSON_GET_AMOUNT | r10=&Json(object), r11=&Name(key) | r10=Option<Amount> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x80 | JSON_GET_ASSET_DEFINITION_ID | r10=&Json(object), r11=&Name(key) | r10=Option<AssetDefinitionId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x81 | JSON_OBJECT | - | r10=&Json(empty object) | asset:gas/G_json@ivm.core/v2 + encoded bytes |
+| 0x82 | JSON_SET_I64 | r10=&Json(object), r11=&Name(key), r12=value:i64 | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
+| 0x83 | JSON_SET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key), r12=&AccountId | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
+| 0x84 | JSON_GET_I64_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<i64> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x85 | JSON_GET_JSON_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<Json> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x86 | JSON_GET_NAME_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<Name> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x87 | JSON_GET_ACCOUNT_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<AccountId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x88 | JSON_GET_NFT_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<NftId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x89 | JSON_GET_BLOB_HEX_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<bytes> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x8A | JSON_GET_AMOUNT_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<Amount> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x8B | JSON_GET_ASSET_DEFINITION_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<AssetDefinitionId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x8C | JSON_SET_I64_DIRECT | r10=&Json(any validated region), r11=&Name(key), r12=value:i64 | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
+| 0x8D | JSON_SET_ACCOUNT_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key), r12=&AccountId | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
 | 0x8E | BUILD_PATH_KEY_NORITO_DIRECT | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&Name) | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x8F | SCHEMA_INFO_DIRECT | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | asset:gas/G_schema@ivm.core/v2 + bytes |
 | 0x90 | SM3_HASH | r10=&Blob(message) | r10=ptr (&Blob(digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
@@ -519,7 +595,7 @@ node enforces that policy unconditionally.
 | 0x98 | BLAKE2B256_HASH | r10=&Blob(message) | r10=ptr (&Blob(raw Blake2b-256 digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
 | 0x99 | KECCAK256_HASH | r10=&Blob(message) | r10=ptr (&Blob(Keccak-256 digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
 | 0x9A | IROHA_HASH | r10=&Blob(message) | r10=ptr (&Blob(Iroha Hash::new digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
-| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | r10=&NoritoBytes(InstructionBox) | u64=0 | asset:gas/G_sci@ivm.core/v2 |
+| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot,2=Unshield,3=RecordSccpMessage) | u64=0 | asset:gas/G_sci@ivm.core/v2 |
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |
 | 0xA2 | CREATE_NFTS_FOR_ALL_USERS | - | u64=count | asset:gas/G_create_nfts_all@ivm.core/v2 |
 | 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | r10=depth:u64 | u64=prev | asset:gas/G_sc_depth@ivm.core/v2 |
@@ -528,7 +604,7 @@ node enforces that policy unconditionally.
 | 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | u64=0 | asset:gas/G_sub_usage@ivm.core/v2 |
 | 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
 | 0xA8 | CURRENT_TIME_MS | - | r10=unix_time_ms:u64 | asset:gas/G_sysvar@ivm.core/v2 |
-| 0xA9 | CALL_CONTRACT | r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload) | r10=ptr (&NoritoBytes(pointer TLV or scalar return)) or 0 | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes |
+| 0xA9 | CALL_CONTRACT | r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&NoritoBytes(EntrypointArgumentRecordV1) or 0 | r10=ptr (&NoritoBytes(EntrypointReturnRecordV1)) or 0 | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas |
 | 0xAA | ANONYMOUS_ESCROW_OPEN_OFFER | r10=&NoritoBytes(OpenAnonymousAssetEscrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xAB | ANONYMOUS_ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xAC | ANONYMOUS_ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
@@ -540,13 +616,13 @@ node enforces that policy unconditionally.
 | 0xB2 | AXT_COMMIT | - | u64=0 | asset:gas/G_axt@ivm.core/v2 + entries |
 | 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 | u64=0/1 | asset:gas/G_verify@ivm.core/v2 + bytes |
 | 0xB4 | USE_ASSET_HANDLE | r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob? | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
-| 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&Amount, r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xB9 | ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBA | ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBB | ESCROW_RELEASE | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBC | ESCROW_CANCEL | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBD | ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
-| 0xBE | ESCROW_RESOLVE_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Numeric buyer_amount), r12=&NoritoBytes(Numeric seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xBE | ESCROW_RESOLVE_DISPUTE | r10=&Name(escrow), r11=&Amount(buyer_amount), r12=&Amount(seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBF | ANONYMOUS_ESCROW_RESOLVE_DISPUTE | r10=&NoritoBytes(ResolveAnonymousEscrowDispute) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xC0 | SORACLOUD_READ_COMMITTED_STATE | r10=&SoracloudRequest(ReadCommittedState) | r10=&SoracloudResponse(ReadCommittedState) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation | asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under SoracloudIvmHost) |
 | 0xC1 | SORACLOUD_EMIT_STATE_MUTATION | r10=&SoracloudRequest(EmitStateMutation) | r10=&SoracloudResponse(EmitStateMutation) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation | asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under SoracloudIvmHost) |
@@ -580,7 +656,7 @@ node enforces that policy unconditionally.
 | 0xF5 | GROW_HEAP | r10=bytes:u64 | u64=new_limit | asset:gas/G_grow_heap@ivm.core/v2 per page |
 | 0xF6 | VERIFY_PROOF | r10=&NoritoBytes(OpenVerifyEnvelope) | r10=0/1, r11=status:u64 | asset:gas/G_verify_proof@ivm.core/v2 + bytes |
 | 0xF7 | GET_MERKLE_PATH | r10=addr:u64, r11=out:u64, r12=root_out?:u64 | u64=len | asset:gas/G_mpath@ivm.core/v2 + len |
-| 0xF9 | GET_ACCOUNT_BALANCE | r10=&AccountId, r11=&AssetDefinitionId | ptr (&NoritoBytes(Numeric)) | asset:gas/G_get_bal@ivm.core/v2 |
+| 0xF9 | GET_ACCOUNT_BALANCE | r10=&AccountId, r11=&AssetDefinitionId | ptr (&Amount) | asset:gas/G_get_bal@ivm.core/v2 |
 | 0xFA | GET_MERKLE_COMPACT | r10=addr, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 | 0xFB | USE_NULLIFIER | r10=nullifier:u64 | u64=0 | asset:gas/G_use_null@ivm.core/v2 |
 | 0xFC | VERIFY_SIGNATURE | r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8 | r10=0/1 | asset:gas/G_verify_sig@ivm.core/v2 + bytes |
@@ -588,11 +664,8 @@ node enforces that policy unconditionally.
 | 0xFE | COMMIT_OUTPUT | - | u64=0 | asset:gas/G_commit@ivm.core/v2 |
 | 0xFF | GET_REGISTER_MERKLE_COMPACT | r10=reg, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 | 0x10000 | QUERY_EXECUTE_NORITO | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10001 | QUERY_GET_ACCOUNT | r10=&NoritoBytes(AccountId) | r10=ptr (&NoritoBytes(Account)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10002 | QUERY_GET_ASSET | r10=&NoritoBytes(AssetId) | r10=ptr (&NoritoBytes(Asset)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10003 | QUERY_GET_ASSET_DEFINITION | r10=&NoritoBytes(AssetDefinitionId) | r10=ptr (&NoritoBytes(AssetDefinition)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10004 | QUERY_GET_DOMAIN | r10=&NoritoBytes(DomainId) | r10=ptr (&NoritoBytes(Domain)) | asset:gas/G_scq@ivm.core/v2 |
-| 0x10005 | QUERY_GET_NFT | r10=&NoritoBytes(NftId) | r10=ptr (&NoritoBytes(Nft)) | asset:gas/G_scq@ivm.core/v2 |
+| 0x10001 | CORE_QUERY_GET | r10=CoreQueryEntityTagV1:u64, r11=&typed entity id | r10=Option<View> sum handle (typed leaf TLVs) | asset:gas/G_scq@ivm.core/v2 + query items + encoded bytes |
+| 0x10002 | CORE_QUERY_PAGE | r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64 | r10=List<View,64> handle, r11=Option<i64> sum handle | asset:gas/G_scq@ivm.core/v2 + offset + query items + encoded bytes |
 | 0x10006 | QUERY_GET_PARAMETER | r10=&NoritoBytes(Name) | r10=ptr (&NoritoBytes(Parameter)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10007 | QUERY_GET_CONTRACT_MANIFEST | r10=&NoritoBytes(ContractAddress | Hash) | r10=ptr (&NoritoBytes(ContractManifest)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10008 | QUERY_GET_CONTRACT_INSTANCE | r10=&NoritoBytes(ContractAddress | Name) | r10=ptr (&NoritoBytes(ContractInstance)) | asset:gas/G_scq@ivm.core/v2 |
@@ -602,10 +675,29 @@ node enforces that policy unconditionally.
 | 0x10023 | SYSVAR_AUTHORITY | - | r10=ptr (&AccountId) | asset:gas/G_get_auth@ivm.core/v2 + bytes |
 | 0x10024 | SYSVAR_CONTRACT_ADDRESS | - | r10=ptr (&NoritoBytes(ContractAddress)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10025 | SYSVAR_ENTRYPOINT | - | r10=ptr (&Blob(entrypoint)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
-| 0x10030 | STATE_KEYS | r10=&Name(prefix), r11=offset:u64, r12=limit:u64 | r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64 | asset:gas/G_state_keys@ivm.core/v2 + count + bytes |
+| 0x10026 | DECODE_ARGUMENT_RECORD | r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1) | r10=ptr (&Blob(pad:u8 then [u64; word_count])) | asset:gas/G_argument_decode@ivm.core/v2 + record + schema + output |
+| 0x10030 | STATE_KEYS | r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64) | r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64 | asset:gas/G_state_keys@ivm.core/v2 + count + bytes |
 | 0x10031 | STATE_HAS | r10=&Name(path) | r10=present:u64 | asset:gas/G_state_has@ivm.core/v2 |
 | 0x10032 | STATE_LEN | r10=&Name(path) | r10=len:u64, r11=found:u64 | asset:gas/G_state_len@ivm.core/v2 + bytes |
 | 0x10033 | STATE_COUNT | r10=&Name(prefix) | r10=total:u64 | asset:gas/G_state_count@ivm.core/v2 + count |
+| 0x10034 | STATE_MAP_KEY_AT | r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index:u64 | r10=ptr (&NoritoBytes(canonical key)) or 0 | asset:gas/G_path@ivm.core/v2 + bytes |
+| 0x10035 | STATE_VALUE_ENCODE | r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count:u64 | r10=ptr (&NoritoBytes(StateValueRecordV1)) | asset:gas/G_state_value@ivm.core/v2 + schema + words + pointers + output |
+| 0x10036 | STATE_VALUE_DECODE | r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1) | r10=ptr (&Blob(pad:u8 then [u64; word_count])) | asset:gas/G_state_value@ivm.core/v2 + schema + record + pointers + output |
+| 0x10040 | AMOUNT_FROM_I64 | r10=value:i64 (nonnegative) | r10=ptr (&Amount) | asset:gas/G_amount@ivm.core/v2 by fixed 64-bit limb work + encoded bytes |
+| 0x10041 | AMOUNT_FROM_U128 | r10=&NoritoBytes(scale-zero u128 Numeric) | r10=ptr (&Amount) | asset:gas/G_amount@ivm.core/v2 by fixed 64-bit limb work + encoded bytes |
+| 0x10042 | AMOUNT_TO_I64 | r10=&Amount (scale zero, i64 range) | r10=value:i64 | asset:gas/G_amount@ivm.core/v2 by fixed 64-bit limb work |
+| 0x10043 | AMOUNT_ADD | r10=&Amount, r11=&Amount | r10=ptr (&Amount) | asset:gas/G_amount_add@ivm.core/v2 by aligned fixed 64-bit limb work + encoded bytes |
+| 0x10044 | AMOUNT_SUB | r10=&Amount, r11=&Amount | r10=ptr (&Amount); underflow traps | asset:gas/G_amount_sub@ivm.core/v2 by aligned fixed 64-bit limb work + encoded bytes |
+| 0x10045 | AMOUNT_MUL | r10=&Amount, r11=&Amount | r10=ptr (&Amount) | asset:gas/G_amount_mul@ivm.core/v2 by limb product + encoded bytes |
+| 0x10046 | AMOUNT_DIV_EXACT | r10=&Amount dividend, r11=&Amount divisor | r10=ptr (&Amount); non-finite or scale>28 result traps | asset:gas/G_amount_div@ivm.core/v2 by deterministic bounded limb work + encoded bytes |
+| 0x10047 | AMOUNT_DIV_ROUND | r10=&Amount dividend, r11=&Amount divisor, r12=scale:0..28, r13=rounding:0..2 | r10=ptr (&Amount) | asset:gas/G_amount_div@ivm.core/v2 by deterministic bounded limb work + encoded bytes |
+| 0x10048 | AMOUNT_EQ | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x10049 | AMOUNT_NE | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x1004A | AMOUNT_LT | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x1004B | AMOUNT_LE | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x1004C | AMOUNT_GT | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x1004D | AMOUNT_GE | r10=&Amount, r11=&Amount | r10=0/1 | asset:gas/G_amount_cmp@ivm.core/v2 by aligned fixed 64-bit limb work |
+| 0x1004E | JSON_BUILD | r10=&NoritoBytes(JsonConstructionSchemaV1), r11=word_table, r12=word_count | r10=&Json | asset:gas/G_json_build@ivm.core/v2 + schema bytes + source bytes + words + collection elements + encoded bytes |
 <!-- END GENERATED SYSCALLS -->
 
 
@@ -651,6 +743,7 @@ Codec helpers
 - 0x54 BUILD_PATH_MAP_KEY — Args: `r10=&Name(base), r11=key:i64` → Return: `ptr (&Name)` — Gas: G_path + bytes
 - 0x55 ENCODE_INT — Args: `r10=value:i64` → Return: `ptr (&NoritoBytes(Norito-framed i64))` — Gas: G_numeric + bytes
 - 0x56 BUILD_PATH_KEY_NORITO — Args: `r10=&Name(base), r11=&NoritoBytes(key)` → Return: `ptr (&Name)` — Gas: G_path + bytes
+  - Produces the injective path `base/<lowercase hex of canonical key bytes>`. The exact suffix is reversible, lexicographic path order equals unsigned canonical-Norito byte order, and keys larger than 4 KiB are rejected.
 - 0x57 JSON_ENCODE — Args: `r10=&Json` → Return: `ptr (&NoritoBytes(Json))` — Gas: G_json_encode + bytes
 - 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(Json)` or `r10=&Blob(JSON text)` → Return: `ptr (&Json)` — Gas: G_json_decode + bytes
 - 0x59 SCHEMA_ENCODE — Args: `r10=&Name(schema), r11=&Json` → Return: `ptr (&NoritoBytes)` — Gas: G_schema + bytes
@@ -669,8 +762,8 @@ Codec helpers
 - Null inputs: DECODE_INT, JSON_DECODE, NAME_DECODE, and POINTER_FROM_NORITO accept `r10=0` and return `r10=0` without error.
 - All other pointer-typed syscalls require explicit non-zero pointers; there is no implicit last-input fallback.
 ZK (Halo2 OpenVerify)
-- 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: G_verify + bytes
-  - `DefaultHost` returns per-item statuses (`1 = verified`, `0 = not verified`) after standalone Halo2 IPA/Pasta verification with the batch transcript label.
+- 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: configured V1 proof + public-input-unit + encoded request/response byte schedule; 1 MiB encoded-payload and 16-proof hard caps
+  - `DefaultHost` has no proof backend. After canonical validation it returns one failure status byte (`0`) per item, `r11=ERR_BACKEND`, and `r12=0`; it never reports a proof as verified.
   - `CoreHost` returns the same status-vector shape and runs the same outer-envelope binding plus full backend verification path as the single-item ZK verify syscalls.
   - Top-level request failures (decode, disabled backend, oversized batch) return `r10=0` and set `r11` (`ERR_DECODE`, `ERR_DISABLED`, `ERR_BACKEND`, `ERR_BATCH`).
   - On vector return, `r11` carries the first observed precheck/verify error code (or `0` when all succeed).

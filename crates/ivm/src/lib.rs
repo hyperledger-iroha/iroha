@@ -28,6 +28,7 @@
 
 mod aes;
 pub mod analysis;
+mod argument_record;
 pub mod axt;
 pub mod bn254_vec;
 mod branch_predictor;
@@ -51,16 +52,28 @@ pub mod instruction;
 pub mod iso20022;
 mod ivm;
 pub mod ivm_cache;
+pub mod json;
+/// VM-backed Kotodama test runner shared by developer tools.
+pub mod koto_test_driver;
 pub mod kotodama;
 pub mod kotodama_std;
 pub mod limits;
+pub mod list;
 mod memory;
 pub mod merkle_utils;
 mod metadata;
+/// Stable Kotodama V1 numeric ABI tags and register conventions.
+pub mod numeric {
+    pub use ivm_abi::numeric::*;
+}
 pub mod mock_wsv;
+pub mod numeric_gas;
+pub mod numeric_tlv;
+pub mod numeric_v1;
 mod pedersen;
 pub mod pointer_abi;
 mod poseidon;
+mod prepared;
 pub mod register_file;
 mod registers;
 pub mod runtime;
@@ -70,6 +83,9 @@ mod sha3;
 pub mod signature;
 pub mod simple_instruction;
 mod state_overlay;
+mod state_value;
+pub mod sum;
+pub mod syscall_metering;
 pub mod syscalls;
 mod vector;
 pub mod zk;
@@ -95,6 +111,11 @@ pub use crate::core_host::CoreHost;
 #[cfg(test)]
 pub use crate::field_dispatch::{clear_field_impl_for_tests, set_field_impl_for_tests};
 // Publicly expose gas schedule helper for tests and tooling.
+pub use crate::argument_record::{
+    PreparedArgumentRecord, argument_record_decode_count, argument_record_from_json,
+    encode_argument_record_from_json, prepare_argument_record_with_gas_limit,
+    reset_argument_record_decode_count, validate_argument_record,
+};
 pub use crate::gas::{cost_of, cost_of_with_params};
 #[cfg(feature = "cuda")]
 pub use crate::gpu_manager::GpuManager;
@@ -104,15 +125,17 @@ pub use crate::gpu_manager::GpuManager;
 pub use crate::metadata::mode as ivm_mode;
 // Re-export the canonical Merkle tree from iroha_crypto for general use.
 pub use crate::contract_artifact::{
-    ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
+    ContractArtifactError, VerifiedContractArtifact, prepare_contract, verify_contract_artifact,
 };
 pub use crate::metadata::{
     CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK,
     CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1,
     EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
-    EmbeddedSourceMapEntryV1, EmbeddedStateFieldDescriptor, EmbeddedStateType,
-    MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
+    EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
+    EmbeddedStateType, LiteralKindV1, MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
+    contract_code_hash, decode_literal_descriptor, encode_literal_descriptor,
 };
+pub use crate::prepared::PreparedContract;
 pub use crate::{
     aes::{
         aes128_decrypt_many, aes128_encrypt_many, aes128_expand_key, aesdec, aesdec_impl,
@@ -142,7 +165,7 @@ pub use crate::{
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},
     host::IVMHost,
     iso20022::*,
-    ivm::{IVM, TraceMode, set_banner_enabled},
+    ivm::{IVM, RuntimeTemplate, TraceMode, set_banner_enabled},
     ivm_cache::{
         CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get_with_meta,
         global_stats,
@@ -163,6 +186,13 @@ pub use crate::{
 pub use iroha_crypto::{MerkleProof, MerkleTree};
 /// Syscall policy determined by `ProgramMetadata.abi_version`.
 pub use ivm_abi::SyscallPolicy;
+/// Stable V1 typed core-query tags, projections, and bounded page records.
+pub use ivm_abi::core_query;
+/// Exact schemas and typed nested-return records encoded at public contract boundaries.
+pub use ivm_abi::entrypoint::{
+    EntrypointArgumentSchemaV1, EntrypointReturnRecordV1, EntrypointValueAtomV1,
+    EntrypointValueTypeV1,
+};
 
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 pub use crate::{

@@ -2750,6 +2750,8 @@ READINESS_SECTION_CONSISTENCY_COVERAGE = {
 }
 WORKFLOW_REQUIRED_PATHS = (
     WORKFLOW_PATH,
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift",
     SHARED_FIXTURE_PATH,
     SHARED_ABI7_FIXTURE_PATH,
     *CI_GUARD_PATHS,
@@ -2790,6 +2792,38 @@ HEADER_NEGATIVE_CONTROL_COMMANDS = (
     (
         "bad recursive header signature negative control",
         "ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-signature",
+    ),
+    (
+        "bad recursive V2 header signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-v2-signature",
+    ),
+    (
+        "bad recursive V2 artifact header signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-v2-artifact-signature",
+    ),
+    (
+        "missing paired recursive V2 export negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-missing-recursive-v2-export-pair",
+    ),
+    (
+        "missing paired Kagemusha V2 protocol export negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-missing-kagemusha-v2-protocol-export-pair",
+    ),
+    (
+        "bad Kagemusha V2 receiver-key algorithm signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-kagemusha-v2-receiver-key-signature",
+    ),
+    (
+        "bad Kagemusha V2 verify-at-time signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-kagemusha-v2-verify-at-time-signature",
+    ),
+    (
+        "bad Kagemusha V2 four-archive ACK-create signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-kagemusha-v2-ack-create-signature",
+    ),
+    (
+        "bad connect_norito_free signature negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-connect-norito-free-signature",
     ),
     (
         "missing Rust export negative control",
@@ -8497,7 +8531,6 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":
     print("negative control rejected typed first-release Torii offline redeem smoke drift")
     print(first_message.splitlines()[0])
     raise SystemExit(0)
-
 if mode == "--negative-control-active-kagemusha-todo":
     todo_prefix = "TO" "DO:"
     cases = (
@@ -8601,16 +8634,16 @@ if mode == "--negative-control-active-kagemusha-todo":
         ),
         (
             "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
-            "//! Source-level guards for the Kagemusha-first offline payment surface.",
+            "//! Wire-contract guards for the first-release offline operation resource.",
             f"// {todo_prefix} bypass Kagemusha-only offline smoke\n"
-            "//! Source-level guards for the Kagemusha-first offline payment surface.",
+            "//! Wire-contract guards for the first-release offline operation resource.",
             "Torii Kagemusha-only smoke active marker",
         ),
         (
             "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
-            "//! Source-level smoke checks for the offline v2 Kagemusha redeem bridge.",
+            "//! Source-level contract guards for the first-release offline redeem command.",
             f"// {todo_prefix} bypass offline-v2 Kagemusha redeem smoke\n"
-            "//! Source-level smoke checks for the offline v2 Kagemusha redeem bridge.",
+            "//! Source-level contract guards for the first-release offline redeem command.",
             "Torii offline-v2 smoke active marker",
         ),
         (

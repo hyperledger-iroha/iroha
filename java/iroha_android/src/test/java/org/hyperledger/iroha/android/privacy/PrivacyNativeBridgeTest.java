@@ -1385,7 +1385,7 @@ public final class PrivacyNativeBridgeTest {
 
   private static PrivacyConfidentialWitness.WitnessV1 sampleTransferWitness() {
     return new PrivacyConfidentialWitness.WitnessV1(
-        "809574f5-fee7-5e69-bfcf-52451e42d50f",
+        "fc56984b-2be7-431d-840e-21514d1883f0",
         "xor#universal",
         repeated(0x11, 32),
         Collections.singletonList(repeated(0x10, 32)),
@@ -1402,7 +1402,7 @@ public final class PrivacyNativeBridgeTest {
 
   private static PrivacyConfidentialWitness.WitnessV1 sampleUnshieldWitness() {
     return new PrivacyConfidentialWitness.WitnessV1(
-        "809574f5-fee7-5e69-bfcf-52451e42d50f",
+        "fc56984b-2be7-431d-840e-21514d1883f0",
         "xor#universal",
         repeated(0x71, 32),
         Collections.singletonList(repeated(0x72, 32)),

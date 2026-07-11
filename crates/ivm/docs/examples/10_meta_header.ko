@@ -1,23 +1,12 @@
-// Demonstrates seiyaku-level metadata controlling the IVM header.
-// - abi_version: syscall policy selection
-// - vector_length: logical SIMD width hint
-// - max_cycles: optional cap for cycle padding/enforcement
-// - zk/vector: set mode bits explicitly
-
+// Demonstrates an opcode whose required header capability is derived by the
+// compiler. ABI v1, vector width, and cycle limits are build/runtime policy;
+// seiyaku source cannot override them.
 seiyaku MetaDemo {
-  meta {
-    abi_version: 1;
-    vector_length: 8;
-    max_cycles: 2000;
-    zk: true;
-    vector: true;
-  }
-
-  // Contract initializer (run on deploy by the runtime)
-  hajimari() {
-    // Emit vector/zk opcodes so the meta flags are exercised.
-    setvl(8);
-    let _digest = poseidon2(1, 2);
-    let a = 1;
-  }
+    // hajimari/始まり hook staged by the runtime at activation.
+    hajimari() {
+        // Emit a ZK opcode so capability inference is exercised. Vector width is
+        // not a source-level option in V1.
+        let _digest = crypto::poseidon2(left: 1, right: 2);
+        let a = 1;
+    }
 }

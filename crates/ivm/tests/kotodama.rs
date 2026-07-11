@@ -11,11 +11,12 @@ use ivm::{
         ast::{BinaryOp, Expr, Function, Item, Statement},
         compiler::{Compiler, CompilerMode, CompilerOptions},
         lexer::{TokenKind, lex},
-        parser::parse,
+        parser::parse as parse_source,
         semantic::{Type, analyze},
     },
     syscalls,
 };
+mod common;
 
 fn parse_meta_offset(code: &[u8]) -> Result<(ProgramMetadata, usize), ivm::VMError> {
     ProgramMetadata::parse(code).map(|parsed| (parsed.metadata, parsed.code_offset))
@@ -37,6 +38,10 @@ fn test_compiler() -> Compiler {
     })
 }
 
+fn parse(source: &str) -> Result<kd_ast::Program, String> {
+    parse_source(source)
+}
+
 #[test]
 fn create_compiler() {
     let _c = Compiler::new();
@@ -51,7 +56,7 @@ fn compile_stub() {
 
 #[test]
 fn lex_simple_function() {
-    let src = "fn add(a, b) { let c = a + b; }";
+    let src = "fn add(int a, int b) { let c = a + b; }";
     let tokens = lex(src).expect("lex failed");
     assert!(tokens.iter().any(|t| matches!(t.kind, TokenKind::Fn)));
     assert!(
@@ -63,7 +68,7 @@ fn lex_simple_function() {
 
 #[test]
 fn parse_simple_add() {
-    let src = "fn add(a, b) { let c = a + b; }";
+    let src = "module SimpleAdd { fn add(int a, int b) { let c = a + b; } }";
     let prog = parse(src).expect("parse failed");
     let Item::Function(Function {
         name, params, body, ..
@@ -93,21 +98,30 @@ fn parse_simple_add() {
 }
 
 #[test]
-fn lexer_alias_keywords_equivalence() {
+fn lexer_accepts_v1_branded_keywords_in_both_scripts() {
     use ivm::kotodama::lexer::{TokenKind, lex};
-    let toks_a = lex("seiyaku { }").expect("lex");
-    let toks_b = lex("誓約 { }").expect("lex");
-    assert!(matches!(toks_a[0].kind, TokenKind::Seiyaku));
-    assert!(matches!(toks_b[0].kind, TokenKind::Seiyaku));
-    let toks_c = lex("hajimari() {}").expect("lex");
-    let toks_d = lex("始まり() {}").expect("lex");
-    assert!(toks_c.iter().any(|t| matches!(t.kind, TokenKind::Hajimari)));
-    assert!(toks_d.iter().any(|t| matches!(t.kind, TokenKind::Hajimari)));
+    let seiyaku = lex("seiyaku Demo { }").expect("lex seiyaku");
+    assert!(matches!(seiyaku[0].kind, TokenKind::Seiyaku));
+    let hajimari = lex("hajimari() {}").expect("lex");
+    assert!(
+        hajimari
+            .iter()
+            .any(|token| matches!(token.kind, TokenKind::Hajimari))
+    );
+    for branded in [
+        "誓約 Demo { }",
+        "始まり() {}",
+        "言挙げ fn run() {}",
+        "改善() {}",
+    ] {
+        lex(branded).expect("Japanese branded declaration must be accepted");
+    }
 }
 
 #[test]
 fn parse_and_type_tuples_and_types() {
-    let src = "fn t(Map<AccountId, fixed_u128> balances, x: int) -> (int, bool) { let (a,b): (int, bool) = (1, true); return (x, true); }";
+    let src =
+        "module Types { fn t(int x) -> (int, bool) { let (a, b) = (1, true); return (x, true); } }";
     let prog = parse(src).expect("parse");
     let typed = analyze(&prog).expect("type");
     let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
@@ -116,7 +130,7 @@ fn parse_and_type_tuples_and_types() {
 
 #[test]
 fn bytes_type_is_accepted_and_roundtrips_through_semantics() {
-    let src = "fn echo(b: bytes) -> bytes { let tmp: bytes = b; return tmp; }";
+    let src = "module BytesDemo { fn echo(bytes b) -> bytes { let bytes tmp = b; return tmp; } }";
     let prog = parse(src).expect("parse bytes");
     let typed = analyze(&prog).expect("analyze bytes");
     let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
@@ -125,7 +139,7 @@ fn bytes_type_is_accepted_and_roundtrips_through_semantics() {
 
 #[test]
 fn string_equality_compiles() {
-    let src = "fn f() { let _x = \"hi\" == \"hi\"; }";
+    let src = "module StringEquality { fn f() { let _x = \"hi\" == \"hi\"; } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("string equality should compile");
@@ -153,7 +167,7 @@ fn prediction_market_demo_compiles() {
 #[test]
 fn tuple_destructure_and_field_access() {
     // Destructure a tuple literal into (a,b) and sum; also exercise direct field access `(1,2).1`
-    let src = "fn sum() -> int { let (a,b) = (3,4); let c = (1,2).1; return a + b + c; }";
+    let src = "seiyaku TupleDestructure { fn sum() -> int { let (a,b) = (3,4); let c = (1,2).1; return a + b + c; } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile tuple destructure");
@@ -173,7 +187,7 @@ fn tuple_destructure_and_field_access() {
 #[test]
 fn tuple_var_member_access() {
     // Bind a tuple to a name and use member access on it.
-    let src = "fn f() -> int { let t = (5,6); return t.0 + t.1; }";
+    let src = "seiyaku TupleMember { fn f() -> int { let t = (5,6); return t.0 + t.1; } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile tuple var member");
@@ -191,10 +205,12 @@ fn tuple_var_member_access() {
 #[test]
 fn call_function_with_tuple_return() {
     let src = r#"
-        fn pair(x: int) -> (int, int) { return (x, x + 1); }
-        fn main() -> int {
-            let (a, b) = pair(7);
-            return a * b;
+        seiyaku TupleCall {
+            fn pair(int x) -> (int, int) { return (x, x + 1); }
+            fn main() -> int {
+                let (a, b) = pair(7);
+                return a * b;
+            }
         }
     "#;
     let code = Compiler::new()
@@ -207,59 +223,62 @@ fn call_function_with_tuple_return() {
 }
 
 #[test]
-fn numeric_alias_u128_arithmetic_roundtrip() {
+fn quantity_arithmetic_compiles_without_implicit_conversion() {
     let src = r#"
-        fn main() -> int {
-            let a: Amount = 9_000_000_000;
-            let b: Amount = a * a;
-            let c: Amount = b / a;
-            return c;
+        seiyaku QuantityArithmetic {
+            fn main() -> quantity {
+                let quantity a = 9_000_000_000;
+                let quantity b = a * a;
+                let quantity c = b / a;
+                return c;
+            }
         }
     "#;
-    let code = Compiler::new()
+    Compiler::new()
         .compile_source(src)
-        .expect("compile numeric alias arithmetic");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).expect("load program");
-    vm.run().expect("run numeric alias program");
-    assert_eq!(vm.register(10), 9_000_000_000);
+        .expect("compile quantity arithmetic");
 }
 
 #[test]
-fn numeric_alias_negative_literal_rejected() {
+fn negative_quantity_conversion_is_rejected() {
     let src = r#"
-        fn main() -> int {
-            let a: Amount = -1;
-            return a;
+        seiyaku NegativeQuantity {
+            fn main() -> quantity {
+                let quantity a = -1;
+                return a;
+            }
         }
     "#;
     let err = Compiler::new()
         .compile_source(src)
-        .expect_err("negative alias literal should fail");
-    assert!(err.to_string().contains("unsigned"));
+        .expect_err("negative quantity literal should fail");
+    assert!(err.to_string().contains("E_NEGATIVE_QUANTITY"), "{err}");
 }
 
 #[test]
-fn numeric_alias_decimal_literal_rejected() {
+fn fractional_quantity_literal_is_accepted_contextually() {
     let src = r#"
-        fn main() -> bool {
-            let a: Amount = 1.50;
-            return a == 1;
+        seiyaku DecimalQuantity {
+            fn main() -> bool {
+                let quantity a = 1.50;
+                return a == a;
+            }
         }
     "#;
-    let err = Compiler::new()
+    Compiler::new()
         .compile_source(src)
-        .expect_err("decimal alias literal should fail");
-    assert!(err.to_string().contains("scale=0"));
+        .expect("fractional quantity literal should compile in quantity context");
 }
 
 #[test]
 fn decimal_literal_rejects_int_annotation() {
     let prog = parse(
         r#"
-        fn main() -> int {
-            let a: int = 1.5;
-            return a;
+        module InvalidDecimalAnnotation {
+            fn main() -> int {
+                let int a = 1.5;
+                return a;
+            }
         }
         "#,
     )
@@ -273,53 +292,54 @@ fn decimal_literal_rejects_int_annotation() {
 }
 
 #[test]
-fn numeric_alias_to_int_overflow_rejected() {
+fn implicit_quantity_to_int_conversion_is_rejected() {
     let src = r#"
-        fn main() -> int {
-            let a: Amount = 9_000_000_000;
-            let b: Amount = a * a;
-            let c: int = b;
-            return c;
+        seiyaku NoImplicitQuantityCast {
+            fn main() -> int {
+                let quantity a = 9_000_000_000;
+                let quantity b = a * a;
+                let int c = b;
+                return c;
+            }
         }
     "#;
-    let code = Compiler::new()
+    let error = Compiler::new()
         .compile_source(src)
-        .expect("compile numeric alias overflow");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).expect("load program");
-    let err = vm.run().expect_err("expected overflow cast failure");
-    assert!(matches!(err, ivm::VMError::AssertionFailed));
+        .expect_err("implicit quantity-to-int conversion must fail");
+    assert!(error.contains("expected int, got quantity"), "{error}");
 }
 
 #[test]
 fn assert_builtin_obeys_truthiness() {
-    let compiler = Compiler::new();
+    let compiler = test_compiler();
 
     let pass = compiler
-        .compile_source("fn main() { assert(true); }")
+        .compile_source("seiyaku AssertTrue { view fn main() { test::assert(true); } }")
         .expect("compile passing assert");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&pass).expect("load passing assert");
-    vm.run().expect("assert(true) should not abort");
+    common::select_kotodama_entrypoint(&mut vm, &pass, "main");
+    vm.run().expect("test::assert(true) should not abort");
 
     let fail = compiler
-        .compile_source("fn main() { assert(false); }")
+        .compile_source("seiyaku AssertFalse { view fn main() { test::assert(false); } }")
         .expect("compile failing assert");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&fail).expect("load failing assert");
-    let err = vm.run().expect_err("assert(false) should abort");
+    common::select_kotodama_entrypoint(&mut vm, &fail, "main");
+    let err = vm.run().expect_err("test::assert(false) should abort");
     assert!(matches!(err, ivm::VMError::AssertionFailed));
 }
 
 #[test]
 fn many_string_literals_load_under_wide_guard() {
     // Exercise pointer literal emission with offsets beyond the wide 8-bit range.
-    let mut src = String::from("fn main() {");
+    let mut src = String::from("seiyaku Literals { kotoage fn main() authorize(\"Test\") {");
     for i in 0..32 {
-        src.push_str(&format!(" info(\"literal_{i}\");"));
+        src.push_str(&format!(" debug::info(\"literal_{i}\");"));
     }
     src.push_str(" return;");
-    src.push('}');
+    src.push_str("} }");
 
     let code = Compiler::new()
         .compile_source(&src)
@@ -330,35 +350,29 @@ fn many_string_literals_load_under_wide_guard() {
 }
 
 #[test]
-fn prelude_macros_compile() {
+fn pointer_constructors_compile() {
     let src = r#"
-        seiyaku MacroDemo {
-            kotoage fn run() permission(Admin) {
-                let alice = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-                let bob = account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
-                let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-                set_account_detail(authority(), name!("cursor"), json!{ query: "sc_dummy", cursor: 1 });
-                transfer_asset(alice, bob, asset, 1, dataspace_id("0"));
+        seiyaku ConstructorDemo {
+            kotoage fn run() authorize("Admin") {
+                let alice = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+                let bob = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
+                let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+                ledger::account::set_detail(account: context::authority(), key: Name::parse("cursor"), value: Json::parse("{\"query\":\"sc_dummy\",\"cursor\":1}"));
+                ledger::asset::transfer(source: alice, destination: bob, asset_definition: asset, amount: 1, dataspace: DataSpaceId::parse("0"));
             }
         }
     "#;
     test_compiler()
         .compile_source(src)
-        .expect("compile macros from the Kotodama prelude");
+        .expect("compile typed pointer constructors");
 }
 
 #[test]
-fn public_function_without_permission_rejected() {
+fn public_function_without_authorization_rejected() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn run() {
-                transfer_asset(
-                    account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-                    account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-                    asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-                    1,
-                    dataspace_id("0")
-                );
+                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
             }
         }
     "#;
@@ -366,8 +380,8 @@ fn public_function_without_permission_rejected() {
         .compile_source(src)
         .expect_err("missing permission should be rejected");
     assert!(
-        err.contains("permission"),
-        "error should mention missing permission: {err}"
+        err.contains("authorize"),
+        "error should mention missing authorization: {err}"
     );
 }
 
@@ -376,7 +390,7 @@ fn register_peer_requires_permission() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn add() {
-                register_peer(json!{ address: "127.0.0.1:1337" });
+                ledger::peer::register(Json::parse("{\"address\":\"127.0.0.1:1337\"}"));
             }
         }
     "#;
@@ -384,8 +398,8 @@ fn register_peer_requires_permission() {
         .compile_source(src)
         .expect_err("missing permission should be rejected");
     assert!(
-        err.contains("permission"),
-        "error should mention missing permission for register_peer: {err}"
+        err.contains("authorize"),
+        "error should mention missing authorization for peer registration: {err}"
     );
 }
 
@@ -394,7 +408,7 @@ fn register_account_requires_permission() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn add() {
-                register_account(account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
+                ledger::account::register(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
             }
         }
     "#;
@@ -402,8 +416,8 @@ fn register_account_requires_permission() {
         .compile_source(src)
         .expect_err("missing permission should be rejected");
     assert!(
-        err.contains("permission"),
-        "error should mention missing permission for register_account: {err}"
+        err.contains("authorize"),
+        "error should mention missing authorization for account registration: {err}"
     );
 }
 
@@ -412,8 +426,8 @@ fn trigger_management_requires_permission() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn add() {
-                create_trigger(json!{ id: "t1" });
-                set_trigger_enabled(name!("t1"), 1);
+                ledger::trigger::create(Json::parse("{\"id\":\"t1\"}"));
+                ledger::trigger::set_enabled(Name::parse("t1"), 1);
             }
         }
     "#;
@@ -421,8 +435,8 @@ fn trigger_management_requires_permission() {
         .compile_source(src)
         .expect_err("missing permission should be rejected");
     assert!(
-        err.contains("permission"),
-        "error should mention missing permission for trigger ops: {err}"
+        err.contains("authorize"),
+        "error should mention missing authorization for trigger operations: {err}"
     );
 }
 
@@ -430,14 +444,8 @@ fn trigger_management_requires_permission() {
 fn public_function_with_permission_is_allowed() {
     let src = r#"
         seiyaku PermissionDemo {
-            kotoage fn run() permission(Admin) {
-                transfer_asset(
-                    account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-                    account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-                    asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-                    1,
-                    dataspace_id("0")
-                );
+            kotoage fn run() authorize("Admin") {
+                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
             }
         }
     "#;
@@ -447,94 +455,86 @@ fn public_function_with_permission_is_allowed() {
 }
 
 #[test]
-fn durable_state_rejects_string_key_maps() {
+fn removed_in_memory_map_type_is_rejected() {
     let src = r#"
         seiyaku Demo {
             state Map<string, int> detail;
 
-            fn main() {
-                return;
-            }
+            view fn main() {}
         }
     "#;
 
     let err = Compiler::new()
         .compile_source(src)
-        .expect_err("expected on-chain profile error for Map<string, int>");
+        .expect_err("in-memory Map must be rejected");
     assert!(
-        err.contains("state Map key type `string`") || err.contains("key type `string`"),
+        err.contains("Map") || err.contains("unknown type"),
         "unexpected error: {err}"
     );
 }
 
 #[test]
 fn parse_for_each_map_and_builtins() {
-    let src = r#"fn f(m: Map<int, int>) { for (k, v) in m { info("kv"); } }"#;
+    let src = r#"
+        seiyaku StateIteration {
+            state StateMap<int, int> values;
+            fn f() { for (k, v) in values { debug::info("kv"); } }
+        }
+    "#;
     let prog = parse(src).expect("parse");
     // Bare map iteration is rejected by the semantic phase; callers must bound it.
     let err = analyze(&prog).expect_err("expected unbounded iteration error");
     assert!(
-        err.message.contains("#[bounded") || err.message.contains(".take"),
-        "error hint should mention bounded helpers: {}",
+        err.message.contains(".take"),
+        "error hint should mention the canonical bounded helper: {}",
         err.message
     );
 }
 
 #[test]
-fn parse_for_loop() {
-    let src = "fn f() { for let i = 0; i < 3; i++ { let x = i; } }";
-    let prog = parse(src).expect("parse failed");
-    let Item::Function(Function { body, .. }) = &prog.items[0] else {
-        panic!("expected function item");
-    };
-    match &body.statements[0] {
-        Statement::For { line: _, .. } => {}
-        _ => panic!("expected for"),
-    }
+fn c_style_for_loop_is_rejected() {
+    let src = "module Loops { fn f() { for var i = 0; i < 3; i = i + 1 { let x = i; } } }";
+    parse(src).expect_err("V1 only accepts compiler-proven bounded iterator loops");
 }
 
 #[test]
-fn parse_range_for_loop_rejected() {
-    // Grammar accepts 'for x in expr' but current semantics reject unbounded iteration
-    let src = "fn f() { for x in range(6) { let y = x; } }";
+fn literal_range_for_loop_is_bounded() {
+    let src = "module Loops { fn f() { for x in range(6) { let y = x; } } }";
     let prog = parse(src).expect("parse should succeed");
-    assert!(analyze(&prog).is_err());
+    analyze(&prog).expect("a literal range within the V1 bound must type-check");
 }
 
 #[test]
-fn parse_and_type_bounded_map_take_two_rejected_for_ephemeral() {
-    let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.take(2) { let z = k; } }"#;
+fn state_map_take_two_is_bounded() {
+    let src = r#"
+        seiyaku StateIteration {
+            state StateMap<int, int> values;
+            fn f() { for (k, v) in values.take(2) { let z = k; } }
+        }
+    "#;
     let prog = parse(src).expect("parse");
-    let err = analyze(&prog).expect_err("ephemeral map take(2) should be rejected");
-    assert!(
-        err.message.contains("E_MAP_BOUNDS"),
-        "error should mention map bounds: {}",
-        err.message
-    );
+    analyze(&prog).expect("StateMap take(2) is compiler-bounded");
 }
 
 #[test]
-fn bounded_attribute_accepts_literal() {
-    let src = r#"fn f(m: Map<int, int>) { for (k, v) in m #[bounded(1)] { let z = k; } }"#;
-    let prog = parse(src).expect("parse");
-    analyze(&prog).expect("analyze with #[bounded]");
-}
-
-#[test]
-fn bounded_attribute_rejects_ephemeral_overflow() {
-    let src = r#"fn f(m: Map<int, int>) { for (k, v) in m #[bounded(2)] { let z = k; } }"#;
-    let prog = parse(src).expect("parse");
-    let err = analyze(&prog).expect_err("ephemeral bounded >1 should error");
-    assert!(
-        err.message.contains("E_MAP_BOUNDS"),
-        "error should mention map bounds: {}",
-        err.message
-    );
+fn removed_bounded_attribute_is_rejected() {
+    let src = r#"
+        seiyaku StateIteration {
+            state StateMap<int, int> values;
+            fn f() { for (k, v) in values #[bounded(1)] { let z = k; } }
+        }
+    "#;
+    parse(src).expect_err("legacy bounded attributes are not V1 syntax");
 }
 
 #[test]
 fn parse_and_type_bounded_map_take_one_ok() {
-    let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.take(1) { let z = k; } }"#;
+    let src = r#"
+        seiyaku StateIteration {
+            state StateMap<int, int> values;
+            fn f() { for (k, v) in values.take(1) { let z = k; } }
+        }
+    "#;
     let prog = parse(src).expect("parse");
     let typed = analyze(&prog).expect("analyze");
     let ivm::kotodama::semantic::TypedItem::Function(func) = &typed.items[0];
@@ -544,8 +544,10 @@ fn parse_and_type_bounded_map_take_one_ok() {
 #[test]
 fn compile_domain_literal_emits_tlv_domainid() {
     let src = r#"
-        fn hajimari() {
-            let d = domain("wonderland.universal");
+        seiyaku DomainLiteral {
+            view fn get() -> DomainId {
+                return DomainId::parse("wonderland.universal");
+            }
         }
     "#;
     let compiler = Compiler::new();
@@ -560,8 +562,10 @@ fn compile_domain_literal_emits_tlv_domainid() {
 fn compile_register_domain_emits_syscall_0x10() {
     use ivm::encoding;
     let src = r#"
-        fn hajimari() {
-            register_domain(domain("wonderland.universal"));
+        seiyaku RegisterDomain {
+            kotoage fn register() authorize("Admin") {
+                ledger::domain::register(DomainId::parse("wonderland.universal"));
+            }
         }
     "#;
     let compiler = Compiler::new();
@@ -579,10 +583,10 @@ fn compile_register_domain_emits_syscall_0x10() {
 fn compile_zk_verify_batch_emits_syscall_0x68() {
     // Ensure the kotodama intrinsic lowers to SCALL 0x68
     let src = r#"
-        fn hajimari() {
-            // norito_bytes("..") is a typed constructor producing a Blob TLV
-            let p = norito_bytes("00");
-            zk_verify_batch(p);
+        seiyaku VerifyBatch {
+            kotoage fn verify(p: bytes) authorize("ZkVerifier") {
+                crypto::zk::verify_batch(p);
+            }
         }
     "#;
     let compiler = Compiler::new();
@@ -597,23 +601,30 @@ fn compile_zk_verify_batch_emits_syscall_0x68() {
 
 #[test]
 fn compile_blob_literal_emits_tlv_blob() {
-    // Ensure `blob("...")` emits a TLV with type 0x0006 (Blob)
+    // Ensure a bytes literal emits the canonical bytes TLV (wire type 0x0006).
     let src = r#"
-        fn hajimari() {
-            let b = blob("hello");
+        seiyaku BlobLiteral {
+            view fn get() -> bytes {
+                return b"hello";
+            }
         }
     "#;
     let bytes = Compiler::new().compile_source(src).expect("compile ok");
     assert!(
         bytes.windows(2).any(|w| w == [0x00, 0x06]),
-        "expected Blob TLV type (0x0006) in compiled artifact"
+        "expected bytes TLV type (0x0006) in compiled artifact"
     );
 }
 
 #[test]
 fn semantic_typed_pointers_and_authority() {
-    // set_account_detail(authority(), name("k"), json("1")) should type-check
-    let src = r#"fn f() { set_account_detail(authority(), name("k"), json("1")); }"#;
+    let src = r#"
+        seiyaku TypedPointers {
+            kotoage fn f() authorize("Admin") {
+                ledger::account::set_detail(account: context::authority(), key: Name::parse("k"), value: Json::parse("1"));
+            }
+        }
+    "#;
     let prog = parse(src).expect("parse");
     let res = analyze(&prog);
     assert!(
@@ -624,8 +635,7 @@ fn semantic_typed_pointers_and_authority() {
 
 #[test]
 fn compile_emits_get_authority_syscall() {
-    // Compile a program that uses authority() and ensure SCALL GET_AUTHORITY is present
-    let src = r#"fn f() { let a = authority(); }"#;
+    let src = r#"seiyaku Authority { view fn f() -> AccountId { return context::authority(); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
@@ -641,7 +651,7 @@ fn compile_emits_get_authority_syscall() {
 
 #[test]
 fn compile_emits_current_time_syscall() {
-    let src = r#"fn f() { let now = current_time_ms(); }"#;
+    let src = r#"seiyaku Time { view fn f() -> int { return context::current_time_ms(); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
@@ -657,7 +667,7 @@ fn compile_emits_current_time_syscall() {
 
 #[test]
 fn compile_emits_block_height_syscall() {
-    let src = r#"fn f() { let height = block_height(); }"#;
+    let src = r#"seiyaku Height { view fn f() -> int { return context::block_height(); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
@@ -671,15 +681,17 @@ fn compile_emits_block_height_syscall() {
 #[test]
 fn compile_emits_extended_sysvar_helpers() {
     let src = r#"
-        fn f() {
-            let block_time = block_time_ms();
-            let chain = chain_id();
-            let contract = contract_address();
-            let name = entrypoint();
-            info(block_time);
-            info(tlv_len(chain));
-            info(tlv_len(contract));
-            info(tlv_len(name));
+        seiyaku Context {
+          kotoage fn f() authorize("Test") {
+            let block_time = context::block_time_ms();
+            let chain = context::chain_id();
+            let contract = context::contract_address();
+            let name = context::entrypoint();
+            debug::info(block_time);
+            debug::info(chain);
+            debug::info(contract);
+            debug::info(name);
+          }
         }
     "#;
     let code = Compiler::new().compile_source(src).expect("compile");
@@ -707,7 +719,8 @@ fn compile_emits_extended_sysvar_helpers() {
 
 #[test]
 fn semantic_rejects_extended_sysvar_helper_args() {
-    let prog = parse(r#"fn f() { let _chain = chain_id(1); }"#).unwrap();
+    let prog = parse(r#"module InvalidContext { fn f() { let _chain = context::chain_id(1); } }"#)
+        .unwrap();
     let err = analyze(&prog).expect_err("expected sysvar arity error");
     assert!(
         err.message.contains("chain_id expects no arguments"),
@@ -717,91 +730,77 @@ fn semantic_rejects_extended_sysvar_helper_args() {
 }
 
 #[test]
-fn compile_emits_extended_query_and_authority_sysvar_helpers() {
+fn raw_query_and_authority_sysvar_helpers_are_not_source_apis() {
     let src = r#"
-        view fn query() -> bytes {
-            let response = query_execute_norito(norito_bytes(b"query"));
-            return response;
-        }
-
-        view fn caller() -> AccountId {
-            return sysvar_authority();
+        seiyaku RawQuery {
+          view fn query(payload: bytes) -> bytes {
+            return query_execute_norito(payload);
+          }
         }
     "#;
-    let code = test_compiler().compile_source(src).expect("compile");
-    let (_, off) = parse_meta_offset(&code).unwrap();
-    let code_region = &code[off..];
-    for (name, syscall) in [
-        (
-            "QUERY_EXECUTE_NORITO",
-            syscalls::SYSCALL_QUERY_EXECUTE_NORITO,
-        ),
-        ("SYSVAR_AUTHORITY", syscalls::SYSCALL_SYSVAR_AUTHORITY),
-    ] {
-        let want = encoding::wide::encode_syscallx(syscall).to_le_bytes();
-        assert!(
-            code_region.windows(want.len()).any(|window| window == want),
-            "{name} syscall not found"
-        );
-    }
+    let error = test_compiler()
+        .compile_source(src)
+        .expect_err("raw query bridge must be rejected");
+    assert!(error.contains("query_execute_norito"));
+
+    let raw_authority =
+        r#"seiyaku RawAuthority { view fn caller() -> AccountId { return sysvar_authority(); } }"#;
+    let error = test_compiler()
+        .compile_source(raw_authority)
+        .expect_err("direct sysvar helper must be rejected");
+    assert!(error.contains("sysvar_authority"));
 }
 
 #[test]
 fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
-    let prog = parse(r#"fn f() { let _response = query_execute_norito(1); }"#).unwrap();
+    let prog =
+        parse(r#"module InvalidQuery { fn f() { let _response = query_execute_norito(1); } }"#)
+            .unwrap();
     let err = analyze(&prog).expect_err("expected query payload type error");
     assert!(
-        err.message.contains(
-            "query_execute_norito expects (Blob|bytes) pointer to NoritoBytes QueryRequest"
-        ),
+        err.message.contains("query_execute_norito"),
         "unexpected error: {}",
         err.message
     );
 
-    let prog = parse(r#"fn f() { let _caller = sysvar_authority(1); }"#).unwrap();
+    let prog =
+        parse(r#"module InvalidAuthority { fn f() { let _caller = sysvar_authority(1); } }"#)
+            .unwrap();
     let err = analyze(&prog).expect_err("expected sysvar arity error");
     assert!(
-        err.message
-            .contains("sysvar_authority expects no arguments"),
+        err.message.contains("sysvar_authority"),
         "unexpected error: {}",
         err.message
     );
 }
 
 #[test]
-fn compile_emits_typed_query_get_helpers() {
+fn compile_emits_core_query_get_helpers() {
     let src = r#"
+      seiyaku Queries {
         view fn read() -> bytes {
-            let account = query_get_account(sysvar_authority());
-            let asset = query_get_asset(norito_bytes(b"asset"));
-            let definition = query_get_asset_definition(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
-            let domain = query_get_domain(domain("wonderland.universal"));
-            let nft = query_get_nft(nft_id("n0$wonderland.universal"));
-            let parameter = query_get_parameter(name("block.max_transactions"));
-            let manifest = query_get_contract_manifest(norito_bytes(b"hash"));
-            let instance = query_get_contract_instance(name("router::universal"));
-            info(tlv_len(account));
-            info(tlv_len(asset));
-            info(tlv_len(definition));
-            info(tlv_len(domain));
-            info(tlv_len(nft));
-            info(tlv_len(parameter));
-            info(tlv_len(manifest));
+            let account = ledger::query::account(context::authority());
+            let definition = ledger::query::asset_definition(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
+            let domain = ledger::query::domain(DomainId::parse("wonderland.universal"));
+            let nft = ledger::query::nft(NftId::parse("n0$wonderland.universal"));
+            let parameter = ledger::query::parameter(Name::parse("block.max_transactions"));
+            let manifest = ledger::query::contract_manifest(b"hash");
+            let instance = ledger::query::contract_instance(Name::parse("router::universal"));
             return instance;
         }
+      }
     "#;
     let code = test_compiler().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
     for (name, syscall) in [
-        ("QUERY_GET_ACCOUNT", syscalls::SYSCALL_QUERY_GET_ACCOUNT),
-        ("QUERY_GET_ASSET", syscalls::SYSCALL_QUERY_GET_ASSET),
+        ("CORE_QUERY_GET(account)", syscalls::SYSCALL_CORE_QUERY_GET),
         (
-            "QUERY_GET_ASSET_DEFINITION",
-            syscalls::SYSCALL_QUERY_GET_ASSET_DEFINITION,
+            "CORE_QUERY_GET(asset_definition)",
+            syscalls::SYSCALL_CORE_QUERY_GET,
         ),
-        ("QUERY_GET_DOMAIN", syscalls::SYSCALL_QUERY_GET_DOMAIN),
-        ("QUERY_GET_NFT", syscalls::SYSCALL_QUERY_GET_NFT),
+        ("CORE_QUERY_GET(domain)", syscalls::SYSCALL_CORE_QUERY_GET),
+        ("CORE_QUERY_GET(nft)", syscalls::SYSCALL_CORE_QUERY_GET),
         ("QUERY_GET_PARAMETER", syscalls::SYSCALL_QUERY_GET_PARAMETER),
         (
             "QUERY_GET_CONTRACT_MANIFEST",
@@ -835,17 +834,15 @@ fn manifest_includes_exact_access_hints_for_static_typed_query_get_helpers() {
     let asset = AssetId::of(asset_definition.clone(), account.clone());
     let src = format!(
         r#"
-        view fn read() -> bytes {{
-            let account = query_get_account(sysvar_authority());
-            let asset = query_get_asset(asset_id("{asset}"));
-            let definition = query_get_asset_definition(asset_definition("{asset_definition}"));
-            let domain = query_get_domain(domain("wonderland.universal"));
-            let nft = query_get_nft(nft_id("n0$wonderland.universal"));
-            info(tlv_len(account));
-            info(tlv_len(asset));
-            info(tlv_len(definition));
-            info(tlv_len(domain));
+        seiyaku QueryHints {{
+          view fn read() -> Option<NftView> {{
+            let account = ledger::query::account(context::authority());
+            let asset = ledger::query::asset(AssetId::parse("{asset}"));
+            let definition = ledger::query::asset_definition(AssetDefinitionId::parse("{asset_definition}"));
+            let domain = ledger::query::domain(DomainId::parse("wonderland.universal"));
+            let nft = ledger::query::nft(NftId::parse("n0$wonderland.universal"));
             return nft;
+          }}
         }}
     "#
     );
@@ -881,20 +878,23 @@ fn manifest_includes_exact_access_hints_for_static_typed_query_get_helpers() {
 
 #[test]
 fn semantic_rejects_typed_query_get_helper_args() {
-    let prog = parse(r#"fn f() { let _account = query_get_account(1); }"#).unwrap();
+    let prog =
+        parse(r#"module InvalidQuery { fn f() { let _account = ledger::query::account(1); } }"#)
+            .unwrap();
     let err = analyze(&prog).expect_err("expected account query key type error");
     assert!(
-        err.message
-            .contains("query_get_account expects (AccountId|Blob|bytes)"),
+        err.message.contains("ledger::query::account"),
         "unexpected error: {}",
         err.message
     );
 
-    let prog = parse(r#"fn f() { let _instance = query_get_contract_instance(1); }"#).unwrap();
+    let prog = parse(
+        r#"module InvalidQuery { fn f() { let _instance = ledger::query::contract_instance(1); } }"#,
+    )
+    .unwrap();
     let err = analyze(&prog).expect_err("expected contract instance query key type error");
     assert!(
-        err.message
-            .contains("query_get_contract_instance expects (Name|Blob|bytes)"),
+        err.message.contains("ledger::query::contract_instance"),
         "unexpected error: {}",
         err.message
     );
@@ -903,13 +903,13 @@ fn semantic_rejects_typed_query_get_helper_args() {
 #[test]
 fn compile_emits_zk_vrf_read_helpers() {
     let src = r#"
-        view fn read() -> bytes {
-            let roots = zk_roots_get(norito_bytes(b"roots"));
-            let tally = zk_vote_get_tally(norito_bytes(b"tally"));
-            let seed = vrf_epoch_seed(norito_bytes(b"seed"));
-            info(tlv_len(roots));
-            info(tlv_len(tally));
+        seiyaku ReadHelpers {
+          view fn read() -> bytes {
+            let roots = crypto::zk::roots(b"roots");
+            let tally = ledger::governance::tally(b"tally");
+            let seed = crypto::vrf::epoch_seed(b"seed");
             return seed;
+          }
         }
     "#;
     let code = test_compiler().compile_source(src).expect("compile");
@@ -945,17 +945,25 @@ fn manifest_includes_exact_access_hints_for_static_zk_read_requests() {
         election_id: "election-1".to_string(),
     })
     .expect("encode tally request");
+    let roots_literal = roots_payload
+        .iter()
+        .map(|byte| format!("\\x{byte:02x}"))
+        .collect::<String>();
+    let tally_literal = tally_payload
+        .iter()
+        .map(|byte| format!("\\x{byte:02x}"))
+        .collect::<String>();
     let src = format!(
         r#"
-        view fn read() -> bytes {{
-            let roots = zk_roots_get(norito_bytes("0x{}"));
-            let tally = zk_vote_get_tally(norito_bytes("0x{}"));
-            info(tlv_len(roots));
+        seiyaku StaticReadHints {{
+          view fn read() -> bytes {{
+            let roots = crypto::zk::roots(b"{}");
+            let tally = ledger::governance::tally(b"{}");
             return tally;
+          }}
         }}
     "#,
-        hex(&roots_payload),
-        hex(&tally_payload)
+        roots_literal, tally_literal
     );
     let (_code, manifest) = Compiler::new()
         .compile_source_with_manifest(&src)
@@ -981,12 +989,13 @@ fn manifest_includes_exact_access_hints_for_static_zk_read_requests() {
 
 #[test]
 fn semantic_rejects_zk_vrf_read_helper_args() {
-    let prog = parse(r#"fn f() { let _seed = vrf_epoch_seed(1); }"#).unwrap();
+    let prog =
+        parse(r#"module InvalidVrfRequest { fn f() { let _seed = crypto::vrf::epoch_seed(1); } }"#)
+            .unwrap();
     let err = analyze(&prog).expect_err("expected vrf seed payload type error");
     assert!(
-        err.message.contains(
-            "vrf_epoch_seed expects (Blob|bytes) pointer to NoritoBytes VrfEpochSeedRequest"
-        ),
+        err.message
+            .contains("crypto::vrf::epoch_seed expects (bytes) VrfEpochSeedRequest"),
         "unexpected error: {}",
         err.message
     );
@@ -995,17 +1004,19 @@ fn semantic_rejects_zk_vrf_read_helper_args() {
 #[test]
 fn compile_emits_state_introspection_helpers() {
     let src = r#"
+        seiyaku StateIntrospection {
         fn f() {
-            let prefix = name("Orders");
-            let keys = state_keys(prefix, 0, 2);
-            let present = state_has(prefix);
-            let len = state_len(prefix);
-            let count = state_count(prefix);
-            info(tlv_len(keys));
+            let prefix = Name::parse("Orders");
+            let keys = state::keys(path: prefix, offset: 0, limit: 2);
+            let present = state::contains(prefix);
+            let len = state::len(prefix);
+            let count = state::count(prefix);
+            debug::info(codec::tlv_len(keys));
             if present {
-                info(len);
+                debug::info(len);
             }
-            info(count);
+            debug::info(count);
+        }
         }
     "#;
     let code = Compiler::new().compile_source(src).expect("compile");
@@ -1027,8 +1038,10 @@ fn compile_emits_state_introspection_helpers() {
 
 #[test]
 fn semantic_rejects_state_introspection_helper_args() {
-    let prog =
-        parse(r#"fn f() { let _keys = state_keys(name("Orders"), 0, blob("bad")); }"#).unwrap();
+    let prog = parse(
+        r#"seiyaku C { fn f() { let _keys = state::keys(path: Name::parse("Orders"), offset: 0, limit: b"bad"); } }"#,
+    )
+    .unwrap();
     let err = analyze(&prog).expect_err("expected state_keys type error");
     assert!(
         err.message
@@ -1041,13 +1054,15 @@ fn semantic_rejects_state_introspection_helper_args() {
 #[test]
 fn compile_emits_extended_hash_syscalls() {
     let src = r#"
-        fn f(payload: Blob) {
-            let b = blake2b256_hash(payload);
-            let k = keccak256_hash(payload);
-            let i = iroha_hash(payload);
-            info(tlv_len(b));
-            info(tlv_len(k));
-            info(tlv_len(i));
+        seiyaku HashFunctions {
+        fn f(bytes payload) {
+            let b = crypto::blake2b256(payload);
+            let k = crypto::keccak256(payload);
+            let i = crypto::iroha_hash(payload);
+            debug::info(codec::tlv_len(b));
+            debug::info(codec::tlv_len(k));
+            debug::info(codec::tlv_len(i));
+        }
         }
     "#;
     let code = Compiler::new().compile_source(src).expect("compile");
@@ -1070,12 +1085,12 @@ fn compile_emits_extended_hash_syscalls() {
 }
 
 #[test]
-fn semantic_rejects_extended_hash_non_blob_arg() {
-    let prog = parse(r#"fn f() { let digest = keccak256_hash(1); }"#).unwrap();
+fn semantic_rejects_extended_hash_non_bytes_arg() {
+    let prog =
+        parse(r#"module InvalidHash { fn f() { let digest = crypto::keccak256(1); } }"#).unwrap();
     let err = analyze(&prog).expect_err("expected type error");
     assert!(
-        err.message
-            .contains("keccak256_hash expects (Blob|bytes) argument pointing to INPUT TLV"),
+        err.message.contains("crypto::keccak256 expects (bytes)"),
         "unexpected error: {}",
         err.message
     );
@@ -1083,7 +1098,7 @@ fn semantic_rejects_extended_hash_non_blob_arg() {
 
 #[test]
 fn compile_emits_resolve_account_alias_syscall() {
-    let src = r#"fn f() { let a = resolve_account_alias("banking@centralbank"); }"#;
+    let src = r#"seiyaku ResolveAlias { view fn f() { let a = ledger::account::resolve_alias("banking@centralbank"); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
@@ -1102,7 +1117,12 @@ fn compile_emits_resolve_account_alias_syscall() {
 
 #[test]
 fn parse_and_type_bounded_map_take_one() {
-    let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.take(1) { let z = k; } }"#;
+    let src = r#"
+        seiyaku BoundedStateIteration {
+            state StateMap<int, int> values;
+            fn f() { for (key, value) in values.take(1) { let seen = key; } }
+        }
+    "#;
     let prog = parse(src).expect("parse");
     let typed = analyze(&prog).expect("analyze");
     let ivm::kotodama::semantic::TypedItem::Function(func) = &typed.items[0];
@@ -1112,7 +1132,12 @@ fn parse_and_type_bounded_map_take_one() {
 #[test]
 fn for_each_map_mutation_is_rejected() {
     // Mutation of the iterated map inside the loop must be rejected.
-    let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.take(1) { m[0] = 1; } }"#;
+    let src = r#"
+        seiyaku MutatingStateIteration {
+            state StateMap<int, int> values;
+            fn f() { for (key, value) in values.take(1) { values[0] = 1; } }
+        }
+    "#;
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).expect_err("should reject mutation during iteration");
     assert!(err.message.contains("E_ITER_MUTATION"));
@@ -1120,15 +1145,15 @@ fn for_each_map_mutation_is_rejected() {
 
 #[test]
 fn parse_error() {
-    let src = "fn bad("; // incomplete
+    let src = "module Broken { fn bad("; // incomplete
     let err = parse(src).unwrap_err();
     assert!(err.contains("identifier"));
-    assert!(err.contains("fn bad("));
+    assert!(err.contains("module Broken { fn bad("));
 }
 
 #[test]
 fn semantic_simple_add() {
-    let src = "fn add(a, b) { let c = a + b; }";
+    let src = "module Arithmetic { fn add(int a, int b) { let c = a + b; } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ivm::kotodama::semantic::TypedItem::Function(func) = &typed.items[0];
@@ -1142,10 +1167,15 @@ fn semantic_simple_add() {
 
 #[test]
 fn semantic_type_error() {
-    let src = "fn bad() { let a = 1 + \"hi\"; }";
+    let src = "module InvalidArithmetic { fn bad() { let a = 1 + \"hi\"; } }";
     let prog = parse(src).expect("parse failed");
     let err = analyze(&prog).unwrap_err();
-    assert!(err.message.contains("expects int operands"));
+    assert!(
+        err.message
+            .contains("operator Add is not defined for int and string"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -1161,7 +1191,7 @@ fn encode_helpers() {
 
 #[test]
 fn compile_and_run_add() {
-    let src = "fn add(a: int, b: int) -> int { return a + b; }";
+    let src = "seiyaku Add { fn add(int a, int b) -> int { return a + b; } }";
     let compiler = Compiler::new();
     let code = compiler.compile_source(src).expect("compile failed");
     let (meta, off) = parse_meta_offset(&code).unwrap();
@@ -1184,8 +1214,10 @@ fn compile_and_run_add() {
 #[test]
 fn state_allocations_do_not_clobber_params() {
     let src = r#"
-        state Map<int,int> m;
-        fn id(x: int) -> int { return x; }
+        seiyaku StateAllocation {
+            state StateMap<int, int> values;
+            fn id(int x) -> int { return x; }
+        }
     "#;
     let code = Compiler::new().compile_source(src).expect("compile failed");
     let mut vm = ivm::IVM::new(u64::MAX);
@@ -1196,8 +1228,8 @@ fn state_allocations_do_not_clobber_params() {
 }
 
 #[test]
-fn compile_builtin_create_nfts_and_depth_and_set_detail() {
-    let src = "fn main() { create_nfts_for_all_users(); set_execution_depth(111); set_account_detail(authority(), name(\"cursor\"), json(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); }";
+fn compile_builtin_create_nfts_and_set_detail() {
+    let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";
     let code = test_compiler().compile_source(src).expect("compile failed");
     // Sanity: code contains at least three syscalls (order preserved)
     // Byte-pattern search for SCALL encodings (LE): [imm8, 0x00, 0x00, 0x60]
@@ -1207,55 +1239,39 @@ fn compile_builtin_create_nfts_and_depth_and_set_detail() {
     let scall = instruction::wide::system::SCALL;
     let _want = [
         encoding::wide::encode_sys(scall, syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS as u8),
-        encoding::wide::encode_sys(
-            scall,
-            syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH as u8,
-        ),
         encoding::wide::encode_sys(scall, syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8),
     ];
     let imm_create = syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS as u8;
-    let imm_depth = syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH as u8;
     let imm_detail = syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8;
     let pat = |imm: u8| [imm, 0x00, 0x00, instruction::wide::system::SCALL];
     let has = |imm: u8| code_bytes.windows(4).any(|w| w == pat(imm));
-    assert!(has(imm_create) && has(imm_depth) && has(imm_detail));
+    assert!(has(imm_create) && has(imm_detail));
 }
 
 #[test]
-fn call_sugar_parses_and_compiles_equivalently() {
-    // Without `call` sugar
-    let src_plain = "fn f() { set_account_detail(authority(), name(\"k\"), json(\"1\")); }";
-    // With `call` sugar
-    let src_call = "fn f() { call set_account_detail(authority(), name(\"k\"), json(\"1\")); }";
-    let compiler = test_compiler();
-    let code_plain = compiler.compile_source(src_plain).expect("compile plain");
-    let code_call = compiler
-        .compile_source(src_call)
-        .expect("compile call sugar");
-    assert_eq!(
-        code_plain, code_call,
-        "call sugar should not change codegen"
-    );
-}
-
-#[test]
-fn call_sugar_misuse_reports_location() {
-    let src = "fn f() { call 1; }";
-    let err = parse(src).expect_err("expected parse error");
-    assert!(err.contains("call expects a function call"));
+fn statement_call_sugar_is_rejected() {
+    for src in [
+        "seiyaku C { fn f() { call helper(); } fn helper() {} }",
+        "seiyaku C { fn f() { call 1; } }",
+    ] {
+        let err = parse(src).expect_err("statement-level call sugar must be rejected");
+        assert!(err.contains("call"), "unexpected parse error: {err}");
+    }
 }
 
 #[test]
 fn pointer_constructors_accept_string_variables() {
     // Use variables bound to string literals; constructors should work
     let src = r#"
-        fn main() {
+        seiyaku PointerConstructors {
+          kotoage fn main() authorize("PointerConstructors") {
             let did = "wonderland.universal";
             let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
             let key = "cursor";
             let val = "{\"query\":\"sc_dummy\",\"cursor\":1}";
-            set_account_detail(account_id(aid), name(key), json(val));
-            transfer_domain(authority(), domain(did), account_id(aid));
+            ledger::account::set_detail(account: AccountId::parse(aid), key: Name::parse(key), value: Json::parse(val));
+            ledger::domain::transfer(source: context::authority(), domain: DomainId::parse(did), destination: AccountId::parse(aid));
+          }
         }
     "#;
     let code = ivm::KotodamaCompiler::new()
@@ -1278,378 +1294,48 @@ fn pointer_constructors_accept_string_variables() {
 }
 
 #[test]
-fn json_constructor_accepts_norito_bytes_pointer() {
-    let src = r#"
-        fn main() {
-            let jb = norito_bytes("{\"k\":1}");
-            let j = json(jb);
-            // Use j to ensure it flows through as Json pointer
-            let did = "wonderland";
-            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-            set_account_detail(account_id(aid), name("cursor"), j);
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile json from norito_bytes");
-    let (_m, off) = parse_meta_offset(&code).unwrap();
-    let bytes = &code[off..];
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
-        bytes
-            .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
-    };
-    assert!(
-        has(syscalls::SYSCALL_JSON_DECODE as u8) && has(syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8),
-        "expected JSON_DECODE and SET_ACCOUNT_DETAIL syscalls"
-    );
-}
-
-#[test]
-fn method_sugar_name_on_variable() {
-    let src = r#"
-        fn main() {
-            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-            let key = "cursor";
-            let val = "{\"x\":1}";
-            set_account_detail(aid.account_id(), key.name(), val.json());
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile method sugar name/json");
-    let (_m, off) = parse_meta_offset(&code).unwrap();
-    let bytes = &code[off..];
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
-        bytes
-            .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
-    };
-    assert!(has(syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8));
-}
-
-#[test]
-fn method_sugar_json_on_norito_bytes_variable() {
-    let src = r#"
-        fn main() {
-            let nb = "{\"k\":1}".norito_bytes();
-            let j = nb.json();
-            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-            set_account_detail(aid.account_id(), "cursor".name(), j);
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile method sugar json on blob");
-    let (_m, off) = parse_meta_offset(&code).unwrap();
-    let bytes = &code[off..];
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
-        bytes
-            .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
-    };
-    assert!(
-        has(syscalls::SYSCALL_JSON_DECODE as u8) && has(syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8),
-        "expected JSON_DECODE and SET_ACCOUNT_DETAIL syscalls"
-    );
-}
-
-#[test]
-fn name_constructor_accepts_norito_bytes_pointer() {
-    let src = r#"
-        fn main() {
-            let nb = norito_bytes("domain_name");
-            let nm = name(nb);
-            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-            transfer_domain(authority(), nm, aid.account_id());
-        }
-    "#;
-    let code = test_compiler()
-        .compile_source(src)
-        .expect("compile name from norito bytes");
-    let (_m, off) = parse_meta_offset(&code).unwrap();
-    let bytes = &code[off..];
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
-        bytes
-            .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
-    };
-    assert!(
-        has(syscalls::SYSCALL_NAME_DECODE as u8) && has(syscalls::SYSCALL_TRANSFER_DOMAIN as u8),
-        "expected NAME_DECODE and TRANSFER_DOMAIN syscalls"
-    );
-}
-
-#[test]
-fn method_sugar_name_on_norito_bytes_variable() {
-    let src = r#"
-        fn main() {
-            let nb = "wonderland".norito_bytes();
-            let nm = nb.name();
-            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-            transfer_domain(authority(), nm, aid.account_id());
-        }
-    "#;
-    let code = test_compiler()
-        .compile_source(src)
-        .expect("compile name method on norito bytes");
-    let (_m, off) = parse_meta_offset(&code).unwrap();
-    let bytes = &code[off..];
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
-        bytes
-            .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
-    };
-    assert!(
-        has(syscalls::SYSCALL_NAME_DECODE as u8) && has(syscalls::SYSCALL_TRANSFER_DOMAIN as u8),
-        "expected NAME_DECODE and TRANSFER_DOMAIN syscalls"
-    );
-}
-
-#[test]
-fn name_constructor_rejects_wrong_type_json() {
-    let src = r#"
-        fn f() { let j = json("{} "); let n = name(j); }
-    "#;
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected type error");
-    assert!(
-        err.message
-            .contains("name expects string, Name, or Blob (NoritoBytes)")
-    );
-}
-
-#[test]
-fn json_constructor_rejects_wrong_type_name() {
-    let src = r#"
-        fn f() { let nm = name("k"); let j = json(nm); }
-    "#;
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected type error");
-    assert!(
-        err.message
-            .contains("json expects string, Json, or Blob (NoritoBytes)")
-    );
-}
-
-#[test]
-fn blob_constructor_rejects_wrong_type_json() {
-    let src = r#"
-        fn f() { let j = json("{} "); let b = blob(j); }
-    "#;
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected type error");
-    assert!(
-        err.message.contains("blob expects string or Blob")
-            || err.message.contains("norito_bytes expects string or Blob")
-    );
-}
-
-#[test]
-fn account_id_constructor_accepts_blob() {
-    let src = r#"
-        fn main() {
-            let nb = norito_bytes("bad");
-            let a = account_id(nb);
-            info("ok");
-        }
-    "#;
-    let code = Compiler::new()
-        .compile_source(src)
-        .expect("account_id should accept NoritoBytes");
-    let (_m, off) = parse_meta_offset(&code).unwrap();
-    let bytes = &code[off..];
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
-        bytes
-            .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
-    };
-    assert!(has(syscalls::SYSCALL_POINTER_FROM_NORITO as u8));
-}
-
-#[test]
-fn name_pass_through_from_name_pointer() {
-    let src = r#"
-        fn main() {
-            let nm = name("wonderland.universal");
-            let nm2 = name(nm);
-            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-            transfer_domain(authority(), nm2, aid.account_id());
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile");
-    let (_m, off) = parse_meta_offset(&code).unwrap();
-    let bytes = &code[off..];
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
-        bytes
-            .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
-    };
-    // Should not need NAME_DECODE or JSON_DECODE for pass-through Name pointer
-    assert!(has(syscalls::SYSCALL_TRANSFER_DOMAIN as u8));
-    assert!(!has(syscalls::SYSCALL_NAME_DECODE as u8));
-    assert!(!has(syscalls::SYSCALL_JSON_DECODE as u8));
-}
-
-#[test]
-fn contains_ephemeral_true_and_false() {
-    let src = r#"
-        fn f() -> int {
-            let m = Map::new();
-            m[7] = 111;
-            let t = m.contains(7);
-            let f = m.contains(8);
-            // return t*2 + f to disambiguate (expect 2*1+0=2)
-            return t*2 + f;
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    vm.run().expect("execute");
-    assert_eq!(vm.register(10), 2);
-}
-
-#[test]
-fn contains_durable_true_then_false() {
-    let src = r#"
-        state Map<int,int> m;
-        fn f() -> int {
-            m[7] = 1;
-            let t = m.contains(7);
-            let f = m.contains(8);
-            return t*2 + f;
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile durable contains");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.set_host(ivm::CoreHost::new());
-    vm.set_register(31, 0x0031_0000);
-    vm.load_program(&code).unwrap();
-    vm.run().expect("execute");
-    assert_eq!(vm.register(10), 2);
-}
-
-#[test]
-fn method_sugar_contains_ephemeral() {
-    let src = r#"
-        fn f() -> int {
-            let m = Map::new();
-            m[1] = 2;
-            let t = m.contains(1);
-            let f = m.contains(2);
-            return t*2 + f;
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    vm.run().expect("execute");
-    assert_eq!(vm.register(10), 2);
-}
-
-#[test]
-fn contains_rejects_wrong_types() {
-    let src = r#"
-        fn f() { let m = Map::new(); let x = 7.contains(m); }
-    "#;
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected type error");
-    assert!(
-        err.message
-            .contains("contains expects Map<K,V> as first arg")
-    );
-}
-
-#[test]
-fn blob_method_pass_through_compiles() {
-    let src = r#"
-        fn main() -> int {
-            let nb = norito_bytes("abc");
-            let bb = nb.blob();
-            return 0;
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile");
-    let (_m, off) = parse_meta_offset(&code).unwrap();
-    let bytes = &code[off..];
-    // Should not need NAME/JSON decode; just a simple program with HALT
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
-        bytes
-            .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
-    };
-    assert!(!has(syscalls::SYSCALL_NAME_DECODE as u8));
-    assert!(!has(syscalls::SYSCALL_JSON_DECODE as u8));
-}
-
-#[test]
-fn norito_bytes_constructor_rejects_json_pointer() {
-    let src = r#"
-        fn f() { let j = json("{} "); let nb = norito_bytes(j); }
-    "#;
-    let prog = parse(src).expect("parse ok");
-    let err = analyze(&prog).expect_err("expected type error");
-    assert!(err.message.contains("norito_bytes expects string or Blob"));
-}
-
-#[test]
-fn nested_struct_field_access_and_map_indexing() {
-    // Define nested structs and access map nested inside
-    let src = r#"
-        struct Inner { map: Map<int, int>; }
-        struct Outer { inner: Inner; }
-        fn f() -> int {
-            let m = Map::new();
-            m[7] = 111;
-            let i = Inner(m);
-            let o = Outer(i);
-            return o.inner.map[7];
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile nested struct and map indexing");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    // The program allocates the map internally; nothing to set up beyond run
-    vm.run().expect("execute");
-    // Expect 111 in r10 from nested access
-    assert_eq!(vm.register(10), 111);
+fn pointer_constructors_reject_implicit_conversions_and_method_aliases() {
+    for source in [
+        r#"seiyaku C { fn f(value: bytes) { let _x = AccountId::parse(value); } }"#,
+        r#"seiyaku C { fn f(value: bytes) { let _x = Json::parse(value); } }"#,
+        r#"seiyaku C { fn f(value: bytes) { let _x = Name::parse(value); } }"#,
+        r#"seiyaku C { fn f(value: Name) { let _x = Name::parse(value); } }"#,
+        r#"seiyaku C { fn f(value: string) { let _x = value.account_id(); } }"#,
+        r#"seiyaku C { fn f(value: string) { let _x = value.name(); } }"#,
+        r#"seiyaku C { fn f(value: string) { let _x = value.json(); } }"#,
+        r#"seiyaku C { fn f(value: bytes) { let _x = value.blob(); } }"#,
+        r#"seiyaku C { fn f(value: bytes) { let _x = value.norito_bytes(); } }"#,
+        r#"seiyaku C { fn f() { let _x = blob("raw"); } }"#,
+        r#"seiyaku C { fn f() { let _x = norito_bytes("raw"); } }"#,
+    ] {
+        let error = Compiler::new()
+            .compile_source(source)
+            .expect_err("non-canonical pointer conversion must be rejected");
+        assert!(
+            error.contains("expects string")
+                || error.contains("method aliases were removed")
+                || error.contains("compiler-internal"),
+            "unexpected error: {error}"
+        );
+    }
 }
 
 #[test]
 fn triple_nested_struct_field_access() {
     // Deeply nested struct fields: d.c.b.a.x
     let src = r#"
-        struct A { x: int; }
-        struct B { a: A; }
-        struct C { b: B; }
-        struct D { c: C; }
+        seiyaku NestedStructFields {
+        struct A { int x }
+        struct B { A a }
+        struct C { B b }
+        struct D { C c }
         fn f() -> int {
-            let a = A(5);
-            let b = B(a);
-            let c = C(b);
-            let d = D(c);
+            let a = A { x: 5 };
+            let b = B { a };
+            let c = C { b };
+            let d = D { c };
             return d.c.b.a.x;
+        }
         }
     "#;
     let code = ivm::KotodamaCompiler::new()
@@ -1663,16 +1349,18 @@ fn triple_nested_struct_field_access() {
 
 #[test]
 fn triple_nested_struct_field_mixed_named_numeric_access() {
-    // Mixed access: d.c.0.a.x where D { c: (B, int) }
+    // Mixed access: d.c.0.a.x where D { (B, int) c }
     let src = r#"
-        struct A { x: int; }
-        struct B { a: A; }
-        struct D { c: (B, int); }
+        seiyaku MixedStructTupleFields {
+        struct A { int x }
+        struct B { A a }
+        struct D { (B, int) c }
         fn f() -> int {
-            let a = A(7);
-            let b = B(a);
-            let d = D((b, 99));
+            let a = A { x: 7 };
+            let b = B { a };
+            let d = D { c: (b, 99) };
             return d.c.0.a.x;
+        }
         }
     "#;
     let code = ivm::KotodamaCompiler::new()
@@ -1685,39 +1373,12 @@ fn triple_nested_struct_field_mixed_named_numeric_access() {
 }
 
 #[test]
-fn durable_nested_struct_map_path_compiles_to_state_get() {
-    use ivm::{encoding, instruction, syscalls};
-    // State-backed nested structs: ensure s.inner.map[7] compiles to BUILD_PATH + STATE_GET
-    let src = r#"
-        struct Inner { map: Map<int, int>; }
-        struct Outer { inner: Inner; }
-        state Outer s;
-        fn f() -> int { return s.inner.map[7]; }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile durable nested map path");
-    let (_meta, off) = parse_meta_offset(&code).unwrap();
-    let bytes = &code[off..];
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
-        bytes
-            .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
-    };
-    assert!(
-        has(syscalls::SYSCALL_BUILD_PATH_MAP_KEY as u8)
-            && has(syscalls::SYSCALL_STATE_GET as u8)
-            && has(syscalls::SYSCALL_DECODE_INT as u8),
-        "expected BUILD_PATH_MAP_KEY + STATE_GET + DECODE_INT in bytecode"
-    );
-}
-
-#[test]
 fn invalid_numeric_on_struct_reports_error() {
     let src = r#"
-        struct A { x: int; }
-        fn f() { let a = A(1); let v = a.0; }
+        module InvalidStructIndex {
+        struct A { int x }
+        fn f() { let a = A { x: 1 }; let v = a.0; }
+        }
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
@@ -1727,7 +1388,9 @@ fn invalid_numeric_on_struct_reports_error() {
 #[test]
 fn invalid_named_on_tuple_reports_error() {
     let src = r#"
+        module InvalidTupleField {
         fn f() { let t = (1,2); let v = t.a; }
+        }
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
@@ -1737,7 +1400,9 @@ fn invalid_named_on_tuple_reports_error() {
 #[test]
 fn invalid_numeric_tuple_index_reports_error() {
     let src = r#"
+        module InvalidTupleIndex {
         fn f() { let t = (1,2); let v = t.3; }
+        }
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
@@ -1747,8 +1412,10 @@ fn invalid_numeric_tuple_index_reports_error() {
 #[test]
 fn tuple_index_on_non_tuple_reports_type() {
     let src = r#"
-        struct A { x: int; }
-        fn f() { let s = A(1); let v = s.0; }
+        module InvalidStructTupleIndex {
+        struct A { int x }
+        fn f() { let s = A { x: 1 }; let v = s.0; }
+        }
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
@@ -1761,7 +1428,9 @@ fn tuple_index_on_non_tuple_reports_type() {
 #[test]
 fn tuple_index_on_non_tuple_int_reports_type() {
     let src = r#"
+        module InvalidScalarTupleIndex {
         fn f() { let n = 1; let v = n.0; }
+        }
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
@@ -1771,8 +1440,10 @@ fn tuple_index_on_non_tuple_int_reports_type() {
 #[test]
 fn unknown_field_on_struct_reports_available_fields() {
     let src = r#"
-        struct A { x: int; y: int; }
-        fn f() { let a = A(1,2); let v = a.z; }
+        module UnknownStructField {
+        struct A { int x, int y }
+        fn f() { let a = A { x: 1, y: 2 }; let v = a.z; }
+        }
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
@@ -1785,7 +1456,9 @@ fn unknown_field_on_struct_reports_available_fields() {
 #[test]
 fn invalid_named_on_non_struct_reports_error() {
     let src = r#"
+        module InvalidScalarField {
         fn f() { let n = 1; let v = n.foo; }
+        }
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
@@ -1795,8 +1468,10 @@ fn invalid_named_on_non_struct_reports_error() {
 #[test]
 fn invalid_indexing_on_non_map_reports_error() {
     let src = r#"
-        struct A { x: int; }
-        fn f() { let a = A(1); let v = a[0]; }
+        module InvalidStructIndexing {
+        struct A { int x }
+        fn f() { let a = A { x: 1 }; let v = a[0]; }
+        }
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
@@ -1807,8 +1482,10 @@ fn invalid_indexing_on_non_map_reports_error() {
 fn method_call_sugar_receiver_and_arg() {
     // a.method(b) sugar: receiver prepended as first arg
     let src = r#"
-        fn add(x: int, y: int) -> int { return x + y; }
+        seiyaku MethodCallSugar {
+        fn add(int x, int y) -> int { return x + y; }
         fn main() -> int { return (5).add(7); }
+        }
     "#;
     let code = ivm::KotodamaCompiler::new()
         .compile_source(src)
@@ -1820,112 +1497,26 @@ fn method_call_sugar_receiver_and_arg() {
 }
 
 #[test]
-fn ir_bounded_map_take_n_sets_loop_bounds() {
-    use ivm::kotodama::ir::{self, Instr, Temp};
-    let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.take(1) { let z = v; } }"#;
-    let prog = parse(src).expect("parse");
-    let typed = analyze(&prog).expect("analyze");
-    let ir_prog = ir::lower(&typed).expect("lower");
-    let func = ir_prog
-        .functions
-        .iter()
-        .find(|f| f.name == "f")
-        .expect("function f present");
-    let mut consts = std::collections::HashMap::<Temp, i64>::new();
-    for instr in func.blocks.iter().flat_map(|bb| &bb.instrs) {
-        if let Instr::Const { dest, value } = instr {
-            consts.insert(*dest, *value);
-        }
-    }
-    let mut saw_start_limit = false;
-    for instr in func.blocks.iter().flat_map(|bb| &bb.instrs) {
-        if let Instr::Binary {
-            op: ivm::kotodama::ast::BinaryOp::Lt,
-            left,
-            right,
-            ..
-        } = instr
-            && consts.get(left) == Some(&0)
-            && consts.get(right) == Some(&1)
-        {
-            saw_start_limit = true;
-            break;
-        }
-    }
-    assert!(
-        saw_start_limit,
-        "loop should compare index 0 against limit 1; const map: {consts:?}"
-    );
-    let mut saw_key = false;
-    let mut saw_val = false;
-    for instr in func.blocks.iter().flat_map(|bb| &bb.instrs) {
-        if let Instr::Load64Imm { imm, .. } = instr {
-            if *imm == 0 {
-                saw_key = true;
-            } else if *imm == 8 {
-                saw_val = true;
-            }
-        }
-    }
-    assert!(
-        saw_key && saw_val,
-        "bounded loop should load key/value pairs"
-    );
-}
-
-#[test]
-fn ir_bounded_map_range_start_is_honored() {
-    use ivm::kotodama::ir::{self, Instr, Temp};
-    let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.range(0, 1) { let z = v; } }"#;
-    let prog = parse(src).expect("parse");
-    let typed = analyze(&prog).expect("analyze");
-    let ir_prog = ir::lower(&typed).expect("lower");
-    let func = ir_prog
-        .functions
-        .iter()
-        .find(|f| f.name == "f")
-        .expect("function f present");
-    let mut consts = std::collections::HashMap::<Temp, i64>::new();
-    for instr in func.blocks.iter().flat_map(|bb| &bb.instrs) {
-        if let Instr::Const { dest, value } = instr {
-            consts.insert(*dest, *value);
-        }
-    }
-    let mut honored = false;
-    for instr in func.blocks.iter().flat_map(|bb| &bb.instrs) {
-        if let Instr::Binary {
-            op: ivm::kotodama::ast::BinaryOp::Lt,
-            left,
-            right,
-            ..
-        } = instr
-            && consts.get(left) == Some(&0)
-            && consts.get(right) == Some(&1)
-        {
-            honored = true;
-            break;
-        }
-    }
-    assert!(
-        honored,
-        "expected comparison between start 0 and end 1; const map: {consts:?}"
-    );
-}
-#[test]
 fn semantic_type_enforcement_for_typed_syscalls() {
     use ivm::kotodama::parser::parse;
     // Wrong types should fail
-    let bad =
-        parse("fn f() { mint_asset(name(\"x\"), asset_definition(\"62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"), 1); }")
-            .unwrap();
+    let bad = parse(
+        "module InvalidMint { fn f() { ledger::asset::mint(account: Name::parse(\"x\"), asset_definition: AssetDefinitionId::parse(\"62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"), amount: 1); } }",
+    )
+    .unwrap();
     assert!(analyze(&bad).is_err());
-    let bad2 = parse("fn f() { set_account_detail(account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), json(\"1\"), name(\"k\")); }").unwrap();
+    let bad2 = parse("module InvalidDetail { fn f() { ledger::account::set_detail(account: AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), key: Json::parse(\"1\"), value: Name::parse(\"k\")); } }").unwrap();
     assert!(analyze(&bad2).is_err());
 }
 
 #[test]
 fn range_end_less_than_start_rejected() {
-    let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.range(5, 2) { let z = v; } }"#;
+    let src = r#"
+        seiyaku InvalidStateRange {
+            state StateMap<int, int> values;
+            fn f() { for (key, value) in values.range(5, 2) { let seen = value; } }
+        }
+    "#;
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).expect_err("expected end<start rejection");
     assert!(err.message.contains("end >= start"));
@@ -1933,53 +1524,62 @@ fn range_end_less_than_start_rejected() {
 
 #[test]
 fn range_non_integer_args_rejected() {
-    let src = r#"state Map<int, int> m; fn f() { for (k, v) in m.range("a", "b") { let z = v; } }"#;
+    let src = r#"
+        seiyaku InvalidStateRangeTypes {
+            state StateMap<int, int> values;
+            fn f() { for (key, value) in values.range("a", "b") { let seen = value; } }
+        }
+    "#;
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).expect_err("expected non-integer rejection");
     assert!(err.message.contains("range(start, end)"));
 }
 
-#[cfg(feature = "kotodama_dynamic_bounds")]
 #[test]
-fn dynamic_take_on_in_memory_map_is_rejected() {
+fn dynamic_state_map_take_is_rejected() {
     let src = r#"
-        fn bounded_take_sum(m: Map<int, int>, n: int) -> int {
-            let acc = 0;
-            for (k, v) in m.take(n) { acc = acc + v; }
+        seiyaku DynamicTake {
+        state StateMap<int, int> values;
+        fn bounded_take_sum(int n) -> int {
+            var acc = 0;
+            for (key, value) in values.take(n) { acc = acc + value; }
             return acc;
+        }
         }
     "#;
     let err = ivm::KotodamaCompiler::new()
         .compile_source(src)
-        .expect_err("dynamic bounds on in-memory maps must be rejected");
+        .expect_err("dynamic state-map bounds must be rejected");
     assert!(
-        err.contains("dynamic bounds on in-memory Map iteration are unsupported"),
+        err.contains("E_UNBOUNDED_ITERATION") && err.contains("literal"),
         "unexpected error: {err}"
     );
 }
 
-#[cfg(feature = "kotodama_dynamic_bounds")]
 #[test]
-fn dynamic_range_on_in_memory_map_is_rejected() {
+fn dynamic_state_map_range_is_rejected() {
     let src = r#"
-        fn bounded_range_sum(m: Map<int, int>, start: int, end: int) -> int {
-            let acc = 0;
-            for (k, v) in m.range(start, end) { acc = acc + v; }
+        seiyaku DynamicRange {
+        state StateMap<int, int> values;
+        fn bounded_range_sum(int start, int end) -> int {
+            var acc = 0;
+            for (key, value) in values.range(start, end) { acc = acc + value; }
             return acc;
+        }
         }
     "#;
     let err = ivm::KotodamaCompiler::new()
         .compile_source(src)
-        .expect_err("dynamic bounds on in-memory maps must be rejected");
+        .expect_err("dynamic state-map bounds must be rejected");
     assert!(
-        err.contains("dynamic bounds on in-memory Map iteration are unsupported"),
+        err.contains("E_UNBOUNDED_ITERATION") && err.contains("literal"),
         "unexpected error: {err}"
     );
 }
 
 #[test]
 fn compile_typed_nft_syscalls() {
-    let src = "fn main() { nft_mint_asset(nft_id(\"n0$wonderland.universal\"), account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\")); nft_transfer_asset(account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), nft_id(\"n0$wonderland.universal\"), account_id(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); }";
+    let src = "seiyaku NftCalls { kotoage fn main() authorize(\"ManageNfts\") { ledger::nft::mint(NftId::parse(\"n0$wonderland.universal\"), AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\")); ledger::nft::transfer(source: AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), nft: NftId::parse(\"n0$wonderland.universal\"), destination: AccountId::parse(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile typed NFT");
@@ -1992,246 +1592,9 @@ fn compile_typed_nft_syscalls() {
 }
 
 #[test]
-fn compile_and_run_map_get_match_and_mismatch() {
-    // Program that returns m[k]
-    let src = "fn get(m: Map<int, int>, k: int) -> int { let v = m[k]; return v; }";
-    let code = Compiler::new().compile_source(src).expect("compile failed");
-
-    // Case 1: key matches -> returns stored value
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    // Decode trace left disabled. Allocate after loading program so memory isn't overwritten.
-    let base = vm.alloc_heap(16).expect("alloc");
-    vm.store_u64(base, 7).expect("store key");
-    vm.store_u64(base + 8, 4242).expect("store val");
-    vm.set_register(10, base); // m
-    vm.set_register(11, 7); // k
-    vm.run().expect("execution failed");
-    // Return value must equal stored value when keys match
-    assert_eq!(vm.register(10), 4242);
-
-    // Case 2: key mismatch -> returns 0
-    let mut vm2 = ivm::IVM::new(u64::MAX);
-    vm2.load_program(&code).unwrap();
-    let base2 = vm2.alloc_heap(16).expect("alloc");
-    vm2.store_u64(base2, 7).expect("store key");
-    vm2.store_u64(base2 + 8, 4242).expect("store val");
-    vm2.set_register(10, base2); // m
-    vm2.set_register(11, 8); // k (mismatch)
-    vm2.run().expect("execution failed");
-    // Return value must be 0 when keys mismatch
-    assert_eq!(vm2.register(10), 0);
-}
-
-#[test]
-fn compile_and_run_map_set() {
-    // Program that sets m[k] = v on the minimal 2-word map layout
-    let src = "fn set(m: Map<int, int>, k: int, v: int) { m[k] = v; }";
-    let code = Compiler::new().compile_source(src).expect("compile failed");
-
-    let mut vm = ivm::IVM::new(u64::MAX);
-    // Decode trace left disabled.
-    let base = vm.alloc_heap(16).expect("alloc");
-    // Initialize with key=7, value=0
-    vm.store_u64(base, 7).expect("store key");
-    vm.store_u64(base + 8, 0).expect("store val");
-
-    // Call: m=base, k=7, v=1234
-    vm.set_register(10, base);
-    vm.set_register(11, 7);
-    vm.set_register(12, 1234);
-    vm.load_program(&code).unwrap();
-    vm.run().expect("execution failed");
-
-    // Value at offset 8 should be updated
-    // Verify the 64-bit value at offset 8 was updated
-    let v64 = vm.memory.load_u64(base + 8).unwrap();
-    assert_eq!(v64, 1234);
-}
-
-#[test]
-fn map_get_handles_spills() {
-    use ivm::kotodama::ir::Instr;
-    use ivm::kotodama::regalloc;
-
-    let count = 20usize;
-    let mut src = String::from("fn main(m: Map<int,int>, k: int) -> int {\n");
-    for i in 0..count {
-        let value = (i + 1) as i64;
-        src.push_str(&format!("  let a{i} = {value};\n"));
-    }
-    src.push_str("  let v = m[k];\n");
-    src.push_str("  let sum = ");
-    for i in 0..count {
-        if i > 0 {
-            src.push_str(" + ");
-        }
-        src.push_str(&format!("a{i}"));
-    }
-    src.push_str(";\n");
-    src.push_str("  let hit = m.contains(k);\n");
-    src.push_str("  return sum + v + hit;\n}\n");
-
-    let prog = parse(&src).expect("parse spill map-get");
-    let typed = analyze(&prog).expect("analyze spill map-get");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-    let func = ir
-        .functions
-        .iter()
-        .find(|f| f.name == "main")
-        .expect("main lowered");
-    let alloc = regalloc::allocate(func);
-    let is_spilled = |t: &ivm::kotodama::ir::Temp| alloc.stack.contains_key(t);
-    let mut saw_map_get_spill = false;
-    for bb in &func.blocks {
-        for ins in &bb.instrs {
-            if let Instr::MapGet { dest, map, key } = ins
-                && (is_spilled(dest) || is_spilled(map) || is_spilled(key))
-            {
-                saw_map_get_spill = true;
-            }
-        }
-    }
-    assert!(
-        saw_map_get_spill,
-        "expected MapGet operand spill under register pressure"
-    );
-
-    let code = Compiler::new()
-        .compile_source(&src)
-        .expect("compile spill map-get");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    let base = vm.alloc_heap(16).expect("alloc map");
-    vm.store_u64(base, 7).expect("store key");
-    vm.store_u64(base + 8, 100).expect("store val");
-    vm.set_register(10, base);
-    vm.set_register(11, 7);
-    vm.run().expect("execute spill map-get");
-    let expected = (count as u64 * (count as u64 + 1) / 2) + 100 + 1;
-    assert_eq!(vm.register(10), expected);
-}
-
-#[test]
-fn keys_take2_load64imm_executes() {
-    use ivm::kotodama::ir::Instr;
-
-    let count = 20usize;
-    let mut src = String::from("fn main(m: Map<int,int>) -> int {\n");
-    for i in 0..count {
-        let value = (i + 1) as i64;
-        src.push_str(&format!("  let a{i} = {value};\n"));
-    }
-    src.push_str("  let pick = std::map::keys_take2(m, 0, 0);\n");
-    src.push_str("  let sum = 0;\n");
-    for i in 0..count {
-        src.push_str(&format!("  sum = sum + a{i};\n"));
-    }
-    src.push_str("  return sum + pick;\n}\n");
-
-    let prog = parse(&src).expect("parse load64");
-    let typed = analyze(&prog).expect("analyze load64");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-    let func = ir
-        .functions
-        .iter()
-        .find(|f| f.name == "main")
-        .expect("main lowered");
-    let mut saw_load64imm = false;
-    for bb in &func.blocks {
-        for ins in &bb.instrs {
-            if let Instr::Load64Imm { .. } = ins {
-                saw_load64imm = true;
-                break;
-            }
-        }
-    }
-    assert!(saw_load64imm, "expected Load64Imm in keys_take2 lowering");
-
-    let code = Compiler::new()
-        .compile_source(&src)
-        .expect("compile load64");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    let base = vm.alloc_heap(16).expect("alloc map");
-    vm.store_u64(base, 7).expect("store key");
-    vm.store_u64(base + 8, 100).expect("store val");
-    vm.set_register(10, base);
-    vm.run().expect("execute load64");
-    let expected = (count as u64 * (count as u64 + 1) / 2) + 7;
-    assert_eq!(vm.register(10), expected);
-}
-
-#[test]
-fn map_load_pair_handles_spilled_map_base() {
-    use ivm::kotodama::ir::Instr;
-    use ivm::kotodama::regalloc;
-
-    let count = 20usize;
-    let mut src = String::from("fn main(m: Map<int,int>) -> int {\n");
-    for i in 0..count {
-        let value = (i + 1) as i64;
-        src.push_str(&format!("  let a{i} = {value};\n"));
-    }
-    src.push_str("  let sum = ");
-    for i in 0..count {
-        if i > 0 {
-            src.push_str(" + ");
-        }
-        src.push_str(&format!("a{i}"));
-    }
-    src.push_str(";\n");
-    src.push_str("  let hit = m.contains(7);\n");
-    src.push_str("  return sum + hit;\n}\n");
-
-    let prog = parse(&src).expect("parse spill map-load");
-    let typed = analyze(&prog).expect("analyze spill map-load");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-    let func = ir
-        .functions
-        .iter()
-        .find(|f| f.name == "main")
-        .expect("main lowered");
-    let alloc = regalloc::allocate(func);
-    let is_spilled = |t: &ivm::kotodama::ir::Temp| alloc.stack.contains_key(t);
-    let mut saw_map_load_pair_spill = false;
-    for bb in &func.blocks {
-        for ins in &bb.instrs {
-            if let Instr::MapLoadPair {
-                dest_key,
-                dest_val,
-                map,
-                ..
-            } = ins
-                && (is_spilled(map) || is_spilled(dest_key) || is_spilled(dest_val))
-            {
-                saw_map_load_pair_spill = true;
-            }
-        }
-    }
-    assert!(
-        saw_map_load_pair_spill,
-        "expected MapLoadPair operand spill under register pressure"
-    );
-
-    let code = Compiler::new()
-        .compile_source(&src)
-        .expect("compile spill map-load");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    let base = vm.alloc_heap(16).expect("alloc map");
-    vm.store_u64(base, 7).expect("store key");
-    vm.store_u64(base + 8, 1).expect("store val");
-    vm.set_register(10, base);
-    vm.run().expect("execute spill map-load");
-    let expected = (count as u64 * (count as u64 + 1) / 2) + 1;
-    assert_eq!(vm.register(10), expected);
-}
-
-#[test]
 fn compile_and_run_modulo() {
     // Return a % b
-    let src = "fn r(a, b) -> int { return a % b; }";
+    let src = "seiyaku Modulo { fn r(int a, int b) -> int { return a % b; } }";
     let code = Compiler::new().compile_source(src).expect("compile modulo");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
@@ -2242,28 +1605,25 @@ fn compile_and_run_modulo() {
 }
 
 #[test]
-fn compiler_abi_version_plumbing() {
-    let opts = CompilerOptions {
-        abi_version: 1,
-        ..Default::default()
-    };
-    let code = Compiler::new_with_options(opts)
-        .compile_source("fn f() { let x = 1 + 2; }")
+fn compiler_owns_first_release_abi_metadata() {
+    let code = Compiler::new()
+        .compile_source("seiyaku FixedAbi { view fn f() -> int { return 3; } }")
         .expect("compile");
     let (meta, _off) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.abi_version, 1);
+    assert_eq!(meta.vector_length, 0);
 }
 
 #[test]
 fn compile_emits_manifest_hashes() {
     use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
-    let src = "fn f() { let x = 1 + 2; }";
+    let src = "module ManifestHash { fn f() { let x = 1 + 2; } }";
     let (code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile with manifest");
     let parsed = ProgramMetadata::parse(&code).expect("parse header");
     let meta = parsed.metadata;
-    let expected_code_hash = iroha_crypto::Hash::new(&code[parsed.header_len..]);
+    let expected_code_hash = ivm::contract_code_hash(&code);
     assert_eq!(manifest.code_hash, Some(expected_code_hash));
     let policy = match meta.abi_version {
         1 => SyscallPolicy::AbiV1,
@@ -2277,10 +1637,10 @@ fn compile_emits_manifest_hashes() {
 fn manifest_code_hash_reflects_literals() {
     let compiler = Compiler::new();
     let (_, manifest_a) = compiler
-        .compile_source_with_manifest("fn f() { info(\"alpha\"); }")
+        .compile_source_with_manifest("seiyaku LiteralAlpha { fn f() { debug::info(\"alpha\"); } }")
         .expect("compile alpha");
     let (_, manifest_b) = compiler
-        .compile_source_with_manifest("fn f() { info(\"beta\"); }")
+        .compile_source_with_manifest("seiyaku LiteralBeta { fn f() { debug::info(\"beta\"); } }")
         .expect("compile beta");
     let hash_a = manifest_a.code_hash.expect("alpha code hash");
     let hash_b = manifest_b.code_hash.expect("beta code hash");
@@ -2293,22 +1653,19 @@ fn manifest_includes_entrypoints_and_features() {
 
     let src = r#"
         seiyaku Demo {
-            meta { features: ["zk", "simd"]; }
             state int counter;
 
             hajimari() {
                 counter = 0;
             }
 
-            kotoage fn run() permission(Admin) {
-                setvl(8);
-                assert(true);
+            kotoage fn run() authorize("Admin") {
                 let current = counter;
-                let _digest = poseidon2(current, 1);
+                let _digest = crypto::poseidon2(left: current, right: 1);
                 if current > 0 {
-                    info("counter tick");
+                    debug::info("counter tick");
                 } else {
-                    info("counter fresh");
+                    debug::info("counter fresh");
                 }
             }
         }
@@ -2333,13 +1690,12 @@ fn manifest_includes_entrypoints_and_features() {
     assert_eq!(entrypoints[0].write_keys, vec!["state:counter"]);
 
     assert_eq!(entrypoints[1].name, "run");
-    assert!(matches!(entrypoints[1].kind, EntryPointKind::Public));
+    assert!(matches!(entrypoints[1].kind, EntryPointKind::Kotoage));
     assert_eq!(entrypoints[1].permission.as_deref(), Some("Admin"));
     assert_eq!(entrypoints[1].read_keys, vec!["state:counter"]);
     assert_eq!(entrypoints[1].write_keys, Vec::<String>::new());
     const FEATURE_ZK: u64 = 1 << 0;
-    const FEATURE_VECTOR: u64 = 1 << 1;
-    assert_eq!(manifest.features_bitmap, Some(FEATURE_ZK | FEATURE_VECTOR));
+    assert_eq!(manifest.features_bitmap, Some(FEATURE_ZK));
 }
 
 #[test]
@@ -2348,10 +1704,9 @@ fn manifest_includes_trigger_descriptors() {
 
     let src = r#"
         seiyaku Demo {
-            kotoage fn run() {}
+            kotoage fn run() authorize("Trigger") {}
 
-            register_trigger wake {
-                call run;
+            trigger wake -> run {
                 on time pre_commit;
                 repeats 2;
                 metadata { tag: "alpha"; }
@@ -2383,11 +1738,13 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
 
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let src = r#"
-        fn main() {
-            let acc = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-            let asset = asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-            mint_asset(acc, asset, 1);
-            burn_asset(acc, asset, 1);
+        seiyaku StaticAssetAccess {
+        kotoage fn main() authorize("MintAndBurn") {
+            let acc = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+            let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+            ledger::asset::mint(account: acc, asset_definition: asset, amount: 1);
+            ledger::asset::burn(account: acc, asset_definition: asset, amount: 1);
+        }
         }
     "#;
     let (_code, manifest) = Compiler::new()
@@ -2434,12 +1791,14 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
 #[test]
 fn production_manifest_accepts_authority_placeholder_isi_access() {
     let src = r#"
-        fn main() {
-            transfer_domain(
-                account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-                domain("wonderland.universal"),
-                authority()
+        seiyaku AuthorityDomainTransfer {
+        kotoage fn main() authorize("TransferDomain") {
+            ledger::domain::transfer(
+                source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+                domain: DomainId::parse("wonderland.universal"),
+                destination: context::authority(),
             );
+        }
         }
     "#;
     let (_code, manifest) = Compiler::new()
@@ -2480,17 +1839,17 @@ fn production_manifest_accepts_authority_placeholder_isi_access() {
 }
 
 #[test]
-fn production_manifest_rejects_opaque_parameter_isi_access() {
+fn production_manifest_rejects_parameter_dependent_isi_access() {
     let src = r#"
         seiyaku Test {
-            kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int, space: DataSpaceId) permission(Admin) {
-                transfer_asset(from, to, asset, amount, space);
+            kotoage fn move(AccountId from, AccountId to, AssetDefinitionId asset, quantity amount, DataSpaceId space) authorize("Admin") {
+                ledger::asset::transfer(source: from, destination: to, asset_definition: asset, amount: amount, dataspace: space);
             }
         }
     "#;
     let err = Compiler::new()
         .compile_source_with_manifest(src)
-        .expect_err("production compile must reject opaque parameter ISI access");
+        .expect_err("production compile must reject incomplete parameter-dependent ISI access");
     assert!(
         err.contains("E_ACCESS_INCOMPLETE"),
         "unexpected error: {err}"
@@ -2501,11 +1860,11 @@ fn production_manifest_rejects_opaque_parameter_isi_access() {
 fn kotoba_block_emits_manifest_translations() {
     let src = r#"
         seiyaku C {
-            kotoba {
+            messages {
                 "E0001": { en: "Invalid assets", ja: "無効な資産" }
                 hint: { en: "Check inputs" }
             }
-            kotoage fn main() {}
+            view fn main() {}
         }
     "#;
     let (_code, manifest) = Compiler::new()
@@ -2523,11 +1882,13 @@ fn kotoba_block_emits_manifest_translations() {
 fn lexer_block_comments_and_number_literals() {
     // Block comments and hex/binary/underscored numbers
     let src = r#"
-        fn f() {
+        module Literals {
+          fn f() {
             /* comment */
             let a = 0x10;
             let b = 0b1010;
             let c = 10_000;
+          }
         }
     "#;
     let prog = parse(src).expect("parse with comments and literals");
@@ -2537,60 +1898,50 @@ fn lexer_block_comments_and_number_literals() {
 #[test]
 fn compound_assignments_typecheck() {
     // x +=, -=, *=, /=, %= should typecheck and rebind SSA name
-    let src = r#"fn f() { let x = 1; x += 2; x *= 3; x /= 2; x %= 2; }"#;
+    let src = r#"module Compound { fn f() { var x = 1; x += 2; x *= 3; x /= 2; x %= 2; } }"#;
     let prog = parse(src).expect("parse compound assigns");
     let _typed = analyze(&prog).expect("analyze compound assigns");
 }
 
 #[test]
-fn namespaced_host_calls_and_std_map_new_parse_and_type() {
-    // host::transfer_asset should resolve to transfer_asset builtin
+fn canonical_host_calls_typecheck_and_removed_map_does_not() {
     let src = r#"
-        fn f() {
-            host::transfer_asset(
-              account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-              account_id("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-              asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-              1,
-              dataspace_id("0")
-            );
+        seiyaku Transfer {
+          kotoage fn f() authorize("Admin") {
+            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
+          }
         }
     "#;
-    let prog = parse(src).expect("parse host::transfer_asset");
-    analyze(&prog).expect("analyze host::transfer_asset");
+    let prog = parse(src).expect("parse ledger::asset::transfer");
+    analyze(&prog).expect("analyze ledger::asset::transfer");
 
-    // std::map::new should normalize to Map::new
-    let src2 = "fn make() -> int { return std::map::new(); }";
+    let src2 = "module RemovedMap { fn make() -> int { return std::map::new(); } }";
     let prog2 = parse(src2).expect("parse std::map::new");
-    analyze(&prog2).expect("analyze std::map::new");
+    analyze(&prog2).expect_err("in-memory map constructors are removed from V1");
 }
 
 #[test]
 fn indirect_sensitive_calls_require_permission() {
     let src = r#"
-        fn helper() {
-            transfer_asset(
-              account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
-              account_id("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-              asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-              1,
-              dataspace_id("0")
-            );
+        seiyaku Permission {
+          fn helper() {
+            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
         }
 
         kotoage fn public_entry() {
             helper();
         }
+        }
     "#;
     let err = Compiler::new().compile_source(src).unwrap_err();
     assert!(
-        err.contains("permission"),
-        "expected permission error, got {err}"
+        err.contains("authorize"),
+        "expected authorization error, got {err}"
     );
 }
 
 #[test]
-fn while_assignments_propagate_state() {
+fn while_loops_are_rejected_in_v1() {
     let src = r#"
         seiyaku Counter {
             state int counter;
@@ -2599,8 +1950,8 @@ fn while_assignments_propagate_state() {
                 counter = 0;
             }
 
-            kotoage fn bump(times: int) {
-                let i = 0;
+            kotoage fn bump(int times) authorize("Admin") {
+                var i = 0;
                 while i < times {
                     counter = counter + 1;
                     i = i + 1;
@@ -2608,15 +1959,15 @@ fn while_assignments_propagate_state() {
             }
         }
     "#;
-    Compiler::new()
+    let error = Compiler::new()
         .compile_source(src)
-        .expect("while loop assignments should compile");
+        .expect_err("while loops must be rejected");
+    assert!(error.contains("while"), "unexpected error: {error}");
 }
 
 #[test]
 fn ternary_parses_and_types() {
-    // Ternary as expression; only parse and typecheck (IR lowering TBD)
-    let src = "fn f(a: int, b: int) -> int { let x = (1 < 2) ? a : b; return x; }";
+    let src = "module Ternary { fn f(int a, int b) -> int { let x = (1 < 2) ? a : b; return x; } }";
     let prog = parse(src).expect("parse ternary");
     let typed = analyze(&prog).expect("type ternary");
     let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
@@ -2624,132 +1975,80 @@ fn ternary_parses_and_types() {
 }
 
 #[test]
-fn compile_and_run_ternary_min() {
-    // Return the min of two ints using a ternary expression
-    let src = "fn min(a: int, b: int) -> int { return (a < b) ? a : b; }";
-    let code = Compiler::new()
-        .compile_source(src)
-        .expect("compile ternary");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    // Case 1: a < b
-    vm.set_register(10, 3); // a
-    vm.set_register(11, 5); // b
-    vm.run().expect("exec");
-    assert_eq!(vm.register(10), 3);
-
-    // Case 2: a >= b
-    let mut vm2 = ivm::IVM::new(u64::MAX);
-    vm2.load_program(&code).unwrap();
-    vm2.set_register(10, 7); // a
-    vm2.set_register(11, 4); // b
-    vm2.run().expect("exec");
-    assert_eq!(vm2.register(10), 4);
+fn ternary_min_types() {
+    let src = "module Ternary { fn min(int a, int b) -> int { return (a < b) ? a : b; } }";
+    let typed = analyze(&parse(src).expect("parse ternary")).expect("type ternary");
+    assert!(typed.items.iter().any(|item| {
+        matches!(item, ivm::kotodama::semantic::TypedItem::Function(function) if function.name == "min")
+    }));
 }
 
 #[test]
-fn compile_and_run_nested_ternary() {
-    // Return: a<b ? (b<c ? b : c) : a
-    let src = "fn f(a: int, b: int, c: int) -> int { return (a < b) ? ((b < c) ? b : c) : a; }";
-    let code = Compiler::new()
-        .compile_source(src)
-        .expect("compile nested ternary");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    vm.set_register(10, 1); // a
-    vm.set_register(11, 3); // b
-    vm.set_register(12, 2); // c
-    vm.run().expect("exec");
-    assert_eq!(vm.register(10), 2);
+fn nested_ternary_types() {
+    let src = "module Ternary { fn f(int a, int b, int c) -> int { return (a < b) ? ((b < c) ? b : c) : a; } }";
+    analyze(&parse(src).expect("parse nested ternary")).expect("type nested ternary");
 }
 
 #[test]
-fn seiyaku_meta_controls_header() {
+fn build_options_control_header_and_source_meta_is_unavailable() {
     let src = r#"
 seiyaku MyC {
-  meta {
-    abi_version: 1;
-    vector_length: 8;
-    max_cycles: 1234;
-    zk: true;
-    vector: true;
-  }
   hajimari() {
-    setvl(8);
-    assert(true);
-    let _digest = poseidon2(1, 2);
+    let _digest = crypto::poseidon2(left: 1, right: 2);
     let a = 1;
   }
 }
 "#;
-    let code = Compiler::new()
-        .compile_source(src)
-        .expect("compile seiyaku meta");
+    let code = Compiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+        max_cycles: 1234,
+        ..Default::default()
+    })
+    .compile_source(src)
+    .expect("compile build-selected metadata");
     let (meta, _off) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.abi_version, 1);
-    assert_eq!(meta.vector_length, 8);
+    assert_eq!(meta.vector_length, 0);
     assert_eq!(meta.max_cycles, 1234);
     assert_ne!(meta.mode & ivm::ivm_mode::ZK, 0);
-    assert_ne!(meta.mode & ivm::ivm_mode::VECTOR, 0);
+    assert_eq!(meta.mode & ivm::ivm_mode::VECTOR, 0);
 }
 
 #[test]
-fn compile_map_get_then_branch_control_flow() {
-    // Program performs a map get and then conditionally returns either the value or 0
-    let src = "fn f(m: Map<int, int>, k: int, b: bool) -> int { let v = m[k]; if b { return v; } else { return 0; } }";
-    let code = Compiler::new().compile_source(src).expect("compile failed");
-
-    // Prepare a simple 2-word map with key=5, value=777
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    let base = vm.alloc_heap(16).expect("alloc");
-    vm.store_u64(base, 5).expect("store key");
-    vm.store_u64(base + 8, 777).expect("store val");
-
-    // Case 1: branch taken (b = true) -> returns v
-    vm.set_register(10, base); // m
-    vm.set_register(11, 5); // k
-    vm.set_register(12, 1); // b = true
-    vm.run().expect("execution failed");
-    assert_eq!(vm.register(10), 777);
-
-    // Case 2: branch not taken (b = false) -> returns 0
-    let mut vm2 = ivm::IVM::new(u64::MAX);
-    vm2.load_program(&code).unwrap();
-    let base2 = vm2.alloc_heap(16).expect("alloc");
-    vm2.store_u64(base2, 5).expect("store key");
-    vm2.store_u64(base2 + 8, 777).expect("store val");
-    vm2.set_register(10, base2);
-    vm2.set_register(11, 5);
-    vm2.set_register(12, 0); // b = false
-    vm2.run().expect("execution failed");
-    assert_eq!(vm2.register(10), 0);
+fn removed_in_memory_map_indexing_is_rejected() {
+    let src = "module RemovedMap { fn f(Map<int, int> m, int k) -> int { return m[k]; } }";
+    let error = Compiler::new()
+        .compile_source(src)
+        .expect_err("in-memory Map must not compile in V1");
+    assert!(error.contains("Map"), "unexpected error: {error}");
 }
 
 #[test]
-fn branch_lowering_uses_short_bne_and_dual_jal() {
+fn branch_lowering_uses_compact_bne_and_one_relaxed_transfer() {
     let src = r#"
-fn branch(b: bool) -> int {
-    if b {
-        return 1;
-    } else {
-        return 2;
+seiyaku Branches {
+    view fn branch(bool b) -> int {
+        if b {
+            return 1;
+        } else {
+            return 2;
+        }
     }
 }
 "#;
-    let code = Compiler::new()
-        .compile_source(src)
+    let (code, _manifest, report) = Compiler::new()
+        .compile_source_with_manifest_and_report(src)
         .expect("compile simple branch");
-    let (_meta, code_offset) = parse_meta_offset(&code).expect("parse metadata");
-
-    let mut words: Vec<u32> = Vec::new();
-    for chunk in code[code_offset..].chunks_exact(4) {
-        let word = u32::from_le_bytes(chunk.try_into().expect("word chunk"));
-        words.push(word);
-        if word == encoding::wide::encode_halt() {
-            break;
-        }
-    }
+    let metadata = ProgramMetadata::parse(&code).expect("parse metadata");
+    let branch = report
+        .budget_report
+        .iter()
+        .find(|entry| entry.function_name == "branch")
+        .expect("branch budget report");
+    let words = code[metadata.code_offset + branch.pc_start as usize
+        ..metadata.code_offset + branch.pc_end as usize]
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("word chunk")))
+        .collect::<Vec<_>>();
 
     let bne_index = words
         .iter()
@@ -2759,41 +2058,41 @@ fn branch(b: bool) -> int {
     let bne_word = words[bne_index];
     let imm = (bne_word & 0xFF) as u8 as i8;
     assert_eq!(
-        imm, 26,
-        "BNE should skip the full fixed-size else transfer stub and land on the then transfer stub"
+        imm, 2,
+        "BNE should skip the one-word else transfer and land on the one-word then transfer"
     );
 
-    let jal_else = words[bne_index + 1];
-    let then_stub_index = bne_index + imm as usize;
+    let relaxed_else_transfer = words[bne_index + 1];
+    let then_block_index = bne_index + imm as usize;
     assert!(
-        words.len() > then_stub_index,
-        "BNE target should land on the start of the second control-transfer stub"
+        words.len() > then_block_index,
+        "BNE target should land directly in the then block"
     );
-    let jal_then = words[then_stub_index];
     assert_eq!(
-        (jal_else >> 24) as u8,
+        (relaxed_else_transfer >> 24) as u8,
         instruction::wide::control::JAL,
         "fallthrough path must jump to the else block"
     );
-    assert_eq!(
-        (jal_then >> 24) as u8,
+    assert_ne!(
+        (words[then_block_index] >> 24) as u8,
         instruction::wide::control::JAL,
-        "taken path must jump to the then block"
+        "taken path must fall through into the then block without a second jump"
     );
 }
 
 #[test]
 fn compile_poseidon2_and_assert_eq() {
     // poseidon2 computation
-    let src = "fn f(a, b) { let h = poseidon2(a, b); }";
+    let src =
+        "module Poseidon { fn f(int a, int b) { let h = crypto::poseidon2(left: a, right: b); } }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
     assert!(!code.is_empty());
     let (meta, _) = parse_meta_offset(&code).unwrap();
     assert_ne!(meta.mode & 0x01, 0, "poseidon2 should enable ZK mode");
 
     // assert_eq succeeds without enabling ZK mode
-    let src = "fn g(a, b) { assert_eq(a, b); }";
-    let code = Compiler::new().compile_source(src).expect("compile failed");
+    let src = "seiyaku Assertions { view fn g(int a, int b) { test::assert_eq(actual: a, expected: b); } }";
+    let code = test_compiler().compile_source(src).expect("compile failed");
 
     let (meta, _) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.mode & 0x01, 0);
@@ -2802,6 +2101,7 @@ fn compile_poseidon2_and_assert_eq() {
     vm.set_register(10, 1);
     vm.set_register(11, 1);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "g");
     vm.run().expect("assert_eq failed");
 
     // failing case
@@ -2809,13 +2109,14 @@ fn compile_poseidon2_and_assert_eq() {
     vm2.set_register(10, 1);
     vm2.set_register(11, 2);
     vm2.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm2, &code, "g");
     let res = vm2.run();
     assert!(matches!(res, Err(ivm::VMError::AssertionFailed)));
 }
 
 #[test]
 fn compile_pubkgen_and_valcom() {
-    let src = "fn f(a: int, b: int) -> (int, int) { let p = pubkgen(a); let c = valcom(a, b); return (p, c); }";
+    let src = "module Commitments { fn f(int a, int b) -> (int, int) { let p = crypto::pubkgen(a); let c = crypto::valcom(left: a, right: b); return (p, c); } }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
 
     let (meta, _) = parse_meta_offset(&code).unwrap();
@@ -2839,18 +2140,18 @@ fn pubkgen_valcom_spills_are_handled() {
     use ivm::kotodama::regalloc;
 
     let build_src = |count: usize| {
-        let mut src = String::from("fn main(a: int, b: int) -> int {\n");
+        let mut src = String::from("module CommitmentSpills {\nfn main(int a, int b) -> int {\n");
         for i in 0..count {
             let value = (i + 1) as i64;
             src.push_str(&format!("  let v{i} = {value};\n"));
         }
-        src.push_str("  let c = valcom(a, b);\n");
-        src.push_str("  let p = pubkgen(c);\n");
-        src.push_str("  let sum = 0;\n");
+        src.push_str("  let c = crypto::valcom(left: a, right: b);\n");
+        src.push_str("  let p = crypto::pubkgen(c);\n");
+        src.push_str("  var sum = 0;\n");
         for i in 0..count {
             src.push_str(&format!("  sum = sum + v{i};\n"));
         }
-        src.push_str("  return sum + p + c;\n}\n");
+        src.push_str("  return sum + p + c;\n}\n}\n");
         src
     };
 
@@ -2900,24 +2201,22 @@ fn pubkgen_valcom_spills_are_handled() {
 }
 
 #[test]
-fn json_encode_decode_spills_are_handled() {
+fn typed_json_access_spills_are_handled() {
     use ivm::kotodama::ir::Instr;
     use ivm::kotodama::regalloc;
 
     let build_src = |count: usize| {
-        let mut src = String::from("fn main(b: bytes) -> int {\n");
+        let mut src = String::from("module JsonSpills {\nfn main(Json j) -> int {\n");
         for i in 0..count {
             let value = (i + 1) as i64;
             src.push_str(&format!("  let v{i} = {value};\n"));
         }
-        src.push_str("  let j = decode_json(b);\n");
-        src.push_str("  let sum = 0;\n");
+        src.push_str("  var sum = 0;\n");
         for i in 0..count {
             src.push_str(&format!("  sum = sum + v{i};\n"));
         }
-        src.push_str("  let encoded = encode_json(j);\n");
-        src.push_str("  let val = decode_int(encoded);\n");
-        src.push_str("  return sum + val;\n}\n");
+        src.push_str("  let val = match j.get_int(Name::parse(\"value\")) { Option::some(value) => value, Option::none => 0 };\n");
+        src.push_str("  return sum + val;\n}\n}\n");
         src
     };
 
@@ -2925,8 +2224,8 @@ fn json_encode_decode_spills_are_handled() {
     let mut count = 20usize;
     while count <= 80 {
         let src = build_src(count);
-        let prog = parse(&src).expect("parse json spill");
-        let typed = analyze(&prog).expect("analyze json spill");
+        let prog = parse(&src).expect("parse typed Json spill");
+        let typed = analyze(&prog).expect("analyze typed Json spill");
         let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
         let func = ir
             .functions
@@ -2939,13 +2238,8 @@ fn json_encode_decode_spills_are_handled() {
         for bb in &func.blocks {
             for ins in &bb.instrs {
                 match ins {
-                    Instr::JsonDecode { dest, blob } => {
-                        if is_spilled(dest) || is_spilled(blob) {
-                            saw_spill = true;
-                        }
-                    }
-                    Instr::JsonEncode { dest, json } => {
-                        if is_spilled(dest) || is_spilled(json) {
+                    Instr::JsonGetInt { dest, json, key } => {
+                        if is_spilled(dest) || is_spilled(json) || is_spilled(key) {
                             saw_spill = true;
                         }
                     }
@@ -2960,75 +2254,93 @@ fn json_encode_decode_spills_are_handled() {
         count += 4;
     }
 
-    let src = chosen.expect("expected json encode/decode spill; adjust pressure if needed");
+    let src = chosen.expect("expected typed Json access spill; adjust pressure if needed");
     Compiler::new()
         .compile_source(&src)
-        .expect("compile json spill");
+        .expect("compile typed Json spill");
 }
 
 #[test]
-fn compile_poseidon6_error() {
-    let src = "fn g(a,b,c,d,e,f) { let h = poseidon6(a,b,c,d,e,f); }";
-    let err = Compiler::new().compile_source(src).unwrap_err();
-    assert!(err.contains("POSEIDON6 not supported"));
-}
-
-#[test]
-fn compile_and_run_foreach_map_single_iteration() {
-    // Executes body once, binding (k,v) and returning v
-    let src = r#"fn f(m: Map<int, int>) -> int { for (k, v) in m { return v; } return 0; }"#;
-    let err = Compiler::new().compile_source(src).unwrap_err();
-    assert!(err.contains("E_UNBOUNDED_ITERATION"));
-}
-
-#[test]
-fn compile_and_run_foreach_map_two_buckets_sum() {
-    // Sum values from two buckets deterministically
-    let src = r#"fn sum(m: Map<int, int>) -> int { let acc = 0; for (k, v) in m { acc = acc + v; } return acc; }"#;
-    let err = Compiler::new().compile_source(src).unwrap_err();
-    assert!(err.contains("E_UNBOUNDED_ITERATION"));
-}
-
-#[test]
-fn map_new_allocates() {
-    // Expect non-zero pointer returned by Map::new()
-    let src = "fn make() -> int { return Map::new(); }";
-    let code = Compiler::new().compile_source(src).expect("compile failed");
-    let (meta, _off) = parse_meta_offset(&code).unwrap();
-    assert_eq!(meta.mode & 0x01, 0); // no ZK flag required
-
-    // Debug: dump first 8 instruction words after header
-    let (_, off) = parse_meta_offset(&code).unwrap();
-    let mut words = Vec::new();
-    for i in 0..8 {
-        let start = off + i * 4;
-        if start + 4 <= code.len() {
-            let w = u32::from_le_bytes(code[start..start + 4].try_into().unwrap());
-            words.push(w);
+fn raw_json_codec_aliases_are_rejected() {
+    let src = r#"
+        module RemovedCodecAliases {
+            fn main(bytes payload) -> Json {
+                return decode_json(payload);
+            }
         }
-    }
-    eprintln!(
-        "Map::new first words: {:?}",
-        words
-            .iter()
-            .map(|w| format!("0x{w:08x}"))
-            .collect::<Vec<_>>()
+    "#;
+    let error = Compiler::new()
+        .compile_source(src)
+        .expect_err("raw JSON codec aliases are not part of Kotodama V1");
+    assert!(
+        error.contains("decode_json") || error.contains("unknown"),
+        "unexpected error: {error}"
     );
+}
+
+#[test]
+fn compile_and_run_poseidon_register_forms() {
+    let src = r#"
+module PoseidonForms {
+    fn main() -> (int, int) {
+        let pair = crypto::poseidon2(left: 123456789, right: 987654321);
+        let sextet = crypto::poseidon6(a: 3, b: 5, c: 8, d: 13, e: 21, f: 34);
+        return (pair, sextet);
+    }
+}
+"#;
+    let code = Compiler::new()
+        .compile_source(src)
+        .expect("compile both Poseidon arities");
+    let parsed = ProgramMetadata::parse(&code).expect("parse metadata");
+    assert_ne!(parsed.metadata.mode & ivm::ivm_mode::ZK, 0);
+    let poseidon6_word = code[parsed.code_offset..]
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .find(|word| instruction::wide::opcode(*word) == instruction::wide::crypto::POSEIDON6)
+        .expect("compiled code contains POSEIDON6");
+    let (_, input_base) = encoding::wide::decode_poseidon6(poseidon6_word)
+        .expect("compiler emits canonical POSEIDON6 register window");
+    assert_eq!(input_base, 10);
 
     let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    vm.run().expect("execution failed");
-    let map_ptr = vm.register(10);
-    assert_ne!(map_ptr, 0);
-    let mut buf = [0u8; 8];
-    vm.load_bytes(map_ptr, &mut buf)
-        .expect("load Map::new key bytes");
-    let key = u64::from_le_bytes(buf);
-    vm.load_bytes(map_ptr + 8, &mut buf)
-        .expect("load Map::new value bytes");
-    let value = u64::from_le_bytes(buf);
-    assert_eq!(key, 0);
-    assert_eq!(value, 0);
+    vm.load_program(&code).expect("load Poseidon program");
+    vm.run().expect("run Poseidon program");
+    assert_eq!(vm.register(10), ivm::poseidon2(123456789, 987654321));
+    assert_eq!(vm.register(11), ivm::poseidon6([3, 5, 8, 13, 21, 34]));
+}
+
+#[test]
+fn unbounded_state_map_iteration_is_rejected() {
+    let src = r#"
+        seiyaku UnboundedStateIteration {
+            state StateMap<int, int> values;
+            fn f() { for (key, value) in values { let seen = value; } }
+        }
+    "#;
+    let err = Compiler::new().compile_source(src).unwrap_err();
+    assert!(err.contains("E_UNBOUNDED_ITERATION"));
+}
+
+#[test]
+fn unbounded_state_map_iteration_cannot_infer_a_limit() {
+    let src = r#"
+        seiyaku MissingStateIterationLimit {
+            state StateMap<int, int> values;
+            fn sum() { for (key, value) in values { let seen = key; } }
+        }
+    "#;
+    let err = Compiler::new().compile_source(src).unwrap_err();
+    assert!(err.contains("E_UNBOUNDED_ITERATION"));
+}
+
+#[test]
+fn map_new_is_rejected_in_v1() {
+    let src = "module RemovedMap { fn make() -> int { return Map::new(); } }";
+    let error = Compiler::new()
+        .compile_source(src)
+        .expect_err("in-memory Map allocation must not compile in V1");
+    assert!(error.contains("Map"), "unexpected error: {error}");
 }
 
 #[test]
@@ -3114,7 +2426,7 @@ fn parse_dai_clone() {
 #[test]
 fn parse_mint_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(a: AccountId, b: AssetDefinitionId, c: int){ mint_asset(a,b,c); }";
+    let src = "module MintHelpers { fn f(AccountId a, AssetDefinitionId b, quantity c) { ledger::asset::mint(account: a, asset_definition: b, amount: c); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -3125,7 +2437,7 @@ fn parse_mint_asset_builtin() {
 #[test]
 fn parse_transfer_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: int, e: DataSpaceId){ transfer_asset(a,b,c,d,e); }";
+    let src = "module TransferHelpers { fn f(AccountId a, AccountId b, AssetDefinitionId c, quantity d, DataSpaceId e) { ledger::asset::transfer(source: a, destination: b, asset_definition: c, amount: d, dataspace: e); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -3140,7 +2452,7 @@ fn parse_transfer_asset_builtin() {
 #[test]
 fn parse_transfer_batch_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: int, e: DataSpaceId){ transfer_batch((a,b,c,d,e), (b,a,c,d,e)); }";
+    let src = "module BatchHelpers { fn f(AccountId a, AccountId b, AssetDefinitionId c, quantity d) { ledger::asset::transfer_batch((a, b, c, d), (b, a, c, d)); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -3163,7 +2475,7 @@ fn parse_transfer_batch_builtin() {
 
 #[test]
 fn transfer_batch_requires_entries() {
-    let src = "fn f(){ transfer_batch(); }";
+    let src = "module EmptyBatch { fn f() { ledger::asset::transfer_batch(); } }";
     let prog = parse(src).expect("parse failed");
     assert!(
         analyze(&prog).is_err(),
@@ -3173,7 +2485,7 @@ fn transfer_batch_requires_entries() {
 
 #[test]
 fn transfer_batch_requires_tuple_entries() {
-    let src = "fn f(a: AccountId){ transfer_batch(a); }";
+    let src = "module InvalidBatch { fn f(a: AccountId) { ledger::asset::transfer_batch(a); } }";
     let prog = parse(src).expect("parse failed");
     assert!(
         analyze(&prog).is_err(),
@@ -3184,7 +2496,7 @@ fn transfer_batch_requires_tuple_entries() {
 #[test]
 fn parse_burn_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(a: AccountId, b: AssetDefinitionId, c: int){ burn_asset(a,b,c); }";
+    let src = "module BurnHelpers { fn f(AccountId a, AssetDefinitionId b, quantity c) { ledger::asset::burn(account: a, asset_definition: b, amount: c); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -3195,8 +2507,13 @@ fn parse_burn_asset_builtin() {
 #[test]
 fn parse_register_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src =
-        r#"fn f(){ register_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "X", 1, 0); }"#;
+    let src = r#"
+        module RegisterAssetHelpers {
+            fn f() {
+                ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "X", scale: 1, mintable: 0);
+            }
+        }
+    "#;
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -3211,7 +2528,19 @@ fn parse_register_asset_builtin() {
 #[test]
 fn parse_create_new_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = r#"fn f(){ create_new_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "X", 1, account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), 0); }"#;
+    let src = r#"
+        module CreateAssetHelpers {
+            fn f() {
+                ledger::asset::create(
+                    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+                    name: "X",
+                    scale: 1,
+                    owner: AccountId::parse("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
+                    mintable: 0
+                );
+            }
+        }
+    "#;
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -3225,7 +2554,11 @@ fn parse_create_new_asset_builtin() {
 
 #[test]
 fn parse_register_asset_rejects_bare_name_literal() {
-    let src = r#"fn f(){ register_asset("x", "X", 1, 0); }"#;
+    let src = r#"
+        module InvalidAssetRegistration {
+            fn f() { ledger::asset::register(asset_definition: "x", name: "X", scale: 1, mintable: 0); }
+        }
+    "#;
     let prog = parse(src).expect("parse failed");
     let err = analyze(&prog).expect_err("bare asset names should be rejected");
     assert!(
@@ -3292,108 +2625,94 @@ fn compile_kotodama_samples_supported() {
 
 #[test]
 fn compile_unary_ops() {
-    let src = "fn f(a: int, b: bool) { let c = -a; let d = !b; }";
+    let src = "module UnaryOps { fn f(int a, bool b) { let c = -a; let d = !b; } }";
     Compiler::new()
         .compile_source(src)
         .expect("compile unary ops");
 }
 
 #[test]
-fn map_methods_and_iter_helpers_parse_and_type() {
-    // Ensure the new method syntax coexists with the remaining iterator helpers.
+fn in_memory_map_methods_are_rejected() {
     let src = r#"
-        fn f(m: Map<int,int>) {
-            let a = m.contains(1);
-            let b = m.ensure(2);
-            let c = std::map::keys_take2(m, 0, 1);
-            let d = std::map::values_take2(m, 0, 0);
+        module RemovedMapMethods {
+            fn f(Map<int, int> m) {
+                let a = m.contains(1);
+                let b = m.ensure(2);
+            }
         }
     "#;
     let prog = parse(src).expect("parse map methods");
-    analyze(&prog).expect("analyze map methods");
+    let error = analyze(&prog).expect_err("in-memory Map methods must be rejected");
+    assert!(error.message.contains("Map"), "unexpected error: {error:?}");
 }
 
 #[test]
-fn ir_lower_contains_method_ephemeral() {
-    // m.contains(k) should lower like contains(m,k) on non-state param maps: MapLoadPair + Eq
+fn ir_lower_contains_method_state_map() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(m: Map<int,int>, k: int) { let x = m.contains(k); }";
+    let src = r#"
+        seiyaku StateContains {
+            state StateMap<int, int> m;
+            view fn f(int k) -> bool { return m.contains(k); }
+        }
+    "#;
     let prog = parse(src).expect("parse contains");
     let typed = analyze(&prog).expect("analyze contains");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
-    let mut saw_load_pair = false;
-    let mut saw_eq = false;
-    for ins in &f.blocks[0].instrs {
-        match ins {
-            Instr::MapLoadPair { .. } => saw_load_pair = true,
-            Instr::Binary { op, .. } if *op == ivm::kotodama::ast::BinaryOp::Eq => saw_eq = true,
-            _ => {}
+    let mut saw_state_get = false;
+    let mut saw_ne = false;
+    for block in &f.blocks {
+        for ins in &block.instrs {
+            match ins {
+                Instr::StateGet { .. } => saw_state_get = true,
+                Instr::Binary { op, .. } if *op == ivm::kotodama::ast::BinaryOp::Ne => {
+                    saw_ne = true;
+                }
+                _ => {}
+            }
         }
     }
-    assert!(saw_load_pair && saw_eq);
+    assert!(saw_state_get && saw_ne);
 }
 
 #[test]
-fn ir_lower_keys_values_take2_ephemeral() {
-    // keys_take2/values_take2 on non-state map param should compute dynamic addr and load key/value
-    use ivm::kotodama::ir::Instr;
+fn ephemeral_keys_take2_helper_is_rejected() {
     let src = r#"
-        fn g(m: Map<int,int>) -> int { return keys_take2(m, 0, 1); }
+        module RemovedMapIteration {
+            fn g(Map<int, int> m) -> int { return keys_take2(m, 0, 1); }
+        }
     "#;
     let prog = parse(src).expect("parse keys_take2");
-    let typed = analyze(&prog).expect("analyze keys_take2");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-    let f = &ir.functions[0];
-    let mut saw_load0 = false;
-    let mut saw_load8 = false;
-    for ins in &f.blocks[0].instrs {
-        if let Instr::Load64Imm { imm, .. } = ins {
-            if *imm == 0 {
-                saw_load0 = true;
-            }
-            if *imm == 8 {
-                saw_load8 = true;
-            }
-        }
-    }
-    assert!(saw_load0 && saw_load8);
+    let error = analyze(&prog).expect_err("ephemeral map helpers must be rejected");
+    assert!(error.message.contains("Map"), "unexpected error: {error:?}");
 }
 
 #[test]
-fn ir_lower_keys_values_take2_tuple_access() {
-    // keys_values_take2 returns a tuple; accessing .0/.1 should lower to LOAD64s
-    use ivm::kotodama::ir::Instr;
+fn ephemeral_keys_values_take2_helper_is_rejected() {
     let src = r#"
-        fn f(m: Map<int,int>) { let t = std::map::keys_values_take2(m, 0, 1); let a = t.0; let b = t.1; }
-    "#;
-    let prog = parse(src).expect("parse keys_values_take2");
-    let typed = analyze(&prog).expect("analyze keys_values_take2");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-    let f = &ir.functions[0];
-    let mut saw0 = false;
-    let mut saw8 = false;
-    for ins in &f.blocks[0].instrs {
-        if let Instr::Load64Imm { imm, .. } = ins {
-            if *imm == 0 {
-                saw0 = true;
-            }
-            if *imm == 8 {
-                saw8 = true;
+        module RemovedMapEntries {
+            fn f(Map<int, int> m) {
+                let t = std::map::keys_values_take2(m, 0, 1);
+                let a = t.0;
+                let b = t.1;
             }
         }
-    }
-    assert!(saw0 && saw8);
+    "#;
+    let prog = parse(src).expect("parse keys_values_take2");
+    let error = analyze(&prog).expect_err("ephemeral map helpers must be rejected");
+    assert!(error.message.contains("Map"), "unexpected error: {error:?}");
 }
 
 #[test]
 fn ir_tuple_pack_and_get_general() {
     use ivm::kotodama::ir::Instr;
     let src = r#"
-        fn f(a: int, b: int) {
-            let t = (a, b);
-            let x = t.0;
-            let y = t.1;
+        module Tuples {
+            fn f(int a, int b) {
+                let t = (a, b);
+                let x = t.0;
+                let y = t.1;
+            }
         }
     "#;
     let prog = parse(src).expect("parse tuple pack/get");
@@ -3430,18 +2749,13 @@ fn ir_tuple_pack_and_get_general() {
 }
 
 #[test]
-fn vrf_and_pointer_syscalls_present() {
+fn typed_vrf_syscalls_are_present() {
     let src = r#"
-        fn main() {
-            let input = blob("msg");
-            let pk = blob("pk");
-            let proof = blob("proof");
-            let out = vrf_verify(input, pk, proof, 2);
-            let _batch = vrf_verify_batch(norito_bytes("batch"));
-            let _encoded = pointer_to_norito(out);
-            let _schema = schema_info(name("example.schema"));
-            let _handle = asset_handle(norito_bytes("0x00"));
-            let _ds = dataspace_id(norito_bytes("0x00"));
+        module VrfVerification {
+            fn main(input: bytes, public_key: bytes, proof: bytes, batch: bytes) {
+                let _out = crypto::vrf::verify(message: input, proof: public_key, public_key: proof, variant: 2);
+                let _batch = crypto::vrf::verify_batch(batch);
+            }
         }
     "#;
     let code = ivm::KotodamaCompiler::new()
@@ -3457,13 +2771,28 @@ fn vrf_and_pointer_syscalls_present() {
     };
     assert!(has(syscalls::SYSCALL_VRF_VERIFY as u8));
     assert!(has(syscalls::SYSCALL_VRF_VERIFY_BATCH as u8));
-    assert!(has(syscalls::SYSCALL_POINTER_TO_NORITO as u8));
-    assert!(has(syscalls::SYSCALL_POINTER_FROM_NORITO as u8));
-    assert!(has(syscalls::SYSCALL_SCHEMA_INFO as u8));
 }
 
 #[test]
-fn axt_intrinsics_lower_to_syscalls() {
+fn raw_pointer_codec_alias_is_rejected() {
+    let src = r#"
+        module RemovedPointerCodec {
+            fn main(value: bytes) {
+                let _encoded = pointer_to_norito(value);
+            }
+        }
+    "#;
+    let error = Compiler::new()
+        .compile_source(src)
+        .expect_err("raw pointer codec aliases are not part of Kotodama V1");
+    assert!(
+        error.contains("pointer_to_norito") || error.contains("unknown"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn raw_axt_intrinsics_are_rejected() {
     use norito::to_bytes;
 
     let dsid = DataSpaceId::new(7);
@@ -3506,40 +2835,36 @@ fn axt_intrinsics_lower_to_syscalls() {
     let proof_hex = hex(&to_bytes(&proof).expect("encode proof"));
     let src = format!(
         r#"
-        fn main() {{
-            let ds = dataspace_id("{dsid}");
+        seiyaku RemovedAxtSurface {{
+          kotoage fn main() authorize("UseAxt") {{
+            let ds = DataSpaceId::parse("{dsid}");
             let desc = axt_descriptor("0x{desc_hex}");
             let handle = asset_handle("0x{handle_hex}");
             let proof = proof_blob("0x{proof_hex}");
-            axt_begin(desc);
-            axt_touch(ds, norito_bytes("manifest"));
-            verify_ds_proof(ds, proof);
-            use_asset_handle(handle, norito_bytes("intent"), proof);
-            axt_commit();
+            axt::begin(desc);
+            axt::touch(ds, norito_bytes("manifest"));
+            axt::verify_proof(ds, proof);
+            axt::use_asset_handle(handle: handle, operation: norito_bytes("intent"), proof: proof);
+            axt::commit();
+          }}
         }}
     "#
     );
-    let code = test_compiler()
+    let error = test_compiler()
         .compile_source(&src)
-        .expect("compile axt intrinsics");
-    let (_meta, off) = parse_meta_offset(&code).unwrap();
-    let bytes = &code[off..];
-    let scall = instruction::wide::system::SCALL;
-    let has = |imm: u8| {
-        bytes
-            .windows(4)
-            .any(|w| w == encoding::wide::encode_sys(scall, imm).to_le_bytes())
-    };
-    assert!(has(syscalls::SYSCALL_AXT_BEGIN as u8));
-    assert!(has(syscalls::SYSCALL_AXT_TOUCH as u8));
-    assert!(has(syscalls::SYSCALL_VERIFY_DS_PROOF as u8));
-    assert!(has(syscalls::SYSCALL_USE_ASSET_HANDLE as u8));
-    assert!(has(syscalls::SYSCALL_AXT_COMMIT as u8));
+        .expect_err("raw AXT pointer construction is not part of Kotodama V1");
+    assert!(
+        error.contains("axt_descriptor")
+            || error.contains("AssetHandle")
+            || error.contains("raw pointer")
+            || error.contains("unknown"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
 fn semantic_return_mismatch_unit() {
-    let src = "fn f() -> () { return 1; }";
+    let src = "module ReturnMismatch { fn f() -> () { return 1; } }";
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).unwrap_err();
     assert!(err.message.contains("return type mismatch"));

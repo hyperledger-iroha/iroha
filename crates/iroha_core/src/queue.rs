@@ -13871,8 +13871,8 @@ pub mod tests {
         }
         .encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let parsed = ProgramMetadata::parse(&program).expect("parse minimal program");
-        let code_hash = iroha_crypto::Hash::new(&program[parsed.header_len..]);
+        ProgramMetadata::parse(&program).expect("parse minimal program");
+        let code_hash = ivm::contract_code_hash(&program);
         (code_hash, program)
     }
 
@@ -13955,7 +13955,7 @@ pub mod tests {
         let call = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: contract_address.clone(),
             entrypoint: entrypoint.to_owned(),
-            payload: None,
+            arguments: None,
         };
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -14103,7 +14103,8 @@ pub mod tests {
         metadata.insert(
             "gas_limit".parse().expect("gas_limit key"),
             iroha_primitives::json::Json::new(crate::smartcontracts::ivm::gas_limit_for_cycles(
-                max_cycles,
+                std::num::NonZeroU64::new(max_cycles)
+                    .expect("queue IVM fixture requires a positive cycle limit"),
             )),
         );
         let tx =
@@ -19297,6 +19298,7 @@ pub mod tests {
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.lane_catalog = (*lane_catalog).clone();
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = (*dataspace_catalog).clone();
         state

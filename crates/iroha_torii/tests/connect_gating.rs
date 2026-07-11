@@ -302,6 +302,11 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 burst: iroha_config::parameters::defaults::torii::PROOF_BURST
                     .and_then(std::num::NonZeroU32::new),
                 max_body_bytes: iroha_config::parameters::defaults::torii::PROOF_MAX_BODY_BYTES,
+                body_max_inflight:
+                    iroha_config::parameters::defaults::torii::PROOF_BODY_MAX_INFLIGHT,
+                body_read_timeout: std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::torii::PROOF_BODY_READ_TIMEOUT_MS,
+                ),
                 egress_bytes_per_sec: iroha_config::parameters::defaults::torii::PROOF_EGRESS_BYTES_PER_SEC
                     .and_then(std::num::NonZeroU64::new),
                 egress_burst_bytes: iroha_config::parameters::defaults::torii::PROOF_EGRESS_BURST_BYTES
@@ -417,10 +422,14 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             zk_ivm_prove_max_inflight:
                 iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT,
             zk_ivm_prove_max_queue: iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_MAX_QUEUE,
+            zk_ivm_tooling_timeout_ms:
+                iroha_config::parameters::defaults::torii::ZK_IVM_TOOLING_TIMEOUT_MS,
             zk_ivm_prove_job_ttl_secs:
                 iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS,
             zk_ivm_prove_job_max_entries:
                 iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
+            zk_ivm_prove_job_max_retained_bytes:
+                iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
             rbc_sampling: A::RbcSampling::default(),
             da_ingest: A::DaIngest::default(),
             connect,
@@ -607,6 +616,9 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                     iroha_config::parameters::defaults::sumeragi::KURA_STORE_RETRY_MAX_ATTEMPTS,
                 commit_inflight_timeout: std::time::Duration::from_millis(
                     iroha_config::parameters::defaults::sumeragi::COMMIT_INFLIGHT_TIMEOUT_MS,
+                ),
+                post_finality_cleanup_timeout: std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::POST_FINALITY_CLEANUP_TIMEOUT_MS,
                 ),
                 commit_work_queue_cap:
                     iroha_config::parameters::defaults::sumeragi::COMMIT_WORK_QUEUE_CAP,
@@ -1101,6 +1113,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
             },
             stark: iroha_config::parameters::actual::Stark::default(),
+            sccp: iroha_config::parameters::actual::Sccp::default(),
             root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
             ballot_history_cap: iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
             empty_root_on_empty:
@@ -1118,13 +1131,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
             bridge_proof_max_future_drift_blocks:
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-            sccp_launch_mode:
-                iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane,
-            sccp_source_verifier_materials: Vec::new(),
-            sccp_source_adapter_engine_deployments: Vec::new(),
-            sccp_destination_rollouts: Vec::new(),
-            sccp_route_allowlists: Vec::new(),
-            sccp_route_manifests: Vec::new(),
             poseidon_params_id:
                 iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id:

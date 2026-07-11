@@ -1,182 +1,252 @@
-export type KotodamaStudioCompilerDiagnosticPhase =
-  | 'lex'
-  | 'parse'
-  | 'semantic'
-  | 'lowering'
-  | 'artifact';
+export type KotodamaCompilerDiagnosticPhase =
+  | "lex"
+  | "parse"
+  | "semantic"
+  | "lowering"
+  | "artifact";
 
-export interface KotodamaStudioCompilerDiagnostic {
-  severity: 'error' | 'warning'
-  message: string
-  line?: number
-  column?: number
-  code?: string | null
-  phase?: KotodamaStudioCompilerDiagnosticPhase | null
+export interface KotodamaCompilerSourcePosition {
+  line: number;
+  column: number;
 }
 
-export interface KotodamaStudioCompiledTriggerDescriptor {
-  id: string
+export interface KotodamaCompilerSourceSpan {
+  source: string | null;
+  start: KotodamaCompilerSourcePosition;
+  end: KotodamaCompilerSourcePosition;
+  /** Exact half-open UTF-8 byte range, when the Rust frontend has source text. */
+  byte_range: { start: number; end: number } | null;
+}
+
+export interface KotodamaCompilerDiagnosticLabel {
+  span: KotodamaCompilerSourceSpan;
+  message: string;
+}
+
+export interface KotodamaCompilerDiagnosticFix {
+  span: KotodamaCompilerSourceSpan;
+  replacement: string;
+}
+
+/** Exact semantic record emitted by `Diagnostic::to_json_value` in Rust. */
+export interface KotodamaCompilerDiagnostic {
+  code: string;
+  severity: "error" | "warning";
+  phase: KotodamaCompilerDiagnosticPhase;
+  message: string;
+  primary_span: KotodamaCompilerSourceSpan | null;
+  labels: KotodamaCompilerDiagnosticLabel[];
+  notes: string[];
+  help: string | null;
+  fix: KotodamaCompilerDiagnosticFix | null;
+}
+
+export interface KotodamaCompiledTriggerDescriptor {
+  id: string;
+  repeats: { Indefinitely: null } | { Exactly: number };
+  /** Canonical standard-base64 NRT0 frame for `EventFilterBox`. */
+  filter: string;
+  authority: string | null;
+  metadata: Record<string, unknown>;
   callback: {
-    namespace: string | null
-    entrypoint: string
-  }
+    namespace: string | null;
+    entrypoint: string;
+  };
 }
 
-export interface KotodamaStudioCompiledManifestEntrypointKind {
-  kind: 'Public' | 'View' | 'Hajimari' | 'Kaizen'
-  value: null
+export interface KotodamaCompiledManifestEntrypointKind {
+  kind: "Kotoage" | "View" | "Hajimari" | "Kaizen";
+  value: null;
 }
 
-export interface KotodamaStudioCompiledKotobaTranslation {
-  lang: string
-  text: string
+export interface KotodamaCompiledKotobaTranslation {
+  lang: string;
+  text: string;
 }
 
-export interface KotodamaStudioCompiledKotobaEntry {
-  msg_id: string
-  translations: KotodamaStudioCompiledKotobaTranslation[]
+export interface KotodamaCompiledKotobaEntry {
+  msg_id: string;
+  translations: KotodamaCompiledKotobaTranslation[];
 }
 
-export interface KotodamaStudioCompiledEntrypoint {
-  name: string
-  kind: 'public' | 'view' | 'hajimari' | 'kaizen' | KotodamaStudioCompiledManifestEntrypointKind
+export type KotodamaCompiledEntrypointValueKindName =
+  | "Int"
+  | "U128"
+  | "Bool"
+  | "String"
+  | "Amount"
+  | "Json"
+  | "Name"
+  | "AccountId"
+  | "AssetDefinitionId"
+  | "AssetId"
+  | "DomainId"
+  | "NftId"
+  | "DataSpaceId"
+  | "Blob";
+
+export interface KotodamaCompiledEntrypointValueKind {
+  kind: KotodamaCompiledEntrypointValueKindName;
+  value: null;
+}
+
+export interface KotodamaCompiledEntrypointValueType {
+  nodes: KotodamaCompiledEntrypointValueTypeNode[];
+}
+
+export type KotodamaCompiledEntrypointValueTypeNode =
+  | {
+      kind: "Struct";
+      value: { name: string; fields: string[] };
+    }
+  | { kind: "Tuple"; value: number }
+  | { kind: "Option"; value: null }
+  | { kind: "Result"; value: null }
+  | {
+      kind: "List";
+      value: { capacity: number };
+    }
+  | { kind: "Leaf"; value: KotodamaCompiledEntrypointValueKind };
+
+export interface KotodamaCompiledEntrypointArgumentSchema {
+  fields: Array<{
+    name: string;
+    ty: KotodamaCompiledEntrypointValueType;
+  }>;
+}
+
+export interface KotodamaCompiledEntrypoint {
+  name: string;
+  kind: KotodamaCompiledManifestEntrypointKind;
   params: Array<{
-    name: string
-    type_name: string
-  }>
-  return_type: string | null
-  permission: string | null
-  read_keys: string[]
-  write_keys: string[]
-  access_hints_complete: boolean | null
-  access_hints_skipped: string[]
-  triggers: KotodamaStudioCompiledTriggerDescriptor[]
+    name: string;
+    type_name: string;
+  }>;
+  argument_schema: KotodamaCompiledEntrypointArgumentSchema | null;
+  return_type: string | null;
+  return_schema: KotodamaCompiledEntrypointValueType | null;
+  permission: string | null;
+  read_keys: string[];
+  write_keys: string[];
+  access_hints_complete: boolean | null;
+  access_hints_skipped: string[];
+  triggers: KotodamaCompiledTriggerDescriptor[];
 }
 
-export interface KotodamaStudioCompiledSourceMapEntry {
-  function_name: string
-  pc_start: number
-  pc_end: number
-  source_path: string | null
-  line: number
-  column: number
+export interface KotodamaCompiledSourceMapEntry {
+  function_name: string;
+  pc_start: number;
+  pc_end: number;
+  source_path: string | null;
+  line: number;
+  column: number;
 }
 
-export interface KotodamaStudioCompiledBudgetEntry {
-  function_name: string
-  pc_start: number
-  pc_end: number
-  bytecode_bytes: number
-  bytecode_words: number
-  frame_bytes: number
-  jump_span_words: number
-  jump_range_risk: boolean
-  source_path: string | null
-  line: number | null
-  column: number | null
+export interface KotodamaCompiledBudgetEntry {
+  function_name: string;
+  pc_start: number;
+  pc_end: number;
+  bytecode_bytes: number;
+  bytecode_words: number;
+  frame_bytes: number;
+  jump_span_words: number;
+  jump_range_risk: boolean;
+  source_path: string | null;
+  line: number | null;
+  column: number | null;
 }
 
-export interface KotodamaStudioCompiledDynamicAccessHint {
-  base_key: string
-  key_type: string
-  bound_kind: string
-  max_keys: number
+export interface KotodamaCompiledDynamicAccessHint {
+  base_key: string;
+  key_type: string;
+  bound_kind: string;
+  max_keys: number;
 }
 
-export interface KotodamaStudioCompiledStateDescriptor {
-  name: string
-  type_name: string
+export interface KotodamaCompiledStateDescriptor {
+  name: string;
+  type_name: string;
 }
 
-export interface KotodamaStudioCompiledManifestMetadata {
-  code_hash: string
-  abi_hash: string
-  compiler_fingerprint: string
-  features_bitmap: number
-  entrypoints: KotodamaStudioCompiledEntrypoint[]
+export interface KotodamaCompiledErrorCodeDescriptor {
+  namespace: string;
+  name: string;
+  code: number;
+}
+
+export interface KotodamaCompiledManifestProvenance {
+  signer: string;
+  signature: string;
+}
+
+export interface KotodamaCompiledManifestMetadata {
+  seiyaku_name: string | null;
+  code_hash: string;
+  abi_hash: string;
+  compiler_fingerprint: string | null;
+  features_bitmap: number | null;
+  entrypoints: KotodamaCompiledEntrypoint[] | null;
   access_set_hints: {
-    read_keys: string[]
-    write_keys: string[]
-    dynamic_reads: KotodamaStudioCompiledDynamicAccessHint[]
-    dynamic_writes: KotodamaStudioCompiledDynamicAccessHint[]
-  } | null
-  states: KotodamaStudioCompiledStateDescriptor[]
-  kotoba: KotodamaStudioCompiledKotobaEntry[] | null
-  provenance: null
+    read_keys: string[];
+    write_keys: string[];
+    dynamic_reads: KotodamaCompiledDynamicAccessHint[];
+    dynamic_writes: KotodamaCompiledDynamicAccessHint[];
+  } | null;
+  states: KotodamaCompiledStateDescriptor[] | null;
+  error_codes: KotodamaCompiledErrorCodeDescriptor[] | null;
+  kotoba: KotodamaCompiledKotobaEntry[] | null;
+  provenance: KotodamaCompiledManifestProvenance | null;
 }
 
-export interface KotodamaStudioCompilerOptions {
-  sourceName?: string | null
-  embedDebug?: boolean
-  mode?: 'production' | 'Production' | 'test' | 'Test' | null
-  forceZk?: boolean
-  forceVector?: boolean
+export interface KotodamaCompilerRequestOptions {
+  /** Logical UTF-8 source path preserved in diagnostics and hash-keyed sidecars. */
+  sourceName?: string;
+  /** Select the canonical ZK contract policy required by `Secret<T>`. */
+  zk?: boolean;
 }
 
-export interface KotodamaStudioCompilerOutput {
-  artifactBytes: Uint8Array
-  codeHashHex: string
-  abiHashHex: string
-  compilerFingerprint: string
-  diagnostics: KotodamaStudioCompilerDiagnostic[]
-  warnings: KotodamaStudioCompilerDiagnostic[]
-  manifest: KotodamaStudioCompiledManifestMetadata | null
-  sourceMap: KotodamaStudioCompiledSourceMapEntry[]
-  budgetReport: KotodamaStudioCompiledBudgetEntry[]
+/** Exact bounded request sent to `iroha_js_host` or the compiler service. */
+export interface KotodamaCompilerRequest {
+  source: string;
+  sourceName?: string;
+  zk: boolean;
 }
 
-
-export declare function compileKotodamaStudioProgram(source: string, options?: KotodamaStudioCompilerOptions): KotodamaStudioCompilerOutput;
-
-export declare function compileKotodamaProgram(source: string, options?: KotodamaStudioCompilerOptions): KotodamaStudioCompilerOutput;
-
-export type KotodamaParitySourceMapEntry = KotodamaStudioCompiledSourceMapEntry;
-export type KotodamaParityBudgetEntry = KotodamaStudioCompiledBudgetEntry;
-
-export interface KotodamaParitySuccessExpectationV1 {
-  kind: 'success'
-  artifact_b64: string
-  manifest: KotodamaStudioCompiledManifestMetadata | null
-  source_map: KotodamaParitySourceMapEntry[]
-  budget_report: KotodamaParityBudgetEntry[]
-  diagnostics: KotodamaStudioCompilerDiagnostic[]
-  compiler_stderr: string[]
+export interface KotodamaCompilerOptions extends KotodamaCompilerRequestOptions {
+  /**
+   * Canonical Rust compiler-service URL. Required in browsers; optional in
+   * Node, which otherwise compiles asynchronously through `iroha_js_host`.
+   * Remote services must use HTTPS; loopback development URLs may use HTTP.
+   */
+  compilerUrl?: string;
+  /** Fetch implementation used only with `compilerUrl`. */
+  fetchImpl?: typeof fetch;
 }
 
-export interface KotodamaParityFailureExpectationV1 {
-  kind: 'failure'
-  diagnostics: KotodamaStudioCompilerDiagnostic[]
-  compiler_stderr: string[]
+export interface KotodamaCompilerOutput {
+  artifactBytes: Uint8Array;
+  codeHashHex: string;
+  abiHashHex: string;
+  compilerFingerprint: string;
+  manifest: KotodamaCompiledManifestMetadata;
+  sourceMap: KotodamaCompiledSourceMapEntry[];
+  budgetReport: KotodamaCompiledBudgetEntry[];
 }
 
-export type KotodamaParityFixtureExpectationV1 =
-  | KotodamaParitySuccessExpectationV1
-  | KotodamaParityFailureExpectationV1;
+/** Compiler errors are values; transport and malformed responses reject the promise. */
+export type KotodamaCompilerResult =
+  | { ok: true; output: KotodamaCompilerOutput }
+  | { ok: false; diagnostics: KotodamaCompilerDiagnostic[] };
 
-export interface KotodamaParityFixtureV1 {
-  version: 1
-  id: string
-  source_name: string
-  compiler_source_path?: string
-  source: string
-  rust: KotodamaParityFixtureExpectationV1
+export declare function compileKotodamaProgram(
+  source: string,
+  options?: KotodamaCompilerOptions,
+): Promise<KotodamaCompilerResult>;
+
+export declare class KotodamaCompilerClient {
+  constructor(baseUrl: string, options?: { fetchImpl?: typeof fetch });
+  compile(
+    source: string,
+    options?: KotodamaCompilerRequestOptions,
+  ): Promise<KotodamaCompilerResult>;
 }
-
-export declare function normalizeKotodamaParitySource(source: string): string;
-
-export declare function normalizeKotodamaParitySourcePath(sourcePath: string | null): string | null;
-
-export declare function normalizeKotodamaParityCompilerStderr(stderr: string): string[];
-
-export declare function normalizeKotodamaParityDiagnostic(
-  diagnostic: KotodamaStudioCompilerDiagnostic
-): KotodamaStudioCompilerDiagnostic;
-
-export declare function createKotodamaParityDiagnostic(input: {
-  severity?: KotodamaStudioCompilerDiagnostic['severity']
-  message: string
-  line?: number
-  column?: number
-  code?: string | null
-  phase?: KotodamaStudioCompilerDiagnostic['phase']
-}): KotodamaStudioCompilerDiagnostic;

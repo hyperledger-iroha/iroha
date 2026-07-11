@@ -117,6 +117,10 @@ impl<H> SyscallDispatcher<H> {
 }
 
 impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
+    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        self.inner.prepare_syscall(number, vm)
+    }
+
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         if !self.allows_syscall(vm.syscall_policy(), number) {
             return Err(VMError::UnknownSyscall(number));
@@ -124,7 +128,7 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
         self.inner.syscall(number, vm)
     }
 
-    fn allows_syscall(&mut self, policy: crate::SyscallPolicy, number: u32) -> bool {
+    fn allows_syscall(&self, policy: crate::SyscallPolicy, number: u32) -> bool {
         self.inner.allows_syscall(policy, number)
     }
 
@@ -172,6 +176,14 @@ impl SharedHost {
 }
 
 impl IVMHost for SharedHost {
+    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        let guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        let Some(host) = guard.as_ref() else {
+            return Err(VMError::HostUnavailable);
+        };
+        host.prepare_syscall(number, vm)
+    }
+
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         let Some(host) = guard.as_mut() else {
@@ -180,10 +192,10 @@ impl IVMHost for SharedHost {
         host.syscall(number, vm)
     }
 
-    fn allows_syscall(&mut self, policy: crate::SyscallPolicy, number: u32) -> bool {
-        let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+    fn allows_syscall(&self, policy: crate::SyscallPolicy, number: u32) -> bool {
+        let guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard
-            .as_mut()
+            .as_ref()
             .map(|h| h.allows_syscall(policy, number))
             .unwrap_or_else(|| syscalls::is_syscall_allowed(policy, number))
     }

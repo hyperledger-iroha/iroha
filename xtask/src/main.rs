@@ -6,6 +6,7 @@ use std::{
     collections::BTreeMap,
     env,
     error::Error,
+    ffi::OsStr,
     fmt::Write as FmtWrite,
     fs,
     net::SocketAddr,
@@ -13,6 +14,12 @@ use std::{
     process,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+#[cfg(unix)]
+use std::{
+    ffi::OsString,
+    os::unix::ffi::{OsStrExt, OsStringExt},
 };
 
 use axum::{
@@ -9877,6 +9884,25 @@ fn generate_openapi(
     };
 
     let formatted = json::to_string_pretty(&spec)?;
+    let emits_manifest = signing_key.is_some() || signature_envelope.is_some() || unsigned_manifest;
+    let generator_provenance = if emits_manifest {
+        Some(git_source_provenance(
+            &workspace_root(),
+            &openapi_generator_output_paths(&outputs, &manifest),
+        )?)
+    } else {
+        None
+    };
+    if (signing_key.is_some() || signature_envelope.is_some())
+        && generator_provenance
+            .as_ref()
+            .is_some_and(|provenance| provenance.dirty)
+    {
+        return Err(
+            "refusing to sign an OpenAPI artifact generated from a dirty source tree; commit or clean the source changes, then regenerate"
+                .into(),
+        );
+    }
 
     for path in &outputs {
         if let Some(parent) = path.parent() {
@@ -9895,12 +9921,32 @@ fn generate_openapi(
             );
         }
         if let Some(signing_key) = signing_key {
-            write_openapi_manifest(&canonical, &manifest, &signing_key)?;
+            write_openapi_manifest(
+                &canonical,
+                &manifest,
+                &signing_key,
+                generator_provenance
+                    .as_ref()
+                    .expect("manifest provenance captured"),
+            )?;
         } else if let Some(signature_envelope) = signature_envelope {
             let signature = load_signature_envelope(&signature_envelope)?;
-            write_openapi_manifest_with_signature(&canonical, &manifest, signature)?;
+            write_openapi_manifest_with_signature(
+                &canonical,
+                &manifest,
+                signature,
+                generator_provenance
+                    .as_ref()
+                    .expect("manifest provenance captured"),
+            )?;
         } else {
-            write_openapi_manifest_unsigned(&canonical, &manifest)?;
+            write_openapi_manifest_unsigned(
+                &canonical,
+                &manifest,
+                generator_provenance
+                    .as_ref()
+                    .expect("manifest provenance captured"),
+            )?;
         }
     }
 
@@ -9912,7 +9958,18 @@ struct OpenApiManifest {
     version: u32,
     generated_unix_ms: u64,
     generator_commit: Option<String>,
+    #[serde(default)]
+    generator_dirty: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    generator_source_sha256_hex: Option<String>,
     artifact: OpenApiArtifact,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OpenApiGeneratorProvenance {
+    commit: Option<String>,
+    dirty: bool,
+    source_sha256_hex: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -9947,6 +10004,7 @@ fn write_openapi_manifest(
     spec_path: &Path,
     manifest_path: &Path,
     signing_key: &Path,
+    provenance: &OpenApiGeneratorProvenance,
 ) -> Result<(), Box<dyn Error>> {
     let spec_bytes = fs::read(spec_path).map_err(|err| {
         format!(
@@ -9955,13 +10013,20 @@ fn write_openapi_manifest(
         )
     })?;
     let signature = sign_manifest_payload(&spec_bytes, signing_key)?;
-    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, Some(signature))
+    write_openapi_manifest_from_bytes(
+        spec_path,
+        manifest_path,
+        &spec_bytes,
+        Some(signature),
+        provenance,
+    )
 }
 
 fn write_openapi_manifest_with_signature(
     spec_path: &Path,
     manifest_path: &Path,
     signature: SignatureEnvelope,
+    provenance: &OpenApiGeneratorProvenance,
 ) -> Result<(), Box<dyn Error>> {
     let spec_bytes = fs::read(spec_path).map_err(|err| {
         format!(
@@ -9970,12 +10035,19 @@ fn write_openapi_manifest_with_signature(
         )
     })?;
     verify_manifest_signature(&signature, &spec_bytes)?;
-    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, Some(signature))
+    write_openapi_manifest_from_bytes(
+        spec_path,
+        manifest_path,
+        &spec_bytes,
+        Some(signature),
+        provenance,
+    )
 }
 
 fn write_openapi_manifest_unsigned(
     spec_path: &Path,
     manifest_path: &Path,
+    provenance: &OpenApiGeneratorProvenance,
 ) -> Result<(), Box<dyn Error>> {
     let spec_bytes = fs::read(spec_path).map_err(|err| {
         format!(
@@ -9983,7 +10055,7 @@ fn write_openapi_manifest_unsigned(
             spec_path.display()
         )
     })?;
-    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, None)
+    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, None, provenance)
 }
 
 fn write_openapi_manifest_from_bytes(
@@ -9991,7 +10063,14 @@ fn write_openapi_manifest_from_bytes(
     manifest_path: &Path,
     spec_bytes: &[u8],
     signature: Option<SignatureEnvelope>,
+    provenance: &OpenApiGeneratorProvenance,
 ) -> Result<(), Box<dyn Error>> {
+    validate_openapi_generator_provenance(provenance, signature.is_none())?;
+    if signature.is_some() && provenance.dirty {
+        return Err(
+            "refusing to write a signed OpenAPI manifest with dirty source provenance".into(),
+        );
+    }
     let sha256_hex = hex::encode(Sha256::digest(spec_bytes));
     let blake3_hex = blake3::hash(spec_bytes).to_hex().to_string();
     let size_bytes = spec_bytes.len() as u64;
@@ -9999,7 +10078,9 @@ fn write_openapi_manifest_from_bytes(
     let manifest = OpenApiManifest {
         version: 1,
         generated_unix_ms: unix_ms_now(),
-        generator_commit: current_git_commit(),
+        generator_commit: provenance.commit.clone(),
+        generator_dirty: provenance.dirty,
+        generator_source_sha256_hex: provenance.source_sha256_hex.clone(),
         artifact: OpenApiArtifact {
             path: infer_artifact_label(spec_path),
             bytes: size_bytes,
@@ -10050,6 +10131,16 @@ fn verify_openapi_manifest(
         )
         .into());
     }
+
+    let provenance = OpenApiGeneratorProvenance {
+        commit: manifest.generator_commit.clone(),
+        dirty: manifest.generator_dirty,
+        source_sha256_hex: manifest.generator_source_sha256_hex.clone(),
+    };
+    validate_openapi_generator_provenance(
+        &provenance,
+        allow_unsigned && manifest.artifact.signature.is_none(),
+    )?;
 
     verify_openapi_artifact_path(spec_path, &manifest.artifact.path)?;
 
@@ -10362,17 +10453,294 @@ fn unix_ms_now() -> u64 {
     }
 }
 
-fn current_git_commit() -> Option<String> {
-    let output = process::Command::new("git")
-        .current_dir(workspace_root())
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+fn validate_openapi_generator_provenance(
+    provenance: &OpenApiGeneratorProvenance,
+    allow_dirty_unsigned: bool,
+) -> Result<(), Box<dyn Error>> {
+    if provenance.dirty {
+        if provenance.commit.is_some() {
+            return Err(
+                "dirty OpenAPI generator provenance must set generator_commit to null".into(),
+            );
+        }
+        let Some(source_digest) = provenance.source_sha256_hex.as_deref() else {
+            return Err(
+                "dirty OpenAPI generator provenance is missing generator_source_sha256_hex".into(),
+            );
+        };
+        if !is_lower_hex_digest(source_digest, 32) {
+            return Err(
+                "generator_source_sha256_hex must be exactly 64 lowercase hexadecimal characters"
+                    .into(),
+            );
+        }
+        if !allow_dirty_unsigned {
+            return Err(
+                "dirty OpenAPI generator provenance cannot be release-verified; regenerate from a clean source tree"
+                    .into(),
+            );
+        }
+    } else {
+        let Some(commit) = provenance.commit.as_deref() else {
+            return Err("clean OpenAPI generator provenance is missing generator_commit".into());
+        };
+        if !is_lower_hex_digest(commit, 20) {
+            return Err(
+                "generator_commit must be exactly 40 lowercase hexadecimal characters".into(),
+            );
+        }
+        if provenance.source_sha256_hex.is_some() {
+            return Err(
+                "clean OpenAPI generator provenance must omit generator_source_sha256_hex".into(),
+            );
+        }
     }
-    let text = String::from_utf8(output.stdout).ok()?;
-    Some(text.trim().to_string())
+    Ok(())
+}
+
+fn is_lower_hex_digest(value: &str, bytes: usize) -> bool {
+    value.len() == bytes * 2
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn openapi_generator_output_paths(outputs: &[PathBuf], manifest: &Path) -> Vec<PathBuf> {
+    let openapi_dir = default_openapi_path()
+        .parent()
+        .expect("canonical OpenAPI output has a parent")
+        .to_path_buf();
+    let mut paths = vec![
+        default_openapi_path(),
+        default_openapi_manifest_path(),
+        openapi_dir.join("versions.json"),
+        openapi_dir.join("versions/current/torii.json"),
+        openapi_dir.join("versions/current/manifest.json"),
+        manifest.to_path_buf(),
+    ];
+    paths.extend(outputs.iter().cloned());
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn git_source_provenance(
+    repo_root: &Path,
+    excluded_paths: &[PathBuf],
+) -> Result<OpenApiGeneratorProvenance, Box<dyn Error>> {
+    let head = git_stdout(repo_root, &["rev-parse", "--verify", "HEAD"])?;
+    let head = std::str::from_utf8(&head)
+        .map_err(|err| format!("git HEAD is not valid UTF-8: {err}"))?
+        .trim();
+    if head.is_empty() {
+        return Err("git rev-parse returned an empty HEAD".into());
+    }
+
+    let pathspecs = git_source_pathspecs(repo_root, excluded_paths)?;
+    let mut status_args = vec![
+        OsString::from("status"),
+        OsString::from("--porcelain=v1"),
+        OsString::from("-z"),
+        OsString::from("--untracked-files=all"),
+    ];
+    status_args.extend(pathspecs.iter().cloned());
+    let status = git_stdout(repo_root, &status_args)?;
+    if status.is_empty() {
+        return Ok(OpenApiGeneratorProvenance {
+            commit: Some(head.to_owned()),
+            dirty: false,
+            source_sha256_hex: None,
+        });
+    }
+
+    let mut diff_args = vec![
+        OsString::from("diff"),
+        OsString::from("--binary"),
+        OsString::from("--full-index"),
+        OsString::from("--no-color"),
+        OsString::from("--no-ext-diff"),
+        OsString::from("HEAD"),
+    ];
+    diff_args.extend(pathspecs.iter().cloned());
+    let tracked_diff = git_stdout(repo_root, &diff_args)?;
+    let mut untracked_args = vec![
+        OsString::from("ls-files"),
+        OsString::from("--others"),
+        OsString::from("--exclude-standard"),
+        OsString::from("-z"),
+    ];
+    untracked_args.extend(pathspecs);
+    let untracked = git_stdout(repo_root, &untracked_args)?;
+
+    let mut source_digest = Sha256::new();
+    update_sha256_component(
+        &mut source_digest,
+        b"domain",
+        b"iroha-openapi-generator-source-v1",
+    );
+    update_sha256_component(&mut source_digest, b"head", head.as_bytes());
+    update_sha256_component(&mut source_digest, b"status", &status);
+    update_sha256_component(&mut source_digest, b"tracked-diff", &tracked_diff);
+    for path_bytes in untracked
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+    {
+        update_sha256_component(&mut source_digest, b"untracked-path", path_bytes);
+        let relative_path = git_path_from_bytes(path_bytes)?;
+        hash_untracked_path(&mut source_digest, &repo_root.join(relative_path))?;
+    }
+
+    Ok(OpenApiGeneratorProvenance {
+        commit: None,
+        dirty: true,
+        source_sha256_hex: Some(hex::encode(source_digest.finalize())),
+    })
+}
+
+fn git_source_pathspecs(
+    repo_root: &Path,
+    excluded_paths: &[PathBuf],
+) -> Result<Vec<OsString>, Box<dyn Error>> {
+    let canonical_root = repo_root.canonicalize().map_err(|err| {
+        format!(
+            "failed to canonicalize git source root {}: {err}",
+            repo_root.display()
+        )
+    })?;
+    let mut relative_exclusions = Vec::new();
+    for path in excluded_paths {
+        let absolute = if path.is_absolute() {
+            path.clone()
+        } else {
+            repo_root.join(path)
+        };
+        let relative = absolute
+            .strip_prefix(repo_root)
+            .or_else(|_| absolute.strip_prefix(&canonical_root));
+        let Ok(relative) = relative else { continue };
+        if relative.as_os_str().is_empty() {
+            return Err("refusing to exclude the entire repository from source provenance".into());
+        }
+        let relative = relative
+            .to_str()
+            .ok_or_else(|| {
+                format!(
+                    "OpenAPI generator output path is not valid UTF-8: {}",
+                    relative.display()
+                )
+            })?
+            .replace('\\', "/");
+        relative_exclusions.push(relative);
+    }
+    relative_exclusions.sort();
+    relative_exclusions.dedup();
+
+    let mut pathspecs = vec![OsString::from("--"), OsString::from(".")];
+    pathspecs.extend(
+        relative_exclusions
+            .into_iter()
+            .map(|path| OsString::from(format!(":(exclude,literal){path}"))),
+    );
+    Ok(pathspecs)
+}
+
+fn git_stdout<S: AsRef<OsStr>>(repo_root: &Path, args: &[S]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let rendered_args = args
+        .iter()
+        .map(|arg| arg.as_ref().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let output = process::Command::new("git")
+        .current_dir(repo_root)
+        .args(args)
+        .output()
+        .map_err(|err| format!("failed to execute git {rendered_args}: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git {} failed with status {}: {}",
+            rendered_args,
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    Ok(output.stdout)
+}
+
+fn update_sha256_component(hasher: &mut Sha256, label: &[u8], value: &[u8]) {
+    hasher.update((label.len() as u64).to_le_bytes());
+    hasher.update(label);
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value);
+}
+
+#[cfg(unix)]
+fn git_path_from_bytes(bytes: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
+    Ok(PathBuf::from(OsString::from_vec(bytes.to_vec())))
+}
+
+#[cfg(not(unix))]
+fn git_path_from_bytes(bytes: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
+    let path = std::str::from_utf8(bytes)
+        .map_err(|err| format!("git returned a non-UTF-8 untracked path: {err}"))?;
+    Ok(PathBuf::from(path))
+}
+
+fn hash_untracked_path(hasher: &mut Sha256, path: &Path) -> Result<(), Box<dyn Error>> {
+    let metadata = fs::symlink_metadata(path).map_err(|err| {
+        format!(
+            "failed to inspect untracked source path {}: {err}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        let target = fs::read_link(path).map_err(|err| {
+            format!(
+                "failed to read untracked source symlink {}: {err}",
+                path.display()
+            )
+        })?;
+        update_sha256_component(hasher, b"untracked-kind", b"symlink");
+        update_sha256_os_str_component(hasher, b"untracked-symlink-target", target.as_os_str());
+        return Ok(());
+    }
+    if !metadata.is_file() {
+        return Err(format!(
+            "unsupported untracked source path type for {}",
+            path.display()
+        )
+        .into());
+    }
+
+    update_sha256_component(hasher, b"untracked-kind", b"file");
+    update_sha256_component(hasher, b"untracked-size", &metadata.len().to_le_bytes());
+    let mut file = fs::File::open(path).map_err(|err| {
+        format!(
+            "failed to read untracked source file {}: {err}",
+            path.display()
+        )
+    })?;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        use std::io::Read as _;
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(())
+}
+
+fn update_sha256_os_str_component(hasher: &mut Sha256, label: &[u8], value: &OsStr) {
+    #[cfg(unix)]
+    {
+        update_sha256_component(hasher, label, value.as_bytes());
+    }
+    #[cfg(not(unix))]
+    {
+        update_sha256_component(hasher, label, value.to_string_lossy().as_bytes());
+    }
 }
 
 #[cfg(test)]
@@ -10542,6 +10910,46 @@ mod openapi_tests {
 
     use super::*;
 
+    fn clean_generator_provenance() -> OpenApiGeneratorProvenance {
+        OpenApiGeneratorProvenance {
+            commit: Some("11".repeat(20)),
+            dirty: false,
+            source_sha256_hex: None,
+        }
+    }
+
+    fn initialize_git_fixture(root: &Path) {
+        git_stdout(root, &["init", "--quiet"]).expect("initialize git fixture");
+        fs::write(root.join("source.txt"), b"source-v1\n").expect("write fixture source");
+        fs::create_dir_all(root.join("docs/portal/static/openapi/versions/current"))
+            .expect("create generated fixture directory");
+        fs::write(
+            root.join("docs/portal/static/openapi/torii.json"),
+            b"{\"version\":1}\n",
+        )
+        .expect("write generated fixture spec");
+        fs::write(
+            root.join("docs/portal/static/openapi/manifest.json"),
+            b"{\"generated_unix_ms\":1}\n",
+        )
+        .expect("write generated fixture manifest");
+        git_stdout(root, &["add", "."]).expect("stage git fixture");
+        git_stdout(
+            root,
+            &[
+                "-c",
+                "user.name=OpenAPI Test",
+                "-c",
+                "user.email=openapi-test@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "fixture",
+            ],
+        )
+        .expect("commit git fixture");
+    }
+
     #[test]
     fn manifest_signature_round_trip() {
         let tmp = tempdir().expect("tempdir");
@@ -10576,8 +10984,13 @@ mod openapi_tests {
 
         let manifest_path = tmp.path().join("manifest.json");
         let loaded = load_signature_envelope(&envelope_path).expect("load detached envelope");
-        write_openapi_manifest_with_signature(&spec_path, &manifest_path, loaded)
-            .expect("write manifest with detached signature");
+        write_openapi_manifest_with_signature(
+            &spec_path,
+            &manifest_path,
+            loaded,
+            &clean_generator_provenance(),
+        )
+        .expect("write manifest with detached signature");
         verify_openapi_manifest(&spec_path, &manifest_path, false, None)
             .expect("verify detached manifest");
     }
@@ -10642,7 +11055,7 @@ mod openapi_tests {
         fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
         let manifest_path = tmp.path().join("manifest.json");
 
-        write_openapi_manifest_unsigned(&spec_path, &manifest_path)
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
             .expect("write unsigned manifest");
         verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect("unsigned manifest should verify when allowed");
@@ -10663,7 +11076,7 @@ mod openapi_tests {
         fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
         let manifest_path = tmp.path().join("manifest.json");
 
-        write_openapi_manifest_unsigned(&spec_path, &manifest_path)
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
             .expect("write unsigned manifest");
         fs::write(&spec_path, b"{\"ok\":false}").expect("tamper spec");
 
@@ -10673,6 +11086,224 @@ mod openapi_tests {
         assert!(
             message.contains("sha256_hex mismatch"),
             "expected digest mismatch message, got {message}"
+        );
+    }
+
+    #[test]
+    fn dirty_unsigned_openapi_manifest_records_explicit_source_provenance() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("spec.json");
+        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        let manifest_path = tmp.path().join("manifest.json");
+        let dirty = OpenApiGeneratorProvenance {
+            commit: None,
+            dirty: true,
+            source_sha256_hex: Some("ab".repeat(32)),
+        };
+
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &dirty)
+            .expect("write dirty unsigned manifest");
+        verify_openapi_manifest(&spec_path, &manifest_path, true, None)
+            .expect("explicitly allowed dirty unsigned manifest should verify");
+        let manifest: OpenApiManifest = serde_json::from_slice(
+            &fs::read(&manifest_path).expect("read dirty unsigned manifest"),
+        )
+        .expect("parse dirty unsigned manifest");
+        assert!(manifest.generator_dirty);
+        assert_eq!(manifest.generator_commit, None);
+        assert_eq!(
+            manifest.generator_source_sha256_hex.as_deref(),
+            Some("abababababababababababababababababababababababababababababababab")
+        );
+
+        let err = verify_openapi_manifest(&spec_path, &manifest_path, false, None)
+            .expect_err("release verification must reject dirty provenance");
+        assert!(
+            err.to_string().contains("cannot be release-verified"),
+            "unexpected dirty release error: {err}"
+        );
+    }
+
+    #[test]
+    fn openapi_manifest_rejects_ambiguous_or_forged_dirty_provenance() {
+        for (name, provenance, expected) in [
+            (
+                "dirty-with-commit",
+                OpenApiGeneratorProvenance {
+                    commit: Some("pretend-clean-head".to_owned()),
+                    dirty: true,
+                    source_sha256_hex: Some("ab".repeat(32)),
+                },
+                "must set generator_commit to null",
+            ),
+            (
+                "dirty-without-digest",
+                OpenApiGeneratorProvenance {
+                    commit: None,
+                    dirty: true,
+                    source_sha256_hex: None,
+                },
+                "missing generator_source_sha256_hex",
+            ),
+            (
+                "dirty-with-uppercase-digest",
+                OpenApiGeneratorProvenance {
+                    commit: None,
+                    dirty: true,
+                    source_sha256_hex: Some("AB".repeat(32)),
+                },
+                "64 lowercase hexadecimal",
+            ),
+            (
+                "clean-with-dirty-digest",
+                OpenApiGeneratorProvenance {
+                    commit: Some("11".repeat(20)),
+                    dirty: false,
+                    source_sha256_hex: Some("ab".repeat(32)),
+                },
+                "clean OpenAPI generator provenance must omit",
+            ),
+            (
+                "clean-short-commit",
+                OpenApiGeneratorProvenance {
+                    commit: Some("ab".repeat(19)),
+                    dirty: false,
+                    source_sha256_hex: None,
+                },
+                "exactly 40 lowercase hexadecimal",
+            ),
+            (
+                "clean-uppercase-commit",
+                OpenApiGeneratorProvenance {
+                    commit: Some("AB".repeat(20)),
+                    dirty: false,
+                    source_sha256_hex: None,
+                },
+                "exactly 40 lowercase hexadecimal",
+            ),
+            (
+                "clean-nonhex-commit",
+                OpenApiGeneratorProvenance {
+                    commit: Some("gg".repeat(20)),
+                    dirty: false,
+                    source_sha256_hex: None,
+                },
+                "exactly 40 lowercase hexadecimal",
+            ),
+            (
+                "clean-padded-commit",
+                OpenApiGeneratorProvenance {
+                    commit: Some(format!(" {} ", "ab".repeat(20))),
+                    dirty: false,
+                    source_sha256_hex: None,
+                },
+                "exactly 40 lowercase hexadecimal",
+            ),
+        ] {
+            let err = validate_openapi_generator_provenance(&provenance, true)
+                .expect_err("malformed provenance must fail closed");
+            assert!(
+                err.to_string().contains(expected),
+                "{name}: expected `{expected}`, got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_openapi_manifest_rejects_dirty_source_provenance() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("spec.json");
+        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        let key_path = tmp.path().join("key.hex");
+        fs::write(&key_path, hex::encode([0x77_u8; 32])).expect("write signing key");
+        let manifest_path = tmp.path().join("manifest.json");
+        let dirty = OpenApiGeneratorProvenance {
+            commit: None,
+            dirty: true,
+            source_sha256_hex: Some("ab".repeat(32)),
+        };
+
+        let err = write_openapi_manifest(&spec_path, &manifest_path, &key_path, &dirty)
+            .expect_err("dirty source must never produce a signed manifest");
+        assert!(
+            err.to_string().contains("cannot be release-verified"),
+            "unexpected dirty signing error: {err}"
+        );
+        assert!(!manifest_path.exists());
+    }
+
+    #[test]
+    fn git_source_provenance_excludes_only_generated_outputs_and_is_deterministic() {
+        let tmp = tempdir().expect("tempdir");
+        initialize_git_fixture(tmp.path());
+        let generated = vec![
+            tmp.path().join("docs/portal/static/openapi/torii.json"),
+            tmp.path().join("docs/portal/static/openapi/manifest.json"),
+            tmp.path()
+                .join("docs/portal/static/openapi/versions/current/torii.json"),
+            tmp.path()
+                .join("docs/portal/static/openapi/versions/current/manifest.json"),
+            tmp.path().join("docs/portal/static/openapi/versions.json"),
+        ];
+        let clean = git_source_provenance(tmp.path(), &generated).expect("clean provenance");
+        assert!(!clean.dirty);
+        assert!(clean.commit.is_some());
+
+        fs::write(
+            &generated[0],
+            b"{\"version\":2,\"generated_unix_ms\":100}\n",
+        )
+        .expect("rewrite generated spec");
+        fs::write(&generated[1], b"{\"generated_unix_ms\":100}\n")
+            .expect("rewrite generated manifest");
+        fs::write(&generated[4], b"{\"generatedAt\":100}\n")
+            .expect("write untracked generated versions index");
+        let generated_only =
+            git_source_provenance(tmp.path(), &generated).expect("generated-only provenance");
+        assert_eq!(
+            generated_only, clean,
+            "generated files are not source inputs"
+        );
+
+        fs::write(tmp.path().join("source.txt"), b"source-v2\n").expect("modify tracked source");
+        let first = git_source_provenance(tmp.path(), &generated).expect("first dirty provenance");
+        assert!(first.dirty);
+        assert_eq!(first.commit, None);
+        assert!(first.source_sha256_hex.is_some());
+
+        fs::write(
+            &generated[0],
+            b"{\"version\":2,\"generated_unix_ms\":200}\n",
+        )
+        .expect("rewrite generated spec again");
+        fs::write(&generated[1], b"{\"generated_unix_ms\":200}\n")
+            .expect("rewrite generated manifest again");
+        fs::write(&generated[4], b"{\"generatedAt\":200}\n")
+            .expect("rewrite generated versions index");
+        let second =
+            git_source_provenance(tmp.path(), &generated).expect("second dirty provenance");
+        assert_eq!(
+            second.source_sha256_hex, first.source_sha256_hex,
+            "identical source must retain its digest across generated timestamps"
+        );
+
+        fs::write(tmp.path().join("source.txt"), b"source-v3\n")
+            .expect("change tracked source content");
+        let changed =
+            git_source_provenance(tmp.path(), &generated).expect("changed dirty provenance");
+        assert_ne!(changed.source_sha256_hex, first.source_sha256_hex);
+
+        fs::write(tmp.path().join("untracked-source.rs"), b"fn one() {}\n")
+            .expect("write untracked source");
+        let untracked_one =
+            git_source_provenance(tmp.path(), &generated).expect("untracked provenance");
+        fs::write(tmp.path().join("untracked-source.rs"), b"fn two() {}\n")
+            .expect("change untracked source content");
+        let untracked_two =
+            git_source_provenance(tmp.path(), &generated).expect("changed untracked provenance");
+        assert_ne!(
+            untracked_two.source_sha256_hex, untracked_one.source_sha256_hex,
+            "untracked non-output contents must be provenance-bound"
         );
     }
 
@@ -10690,8 +11321,13 @@ mod openapi_tests {
         let signature = sign_manifest_payload(other_payload, &key_path).expect("sign payload");
         let manifest_path = tmp.path().join("manifest.json");
 
-        let err = write_openapi_manifest_with_signature(&spec_path, &manifest_path, signature)
-            .expect_err("detached signature for another payload must be rejected");
+        let err = write_openapi_manifest_with_signature(
+            &spec_path,
+            &manifest_path,
+            signature,
+            &clean_generator_provenance(),
+        )
+        .expect_err("detached signature for another payload must be rejected");
         let message = err.to_string();
         assert!(
             message.contains("manifest signature verification failed"),
@@ -10714,7 +11350,13 @@ mod openapi_tests {
         fs::write(&key_path, key_hex).expect("write key");
 
         let manifest_path = tmp.path().join("manifest.json");
-        write_openapi_manifest(&spec_path, &manifest_path, &key_path).expect("sign manifest");
+        write_openapi_manifest(
+            &spec_path,
+            &manifest_path,
+            &key_path,
+            &clean_generator_provenance(),
+        )
+        .expect("sign manifest");
 
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
         let mut manifest: OpenApiManifest =
@@ -10833,7 +11475,7 @@ mod openapi_tests {
         let spec_path = tmp.path().join("torii.json");
         fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
         let manifest_path = tmp.path().join("manifest.json");
-        write_openapi_manifest_unsigned(&spec_path, &manifest_path)
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
             .expect("write unsigned manifest");
 
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
@@ -10862,8 +11504,12 @@ mod openapi_tests {
             let spec_path = tmp.path().join("torii.json");
             fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
             let manifest_path = tmp.path().join("manifest.json");
-            write_openapi_manifest_unsigned(&spec_path, &manifest_path)
-                .expect("write unsigned manifest");
+            write_openapi_manifest_unsigned(
+                &spec_path,
+                &manifest_path,
+                &clean_generator_provenance(),
+            )
+            .expect("write unsigned manifest");
 
             let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
             let mut manifest: OpenApiManifest =
@@ -10891,7 +11537,7 @@ mod openapi_tests {
         let spec_path = tmp.path().join("torii.json");
         fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
         let manifest_path = tmp.path().join("manifest.json");
-        write_openapi_manifest_unsigned(&spec_path, &manifest_path)
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
             .expect("write unsigned manifest");
 
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
@@ -10932,8 +11578,13 @@ mod openapi_tests {
         fs::write(&signing_key_path, signing_key_hex).expect("write key");
 
         let manifest_path = tmp.path().join("manifest.json");
-        write_openapi_manifest(&spec_path, &manifest_path, &signing_key_path)
-            .expect("sign manifest");
+        write_openapi_manifest(
+            &spec_path,
+            &manifest_path,
+            &signing_key_path,
+            &clean_generator_provenance(),
+        )
+        .expect("sign manifest");
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
         let manifest: OpenApiManifest =
             serde_json::from_str(&manifest_json).expect("parse manifest json");

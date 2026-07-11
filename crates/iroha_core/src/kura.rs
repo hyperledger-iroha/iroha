@@ -388,6 +388,7 @@ type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
 type BlockHeightIndex = BTreeMap<HashOf<BlockHeader>, NonZeroUsize>;
 type TransactionEntrypointHeights = BTreeMap<HashOf<TransactionEntrypoint>, BTreeSet<NonZeroUsize>>;
 type TransactionHashHeights = BTreeMap<HashOf<SignedTransaction>, BTreeSet<NonZeroUsize>>;
+type OfflineOperationHeights = BTreeMap<(AccountId, [u8; 32]), BTreeSet<NonZeroUsize>>;
 type TransactionAuthorityHeights = BTreeMap<AccountId, BTreeSet<NonZeroUsize>>;
 type TransactionTimestampHeights = BTreeMap<u64, BTreeSet<NonZeroUsize>>;
 type TransactionResultStatusHeights = BTreeMap<bool, BTreeSet<NonZeroUsize>>;
@@ -551,7 +552,7 @@ struct TransactionEntrypointIndex {
     indexed_heights: BTreeSet<NonZeroUsize>,
     heights_by_entrypoint: TransactionEntrypointHeights,
     heights_by_transaction: TransactionHashHeights,
-    heights_by_offline_operation_id: BTreeMap<[u8; 32], BTreeSet<NonZeroUsize>>,
+    heights_by_offline_operation_id: OfflineOperationHeights,
     heights_by_authority: TransactionAuthorityHeights,
     heights_by_timestamp_ms: TransactionTimestampHeights,
     heights_by_result_status: TransactionResultStatusHeights,
@@ -1428,6 +1429,7 @@ impl Kura {
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return;
         };
+        let transaction_authority = transaction.authority();
         for instruction in instructions.iter() {
             let any = instruction.as_any();
             let operation_id = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV2>()
@@ -1443,7 +1445,7 @@ impl Kura {
             }
             index
                 .heights_by_offline_operation_id
-                .entry(operation_id)
+                .entry((transaction_authority.clone(), operation_id))
                 .or_default()
                 .insert(height);
         }
@@ -1836,7 +1838,12 @@ impl Kura {
     ) -> Result<(Arc<Self>, BlockCount)> {
         let store_dir = config.store_dir.resolve_relative_path();
         if let Some(configured_catalog_hash) = configured_catalog_hash {
-            Self::preflight_configured_lane_catalog_baseline(&store_dir, configured_catalog_hash)?;
+            Self::establish_or_verify_configured_lane_catalog_baseline(
+                &store_dir,
+                configured_catalog_hash,
+            )?;
+            #[cfg(test)]
+            Self::configured_catalog_preflight_crash_boundary(&store_dir)?;
         }
         let store_root = store_dir.clone();
         let primary_lane = lane_config.primary();
@@ -5191,20 +5198,24 @@ impl Kura {
         })
     }
 
-    /// Resolve the earliest block height containing the given offline operation identifier.
+    /// Resolve the earliest block height containing an issuer-bound offline operation.
     ///
     /// The outer `None` means the in-memory transaction index is partial. An inner `None`
-    /// means the complete index contains no matching operation. Returning only the earliest
-    /// height bounds request-time work even if invalid historical data reused an identifier.
+    /// means the complete index contains no operation with both the requested outer transaction
+    /// authority and signed operation identifier. Binding the lookup to the outer authority keeps
+    /// a rejected transaction from another authority from shadowing a Torii-issued operation.
+    /// Returning only the earliest height bounds request-time work even if invalid historical data
+    /// reused an identifier within one issuer namespace.
     pub fn get_earliest_block_height_by_offline_operation_id(
         &self,
+        issuer: &AccountId,
         operation_id: [u8; 32],
     ) -> Option<Option<NonZeroUsize>> {
         let index = self.transaction_entrypoint_index.lock();
         index.complete.then(|| {
             index
                 .heights_by_offline_operation_id
-                .get(&operation_id)
+                .get(&(issuer.clone(), operation_id))
                 .and_then(|heights| heights.first().copied())
         })
     }
@@ -18327,6 +18338,18 @@ mod tests {
         request_operation_id: [u8; 32],
         authorization_operation_id: [u8; 32],
     ) -> TransactionEntrypoint {
+        offline_top_up_entrypoint_for_index_with_outer_authority(
+            request_operation_id,
+            authorization_operation_id,
+            &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+        )
+    }
+
+    fn offline_top_up_entrypoint_for_index_with_outer_authority(
+        request_operation_id: [u8; 32],
+        authorization_operation_id: [u8; 32],
+        outer_authority: &KeyPair,
+    ) -> TransactionEntrypoint {
         let chain_id = ChainId::from("kura-offline-operation-index");
         let domain_id = DomainId::try_new("offline", "index").expect("fixture domain id");
         let definition = AssetDefinitionId::new(
@@ -18374,12 +18397,13 @@ mod tests {
                 ),
             },
         };
+        let outer_authority_id = AccountId::new(outer_authority.public_key().clone());
         let transaction = TransactionBuilder::new(
             ChainId::from("kura-offline-operation-index"),
-            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            outer_authority_id,
         )
         .with_instructions([TopUpKagemushaRecursiveV2::new(request)])
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        .sign(outer_authority.private_key());
         TransactionEntrypoint::External(transaction)
     }
 
@@ -18529,6 +18553,7 @@ mod tests {
             height,
             epoch: 0,
             epoch_end_height: 100,
+            next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
@@ -18560,7 +18585,8 @@ mod tests {
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xA5; 48],
         };
-        V2FinalityArtifact::new(context, subject, commit_qc, None)
+        let validator_set_pops = vec![vec![0x5B]; context.roster.len()];
+        V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
     }
 
     #[test]
@@ -22236,7 +22262,10 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let operation_id = [0xA5; 32];
         assert_eq!(
-            kura.get_earliest_block_height_by_offline_operation_id(operation_id),
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
             Some(None),
             "an empty complete index reports a definite miss"
         );
@@ -22244,27 +22273,36 @@ mod tests {
         {
             let mut index = kura.transaction_entrypoint_index.lock();
             index.heights_by_offline_operation_id.insert(
-                operation_id,
+                (SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id),
                 BTreeSet::from([nonzero!(3_usize), nonzero!(1_usize)]),
             );
             index.indexed_heights =
                 BTreeSet::from([nonzero!(1_usize), nonzero!(2_usize), nonzero!(3_usize)]);
         }
         assert_eq!(
-            kura.get_earliest_block_height_by_offline_operation_id(operation_id),
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
             Some(Some(nonzero!(1_usize)))
         );
 
         kura.truncate_transaction_entrypoint_index(2);
         assert_eq!(
-            kura.get_earliest_block_height_by_offline_operation_id(operation_id),
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
             Some(Some(nonzero!(1_usize))),
             "truncation retains the earliest surviving occurrence"
         );
 
         kura.transaction_entrypoint_index.lock().complete = false;
         assert_eq!(
-            kura.get_earliest_block_height_by_offline_operation_id(operation_id),
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
             None,
             "a partial index must not turn an unknown result into a miss"
         );
@@ -22279,21 +22317,26 @@ mod tests {
 
         Kura::insert_offline_operation_id_heights(&mut index, nonzero!(3_usize), &entrypoint);
         Kura::insert_offline_operation_id_heights(&mut index, nonzero!(1_usize), &entrypoint);
+        let operation_key = (SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id);
         assert_eq!(
-            index.heights_by_offline_operation_id.get(&operation_id),
+            index.heights_by_offline_operation_id.get(&operation_key),
             Some(&BTreeSet::from([nonzero!(1_usize), nonzero!(3_usize)])),
             "the signed authorization id is the canonical retry identity"
         );
         assert!(
             !index
                 .heights_by_offline_operation_id
-                .contains_key(&top_level_mismatch),
+                .contains_key(&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), top_level_mismatch)),
             "a malformed duplicate top-level id must not create a second lookup identity"
         );
 
         let zero = offline_top_up_entrypoint_for_index([0; 32], [0; 32]);
         Kura::insert_offline_operation_id_heights(&mut index, nonzero!(2_usize), &zero);
-        assert!(!index.heights_by_offline_operation_id.contains_key(&[0; 32]));
+        assert!(
+            !index
+                .heights_by_offline_operation_id
+                .contains_key(&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), [0; 32]))
+        );
 
         let unrelated = TransactionBuilder::new(
             ChainId::from("kura-offline-operation-index"),
@@ -22312,12 +22355,58 @@ mod tests {
         assert_eq!(
             index
                 .heights_by_offline_operation_id
-                .get(&operation_id)
+                .get(&operation_key)
                 .and_then(|heights| heights.first().copied()),
             Some(nonzero!(3_usize))
         );
         Kura::remove_transaction_entrypoint_height(&mut index, nonzero!(3_usize));
         assert!(index.heights_by_offline_operation_id.is_empty());
+    }
+
+    #[test]
+    fn offline_operation_index_cannot_be_shadowed_by_another_outer_authority() {
+        let operation_id = [0xA7; 32];
+        let front_runner = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("derive unauthorized offline front-run fixture key");
+        let front_runner_id = AccountId::new(front_runner.public_key().clone());
+        let rejected_front_run = offline_top_up_entrypoint_for_index_with_outer_authority(
+            operation_id,
+            operation_id,
+            &front_runner,
+        );
+        let issuer_submission = offline_top_up_entrypoint_for_index(operation_id, operation_id);
+        let mut index = TransactionEntrypointIndex::complete_empty();
+
+        // The first transaction carries the observed signed request but uses an outer
+        // authority that is not the configured Torii issuer, so execution can reject it.
+        // Its earlier height must not shadow the later canonical issuer submission.
+        Kura::insert_offline_operation_id_heights(
+            &mut index,
+            nonzero!(1_usize),
+            &rejected_front_run,
+        );
+        Kura::insert_offline_operation_id_heights(
+            &mut index,
+            nonzero!(2_usize),
+            &issuer_submission,
+        );
+        index.indexed_heights = BTreeSet::from([nonzero!(1_usize), nonzero!(2_usize)]);
+
+        let kura = Kura::blank_kura_for_testing();
+        *kura.transaction_entrypoint_index.lock() = index;
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
+            Some(Some(nonzero!(2_usize))),
+            "the configured issuer lookup must skip an earlier foreign-authority transaction"
+        );
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(&front_runner_id, operation_id,),
+            Some(Some(nonzero!(1_usize))),
+            "the foreign transaction remains isolated in its own authority namespace"
+        );
     }
 
     #[test]
@@ -22333,14 +22422,18 @@ mod tests {
         for _ in 0..2 {
             kura.set_transaction_entrypoint_index_entry(1, &block, 1, Some(&merge_entry));
             assert_eq!(
-                kura.get_earliest_block_height_by_offline_operation_id(operation_id),
+                kura.get_earliest_block_height_by_offline_operation_id(
+                    &SAMPLE_GENESIS_ACCOUNT_ID,
+                    operation_id,
+                ),
                 Some(Some(nonzero!(1_usize))),
                 "ordinary-index refresh must not discard an operation carried by the merge sidecar"
             );
             let index = kura.transaction_entrypoint_index.lock();
             assert!(index.complete);
             assert_eq!(
-                index.heights_by_offline_operation_id[&operation_id],
+                index.heights_by_offline_operation_id
+                    [&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id)],
                 BTreeSet::from([nonzero!(1_usize)]),
                 "repeated refreshes must remain idempotent"
             );

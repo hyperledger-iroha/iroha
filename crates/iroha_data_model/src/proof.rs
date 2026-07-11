@@ -13,6 +13,8 @@ use base64::Engine as _;
 #[cfg(feature = "json")]
 use base64::engine::general_purpose::STANDARD;
 use iroha_schema::{Ident, IntoSchema};
+#[cfg(feature = "json")]
+use norito::json::JsonDeserialize as _;
 use norito::{
     codec::{Decode, Encode},
     core as ncore,
@@ -546,22 +548,56 @@ fn proof_attachment_json_optional_fixed_bytes<const N: usize>(
 }
 
 #[cfg(feature = "json")]
-fn proof_attachment_json_reject_unknown_nested_fields(
+fn proof_attachment_json_proof_box(
     object: &norito::json::Map,
-    field: &'static str,
-    allowed: &[&str],
+) -> Result<ProofBox, norito::json::Error> {
+    let value = object
+        .get("proof")
+        .ok_or_else(|| norito::json::Error::missing_field("proof"))?;
+    let proof = value
+        .as_object()
+        .ok_or_else(|| norito::json::Error::InvalidField {
+            field: "proof".into(),
+            message: "expected object".into(),
+        })?;
+    if proof.contains_key("bytes_b64") {
+        return Err(norito::json::Error::InvalidField {
+            field: "proof.bytes_b64".into(),
+            message: "retired base64 proof field is not supported; use bytes".into(),
+        });
+    }
+
+    let backend = proof
+        .get("backend")
+        .ok_or_else(|| norito::json::Error::missing_field("proof.backend"))
+        .and_then(Ident::json_from_value)?;
+    let bytes = proof
+        .get("bytes")
+        .ok_or_else(|| norito::json::Error::missing_field("proof.bytes"))
+        .and_then(Vec::<u8>::json_from_value)?;
+    if bytes.len() > MAX_LEN_PREFIXED_FIELD_BYTES {
+        return Err(norito::json::Error::InvalidField {
+            field: "proof.bytes".into(),
+            message: format!("proof bytes exceed the {MAX_LEN_PREFIXED_FIELD_BYTES}-byte limit"),
+        });
+    }
+    Ok(ProofBox::new(backend, bytes))
+}
+
+#[cfg(feature = "json")]
+fn proof_attachment_json_reject_retired_inline_vk_fields(
+    object: &norito::json::Map,
+    parent: Option<&str>,
 ) -> Result<(), norito::json::Error> {
-    let Some(value) = object.get(field) else {
-        return Ok(());
-    };
-    let Some(nested) = value.as_object() else {
-        return Ok(());
-    };
-    for key in nested.keys() {
-        if !allowed.contains(&key.as_str()) {
+    for key in object.keys() {
+        if matches!(
+            key.as_str(),
+            "vk_inline" | "vkInline" | "verifyingKeyInline" | "verifying_key_inline"
+        ) {
+            let field = parent.map_or_else(|| key.clone(), |parent| format!("{parent}.{key}"));
             return Err(norito::json::Error::InvalidField {
-                field: format!("{field}.{key}"),
-                message: "unknown field".into(),
+                field,
+                message: "retired inline verifying-key field is not supported; use vk_ref".into(),
             });
         }
     }
@@ -586,23 +622,12 @@ impl norito::json::JsonDeserialize for ProofAttachment {
                 message: "expected object".into(),
             })?;
 
-        for field in object.keys() {
-            match field.as_str() {
-                "backend" | "proof" | "vk_ref" | "vk_commitment" | "envelope_hash"
-                | "lane_privacy" => {}
-                "vk_inline" | "vkInline" | "verifyingKeyInline" | "verifying_key_inline" => {
-                    return Err(norito::json::Error::InvalidField {
-                        field: field.clone(),
-                        message: "legacy inline verifying-key field is not supported; use vk_ref"
-                            .into(),
-                    });
-                }
-                other => return Err(norito::json::Error::unknown_field(other.to_owned())),
+        proof_attachment_json_reject_retired_inline_vk_fields(object, None)?;
+        for field in ["proof", "vk_ref"] {
+            if let Some(nested) = object.get(field).and_then(norito::json::Value::as_object) {
+                proof_attachment_json_reject_retired_inline_vk_fields(nested, Some(field))?;
             }
         }
-
-        proof_attachment_json_reject_unknown_nested_fields(object, "proof", &["backend", "bytes"])?;
-        proof_attachment_json_reject_unknown_nested_fields(object, "vk_ref", &["backend", "name"])?;
 
         let lane_privacy = match object.get("lane_privacy") {
             None | Some(norito::json::Value::Null) => None,
@@ -614,7 +639,7 @@ impl norito::json::JsonDeserialize for ProofAttachment {
         };
 
         let backend: Ident = proof_attachment_json_required(object, "backend")?;
-        let proof: ProofBox = proof_attachment_json_required(object, "proof")?;
+        let proof = proof_attachment_json_proof_box(object)?;
         if proof.backend != backend {
             return Err(norito::json::Error::InvalidField {
                 field: "proof.backend".into(),
@@ -1590,6 +1615,43 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
+    fn proof_attachment_json_uses_canonical_proof_byte_array() {
+        let json = r#"{
+            "backend": "halo2/ipa",
+            "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+        }"#;
+        let attachment: ProofAttachment = norito::json::from_str(json).expect("canonical JSON");
+        assert_eq!(attachment.proof.bytes, vec![1, 2, 3]);
+
+        let canonical = norito::json::to_json(&attachment).expect("serialize canonical JSON");
+        assert!(canonical.contains("\"bytes\":[1,2,3]"));
+        assert!(!canonical.contains("bytes_b64"));
+        let roundtrip: ProofAttachment =
+            norito::json::from_str(&canonical).expect("canonical roundtrip JSON");
+        assert_eq!(roundtrip, attachment);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proof_attachment_json_rejects_noncanonical_proof_byte_encodings() {
+        for proof_json in [
+            r#"{"backend":"halo2/ipa"}"#,
+            r#"{"backend":"halo2/ipa","bytes_b64":"AQID"}"#,
+            r#"{"backend":"halo2/ipa","bytes":[1,2,3],"bytes_b64":"AQID"}"#,
+            r#"{"backend":"halo2/ipa","bytes":"AQID"}"#,
+            r#"{"backend":"halo2/ipa","bytes":[1,256,3]}"#,
+        ] {
+            let json = format!(
+                r#"{{"backend":"halo2/ipa","proof":{proof_json},"vk_ref":{{"backend":"halo2/ipa","name":"vk_1"}}}}"#
+            );
+            norito::json::from_str::<ProofAttachment>(&json)
+                .expect_err("noncanonical proof bytes must fail");
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
     fn proof_attachment_json_accepts_matching_envelope_hash() {
         let proof_bytes = [1u8, 2, 3];
         let envelope_hash = proof_bytes_hash(&proof_bytes);
@@ -1609,7 +1671,7 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
-    fn proof_attachment_json_rejects_legacy_inline_vk_fields() {
+    fn proof_attachment_json_rejects_retired_inline_vk_fields() {
         for field in [
             "vk_inline",
             "vkInline",
@@ -1625,26 +1687,63 @@ mod tests {
                 }}"#
             );
             let err = norito::json::from_str::<ProofAttachment>(&json)
-                .expect_err("legacy inline verifying key must be rejected");
+                .expect_err("retired inline verifying key must be rejected");
             assert!(
                 err.to_string()
-                    .contains("legacy inline verifying-key field")
+                    .contains("retired inline verifying-key field")
             );
         }
     }
 
     #[cfg(feature = "json")]
     #[test]
-    fn proof_attachment_json_rejects_unknown_vk_reference_alias() {
+    fn proof_attachment_json_ignores_unrelated_unknown_members() {
         let json = r#"{
             "backend": "halo2/ipa",
-            "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
-            "vk_reference": { "backend": "halo2/ipa", "name": "vk_shadow" }
+            "proof": {
+                "backend": "halo2/ipa",
+                "bytes": [1, 2, 3],
+                "future_proof_metadata": { "epoch": 7 }
+            },
+            "vk_ref": {
+                "backend": "halo2/ipa",
+                "name": "vk_1",
+                "future_registry_metadata": [1, 2, 3]
+            },
+            "vk_reference": { "backend": "halo2/ipa", "name": "vk_shadow" },
+            "future_attachment_metadata": true
         }"#;
-        let err = norito::json::from_str::<ProofAttachment>(json)
-            .expect_err("unknown VK alias must be rejected");
-        assert!(err.to_string().contains("unknown field `vk_reference`"));
+        let attachment = norito::json::from_str::<ProofAttachment>(json)
+            .expect("unrelated additive members must be ignored");
+        assert_eq!(attachment.proof.bytes, [1, 2, 3]);
+        assert_eq!(attachment.vk_ref.name.as_str(), "vk_1");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proof_attachment_json_rejects_duplicate_declared_members() {
+        for json in [
+            r#"{
+                "backend": "halo2/ipa",
+                "backend": "halo2/ipa",
+                "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
+                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+            }"#,
+            r#"{
+                "backend": "halo2/ipa",
+                "proof": { "backend": "halo2/ipa", "bytes": [1], "bytes": [2] },
+                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+            }"#,
+            r#"{
+                "backend": "halo2/ipa",
+                "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
+                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1", "name": "vk_2" }
+            }"#,
+        ] {
+            let err = norito::json::from_str::<ProofAttachment>(json)
+                .expect_err("duplicate declared member must fail");
+            assert!(err.to_string().contains("duplicate field"));
+        }
     }
 
     #[cfg(feature = "json")]
@@ -1699,24 +1798,24 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
-    fn proof_attachment_json_rejects_nested_shadow_fields() {
+    fn proof_attachment_json_rejects_nested_retired_inline_vk_fields() {
         let proof_shadow_json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3], "vk_inline": { "backend": "halo2/ipa", "bytes": [9] } },
             "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
         }"#;
         let err = norito::json::from_str::<ProofAttachment>(proof_shadow_json)
-            .expect_err("proof shadow fields must be rejected");
+            .expect_err("retired proof inline key must be rejected");
         assert!(err.to_string().contains("proof.vk_inline"));
 
         let vk_ref_shadow_json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1", "vk_reference": "shadow" }
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1", "verifying_key_inline": "shadow" }
         }"#;
         let err = norito::json::from_str::<ProofAttachment>(vk_ref_shadow_json)
-            .expect_err("vk_ref shadow fields must be rejected");
-        assert!(err.to_string().contains("vk_ref.vk_reference"));
+            .expect_err("retired vk_ref inline key must be rejected");
+        assert!(err.to_string().contains("vk_ref.verifying_key_inline"));
     }
 
     #[cfg(feature = "json")]

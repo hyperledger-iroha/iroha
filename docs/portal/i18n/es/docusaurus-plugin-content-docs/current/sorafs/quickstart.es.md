@@ -123,3 +123,23 @@ cuando la carga reconstruida se desvíe del manifiesto.
 - **Automatización de CI** – añade los comandos anteriores a los pipelines de liberación para que
   la documentación, accesorios y artefactos publiquen manifiestos deterministas junto con
   metadatos firmados.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

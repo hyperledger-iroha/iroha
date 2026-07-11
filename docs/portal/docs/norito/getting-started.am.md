@@ -20,7 +20,7 @@ translator: machine-google-reviewed
 
 1. የ Rust Toolchain (1.76 ወይም አዲስ) ይጫኑ እና ይህን ማከማቻ ይመልከቱ።
 2. የሚደግፉ ሁለትዮሾችን ይገንቡ ወይም ያውርዱ፡
-   - `koto_compile` - Kotodama ባይትኮድ የሚያወጣው IVM/Norito
+   - `koto build` - Kotodama ባይትኮድ የሚያወጣው IVM/Norito
    - `ivm_run` እና `ivm_tool` - የአካባቢ ማስፈጸሚያ እና የፍተሻ መገልገያዎች
    - `iroha` - በ Torii በኩል ውል ለማሰማራት ያገለግላል
 
@@ -29,7 +29,7 @@ translator: machine-google-reviewed
    የመሳሪያ ሰንሰለት በአገር ውስጥ፣ የ Makefile ረዳቶችን በሁለትዮሽዎቹ ላይ ያመልክቱ፡
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. የማሰማራቱ ደረጃ ላይ ሲደርሱ የI18NT0000014X መስቀለኛ መንገድ እየሰራ መሆኑን ያረጋግጡ። የ
@@ -43,17 +43,16 @@ translator: machine-google-reviewed
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 ቁልፍ ባንዲራዎች፡-
 
-- `--abi 1` ውሉን ወደ ABI ስሪት 1 ይቆልፋል ( ብቸኛው የሚደገፍ ስሪት በ ላይ
+- `ABI V1` ውሉን ወደ ABI ስሪት 1 ይቆልፋል ( ብቸኛው የሚደገፍ ስሪት በ ላይ
   የጽሑፍ ጊዜ)።
-- `--max-cycles 0` ያልተገደበ አፈፃፀም ይጠይቃል; ለማሰር አዎንታዊ ቁጥር ያዘጋጁ
+- `--max-cycles 1000000` ያልተገደበ አፈፃፀም ይጠይቃል; ለማሰር አዎንታዊ ቁጥር ያዘጋጁ
   ለዜሮ-እውቀት ማረጋገጫዎች ዑደት ንጣፍ.
 
 ## 2. የNorito አርቲፊክስን መርምር (አማራጭ)
@@ -87,7 +86,7 @@ ivm_run target/examples/hello.to --args '{}'
 ቤዝ64 ጭነት፡-
 
 ```sh
-iroha app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -98,13 +97,13 @@ iroha app contracts deploy \
 በምላሹ ላይ የሚታየው hash መግለጫዎችን ለማውጣት ወይም ምሳሌዎችን ለመዘርዘር ሊያገለግል ይችላል፡-
 
 ```sh
-iroha app contracts manifest get --code-hash 0x<hash>
+iroha contract manifest get --code-hash 0x<hash>
 ```
 
 ## 5. ከ Torii ጋር ሩጡ
 
 በባይቴኮድ የተመዘገበ፣ መመሪያ በማስገባት ሊጠሩት ይችላሉ።
-የተቀመጠውን ኮድ የሚያመለክት (ለምሳሌ በ`iroha app contracts call --contract-address <contract-address> --entrypoint main --wait`
+የተቀመጠውን ኮድ የሚያመለክት (ለምሳሌ በ`iroha contract call --contract-address <contract-address> --entrypoint main --wait`
 ወይም የእርስዎ መተግበሪያ ደንበኛ)። የመለያ ፈቃዶች የሚፈለገውን እንደሚፈቅዱ ያረጋግጡ
 ሲስካልስ (`set_account_detail`፣ `transfer_asset`፣ ወዘተ)።
 
@@ -113,8 +112,8 @@ iroha app contracts manifest get --code-hash 0x<hash>
 - የቀረቡትን ምሳሌዎች በአንድ ላይ ለማሰባሰብ እና ለማስፈጸም `make examples-run` ይጠቀሙ
   ተኩስ ሁለትዮሽዎቹ ከሌሉ `KOTO`/`IVM` የአካባቢ ተለዋዋጮችን ይሽሩ
   `PATH`.
-- `koto_compile` የኤቢአይ ሥሪቱን ውድቅ ካደረገ፣ አጠናቃሪው እና መስቀለኛ መንገዱን ያረጋግጡ።
-  ሁለቱም ኢላማ ABI v1 (ለመዘርዘር ያለ ክርክሮች `koto_compile --abi` ያሂዱ
+- `koto build` የኤቢአይ ሥሪቱን ውድቅ ካደረገ፣ አጠናቃሪው እና መስቀለኛ መንገዱን ያረጋግጡ።
+  ሁለቱም ኢላማ ABI v1 (ለመዘርዘር ያለ ክርክሮች `koto build --help` ያሂዱ
   ድጋፍ)።
 - CLI ሄክስ ወይም Base64 የመፈረሚያ ቁልፎችን ይቀበላል። ለሙከራ, መጠቀም ይችላሉ
   በ I18NI0000055X የወጡ ቁልፎች።

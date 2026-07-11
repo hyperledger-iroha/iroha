@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-12-29T18:16:35.135788+00:00"
 translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan
@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 ## Ցանցային միջավայրեր
 - Գործարկեք երկու Nexus միջավայրեր՝ հստակ ցանցային նախածանցներով.
 - **Sora Nexus (mainnet)** – արտադրական ցանցի նախածանց `nexus`, հոսթինգ կանոնական կառավարում և SoraFS/SoraNet piggyback ծառայություններ (շղթայի ID `0x02F1` / UU000001):
-- **Sora Taira (testnet)** – բեմադրող ցանցի նախածանց `taira`, հայելային ցանցի կոնֆիգուրացիան ինտեգրման փորձարկման և նախնական թողարկման վավերացման համար (շղթա UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`):
+- **Sora Taira (testnet)** – բեմադրող ցանցի նախածանց `taira`, հայելային ցանցի կոնֆիգուրացիան ինտեգրման փորձարկման և նախնական թողարկման վավերացման համար (շղթա UUID `fc56984b-2be7-431d-840e-21514d1883f0`):
 - Պահպանեք առանձին ծագման ֆայլեր, կառավարման բանալիներ և ենթակառուցվածքների հետքեր յուրաքանչյուր միջավայրի համար: Taira-ը գործում է որպես SoraFS/SoraNet-ի բոլոր թողարկումների ապացուցման հիմք՝ նախքան Nexus-ի առաջխաղացումը:
 - CI/CD խողովակաշարերը նախ պետք է տեղակայվեն Taira-ում, կատարեն ծխի ավտոմատ թեստեր և պահանջեն ձեռքով առաջխաղացում դեպի Nexus, երբ ստուգումները անցնեն:
 - Հղման կազմաձևման փաթեթները գործում են `configs/soranexus/nexus/` (հիմնական ցանց) և `configs/soranexus/taira/` (փորձացանցի) ներքո, որոնցից յուրաքանչյուրը պարունակում է `config.toml`, `genesis.json` և Torii նմուշներ:

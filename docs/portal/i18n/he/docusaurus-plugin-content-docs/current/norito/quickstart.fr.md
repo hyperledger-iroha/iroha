@@ -22,10 +22,10 @@ Le contrat d'exemple ecrit une paire cle/valeur dans le compte de l'appelant afi
 
 - [Docker](https://docs.docker.com/engine/install/) avec Compose V2 פעיל (השתמש ב-pour demarrer le pair d'exemple defini dans `defaults/docker-compose.single.yml`).
 - Toolchain Rust (1.76+) pour construire les binaires auxiliaires si vous ne telechargez pas ceux publies.
-- Binaires `koto_compile`, `ivm_run` ו-`iroha_cli`. Vous pouvez les construire depuis le checkout du space work comme ci-dessous או משחררים את חפצי האמנות של כתבי השחרור:
+- Binaires `koto build`, `ivm_run` ו-`iroha_cli`. Vous pouvez les construire depuis le checkout du space work comme ci-dessous או משחררים את חפצי האמנות של כתבי השחרור:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -49,22 +49,22 @@ Creez un repertoire de travail et enregistrez l'exemple Kotodama מינימלי�
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -76,15 +76,14 @@ KO
 Compilez le contrat en bytecode IVM/Norito (`.to`) ו-executez-le localement pour confirmer que les syscalls du host reussissent avant de toucher le reseau:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-Le runner imprime le log `info("Hello from Kotodama")` et effectue le syscall `SET_ACCOUNT_DETAIL` contre le host simule. אופציונלי בינארי `ivm_tool` est disponible, `ivm_tool inspect target/quickstart/hello.to` אפיche l'en-tete ABI, les bits de features and les entrypoints exports.
+Le runner imprime le log `debug::info("Hello from Kotodama")` et effectue le syscall `SET_ACCOUNT_DETAIL` contre le host simule. אופציונלי בינארי `ivm_tool` est disponible, `ivm_tool inspect target/quickstart/hello.to` אפיche l'en-tete ABI, les bits de features and les entrypoints exports.
 
 ## 4. Soumettre le bytecode דרך Torii
 

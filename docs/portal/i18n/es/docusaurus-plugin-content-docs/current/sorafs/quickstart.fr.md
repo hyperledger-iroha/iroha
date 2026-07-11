@@ -127,3 +127,23 @@ Rapidement lorsque le payload reconstruit s'écarte du manifeste.
 - **Automatización CI**: agregue los comandos ci-dessus aux pipelines de release pour que
   la documentación, los accesorios y los artefactos públicos de los manifiestos determinantes
   avec des métadonnées signées.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

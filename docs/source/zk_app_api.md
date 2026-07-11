@@ -113,8 +113,14 @@ Resource controls:
 - Job processing is bounded by `torii.zk_ivm_prove_max_inflight` (concurrent jobs) and
   `torii.zk_ivm_prove_max_queue` (queued jobs). When saturated, `POST /v1/zk/ivm/prove` returns
   `429` with `Retry-After` based on Torii’s proof retry hint.
-- Job cache retention is controlled by `torii.zk_ivm_prove_job_ttl_secs` (TTL) and
-  `torii.zk_ivm_prove_job_max_entries` (cap).
+- The same bounded blocking capacity and `torii.zk_ivm_tooling_timeout_ms` protect derive,
+  contract simulation, and contract view execution. Cancellation/timeout does not release a
+  permit until the physical blocking task exits.
+- Job cache retention is controlled by `torii.zk_ivm_prove_job_ttl_secs` (TTL),
+  `torii.zk_ivm_prove_job_max_entries` (count cap), and
+  `torii.zk_ivm_prove_job_max_retained_bytes` (aggregate byte cap; default 128 MiB).
+  Terminal JSON is compact, serialized once, and retained as immutable bytes; proof bytes use
+  canonical `proof.bytes_b64` and are limited to 8 MiB decoded.
   - TTL eviction cancels pending/running jobs best-effort to free capacity.
 
 Privacy:
@@ -227,8 +233,10 @@ zk_prover_allowed_circuits = []       # prefix match (empty = allow all)
 # IVM prove jobs (non-consensus)
 zk_ivm_prove_max_inflight = 1         # concurrent jobs
 zk_ivm_prove_max_queue = 16           # queued jobs
+zk_ivm_tooling_timeout_ms = 60000     # derive/simulation/view deadline
 zk_ivm_prove_job_ttl_secs = 1800      # 30 minutes
 zk_ivm_prove_job_max_entries = 1024   # cap in-memory job entries (0 disables the cap)
+zk_ivm_prove_job_max_retained_bytes = 134_217_728 # aggregate job memory cap (128 MiB)
 
 # (optional) app API tokens and rate limits
 require_api_token = false
@@ -237,12 +245,14 @@ api_tokens = ["example-token-value"]
 proof_rate_per_minute = 120           # steady-state tokens/min (None to disable rate limiting)
 proof_burst = 60                      # burst tokens per endpoint key
 proof_max_body_bytes = 8_388_608      # maximum submission payload size (bytes)
+proof_body_max_inflight = 8           # aggregate pre-parse body admission
+proof_body_read_timeout_ms = 15000    # absolute deadline for each admitted body
 proof_max_list_limit = 200            # maximum allowed `limit` for proofs list
 proof_request_timeout_ms = 1000       # wall-clock timeout for list/count
 proof_cache_max_age_secs = 30         # Cache-Control max-age for proof fetches
 proof_retry_after_secs = 1            # Retry-After value returned on throttling
 proof_egress_bytes_per_sec = 8_388_608 # optional steady-state egress budget (bytes/sec)
-proof_egress_burst_bytes = 16_777_216 # optional egress burst budget (bytes)
+proof_egress_burst_bytes = 33_554_432 # optional egress burst budget (32 MiB)
 ```
 
 Configuration must be set via `iroha_config` files. Environment variable overrides exist for developer tooling but are not intended for operator-facing deployments.

@@ -23,8 +23,8 @@ What still must be verified outside this checkout:
   opening the upstream PR.
 
 Authenticated search queries to run:
-- `extension:ko seiyaku NOT is:fork`
-- `extension:ko kotoage NOT is:fork`
+- `extension:ko contract NOT is:fork`
+- `extension:ko entry NOT is:fork`
 - `extension:ko "register_trigger" NOT is:fork`
 - If one user or repo dominates the result set, re-run with exclusions such as
   `-user:<name>` or `-repo:<owner>/<repo>` to show broader adoption.

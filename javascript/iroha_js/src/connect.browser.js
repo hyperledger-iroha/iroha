@@ -1214,6 +1214,14 @@ function rejectDeferred(deferred, error) {
   }
 }
 
+function copyConnectApproval(approval) {
+  return Object.freeze({
+    accountId: approval.accountId,
+    walletPublicKey: Uint8Array.from(approval.walletPublicKey),
+    signature: Uint8Array.from(approval.signature),
+  });
+}
+
 export function createConnectAppSession(options = {}) {
   if (!options || typeof options !== "object") {
     throw new TypeError("options must be an object");
@@ -1237,6 +1245,7 @@ export function createConnectAppSession(options = {}) {
   let serverSeqWalletToApp = 1;
   let closed = false;
   let approved = null;
+  let approvalFailure = null;
   let keys = null;
 
   function failSession(error) {
@@ -1307,17 +1316,30 @@ export function createConnectAppSession(options = {}) {
         }
         walletSeq += 1;
         if (control.kind === "approve") {
+          if (approved !== null) {
+            const error = new ConnectSessionClosedError(
+              "connect session received more than one wallet approval",
+            );
+            approvalFailure = error;
+            failSession(error);
+            try {
+              socket.close();
+            } catch {
+              // The session is already closed locally; socket close is best-effort.
+            }
+            return;
+          }
           verifyApproval(preview, control, session.tokenRelay);
           keys = deriveDirectionKeys(
             x25519.getSharedSecret(preview.appKeyPair.privateKey, control.walletPublicKey),
             preview.sidBytes,
           );
-          approved = {
+          approved = Object.freeze({
             accountId: control.accountId,
-            walletPublicKey: control.walletPublicKey,
-            signature: control.signature.signature,
-          };
-          approval.resolve(approved);
+            walletPublicKey: Uint8Array.from(control.walletPublicKey),
+            signature: Uint8Array.from(control.signature.signature),
+          });
+          approval.resolve();
           return;
         }
         if (control.kind === "reject") {
@@ -1425,17 +1447,29 @@ export function createConnectAppSession(options = {}) {
 
   return {
     socket,
-    waitForApproval() {
-      return approval.promise;
+    async waitForApproval() {
+      await approval.promise;
+      if (approvalFailure !== null) {
+        throw approvalFailure;
+      }
+      return copyConnectApproval(approved);
     },
     async signTransaction(unsignedTxBytes) {
       if (pendingSign) {
         throw new Error("a wallet signature request is already in flight");
       }
       await approval.promise;
+      if (approvalFailure !== null) {
+        throw approvalFailure;
+      }
       const txBytes = toUint8Array(unsignedTxBytes, "unsignedTxBytes");
       pendingSign = createDeferred();
-      sendEncrypted(encodeSignRequestTxPayload(txBytes));
+      try {
+        sendEncrypted(encodeSignRequestTxPayload(txBytes));
+      } catch (error) {
+        pendingSign = null;
+        throw error;
+      }
       return pendingSign.promise;
     },
     close(reason = "client closed session") {

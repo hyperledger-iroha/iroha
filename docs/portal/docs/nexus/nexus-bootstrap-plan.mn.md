@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-12-29T18:16:35.135788+00:00"
 translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan
@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 ## Сүлжээний орчин
 - Өөр өөр сүлжээний угтвар бүхий хоёр Nexus орчныг ажиллуулах:
 - **Sora Nexus (үндсэн сүлжээ)** – үйлдвэрлэлийн сүлжээний угтвар `nexus`, каноник засаглал болон SoraFS/SoraNet-н тусламж үйлчилгээ (гинжин хэлхээний ID `0x02F1` / UU028X / U0020).
-- **Sora Taira (testnet)** – `taira` үе шаттай сүлжээний угтвар, нэгтгэх тест болон хувилбарын өмнөх баталгаажуулалтад зориулсан үндсэн сүлжээний тохиргоог тусгадаг (UUID `809574f5-fee7-5e69-bfcf-52451e42d50f` хэлхээ).
+- **Sora Taira (testnet)** – `taira` үе шаттай сүлжээний угтвар, нэгтгэх тест болон хувилбарын өмнөх баталгаажуулалтад зориулсан үндсэн сүлжээний тохиргоог тусгадаг (UUID `fc56984b-2be7-431d-840e-21514d1883f0` хэлхээ).
 - Орчны бүрд тусад нь үүслийн файлууд, засаглалын түлхүүрүүд, дэд бүтцийн ул мөрийг хадгалах. Taira нь Nexus-д дэвшихээс өмнө SoraFS/SoraNet-ийн бүх хувилбаруудын туршилтын үндэс болдог.
 - CI/CD дамжуулах хоолойг эхлээд Taira-д байрлуулж, автомат утааны туршилт хийж, шалгалтад тэнцсэний дараа Nexus руу гар аргаар дэвшүүлэх шаардлагатай.
 - Лавлагаа тохиргооны багцууд нь `configs/soranexus/nexus/` (үндсэн сүлжээ) болон `configs/soranexus/taira/` (testnet) дор амьдардаг бөгөөд тус бүр нь `config.toml`, `genesis.json`, Torii элсэлтийн лавлахуудыг агуулна.

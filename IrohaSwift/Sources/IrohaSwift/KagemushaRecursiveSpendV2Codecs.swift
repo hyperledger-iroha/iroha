@@ -3,6 +3,66 @@ import Foundation
 public enum KagemushaRecursiveSpendV2Codecs {
     private static let flags = NoritoHeader.compactLen
 
+    public static func decodeNativeCapabilities(
+        _ archive: Data
+    ) throws -> KagemushaRecursiveSpendNativeCapabilitiesV1 {
+        var reader = KagemushaV2Reader(try payload(
+            archive,
+            schema: KagemushaRecursiveSpendV2.nativeCapabilitiesWireName,
+            field: "nativeCapabilities"
+        ))
+        let value = try KagemushaRecursiveSpendNativeCapabilitiesV1(
+            bridgeABIVersion: scalarUInt32(
+                reader.field(),
+                field: "nativeCapabilities.bridgeABIVersion"
+            ),
+            artifactManifestSchema: decodeString(
+                reader.field(),
+                field: "nativeCapabilities.artifactManifestSchema"
+            ),
+            mode: decodeString(reader.field(), field: "nativeCapabilities.mode"),
+            proofBackend: decodeString(
+                reader.field(),
+                field: "nativeCapabilities.proofBackend"
+            ),
+            transcriptProfile: decodeString(
+                reader.field(),
+                field: "nativeCapabilities.transcriptProfile"
+            ),
+            proofEnvelopeVersion: scalarUInt16(
+                reader.field(),
+                field: "nativeCapabilities.proofEnvelopeVersion"
+            ),
+            stateBoundaryVersion: scalarUInt16(
+                reader.field(),
+                field: "nativeCapabilities.stateBoundaryVersion"
+            ),
+            transitionCircuitID: decodeString(
+                reader.field(),
+                field: "nativeCapabilities.transitionCircuitID"
+            ),
+            stateCircuitID: decodeString(
+                reader.field(),
+                field: "nativeCapabilities.stateCircuitID"
+            ),
+            maxProofBytes: scalarUInt32(
+                reader.field(),
+                field: "nativeCapabilities.maxProofBytes"
+            ),
+            proofBackendAvailable: decodeBool(
+                reader.field(),
+                field: "nativeCapabilities.proofBackendAvailable"
+            ),
+            missingGates: decodeStringVector(
+                reader.field(),
+                field: "nativeCapabilities.missingGates",
+                maximumCount: 16
+            )
+        )
+        try reader.finish("nativeCapabilities")
+        return value
+    }
+
     public static func encodeRecipientRequestPayload(
         _ payload: KagemushaRecipientPaymentRequestSigningPayloadV2
     ) throws -> Data {
@@ -1853,6 +1913,28 @@ public enum KagemushaRecursiveSpendV2Codecs {
             throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
         }
         return value
+    }
+
+    private static func decodeStringVector(
+        _ data: Data,
+        field: String,
+        maximumCount: UInt64
+    ) throws -> [String] {
+        var reader = KagemushaV2Reader(data)
+        let count = try reader.uint64()
+        guard count <= maximumCount else {
+            throw KagemushaRecursiveSpendV2Error.invalidArchive(field)
+        }
+        var values: [String] = []
+        values.reserveCapacity(Int(count))
+        for index in 0..<count {
+            values.append(try decodeString(
+                reader.field(),
+                field: "\(field)[\(index)]"
+            ))
+        }
+        try reader.finish(field)
+        return values
     }
 
     private static func bytes(_ value: Data) -> Data {

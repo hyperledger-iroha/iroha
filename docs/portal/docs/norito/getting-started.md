@@ -1,123 +1,132 @@
 # Norito Getting Started
 
-This quick guide shows the minimal workflow for compiling a Kotodama contract,
-inspecting the generated Norito bytecode, running it locally, and deploying it
-to an Iroha node.
+This guide uses the strict Kotodama V1 language and the unified Rust toolchain
+to check, build, inspect, exercise, and deploy one canonical IVM (`.to`)
+artifact.
 
 ## Prerequisites
 
-1. Install the Rust toolchain (1.76 or newer) and check out this repository.
-2. Build or download the supporting binaries:
-   - `koto_compile` – Kotodama compiler that emits IVM/Norito bytecode
-   - `ivm_run` and `ivm_tool` – local execution and inspection utilities
-   - `iroha` – used for contract deployment and contract calls via Torii
-
-   The repository Makefile expects these binaries on `PATH`. You can either
-   download prebuilt artifacts or build them from source. If you compile the
-   toolchain locally, point the Makefile helpers at the binaries:
-
-   ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
-   ```
-
-3. Ensure an Iroha node is running when you reach the deployment step. The
-   examples below assume Torii is reachable at the URL configured in your
-   `iroha` CLI profile (`~/.config/iroha/cli.toml`).
-
-## 1. Compile a Kotodama contract
-
-The repository ships a minimal “hello world” contract in
-`examples/hello/hello.ko`. Compile it to Norito/IVM bytecode (`.to`):
+Install a Rust toolchain and check out this repository. Build the two commands
+used below:
 
 ```sh
-mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+cargo build -p ivm --bin koto
+cargo build -p iroha_cli --bin iroha
 ```
 
-Key flags:
+Add `target/debug` to `PATH`, or prefix the commands with
+`./target/debug/`. A running Iroha network is needed only for deployment and
+remote calls; the local debug command uses an in-process host.
 
-- `--abi 1` locks the contract to ABI version 1 (the only supported version at
-  the time of writing).
-- `--max-cycles 0` requests unbounded execution; set a positive number to bound
-  cycle padding for zero-knowledge proofs.
+## 1. Check and build a Kotodama contract
 
-## 2. Inspect the Norito artifact (optional)
-
-Use `ivm_tool` to verify the header and embedded metadata:
+The repository ships `examples/hello/hello.ko`. Validate it without writing an
+artifact, then build it with the release default cycle ceiling:
 
 ```sh
-ivm_tool inspect target/examples/hello.to
+koto check examples/hello/hello.ko
+
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to \
+  --manifest-out target/examples/hello.manifest.json
 ```
 
-You should see the ABI version, enabled feature flags, and the exported entry
-points. This is a quick sanity check before deployment.
+`koto check` runs parsing, resolution, type checking, effect analysis, and
+linting. `koto build` writes the canonical artifact plus hash-keyed source-map
+and budget sidecars. A repeated build with unchanged inputs reports `fresh` and
+does not rewrite outputs.
 
-## 3. Run the contract locally
+ABI v1 is unconditional. Contract source cannot select an ABI, vector width,
+or execution feature. The positive cycle ceiling is embedded in the execution
+header, covered by `code_hash`, and must not exceed node admission policy.
 
-Execute the bytecode with `ivm_run` to confirm behaviour without touching a
-node:
+## 2. Inspect the interface
+
+Generate Markdown documentation from the same compiler driver:
 
 ```sh
-ivm_run target/examples/hello.to --args '{}'
+koto doc examples/hello/hello.ko
 ```
 
-The `hello` example logs a greeting and issues a `SET_ACCOUNT_DETAIL` syscall.
-Running locally is useful while iterating on contract logic before publishing
-it on-chain.
+The generated interface lists the named `hajimari`/`始まり`, authorized
+`kotoage fn`/`言挙げ fn`, and
+read-only `view fn` declarations, their typed parameters and returns, stable
+contract error codes, and compiler-derived effects. CNTR carries this interface
+inside the artifact, but nodes independently validate bytecode control flow and
+derive security-relevant effects/access at admission.
 
-Raw `ivm_run` and `iroha transaction ivm` execution enter only the compiled
-default entrypoint. The checked-in `examples/hello/hello.ko` declares `main()`
-so the smoke test reaches `write_detail()` without needing an explicit
-selector.
+## 3. Exercise an entrypoint locally
 
-## 4. Deploy via `iroha`
-
-When you are satisfied with the contract, deploy it to a node using the CLI.
-Provide an authority account, its signing key, and either a `.to` file or
-Base64 payload:
+Use the Iroha CLI's local contract debugger. Always name the entrypoint; V1 has
+no implicit source entrypoint or source-order dispatch.
 
 ```sh
-iroha app contracts deploy \
+iroha --config defaults/client.toml \
+  contract debug-call \
+  --code-file target/examples/hello.to \
+  --source-file examples/hello/hello.ko \
+  --entrypoint main \
+  --payload-json '{}'
+```
+
+The response includes the typed result, gas/cycle budget, syscall trace, queued
+instructions, durable-state overlay, and source location for a trap. For a
+read-only declaration use `contract debug-view` instead.
+
+Contract test files use the same compiler and runtime path:
+
+```sh
+koto test path/to/contract.test.ko
+```
+
+## 4. Deploy via Iroha
+
+Deploy the exact `.to` artifact. The alias identifies the deployed contract;
+the authority and private key sign the deployment request.
+
+```sh
+iroha --config defaults/client.toml \
+  contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
-  --code-file target/examples/hello.to
+  --contract-alias hello::universal \
+  --code-file target/examples/hello.to \
+  --wait
 ```
 
-The command submits a Norito manifest + bytecode bundle over Torii and prints
-the resulting transaction status. Once the transaction is committed, the code
-hash shown in the response can be used to retrieve the on-chain manifest:
+The response includes the canonical contract address and code hash. Fetch the
+admitted manifest by that hash:
 
 ```sh
-iroha app contracts manifest get --code-hash 0x<hash>
+iroha --config defaults/client.toml \
+  contract manifest get \
+  --code-hash 0x<64-hex-digits>
 ```
 
-## 5. Run against Torii
+## 5. Call the deployed contract
 
-With the contract deployed, you can invoke it through
-`iroha app contracts call --contract-address <contract-address> --entrypoint main --wait`
-or your application client. Ensure the account permissions allow the desired
-syscalls (`set_account_detail`, `transfer_asset`, etc.).
+Public call payloads are JSON at the CLI boundary. The runtime converts the
+object to one canonical Norito argument record and the wrapper decodes it once.
+Zero-parameter entries omit the payload entirely; an empty object is still a
+payload and is rejected.
 
-## Tips & troubleshooting
+```sh
+iroha --config defaults/client.toml \
+  contract call \
+  --contract-alias hello::universal \
+  --entrypoint main \
+  --wait
+```
 
-- Use `make examples-run` to compile and execute the provided examples in one
-  shot. Override `KOTO`/`IVM` environment variables if the binaries are not on
-  `PATH`.
-- If `koto_compile` rejects the ABI version, verify that the compiler and node
-  both target ABI v1 (run `koto_compile --abi` without arguments to list
-  support).
-- The CLI accepts either hex or Base64 signing keys. For testing, you can reuse
-  the dev key from `defaults/client.toml` or generate fresh keys with
-  `kagami keys --json`.
-- When debugging Norito payloads, the `ivm_tool disassemble` subcommand helps
-  correlate instructions with Kotodama source.
+The caller must hold the permission named by `authorize`, and the host still
+applies operation-specific authorization. Views use `contract view` and
+cannot mutate durable or ledger state.
 
-This flow mirrors the steps used in CI and the integration tests. For a deeper
-dive into Kotodama grammar, syscall mappings, and Norito internals, see:
+## Next steps
 
-- `docs/source/kotodama_grammar.md`
-- `docs/source/kotodama_examples.md`
-- `norito.md`
+- Read `docs/source/kotodama_grammar.md`, the normative Kotodama V1 grammar.
+- Explore the [compile-checked example gallery](./examples/).
+- Use `koto explain <diagnostic-code>` for a stable compiler diagnostic.
+- Use `iroha contract dev` for manifest-based multi-module projects; it
+  calls the same compiler driver in process.

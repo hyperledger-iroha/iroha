@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "함수 `{func}`의 매개변수 `{name}`은 사용되지 않습니다",
     lint_unreachable_after_return: "{context}에서 도달할 수 없는 문장을 발견했습니다: return 이후의 코드는 실행되지 않습니다",
     lint_ok: "정상",
-    lint_usage: "사용법: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "사용법: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "제공된 소스에 Kotodama lint를 실행합니다.",
     ..english::MESSAGES
 };

@@ -5,8 +5,13 @@ use std::{collections::HashMap, str::FromStr};
 use iroha_crypto::PublicKey;
 use ivm::{
     CoreHost, IVM, IVMHost, VMError, gas,
-    host::DefaultHost,
+    host::{
+        DefaultHost, HostSyscallGasClass, HostSyscallGasFormula, HostSyscallQuoteStrategy,
+        abi_v1_host_syscall_metering_registry, host_syscall_metering_spec,
+        registered_host_syscall_gas_formula,
+    },
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+    syscall_metering::SyscallMetering,
     syscalls,
 };
 
@@ -43,6 +48,32 @@ where
         let result = host.syscall(number, &mut vm);
         assert_not_unknown_syscall(result, host_name, number);
     }
+
+    for number in [
+        syscalls::SYSCALL_JSON_BUILD,
+        syscalls::SYSCALL_STATE_VALUE_ENCODE,
+        syscalls::SYSCALL_STATE_VALUE_DECODE,
+        syscalls::SYSCALL_GET_PUBLIC_INPUT,
+    ] {
+        let spec = host_syscall_metering_spec(ivm::SyscallPolicy::AbiV1, number)
+            .expect("registered reserve formula");
+        assert_eq!(spec.formula, HostSyscallGasFormula::ReserveAvailable);
+        assert_eq!(
+            spec.quote_strategy,
+            HostSyscallQuoteStrategy::ReserveAvailable
+        );
+    }
+}
+
+fn assert_prepare_covers_abi<H>(host_name: &str, make_host: impl Fn() -> H)
+where
+    H: IVMHost,
+{
+    let vm = IVM::new(u64::MAX);
+    for &number in syscalls::abi_syscall_list() {
+        let host = make_host();
+        assert_not_unknown_syscall(host.prepare_syscall(number, &vm), host_name, number);
+    }
 }
 
 fn assert_fastpq_scope_gas<H>(mut host: H)
@@ -67,6 +98,78 @@ fn abi_v1_allowed_syscalls_are_covered_by_lightweight_hosts() {
     assert_host_covers_abi("DefaultHost", DefaultHost::new);
     assert_host_covers_abi("CoreHost", CoreHost::new);
     assert_host_covers_abi("WsvHost", wsv_host);
+}
+
+#[test]
+fn abi_v1_allowed_syscalls_have_one_exhaustive_host_metering_registry() {
+    let registry = abi_v1_host_syscall_metering_registry();
+    let registered_numbers: Vec<_> = registry.iter().map(|spec| spec.number).collect();
+    assert_eq!(registered_numbers, syscalls::abi_syscall_list());
+    assert!(
+        registry
+            .windows(2)
+            .all(|pair| pair[0].number < pair[1].number),
+        "host metering registry must be sorted and deduplicated"
+    );
+    assert!(
+        syscalls::abi_syscall_list()
+            .iter()
+            .all(|&number| syscalls::registered_syscall_access(number).is_some()),
+        "every allowed syscall must have explicit access metadata"
+    );
+    assert!(
+        syscalls::abi_syscall_list()
+            .iter()
+            .all(|&number| registered_host_syscall_gas_formula(number).is_some()),
+        "every allowed syscall must have an explicit gas formula"
+    );
+    for class in [
+        HostSyscallGasClass::VmLocal,
+        HostSyscallGasClass::Allocation,
+        HostSyscallGasClass::DurableStateRead,
+        HostSyscallGasClass::DurableStateWrite,
+        HostSyscallGasClass::LedgerRead,
+        HostSyscallGasClass::LedgerWrite,
+        HostSyscallGasClass::Dynamic,
+    ] {
+        assert!(
+            registry.iter().any(|spec| spec.gas_class == class),
+            "ABI-v1 registry is missing the {class:?} work class"
+        );
+    }
+
+    let unknown = 0x00ff_fffe;
+    assert!(!syscalls::is_syscall_allowed(
+        ivm::SyscallPolicy::AbiV1,
+        unknown
+    ));
+    assert_eq!(
+        host_syscall_metering_spec(ivm::SyscallPolicy::AbiV1, unknown),
+        None,
+        "unknown numbers must not inherit a generic metering class"
+    );
+    assert_eq!(
+        registered_host_syscall_gas_formula(unknown),
+        None,
+        "unknown numbers must not inherit a formula from their access class"
+    );
+
+    for &number in syscalls::abi_syscall_list() {
+        let spec = host_syscall_metering_spec(ivm::SyscallPolicy::AbiV1, number)
+            .expect("allowed syscall has metering metadata");
+        assert_eq!(
+            spec.metering,
+            SyscallMetering::Reserved,
+            "metering mode for {number:#x}"
+        );
+    }
+}
+
+#[test]
+fn abi_v1_prepare_paths_never_treat_an_allowed_syscall_as_unclassified() {
+    assert_prepare_covers_abi("DefaultHost", DefaultHost::new);
+    assert_prepare_covers_abi("CoreHost", CoreHost::new);
+    assert_prepare_covers_abi("WsvHost", wsv_host);
 }
 
 #[test]

@@ -65,11 +65,11 @@ Références totales : **505** · Variables uniques : **137**
 
 - test : mochi/mochi-integration/tests/supervisor.rs:33 — `let kagami = env!("CARGO_BIN_EXE_kagami_mock");`
 
-## CARGO_BIN_EXE_koto_compile (test : 3)
+## CARGO_BIN_EXE_koto build (test : 3)
 
-- test : crates/ivm/tests/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- test : crates/ivm/tests/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- test : crates/ivm/tests/cli_smoke.rs:88 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
+- test : crates/ivm/tests/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto build");`
+- test : crates/ivm/tests/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto build");`
+- test : crates/ivm/tests/cli_smoke.rs:88 — `let bin = env!("CARGO_BIN_EXE_koto build");`
 
 ## CARGO_BIN_EXE_sorafs_chunk_dump (test : 1)
 
@@ -653,7 +653,7 @@ Références totales : **505** · Variables uniques : **137**
 
 ## LANG (test : 3)
 
-- test : crates/ivm/src/bin/koto_lint.rs:702 — `let previous = env::var("LANG").ok();`
+- test : crates/ivm/src/bin/koto check.rs:702 — `let previous = env::var("LANG").ok();`
 - test : crates/ivm/tests/i18n.rs:11 — `let old_lang = env::var("LANG").ok();`
 - test : crates/ivm/tests/i18n.rs:69 — `let old_lang = env::var("LANG").ok();`
 
@@ -744,10 +744,6 @@ Références totales : **505** · Variables uniques : **137**
 - production : crates/ivm/src/cuda.rs:22 — `static BITONIC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx"));`
 - test : crates/ivm/src/ptx_tests.rs:7 — `let out_dir = match std::env::var("OUT_DIR") {`
 - test : crates/ivm/tests/ptx_kernels.rs:5 — `let out_dir = env!("OUT_DIR");`
-
-## P2P_TURN (production : 1)
-
-- production : crates/iroha_p2p/src/transport.rs:296 — `let endpoint = std::env::var("P2P_TURN")`
 
 ## CHEMIN (prod : 2, test : 1)
 

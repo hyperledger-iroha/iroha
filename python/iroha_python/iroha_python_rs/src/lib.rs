@@ -7715,7 +7715,7 @@ mod tests {
         let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
             [0x11; 32],
             [0x22; 32],
-            ChainId::from_str("809574f5-fee7-5e69-bfcf-52451e42d50f").expect("chain id parses"),
+            ChainId::from_str("fc56984b-2be7-431d-840e-21514d1883f0").expect("chain id parses"),
             [0x33; 32],
             [0x44; 32],
             from,

@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "函数`{func}`中的参数`{name}`从未使用",
     lint_unreachable_after_return: "在{context}中检测到不可达语句：return 之后的代码永远不会执行",
     lint_ok: "正常",
-    lint_usage: "用法：koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "用法：koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "对提供的源文件运行 Kotodama 的 lint。",
     ..english::MESSAGES
 };

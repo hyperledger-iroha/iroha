@@ -82,9 +82,8 @@ pub fn verify_kagemusha_topup_finality_v2(
     let roster_bytes = norito::to_bytes(roster_artifact)
         .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
     if u64::try_from(roster_bytes.len()).map_or(true, |length| {
-            length > KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
-        })
-        || <[u8; 32]>::from(Sha256::digest(&roster_bytes)) != expected_roster_sha256
+        length > KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
+    }) || <[u8; 32]>::from(Sha256::digest(&roster_bytes)) != expected_roster_sha256
     {
         return Err(KagemushaTopUpFinalityVerifyError::ArtifactDigestMismatch);
     }
@@ -398,11 +397,7 @@ mod tests {
         attacker_roster.windows[0].validator_set_pops[0][0] ^= 0x80;
 
         assert_eq!(
-            verify_kagemusha_topup_finality_v2(
-                &fixture.proof,
-                &attacker_roster,
-                trusted_digest,
-            ),
+            verify_kagemusha_topup_finality_v2(&fixture.proof, &attacker_roster, trusted_digest,),
             Err(KagemushaTopUpFinalityVerifyError::ArtifactDigestMismatch)
         );
         assert_eq!(

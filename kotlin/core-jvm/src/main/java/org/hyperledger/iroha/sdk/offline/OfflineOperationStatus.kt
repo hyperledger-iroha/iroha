@@ -61,10 +61,10 @@ sealed class OfflineOperationStatus(
         val transactionHash: String = requireTransactionHash(transactionHash, "transactionHash")
 
         @JvmField
-        val finalizedBlockHeight: BigInteger = requireU64(finalizedBlockHeight, "finalizedBlockHeight")
+        val finalizedBlockHeight: BigInteger = requirePositiveU64(finalizedBlockHeight, "finalizedBlockHeight")
 
         @JvmField
-        val serverTimeMs: BigInteger = requireU64(serverTimeMs, "serverTimeMs")
+        val serverTimeMs: BigInteger = requirePositiveU64(serverTimeMs, "serverTimeMs")
     }
 
     /** Finalized redemption result. */
@@ -77,10 +77,10 @@ sealed class OfflineOperationStatus(
         val transactionHash: String = requireTransactionHash(transactionHash, "transactionHash")
 
         @JvmField
-        val finalizedBlockHeight: BigInteger = requireU64(finalizedBlockHeight, "finalizedBlockHeight")
+        val finalizedBlockHeight: BigInteger = requirePositiveU64(finalizedBlockHeight, "finalizedBlockHeight")
 
         @JvmField
-        val serverTimeMs: BigInteger = requireU64(serverTimeMs, "serverTimeMs")
+        val serverTimeMs: BigInteger = requirePositiveU64(serverTimeMs, "serverTimeMs")
     }
 
     /**
@@ -192,4 +192,10 @@ sealed class OfflineOperationStatus(
             }
         }
     }
+}
+
+private fun requirePositiveU64(value: BigInteger, field: String): BigInteger {
+    val checked = requireU64(value, field)
+    require(checked.signum() > 0) { "$field must be at least 1" }
+    return checked
 }

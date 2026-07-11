@@ -211,6 +211,28 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             XCTAssertEqual(error as? OfflineOperationError, .invalidField("transaction_hash"))
         }
 
+        let anchor = try OfflineTopUpAnchor(noritoArchive: canonicalTopUpAnchorArchive())
+        for (finalizedBlockHeight, serverTimeMs, field) in [
+            (UInt64(0), UInt64(1), "finalized_block_height"),
+            (UInt64(1), UInt64(0), "server_time_ms"),
+        ] {
+            XCTAssertThrowsError(try OfflineTopUpResult(
+                transactionHash: Self.transactionHash,
+                finalizedBlockHeight: finalizedBlockHeight,
+                serverTimeMs: serverTimeMs,
+                anchor: anchor
+            )) { error in
+                XCTAssertEqual(error as? OfflineOperationError, .invalidField(field))
+            }
+            XCTAssertThrowsError(try OfflineRedeemResult(
+                transactionHash: Self.transactionHash,
+                finalizedBlockHeight: finalizedBlockHeight,
+                serverTimeMs: serverTimeMs
+            )) { error in
+                XCTAssertEqual(error as? OfflineOperationError, .invalidField(field))
+            }
+        }
+
         let valid = try OfflineOperationStatus.Pending(
             operationId: Self.operationId,
             kind: .redeem,

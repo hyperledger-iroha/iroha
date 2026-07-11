@@ -5588,37 +5588,32 @@ public sealed record class ToriiContractAliasResolution
     }
 }
 
-[JsonConverter(typeof(ToriiContractManifestSummaryJsonConverter))]
-public sealed record class ToriiContractManifestSummary
+[JsonConverter(typeof(ToriiContractCodeRecordJsonConverter))]
+public sealed record class ToriiContractCodeRecord
 {
+    private ToriiContractManifest manifest = new();
     private string? codeHash;
     private string? abiHash;
+
+    [JsonPropertyName("manifest")]
+    public ToriiContractManifest Manifest
+    {
+        get => manifest;
+        init => manifest = ToriiContractMetadataDirectMetadata.RequireObject(value, nameof(Manifest));
+    }
 
     [JsonPropertyName("code_hash")]
     public string? CodeHash
     {
         get => codeHash;
-        init => codeHash = ToriiContractMetadataDirectMetadata.RequireExactSizedHex(value, nameof(CodeHash));
+        init => codeHash = ToriiContractMetadataDirectMetadata.RequireOptionalExactSizedHex(value, nameof(CodeHash));
     }
 
     [JsonPropertyName("abi_hash")]
     public string? AbiHash
     {
         get => abiHash;
-        init => abiHash = ToriiContractMetadataDirectMetadata.RequireExactSizedHex(value, nameof(AbiHash));
-    }
-}
-
-[JsonConverter(typeof(ToriiContractCodeRecordJsonConverter))]
-public sealed record class ToriiContractCodeRecord
-{
-    private ToriiContractManifestSummary manifest = new();
-
-    [JsonPropertyName("manifest")]
-    public ToriiContractManifestSummary Manifest
-    {
-        get => manifest;
-        init => manifest = ToriiContractMetadataDirectMetadata.RequireObject(value, nameof(Manifest));
+        init => abiHash = ToriiContractMetadataDirectMetadata.RequireOptionalExactSizedHex(value, nameof(AbiHash));
     }
 }
 

@@ -239,15 +239,17 @@ function requireUnsignedInteger(value, context, maximum, { positive = false } = 
   return value;
 }
 
-function requireUnsignedResponseInteger(value, context) {
+function requireUnsignedResponseInteger(value, context, { positive = false } = {}) {
   if (typeof value === "bigint") {
-    if (value < 0n || value > MAX_U128) {
-      throw new RangeError(`${context} must fit in unsigned 128-bit range`);
+    if (value < 0n || (positive && value === 0n) || value > MAX_U128) {
+      const lower = positive ? 1 : 0;
+      throw new RangeError(`${context} must be between ${lower} and ${MAX_U128}`);
     }
     return value;
   }
-  if (Number.isSafeInteger(value) && value >= 0) return value;
-  throw new TypeError(`${context} must be a non-negative lossless integer`);
+  if (Number.isSafeInteger(value) && value >= (positive ? 1 : 0)) return value;
+  const requirement = positive ? "a positive lossless integer" : "a non-negative lossless integer";
+  throw new TypeError(`${context} must be ${requirement}`);
 }
 
 function requireByteArray(value, context, exactLength = null) {
@@ -726,10 +728,12 @@ function normalizeOperationResult(value, context) {
     finalized_block_height: requireUnsignedResponseInteger(
       requireOwn(rawResult, "finalized_block_height", resultContext),
       `${resultContext}.finalized_block_height`,
+      { positive: true },
     ),
     server_time_ms: requireUnsignedResponseInteger(
       requireOwn(rawResult, "server_time_ms", resultContext),
       `${resultContext}.server_time_ms`,
+      { positive: true },
     ),
   };
   if (kind === "top_up") {

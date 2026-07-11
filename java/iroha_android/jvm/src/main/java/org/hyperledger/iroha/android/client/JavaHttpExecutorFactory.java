@@ -28,6 +28,19 @@ public final class JavaHttpExecutorFactory {
   }
 
   /**
+   * Creates an executor backed by the provided client with a custom buffered-response limit.
+   *
+   * @param client HTTP client instance
+   * @param maximumResponseBytes inclusive maximum number of response bytes buffered per request
+   * @return executor that delegates to the provided client
+   */
+  public static HttpTransportExecutor create(
+      final HttpClient client, final long maximumResponseBytes) {
+    return new JavaHttpExecutor(
+        Objects.requireNonNull(client, "client"), maximumResponseBytes);
+  }
+
+  /**
    * Convenience helper that wraps a JDK {@link HttpClient} in the SDK transport executor and
    * constructs a {@link HttpClientTransport} with the provided configuration.
    *

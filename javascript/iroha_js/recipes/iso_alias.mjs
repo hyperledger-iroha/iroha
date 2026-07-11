@@ -2,14 +2,12 @@
 /**
  * ISO alias helper
  *
- * Evaluates a blinded alias element via the mock VOPRF endpoint and resolves
- * ISO aliases either by literal label (IBAN-style strings) or by deterministic
- * index. Useful for roadmap item JS-06 when exercising ISO bridge helpers from
- * CI or during manual rehearsals without writing bespoke client code.
+ * Resolves ISO aliases either by literal label (IBAN-style strings) or by
+ * deterministic index.
  *
  * Usage:
  *   TORII_URL=http://localhost:8080 \
- *   ISO_VOPRF_INPUT=deadbeef ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
+ *   ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
  *   node ./recipes/iso_alias.mjs
  */
 import { ToriiClient } from "../src/index.js";
@@ -20,8 +18,6 @@ const AUTH_TOKEN =
 const API_TOKEN =
   process.env.TORII_API_TOKEN ?? process.env.IROHA_TORII_API_TOKEN ?? null;
 
-const SHOULD_EVALUATE = process.env.ISO_SKIP_VOPRF === "1" ? false : true;
-const VOPRF_INPUT = (process.env.ISO_VOPRF_INPUT ?? "deadbeef").trim();
 const ALIAS_LABEL = process.env.ISO_ALIAS_LABEL?.trim();
 const ALIAS_INDEX_INPUT = process.env.ISO_ALIAS_INDEX?.trim();
 
@@ -66,20 +62,6 @@ function isRuntimeDisabledError(error) {
     error instanceof Error &&
     /runtime is disabled/i.test(error.message ?? "")
   );
-}
-
-async function evaluateAliasVoprf(client, inputHex) {
-  if (!SHOULD_EVALUATE) {
-    console.log("Skipping VOPRF evaluation (ISO_SKIP_VOPRF=1).");
-    return;
-  }
-  console.log(`Evaluating alias VOPRF input (${inputHex.length / 2} bytes)…`);
-  const response = await client.evaluateAliasVoprf(inputHex);
-  const digestPreview = response.evaluated_element_hex.slice(0, 32);
-  console.log(
-    `backend=${response.backend} evaluated_element_hex=${response.evaluated_element_hex}`,
-  );
-  console.log(`digest preview: ${digestPreview}…`);
 }
 
 async function resolveAliasLabel(client, alias) {
@@ -138,16 +120,11 @@ async function resolveAliasIndex(client, indexInput) {
 async function main() {
   console.log(`Torii endpoint: ${TORII_URL}`);
   const client = buildClient();
-  await evaluateAliasVoprf(client, VOPRF_INPUT);
   await resolveAliasLabel(client, ALIAS_LABEL);
   await resolveAliasIndex(client, ALIAS_INDEX_INPUT);
-  if (
-    !SHOULD_EVALUATE &&
-    !ALIAS_LABEL &&
-    (ALIAS_INDEX_INPUT === undefined || ALIAS_INDEX_INPUT === null)
-  ) {
+  if (!ALIAS_LABEL && (ALIAS_INDEX_INPUT === undefined || ALIAS_INDEX_INPUT === null)) {
     console.log(
-      "Nothing to do — provide ISO_VOPRF_INPUT, ISO_ALIAS_LABEL, or ISO_ALIAS_INDEX to exercise the helpers.",
+      "Nothing to do — provide ISO_ALIAS_LABEL or ISO_ALIAS_INDEX to exercise the helpers.",
     );
   }
 }

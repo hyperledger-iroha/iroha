@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "paramèter `{name}` ing fungsi `{func}` ora tau dienggo",
     lint_unreachable_after_return: "pernyataan ora bisa digayuh ditemokaké ing {context}: kode sawisé return ora bakal mlaku",
     lint_ok: "berhasil",
-    lint_usage: "Panggunaan: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Panggunaan: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Mbukak lint Kotodama marang sumber sing diwènèhaké.",
     ..english::MESSAGES
 };

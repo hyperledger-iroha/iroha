@@ -10,17 +10,10 @@ translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
 ---
 
-# Códigos de error del compilador Kotodama
+# Kotodama Compiler Error Codes
 
-El compilador Kotodama emite códigos de error estables para que los usuarios de herramientas y CLI puedan
-entender rápidamente la causa de una falla. Utilice `koto_compile --explain <code>`
-para imprimir la pista correspondiente.
+The canonical V1 diagnostic registry and reference are maintained in
+[`kotodama_error_codes.md`](./kotodama_error_codes.md).
 
-| Código | Descripción | Solución típica |
-|-------|-------------|-------------|
-| `E0001` | El objetivo de bifurcación está fuera del rango para la codificación de salto IVM. | Divida funciones muy grandes o reduzca la inserción para que las distancias de bloque básicas se mantengan dentro de ±1 MiB. |
-| `E0002` | Los sitios de llamadas hacen referencia a una función que nunca se definió. | Compruebe si hay errores tipográficos, modificadores de visibilidad o indicadores de funciones que eliminaron al destinatario. |
-| `E0003` | Las llamadas al sistema de estado duradero se emitieron sin ABI v1 habilitado. | Configure `CompilerOptions::abi_version = 1` o agregue `meta { abi_version: 1 }` dentro del contrato `seiyaku`. |
-| `E0004` | Las llamadas al sistema relacionadas con activos recibieron punteros no literales. | Utilice `account_id(...)`, `asset_definition(...)`, etc., o pase 0 centinelas para los valores predeterminados del host. |
-| `E0005` | El inicializador de bucle `for` es más complejo de lo que se admite actualmente. | Mueva la configuración compleja antes del bucle; Actualmente solo se aceptan inicializadores de expresión/`let` simples. |
-| `E0006` | La cláusula de paso del bucle `for` es más compleja de lo que se admite actualmente. | Actualice el contador de bucles con una expresión simple (por ejemplo, `i = i + 1`). |
+This former translation is retained as a stable link only. `koto explain
+<code>` reads the same registry used by the compiler.

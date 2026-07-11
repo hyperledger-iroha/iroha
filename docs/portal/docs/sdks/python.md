@@ -141,7 +141,7 @@ Other convenience methods include `stream_pipeline_transactions`,
 
 ## Related Norito examples
 
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — mirrors the compile/run
+- [Initializer skeleton](../norito/examples/hajimari-entrypoint) — mirrors the check/build
   workflow from this quickstart so you can deploy the same starter contract from Python.
 - [Register domain and mint assets](../norito/examples/register-and-mint) — matches the domain +
   asset flows above and is useful when you want the ledger-side implementation instead of SDK builders.

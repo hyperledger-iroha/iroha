@@ -31,7 +31,7 @@ Cette page correspond à `docs/source/soranexus_bootstrap_plan.md`. Vous pouvez 
 - Configuration d'amorçage avancée (`configs/nexus/bootstrap/*.toml`), permettant de définir les paramètres réels.## Сетевые окружения
 - Utilisez la commande Nexus avec les paramètres suivants :
 - **Sora Nexus (réseau principal)** - Les préfixes produits sont `nexus`, permettant l'installation canonique et les services de ferroutage SoraFS/SoraNet (ID de chaîne `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - Paramètres de mise en scène définis `testus`, configuration du réseau principal pour les tests d'intégration et les validations préalables à la version (chaîne UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - Paramètres de mise en scène définis `testus`, configuration du réseau principal pour les tests d'intégration et les validations préalables à la version (chaîne UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Découvrez les principaux événements de la genèse, les clés de gouvernance et les empreintes d'infrastructure pour la réalisation du calendrier. Testus est un polygone pour tous les déploiements SoraFS/SoraNet avant la production dans Nexus.
 - Les pipelines CI/CD doivent être déployés dans Testus, effectuer des tests de fumée automatiques et effectuer une promotion rapide dans Nexus après la procédure. проверок.
 - Les bundles de configuration de référence sont disponibles dans `configs/soranexus/nexus/` (réseau principal) et `configs/soranexus/testus/` (testnet), pour que vous puissiez utiliser `config.toml`, `genesis.json` et admission des catalogues Torii.## Partie 1 - Révision de la configuration

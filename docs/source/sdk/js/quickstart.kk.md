@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sdk/js/quickstart.md
 status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: ed490b7e796183ba923148179dbbe4b923b6d5e52c203853bd2d1236e760e631
+source_hash: f55d6e0a07dc623a4a4751f6d6580ab1205c298ea6d225bfd9a054f15b2d813b
 source_last_modified: "2026-04-04T12:16:49.583988+00:00"
 translation_last_reviewed: 2026-04-05
 ---
@@ -446,15 +446,20 @@ for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
 // env-driven pagination/filters so you can smoke-test permissions against a live Torii.
 ```
 
-## Offline readiness
+## Offline lifecycle
 
-JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
-Classic Offline Note issuance, redemption, and audit transaction paths are retired;
-Kagemusha readiness fields advertise the active offline payment implementation.
+JavaScript integrations use exactly four first-release routes:
+`GET /v1/offline/readiness?asset_definition_id=...`,
+`POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
+`GET /v1/offline/operations/{operation_id}`. Top-up and redemption send the
+typed request directly as structured JSON or Norito, return `202 Accepted`,
+and are followed through the response `Location`. Readiness returns `200`
+with `ready: false` when evaluation succeeds but requirements are unmet, and
+reserves `503 readiness_unavailable` for an evaluation failure.
 
 ```js
-const readiness = await torii.getOfflineReadiness();
-console.log("kagemusha", readiness.offline_kagemusha_recursive_compact_available);
+const readiness = await torii.getOfflineReadiness("xor#wonderland");
+console.log("offline ready", readiness.ready, readiness.blockers);
 ```
 ## Torii Queries & Streaming
 

@@ -41,7 +41,7 @@ if output_path is None:
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write(
-        'chain = "iroha3-taira"\n'
+        'chain = "fc56984b-2be7-431d-840e-21514d1883f0"\n'
         '\n'
         '[account]\n'
         'domain = "universal"\n'
@@ -174,21 +174,21 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/status" ]]; then
     body='{"build":{"git_commit_sha":"490dacc287"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/status" ]]; then
-  if [[ "$scenario" == "post_canary_sumeragi_missing_validator_set" ]]; then
-    body='{"commit_qc_height":707,"highest_qc_height":708,"locked_qc_height":708,"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
+  if [[ $after_ping -eq 1 && "$scenario" == "post_canary_sumeragi_missing_validator_set" ]]; then
+    body='{"protocol_version":2,"build_fingerprint":"build","config_fingerprint":"config","height_context_id":"context","height":708,"view":0,"phase":"prepare","leader":0,"last_committed_height":707,"last_committed_subject":"subject","body_state":"available","pending_persistence_id":null}'
   elif [[ "$scenario" == "sumeragi_highest_qc_behind_commit" ]]; then
-    body='{"commit_qc_height":9532,"highest_qc_height":6544,"locked_qc_height":9532,"commit_qc_validator_set_len":4,"view_change_causes":{"last_cause":null},"worker_loop":{"stage":"idle"}}'
+    body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","config_fingerprint":"config","height_context_id":"context","height":6544,"view":0,"phase":"prepare","leader":0,"last_committed_height":9532,"last_committed_subject":"subject","body_state":"available","pending_persistence_id":null}'
   elif [[ "$scenario" == "sumeragi_locked_qc_behind_commit" ]]; then
-    body='{"commit_qc_height":9532,"highest_qc_height":9532,"locked_qc_height":6544,"commit_qc_validator_set_len":4,"view_change_causes":{"last_cause":null},"worker_loop":{"stage":"idle"}}'
+    body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","config_fingerprint":"config","height_context_id":"context","height":9533,"view":0,"phase":"prepare","leader":0,"last_committed_height":9532,"body_state":"available","pending_persistence_id":null}'
   elif [[ "$scenario" == "sumeragi_idle_high_view_missing_qc" ]]; then
-    body='{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"canonical":{"height":708,"phase":"prepare","view":42,"pending_finality":null,"rbc_status":"disabled"},"membership":{"height":708,"view":42},"pending_rbc":{"sessions":0},"view_change_causes":{"last_cause":"missing_qc"},"tx_queue":{"depth":1,"capacity":20000,"saturated_by_age":true,"oldest_queued_age_ms":30000},"worker_loop":{"stage":"idle"}}'
+    body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","config_fingerprint":"config","height_context_id":"context","height":708,"view":42,"phase":"prepare","leader":0,"last_committed_height":707,"last_committed_subject":"subject","body_state":"fetching","pending_persistence_id":0}'
   else
-    body='{"commit_qc_height":707,"highest_qc_height":708,"locked_qc_height":708,"commit_qc_validator_set_len":4,"canonical":{"height":707,"pending_finality":null,"rbc_status":"disabled"},"membership":{"height":707},"pending_rbc":{"sessions":0,"entries":[]},"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
+    body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","config_fingerprint":"config","height_context_id":"context","height":708,"view":0,"phase":"prepare","leader":0,"last_committed_height":707,"last_committed_subject":"subject","body_state":"available","pending_persistence_id":null}'
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/capabilities" ]]; then
   body='{}'
-elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/manifests" ]]; then
-  body='{}'
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/registry" ]]; then
+  body='{"version":1,"lanes":[]}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/zk/proofs/count" ]]; then
   body='{}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/validator-sets" ]]; then
@@ -241,6 +241,10 @@ if [[ "$*" == *"ledger transaction ping"* ]]; then
         exit 1
         ;;
       post_canary_sumeragi_missing_validator_set)
+        echo "pong"
+        exit 0
+        ;;
+      success)
         echo "pong"
         exit 0
         ;;
@@ -301,12 +305,12 @@ run_case() {
       MOCK_SCENARIO="$scenario" \
       MOCK_STATE_DIR="${root}/state" \
       EXPECTED_TAIRA_GIT_SHA="$expected_git_sha" \
+      WRITE_CONFIG_DEFAULT="${root}/canary.toml" \
       POST_CANARY_STATUS_RECHECK_ATTEMPTS=2 \
       POST_CANARY_STATUS_RECHECK_DELAY_SECONDS=0 \
       "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
         --skip-local \
         --public-root https://taira.sora.org \
-        --write-config "${root}/canary.toml" \
         --iroha-bin "${root}/mockbin/iroha" \
         >"$output_file" 2>&1; then
     echo "case ${scenario} unexpectedly succeeded" >&2
@@ -327,8 +331,59 @@ run_case() {
   fi
 }
 
-run_case txn_expired 'write canary failed: transaction expired' '"highest_qc_height": 708'
-run_case permission_403 'write canary failed: signer or permission check returned 403' '"commit_qc_height": 707'
+run_invalid_canary_identity_case() {
+  local mutation="$1"
+  local expected_pattern="$2"
+  local root output_file config_path
+
+  root="$(mktemp -d)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  output_file="${root}/invalid-${mutation}.log"
+  config_path="${root}/canary.toml"
+  "${root}/scripts/taira_bootstrap_canary.py" --output-config "$config_path"
+  python3 - "$config_path" "$mutation" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+mutation = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+if mutation == "archived-chain":
+    text = text.replace(
+        "fc56984b-2be7-431d-840e-21514d1883f0",
+        "809574f5-fee7-5e69-bfcf-52451e42d50f",
+        1,
+    )
+elif mutation == "wrong-discriminant":
+    text = text.replace("chain_discriminant = 369", "chain_discriminant = 753", 1)
+else:
+    raise SystemExit(f"unknown mutation: {mutation}")
+path.write_text(text, encoding="utf-8")
+PY
+
+  if PATH="${root}/mockbin:${PATH}" \
+      MOCK_SCENARIO="cargo_success" \
+      MOCK_STATE_DIR="${root}/state" \
+      "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+        --skip-local \
+        --public-root https://taira.sora.org \
+        --write-config "$config_path" \
+        --iroha-bin "${root}/mockbin/iroha" \
+        >"$output_file" 2>&1; then
+    echo "invalid canary identity case ${mutation} unexpectedly succeeded" >&2
+    sed -n '1,200p' "$output_file" >&2 || true
+    return 1
+  fi
+  if ! grep -q "$expected_pattern" "$output_file"; then
+    echo "invalid canary identity case ${mutation} did not emit expected pattern: ${expected_pattern}" >&2
+    sed -n '1,200p' "$output_file" >&2 || true
+    return 1
+  fi
+}
+
+run_case txn_expired 'write canary failed: transaction expired' '"last_committed_height": 707'
+run_case permission_403 'write canary failed: signer or permission check returned 403' '"blocks": 707'
 run_case public_502 'public Torii ingress looks degraded' 'HTTP 502'
 run_case public_503 'public Torii ingress looks degraded' 'HTTP 503'
 run_case public_503_mcp 'public MCP ingress looks degraded' 'HTTP 503'
@@ -336,10 +391,59 @@ run_case initialized_timeout 'initialized notification failed with HTTP curl_err
 run_case status_build_sha_missing '/status did not publish build.git_commit_sha' '' '490dacc'
 run_case status_build_sha_too_short '/status build git SHA 490dac is not a 7 to 40 character hexadecimal SHA prefix' '' '490dacc'
 run_case status_build_sha_mismatch '/status build git SHA 94dcbf7c28 does not match expected 490dacc' '' '490dacc'
-run_case sumeragi_highest_qc_behind_commit '/v1/sumeragi/status highest QC height 6544 is behind commit QC height 9532'
-run_case sumeragi_locked_qc_behind_commit '/v1/sumeragi/status locked QC height 6544 is behind commit QC height 9532'
-run_case sumeragi_idle_high_view_missing_qc '/v1/sumeragi/status reports a finality fault'
-run_case post_canary_sumeragi_missing_validator_set '/v1/sumeragi/status still did not publish a healthy commit QC snapshot after the signed write canary' 'reported an empty commit validator set'
+run_case sumeragi_highest_qc_behind_commit 'committed height 9532 is ahead of reducer height 6544'
+run_case sumeragi_locked_qc_behind_commit 'v2 status omitted last_committed_subject for a non-genesis commit'
+run_case sumeragi_idle_high_view_missing_qc 'v2 status reported invalid pending persistence id: 0'
+run_case post_canary_sumeragi_missing_validator_set '/v1/sumeragi/status still did not publish a healthy commit QC snapshot after the signed write canary' 'v2 status omitted required field(s): node_fingerprint'
+run_invalid_canary_identity_case \
+  archived-chain \
+  'write canary config must target the public Sumeragi-v2 Taira chain'
+run_invalid_canary_identity_case \
+  wrong-discriminant \
+  'write canary config must use Taira chain discriminant 369'
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --write-config "${root}/missing-canary.toml" \
+      --iroha-bin "${root}/mockbin/iroha" \
+      >"${root}/missing-canary-output.log" 2>&1; then
+  echo "explicit missing write-config case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/missing-canary-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'write canary config not found:' "${root}/missing-canary-output.log"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+"${root}/scripts/taira_bootstrap_canary.py" \
+  --output-config "${root}/explicit-canary.toml"
+before_hash="$(shasum -a 256 "${root}/explicit-canary.toml" | awk '{print $1}')"
+if ! PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="success" \
+    MOCK_STATE_DIR="${root}/state" \
+    POST_CANARY_STATUS_RECHECK_ATTEMPTS=2 \
+    POST_CANARY_STATUS_RECHECK_DELAY_SECONDS=0 \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --write-config "${root}/explicit-canary.toml" \
+      --iroha-bin "${root}/mockbin/iroha" \
+      >"${root}/explicit-canary-output.log" 2>&1; then
+  echo "explicit write-config preservation case unexpectedly failed" >&2
+  sed -n '1,200p' "${root}/explicit-canary-output.log" >&2 || true
+  exit 1
+fi
+after_hash="$(shasum -a 256 "${root}/explicit-canary.toml" | awk '{print $1}')"
+[[ "$before_hash" == "$after_hash" ]]
+grep -q 'Taira MCP rollout checks passed.' "${root}/explicit-canary-output.log"
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")
@@ -442,11 +546,11 @@ make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="txn_expired" \
     MOCK_STATE_DIR="${root}/state" \
+    WRITE_CONFIG_DEFAULT="${root}/canary.toml" \
     "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
       --skip-local \
       --public-root https://taira.sora.org \
       --resolve-host taira.sora.org:443:127.0.0.1 \
-      --write-config "${root}/canary.toml" \
       --iroha-bin "${root}/mockbin/iroha" \
       >"${root}/resolve-output.log" 2>&1; then
   echo "resolve-host case unexpectedly succeeded" >&2

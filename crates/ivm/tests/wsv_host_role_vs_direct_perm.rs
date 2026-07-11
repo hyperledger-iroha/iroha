@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use iroha_crypto::{Hash, PublicKey};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
@@ -27,8 +27,8 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
-    let buf = to_bytes(&amount.into()).expect("encode numeric into Norito");
-    make_tlv(PointerType::NoritoBytes as u16, &buf)
+    let quantity = Quantity::try_from_numeric(amount.into()).expect("canonical quantity");
+    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
 }
 
 fn account(_domain: &str, public_key: &str) -> AccountId {

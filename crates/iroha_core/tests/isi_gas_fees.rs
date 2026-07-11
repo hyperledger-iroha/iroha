@@ -1014,7 +1014,7 @@ fn ivm_gas_fees_record_settlement_receipt() {
         version_minor: 0,
         mode: 0,
         vector_length: 0,
-        max_cycles: 0,
+        max_cycles: 1_000_000,
         abi_version: 1,
     };
     let mut program = meta.encode();

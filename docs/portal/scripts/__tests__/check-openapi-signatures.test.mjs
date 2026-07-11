@@ -960,7 +960,54 @@ test('checkOpenApiSignatures rejects incomplete manifest generator metadata', as
     ['generated', {generated_unix_ms: null}, /manifest missing generated_unix_ms/i],
     ['negative-generated', {generated_unix_ms: -1}, /manifest missing generated_unix_ms/i],
     ['fractional-generated', {generated_unix_ms: 1.5}, /manifest missing generated_unix_ms/i],
-    ['commit', {generator_commit: ''}, /manifest missing generator_commit/i],
+    [
+      'commit',
+      {generator_commit: ''},
+      /clean provenance requires generator_commit as exactly 40 lowercase hexadecimal/i,
+    ],
+    [
+      'short-commit',
+      {generator_commit: 'ab'.repeat(19)},
+      /exactly 40 lowercase hexadecimal/i,
+    ],
+    [
+      'uppercase-commit',
+      {generator_commit: 'AB'.repeat(20)},
+      /exactly 40 lowercase hexadecimal/i,
+    ],
+    [
+      'nonhex-commit',
+      {generator_commit: 'gg'.repeat(20)},
+      /exactly 40 lowercase hexadecimal/i,
+    ],
+    [
+      'padded-commit',
+      {generator_commit: ` ${'ab'.repeat(20)} `},
+      /exactly 40 lowercase hexadecimal/i,
+    ],
+    [
+      'dirty-commit-smuggling',
+      {
+        generator_commit: 'abcdef',
+        generator_dirty: true,
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
+      /dirty provenance must set generator_commit to null/i,
+    ],
+    [
+      'dirty-missing-digest',
+      {generator_commit: null, generator_dirty: true},
+      /dirty provenance requires generator_source_sha256_hex/i,
+    ],
+    [
+      'dirty-signed',
+      {
+        generator_commit: null,
+        generator_dirty: true,
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
+      /dirty provenance must not be signed/i,
+    ],
   ]) {
     const tempRoot = await mkdtemp(join(tmpdir(), `openapi-signatures-manifest-meta-${name}-`));
     const staticDir = join(tempRoot, 'static', 'openapi');
@@ -1732,7 +1779,7 @@ function buildManifest({path: specPath, payload, sha256, blake3 = null, signatur
   return {
     version: 1,
     generated_unix_ms: Date.now(),
-    generator_commit: 'abcdef',
+    generator_commit: 'ab'.repeat(20),
     artifact,
   };
 }

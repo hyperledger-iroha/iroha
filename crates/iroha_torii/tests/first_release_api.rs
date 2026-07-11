@@ -9,7 +9,7 @@ use std::{
 
 use axum::http::Request;
 use http::{
-    HeaderMap, Method, StatusCode,
+    HeaderMap, HeaderValue, Method, StatusCode,
     header::{ACCEPT, ALLOW, CONTENT_TYPE, VARY},
 };
 use http_body_util::BodyExt as _;
@@ -63,6 +63,49 @@ async fn decode_error_response(
     (status, headers, envelope)
 }
 
+async fn assert_canonical_early_error(
+    response: axum::response::Response,
+    expected_status: StatusCode,
+    expected_content_type: &str,
+    expected_code: &str,
+    expected_request_id: &str,
+) {
+    assert_eq!(response.status(), expected_status);
+    let headers = response.headers().clone();
+    assert_eq!(
+        headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some(expected_content_type)
+    );
+    assert_eq!(
+        headers
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok()),
+        Some(expected_request_id)
+    );
+    assert!(header_contains_token(&headers, VARY, "Accept"));
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect early error response")
+        .to_bytes();
+    assert_eq!(
+        headers
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<usize>().ok()),
+        Some(body.len())
+    );
+    let envelope: ErrorEnvelope = if expected_content_type.starts_with("application/json") {
+        norito::json::from_slice(&body).expect("decode canonical early JSON error")
+    } else {
+        norito::decode_from_bytes(&body).expect("decode canonical early Norito error")
+    };
+    assert_eq!(envelope.code(), expected_code);
+}
+
 #[tokio::test]
 async fn unknown_routes_use_negotiated_typed_error_envelopes() {
     let router = build_router();
@@ -84,6 +127,81 @@ async fn unknown_routes_use_negotiated_typed_error_envelopes() {
         assert_eq!(envelope.code(), "route_not_found", "Accept: {accept}");
         assert!(header_contains_token(&headers, VARY, "Accept"));
     }
+}
+
+#[tokio::test]
+async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
+    let router = build_router();
+
+    let invalid_path = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1//route-that-does-not-exist")
+                .extension(local_connect_info())
+                .header(ACCEPT, "application/json")
+                .header("x-request-id", "early-path-400")
+                .body(axum::body::Body::empty())
+                .expect("invalid-path request"),
+        )
+        .await
+        .expect("invalid-path response");
+    assert_canonical_early_error(
+        invalid_path,
+        StatusCode::BAD_REQUEST,
+        "application/json; charset=utf-8",
+        "request_path_invalid",
+        "early-path-400",
+    )
+    .await;
+
+    let trailing_slash = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/health/")
+                .extension(local_connect_info())
+                .header(ACCEPT, "application/x-norito")
+                .header("x-request-id", "early-path-404")
+                .body(axum::body::Body::empty())
+                .expect("trailing-slash request"),
+        )
+        .await
+        .expect("trailing-slash response");
+    assert_canonical_early_error(
+        trailing_slash,
+        StatusCode::NOT_FOUND,
+        "application/x-norito",
+        "route_not_found",
+        "early-path-404",
+    )
+    .await;
+
+    let mut malformed_accept = Request::builder()
+        .uri(uri::HEALTH)
+        .extension(local_connect_info())
+        .header("x-request-id", "early-accept-406")
+        .body(axum::body::Body::empty())
+        .expect("malformed-Accept request");
+    malformed_accept
+        .headers_mut()
+        .append(ACCEPT, HeaderValue::from_static("application/json"));
+    malformed_accept.headers_mut().append(
+        ACCEPT,
+        HeaderValue::from_bytes(&[0xff]).expect("opaque invalid-ASCII Accept value"),
+    );
+    let malformed_accept = router
+        .oneshot(malformed_accept)
+        .await
+        .expect("malformed-Accept response");
+    assert_canonical_early_error(
+        malformed_accept,
+        StatusCode::NOT_ACCEPTABLE,
+        "application/json; charset=utf-8",
+        "response_not_acceptable",
+        "early-accept-406",
+    )
+    .await;
 }
 
 #[tokio::test]

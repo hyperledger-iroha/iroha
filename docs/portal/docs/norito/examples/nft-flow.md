@@ -23,18 +23,25 @@ Walks through an NFT lifecycle end to end: minting to the owner, transferring, t
 
 [Download the Kotodama source](/norito-snippets/nft-flow.ko)
 
-```text
+```kotodama
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
-  kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-    let nft = nft_id!("n0$wonderland.universal");
-    nft_mint_asset(nft, owner);
-
-    let to = account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
-    nft_transfer_asset(owner, nft, to);
-    nft_set_metadata(nft, name!("issued"), json!{ issued: "demo" });
-    nft_burn_asset(nft);
-  }
+    kotoage fn nft_issue_and_transfer() authorize("NftAuthority") {
+        let owner = AccountId::parse(
+            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        );
+        let nft = NftId::parse("n0$wonderland.universal");
+        ledger::nft::mint(nft, owner);
+        let to = AccountId::parse(
+            "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+        );
+        ledger::nft::transfer(source: owner, nft: nft, destination: to);
+        ledger::nft::set_metadata(
+            nft: nft,
+            key: Name::parse("issued"),
+            value: Json::parse("{\"issued\":\"demo\"}"),
+        );
+        ledger::nft::burn(nft);
+    }
 }
 ```

@@ -16,14 +16,14 @@ Esta guía rápida presenta el flujo de trabajo mínimo para compilar un contrat
 
 1. Instale la cadena de herramientas Rust (1.76 o más) y recupere este depósito.
 2. Construya o telecargue los binarios de soporte:
-   - `koto_compile` - compilador Kotodama que contiene el código de bytes IVM/Norito
+   - `koto build` - compilador Kotodama que contiene el código de bytes IVM/Norito
    - `ivm_run` e `ivm_tool` - utilidades de ejecución local e inspección
    - `iroha_cli` - utilizar para implementar contratos a través de Torii
 
    Le Makefile du depot atiende estos binarios en `PATH`. Podrás telecargar artefactos precompilados o construir después de las fuentes. Si compila la ubicación de la cadena de herramientas, indique los ayudantes de Makefile frente a los binarios:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Asegúrese de que un nud Iroha esté en curso de ejecución cuando atteignez la etapa de implementación. Los ejemplos anteriores suponen que Torii está accesible a la URL configurada en su perfil `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -34,14 +34,13 @@ El depósito dispone de un contrato mínimo "hola mundo" en `examples/hello/hell
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
-Opciones de elementos:- `--abi 1` canceló el contrato en la versión ABI 1 (el único soporte en el momento de la redacción).
-- `--max-cycles 0` exige una ejecución sin límite; Fixez un nombre positif pour borner le padding de Cycles pour les preuves de connaissance zero.
+Opciones de elementos:- `ABI V1` canceló el contrato en la versión ABI 1 (el único soporte en el momento de la redacción).
+- `--max-cycles 1000000` exige una ejecución sin límite; Fixez un nombre positif pour borner le padding de Cycles pour les preuves de connaissance zero.
 
 ## 2. Inspeccione el artefacto Norito (opcional)
 
@@ -68,15 +67,15 @@ El ejemplo `hello` escribe un saludo y emite una llamada al sistema `SET_ACCOUNT
 Cuando esté satisfecho con el contrato, implementelo en un lugar a través de la CLI. Introduzca una cuenta de autorización, una clave de firma y un archivo `.to` con una carga útil Base64:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```
 
 El comando requiere un paquete manifiesto Norito + código de bytes a través de Torii y muestra el estado de la transacción resultante. Una vez validada la transacción, el hash de código que se muestra en la respuesta puede servir para recuperar manifiestos o listar instancias:```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Ejecutor vía Torii
@@ -86,7 +85,7 @@ Con el registro de bytecode, puede solicitar alguna instrucción que haga refere
 ## Consejos y despacho
 
 - Utilice `make examples-run` para compilar y ejecutar ejemplos en un solo comando. Recargue las variables de entorno `KOTO`/`IVM` si los binarios no están en `PATH`.
-- Si `koto_compile` rechaza la versión ABI, verifique que el compilador y el nud cible bien ABI v1 (ejecute `koto_compile --abi` sin argumentos para listar el soporte).
+- Si `koto build` rechaza la versión ABI, verifique que el compilador y el nud cible bien ABI v1 (ejecute `koto build --help` sin argumentos para listar el soporte).
 - La CLI acepta las claves de firma en hexadecimal o Base64. Para las pruebas, puede utilizar las luces emitidas por `iroha_cli tools crypto keypair`.
 - Durante la depuración de cargas útiles Norito, el sous-commande `ivm_tool disassemble` ayuda a correlacionar las instrucciones con la fuente Kotodama.
 

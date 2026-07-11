@@ -4,9 +4,13 @@
 //! Structures and impls related to processing Iroha Virtual Machine (IVM)
 //! runtime executors.
 
-use core::{convert::TryFrom, str::FromStr};
+use core::{
+    convert::TryFrom,
+    ops::{Deref, DerefMut},
+    str::FromStr,
+};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{Arc, Mutex},
 };
 
@@ -53,7 +57,7 @@ use iroha_primitives::{
     numeric::{Numeric, NumericSpec},
 };
 use ivm::runtime::IvmConfig;
-use ivm::{IVM, Memory, VMError};
+use ivm::{IVM, Memory, RuntimeTemplate, VMError};
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
@@ -76,6 +80,118 @@ use crate::{
 
 #[cfg(test)]
 const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
+
+#[cfg(test)]
+fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> {
+    const LITERAL_HEADER_LEN: usize = 4 + 12;
+    use std::mem::size_of;
+
+    use ivm::{ProgramMetadata, encoding, instruction};
+
+    let len_size = size_of::<usize>();
+    let total_len = len_size
+        .checked_add(result_bytes.len())
+        .expect("encoded blob fits in usize");
+    let total_len_u64 = u64::try_from(total_len).expect("encoded blob fits in u64");
+    let mut data = total_len_u64.to_le_bytes()[..len_size].to_vec();
+    data.extend_from_slice(result_bytes);
+    let padded_len = (data.len() + 7) & !7;
+    data.resize(padded_len, 0);
+    let chunk_count = data.len() / 8;
+
+    let meta = ProgramMetadata {
+        version_major: 1,
+        version_minor: 0,
+        mode: 0,
+        vector_length: 0,
+        max_cycles: 1_000_000,
+        abi_version: 1,
+    };
+    let mut program = meta.encode();
+    program.extend_from_slice(&LITERAL_SECTION_MAGIC);
+    program.extend_from_slice(&(0u32).to_le_bytes());
+    program.extend_from_slice(&(0u32).to_le_bytes());
+    program.extend_from_slice(
+        &(u32::try_from(data.len()).expect("literal length fits")).to_le_bytes(),
+    );
+    program.extend_from_slice(&data);
+
+    let mut emit = |word: u32| program.extend_from_slice(&word.to_le_bytes());
+    emit(encoding::wide::encode_rr(
+        instruction::wide::arithmetic::ADD,
+        20,
+        10,
+        0,
+    ));
+    emit(encoding::wide::encode_rr(
+        instruction::wide::arithmetic::ADD,
+        21,
+        10,
+        0,
+    ));
+
+    let data_addr = i8::try_from(LITERAL_HEADER_LEN).expect("literal header fits i8");
+    emit(encoding::wide::encode_ri(
+        instruction::wide::arithmetic::ADDI,
+        22,
+        0,
+        data_addr,
+    ));
+
+    for _ in 0..chunk_count {
+        emit(encoding::wide::encode_load(
+            instruction::wide::memory::LOAD64,
+            23,
+            22,
+            0,
+        ));
+        emit(encoding::wide::encode_store(
+            instruction::wide::memory::STORE64,
+            21,
+            23,
+            0,
+        ));
+        emit(encoding::wide::encode_ri(
+            instruction::wide::arithmetic::ADDI,
+            22,
+            22,
+            8,
+        ));
+        emit(encoding::wide::encode_ri(
+            instruction::wide::arithmetic::ADDI,
+            21,
+            21,
+            8,
+        ));
+    }
+
+    emit(encoding::wide::encode_rr(
+        instruction::wide::arithmetic::ADD,
+        10,
+        20,
+        0,
+    ));
+    emit(encoding::wide::encode_halt());
+    program
+}
+
+#[cfg(test)]
+fn generate_verdict_program(verdict: &Result<(), ValidationFail>) -> Vec<u8> {
+    let verdict_bytes = verdict.encode();
+    build_program_from_encoded_result(&verdict_bytes)
+}
+
+/// Build a user executor that rejects every validation request with a stable message.
+#[cfg(test)]
+pub(crate) fn denying_executor_for_testing(message: &str) -> Executor {
+    let verdict = Err(ValidationFail::NotPermitted(message.to_owned()));
+    let bytecode = generate_verdict_program(&verdict);
+    let raw = data_model_executor::Executor::new(
+        iroha_data_model::transaction::executable::IvmBytecode::from_compiled(bytecode),
+    );
+    Executor::UserProvided(LoadedExecutor::load(raw).expect("load deny-all test executor"))
+}
+
 const EXECUTOR_ADDITIONAL_FUEL_KEY: &str = "additional_fuel";
 const SORA_V2_CLAIM_TX_HASH_METADATA_KEY: &str = "sora_v2_claim_tx_hash";
 const SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY: &str = "sora_nexus_claim_recipient";
@@ -1432,6 +1548,229 @@ pub(crate) struct ContractRuntimeExecutionContext {
     pub(crate) entrypoint: String,
 }
 
+/// Immutable authorization selected before a contract invocation is decoded or executed.
+///
+/// This snapshot deliberately carries the permission name chosen from the validated artifact.
+/// Apply paths must validate this exact value and must not derive a replacement from mutable
+/// world state after the VM has queued effects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ContractEntrypointAuthorizationSnapshot {
+    pub(crate) authority: AccountId,
+    pub(crate) entrypoint: String,
+    pub(crate) permission: Option<String>,
+    pub(crate) contract_address: iroha_data_model::smart_contract::ContractAddress,
+    pub(crate) contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    pub(crate) code_hash: iroha_crypto::Hash,
+    parent: Option<Box<ContractEntrypointAuthorizationSnapshot>>,
+}
+
+impl ContractEntrypointAuthorizationSnapshot {
+    /// Capture the exact live identity and selected artifact permission at dispatch time.
+    pub(crate) fn new(
+        authority: AccountId,
+        entrypoint: String,
+        permission: Option<String>,
+        identity: &code::BoundContractIdentity,
+    ) -> Self {
+        Self {
+            authority,
+            entrypoint,
+            permission,
+            contract_address: identity.contract_address.clone(),
+            contract_alias: identity.contract_alias.clone(),
+            code_hash: identity.code_hash,
+            parent: None,
+        }
+    }
+
+    /// Attach the complete caller authorization chain for a nested invocation.
+    #[must_use]
+    pub(crate) fn with_parent(
+        mut self,
+        parent: Option<ContractEntrypointAuthorizationSnapshot>,
+    ) -> Self {
+        self.parent = parent.map(Box::new);
+        self
+    }
+
+    /// Return whether this snapshot is the root or retains it in its caller chain.
+    pub(crate) fn descends_from(&self, root: &Self) -> bool {
+        self == root
+            || self
+                .parent
+                .as_deref()
+                .is_some_and(|parent| parent.descends_from(root))
+    }
+
+    /// Return whether this snapshot represents a top-level invocation.
+    pub(crate) fn is_root(&self) -> bool {
+        self.parent.is_none()
+    }
+
+    /// Validate the immutable caller relationship between every adjacent invocation.
+    ///
+    /// A nested contract executes as the subject account derived from its immediate caller's
+    /// address. Merely retaining an arbitrary ancestor is insufficient: without this adjacency
+    /// check a forged leaf could borrow an unrelated caller's permission while still embedding a
+    /// valid root snapshot somewhere in its chain.
+    pub(crate) fn validate_chain_structure(
+        &self,
+        world: &impl WorldReadOnly,
+    ) -> Result<(), ValidationFail> {
+        let Some(parent) = self.parent.as_deref() else {
+            return Ok(());
+        };
+        parent.validate_chain_structure(world)?;
+        let parent_subject = world
+            .contract_subject_bindings()
+            .get(&parent.contract_address)
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!(
+                    "parent contract instance `{}` has no subject binding",
+                    parent.contract_address
+                ))
+            })?;
+        parent_subject
+            .validate_for(&parent.contract_address)
+            .map_err(ValidationFail::NotPermitted)?;
+        if self.authority != parent_subject.subject {
+            return Err(ValidationFail::NotPermitted(
+                "nested contract authorization caller does not match its immediate parent contract"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Revalidate the captured caller permission and the exact forward/reverse live binding.
+    pub(crate) fn validate(&self, world: &impl WorldReadOnly) -> Result<(), ValidationFail> {
+        self.validate_chain_structure(world)?;
+        self.validate_live(world)
+    }
+
+    fn validate_live(&self, world: &impl WorldReadOnly) -> Result<(), ValidationFail> {
+        if let Some(parent) = self.parent.as_deref() {
+            parent.validate_live(world)?;
+        }
+        let live_code_hash = world
+            .contract_instances()
+            .get(&self.contract_address)
+            .copied()
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!(
+                    "contract instance `{}` is no longer active",
+                    self.contract_address
+                ))
+            })?;
+        if live_code_hash != self.code_hash {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract instance `{}` changed code binding while its call was prepared",
+                self.contract_address
+            )));
+        }
+
+        let reverse_alias = world
+            .contract_alias_bindings()
+            .get(&self.contract_address)
+            .map(|binding| binding.alias.clone());
+        if reverse_alias != self.contract_alias {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract instance `{}` changed alias binding while its call was prepared",
+                self.contract_address
+            )));
+        }
+        if let Some(alias) = self.contract_alias.as_ref()
+            && world.contract_aliases().get(alias) != Some(&self.contract_address)
+        {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract instance `{}` has an inconsistent live alias binding",
+                self.contract_address
+            )));
+        }
+        if world.contract_aliases().iter().any(|(alias, address)| {
+            address == &self.contract_address && Some(alias) != self.contract_alias.as_ref()
+        }) {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract instance `{}` has a non-canonical forward alias binding",
+                self.contract_address
+            )));
+        }
+
+        enforce_named_contract_entrypoint_permission(
+            world,
+            &self.authority,
+            &self.entrypoint,
+            self.permission.as_deref(),
+        )
+    }
+
+    /// Validate the snapshot and require the apply-time caller to be the captured caller.
+    pub(crate) fn validate_for_authority(
+        &self,
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+    ) -> Result<(), ValidationFail> {
+        if authority != &self.authority {
+            return Err(ValidationFail::NotPermitted(
+                "prepared contract authorization caller changed before apply".to_owned(),
+            ));
+        }
+        self.validate(world)
+    }
+}
+
+impl ContractRuntimeExecutionContext {
+    fn allows_benefit_runtime_asset_transfer_bypass(&self) -> bool {
+        self.contract_alias.as_ref().is_some_and(|contract_alias| {
+            contract_alias.name_segment() == "benefit"
+                && contract_alias.dataspace_segment() == "benefit"
+        }) && matches!(self.entrypoint.as_str(), "spend_to_merchant" | "spend_many")
+    }
+
+    fn allows_bisp_spend_permission_grant_bypass(&self) -> bool {
+        self.contract_alias.as_ref().is_some_and(|contract_alias| {
+            contract_alias.name_segment() == "bisp_bisp"
+                && contract_alias.dataspace_segment() == "sbp"
+        }) && self.entrypoint == "grant_beneficiary_spend_permission"
+    }
+}
+
+/// Reject binding mutations emitted from a lifecycle hook before executor dispatch.
+///
+/// This guard runs ahead of both initial and user-provided executors and is shared by owned and
+/// borrowed overlay paths. Without it, a hook could deactivate/reactivate its address and let the
+/// completion tombstone erase the newly staged lifecycle record.
+pub(crate) fn ensure_lifecycle_hook_cannot_mutate_contract_binding(
+    context: Option<&ContractRuntimeExecutionContext>,
+    instruction: &InstructionBox,
+) -> Result<(), ValidationFail> {
+    let Some(context) = context else {
+        return Ok(());
+    };
+    if !matches!(
+        context.entrypoint.as_str(),
+        "hajimari" | "始まり" | "kaizen" | "改善"
+    ) {
+        return Ok(());
+    }
+    let instruction = instruction.as_any();
+    if instruction
+        .downcast_ref::<iroha_data_model::isi::smart_contract_code::ActivateContractInstance>()
+        .is_none()
+        && instruction
+            .downcast_ref::<iroha_data_model::isi::smart_contract_code::DeactivateContractInstance>(
+            )
+            .is_none()
+    {
+        return Ok(());
+    }
+
+    Err(ValidationFail::NotPermitted(format!(
+        "lifecycle entrypoint `{}` cannot activate or deactivate contract bindings",
+        context.entrypoint
+    )))
+}
+
 #[derive(Clone, Debug)]
 /// Parsed contract dispatch metadata used to configure IVM execution.
 pub struct ContractCallExecutionContext {
@@ -1442,6 +1781,7 @@ pub struct ContractCallExecutionContext {
     pub(crate) entrypoint_pc: Option<u64>,
     pub(crate) entrypoint_permission: Option<String>,
     pub(crate) args: Json,
+    pub(crate) argument_record: Option<ivm::PreparedArgumentRecord>,
 }
 
 impl ContractCallExecutionContext {
@@ -1456,6 +1796,16 @@ impl ContractCallExecutionContext {
         })
     }
 
+    pub(crate) fn bind_runtime_identity(
+        &mut self,
+        identity: code::BoundContractIdentity,
+        contract_subject: AccountId,
+    ) {
+        self.contract_address = Some(identity.contract_address);
+        self.contract_subject = Some(contract_subject);
+        self.contract_alias = identity.contract_alias;
+    }
+
     pub(crate) fn entrypoint_pc(&self) -> Option<u64> {
         self.entrypoint_pc
     }
@@ -1467,15 +1817,96 @@ impl ContractCallExecutionContext {
     pub(crate) fn args(&self) -> &Json {
         &self.args
     }
+
+    #[cfg(test)]
+    pub(crate) fn argument_record(&self) -> Option<&[u8]> {
+        self.argument_record
+            .as_ref()
+            .map(ivm::PreparedArgumentRecord::canonical_bytes)
+    }
+
+    pub(crate) fn prepared_argument_record(&self) -> Option<&ivm::PreparedArgumentRecord> {
+        self.argument_record.as_ref()
+    }
 }
 
-fn resolve_public_contract_entrypoint(
+pub(crate) fn encode_contract_argument_record(
+    schema: Option<&ivm::EntrypointArgumentSchemaV1>,
+    payload: Option<&Json>,
+) -> Result<Option<Vec<u8>>, ValidationFail> {
+    match (schema, payload) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(ValidationFail::NotPermitted(
+            "zero-parameter entrypoint must not receive a payload".to_owned(),
+        )),
+        (Some(_), None) => Err(ValidationFail::NotPermitted(
+            "parameterized entrypoint requires a payload".to_owned(),
+        )),
+        (Some(schema), Some(payload)) => ivm::encode_argument_record_from_json(schema, payload)
+            .map(Some)
+            .map_err(|error| {
+                ValidationFail::NotPermitted(format!(
+                    "contract payload does not match the entrypoint argument schema: {error}"
+                ))
+            }),
+    }
+}
+
+fn prepare_contract_argument_record_from_json(
+    schema: Option<&ivm::EntrypointArgumentSchemaV1>,
+    payload: Option<&Json>,
+    gas_limit: u64,
+) -> Result<Option<ivm::PreparedArgumentRecord>, ValidationFail> {
+    let canonical = encode_contract_argument_record(schema, payload)?;
+    match (schema, canonical) {
+        (None, None) => Ok(None),
+        (Some(schema), Some(canonical)) => {
+            ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), gas_limit)
+                .map(Some)
+                .map_err(|error| {
+                    ValidationFail::NotPermitted(format!(
+                        "failed to prepare canonical contract arguments: {error}"
+                    ))
+                })
+        }
+        _ => Err(ValidationFail::InternalError(
+            "contract argument schema and canonical record diverged".to_owned(),
+        )),
+    }
+}
+
+fn prepare_validated_contract_argument_record(
+    schema: Option<&ivm::EntrypointArgumentSchemaV1>,
+    arguments: Option<&[u8]>,
+    gas_limit: u64,
+) -> Result<Option<ivm::PreparedArgumentRecord>, ValidationFail> {
+    match (schema, arguments) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(ValidationFail::NotPermitted(
+            "zero-parameter entrypoint must not carry an argument record".to_owned(),
+        )),
+        (Some(_), None) => Err(ValidationFail::NotPermitted(
+            "parameterized entrypoint requires an argument record".to_owned(),
+        )),
+        (Some(schema), Some(arguments)) => ivm::prepare_argument_record_with_gas_limit(
+            schema,
+            Arc::<[u8]>::from(arguments),
+            gas_limit,
+        )
+        .map(Some)
+        .map_err(|error| {
+            ValidationFail::NotPermitted(format!("invalid contract argument record: {error}"))
+        }),
+    }
+}
+
+type ResolvedContractEntrypoint = (u64, Option<String>, Option<ivm::EntrypointArgumentSchemaV1>);
+
+fn resolve_callable_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
     interface_required_message: &'static str,
-) -> Result<(u64, Option<String>), ValidationFail> {
-    use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
+) -> Result<ResolvedContractEntrypoint, ValidationFail> {
     let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
         ValidationFail::NotPermitted(format!(
             "invalid contract artifact for contract call dispatch: {err}"
@@ -1493,23 +1924,18 @@ fn resolve_public_contract_entrypoint(
         .ok_or_else(|| {
             ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
         })?;
-    if !matches!(descriptor.kind, EntryPointKind::Public) {
-        return Err(ValidationFail::NotPermitted(format!(
-            "contract entrypoint `{selector}` is not public"
-        )));
-    }
+    let permission = callable_contract_entrypoint_permission(descriptor, selector)?;
     Ok((
         prefix_len + descriptor.entry_pc,
-        descriptor.permission.clone(),
+        permission,
+        descriptor.argument_schema.clone(),
     ))
 }
 
 fn resolve_nested_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
-) -> Result<(u64, Option<String>), ValidationFail> {
-    use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
+) -> Result<ResolvedContractEntrypoint, ValidationFail> {
     let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
         ValidationFail::NotPermitted(format!(
             "invalid contract artifact for nested contract dispatch: {err}"
@@ -1528,59 +1954,237 @@ fn resolve_nested_contract_entrypoint(
         .ok_or_else(|| {
             ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
         })?;
-    if !matches!(
-        descriptor.kind,
-        EntryPointKind::Public | EntryPointKind::View
-    ) {
-        return Err(ValidationFail::NotPermitted(format!(
-            "contract entrypoint `{selector}` is not callable"
-        )));
-    }
+    let permission = nested_contract_entrypoint_permission(descriptor, selector)?;
     Ok((
         prefix_len + descriptor.entry_pc,
-        descriptor.permission.clone(),
+        permission,
+        descriptor.argument_schema.clone(),
     ))
 }
 
-fn resolve_default_public_contract_entrypoint(
+fn resolve_raw_contract_entrypoint(
     bytecode: &[u8],
-) -> Result<Option<(u64, Option<String>)>, ValidationFail> {
-    use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
-    let parsed = match ivm::ProgramMetadata::parse(bytecode) {
-        Ok(parsed) => parsed,
-        Err(_) => return Ok(None),
-    };
-    let Some(contract_interface) = parsed.contract_interface.as_ref() else {
-        return Ok(None);
-    };
-    let selector = "main";
+    selector: &str,
+    interface_required_message: &'static str,
+) -> Result<ResolvedContractEntrypoint, ValidationFail> {
+    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+        ValidationFail::NotPermitted(format!(
+            "invalid contract artifact for contract call dispatch: {err}"
+        ))
+    })?;
+    let prefix_len = parsed.prefix_len() as u64;
+    let contract_interface = parsed
+        .contract_interface
+        .as_ref()
+        .ok_or_else(|| ValidationFail::NotPermitted(interface_required_message.to_owned()))?;
     let descriptor = contract_interface
         .entrypoints
         .iter()
         .find(|candidate| candidate.name == selector)
         .ok_or_else(|| {
-            ValidationFail::NotPermitted(
-                "contract call without contract_entrypoint metadata requires a public `main` entrypoint"
-                    .to_owned(),
-            )
+            ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
         })?;
-    if !matches!(descriptor.kind, EntryPointKind::Public) {
-        return Err(ValidationFail::NotPermitted(
-            "contract entrypoint `main` is not public".to_owned(),
-        ));
+    let permission = raw_contract_entrypoint_permission(descriptor, selector)?;
+    Ok((
+        prefix_len + descriptor.entry_pc,
+        permission,
+        descriptor.argument_schema.clone(),
+    ))
+}
+
+fn resolve_prepared_contract_entrypoint(
+    contract: &ivm::PreparedContract,
+    selector: &str,
+) -> Result<ResolvedContractEntrypoint, ValidationFail> {
+    let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+    })?;
+    let entrypoint_pc = contract.entrypoint_pc(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` has no validated program counter"
+        ))
+    })?;
+    let permission = callable_contract_entrypoint_permission(descriptor, selector)?;
+    Ok((
+        entrypoint_pc,
+        permission,
+        descriptor.argument_schema.clone(),
+    ))
+}
+
+fn resolve_prepared_raw_contract_entrypoint(
+    contract: &ivm::PreparedContract,
+    selector: &str,
+) -> Result<ResolvedContractEntrypoint, ValidationFail> {
+    let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+    })?;
+    let entrypoint_pc = contract.entrypoint_pc(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` has no validated program counter"
+        ))
+    })?;
+    let permission = raw_contract_entrypoint_permission(descriptor, selector)?;
+    Ok((
+        entrypoint_pc,
+        permission,
+        descriptor.argument_schema.clone(),
+    ))
+}
+
+/// Resolve authorization for a top-level deployed-contract transaction entrypoint.
+pub(crate) fn callable_contract_entrypoint_permission(
+    descriptor: &ivm::EmbeddedEntrypointDescriptor,
+    selector: &str,
+) -> Result<Option<String>, ValidationFail> {
+    use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+    match descriptor.kind {
+        EntryPointKind::Kotoage => Ok(descriptor.permission.clone()),
+        EntryPointKind::View => Err(ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` is read-only and cannot be invoked as a transaction"
+        ))),
+        EntryPointKind::Hajimari => Ok(Some(
+            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
+        )),
+        EntryPointKind::Kaizen => Ok(Some(
+            iroha_data_model::smart_contract::CONTRACT_KAIZEN_PERMISSION_NAME.to_owned(),
+        )),
     }
-    Ok(Some((
-        parsed.prefix_len() as u64 + descriptor.entry_pc,
-        descriptor.permission.clone(),
-    )))
+}
+
+/// Resolve authorization for raw-IVM source dispatch.
+///
+/// Lifecycle hooks require a consensus-bound deployed-instance transition and therefore can only
+/// be selected through `Executable::ContractCall`.
+pub(crate) fn raw_contract_entrypoint_permission(
+    descriptor: &ivm::EmbeddedEntrypointDescriptor,
+    selector: &str,
+) -> Result<Option<String>, ValidationFail> {
+    use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+    match descriptor.kind {
+        EntryPointKind::Kotoage => Ok(descriptor.permission.clone()),
+        EntryPointKind::View => Err(ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` is read-only and cannot be invoked as a transaction"
+        ))),
+        EntryPointKind::Hajimari | EntryPointKind::Kaizen => {
+            Err(ValidationFail::NotPermitted(format!(
+                "`{selector}` is a hajimari/始まり or kaizen/改善 entrypoint and requires a top-level deployed ContractCall"
+            )))
+        }
+    }
+}
+
+/// Resolve authorization for an ordinary nested contract call.
+///
+/// Nested calls may invoke `kotoage`/`言挙げ` and `view` entrypoints, but lifecycle
+/// hooks remain reserved for the deployment and `kaizen`/`改善` state machine.
+pub(crate) fn nested_contract_entrypoint_permission(
+    descriptor: &ivm::EmbeddedEntrypointDescriptor,
+    selector: &str,
+) -> Result<Option<String>, ValidationFail> {
+    use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+    match descriptor.kind {
+        EntryPointKind::Kotoage | EntryPointKind::View => Ok(descriptor.permission.clone()),
+        EntryPointKind::Hajimari | EntryPointKind::Kaizen => {
+            Err(ValidationFail::NotPermitted(format!(
+                "`{selector}` is a hajimari/始まり or kaizen/改善 entrypoint and cannot be invoked by a nested call"
+            )))
+        }
+    }
+}
+
+fn is_self_describing_contract(bytecode: &[u8]) -> bool {
+    ivm::ProgramMetadata::parse(bytecode)
+        .ok()
+        .and_then(|parsed| parsed.contract_interface)
+        .is_some()
+}
+
+enum ContractDispatchSource<'a> {
+    Bytecode(&'a [u8]),
+    Prepared(&'a ivm::PreparedContract),
+}
+
+impl ContractDispatchSource<'_> {
+    fn resolve(
+        &self,
+        selector: &str,
+        interface_required_message: &'static str,
+    ) -> Result<ResolvedContractEntrypoint, ValidationFail> {
+        match self {
+            Self::Bytecode(bytecode) => {
+                resolve_raw_contract_entrypoint(bytecode, selector, interface_required_message)
+            }
+            Self::Prepared(contract) => {
+                resolve_prepared_raw_contract_entrypoint(contract, selector)
+            }
+        }
+    }
+
+    fn is_self_describing(&self) -> bool {
+        match self {
+            Self::Bytecode(bytecode) => is_self_describing_contract(bytecode),
+            Self::Prepared(_) => true,
+        }
+    }
 }
 
 pub(crate) fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
 ) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {
-    let contract_address = metadata
+    parse_contract_call_execution_context_from_source(
+        metadata,
+        ContractDispatchSource::Bytecode(bytecode),
+        ContractArgumentSource::Metadata,
+        u64::MAX,
+    )
+}
+
+pub(crate) fn parse_prepared_contract_call_execution_context(
+    metadata: &Metadata,
+    contract: &ivm::PreparedContract,
+    gas_limit: u64,
+) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {
+    parse_contract_call_execution_context_from_source(
+        metadata,
+        ContractDispatchSource::Prepared(contract),
+        ContractArgumentSource::Metadata,
+        gas_limit,
+    )
+}
+
+/// Read and normalize the explicitly selected contract entrypoint.
+///
+/// Callers use this cheap metadata-only step to authorize a selector before
+/// argument records are decoded or materialized.
+pub(crate) fn requested_contract_entrypoint(
+    metadata: &Metadata,
+) -> Result<Option<String>, ValidationFail> {
+    let entrypoint = metadata
+        .get("contract_entrypoint")
+        .map(|raw| {
+            raw.try_into_any_norito::<String>().map_err(|err| {
+                ValidationFail::NotPermitted(format!("invalid contract_entrypoint metadata: {err}"))
+            })
+        })
+        .transpose()?
+        .map(|value| value.trim().to_owned());
+    if entrypoint.as_deref().is_some_and(str::is_empty) {
+        return Err(ValidationFail::NotPermitted(
+            "contract_entrypoint must not be empty".to_owned(),
+        ));
+    }
+    Ok(entrypoint)
+}
+
+fn requested_contract_address(
+    metadata: &Metadata,
+) -> Result<Option<iroha_data_model::smart_contract::ContractAddress>, ValidationFail> {
+    metadata
         .get("contract_address")
         .map(|raw| {
             raw.try_into_any_norito::<String>().map_err(|err| {
@@ -1601,9 +2205,13 @@ pub(crate) fn parse_contract_call_execution_context(
                 ))
             })
         })
-        .transpose()?;
+        .transpose()
+}
 
-    let contract_alias = metadata
+fn requested_contract_alias(
+    metadata: &Metadata,
+) -> Result<Option<iroha_data_model::smart_contract::ContractAlias>, ValidationFail> {
+    metadata
         .get("contract_alias")
         .map(|raw| {
             raw.try_into_any_norito::<String>().map_err(|err| {
@@ -1624,28 +2232,172 @@ pub(crate) fn parse_contract_call_execution_context(
                 ))
             })
         })
-        .transpose()?;
+        .transpose()
+}
 
-    let entrypoint = metadata
-        .get("contract_entrypoint")
-        .map(|raw| {
-            raw.try_into_any_norito::<String>().map_err(|err| {
-                ValidationFail::NotPermitted(format!("invalid contract_entrypoint metadata: {err}"))
+/// Resolve raw-IVM identity metadata exclusively through live world-state bindings.
+///
+/// User metadata selects an identity; it never supplies the trusted alias or
+/// contract subject used by runtime authorization exceptions and state scope.
+pub(crate) fn resolve_raw_contract_runtime_identity(
+    world: &impl WorldReadOnly,
+    code_hash: iroha_crypto::Hash,
+    metadata: &Metadata,
+) -> Result<Option<code::BoundContractIdentity>, ValidationFail> {
+    let requested_address = requested_contract_address(metadata)?;
+    let requested_alias = requested_contract_alias(metadata)?;
+    let alias_address = requested_alias
+        .as_ref()
+        .map(|alias| {
+            world.contract_aliases().get(alias).cloned().ok_or_else(|| {
+                ValidationFail::NotPermitted(format!(
+                    "contract alias `{alias}` is not bound in live state"
+                ))
             })
         })
-        .transpose()?
-        .map(|value| value.trim().to_owned());
-    if entrypoint.as_deref().is_some_and(str::is_empty) {
+        .transpose()?;
+    if let (Some(requested), Some(resolved)) = (&requested_address, &alias_address)
+        && requested != resolved
+    {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract alias metadata resolves to `{resolved}`, not requested address `{requested}`"
+        )));
+    }
+    let Some(contract_address) = requested_address.or(alias_address) else {
+        return Ok(None);
+    };
+    let bound_code_hash = world
+        .contract_instances()
+        .get(&contract_address)
+        .copied()
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!(
+                "contract instance `{contract_address}` not found in live state"
+            ))
+        })?;
+    if bound_code_hash != code_hash {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract instance `{contract_address}` is bound to code `{bound_code_hash}`, not executing code `{code_hash}`"
+        )));
+    }
+    let live_alias = world
+        .contract_alias_bindings()
+        .get(&contract_address)
+        .map(|binding| binding.alias.clone());
+    if let Some(alias) = live_alias.as_ref()
+        && world.contract_aliases().get(alias) != Some(&contract_address)
+    {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract instance `{contract_address}` has an inconsistent live alias binding"
+        )));
+    }
+    if requested_alias.as_ref().is_some_and(|requested| {
+        live_alias.as_ref() != Some(requested)
+            || world.contract_aliases().get(requested) != Some(&contract_address)
+    }) {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract alias metadata does not match the live alias for `{contract_address}`"
+        )));
+    }
+    Ok(Some(code::BoundContractIdentity {
+        contract_address,
+        contract_alias: live_alias,
+        code_hash,
+    }))
+}
+
+/// Resolve the mandatory live identity for a selected raw-IVM contract entrypoint.
+///
+/// A selected entrypoint is contract dispatch, even when its descriptor has no named
+/// permission. It therefore cannot execute with an anonymous/state-free runtime identity.
+pub(crate) fn require_raw_contract_runtime_identity(
+    world: &impl WorldReadOnly,
+    code_hash: iroha_crypto::Hash,
+    metadata: &Metadata,
+) -> Result<code::BoundContractIdentity, ValidationFail> {
+    resolve_raw_contract_runtime_identity(world, code_hash, metadata)?.ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "raw-IVM contract entrypoint dispatch requires a live contract_address or contract_alias binding"
+                .to_owned(),
+        )
+    })
+}
+
+#[derive(Clone, Copy)]
+enum ContractArgumentSource<'a> {
+    Metadata,
+    TriggerEvent(&'a Json),
+    SchemaOnly,
+}
+
+/// Resolve a self-describing IVM trigger callback and bind the current event
+/// arguments to its compiler-emitted schema.
+///
+/// Trigger actions select the callback with `contract_entrypoint` metadata, but
+/// their payload is supplied by the event that fired the trigger. The payload
+/// is converted here, once, into the same schema-bound canonical Norito record
+/// used by ordinary contract calls. A fixed `contract_payload` in trigger
+/// metadata is rejected so it cannot shadow the signed event arguments.
+pub(crate) fn parse_prepared_trigger_call_execution_context(
+    metadata: &Metadata,
+    contract: &ivm::PreparedContract,
+    event_args: &Json,
+    gas_limit: u64,
+) -> Result<ContractCallExecutionContext, ValidationFail> {
+    parse_contract_call_execution_context_from_source(
+        metadata,
+        ContractDispatchSource::Prepared(contract),
+        ContractArgumentSource::TriggerEvent(event_args),
+        gas_limit,
+    )?
+    .ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "self-describing IVM trigger action did not resolve a callback".to_owned(),
+        )
+    })
+}
+
+/// Validate trigger callback selection at registration without fabricating an
+/// event payload for a parameterized callback.
+pub(crate) fn validate_trigger_call_execution_context(
+    metadata: &Metadata,
+    bytecode: &[u8],
+) -> Result<(), ValidationFail> {
+    parse_contract_call_execution_context_from_source(
+        metadata,
+        ContractDispatchSource::Bytecode(bytecode),
+        ContractArgumentSource::SchemaOnly,
+        u64::MAX,
+    )?
+    .ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "self-describing IVM trigger action did not resolve a callback".to_owned(),
+        )
+    })?;
+    Ok(())
+}
+
+fn parse_contract_call_execution_context_from_source(
+    metadata: &Metadata,
+    source: ContractDispatchSource<'_>,
+    argument_source: ContractArgumentSource<'_>,
+    gas_limit: u64,
+) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {
+    let contract_address = requested_contract_address(metadata)?;
+    let contract_alias = requested_contract_alias(metadata)?;
+
+    let entrypoint = requested_contract_entrypoint(metadata)?;
+
+    let metadata_payload = metadata.get("contract_payload").cloned();
+    if !matches!(argument_source, ContractArgumentSource::Metadata) && metadata_payload.is_some() {
         return Err(ValidationFail::NotPermitted(
-            "contract_entrypoint must not be empty".to_owned(),
+            "IVM trigger actions must take arguments from the triggering event, not contract_payload metadata"
+                .to_owned(),
         ));
     }
-
-    let payload = metadata.get("contract_payload").cloned();
-    let (entrypoint, entrypoint_pc, entrypoint_permission) =
+    let (entrypoint, entrypoint_pc, entrypoint_permission, argument_schema) =
         if let Some(selector) = entrypoint.as_deref() {
-            let (entrypoint_pc, entrypoint_permission) = resolve_public_contract_entrypoint(
-                bytecode,
+            let (entrypoint_pc, entrypoint_permission, argument_schema) = source.resolve(
                 selector,
                 "contract call entrypoint metadata requires a self-describing contract artifact",
             )?;
@@ -1653,20 +2405,41 @@ pub(crate) fn parse_contract_call_execution_context(
                 Some(selector.to_owned()),
                 Some(entrypoint_pc),
                 entrypoint_permission,
+                argument_schema,
             )
-        } else if let Some((entrypoint_pc, entrypoint_permission)) =
-            resolve_default_public_contract_entrypoint(bytecode)?
-        {
-            (
-                Some("main".to_owned()),
-                Some(entrypoint_pc),
-                entrypoint_permission,
-            )
-        } else if payload.is_none() {
+        } else if source.is_self_describing() {
+            return Err(ValidationFail::NotPermitted(
+                "self-describing contract calls require explicit contract_entrypoint metadata"
+                    .to_owned(),
+            ));
+        } else if metadata_payload.is_none() {
             return Ok(None);
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
+
+    let payload = match argument_source {
+        ContractArgumentSource::Metadata => metadata_payload,
+        ContractArgumentSource::TriggerEvent(event_args) => {
+            argument_schema.as_ref().map(|_| event_args.clone())
+        }
+        ContractArgumentSource::SchemaOnly => None,
+    };
+    let argument_record = if matches!(argument_source, ContractArgumentSource::SchemaOnly) {
+        None
+    } else {
+        prepare_contract_argument_record_from_json(
+            argument_schema.as_ref(),
+            payload.as_ref(),
+            gas_limit,
+        )?
+    };
+    let args = match argument_source {
+        ContractArgumentSource::TriggerEvent(event_args) => event_args.clone(),
+        ContractArgumentSource::Metadata | ContractArgumentSource::SchemaOnly => {
+            payload.unwrap_or_default()
+        }
+    };
 
     Ok(Some(ContractCallExecutionContext {
         contract_address,
@@ -1675,7 +2448,8 @@ pub(crate) fn parse_contract_call_execution_context(
         entrypoint,
         entrypoint_pc,
         entrypoint_permission,
-        args: payload.unwrap_or_default(),
+        args,
+        argument_record,
     }))
 }
 
@@ -1726,10 +2500,17 @@ pub(crate) fn parse_contract_invocation_execution_context(
         ));
     }
 
-    let (entrypoint_pc, entrypoint_permission) = resolve_public_contract_entrypoint(
-        bytecode,
-        selector,
-        "contract call requires a self-describing contract artifact",
+    let (entrypoint_pc, entrypoint_permission, argument_schema) =
+        resolve_callable_contract_entrypoint(
+            bytecode,
+            selector,
+            "contract call requires a self-describing contract artifact",
+        )?;
+    let args = Json::default();
+    let argument_record = prepare_validated_contract_argument_record(
+        argument_schema.as_ref(),
+        invocation.arguments.as_deref(),
+        u64::MAX,
     )?;
 
     Ok(ContractCallExecutionContext {
@@ -1739,7 +2520,8 @@ pub(crate) fn parse_contract_invocation_execution_context(
         entrypoint: Some(selector.to_owned()),
         entrypoint_pc: Some(entrypoint_pc),
         entrypoint_permission,
-        args: invocation.payload.clone().unwrap_or_default(),
+        args,
+        argument_record,
     })
 }
 
@@ -1756,8 +2538,14 @@ pub(crate) fn parse_nested_contract_invocation_execution_context(
         ));
     }
 
-    let (entrypoint_pc, entrypoint_permission) =
+    let (entrypoint_pc, entrypoint_permission, argument_schema) =
         resolve_nested_contract_entrypoint(bytecode, selector)?;
+    let args = Json::default();
+    let argument_record = prepare_validated_contract_argument_record(
+        argument_schema.as_ref(),
+        invocation.arguments.as_deref(),
+        u64::MAX,
+    )?;
 
     Ok(ContractCallExecutionContext {
         contract_address: Some(invocation.contract_address.clone()),
@@ -1766,8 +2554,57 @@ pub(crate) fn parse_nested_contract_invocation_execution_context(
         entrypoint: Some(selector.to_owned()),
         entrypoint_pc: Some(entrypoint_pc),
         entrypoint_permission,
-        args: invocation.payload.clone().unwrap_or_default(),
+        args,
+        argument_record,
     })
+}
+
+pub(crate) fn parse_prepared_contract_invocation_execution_context(
+    invocation: &ContractInvocation,
+    contract: &ivm::PreparedContract,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    contract_subject: AccountId,
+    gas_limit: u64,
+) -> Result<ContractCallExecutionContext, ValidationFail> {
+    let selector = invocation.entrypoint.trim();
+    if selector.is_empty() {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint must not be empty".to_owned(),
+        ));
+    }
+
+    let (entrypoint_pc, entrypoint_permission, argument_schema) =
+        resolve_prepared_contract_entrypoint(contract, selector)?;
+    let args = Json::default();
+    let argument_record = prepare_validated_contract_argument_record(
+        argument_schema.as_ref(),
+        invocation.arguments.as_deref(),
+        gas_limit,
+    )?;
+    Ok(ContractCallExecutionContext {
+        contract_address: Some(invocation.contract_address.clone()),
+        contract_subject: Some(contract_subject),
+        contract_alias,
+        entrypoint: Some(selector.to_owned()),
+        entrypoint_pc: Some(entrypoint_pc),
+        entrypoint_permission,
+        args,
+        argument_record,
+    })
+}
+
+/// Validate a top-level deployed entrypoint against the instance lifecycle state.
+pub(crate) fn validate_prepared_contract_lifecycle_call(
+    world: &impl WorldReadOnly,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    code_hash: iroha_crypto::Hash,
+    contract: &ivm::PreparedContract,
+    selector: &str,
+) -> Result<Option<code::PendingContractLifecycle>, ValidationFail> {
+    let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+    })?;
+    code::validate_contract_lifecycle_call(world, contract_address, code_hash, descriptor.kind)
 }
 
 fn parse_executor_additional_fuel(metadata: &Metadata) -> Result<u64, ValidationFail> {
@@ -2807,6 +3644,8 @@ impl Executor {
         transaction: &SignedTransaction,
         instructions: Vec<InstructionBox>,
         ivm_proved_replay: Option<crate::pipeline::overlay::IvmProvedReplay>,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+        entrypoint_authorization: Option<&ContractEntrypointAuthorizationSnapshot>,
         tx_bytes_len: usize,
         settlement_source_id: [u8; iroha_crypto::Hash::LENGTH],
         tx_hash: iroha_crypto::HashOf<SignedTransaction>,
@@ -2824,6 +3663,12 @@ impl Executor {
             ));
         }
         if let Some(replay) = ivm_proved_replay.as_ref() {
+            if !replay.durable_state_overlay.is_empty() {
+                return Err(ValidationFail::NotPermitted(
+                    "Executable::IvmProved ABI V1 cannot apply durable StateMap writes without per-path authorization metadata"
+                        .to_owned(),
+                ));
+            }
             crate::validation_fee::enforce_ivm_proved_completed_axt_admission(
                 replay.completed_axt.len(),
                 state_transaction,
@@ -2847,6 +3692,49 @@ impl Executor {
         }
         Self::enforce_transaction_gas_fits_block(state_transaction, used)?;
 
+        match (contract_runtime_context, entrypoint_authorization) {
+            (Some(context), Some(authorization)) => {
+                if !authorization.is_root() {
+                    return Err(ValidationFail::NotPermitted(
+                        "proved overlay root authorization contains a parent invocation".to_owned(),
+                    ));
+                }
+                let live_subject = code::fetch_bound_contract_subject(
+                    state_transaction,
+                    &context.contract_address,
+                )
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` has no valid subject binding",
+                        context.contract_address
+                    ))
+                })?;
+                if context.contract_subject != live_subject
+                    || context.contract_address != authorization.contract_address
+                    || context.contract_alias != authorization.contract_alias
+                    || context.entrypoint != authorization.entrypoint
+                {
+                    return Err(ValidationFail::NotPermitted(
+                        "proved overlay runtime context does not match its immutable authorization snapshot"
+                            .to_owned(),
+                    ));
+                }
+                authorization.validate_for_authority(&state_transaction.world, authority)?;
+            }
+            (Some(_), None) => {
+                return Err(ValidationFail::NotPermitted(
+                    "proved contract overlay is missing its immutable authorization snapshot"
+                        .to_owned(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(ValidationFail::InternalError(
+                    "proved entrypoint authorization has no contract runtime context".to_owned(),
+                ));
+            }
+            (None, None) => {}
+        }
+
         let instruction_count = instructions.len();
         let confidential_delta = instructions
             .iter()
@@ -2859,12 +3747,68 @@ impl Executor {
         let execution_result = (|| -> Result<(), ValidationFail> {
             if let Some(replay) = ivm_proved_replay {
                 for queued in replay.queued {
+                    match (
+                        queued.contract_runtime_context.as_ref(),
+                        queued.entrypoint_authorization.as_ref(),
+                    ) {
+                        (Some(context), Some(authorization)) => {
+                            if let Some(root) = entrypoint_authorization
+                                && !authorization.descends_from(root)
+                            {
+                                return Err(ValidationFail::NotPermitted(
+                                    "proved overlay effect authorization does not descend from its root invocation"
+                                        .to_owned(),
+                                ));
+                            }
+                            let live_subject = code::fetch_bound_contract_subject(
+                                state_transaction,
+                                &context.contract_address,
+                            )
+                            .ok_or_else(|| {
+                                ValidationFail::NotPermitted(format!(
+                                    "contract instance `{}` has no valid subject binding",
+                                    context.contract_address
+                                ))
+                            })?;
+                            if context.contract_subject != live_subject
+                                || context.contract_address != authorization.contract_address
+                                || context.contract_alias != authorization.contract_alias
+                                || context.entrypoint != authorization.entrypoint
+                            {
+                                return Err(ValidationFail::NotPermitted(
+                                    "proved overlay effect runtime context does not match its immutable authorization snapshot"
+                                        .to_owned(),
+                                ));
+                            }
+                            authorization.validate_for_authority(
+                                &state_transaction.world,
+                                &queued.authority,
+                            )?;
+                        }
+                        (Some(_), None) => {
+                            return Err(ValidationFail::NotPermitted(
+                                "proved contract effect is missing its immutable authorization snapshot"
+                                    .to_owned(),
+                            ));
+                        }
+                        (None, Some(_)) => {
+                            return Err(ValidationFail::InternalError(
+                                "proved effect authorization has no contract runtime context"
+                                    .to_owned(),
+                            ));
+                        }
+                        (None, None) => {}
+                    }
                     self.execute_instruction_with_contract_runtime_context(
                         state_transaction,
                         &queued.authority,
                         queued.instruction,
                         queued.contract_runtime_context.as_ref(),
                     )?;
+                    if let Some(authorization) = queued.entrypoint_authorization.as_ref() {
+                        authorization
+                            .validate_for_authority(&state_transaction.world, &queued.authority)?;
+                    }
                 }
                 crate::smartcontracts::ivm::host::HostExecutionArtifacts::record_completed_axt_states(
                     state_transaction,
@@ -2882,8 +3826,24 @@ impl Executor {
                 }
             } else {
                 for isi in instructions {
-                    self.execute_instruction(state_transaction, authority, isi)?;
+                    if let Some(authorization) = entrypoint_authorization {
+                        authorization
+                            .validate_for_authority(&state_transaction.world, authority)?;
+                    }
+                    self.execute_instruction_with_contract_runtime_context(
+                        state_transaction,
+                        authority,
+                        isi,
+                        contract_runtime_context,
+                    )?;
+                    if let Some(authorization) = entrypoint_authorization {
+                        authorization
+                            .validate_for_authority(&state_transaction.world, authority)?;
+                    }
                 }
+            }
+            if let Some(authorization) = entrypoint_authorization {
+                authorization.validate_for_authority(&state_transaction.world, authority)?;
             }
             Ok(())
         })();
@@ -3138,6 +4098,12 @@ impl Executor {
                 )));
             }
         }
+        enforce_transaction_contract_permission_before_proof_verification(
+            state_transaction,
+            authority,
+            &transaction,
+            ivm_cache,
+        )?;
         #[cfg(feature = "zk-preverify")]
         {
             use iroha_data_model::proof::{ProofAttachment, ProofAttachmentList};
@@ -3333,6 +4299,9 @@ impl Executor {
             }
         }
 
+        let mut proved_contract_runtime_context = None;
+        let mut proved_entrypoint_authorization = None;
+
         // Full verification for proof-carrying IVM executables must run before we move the
         // transaction payload out of `SignedTransaction`.
         let ivm_proved_replay = if let Executable::IvmProved(proved) = transaction.instructions() {
@@ -3388,6 +4357,40 @@ impl Executor {
             )
             .map_err(map_overlay_error)?;
 
+            let selector = requested_contract_entrypoint(transaction.metadata())?.ok_or_else(|| {
+                ValidationFail::NotPermitted(
+                    "self-describing proved raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
+                        .to_owned(),
+                )
+            })?;
+            let identity = require_raw_contract_runtime_identity(
+                &state_transaction.world,
+                summary.code_hash,
+                transaction.metadata(),
+            )?;
+            let authorization = authorize_prepared_raw_contract_selector(
+                &state_transaction.world,
+                authority,
+                summary.prepared_contract(),
+                &selector,
+                &identity,
+            )?;
+            let contract_subject =
+                code::fetch_bound_contract_subject(state_transaction, &identity.contract_address)
+                    .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` has no valid subject binding",
+                        identity.contract_address
+                    ))
+                })?;
+            proved_contract_runtime_context = Some(ContractRuntimeExecutionContext {
+                contract_subject,
+                contract_address: identity.contract_address,
+                contract_alias: identity.contract_alias,
+                entrypoint: selector,
+            });
+            proved_entrypoint_authorization = Some(authorization);
+
             crate::pipeline::overlay::enforce_manifest_is_pre_registered(
                 state_transaction,
                 &transaction,
@@ -3421,6 +4424,8 @@ impl Executor {
                     &transaction_for_fee,
                     instructions.into_vec(),
                     None,
+                    None,
+                    None,
                     tx_bytes_len,
                     settlement_source_id,
                     tx_hash,
@@ -3446,6 +4451,8 @@ impl Executor {
                     &transaction_for_fee,
                     instructions,
                     Some(replay),
+                    proved_contract_runtime_context.as_ref(),
+                    proved_entrypoint_authorization.as_ref(),
                     tx_bytes_len,
                     settlement_source_id,
                     tx_hash,
@@ -3474,50 +4481,92 @@ impl Executor {
                         .saturating_sub(state_transaction.gas_used_in_block_so_far)
                 };
                 let effective_limit = gas_limit_md.min(block_remaining);
-                let record =
-                    code::fetch_bound_contract_record(state_transaction, &call.contract_address)
+                let identity =
+                    code::fetch_bound_contract_identity(state_transaction, &call.contract_address)
                         .ok_or_else(|| {
                             ValidationFail::NotPermitted(format!(
                                 "contract instance `{}` not found in WSV",
                                 call.contract_address
                             ))
                         })?;
-                let mut runtime = ivm_cache
-                    .take_or_create_cached_runtime(record.code_bytes.as_ref(), effective_limit)
-                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                let contract_call_context = parse_contract_invocation_execution_context(
-                    &call,
-                    record.code_bytes.as_ref(),
-                    record.contract_alias.clone(),
-                    record.contract_subject.clone(),
+                let contract_subject = code::fetch_bound_contract_subject(
+                    state_transaction,
+                    &identity.contract_address,
+                )
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` has no valid subject binding",
+                        identity.contract_address
+                    ))
+                })?;
+                let summary = if let Some(summary) = ivm_cache
+                    .cached_program_summary(identity.code_hash)
+                    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+                {
+                    summary
+                } else {
+                    code::with_code_bytes(state_transaction, &identity.code_hash, |bytecode| {
+                        ivm_cache.summarize_program_with_hash(identity.code_hash, bytecode)
+                    })
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(format!(
+                            "contract bytecode `{}` not found in WSV",
+                            identity.code_hash
+                        ))
+                    })?
+                    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+                };
+                let lifecycle_transition = validate_prepared_contract_lifecycle_call(
+                    &state_transaction.world,
+                    &call.contract_address,
+                    identity.code_hash,
+                    summary.prepared_contract(),
+                    &call.entrypoint,
                 )?;
-                enforce_contract_entrypoint_permission(
+                let entrypoint_authorization = authorize_prepared_contract_selector(
                     &state_transaction.world,
                     authority,
-                    &contract_call_context,
+                    summary.prepared_contract(),
+                    &call.entrypoint,
+                    &identity,
                 )?;
+                let contract_call_context = parse_prepared_contract_invocation_execution_context(
+                    &call,
+                    summary.prepared_contract(),
+                    identity.contract_alias.clone(),
+                    contract_subject,
+                    effective_limit,
+                )?;
+                let mut runtime = summary
+                    .checkout_runtime(effective_limit)
+                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                runtime.set_gas_limit(effective_limit);
+                if let Some(argument_record) = contract_call_context.argument_record.as_ref() {
+                    argument_record
+                        .precharge_vm(&mut runtime)
+                        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+                }
                 if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc {
-                    runtime.vm.set_register(1, runtime.vm.memory.code_len());
-                    runtime
-                        .vm
-                        .set_program_counter(entrypoint_pc)
-                        .map_err(|err| {
-                            let selector = contract_call_context
-                                .entrypoint
-                                .as_deref()
-                                .unwrap_or("main");
-                            ValidationFail::NotPermitted(format!(
-                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
-                            ))
-                        })?;
+                    let code_len = runtime.memory.code_len();
+                    runtime.set_register(1, code_len);
+                    runtime.set_program_counter(entrypoint_pc).map_err(|err| {
+                        let selector = contract_call_context
+                            .entrypoint
+                            .as_deref()
+                            .unwrap_or("main");
+                        ValidationFail::NotPermitted(format!(
+                            "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                        ))
+                    })?;
                 }
                 let contract_runtime_context = contract_call_context.runtime_context();
                 let accounts = state_transaction.accounts_snapshot();
-                let mut host = CoreCoreHost::with_accounts_and_args(
+                let mut host = CoreCoreHost::with_accounts_and_argument_record(
                     authority.clone(),
                     Arc::clone(&accounts),
-                    contract_call_context.args,
+                    contract_call_context.argument_record,
                 );
+                host.set_prepared_contract_cache(summary.prepared_contract_cache());
                 // User contract calls execute before the enclosing block has a finalized
                 // creation timestamp, so expose the transaction creation time as the
                 // logical "current time" seen by `current_time_ms()`.
@@ -3528,6 +4577,10 @@ impl Executor {
                 host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                 host.set_query_state(state_transaction);
                 host.set_contract_runtime_context(contract_runtime_context.clone());
+                host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
+                if let Some(pending) = lifecycle_transition {
+                    host.set_contract_lifecycle_transition(&call.contract_address, pending);
+                }
                 host.set_chain_id(&state_transaction.chain_id);
                 #[cfg(feature = "telemetry")]
                 host.set_telemetry(state_transaction.telemetry.clone());
@@ -3535,18 +4588,27 @@ impl Executor {
                     .map_err(|err| {
                         ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
                     })?;
-                runtime.vm.set_gas_limit(effective_limit);
-                if let Err(err) = runtime.vm.run_with_host(&mut host) {
+                if let Err(err) = runtime.run_with_host(&mut host) {
                     return Err(
                         crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                            &runtime.vm,
-                            &err,
+                            &runtime, &err,
                         ),
                     );
                 }
-                let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
+                let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
                 let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
-                let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
+                if let Some(pending) = lifecycle_transition {
+                    code::validate_contract_lifecycle_completion(
+                        &state_transaction.world,
+                        &call.contract_address,
+                        pending,
+                    )?;
+                }
+                let _executed = artifacts.apply_to_transaction_with_lifecycle(
+                    state_transaction,
+                    authority,
+                    lifecycle_transition.map(|pending| (&call.contract_address, pending)),
+                )?;
                 state_transaction.last_tx_gas_used = gas_used;
                 Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
 
@@ -3590,29 +4652,91 @@ impl Executor {
                         .saturating_sub(state_transaction.gas_used_in_block_so_far)
                 };
                 let effective_limit = gas_limit_md.min(block_remaining);
-                let mut runtime = ivm_cache
-                    .take_or_create_cached_runtime(bytes.as_ref(), effective_limit)
+                let summary = ivm_cache
+                    .summarize_program(bytes.as_ref())
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                let mut contract_call_context =
-                    parse_contract_call_execution_context(&md, bytes.as_ref())?;
+                crate::pipeline::overlay::validate_contract_binding(
+                    state_transaction,
+                    &transaction_for_fee,
+                    &summary,
+                )
+                .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+                let selector = requested_contract_entrypoint(&md)?.ok_or_else(|| {
+                    ValidationFail::NotPermitted(
+                        "self-describing raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
+                            .to_owned(),
+                    )
+                })?;
+                let runtime_identity = require_raw_contract_runtime_identity(
+                    &state_transaction.world,
+                    summary.code_hash,
+                    &md,
+                )?;
+                let entrypoint_authorization = authorize_prepared_raw_contract_selector(
+                    &state_transaction.world,
+                    authority,
+                    summary.prepared_contract(),
+                    &selector,
+                    &runtime_identity,
+                )?;
+                let contract_subject = code::fetch_bound_contract_subject(
+                    state_transaction,
+                    &runtime_identity.contract_address,
+                )
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` has no valid subject binding",
+                        runtime_identity.contract_address
+                    ))
+                })?;
+                let transition = validate_prepared_contract_lifecycle_call(
+                    &state_transaction.world,
+                    &runtime_identity.contract_address,
+                    runtime_identity.code_hash,
+                    summary.prepared_contract(),
+                    &selector,
+                )?;
+                debug_assert!(
+                    transition.is_none(),
+                    "raw lifecycle selectors are rejected before state validation"
+                );
+                let mut contract_call_context = parse_prepared_contract_call_execution_context(
+                    &md,
+                    summary.prepared_contract(),
+                    effective_limit,
+                )?;
                 if let Some(context) = contract_call_context.as_mut() {
-                    canonicalize_contract_call_execution_context(state_transaction, context)?;
+                    context.bind_runtime_identity(runtime_identity, contract_subject);
+                }
+                if let Some(context) = contract_call_context.as_ref() {
                     enforce_contract_entrypoint_permission(
                         &state_transaction.world,
                         authority,
                         context,
                     )?;
+                }
+                let mut runtime = summary
+                    .checkout_runtime(effective_limit)
+                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                runtime.set_gas_limit(effective_limit);
+                if let Some(argument_record) = contract_call_context
+                    .as_ref()
+                    .and_then(ContractCallExecutionContext::prepared_argument_record)
+                {
+                    argument_record
+                        .precharge_vm(&mut runtime)
+                        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+                }
+                if let Some(context) = contract_call_context.as_ref() {
                     if let Some(entrypoint_pc) = context.entrypoint_pc {
-                        runtime.vm.set_register(1, runtime.vm.memory.code_len());
-                        runtime
-                            .vm
-                            .set_program_counter(entrypoint_pc)
-                            .map_err(|err| {
-                                let selector = context.entrypoint.as_deref().unwrap_or("main");
-                                ValidationFail::NotPermitted(format!(
-                                    "contract entrypoint `{selector}` resolved to invalid pc: {err}"
-                                ))
-                            })?;
+                        let code_len = runtime.memory.code_len();
+                        runtime.set_register(1, code_len);
+                        runtime.set_program_counter(entrypoint_pc).map_err(|err| {
+                            let selector = context.entrypoint.as_deref().unwrap_or("main");
+                            ValidationFail::NotPermitted(format!(
+                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                            ))
+                        })?;
                     }
                 }
                 let contract_runtime_context = contract_call_context
@@ -3621,20 +4745,22 @@ impl Executor {
                 // Attach host with a snapshot of known accounts for vendor helpers when present.
                 let accounts = state_transaction.accounts_snapshot();
                 let mut host = if let Some(context) = contract_call_context {
-                    CoreCoreHost::with_accounts_and_args(
+                    CoreCoreHost::with_accounts_and_argument_record(
                         authority.clone(),
                         Arc::clone(&accounts),
-                        context.args,
+                        context.argument_record,
                     )
                 } else {
                     CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
                 };
+                host.set_prepared_contract_cache(summary.prepared_contract_cache());
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_zk_config(&state_transaction.zk);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                 host.set_query_state(state_transaction);
                 host.set_contract_runtime_context(contract_runtime_context.clone());
+                host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
                 // Thread chain_id from StateTransaction into the IVM host for VRF binding
                 host.set_chain_id(&state_transaction.chain_id);
                 #[cfg(feature = "telemetry")]
@@ -3644,16 +4770,14 @@ impl Executor {
                     .map_err(|err| {
                         ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
                     })?;
-                runtime.vm.set_gas_limit(effective_limit);
-                if let Err(err) = runtime.vm.run_with_host(&mut host) {
+                if let Err(err) = runtime.run_with_host(&mut host) {
                     return Err(
                         crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                            &runtime.vm,
-                            &err,
+                            &runtime, &err,
                         ),
                     );
                 }
-                let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
+                let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
 
                 // Drain and apply queued ISIs deterministically via executor.
                 let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
@@ -3691,7 +4815,6 @@ impl Executor {
                     gas_used,
                     false,
                 )?;
-                ivm_cache.put_cached_runtime(&runtime);
                 Ok(())
             }
         }
@@ -3808,6 +4931,10 @@ impl Executor {
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
+        ensure_lifecycle_hook_cannot_mutate_contract_binding(
+            contract_runtime_context,
+            &instruction,
+        )?;
         trace!("Running instruction execution");
         let instr_id = instruction.id();
 
@@ -3845,6 +4972,10 @@ impl Executor {
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
+        ensure_lifecycle_hook_cannot_mutate_contract_binding(
+            contract_runtime_context,
+            instruction,
+        )?;
         trace!("Running borrowed instruction execution");
         let instr_id = instruction.id();
 
@@ -4566,7 +5697,7 @@ where
     ValidatePayload<T>: Encode,
 {
     let mut ivm = executor
-        .clone_runtime_for_gas_limit(gas_limit)
+        .checkout_runtime_for_gas_limit(gas_limit)
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
     ivm.set_host(ivm::host::DefaultHost::default());
 
@@ -4653,7 +5784,7 @@ fn run_executor_migration(
     gas_limit: u64,
 ) -> Result<Option<ExecutorDataModel>, ValidationFail> {
     let mut ivm = executor
-        .clone_runtime_for_gas_limit(gas_limit)
+        .checkout_runtime_for_gas_limit(gas_limit)
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
     ivm.set_host(ivm::host::DefaultHost::default());
 
@@ -5495,7 +6626,76 @@ pub(crate) fn enforce_contract_entrypoint_permission(
     authority: &AccountId,
     context: &ContractCallExecutionContext,
 ) -> Result<(), ValidationFail> {
-    let Some(permission_name) = context.entrypoint_permission() else {
+    enforce_named_contract_entrypoint_permission(
+        world,
+        authority,
+        context.entrypoint.as_deref().unwrap_or("main"),
+        context.entrypoint_permission(),
+    )
+}
+
+/// Authorize a prepared deployed-contract selector and capture its immutable apply snapshot.
+pub(crate) fn authorize_prepared_contract_selector(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    contract: &ivm::PreparedContract,
+    selector: &str,
+    identity: &code::BoundContractIdentity,
+) -> Result<ContractEntrypointAuthorizationSnapshot, ValidationFail> {
+    let selector = selector.trim();
+    if selector.is_empty() {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint must not be empty".to_owned(),
+        ));
+    }
+    let (_, permission, _) = resolve_prepared_contract_entrypoint(contract, selector)?;
+    let snapshot = ContractEntrypointAuthorizationSnapshot::new(
+        authority.clone(),
+        selector.to_owned(),
+        permission,
+        identity,
+    );
+    snapshot.validate(world)?;
+    Ok(snapshot)
+}
+
+/// Authorize a prepared raw-IVM selector and capture its immutable apply snapshot.
+pub(crate) fn authorize_prepared_raw_contract_selector(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    contract: &ivm::PreparedContract,
+    selector: &str,
+    identity: &code::BoundContractIdentity,
+) -> Result<ContractEntrypointAuthorizationSnapshot, ValidationFail> {
+    let selector = selector.trim();
+    if selector.is_empty() {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint must not be empty".to_owned(),
+        ));
+    }
+    let (_, permission, _) = resolve_prepared_raw_contract_entrypoint(contract, selector)?;
+    let snapshot = ContractEntrypointAuthorizationSnapshot::new(
+        authority.clone(),
+        selector.to_owned(),
+        permission,
+        identity,
+    );
+    snapshot.validate(world)?;
+    Ok(snapshot)
+}
+
+/// Enforce the compiler-verified permission attached to a named public entrypoint.
+///
+/// Overlay preparation, live overlay application, direct execution, triggers,
+/// and nested calls all use this helper so none of those paths can drift into a
+/// weaker authorization policy.
+pub(crate) fn enforce_named_contract_entrypoint_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    entrypoint: &str,
+    permission_name: Option<&str>,
+) -> Result<(), ValidationFail> {
+    let Some(permission_name) = permission_name else {
         return Ok(());
     };
 
@@ -5503,11 +6703,106 @@ pub(crate) fn enforce_contract_entrypoint_permission(
         return Ok(());
     }
 
-    let entrypoint = context.entrypoint.as_deref().unwrap_or("main");
     Err(ValidationFail::NotPermitted(format!(
         "contract entrypoint `{entrypoint}` requires permission `{}`",
         permission_name.trim()
     )))
+}
+
+fn enforce_transaction_contract_permission_before_proof_verification<R>(
+    state: &R,
+    authority: &AccountId,
+    transaction: &SignedTransaction,
+    ivm_cache: &mut IvmCache,
+) -> Result<(), ValidationFail>
+where
+    R: StateReadOnly,
+{
+    match transaction.instructions() {
+        Executable::Instructions(_) => Ok(()),
+        Executable::ContractCall(call) => {
+            let identity = code::fetch_bound_contract_identity(state, &call.contract_address)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` not found in WSV",
+                        call.contract_address
+                    ))
+                })?;
+            let summary = if let Some(summary) = ivm_cache
+                .cached_program_summary(identity.code_hash)
+                .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+            {
+                summary
+            } else {
+                code::with_code_bytes(state, &identity.code_hash, |bytecode| {
+                    ivm_cache.summarize_program_with_hash(identity.code_hash, bytecode)
+                })
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract bytecode `{}` not found in WSV",
+                        identity.code_hash
+                    ))
+                })?
+                .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+            };
+            authorize_prepared_contract_selector(
+                state.world(),
+                authority,
+                summary.prepared_contract(),
+                &call.entrypoint,
+                &identity,
+            )
+            .map(drop)
+        }
+        Executable::Ivm(bytecode) => {
+            let summary = ivm_cache
+                .summarize_program(bytecode.as_ref())
+                .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
+            let selector = requested_contract_entrypoint(transaction.metadata())?.ok_or_else(|| {
+                ValidationFail::NotPermitted(
+                    "self-describing raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
+                        .to_owned(),
+                )
+            })?;
+            let identity = require_raw_contract_runtime_identity(
+                state.world(),
+                summary.code_hash,
+                transaction.metadata(),
+            )?;
+            authorize_prepared_raw_contract_selector(
+                state.world(),
+                authority,
+                summary.prepared_contract(),
+                &selector,
+                &identity,
+            )?;
+            Ok(())
+        }
+        Executable::IvmProved(proved) => {
+            let summary = ivm_cache
+                .summarize_program(proved.bytecode.as_ref())
+                .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
+            let selector = requested_contract_entrypoint(transaction.metadata())?.ok_or_else(|| {
+                ValidationFail::NotPermitted(
+                    "self-describing proved raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
+                        .to_owned(),
+                )
+            })?;
+            let identity = require_raw_contract_runtime_identity(
+                state.world(),
+                summary.code_hash,
+                transaction.metadata(),
+            )?;
+            authorize_prepared_raw_contract_selector(
+                state.world(),
+                authority,
+                summary.prepared_contract(),
+                &selector,
+                &identity,
+            )?;
+            Ok(())
+        }
+    }
 }
 
 fn can_modify_account_metadata(
@@ -5919,15 +7214,203 @@ fn execute_wat_embedded_instructions(
 #[derive(Debug, Clone)]
 #[debug("LoadedExecutor {{ runtime: <IVM> }}")]
 pub struct LoadedExecutor {
-    runtime: Arc<Mutex<ExecutorRuntime>>,
+    runtime_pool: Arc<Mutex<ExecutorRuntimePool>>,
     /// Arc is needed so cloning of executor will be fast.
     /// See [`crate::tx::TransactionExecutor::validate_with_runtime_executor`].
     raw_executor: Arc<data_model_executor::Executor>,
 }
 
-struct ExecutorRuntime {
+// Stack sizing is the only gas-derived property that changes the VM allocation.
+// Keep a small bounded LRU so adversarial gas-limit variation cannot retain an
+// unbounded number of complete memory images and Merkle baselines.
+const EXECUTOR_RUNTIME_VARIANT_CAPACITY: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ExecutorRuntimeKey {
     stack_limit: u64,
-    vm: IVM,
+}
+
+impl ExecutorRuntimeKey {
+    fn for_gas_limit(gas_limit: u64) -> Self {
+        // The exact gas limit is replenished on every checkout. Keying by it
+        // would create distinct variants with identical memory layouts.
+        Self {
+            stack_limit: stack_limit_for_gas(gas_limit),
+        }
+    }
+}
+
+struct ExecutorRuntimeVariant {
+    baseline: Arc<RuntimeTemplate>,
+    available: Option<IVM>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ExecutorRuntimePoolStats {
+    hits: u64,
+    misses: u64,
+    program_loads: u64,
+    template_builds: u64,
+    dirty_resets: u64,
+    evictions: u64,
+}
+
+#[derive(Clone, Copy)]
+enum ExecutorRuntimePoolEvent {
+    Hit,
+    Miss,
+    ProgramLoad,
+    TemplateBuild,
+    DirtyReset,
+    Eviction,
+}
+
+struct ExecutorRuntimePool {
+    variants: BTreeMap<ExecutorRuntimeKey, ExecutorRuntimeVariant>,
+    order: VecDeque<ExecutorRuntimeKey>,
+    capacity: usize,
+    #[cfg(test)]
+    stats: ExecutorRuntimePoolStats,
+}
+
+impl ExecutorRuntimePool {
+    fn new(
+        key: ExecutorRuntimeKey,
+        baseline: Arc<RuntimeTemplate>,
+        vm: IVM,
+        capacity: usize,
+    ) -> Self {
+        let capacity = capacity.max(1);
+        let mut variants = BTreeMap::new();
+        variants.insert(
+            key,
+            ExecutorRuntimeVariant {
+                baseline,
+                available: Some(vm),
+            },
+        );
+        Self {
+            variants,
+            order: VecDeque::from([key]),
+            capacity,
+            #[cfg(test)]
+            stats: ExecutorRuntimePoolStats {
+                program_loads: 1,
+                template_builds: 1,
+                ..ExecutorRuntimePoolStats::default()
+            },
+        }
+    }
+
+    fn record(&mut self, event: ExecutorRuntimePoolEvent) {
+        #[cfg(test)]
+        match event {
+            ExecutorRuntimePoolEvent::Hit => {
+                self.stats.hits = self.stats.hits.saturating_add(1);
+            }
+            ExecutorRuntimePoolEvent::Miss => {
+                self.stats.misses = self.stats.misses.saturating_add(1);
+            }
+            ExecutorRuntimePoolEvent::ProgramLoad => {
+                self.stats.program_loads = self.stats.program_loads.saturating_add(1);
+            }
+            ExecutorRuntimePoolEvent::TemplateBuild => {
+                self.stats.template_builds = self.stats.template_builds.saturating_add(1);
+            }
+            ExecutorRuntimePoolEvent::DirtyReset => {
+                self.stats.dirty_resets = self.stats.dirty_resets.saturating_add(1);
+            }
+            ExecutorRuntimePoolEvent::Eviction => {
+                self.stats.evictions = self.stats.evictions.saturating_add(1);
+            }
+        }
+        #[cfg(not(test))]
+        let _ = event;
+    }
+
+    fn touch(&mut self, key: ExecutorRuntimeKey) {
+        if let Some(position) = self.order.iter().position(|candidate| *candidate == key) {
+            self.order.remove(position);
+        }
+        self.order.push_back(key);
+    }
+
+    fn insert_variant(&mut self, key: ExecutorRuntimeKey, baseline: Arc<RuntimeTemplate>) {
+        while self.variants.len() >= self.capacity {
+            let Some(evicted) = self.order.pop_front() else {
+                break;
+            };
+            if self.variants.remove(&evicted).is_some() {
+                self.record(ExecutorRuntimePoolEvent::Eviction);
+            }
+        }
+        self.variants.insert(
+            key,
+            ExecutorRuntimeVariant {
+                baseline,
+                available: None,
+            },
+        );
+        self.touch(key);
+    }
+}
+
+struct ExecutorRuntimeLease {
+    pool: Arc<Mutex<ExecutorRuntimePool>>,
+    key: ExecutorRuntimeKey,
+    baseline: Arc<RuntimeTemplate>,
+    vm: Option<IVM>,
+}
+
+impl Deref for ExecutorRuntimeLease {
+    type Target = IVM;
+
+    fn deref(&self) -> &Self::Target {
+        self.vm
+            .as_ref()
+            .expect("executor runtime lease always owns a VM")
+    }
+}
+
+impl DerefMut for ExecutorRuntimeLease {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.vm
+            .as_mut()
+            .expect("executor runtime lease always owns a VM")
+    }
+}
+
+impl Drop for ExecutorRuntimeLease {
+    fn drop(&mut self) {
+        let Some(mut vm) = self.vm.take() else {
+            return;
+        };
+
+        let can_return = {
+            let pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
+            pool.variants.get(&self.key).is_some_and(|variant| {
+                Arc::ptr_eq(&variant.baseline, &self.baseline) && variant.available.is_none()
+            })
+        };
+        if !can_return {
+            return;
+        }
+
+        vm.reset_from_runtime_template(&self.baseline);
+        let mut pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
+        let stored = pool.variants.get_mut(&self.key).is_some_and(|variant| {
+            if !Arc::ptr_eq(&variant.baseline, &self.baseline) || variant.available.is_some() {
+                return false;
+            }
+            variant.available = Some(vm);
+            true
+        });
+        if stored {
+            pool.record(ExecutorRuntimePoolEvent::DirtyReset);
+            pool.touch(self.key);
+        }
+    }
 }
 
 fn stack_limit_for_gas(gas_limit: u64) -> u64 {
@@ -5939,28 +7422,102 @@ impl LoadedExecutor {
         let gas_limit = iroha_data_model::parameter::SmartContractParameters::default()
             .fuel
             .get();
-        let stack_limit = stack_limit_for_gas(gas_limit);
-        let mut ivm = IVM::new(gas_limit);
-        ivm.load_program(raw_executor.bytecode().as_ref())?;
+        let key = ExecutorRuntimeKey::for_gas_limit(gas_limit);
+        let raw_executor = Arc::new(raw_executor);
+        let ivm = Self::load_runtime(raw_executor.as_ref(), gas_limit)?;
+        let baseline = Arc::new(ivm.runtime_template());
         Ok(Self {
-            runtime: Arc::new(Mutex::new(ExecutorRuntime {
-                stack_limit,
-                vm: ivm,
-            })),
-            raw_executor: Arc::new(raw_executor),
+            runtime_pool: Arc::new(Mutex::new(ExecutorRuntimePool::new(
+                key,
+                baseline,
+                ivm,
+                EXECUTOR_RUNTIME_VARIANT_CAPACITY,
+            ))),
+            raw_executor,
         })
     }
 
-    fn clone_runtime_for_gas_limit(&self, gas_limit: u64) -> Result<IVM, VMError> {
-        let stack_limit = stack_limit_for_gas(gas_limit);
-        let mut runtime = self.runtime.lock().expect("executor template poisoned");
-        if runtime.stack_limit != stack_limit {
-            let mut ivm = IVM::new(gas_limit);
-            ivm.load_program(self.raw_executor.bytecode().as_ref())?;
-            runtime.vm = ivm;
-            runtime.stack_limit = stack_limit;
-        }
-        Ok(runtime.vm.clone())
+    fn load_runtime(
+        raw_executor: &data_model_executor::Executor,
+        gas_limit: u64,
+    ) -> Result<IVM, VMError> {
+        let mut vm = IVM::new(gas_limit);
+        vm.load_program(raw_executor.bytecode().as_ref())?;
+        vm.set_gas_limit(gas_limit);
+        Ok(vm)
+    }
+
+    fn checkout_runtime_for_gas_limit(
+        &self,
+        gas_limit: u64,
+    ) -> Result<ExecutorRuntimeLease, VMError> {
+        let key = ExecutorRuntimeKey::for_gas_limit(gas_limit);
+        let (baseline, vm) = {
+            let mut pool = self
+                .runtime_pool
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if pool.variants.contains_key(&key) {
+                let (baseline, vm) = {
+                    let variant = pool
+                        .variants
+                        .get_mut(&key)
+                        .expect("checked executor runtime variant exists");
+                    (Arc::clone(&variant.baseline), variant.available.take())
+                };
+                if vm.is_some() {
+                    pool.record(ExecutorRuntimePoolEvent::Hit);
+                } else {
+                    pool.record(ExecutorRuntimePoolEvent::Miss);
+                }
+                pool.touch(key);
+                (baseline, vm)
+            } else {
+                pool.record(ExecutorRuntimePoolEvent::Miss);
+                let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit)?;
+                let baseline = Arc::new(vm.runtime_template());
+                pool.record(ExecutorRuntimePoolEvent::ProgramLoad);
+                pool.record(ExecutorRuntimePoolEvent::TemplateBuild);
+                pool.insert_variant(key, Arc::clone(&baseline));
+                (baseline, Some(vm))
+            }
+        };
+
+        let mut vm = if let Some(vm) = vm {
+            vm
+        } else {
+            let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit)?;
+            let mut pool = self
+                .runtime_pool
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            pool.record(ExecutorRuntimePoolEvent::ProgramLoad);
+            vm
+        };
+        vm.set_gas_limit(gas_limit);
+        Ok(ExecutorRuntimeLease {
+            pool: Arc::clone(&self.runtime_pool),
+            key,
+            baseline,
+            vm: Some(vm),
+        })
+    }
+
+    #[cfg(test)]
+    fn runtime_pool_snapshot(&self) -> (ExecutorRuntimePoolStats, usize) {
+        let pool = self
+            .runtime_pool
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        (pool.stats, pool.variants.len())
+    }
+
+    #[cfg(test)]
+    fn runtime_variant_capacity(&self) -> usize {
+        self.runtime_pool
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .capacity
     }
 }
 
@@ -6122,6 +7679,64 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_runtime_context_rejects_binding_mutations_for_every_executor_path() {
+        let subject = checked_account_id();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &subject,
+            404,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let instructions = [
+            InstructionBox::from(
+                iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+                    contract_address: contract_address.clone(),
+                    code_hash: Hash::new(b"executor-lifecycle-activation"),
+                },
+            ),
+            InstructionBox::from(
+                iroha_data_model::isi::smart_contract_code::DeactivateContractInstance {
+                    contract_address: contract_address.clone(),
+                    reason: Some("executor lifecycle guard".to_owned()),
+                },
+            ),
+        ];
+
+        for entrypoint in ["hajimari", "始まり", "kaizen", "改善"] {
+            let context = ContractRuntimeExecutionContext {
+                contract_address: contract_address.clone(),
+                contract_subject: contract_address.subject_id(),
+                contract_alias: None,
+                entrypoint: entrypoint.to_owned(),
+            };
+            for instruction in &instructions {
+                assert!(matches!(
+                    ensure_lifecycle_hook_cannot_mutate_contract_binding(
+                        Some(&context),
+                        instruction,
+                    ),
+                    Err(ValidationFail::NotPermitted(_))
+                ));
+            }
+        }
+
+        let ordinary_context = ContractRuntimeExecutionContext {
+            contract_address,
+            contract_subject: subject,
+            contract_alias: None,
+            entrypoint: "kotoage".to_owned(),
+        };
+        for instruction in &instructions {
+            ensure_lifecycle_hook_cannot_mutate_contract_binding(
+                Some(&ordinary_context),
+                instruction,
+            )
+            .expect("ordinary kotoage dispatch is governed by the instruction permission layer");
+        }
+    }
+
+    #[test]
     fn proved_empty_overlay_accounts_verified_replay_gas() {
         let keypair = checked_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
@@ -6170,6 +7785,8 @@ mod tests {
                 &tx,
                 Vec::new(),
                 Some(replay),
+                None,
+                None,
                 0,
                 [0_u8; Hash::LENGTH],
                 tx_hash,
@@ -6190,6 +7807,61 @@ mod tests {
             "direct proved replay must persist completed AXT envelopes"
         );
         assert_eq!(block.axt_envelopes()[0].binding.as_bytes(), &axt_binding);
+    }
+
+    #[test]
+    fn proved_replay_rejects_durable_state_overlay_before_effects() {
+        let keypair = checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "gas fixture".to_owned())])
+            .sign(keypair.private_key());
+        let marker: Name = "proved_replay_forbidden_marker"
+            .parse()
+            .expect("durable state marker");
+        let replay = crate::pipeline::overlay::IvmProvedReplay {
+            queued: Vec::new(),
+            completed_axt: Vec::new(),
+            durable_state_overlay: BTreeMap::from([(marker.clone(), Some(vec![0xA5]))]),
+            events_commitment: Hash::new(b"events"),
+            gas_used: 0,
+            trace_hash: Hash::new(b"trace"),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        let tx_hash = tx.hash();
+        let error = super::Executor::Initial
+            .execute_metered_instructions(
+                &mut state_tx,
+                &authority,
+                &tx,
+                Vec::new(),
+                Some(replay),
+                None,
+                None,
+                0,
+                [0_u8; Hash::LENGTH],
+                tx_hash,
+                Some(50_000),
+                true,
+                true,
+                None,
+                None,
+                true,
+                false,
+            )
+            .expect_err("proved replay durable state writes must be rejected");
+
+        assert!(matches!(error, ValidationFail::NotPermitted(_)));
+        assert!(
+            state_tx.world.smart_contract_state.get(&marker).is_none(),
+            "rejected proved replay must apply no durable state"
+        );
     }
 
     fn make_peer_id() -> crate::PeerId {
@@ -7985,7 +9657,7 @@ mod tests {
         let call = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: contract_address.clone(),
             entrypoint: entrypoint.to_owned(),
-            payload: None,
+            arguments: None,
         };
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -11011,105 +12683,6 @@ mod tests {
         None
     }
 
-    fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> {
-        const LITERAL_HEADER_LEN: usize = 4 + 12;
-        use std::mem::size_of;
-
-        use ivm::{ProgramMetadata, encoding, instruction};
-
-        let len_size = size_of::<usize>();
-        let total_len = len_size
-            .checked_add(result_bytes.len())
-            .expect("encoded blob fits in usize");
-        let total_len_u64 = u64::try_from(total_len).expect("encoded blob fits in u64");
-        let mut data = total_len_u64.to_le_bytes()[..len_size].to_vec();
-        data.extend_from_slice(result_bytes);
-        let padded_len = (data.len() + 7) & !7;
-        data.resize(padded_len, 0);
-        let chunk_count = data.len() / 8;
-
-        let meta = ProgramMetadata {
-            version_major: 1,
-            version_minor: 0,
-            mode: 0,
-            vector_length: 0,
-            max_cycles: 1_000_000,
-            abi_version: 1,
-        };
-        let mut program = meta.encode();
-        program.extend_from_slice(&LITERAL_SECTION_MAGIC);
-        program.extend_from_slice(&(0u32).to_le_bytes()); // literal entries
-        program.extend_from_slice(&(0u32).to_le_bytes()); // post-pad
-        program.extend_from_slice(
-            &(u32::try_from(data.len()).expect("literal length fits")).to_le_bytes(),
-        );
-        program.extend_from_slice(&data);
-
-        let mut emit = |word: u32| program.extend_from_slice(&word.to_le_bytes());
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            20,
-            10,
-            0,
-        ));
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            21,
-            10,
-            0,
-        ));
-
-        let data_addr = i8::try_from(LITERAL_HEADER_LEN).expect("literal header fits i8");
-        emit(encoding::wide::encode_ri(
-            instruction::wide::arithmetic::ADDI,
-            22,
-            0,
-            data_addr,
-        ));
-
-        for _ in 0..chunk_count {
-            emit(encoding::wide::encode_load(
-                instruction::wide::memory::LOAD64,
-                23,
-                22,
-                0,
-            ));
-            emit(encoding::wide::encode_store(
-                instruction::wide::memory::STORE64,
-                21,
-                23,
-                0,
-            ));
-            emit(encoding::wide::encode_ri(
-                instruction::wide::arithmetic::ADDI,
-                22,
-                22,
-                8,
-            ));
-            emit(encoding::wide::encode_ri(
-                instruction::wide::arithmetic::ADDI,
-                21,
-                21,
-                8,
-            ));
-        }
-
-        emit(encoding::wide::encode_rr(
-            instruction::wide::arithmetic::ADD,
-            10,
-            20,
-            0,
-        ));
-        emit(encoding::wide::encode_halt());
-        program
-    }
-
-    fn generate_verdict_program(verdict: &Result<(), iroha_data_model::ValidationFail>) -> Vec<u8> {
-        use norito::codec::Encode as _;
-        let verdict_bytes = verdict.encode();
-        build_program_from_encoded_result(&verdict_bytes)
-    }
-
     fn generate_migration_program(
         verdict: &Result<ExecutorDataModel, iroha_data_model::ValidationFail>,
     ) -> Vec<u8> {
@@ -11133,13 +12706,13 @@ mod tests {
     ) -> (Vec<u8>, u64) {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
 
-        contract_program_with_entrypoint_kind(entrypoint, permission, EntryPointKind::Public)
+        contract_program_with_entrypoint_kind(entrypoint, EntryPointKind::Kotoage, permission)
     }
 
     fn contract_program_with_entrypoint_kind(
         entrypoint: &str,
-        permission: Option<&str>,
         kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
+        permission: Option<&str>,
     ) -> (Vec<u8>, u64) {
         use ivm::{EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, ProgramMetadata};
 
@@ -11147,7 +12720,9 @@ mod tests {
             name: entrypoint.to_owned(),
             kind,
             params: Vec::new(),
+            argument_schema: None,
             return_type: None,
+            return_schema: None,
             permission: permission.map(str::to_owned),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -11157,11 +12732,13 @@ mod tests {
             entry_pc: 0,
         };
         let interface = EmbeddedContractInterfaceV1 {
+            seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "executor-test".to_owned(),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![descriptor],
+            error_codes: Vec::new(),
             states: Vec::new(),
         };
         let interface_section = interface.encode_section();
@@ -11181,6 +12758,297 @@ mod tests {
         (program, expected_entrypoint_pc)
     }
 
+    fn prepared_parameterized_trigger_contract() -> ivm::PreparedContract {
+        let source = r#"
+seiyaku TriggerArguments {
+  kotoage fn run(val: Amount) authorize("Admin") {
+    let _val = val;
+  }
+}
+"#;
+        let code = ivm::KotodamaCompiler::new()
+            .compile_source(source)
+            .expect("compile parameterized trigger callback");
+        ivm::prepare_contract(Arc::<[u8]>::from(code))
+            .expect("prepare parameterized trigger callback")
+    }
+
+    #[test]
+    fn protected_contract_call_is_denied_before_argument_record_decode() {
+        const REQUIRED_PERMISSION: &str = "CanWriteGuardedValue";
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku GuardedValue {
+  state guarded_value: i64;
+
+  kotoage fn write(value: i64) authorize("CanWriteGuardedValue") {
+    guarded_value = value;
+  }
+}
+"#,
+            )
+            .expect("compile parameterized protected contract");
+        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse protected contract");
+        let schema = parsed
+            .contract_interface
+            .as_ref()
+            .and_then(|interface| {
+                interface
+                    .entrypoints
+                    .iter()
+                    .find(|entry| entry.name == "write")
+            })
+            .and_then(|entry| entry.argument_schema.as_ref())
+            .expect("write argument schema");
+        let arguments = ivm::encode_argument_record_from_json(
+            schema,
+            &Json::from(norito::json!({ "value": 7 })),
+        )
+        .expect("encode valid protected arguments");
+        let arguments =
+            iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(arguments)
+                .expect("bounded protected arguments");
+
+        let chain_id = ChainId::from("protected-direct-call");
+        let authority = ALICE_ID.clone();
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").expect("valid domain id"))
+                .build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([domain], [account], []);
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let contract_scope =
+            hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
+        let durable_marker: Name = format!("sc/{contract_scope}/guarded_value")
+            .parse()
+            .expect("valid scoped direct-call marker");
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "gas_limit".parse().expect("gas_limit key"),
+            Json::new(50_000_000_u64),
+        );
+        let transaction = TransactionBuilder::new(chain_id, authority.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: contract_address.clone(),
+                entrypoint: "write".to_owned(),
+                arguments: Some(arguments),
+            }))
+            .sign(ALICE_KEYPAIR.private_key());
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_tx = block.transaction();
+        let mut ivm_cache = IvmCache::new();
+
+        ivm::reset_argument_record_decode_count();
+        let error = super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("missing entrypoint permission must deny the direct call");
+
+        assert!(
+            error.to_string().contains(REQUIRED_PERMISSION),
+            "unexpected direct contract authorization error: {error}"
+        );
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "denied direct-call arguments must remain undecoded"
+        );
+        assert!(
+            state_tx
+                .world
+                .smart_contract_state
+                .get(&durable_marker)
+                .is_none(),
+            "denied direct contract call must apply no durable state"
+        );
+
+        let entrypoint_permission = Permission::new(REQUIRED_PERMISSION.to_owned(), Json::new(()));
+        Grant::account_permission(entrypoint_permission.clone(), authority.clone())
+            .execute(&authority, &mut state_tx)
+            .expect("grant direct-call entrypoint permission");
+        ivm::reset_argument_record_decode_count();
+        super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect("granted direct contract call must execute");
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            1,
+            "granted direct-call arguments must be prepared exactly once"
+        );
+        let authorized_marker = state_tx
+            .world
+            .smart_contract_state
+            .get(&durable_marker)
+            .cloned()
+            .expect("authorized direct call writes its durable marker");
+
+        Revoke::account_permission(entrypoint_permission.clone(), authority.clone())
+            .execute(&authority, &mut state_tx)
+            .expect("revoke direct-call entrypoint permission");
+        ivm::reset_argument_record_decode_count();
+        let revoked = super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("revoked direct-call permission must deny execution");
+        assert!(revoked.to_string().contains(REQUIRED_PERMISSION));
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "revoked direct-call arguments must remain undecoded"
+        );
+        assert_eq!(
+            state_tx.world.smart_contract_state.get(&durable_marker),
+            Some(&authorized_marker),
+            "revoked direct contract call must preserve authorized state"
+        );
+
+        Grant::account_permission(entrypoint_permission, authority.clone())
+            .execute(&authority, &mut state_tx)
+            .expect("restore direct-call entrypoint permission");
+        state_tx
+            .world
+            .contract_instances
+            .remove(contract_address.clone());
+        ivm::reset_argument_record_decode_count();
+        let deactivated = super::Executor::Initial
+            .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
+            .expect_err("deactivated direct-call target must deny execution");
+        assert!(
+            deactivated.to_string().contains("not found"),
+            "unexpected deactivated direct-call error: {deactivated}"
+        );
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "deactivated direct-call arguments must remain undecoded"
+        );
+        assert_eq!(
+            state_tx.world.smart_contract_state.get(&durable_marker),
+            Some(&authorized_marker),
+            "deactivated direct contract call must apply no durable state"
+        );
+    }
+
+    #[test]
+    fn identityless_raw_and_proved_dispatch_reject_before_argument_decode_or_proof_work() {
+        let program =
+            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+                force_zk: true,
+                max_cycles: 10_000,
+                ..ivm::kotodama::compiler::CompilerOptions::default()
+            })
+            .compile_source(
+                r#"
+seiyaku IdentityRequired {
+  kotoage fn write(value: i64) {
+    let _value = value;
+  }
+}
+"#,
+            )
+            .expect("compile identity-required raw contract");
+        let chain_id = ChainId::from("identity-required-direct");
+        let authority = ALICE_ID.clone();
+        let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
+            .build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_with_chain(
+            World::with([domain], [account], []),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "gas_limit".parse().expect("gas_limit key"),
+            Json::new(1_000_000_u64),
+        );
+        metadata.insert(
+            "contract_entrypoint".parse().expect("entrypoint key"),
+            Json::new("write"),
+        );
+        metadata.insert(
+            "contract_payload".parse().expect("payload key"),
+            Json::from(norito::json!({ "value": 7 })),
+        );
+        let bytecode = IvmBytecode::from_compiled(program);
+        let raw = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_metadata(metadata.clone())
+            .with_executable(Executable::Ivm(bytecode.clone()))
+            .sign(ALICE_KEYPAIR.private_key());
+        let proved = TransactionBuilder::new(chain_id, authority.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::IvmProved(
+                iroha_data_model::transaction::IvmProved {
+                    bytecode,
+                    overlay: Vec::<InstructionBox>::new().into(),
+                    events_commitment: Hash::new(b"identityless-events"),
+                    gas_policy_commitment: Hash::new(b"identityless-gas"),
+                },
+            ))
+            .sign(ALICE_KEYPAIR.private_key());
+
+        for (label, transaction) in [("raw", raw), ("proved", proved)] {
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            let mut state_tx = block.transaction();
+            let mut ivm_cache = IvmCache::new();
+            ivm::reset_argument_record_decode_count();
+            let error = super::Executor::Initial
+                .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
+                .expect_err("identity-less raw contract dispatch must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("requires a live contract_address or contract_alias"),
+                "unexpected identity-less {label} dispatch error: {error}"
+            );
+            assert_eq!(
+                ivm::argument_record_decode_count(),
+                0,
+                "identity-less {label} dispatch must not decode its argument record"
+            );
+            assert!(
+                state_tx.world.smart_contract_state.is_empty(),
+                "identity-less {label} dispatch must apply no durable state"
+            );
+        }
+    }
+
     fn contract_permission_context(permission: &str) -> ContractCallExecutionContext {
         ContractCallExecutionContext {
             contract_address: None,
@@ -11190,6 +13058,7 @@ mod tests {
             entrypoint_pc: Some(0),
             entrypoint_permission: Some(permission.to_owned()),
             args: Json::new(()),
+            argument_record: None,
         }
     }
 
@@ -11226,7 +13095,7 @@ mod tests {
         let invocation = ContractInvocation {
             contract_address: contract_address.clone(),
             entrypoint: "admin".to_owned(),
-            payload: None,
+            arguments: None,
         };
         let invocation_context = parse_contract_invocation_execution_context(
             &invocation,
@@ -11250,7 +13119,7 @@ mod tests {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
 
         let (program, expected_entrypoint_pc) =
-            contract_program_with_entrypoint_kind("configuration", None, EntryPointKind::View);
+            contract_program_with_entrypoint_kind("configuration", EntryPointKind::View, None);
         let contract_address = ContractAddress::derive(
             iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
             &ALICE_ID,
@@ -11261,7 +13130,7 @@ mod tests {
         let invocation = ContractInvocation {
             contract_address: contract_address.clone(),
             entrypoint: "configuration".to_owned(),
-            payload: None,
+            arguments: None,
         };
 
         let top_level_err = parse_contract_invocation_execution_context(
@@ -11273,7 +13142,7 @@ mod tests {
         .expect_err("top-level transaction dispatch must remain public-only");
         assert!(matches!(
             top_level_err,
-            ValidationFail::NotPermitted(message) if message.contains("is not public")
+            ValidationFail::NotPermitted(message) if message.contains("read-only")
         ));
 
         let nested = parse_nested_contract_invocation_execution_context(
@@ -11289,45 +13158,105 @@ mod tests {
     }
 
     #[test]
-    fn contract_dispatch_context_defaults_to_main_permission_for_self_describing_artifact() {
-        let (program, expected_entrypoint_pc) =
-            contract_program_with_entrypoint("main", Some("ContractAdmin"));
-        let metadata = Metadata::default();
+    fn raw_contract_dispatch_rejects_lifecycle_entrypoints() {
+        use iroha_data_model::smart_contract::manifest::EntryPointKind;
 
-        let context = parse_contract_call_execution_context(&metadata, &program)
-            .expect("parse default main dispatch")
-            .expect("default main context");
+        for (selector, kind) in [
+            ("hajimari", EntryPointKind::Hajimari),
+            ("kaizen", EntryPointKind::Kaizen),
+        ] {
+            let (program, _) = contract_program_with_entrypoint_kind(selector, kind, None);
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                Name::from_str("contract_entrypoint").expect("static name"),
+                Json::new(selector.to_owned()),
+            );
 
-        assert_eq!(context.entrypoint.as_deref(), Some("main"));
-        assert_eq!(context.entrypoint_pc(), Some(expected_entrypoint_pc));
-        assert_eq!(context.entrypoint_permission(), Some("ContractAdmin"));
+            let error = parse_contract_call_execution_context(&metadata, &program)
+                .expect_err("raw transaction dispatch must not invoke lifecycle hooks");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(message) if message.contains("top-level deployed ContractCall") && message.contains(selector))
+            );
+        }
+    }
 
-        let authority = ALICE_ID.clone();
-        let account = Account::new(authority.clone()).build(&authority);
-        let world = World::with([], [account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
+    #[test]
+    fn top_level_contract_invocation_uses_branded_lifecycle_permissions() {
+        use iroha_data_model::smart_contract::manifest::EntryPointKind;
 
-        let err = enforce_contract_entrypoint_permission(&tx.world, &authority, &context)
-            .expect_err("missing default main permission should reject");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &ALICE_ID,
+            44,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        for (selector, kind, expected_permission) in [
+            (
+                "hajimari",
+                EntryPointKind::Hajimari,
+                iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME,
+            ),
+            (
+                "kaizen",
+                EntryPointKind::Kaizen,
+                iroha_data_model::smart_contract::CONTRACT_KAIZEN_PERMISSION_NAME,
+            ),
+        ] {
+            let (program, _) = contract_program_with_entrypoint_kind(selector, kind, None);
+            let invocation = ContractInvocation {
+                contract_address: contract_address.clone(),
+                entrypoint: selector.to_owned(),
+                arguments: None,
+            };
+            let context = parse_contract_invocation_execution_context(
+                &invocation,
+                &program,
+                None,
+                contract_address.subject_id(),
+            )
+            .expect("top-level lifecycle invocation resolves");
+            assert_eq!(
+                context.entrypoint_permission(),
+                Some(expected_permission),
+                "{selector} must use its runtime-defined branded lifecycle permission"
+            );
+        }
+    }
+
+    #[test]
+    fn contract_transaction_dispatch_rejects_view_entrypoints() {
+        use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+        let (program, _) =
+            contract_program_with_entrypoint_kind("inspect", EntryPointKind::View, None);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static name"),
+            Json::new("inspect".to_owned()),
+        );
+
+        let err = parse_contract_call_execution_context(&metadata, &program)
+            .expect_err("view transaction dispatch must reject");
         assert!(matches!(
             err,
             ValidationFail::NotPermitted(message)
-                if message.contains("contract entrypoint `main` requires permission `ContractAdmin`")
+                if message.contains("read-only")
         ));
+    }
 
-        Grant::account_permission(
-            Permission::new("ContractAdmin".to_owned(), Json::new(())),
-            authority.clone(),
-        )
-        .execute(&authority, &mut tx)
-        .expect("grant default main permission");
-        enforce_contract_entrypoint_permission(&tx.world, &authority, &context)
-            .expect("granted default main permission should allow dispatch");
+    #[test]
+    fn contract_dispatch_context_rejects_implicit_main_for_self_describing_artifact() {
+        let (program, _) = contract_program_with_entrypoint("main", Some("ContractAdmin"));
+        let metadata = Metadata::default();
+
+        let err = parse_contract_call_execution_context(&metadata, &program)
+            .expect_err("implicit main dispatch must reject");
+        assert!(matches!(
+            err,
+            ValidationFail::NotPermitted(message)
+                if message.contains("require explicit contract_entrypoint")
+        ));
     }
 
     #[test]
@@ -11350,7 +13279,7 @@ mod tests {
         assert!(matches!(
             err,
             ValidationFail::NotPermitted(message)
-                if message.contains("requires a public `main` entrypoint")
+                if message.contains("require explicit contract_entrypoint")
         ));
 
         let mut metadata = Metadata::default();
@@ -11364,6 +13293,135 @@ mod tests {
         assert_eq!(context.entrypoint.as_deref(), Some("run"));
         assert_eq!(context.entrypoint_pc(), Some(expected_entrypoint_pc));
         assert_eq!(context.entrypoint_permission(), Some("RunPermission"));
+    }
+
+    #[test]
+    fn trigger_dispatch_encodes_event_args_as_one_canonical_record() {
+        let contract = prepared_parameterized_trigger_contract();
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static name"),
+            Json::new("run".to_owned()),
+        );
+        let event_args = Json::from(norito::json!({"val": "1.25"}));
+
+        validate_trigger_call_execution_context(&metadata, contract.artifact())
+            .expect("registration validates the typed callback without a fabricated payload");
+
+        let context = parse_prepared_trigger_call_execution_context(
+            &metadata,
+            &contract,
+            &event_args,
+            u64::MAX,
+        )
+        .expect("bind typed trigger arguments");
+        let descriptor = contract
+            .entrypoint_descriptor("run")
+            .expect("run descriptor");
+        let schema = descriptor
+            .argument_schema
+            .as_ref()
+            .expect("run argument schema");
+        let expected = ivm::encode_argument_record_from_json(schema, &event_args)
+            .expect("encode expected canonical record");
+
+        assert_eq!(context.argument_record(), Some(expected.as_slice()));
+        ivm::validate_argument_record(
+            schema,
+            context.argument_record().expect("trigger argument record"),
+        )
+        .expect("roundtrip canonical trigger argument record");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn malformed_invocation_arguments_fail_during_context_preparation() {
+        let contract = prepared_parameterized_trigger_contract();
+        let schema = contract
+            .entrypoint_descriptor("run")
+            .and_then(|descriptor| descriptor.argument_schema.as_ref())
+            .expect("run argument schema");
+        let mut malformed = ivm::encode_argument_record_from_json(
+            schema,
+            &Json::from(norito::json!({"val": "1.25"})),
+        )
+        .expect("encode valid argument fixture");
+        *malformed.last_mut().expect("record hash byte") ^= 0x80;
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            19,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let invocation = ContractInvocation {
+            contract_address,
+            entrypoint: "run".to_owned(),
+            arguments: Some(
+                iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
+                    malformed,
+                )
+                .expect("bounded malformed fixture"),
+            ),
+        };
+
+        ivm::reset_argument_record_decode_count();
+        let error = parse_prepared_contract_invocation_execution_context(
+            &invocation,
+            &contract,
+            None,
+            invocation.contract_address.subject_id(),
+            u64::MAX,
+        )
+        .expect_err("malformed arguments must fail before a VM is constructed or entered");
+
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message.contains("invalid contract argument record")
+        ));
+        assert_eq!(ivm::argument_record_decode_count(), 1);
+    }
+
+    #[test]
+    fn trigger_dispatch_rejects_static_payload_and_implicit_entrypoint() {
+        let contract = prepared_parameterized_trigger_contract();
+        let event_args = Json::from(norito::json!({"val": 7}));
+
+        let err = parse_prepared_trigger_call_execution_context(
+            &Metadata::default(),
+            &contract,
+            &event_args,
+            u64::MAX,
+        )
+        .expect_err("trigger callback selection must be explicit");
+        assert!(matches!(
+            err,
+            ValidationFail::NotPermitted(message)
+                if message.contains("explicit contract_entrypoint")
+        ));
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static name"),
+            Json::new("run".to_owned()),
+        );
+        metadata.insert(
+            Name::from_str("contract_payload").expect("static name"),
+            Json::from(norito::json!({"val": 99})),
+        );
+        let err = parse_prepared_trigger_call_execution_context(
+            &metadata,
+            &contract,
+            &event_args,
+            u64::MAX,
+        )
+        .expect_err("fixed metadata payload must not shadow event arguments");
+        assert!(matches!(
+            err,
+            ValidationFail::NotPermitted(message)
+                if message.contains("triggering event")
+        ));
     }
 
     #[test]
@@ -11466,21 +13524,115 @@ mod tests {
         let small_limit = 10_000;
         let large_limit = 50_000;
 
-        let vm_small = loaded
-            .clone_runtime_for_gas_limit(small_limit)
-            .expect("clone small");
-        assert_eq!(
-            vm_small.memory.stack_limit(),
-            super::stack_limit_for_gas(small_limit)
-        );
+        {
+            let vm_small = loaded
+                .checkout_runtime_for_gas_limit(small_limit)
+                .expect("checkout small");
+            assert_eq!(
+                vm_small.memory.stack_limit(),
+                super::stack_limit_for_gas(small_limit)
+            );
+            assert_eq!(vm_small.remaining_gas(), small_limit);
+        }
 
-        let vm_large = loaded
-            .clone_runtime_for_gas_limit(large_limit)
-            .expect("clone large");
+        {
+            let vm_large = loaded
+                .checkout_runtime_for_gas_limit(large_limit)
+                .expect("checkout large");
+            assert_eq!(
+                vm_large.memory.stack_limit(),
+                super::stack_limit_for_gas(large_limit)
+            );
+            assert_eq!(vm_large.remaining_gas(), large_limit);
+        }
+    }
+
+    #[test]
+    fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
+        const GAS_LIMIT: u64 = 10_000;
+
+        fn dirty_then_fail(loaded: &super::LoadedExecutor) -> Result<(), *const u8> {
+            let mut runtime = loaded
+                .checkout_runtime_for_gas_limit(GAS_LIMIT)
+                .expect("checkout runtime");
+            let allocation = runtime
+                .memory
+                .load_region(0, 1)
+                .expect("code memory")
+                .as_ptr();
+            runtime.set_register(7, 99);
+            runtime
+                .memory
+                .preload_input(0, &[0xA5])
+                .expect("dirty input memory");
+            Err(allocation)
+        }
+
+        let raw =
+            data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
+        let loaded = super::LoadedExecutor::load(raw).expect("load");
+        let (before, _) = loaded.runtime_pool_snapshot();
+
+        let allocation = dirty_then_fail(&loaded).expect_err("synthetic validation failure");
+        let (after_error, _) = loaded.runtime_pool_snapshot();
+        assert_eq!(after_error.dirty_resets, before.dirty_resets + 1);
+
+        let runtime = loaded
+            .checkout_runtime_for_gas_limit(GAS_LIMIT)
+            .expect("warm checkout");
+        assert_eq!(runtime.register(7), 0);
+        assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
         assert_eq!(
-            vm_large.memory.stack_limit(),
-            super::stack_limit_for_gas(large_limit)
+            runtime
+                .memory
+                .load_region(0, 1)
+                .expect("code memory")
+                .as_ptr(),
+            allocation,
+            "warm executor validation must reuse the same memory allocation"
         );
+        assert_eq!(
+            runtime
+                .memory
+                .load_region(Memory::INPUT_START, 1)
+                .expect("input memory"),
+            &[0],
+            "dirty input must be restored before reuse"
+        );
+        let (after_reuse, _) = loaded.runtime_pool_snapshot();
+        assert_eq!(after_reuse.hits, after_error.hits + 1);
+        assert_eq!(after_reuse.program_loads, after_error.program_loads);
+        assert_eq!(after_reuse.template_builds, after_error.template_builds);
+    }
+
+    #[test]
+    fn loaded_executor_runtime_variants_are_bounded() {
+        let raw =
+            data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
+        let loaded = super::LoadedExecutor::load(raw).expect("load");
+        let capacity = loaded.runtime_variant_capacity();
+        let (before, _) = loaded.runtime_pool_snapshot();
+        let multiplier = ivm::gas_to_stack_multiplier().max(1);
+        let mut observed_keys = BTreeSet::new();
+        for index in 0..capacity.saturating_add(3) {
+            let target_stack = 64_u64
+                .saturating_mul(1024)
+                .saturating_mul(u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1));
+            let gas_limit = target_stack.saturating_add(multiplier.saturating_sub(1)) / multiplier;
+            let key = super::ExecutorRuntimeKey::for_gas_limit(gas_limit);
+            assert!(
+                observed_keys.insert(key),
+                "test gas limits must resolve to distinct stack variants"
+            );
+            let runtime = loaded
+                .checkout_runtime_for_gas_limit(gas_limit)
+                .expect("checkout gas/stack variant");
+            assert_eq!(runtime.memory.stack_limit(), key.stack_limit);
+        }
+
+        let (after, variant_count) = loaded.runtime_pool_snapshot();
+        assert_eq!(variant_count, capacity);
+        assert!(after.evictions > before.evictions);
     }
 
     #[test]

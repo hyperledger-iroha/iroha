@@ -431,6 +431,26 @@ public final class OfflineToriiClientTests {
     assertRejects(
         () -> new OfflineOperationStatus.Error(repeat("a", 65), "rejected", null),
         "error envelope must reject an oversized code");
+    assertRejects(
+        () ->
+            new OfflineOperationStatus.TopUpResult(
+                TRANSACTION_HASH, BigInteger.ZERO, BigInteger.ONE, null),
+        "top-up result must reject zero finalizedBlockHeight");
+    assertRejects(
+        () ->
+            new OfflineOperationStatus.TopUpResult(
+                TRANSACTION_HASH, BigInteger.ONE, BigInteger.ZERO, null),
+        "top-up result must reject zero serverTimeMs");
+    assertRejects(
+        () ->
+            new OfflineOperationStatus.RedeemResult(
+                TRANSACTION_HASH, BigInteger.ZERO, BigInteger.ONE),
+        "redeem result must reject zero finalizedBlockHeight");
+    assertRejects(
+        () ->
+            new OfflineOperationStatus.RedeemResult(
+                TRANSACTION_HASH, BigInteger.ONE, BigInteger.ZERO),
+        "redeem result must reject zero serverTimeMs");
   }
 
   private static void referenceDecoderRejectsMalformedUtf8WithoutReplacement() {

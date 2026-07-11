@@ -31,7 +31,7 @@ class KagemushaRecursiveSpendProverTest {
             "kagemusha.offline.recursive_spend.artifact_manifest.v3",
             KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA,
         )
-        assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)
+        assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)
         assertEquals(
             "halo2/ipa-pasta-cycle-v1",
             KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_PROOF_BACKEND,
@@ -621,40 +621,13 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(null, 1))
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend("", 1))
-        assertEquals("recursive_compact_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1.wireName)
-        assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName)
-        assertFalse(
-            KagemushaRecursiveSpendProver.Mode.values().any { it.wireName == "checked_prefold_v1" },
-            "checked-prefold is not a first-release spend mode",
-        )
+        assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2.wireName)
+        assertEquals(1, KagemushaRecursiveSpendProver.Mode.values().size)
         assertEquals(
-            KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1,
-            KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable = true,
-                recursiveSpendAvailable = true,
-            ),
+            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2,
+            KagemushaRecursiveSpendProver.preferredMode(true),
         )
-        assertEquals(
-            KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1,
-            KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable = true,
-                recursiveSpendAvailable = false,
-            ),
-        )
-        assertEquals(
-            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
-            KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable = false,
-                recursiveSpendAvailable = true,
-            ),
-        )
-        assertEquals(
-            null,
-            KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable = false,
-                recursiveSpendAvailable = false,
-            ),
-        )
+        assertEquals(null, KagemushaRecursiveSpendProver.preferredMode(false))
         assertEquals(7, KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
             "kagemusha-recursive-compact-v1",

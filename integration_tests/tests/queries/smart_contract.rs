@@ -17,7 +17,8 @@ fn metadata_with_gas_limit(bytecode: &IvmBytecode) -> Result<Metadata> {
     let mut metadata = Metadata::default();
     metadata.insert(
         "gas_limit".parse().expect("static gas_limit key"),
-        gas_limit_for_meta(&parsed.metadata),
+        gas_limit_for_meta(&parsed.metadata)
+            .map_err(|error| eyre::eyre!("invalid IVM cycle limit: {error:?}"))?,
     );
     Ok(metadata)
 }

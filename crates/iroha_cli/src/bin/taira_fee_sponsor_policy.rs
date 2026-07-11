@@ -30,7 +30,7 @@ use url::Url;
 struct Args {
     #[arg(long, default_value = "https://taira.sora.org")]
     torii_url: Url,
-    #[arg(long, default_value = "809574f5-fee7-5e69-bfcf-52451e42d50f")]
+    #[arg(long, default_value = "fc56984b-2be7-431d-840e-21514d1883f0")]
     chain_id: ChainId,
     #[arg(long, default_value_t = 369)]
     chain_discriminant: u16,

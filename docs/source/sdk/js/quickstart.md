@@ -445,6 +445,11 @@ wrapper or version-nested route. Readiness returns `200` with `ready: false`
 when evaluation succeeds but requirements are unmet, and reserves `503` for an
 evaluation failure.
 
+```js
+const readiness = await torii.getOfflineReadiness("xor#wonderland");
+console.log("offline ready", readiness.ready, readiness.blockers);
+```
+
 ## Torii Queries & Streaming
 
 ```js

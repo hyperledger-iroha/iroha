@@ -578,8 +578,8 @@ final class KagemushaRecursiveSpendV2Tests: XCTestCase {
             KagemushaRecursiveSpendV2.artifactManifestSchema,
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         )
-        XCTAssertEqual(KagemushaRecursiveSpendV2.mode, "recursive_spend_v1")
-        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpendV1.rawValue, "recursive_spend_v1")
+        XCTAssertEqual(KagemushaRecursiveSpendV2.mode, "recursive_spend_v2")
+        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpendV2.rawValue, "recursive_spend_v2")
         XCTAssertFalse(KagemushaRecursiveSpendV2.isProductionAvailable)
         XCTAssertNil(KagemushaRecursiveSpendV2.preferredProductionMode)
         XCTAssertEqual(
@@ -640,7 +640,7 @@ final class KagemushaRecursiveSpendV2Tests: XCTestCase {
                 proofBackendAvailable: true,
                 nativeStubAvailable: true
             ),
-            .recursiveSpendV1
+            .recursiveSpendV2
         )
         XCTAssertEqual(
             NativeBridgeError.fromStatus(-314),
@@ -666,6 +666,57 @@ final class KagemushaRecursiveSpendV2Tests: XCTestCase {
             KagemushaRecursiveSpendLineageWitnessVerifier.requiredNativeSymbol,
             "connect_norito_kagemusha_recursive_spend_lineage_witness_verify"
         )
+    }
+
+    func testNativeCapabilitiesRequireExactABI18ContractAndGateSet() throws {
+        let capabilities = try KagemushaRecursiveSpendNativeCapabilitiesV1(
+            bridgeABIVersion: 18,
+            artifactManifestSchema: KagemushaRecursiveSpendV2.artifactManifestSchema,
+            mode: KagemushaRecursiveSpendV2.mode,
+            proofBackend: KagemushaRecursiveSpendV2.pastaCycleBackend,
+            transcriptProfile: KagemushaRecursiveSpendV2.pastaCycleTranscript,
+            proofEnvelopeVersion: KagemushaRecursiveSpendV2.pastaCycleProofEnvelopeVersion,
+            stateBoundaryVersion: KagemushaRecursiveSpendV2.stateBoundaryVersion,
+            transitionCircuitID: KagemushaRecursiveSpendV2.transitionEqCircuitID,
+            stateCircuitID: KagemushaRecursiveSpendV2.stateEpCircuitID,
+            maxProofBytes: UInt32(KagemushaRecursiveSpendV2.releaseMaximumProofBytes),
+            proofBackendAvailable: false,
+            missingGates: KagemushaRecursiveSpendV2.unavailableProofBackendGates
+        )
+        XCTAssertFalse(capabilities.proofBackendAvailable)
+        XCTAssertEqual(capabilities.mode, "recursive_spend_v2")
+        XCTAssertEqual(
+            capabilities.missingGates,
+            KagemushaRecursiveSpendV2.unavailableProofBackendGates
+        )
+        XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV1(
+            bridgeABIVersion: 18,
+            artifactManifestSchema: KagemushaRecursiveSpendV2.artifactManifestSchema,
+            mode: KagemushaRecursiveSpendV2.mode,
+            proofBackend: KagemushaRecursiveSpendV2.pastaCycleBackend,
+            transcriptProfile: KagemushaRecursiveSpendV2.pastaCycleTranscript,
+            proofEnvelopeVersion: KagemushaRecursiveSpendV2.pastaCycleProofEnvelopeVersion,
+            stateBoundaryVersion: KagemushaRecursiveSpendV2.stateBoundaryVersion,
+            transitionCircuitID: KagemushaRecursiveSpendV2.transitionEqCircuitID,
+            stateCircuitID: KagemushaRecursiveSpendV2.stateEpCircuitID,
+            maxProofBytes: UInt32(KagemushaRecursiveSpendV2.releaseMaximumProofBytes),
+            proofBackendAvailable: false,
+            missingGates: []
+        ))
+        XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV1(
+            bridgeABIVersion: 18,
+            artifactManifestSchema: KagemushaRecursiveSpendV2.artifactManifestSchema,
+            mode: "unsupported_mode",
+            proofBackend: KagemushaRecursiveSpendV2.pastaCycleBackend,
+            transcriptProfile: KagemushaRecursiveSpendV2.pastaCycleTranscript,
+            proofEnvelopeVersion: KagemushaRecursiveSpendV2.pastaCycleProofEnvelopeVersion,
+            stateBoundaryVersion: KagemushaRecursiveSpendV2.stateBoundaryVersion,
+            transitionCircuitID: KagemushaRecursiveSpendV2.transitionEqCircuitID,
+            stateCircuitID: KagemushaRecursiveSpendV2.stateEpCircuitID,
+            maxProofBytes: UInt32(KagemushaRecursiveSpendV2.releaseMaximumProofBytes),
+            proofBackendAvailable: true,
+            missingGates: []
+        ))
     }
 
     func testTopUpFinalityOpaqueTypesPinExactNoritoSchemasAndCopyBytes() throws {

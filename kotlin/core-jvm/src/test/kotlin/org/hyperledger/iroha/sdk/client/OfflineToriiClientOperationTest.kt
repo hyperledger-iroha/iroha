@@ -156,6 +156,31 @@ class OfflineToriiClientOperationTest {
     }
 
     @Test
+    fun appliedResultsRejectZeroFinalityFields() {
+        val anchor = OfflineOperationStatus.TopUpAnchor(byteArrayOf(1))
+        for ((finalizedBlockHeight, serverTimeMs) in listOf(
+            BigInteger.ZERO to BigInteger.ONE,
+            BigInteger.ONE to BigInteger.ZERO,
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                OfflineOperationStatus.TopUpResult(
+                    TRANSACTION_HASH,
+                    finalizedBlockHeight,
+                    serverTimeMs,
+                    anchor,
+                )
+            }
+            assertFailsWith<IllegalArgumentException> {
+                OfflineOperationStatus.RedeemResult(
+                    TRANSACTION_HASH,
+                    finalizedBlockHeight,
+                    serverTimeMs,
+                )
+            }
+        }
+    }
+
+    @Test
     fun topUpPostsCanonicalNoritoArchive() {
         val reference = reference(OfflineOperationKind.TOP_UP)
         val responseArchive = OfflineOperationCodec.encodeReference(reference)

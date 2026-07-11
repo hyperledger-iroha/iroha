@@ -226,7 +226,7 @@ runtime `CircuitAuthenticatedRecursionAdapter` must continue returning
 
 The fail-closed production contract is now explicit even though the loader is
 not yet available. Native capability negotiation reports bridge ABI `18`, mode
-`recursive_spend_v1`, manifest schema
+`recursive_spend_v2`, manifest schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v3`, proof backend
 `halo2/ipa-pasta-cycle-v1`, and transcript profile
 `kagemusha-pasta-cycle-poseidon-v1`. The two fixed circuit roles are:
@@ -276,11 +276,15 @@ rejects non-regular files, empty or oversized inputs, duplicate paths,
 hardlinks, duplicate raw payloads, source mutation, non-canonical release
 fields, roster gaps, and an existing output directory before publication. It
 writes owner-only files, hashes both raw and complete framed bytes into the 2×3
-inventory, fsyncs them, and publishes `manifest.json` with an atomic no-clobber
-link only after validation. A failure retains an incomplete owner-only
-directory for inspection instead of recursively deleting a path. The packager
-is deliberately an unsigned staging step: evidence digest strings are recorded,
-but release-signature authentication happens in the separate release process.
+inventory and fsyncs them. It publishes canonical `manifest.norito`, the
+lowercase `manifest.norito.sha256` content identifier, and finally the
+human-readable `manifest.json` publication marker with atomic no-clobber links.
+Runtime and proof-envelope validation consume the exact Norito bytes; JSON is
+an operator view and is never re-encoded into a trust anchor. A failure retains
+an incomplete owner-only directory for inspection instead of recursively
+deleting a path. The packager is deliberately an unsigned staging step:
+evidence digests and the Norito content address are recorded, but
+release-signature authentication happens in the separate release process.
 The small file header does not embed the manifest digest because a manifest
 that contains framed-file digests would make that content address circular;
 proof envelopes bind the final authenticated manifest digest instead.

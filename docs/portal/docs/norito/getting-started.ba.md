@@ -29,7 +29,7 @@ Iroha төйөнөнә тиклем.
    Ҡораллы сылбыр урындағы, күрһәтеү Makefile ярҙамсылары бинар:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 . 1990 й.
@@ -43,17 +43,16 @@ Iroha төйөнөнә тиклем.
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Төп флагтар:
 
 - I18NI0000000038X контрактты 1-се версияһына ABI-ға бикләп ҡуя (берҙән-бер ярҙам версияһында
   яҙыу ваҡыты).
-- `--max-cycles 0` X сикһеҙ башҡарыу үтенесе; ыңғай һан ҡуйығыҙ, бәйләү өсөн
+- `--max-cycles 1000000` X сикһеҙ башҡарыу үтенесе; ыңғай һан ҡуйығыҙ, бәйләү өсөн
   цикл нуль-белемле дәлилдәр өсөн прокладка.
 
 ## 2. I18NT0000000009X артефактын тикшерергә (төҙөү)
@@ -85,7 +84,7 @@ I18NI000000042X миҫалы сәләмләү һәм `SET_ACCOUNT_DETAIL` syscal
 База64 файҙалы йөк:
 
 ```sh
-iroha app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to

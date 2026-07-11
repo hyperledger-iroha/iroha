@@ -31,18 +31,48 @@ import java.util.concurrent.Executor
  *     parameter keeps `core-jvm` free of Android-only APIs while still giving Android callers
  *     a clean injection point. The same hook also works for any other thread-local context
  *     (auth MDC, tracing) the consumer wants set per request.
+ * @param maximumResponseBytes maximum number of response-body bytes buffered by [execute].
+ *   The default is 64 MiB. Streaming responses opened through [openStream] are intentionally
+ *   not subject to this buffered-response limit.
  */
 class UrlConnectionTransportExecutor(
     private val connectTimeout: Duration? = null,
     private val readTimeout: Duration? = null,
     private val asyncExecutor: Executor? = null,
+    private val maximumResponseBytes: Long = DEFAULT_MAXIMUM_RESPONSE_BYTES,
 ) : HttpTransportExecutor, StreamingTransportExecutor {
 
+    init {
+        require(maximumResponseBytes in 1..Int.MAX_VALUE.toLong()) {
+            "maximumResponseBytes must be between 1 and ${Int.MAX_VALUE}"
+        }
+    }
+
     /** Creates an executor that applies the same timeout to connect and read operations. */
-    constructor(timeout: Duration?) : this(timeout, timeout, null)
+    constructor(timeout: Duration?) : this(timeout, timeout, null, DEFAULT_MAXIMUM_RESPONSE_BYTES)
 
     /** Creates an executor with distinct connect/read timeouts (nullable to use defaults). */
-    constructor(connectTimeout: Duration?, readTimeout: Duration?) : this(connectTimeout, readTimeout, null)
+    constructor(
+        connectTimeout: Duration?,
+        readTimeout: Duration?,
+    ) : this(connectTimeout, readTimeout, null, DEFAULT_MAXIMUM_RESPONSE_BYTES)
+
+    /** Creates an executor with distinct timeouts and a custom asynchronous executor. */
+    constructor(
+        connectTimeout: Duration?,
+        readTimeout: Duration?,
+        asyncExecutor: Executor?,
+    ) : this(connectTimeout, readTimeout, asyncExecutor, DEFAULT_MAXIMUM_RESPONSE_BYTES)
+
+    /** Creates an executor with default timeouts and a custom buffered-response limit. */
+    constructor(maximumResponseBytes: Long) : this(null, null, null, maximumResponseBytes)
+
+    /** Creates an executor with distinct timeouts and a custom buffered-response limit. */
+    constructor(
+        connectTimeout: Duration?,
+        readTimeout: Duration?,
+        maximumResponseBytes: Long,
+    ) : this(connectTimeout, readTimeout, null, maximumResponseBytes)
 
     override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> =
         if (asyncExecutor != null) {
@@ -65,7 +95,11 @@ class UrlConnectionTransportExecutor(
             writeRequestBody(request, connection)
             val status = connection.responseCode
             val message = connection.responseMessage ?: ""
-            val body = readBody(connection, status)
+            val responseLimit = minOf(
+                maximumResponseBytes,
+                request.maximumResponseBytes ?: maximumResponseBytes,
+            )
+            val body = readBody(connection, status, request.method, responseLimit)
             val headers = normalizeHeaders(connection.headerFields)
             return TransportResponse(status, body, message, headers)
         } catch (ex: IOException) {
@@ -113,25 +147,164 @@ class UrlConnectionTransportExecutor(
     }
 
     companion object {
+        /** Default maximum body size buffered by [execute], in bytes (64 MiB). */
+        const val DEFAULT_MAXIMUM_RESPONSE_BYTES: Long = 64L * 1024L * 1024L
+
         private fun writeRequestBody(request: TransportRequest, connection: HttpURLConnection) {
             val hasBody = request.body.isNotEmpty() && !request.method.equals("GET", ignoreCase = true)
             if (!hasBody) return
             connection.outputStream.write(request.body)
         }
 
-        private fun readBody(connection: HttpURLConnection, status: Int): ByteArray {
-            val stream = responseStream(connection, status) ?: return ByteArray(0)
-            stream.use { input ->
-                ByteArrayOutputStream().use { buffer ->
-                    val chunk = ByteArray(4096)
-                    var read: Int
-                    while (input.read(chunk).also { read = it } != -1) {
-                        buffer.write(chunk, 0, read)
-                    }
-                    return buffer.toByteArray()
+        private fun readBody(
+            connection: HttpURLConnection,
+            status: Int,
+            requestMethod: String,
+            maximumResponseBytes: Long,
+        ): ByteArray {
+            val headers = connection.headerFields
+            val declaredLength = canonicalContentLength(headers)
+            rejectAmbiguousFraming(headers, declaredLength)
+            if (responseMustNotHaveBody(requestMethod, status)) {
+                return ByteArray(0)
+            }
+            val bufferedLength = contentLengthForBufferedBody(headers, declaredLength)
+            if (bufferedLength != null && bufferedLength > maximumResponseBytes) {
+                throw IOException(
+                    "HTTP response Content-Length $bufferedLength exceeds the " +
+                        "$maximumResponseBytes-byte limit",
+                )
+            }
+            val stream = responseStream(connection, status)
+            if (stream == null) {
+                if (declaredLength != null && declaredLength != 0L) {
+                    throw IOException(
+                        "HTTP response ended before its $declaredLength-byte Content-Length",
+                    )
                 }
+                return ByteArray(0)
+            }
+            return stream.use { input ->
+                readBoundedBody(input, maximumResponseBytes, bufferedLength)
             }
         }
+
+        internal fun readBoundedBody(
+            input: InputStream,
+            maximumResponseBytes: Long,
+            declaredLength: Long?,
+        ): ByteArray {
+            require(maximumResponseBytes in 1..Int.MAX_VALUE.toLong()) {
+                "maximumResponseBytes must be between 1 and ${Int.MAX_VALUE}"
+            }
+            val initialCapacity = minOf(declaredLength ?: 32L, maximumResponseBytes, 8192L).toInt()
+            ByteArrayOutputStream(initialCapacity).use { buffer ->
+                val chunk = ByteArray(8192)
+                var total = 0L
+                while (true) {
+                    val remaining = maximumResponseBytes - total
+                    val requested = minOf(chunk.size.toLong(), remaining + 1L).toInt()
+                    val read = input.read(chunk, 0, requested)
+                    if (read == -1) break
+                    if (read < -1 || read > requested) {
+                        throw IOException("HTTP response body stream returned an invalid read count")
+                    }
+                    if (read == 0) {
+                        throw IOException("HTTP response body stream made no read progress")
+                    }
+                    if (read.toLong() > remaining) {
+                        throw IOException(
+                            "HTTP response body exceeds the $maximumResponseBytes-byte limit",
+                        )
+                    }
+                    buffer.write(chunk, 0, read)
+                    total += read.toLong()
+                }
+                if (declaredLength != null && total != declaredLength) {
+                    throw IOException(
+                        "HTTP response body length $total does not match Content-Length " +
+                            declaredLength,
+                    )
+                }
+                return buffer.toByteArray()
+            }
+        }
+
+        private fun canonicalContentLength(raw: Map<String?, List<String>?>?): Long? {
+            if (raw == null) return null
+            var value: String? = null
+            for ((name, values) in raw) {
+                if (name == null || !name.equals("Content-Length", ignoreCase = true)) continue
+                if (value != null || values == null || values.size != 1) {
+                    throw IOException(
+                        "HTTP response must contain at most one Content-Length value",
+                    )
+                }
+                value = values[0]
+            }
+            return value?.let(::parseCanonicalContentLength)
+        }
+
+        internal fun parseCanonicalContentLength(value: String): Long {
+            if (value.isEmpty() || (value.length > 1 && value[0] == '0')) {
+                throw IOException(
+                    "HTTP response Content-Length must be a canonical unsigned decimal",
+                )
+            }
+            var parsed = 0L
+            for (character in value) {
+                if (character !in '0'..'9') {
+                    throw IOException(
+                        "HTTP response Content-Length must be a canonical unsigned decimal",
+                    )
+                }
+                val digit = character.code - '0'.code
+                if (parsed > (Long.MAX_VALUE - digit) / 10L) {
+                    throw IOException("HTTP response Content-Length exceeds the supported range")
+                }
+                parsed = parsed * 10L + digit
+            }
+            return parsed
+        }
+
+        internal fun contentLengthForBufferedBody(
+            raw: Map<String?, List<String>?>?,
+            declaredLength: Long?,
+        ): Long? {
+            if (declaredLength == null || raw == null) return declaredLength
+            for ((name, values) in raw) {
+                if (name == null || !name.equals("Content-Encoding", ignoreCase = true)) continue
+                if (values == null || values.isEmpty()) return null
+                for (value in values) {
+                    val encodings = value.split(',')
+                    if (encodings.any { !it.trim().equals("identity", ignoreCase = true) }) {
+                        return null
+                    }
+                }
+            }
+            return declaredLength
+        }
+
+        private fun rejectAmbiguousFraming(
+            raw: Map<String?, List<String>?>?,
+            declaredLength: Long?,
+        ) {
+            if (declaredLength == null || raw == null) return
+            val hasTransferEncoding = raw.keys.any { name ->
+                name != null && name.equals("Transfer-Encoding", ignoreCase = true)
+            }
+            if (hasTransferEncoding) {
+                throw IOException(
+                    "HTTP response must not combine Content-Length with Transfer-Encoding",
+                )
+            }
+        }
+
+        private fun responseMustNotHaveBody(requestMethod: String, status: Int): Boolean =
+            requestMethod.equals("HEAD", ignoreCase = true) ||
+                status in 100..199 ||
+                status == HttpURLConnection.HTTP_NO_CONTENT ||
+                status == HttpURLConnection.HTTP_NOT_MODIFIED
 
         private fun responseStream(connection: HttpURLConnection, status: Int): InputStream? {
             if (status >= 400) {
@@ -151,7 +324,7 @@ class UrlConnectionTransportExecutor(
             val out = LinkedHashMap<String, List<String>>()
             for ((key, value) in raw) {
                 if (key == null) continue
-                out[key] = value?.toList() ?: emptyList()
+                out[key] = value.toList()
             }
             return out
         }

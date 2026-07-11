@@ -1,4 +1,4 @@
-import { Buffer } from "node:buffer";
+import { Buffer } from "buffer";
 import { blake3 } from "@noble/hashes/blake3";
 import { sha256 } from "@noble/hashes/sha2";
 import {
@@ -20,9 +20,20 @@ import {
   normalizeAssetId,
 } from "./normalizers.js";
 import { getNativeBinding } from "./native.js";
+import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
 
 const ALIGNMENT = 16;
 const COMPACT_LEN_FLAG = 0x02;
+const NORITO_FRAME_HEADER_LENGTH = 40;
+const NORITO_MAX_HEADER_PADDING = 64;
+const NORITO_PACKED_SEQ_FLAG = 0x01;
+const NORITO_PACKED_STRUCT_FLAG = 0x04;
+const NORITO_FIELD_BITSET_FLAG = 0x20;
+const NORITO_SUPPORTED_HEADER_FLAGS =
+  NORITO_PACKED_SEQ_FLAG |
+  COMPACT_LEN_FLAG |
+  NORITO_PACKED_STRUCT_FLAG |
+  NORITO_FIELD_BITSET_FLAG;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 const CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
@@ -71,6 +82,9 @@ const MULTISIG_CONTRACT_CALL_APPROVE_DTO_SCHEMA_HASH = schemaHashForTypeName(
 );
 const OPEN_VERIFY_ENVELOPE_SCHEMA_HASH = schemaHashForTypeName(
   "iroha_data_model::zk::OpenVerifyEnvelope",
+);
+const EVENT_FILTER_BOX_SCHEMA_HASH = schemaHashForTypeName(
+  "iroha_data_model::events::model::EventFilterBox",
 );
 const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = schemaHashForTypeName(
   "alloc::vec::Vec<alloc::vec::Vec<u8>>",
@@ -270,7 +284,7 @@ let noritoLengthFlags = 0;
 let forcePureJsInstructionCodec = false;
 
 class BufferReader {
-  constructor(buffer, context, lengthFlags = 0) {
+  constructor(buffer, context, lengthFlags = noritoLengthFlags) {
     this.buffer = buffer;
     this.context = context;
     this.lengthFlags = lengthFlags;
@@ -460,7 +474,10 @@ function encodeNormalizedInstruction(normalized) {
 function isPureJsUnsupportedInstructionError(error) {
   const message =
     error && typeof error.message === "string" ? error.message : String(error ?? "");
-  return message.startsWith("Internal Norito canonicalization supports ");
+  return (
+    message.startsWith("Internal Norito canonicalization supports ") ||
+    message.startsWith("Internal Norito decoder does not support ")
+  );
 }
 
 function cacheInstructionRoundTrip(bytes, instruction) {
@@ -1060,7 +1077,10 @@ export function noritoDecodeInstruction(bytes, options = {}) {
     try {
       const decoded = decodePureJsInstruction(buffer);
       return options.parseJson === false ? JSON.stringify(decoded) : decoded;
-    } catch {
+    } catch (fallbackError) {
+      if (!isPureJsUnsupportedInstructionError(fallbackError)) {
+        throw fallbackError;
+      }
       throw error;
     }
   }
@@ -1352,6 +1372,12 @@ function encodePureJsInstructionPayload(instruction) {
 
 function decodePureJsInstruction(buffer) {
   const { wireId, payload, innerFlags } = decodeInstructionEnvelope(buffer);
+  return withNoritoLengthFlags(innerFlags, () =>
+    decodePureJsInstructionPayload(wireId, payload, innerFlags, buffer),
+  );
+}
+
+function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstruction) {
   switch (wireId) {
     case "iroha.mint":
       return { Mint: decodeMintPayload(payload) };
@@ -1416,7 +1442,7 @@ function decodePureJsInstruction(buffer) {
     case "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey":
       return decodeVerifyingKeyInstructionPayload(wireId, payload);
     default:
-      const cached = getCachedInstruction(buffer);
+      const cached = getCachedInstruction(framedInstruction);
       if (cached !== null) {
         return cached;
       }
@@ -1438,6 +1464,7 @@ function decodeInstructionEnvelope(bytes) {
   const innerReader = new BufferReader(
     innerField,
     "instruction.outer.inner",
+    0,
   );
   const innerBytes = readNoritoField(innerReader, "frame");
   innerReader.assertEof();
@@ -3461,6 +3488,12 @@ function encodeSocialInstruction(instruction) {
 }
 
 function encodeSmartContractInstruction(instruction) {
+  return withNoritoCompactLengths(() =>
+    encodeSmartContractInstructionCompact(instruction),
+  );
+}
+
+function encodeSmartContractInstructionCompact(instruction) {
   if (isPlainObject(instruction.RegisterSmartContractCode)) {
     return encodeInstructionEnvelope(
       "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode",
@@ -5130,11 +5163,10 @@ function decodeCouncilDerivationKindValue(payload, context) {
 }
 
 function encodeVotingModeValue(value, context) {
-  const normalized = assertNonEmptyString(value, context).toLowerCase();
-  if (normalized === "zk") {
+  if (value === "Zk") {
     return encodeEnumTagValue(0);
   }
-  if (normalized === "plain") {
+  if (value === "Plain") {
     return encodeEnumTagValue(1);
   }
   throw new Error(`${context} must be Zk or Plain`);
@@ -5883,7 +5915,21 @@ function encodeContractManifestValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
+  assertOnlyObjectKeys(value, [
+    "seiyaku_name",
+    "code_hash",
+    "abi_hash",
+    "compiler_fingerprint",
+    "features_bitmap",
+    "access_set_hints",
+    "entrypoints",
+    "states",
+    "error_codes",
+    "kotoba",
+    "provenance",
+  ], context);
   return encodeStructValue([
+    [encodeOptionValue(value.seiyaku_name, encodeNoritoStringValue, `${context}.seiyaku_name`)],
     [encodeOptionValue(value.code_hash, encodeHashValue, `${context}.code_hash`)],
     [encodeOptionValue(value.abi_hash, encodeHashValue, `${context}.abi_hash`)],
     [encodeOptionValue(value.compiler_fingerprint, encodeNoritoStringValue, `${context}.compiler_fingerprint`)],
@@ -5894,6 +5940,20 @@ function encodeContractManifestValue(value, context) {
         value.entrypoints ?? null,
         encodeEntrypointDescriptorsValue,
         `${context}.entrypoints`,
+      ),
+    ],
+    [
+      encodeOptionValue(
+        value.states ?? null,
+        encodeStateDescriptorsValue,
+        `${context}.states`,
+      ),
+    ],
+    [
+      encodeOptionValue(
+        value.error_codes ?? null,
+        encodeContractErrorCodeDescriptorsValue,
+        `${context}.error_codes`,
       ),
     ],
     [
@@ -5915,71 +5975,87 @@ function encodeContractManifestValue(value, context) {
 
 function decodeContractManifestValue(payload, context) {
   const fields = decodeStructFields(payload, context, [
+    "seiyaku_name",
     "code_hash",
     "abi_hash",
     "compiler_fingerprint",
     "features_bitmap",
     "access_set_hints",
     "entrypoints",
+    "states",
+    "error_codes",
     "kotoba",
     "provenance",
   ]);
-  const decoded = {
+  return {
+    seiyaku_name: decodeOptionValue(
+      fields.seiyaku_name,
+      decodeStringValue,
+      `${context}.seiyaku_name`,
+    ),
+    code_hash: decodeOptionValue(
+      fields.code_hash,
+      decodeHashValue,
+      `${context}.code_hash`,
+    ),
+    abi_hash: decodeOptionValue(
+      fields.abi_hash,
+      decodeHashValue,
+      `${context}.abi_hash`,
+    ),
+    compiler_fingerprint: decodeOptionValue(
+      fields.compiler_fingerprint,
+      decodeStringValue,
+      `${context}.compiler_fingerprint`,
+    ),
+    features_bitmap: decodeOptionValue(
+      fields.features_bitmap,
+      decodeU64NumberValue,
+      `${context}.features_bitmap`,
+    ),
+    access_set_hints: decodeOptionValue(
+      fields.access_set_hints,
+      decodeAccessSetHintsValue,
+      `${context}.access_set_hints`,
+    ),
     entrypoints: decodeOptionValue(
       fields.entrypoints,
       decodeEntrypointDescriptorsValue,
       `${context}.entrypoints`,
+    ),
+    states: decodeOptionValue(
+      fields.states,
+      decodeStateDescriptorsValue,
+      `${context}.states`,
+    ),
+    error_codes: decodeOptionValue(
+      fields.error_codes,
+      decodeContractErrorCodeDescriptorsValue,
+      `${context}.error_codes`,
     ),
     kotoba: decodeOptionValue(
       fields.kotoba,
       decodeKotobaTranslationEntriesValue,
       `${context}.kotoba`,
     ),
+    provenance: decodeOptionValue(
+      fields.provenance,
+      decodeManifestProvenanceValue,
+      `${context}.provenance`,
+    ),
   };
-  const code_hash = decodeOptionValue(fields.code_hash, decodeHashValue, `${context}.code_hash`);
-  const abi_hash = decodeOptionValue(fields.abi_hash, decodeHashValue, `${context}.abi_hash`);
-  const compiler_fingerprint = decodeOptionValue(
-    fields.compiler_fingerprint,
-    decodeStringValue,
-    `${context}.compiler_fingerprint`,
-  );
-  const features_bitmap = decodeOptionValue(
-    fields.features_bitmap,
-    decodeU64NumberValue,
-    `${context}.features_bitmap`,
-  );
-  const access_set_hints = decodeOptionValue(
-    fields.access_set_hints,
-    decodeAccessSetHintsValue,
-    `${context}.access_set_hints`,
-  );
-  const provenance = decodeOptionValue(
-    fields.provenance,
-    decodeManifestProvenanceValue,
-    `${context}.provenance`,
-  );
-  if (code_hash !== null) {
-    decoded.code_hash = code_hash;
-  }
-  if (abi_hash !== null) {
-    decoded.abi_hash = abi_hash;
-  }
-  if (compiler_fingerprint !== null) {
-    decoded.compiler_fingerprint = compiler_fingerprint;
-  }
-  if (features_bitmap !== null) {
-    decoded.features_bitmap = features_bitmap;
-  }
-  if (access_set_hints !== null) {
-    decoded.access_set_hints = access_set_hints;
-  }
-  if (provenance !== null) {
-    decoded.provenance = provenance;
-  }
-  return decoded;
 }
 
 function encodeAccessSetHintsValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(value, [
+    "read_keys",
+    "write_keys",
+    "dynamic_reads",
+    "dynamic_writes",
+  ], context);
   return encodeStructValue([
     [encodeNoritoVec(value.read_keys ?? [], (entry, index) =>
       encodeNoritoStringValue(assertNonEmptyString(entry, `${context}.read_keys[${index}]`)),
@@ -5997,41 +6073,35 @@ function encodeAccessSetHintsValue(value, context) {
 }
 
 function decodeAccessSetHintsValue(payload, context) {
-  const reader = new BufferReader(payload, context);
-  const read_keys = readNoritoField(reader, "read_keys");
-  const write_keys = readNoritoField(reader, "write_keys");
-  const dynamic_reads =
-    reader.offset < reader.buffer.length ? readNoritoField(reader, "dynamic_reads") : null;
-  const dynamic_writes =
-    reader.offset < reader.buffer.length ? readNoritoField(reader, "dynamic_writes") : null;
-  reader.assertEof();
+  const fields = decodeStructFields(payload, context, [
+    "read_keys",
+    "write_keys",
+    "dynamic_reads",
+    "dynamic_writes",
+  ]);
   return {
     read_keys: decodeNoritoVec(
-      read_keys,
+      fields.read_keys,
       (entry, index) => decodeStringValue(entry, `${context}.read_keys[${index}]`),
       `${context}.read_keys`,
     ),
     write_keys: decodeNoritoVec(
-      write_keys,
+      fields.write_keys,
       (entry, index) => decodeStringValue(entry, `${context}.write_keys[${index}]`),
       `${context}.write_keys`,
     ),
-    dynamic_reads:
-      dynamic_reads === null
-        ? []
-        : decodeNoritoVec(
-            dynamic_reads,
-            (entry, index) => decodeDynamicAccessHintValue(entry, `${context}.dynamic_reads[${index}]`),
-            `${context}.dynamic_reads`,
-          ),
-    dynamic_writes:
-      dynamic_writes === null
-        ? []
-        : decodeNoritoVec(
-            dynamic_writes,
-            (entry, index) => decodeDynamicAccessHintValue(entry, `${context}.dynamic_writes[${index}]`),
-            `${context}.dynamic_writes`,
-          ),
+    dynamic_reads: decodeNoritoVec(
+      fields.dynamic_reads,
+      (entry, index) =>
+        decodeDynamicAccessHintValue(entry, `${context}.dynamic_reads[${index}]`),
+      `${context}.dynamic_reads`,
+    ),
+    dynamic_writes: decodeNoritoVec(
+      fields.dynamic_writes,
+      (entry, index) =>
+        decodeDynamicAccessHintValue(entry, `${context}.dynamic_writes[${index}]`),
+      `${context}.dynamic_writes`,
+    ),
   };
 }
 
@@ -6039,6 +6109,7 @@ function encodeDynamicAccessHintValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
+  assertOnlyObjectKeys(value, ["base_key", "key_type", "bound_kind", "max_keys"], context);
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.base_key, `${context}.base_key`))],
     [encodeNoritoStringValue(assertNonEmptyString(value.key_type, `${context}.key_type`))],
@@ -6083,12 +6154,23 @@ function encodeEntrypointDescriptorValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
+  assertOnlyObjectKeys(value, [
+    "name",
+    "kind",
+    "params",
+    "argument_schema",
+    "return_type",
+    "return_schema",
+    "permission",
+    "read_keys",
+    "write_keys",
+    "access_hints_complete",
+    "access_hints_skipped",
+    "triggers",
+  ], context);
   const triggers = value.triggers ?? [];
   if (!Array.isArray(triggers)) {
     throw new TypeError(`${context}.triggers must be an array`);
-  }
-  if (triggers.length > 0) {
-    throw new Error(`${context}.triggers are not yet supported by the manifest codec`);
   }
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
@@ -6100,9 +6182,23 @@ function encodeEntrypointDescriptorValue(value, context) {
     ],
     [
       encodeOptionValue(
-        value.return_type ?? value.returnType ?? null,
+        value.argument_schema ?? null,
+        encodeEntrypointArgumentSchemaValue,
+        `${context}.argument_schema`,
+      ),
+    ],
+    [
+      encodeOptionValue(
+        value.return_type ?? null,
         encodeNoritoStringValue,
         `${context}.return_type`,
+      ),
+    ],
+    [
+      encodeOptionValue(
+        value.return_schema ?? null,
+        encodeEntrypointValueTypeValue,
+        `${context}.return_schema`,
       ),
     ],
     [
@@ -6113,14 +6209,14 @@ function encodeEntrypointDescriptorValue(value, context) {
       ),
     ],
     [
-      encodeNoritoVec(value.read_keys ?? value.readKeys ?? [], (entry, index) =>
+      encodeNoritoVec(value.read_keys ?? [], (entry, index) =>
         encodeNoritoStringValue(
           assertNonEmptyString(entry, `${context}.read_keys[${index}]`),
         ),
       ),
     ],
     [
-      encodeNoritoVec(value.write_keys ?? value.writeKeys ?? [], (entry, index) =>
+      encodeNoritoVec(value.write_keys ?? [], (entry, index) =>
         encodeNoritoStringValue(
           assertNonEmptyString(entry, `${context}.write_keys[${index}]`),
         ),
@@ -6128,23 +6224,25 @@ function encodeEntrypointDescriptorValue(value, context) {
     ],
     [
       encodeOptionValue(
-        value.access_hints_complete ?? value.accessHintsComplete ?? null,
+        value.access_hints_complete ?? null,
         encodeBoolValue,
         `${context}.access_hints_complete`,
       ),
     ],
     [
       encodeNoritoVec(
-        value.access_hints_skipped ?? value.accessHintsSkipped ?? [],
+        value.access_hints_skipped ?? [],
         (entry, index) =>
           encodeNoritoStringValue(
             assertNonEmptyString(entry, `${context}.access_hints_skipped[${index}]`),
           ),
       ),
     ],
-    [encodeNoritoVec(triggers, (entry, index) =>
-      encodeUnsupportedManifestTriggerValue(entry, `${context}.triggers[${index}]`),
-    )],
+    [
+      encodeNoritoVec(triggers, (entry, index) =>
+        encodeManifestTriggerDescriptorValue(entry, `${context}.triggers[${index}]`),
+      ),
+    ],
   ]);
 }
 
@@ -6153,7 +6251,9 @@ function decodeEntrypointDescriptorValue(payload, context) {
     "name",
     "kind",
     "params",
+    "argument_schema",
     "return_type",
+    "return_schema",
     "permission",
     "read_keys",
     "write_keys",
@@ -6169,10 +6269,20 @@ function decodeEntrypointDescriptorValue(payload, context) {
       (entry, index) => decodeEntrypointParamDescriptorValue(entry, `${context}.params[${index}]`),
       `${context}.params`,
     ),
+    argument_schema: decodeOptionValue(
+      fields.argument_schema,
+      decodeEntrypointArgumentSchemaValue,
+      `${context}.argument_schema`,
+    ),
     return_type: decodeOptionValue(
       fields.return_type,
       decodeStringValue,
       `${context}.return_type`,
+    ),
+    return_schema: decodeOptionValue(
+      fields.return_schema,
+      decodeEntrypointValueTypeValue,
+      `${context}.return_schema`,
     ),
     permission: decodeOptionValue(
       fields.permission,
@@ -6202,20 +6312,18 @@ function decodeEntrypointDescriptorValue(payload, context) {
     ),
     triggers: decodeNoritoVec(
       fields.triggers,
-      (entry, index) => decodeUnsupportedManifestTriggerValue(entry, `${context}.triggers[${index}]`),
+      (entry, index) =>
+        decodeManifestTriggerDescriptorValue(entry, `${context}.triggers[${index}]`),
       `${context}.triggers`,
     ),
   };
 }
 
 function encodeEntryPointKindValue(value, context) {
-  const kind =
-    typeof value === "string"
-      ? value
-      : value?.kind ?? value?.Kind ?? value?.variant ?? value?.tag;
+  const kind = typeof value === "string" ? value : value?.kind;
   const normalized = assertNonEmptyString(kind, context).toLowerCase();
   switch (normalized) {
-    case "public":
+    case "kotoage":
       return encodeEnumTagValue(0);
     case "view":
       return encodeEnumTagValue(1);
@@ -6224,7 +6332,7 @@ function encodeEntryPointKindValue(value, context) {
     case "kaizen":
       return encodeEnumTagValue(3);
     default:
-      throw new Error(`${context} must be Public, View, Hajimari, or Kaizen`);
+      throw new Error(`${context} must be Kotoage, View, Hajimari, or Kaizen`);
   }
 }
 
@@ -6234,7 +6342,7 @@ function decodeEntryPointKindValue(payload, context) {
   reader.assertEof();
   switch (tag) {
     case 0:
-      return { kind: "Public", value: null };
+      return { kind: "Kotoage", value: null };
     case 1:
       return { kind: "View", value: null };
     case 2:
@@ -6250,9 +6358,10 @@ function encodeEntrypointParamDescriptorValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
+  assertOnlyObjectKeys(value, ["name", "type_name"], context);
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.type_name ?? value.typeName, `${context}.type_name`))],
+    [encodeNoritoStringValue(assertNonEmptyString(value.type_name, `${context}.type_name`))],
   ]);
 }
 
@@ -6261,6 +6370,344 @@ function decodeEntrypointParamDescriptorValue(payload, context) {
   return {
     name: decodeStringValue(fields.name, `${context}.name`),
     type_name: decodeStringValue(fields.type_name, `${context}.type_name`),
+  };
+}
+
+function encodeEntrypointArgumentSchemaValue(value, context) {
+  if (!isPlainObject(value) || !Array.isArray(value.fields)) {
+    throw new TypeError(`${context} must contain a fields array`);
+  }
+  assertOnlyObjectKeys(value, ["fields"], context);
+  return encodeStructValue([
+    [
+      encodeNoritoVec(value.fields, (field, index) =>
+        encodeEntrypointArgumentFieldValue(field, `${context}.fields[${index}]`),
+      ),
+    ],
+  ]);
+}
+
+function decodeEntrypointArgumentSchemaValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["fields"]);
+  return {
+    fields: decodeNoritoVec(
+      fields.fields,
+      (field, index) =>
+        decodeEntrypointArgumentFieldValue(field, `${context}.fields[${index}]`),
+      `${context}.fields`,
+    ),
+  };
+}
+
+function encodeEntrypointArgumentFieldValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(value, ["name", "ty"], context);
+  return encodeStructValue([
+    [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
+    [encodeEntrypointValueTypeValue(value.ty, `${context}.ty`)],
+  ]);
+}
+
+function decodeEntrypointArgumentFieldValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["name", "ty"]);
+  return {
+    name: decodeStringValue(fields.name, `${context}.name`),
+    ty: decodeEntrypointValueTypeValue(fields.ty, `${context}.ty`),
+  };
+}
+
+function encodeEntrypointValueTypeValue(value, context) {
+  if (!isPlainObject(value) || !Array.isArray(value.nodes)) {
+    throw new TypeError(`${context} must contain a nodes array`);
+  }
+  assertOnlyObjectKeys(value, ["nodes"], context);
+  analyzeEntrypointValueTypeV1(value, context);
+  return encodeStructValue([
+    [
+      encodeNoritoVec(value.nodes, (node, index) =>
+        encodeEntrypointValueTypeNodeValue(node, `${context}.nodes[${index}]`),
+      ),
+    ],
+  ]);
+}
+
+function decodeEntrypointValueTypeValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["nodes"]);
+  const value = {
+    nodes: decodeNoritoVec(
+      fields.nodes,
+      (node, index) =>
+        decodeEntrypointValueTypeNodeValue(node, `${context}.nodes[${index}]`),
+      `${context}.nodes`,
+    ),
+  };
+  analyzeEntrypointValueTypeV1(value, context);
+  return value;
+}
+
+function taggedEnumParts(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be a tagged object`);
+  }
+  assertOnlyObjectKeys(value, ["kind", "value"], context);
+  return {
+    kind: assertNonEmptyString(value.kind, `${context}.kind`),
+    value: value.value ?? null,
+  };
+}
+
+function encodeEntrypointValueTypeNodeValue(value, context) {
+  const tagged = taggedEnumParts(value, context);
+  switch (tagged.kind) {
+    case "Struct":
+      return encodeEnumTagValue(0, () =>
+        encodeEntrypointStructTypeNodeValue(tagged.value, `${context}.value`),
+      );
+    case "Tuple":
+      return encodeEnumTagValue(1, () =>
+        encodeU16Value(tagged.value, `${context}.value`),
+      );
+    case "Option":
+      requireNullEnumPayload(tagged.value, context);
+      return encodeEnumTagValue(2);
+    case "Result":
+      requireNullEnumPayload(tagged.value, context);
+      return encodeEnumTagValue(3);
+    case "List":
+      return encodeEnumTagValue(4, () =>
+        encodeEntrypointListTypeNodeValue(tagged.value, `${context}.value`),
+      );
+    case "Leaf":
+      return encodeEnumTagValue(5, () =>
+        encodeEntrypointValueKindValue(tagged.value, `${context}.value`),
+      );
+    default:
+      throw new Error(`${context}.kind uses unsupported value-type node ${tagged.kind}`);
+  }
+}
+
+function decodeEntrypointValueTypeNodeValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("tag");
+  switch (tag) {
+    case 0:
+      return {
+        kind: "Struct",
+        value: decodeEntrypointStructTypeNodeValue(
+          readSingleEnumPayload(reader, context),
+          `${context}.value`,
+        ),
+      };
+    case 1:
+      return {
+        kind: "Tuple",
+        value: decodeU16Value(readSingleEnumPayload(reader, context), `${context}.value`),
+      };
+    case 2:
+      reader.assertEof();
+      return { kind: "Option", value: null };
+    case 3:
+      reader.assertEof();
+      return { kind: "Result", value: null };
+    case 4:
+      return {
+        kind: "List",
+        value: decodeEntrypointListTypeNodeValue(
+          readSingleEnumPayload(reader, context),
+          `${context}.value`,
+        ),
+      };
+    case 5:
+      return {
+        kind: "Leaf",
+        value: decodeEntrypointValueKindValue(
+          readSingleEnumPayload(reader, context),
+          `${context}.value`,
+        ),
+      };
+    default:
+      throw new Error(`${context} uses unsupported value-type node tag ${tag}`);
+  }
+}
+
+function readSingleEnumPayload(reader, context) {
+  const value = readNoritoField(reader, "value");
+  reader.assertEof();
+  return value;
+}
+
+function requireNullEnumPayload(value, context) {
+  if (value !== null && value !== undefined) {
+    throw new TypeError(`${context}.value must be null for a unit variant`);
+  }
+}
+
+function encodeEntrypointStructTypeNodeValue(value, context) {
+  if (!isPlainObject(value) || !Array.isArray(value.fields)) {
+    throw new TypeError(`${context} must contain a fields array`);
+  }
+  assertOnlyObjectKeys(value, ["name", "fields"], context);
+  return encodeStructValue([
+    [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
+    [
+      encodeNoritoVec(value.fields, (field, index) =>
+        encodeNoritoStringValue(
+          assertNonEmptyString(field, `${context}.fields[${index}]`),
+        ),
+      ),
+    ],
+  ]);
+}
+
+function decodeEntrypointStructTypeNodeValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["name", "fields"]);
+  return {
+    name: decodeStringValue(fields.name, `${context}.name`),
+    fields: decodeNoritoVec(
+      fields.fields,
+      (field, index) => decodeStringValue(field, `${context}.fields[${index}]`),
+      `${context}.fields`,
+    ),
+  };
+}
+
+function encodeEntrypointListTypeNodeValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(value, ["capacity"], context);
+  return encodeStructValue([
+    [encodeU8Value(value.capacity, `${context}.capacity`)],
+  ]);
+}
+
+function decodeEntrypointListTypeNodeValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["capacity"]);
+  return {
+    capacity: decodeU8Value(fields.capacity, `${context}.capacity`),
+  };
+}
+
+const ENTRYPOINT_VALUE_KIND_NAMES = Object.freeze([
+  "Int",
+  "Decimal",
+  "Quantity",
+  "Bool",
+  "String",
+  "Json",
+  "Name",
+  "AccountId",
+  "AssetDefinitionId",
+  "AssetId",
+  "DomainId",
+  "NftId",
+  "DataSpaceId",
+  "Blob",
+]);
+
+function encodeEntrypointValueKindValue(value, context) {
+  const tagged = taggedEnumParts(value, context);
+  requireNullEnumPayload(tagged.value, context);
+  const tag = ENTRYPOINT_VALUE_KIND_NAMES.indexOf(tagged.kind);
+  if (tag < 0) {
+    throw new Error(`${context}.kind uses unsupported value kind ${tagged.kind}`);
+  }
+  return encodeEnumTagValue(tag);
+}
+
+function decodeEntrypointValueKindValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("tag");
+  reader.assertEof();
+  const kind = ENTRYPOINT_VALUE_KIND_NAMES[tag];
+  if (kind === undefined) {
+    throw new Error(`${context} uses unsupported value-kind tag ${tag}`);
+  }
+  return { kind, value: null };
+}
+
+function encodeStateDescriptorsValue(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return encodeNoritoVec(value, (entry, index) =>
+    encodeStateDescriptorValue(entry, `${context}[${index}]`),
+  );
+}
+
+function decodeStateDescriptorsValue(payload, context) {
+  return decodeNoritoVec(
+    payload,
+    (entry, index) => decodeStateDescriptorValue(entry, `${context}[${index}]`),
+    context,
+  );
+}
+
+function encodeStateDescriptorValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(value, ["name", "type_name"], context);
+  return encodeStructValue([
+    [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
+    [
+      encodeNoritoStringValue(
+        assertNonEmptyString(value.type_name, `${context}.type_name`),
+      ),
+    ],
+  ]);
+}
+
+function decodeStateDescriptorValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["name", "type_name"]);
+  return {
+    name: decodeStringValue(fields.name, `${context}.name`),
+    type_name: decodeStringValue(fields.type_name, `${context}.type_name`),
+  };
+}
+
+function encodeContractErrorCodeDescriptorsValue(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return encodeNoritoVec(value, (entry, index) =>
+    encodeContractErrorCodeDescriptorValue(entry, `${context}[${index}]`),
+  );
+}
+
+function decodeContractErrorCodeDescriptorsValue(payload, context) {
+  return decodeNoritoVec(
+    payload,
+    (entry, index) =>
+      decodeContractErrorCodeDescriptorValue(entry, `${context}[${index}]`),
+    context,
+  );
+}
+
+function encodeContractErrorCodeDescriptorValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(value, ["namespace", "name", "code"], context);
+  return encodeStructValue([
+    [
+      encodeNoritoStringValue(
+        assertNonEmptyString(value.namespace, `${context}.namespace`),
+      ),
+    ],
+    [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
+    [encodeU32Value(value.code, `${context}.code`)],
+  ]);
+}
+
+function decodeContractErrorCodeDescriptorValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["namespace", "name", "code"]);
+  return {
+    namespace: decodeStringValue(fields.namespace, `${context}.namespace`),
+    name: decodeStringValue(fields.name, `${context}.name`),
+    code: decodeU32Value(fields.code, `${context}.code`),
   };
 }
 
@@ -6285,8 +6732,9 @@ function encodeKotobaTranslationEntryValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
+  assertOnlyObjectKeys(value, ["msg_id", "translations"], context);
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.msg_id ?? value.msgId, `${context}.msg_id`))],
+    [encodeNoritoStringValue(assertNonEmptyString(value.msg_id, `${context}.msg_id`))],
     [
       encodeNoritoVec(value.translations ?? [], (entry, index) =>
         encodeKotobaTranslationValue(entry, `${context}.translations[${index}]`),
@@ -6311,9 +6759,10 @@ function encodeKotobaTranslationValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
+  assertOnlyObjectKeys(value, ["lang", "text"], context);
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.lang, `${context}.lang`))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.text, `${context}.text`))],
+    [encodeStringValue(value.text, `${context}.text`)],
   ]);
 }
 
@@ -6329,6 +6778,8 @@ function encodeManifestProvenanceValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
+  assertOnlyObjectKeys(value, ["signer", "signature"], context);
+  const signer = parsePublicKeyLiteral(value.signer, `${context}.signer`);
   const signatureLiteral = assertNonEmptyString(value.signature, `${context}.signature`);
   if (
     signatureLiteral.length % 2 !== 0 ||
@@ -6336,36 +6787,224 @@ function encodeManifestProvenanceValue(value, context) {
   ) {
     throw new Error(`${context}.signature must be an even-length hexadecimal string`);
   }
+  const signature = Buffer.from(signatureLiteral, "hex");
+  validateManifestSignatureBytes(signature, `${context}.signature`);
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.signer, `${context}.signer`))],
-    [
-      encodeNoritoVec(Array.from(Buffer.from(signatureLiteral, "hex")), (byte, index) =>
-        encodeU8Value(byte, `${context}.signature[${index}]`),
-      ),
-    ],
+    [encodePublicKeyValue(signer, `${context}.signer`)],
+    [encodeConstVecU8Value(signature)],
   ]);
 }
 
 function decodeManifestProvenanceValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["signer", "signature"]);
+  const signer = decodePublicKeyValue(fields.signer, `${context}.signer`);
+  const signature = decodeConstVecU8Value(fields.signature, `${context}.signature`);
+  validateManifestSignatureBytes(signature, `${context}.signature`);
   return {
-    signer: decodeStringValue(fields.signer, `${context}.signer`),
-    signature: Buffer.from(
-      decodeNoritoVec(
-        fields.signature,
-        (entry, index) => decodeU8Value(entry, `${context}.signature[${index}]`),
-        `${context}.signature`,
-      ),
-    ).toString("hex").toUpperCase(),
+    signer: publicKeyLiteralFromParts(
+      signer.curve,
+      signer.publicKey,
+      `${context}.signer`,
+    ),
+    signature: signature.toString("hex").toUpperCase(),
   };
 }
 
-function encodeUnsupportedManifestTriggerValue(_value, context) {
-  throw new Error(`${context} is not yet supported by the manifest codec`);
+function validateManifestSignatureBytes(signature, context) {
+  if (signature.length === 0) {
+    throw new Error(`${context} must not be empty`);
+  }
+  if (signature.every((byte) => byte === 0)) {
+    throw new Error(`${context} must not be all zero`);
+  }
 }
 
-function decodeUnsupportedManifestTriggerValue(_payload, context) {
-  throw new Error(`${context} is not yet supported by the manifest codec`);
+function encodeManifestTriggerDescriptorValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(value, [
+    "id",
+    "repeats",
+    "filter",
+    "authority",
+    "metadata",
+    "callback",
+  ], context);
+  return encodeStructValue([
+    [encodeTriggerIdValue(value.id, `${context}.id`)],
+    [encodeTriggerRepeatsValue(value.repeats, `${context}.repeats`)],
+    [encodeEventFilterBoxFramePayload(value.filter, `${context}.filter`)],
+    [
+      encodeOptionValue(
+        value.authority ?? null,
+        encodeAccountIdValue,
+        `${context}.authority`,
+      ),
+    ],
+    [encodeMetadataValue(value.metadata ?? {}, `${context}.metadata`)],
+    [encodeTriggerCallbackValue(value.callback, `${context}.callback`)],
+  ]);
+}
+
+function decodeManifestTriggerDescriptorValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "id",
+    "repeats",
+    "filter",
+    "authority",
+    "metadata",
+    "callback",
+  ]);
+  return {
+    id: decodeTriggerIdValue(fields.id, `${context}.id`),
+    repeats: decodeTriggerRepeatsValue(fields.repeats, `${context}.repeats`),
+    filter: decodeEventFilterBoxFramePayload(fields.filter, `${context}.filter`),
+    authority: decodeOptionValue(
+      fields.authority,
+      decodeAccountIdValue,
+      `${context}.authority`,
+    ),
+    metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
+    callback: decodeTriggerCallbackValue(fields.callback, `${context}.callback`),
+  };
+}
+
+function encodeTriggerIdValue(value, context) {
+  return encodeStructValue([
+    [encodeNameValue(assertNonEmptyString(value, context), `${context}.name`)],
+  ]);
+}
+
+function decodeTriggerIdValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["name"]);
+  return decodeNameValue(fields.name, `${context}.name`);
+}
+
+function encodeTriggerRepeatsValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(
+      `${context} must be {Indefinitely:null} or {Exactly:<u32>}`,
+    );
+  }
+  const keys = Object.keys(value);
+  if (keys.length !== 1) {
+    throw new TypeError(`${context} must contain exactly one repeat variant`);
+  }
+  if (keys[0] === "Indefinitely") {
+    requireNullEnumPayload(value.Indefinitely, context);
+    return encodeEnumTagValue(0);
+  }
+  if (keys[0] === "Exactly") {
+    return encodeEnumTagValue(1, () =>
+      encodeU32Value(value.Exactly, `${context}.Exactly`),
+    );
+  }
+  throw new Error(`${context} uses unsupported repeat variant ${keys[0]}`);
+}
+
+function decodeTriggerRepeatsValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("tag");
+  if (tag === 0) {
+    reader.assertEof();
+    return { Indefinitely: null };
+  }
+  if (tag === 1) {
+    return {
+      Exactly: decodeU32Value(
+        readSingleEnumPayload(reader, context),
+        `${context}.Exactly`,
+      ),
+    };
+  }
+  throw new Error(`${context} uses unsupported repeat tag ${tag}`);
+}
+
+function encodeTriggerCallbackValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(value, ["namespace", "entrypoint"], context);
+  return encodeStructValue([
+    [
+      encodeOptionValue(
+        value.namespace ?? null,
+        encodeNoritoStringValue,
+        `${context}.namespace`,
+      ),
+    ],
+    [
+      encodeNoritoStringValue(
+        assertNonEmptyString(value.entrypoint, `${context}.entrypoint`),
+      ),
+    ],
+  ]);
+}
+
+function decodeTriggerCallbackValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["namespace", "entrypoint"]);
+  return {
+    namespace: decodeOptionValue(
+      fields.namespace,
+      decodeStringValue,
+      `${context}.namespace`,
+    ),
+    entrypoint: decodeStringValue(fields.entrypoint, `${context}.entrypoint`),
+  };
+}
+
+function encodeEventFilterBoxFramePayload(value, context) {
+  const frameBytes = decodeExactStandardBase64(value, context);
+  const frame = decodeNoritoFrame(frameBytes, context, EVENT_FILTER_BOX_SCHEMA_HASH);
+  const expectedFlags = noritoLengthFlags & COMPACT_LEN_FLAG;
+  if (frame.flags !== expectedFlags) {
+    throw new Error(
+      `${context} uses Norito layout flags ${frame.flags}; expected ${expectedFlags}`,
+    );
+  }
+  const canonical = frameNoritoPayload(
+    frame.payload,
+    EVENT_FILTER_BOX_SCHEMA_HASH,
+    frame.flags,
+  );
+  if (!canonical.equals(frameBytes)) {
+    throw new Error(`${context} must be a canonical unpadded EventFilterBox frame`);
+  }
+  return frame.payload;
+}
+
+function decodeEventFilterBoxFramePayload(payload, _context) {
+  return frameNoritoPayload(
+    payload,
+    EVENT_FILTER_BOX_SCHEMA_HASH,
+    noritoLengthFlags & COMPACT_LEN_FLAG,
+  ).toString("base64");
+}
+
+function decodeExactStandardBase64(value, context) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.trim() !== value ||
+    value.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)
+  ) {
+    throw new TypeError(`${context} must be exact standard-base64`);
+  }
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.length === 0 || bytes.toString("base64") !== value) {
+    throw new TypeError(`${context} must be exact standard-base64`);
+  }
+  return bytes;
+}
+
+function assertOnlyObjectKeys(value, allowedKeys, context) {
+  const allowed = new Set(allowedKeys);
+  const unknown = Object.keys(value).find((key) => !allowed.has(key));
+  if (unknown !== undefined) {
+    throw new TypeError(`${context} contains unknown field ${unknown}`);
+  }
 }
 
 function encodeNumericValue(value, context) {
@@ -6478,7 +7117,7 @@ function encodeExactBase64StringValue(value, context) {
   return encodeNoritoStringValue(value);
 }
 
-function decodeStringValue(payload, context, lengthFlags = 0) {
+function decodeStringValue(payload, context, lengthFlags = noritoLengthFlags) {
   const reader = new BufferReader(payload, context, lengthFlags);
   const stringBytes = readNoritoField(reader, "value");
   reader.assertEof();
@@ -6568,45 +7207,139 @@ function schemaHashForTypeName(typeName) {
   return Buffer.from(digest.subarray(0, 16));
 }
 
-function decodeNoritoFrame(buffer, context, expectedSchemaHash) {
-  const reader = new BufferReader(buffer, context);
-  const magic = reader.readBytes(4, "magic").toString("ascii");
-  if (magic !== "NRT0") {
+/**
+ * Validate one canonical, uncompressed Norito v1 frame without decoding its payload.
+ *
+ * The schema can be bound either by its exact hash or by the Rust type name from
+ * which Norito derives that hash. The returned payload is a view over the input.
+ *
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @param {{
+ *   context?: string,
+ *   expectedSchemaHash?: ArrayBufferView | ArrayBuffer | Buffer,
+ *   expectedTypeName?: string,
+ *   expectedPaddingLength?: number,
+ *   requireNonEmptyPayload?: boolean,
+ * }} [options]
+ * @returns {{payload: Buffer, schemaHash: Buffer, flags: number}}
+ */
+export function validateNoritoFrame(bytes, options = {}) {
+  const context = options.context ?? "Norito frame";
+  const buffer = toBuffer(bytes);
+  if (buffer.length < NORITO_FRAME_HEADER_LENGTH) {
+    throw new Error(
+      `${context} is shorter than the ${NORITO_FRAME_HEADER_LENGTH}-byte Norito header`,
+    );
+  }
+  if (buffer.subarray(0, 4).toString("ascii") !== "NRT0") {
     throw new Error(`${context} is not an NRT0 frame`);
   }
-  const major = reader.readU8("versionMajor");
-  const minor = reader.readU8("versionMinor");
+  const major = buffer[4];
+  const minor = buffer[5];
   if (major !== 0 || minor !== 0) {
     throw new Error(`${context} uses unsupported NRT0 version ${major}.${minor}`);
   }
-  const schemaHash = reader.readBytes(16, "schemaHash");
-  if (expectedSchemaHash && !schemaHash.equals(expectedSchemaHash)) {
+
+  const schemaHash = buffer.subarray(6, 22);
+  if (schemaHash.every((byte) => byte === 0)) {
+    throw new Error(`${context} uses the reserved all-zero schema hash`);
+  }
+  let expectedSchemaHash = null;
+  if (options.expectedSchemaHash !== undefined) {
+    expectedSchemaHash = toBuffer(options.expectedSchemaHash);
+    if (expectedSchemaHash.length !== 16) {
+      throw new TypeError(`${context} expected schema hash must contain exactly 16 bytes`);
+    }
+  }
+  if (options.expectedTypeName !== undefined) {
+    if (
+      typeof options.expectedTypeName !== "string" ||
+      options.expectedTypeName.length === 0
+    ) {
+      throw new TypeError(`${context} expected Rust type name must be non-empty`);
+    }
+    const fromTypeName = schemaHashForTypeName(options.expectedTypeName);
+    if (expectedSchemaHash !== null && !expectedSchemaHash.equals(fromTypeName)) {
+      throw new TypeError(`${context} expected schema constraints contradict each other`);
+    }
+    expectedSchemaHash = fromTypeName;
+  }
+  if (expectedSchemaHash !== null && !schemaHash.equals(expectedSchemaHash)) {
     throw new Error(`${context} schema hash did not match the expected type`);
   }
-  reader.readU8("reserved");
+
+  const compression = buffer[22];
+  if (compression !== 0) {
+    throw new Error(`${context} must use uncompressed Norito payload encoding`);
+  }
   const payloadLength = bigintToSafeNumber(
-    reader.readU64LE("payloadLength"),
+    buffer.readBigUInt64LE(23),
     `${context}.payloadLength`,
   );
-  const expectedCrc = reader.readU64LE("payloadCrc");
-  const flags = reader.readU8("flags");
-  const paddingLength = reader.buffer.length - reader.offset - payloadLength;
+  if (options.requireNonEmptyPayload === true && payloadLength === 0) {
+    throw new Error(`${context} must contain a non-empty Norito payload`);
+  }
+  const expectedCrc = buffer.readBigUInt64LE(31);
+  const flags = buffer[39];
+  if ((flags & ~NORITO_SUPPORTED_HEADER_FLAGS) !== 0) {
+    throw new Error(`${context} uses unsupported Norito header flags 0x${flags.toString(16)}`);
+  }
+  if (
+    (flags & NORITO_FIELD_BITSET_FLAG) !== 0 &&
+    (flags & (NORITO_PACKED_STRUCT_FLAG | COMPACT_LEN_FLAG)) !==
+      (NORITO_PACKED_STRUCT_FLAG | COMPACT_LEN_FLAG)
+  ) {
+    throw new Error(`${context} uses an invalid Norito header flag combination`);
+  }
+
+  const paddingLength = buffer.length - NORITO_FRAME_HEADER_LENGTH - payloadLength;
   if (paddingLength < 0) {
     throw new Error(`${context} payload length exceeds the available frame bytes`);
   }
-  if (paddingLength > 0) {
-    const padding = reader.readBytes(paddingLength, "padding");
-    if (padding.some((byte) => byte !== 0)) {
-      throw new Error(`${context} contains non-zero alignment padding`);
+  if (paddingLength > NORITO_MAX_HEADER_PADDING) {
+    throw new Error(
+      `${context} exceeds the ${NORITO_MAX_HEADER_PADDING}-byte Norito header-padding bound`,
+    );
+  }
+  if (options.expectedPaddingLength !== undefined) {
+    if (
+      !Number.isInteger(options.expectedPaddingLength) ||
+      options.expectedPaddingLength < 0 ||
+      options.expectedPaddingLength > NORITO_MAX_HEADER_PADDING
+    ) {
+      throw new TypeError(
+        `${context} expected padding length must be an integer from 0 through ${NORITO_MAX_HEADER_PADDING}`,
+      );
+    }
+    if (paddingLength !== options.expectedPaddingLength) {
+      throw new Error(
+        `${context} must contain exactly ${options.expectedPaddingLength} bytes of header padding`,
+      );
     }
   }
-  const payload = reader.readBytes(payloadLength, "payload");
-  reader.assertEof();
+  const payloadStart = NORITO_FRAME_HEADER_LENGTH + paddingLength;
+  const padding = buffer.subarray(NORITO_FRAME_HEADER_LENGTH, payloadStart);
+  if (padding.some((byte) => byte !== 0)) {
+    throw new Error(`${context} contains non-zero alignment padding or trailing bytes`);
+  }
+  const payload = buffer.subarray(payloadStart, payloadStart + payloadLength);
+  if (payload.length !== payloadLength || payloadStart + payload.length !== buffer.length) {
+    throw new Error(`${context} contains trailing bytes outside the declared payload`);
+  }
   const actualCrc = crc64Ecma(payload);
   if (actualCrc !== expectedCrc) {
     throw new Error(`${context} CRC64 mismatch`);
   }
   return { payload, schemaHash, flags };
+}
+
+function decodeNoritoFrame(buffer, context, expectedSchemaHash) {
+  if (buffer.length < NORITO_FRAME_HEADER_LENGTH) {
+    // Preserve the established decoder diagnostic while the exported preflight
+    // helper reports the more specific SCCP-facing short-header error.
+    throw new Error(`${context} reader overran payload while reading Norito header`);
+  }
+  return validateNoritoFrame(buffer, { context, expectedSchemaHash });
 }
 
 function frameNoritoPayload(payload, schemaHash, flags = 0, padding = 0) {

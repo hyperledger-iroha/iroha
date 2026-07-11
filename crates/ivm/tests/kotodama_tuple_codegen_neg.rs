@@ -5,9 +5,11 @@ fn compile_function_returning_fourteen_values_fails() {
     use ivm::kotodama::compiler::Compiler;
     // A function returning a 14-tuple. Codegen should reject with an error.
     let src = r#"
-        fn h(a:int,b:int,c:int,d:int,e:int,f:int,g:int,h:int,i:int,j:int,k:int,l:int,m:int,n:int)
-            -> (int,int,int,int,int,int,int,int,int,int,int,int,int,int) {
-            return (a,b,c,d,e,f,g,h,i,j,k,l,m,n);
+        seiyaku TooManyReturns {
+            fn h()
+                -> (int,int,int,int,int,int,int,int,int,int,int,int,int,int) {
+                return (1,2,3,4,5,6,7,8,9,10,11,12,13,14);
+            }
         }
     "#;
     let err = Compiler::new()
@@ -34,9 +36,11 @@ fn callmulti_with_fourteen_returns_fails() {
 fn compile_function_returning_thirteen_values_succeeds() {
     use ivm::kotodama::compiler::Compiler;
     let src = r#"
-        fn h(a:int,b:int,c:int,d:int,e:int,f:int,g:int,h:int,i:int,j:int,k:int,l:int,m:int)
-            -> (int,int,int,int,int,int,int,int,int,int,int,int,int) {
-            return (a,b,c,d,e,f,g,h,i,j,k,l,m);
+        seiyaku MaximumReturns {
+            fn h(int a,int b,int c,int d,int e,int f,int g,int eighth,int i,int j,int k,int l,int m)
+                -> (int,int,int,int,int,int,int,int,int,int,int,int,int) {
+                return (a,b,c,d,e,f,g,eighth,i,j,k,l,m);
+            }
         }
     "#;
     Compiler::new()

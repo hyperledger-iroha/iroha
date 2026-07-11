@@ -1,3 +1,5 @@
+//! End-to-end canonical domain registration from a Kotodama contract.
+
 use std::collections::HashMap;
 
 use iroha_crypto::PublicKey;
@@ -5,6 +7,7 @@ use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
 };
+mod common;
 
 fn account(domain: &str, public_key: &str) -> AccountId {
     let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
@@ -16,8 +19,10 @@ fn account(domain: &str, public_key: &str) -> AccountId {
 fn kotodama_register_domain_e2e() {
     // Compile a tiny Kotodama program that registers a domain via typed constructor.
     let src = r#"
-        fn main() {
-            register_domain(domain("e2e_domain.universal"));
+        seiyaku RegisterDomain {
+        kotoage fn main() authorize("RegisterDomain") {
+            ledger::domain::register(DomainId::parse("e2e_domain.universal"));
+        }
         }
     "#;
     let compiler = KotodamaCompiler::new();
@@ -38,6 +43,7 @@ fn kotodama_register_domain_e2e() {
 
     // Load and run
     vm.load_program(&program).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &program, "main");
     // Place a small INPUT TLV buffer to satisfy any pointer-ABI publish needs.
     vm.memory.preload_input(0, &[]).expect("preload input");
     vm.run().expect("register_domain should succeed");

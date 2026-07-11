@@ -25,6 +25,9 @@ use norito::{
 // note: no elegant way to associate it with generic `NoritoBody<T>`
 pub const NORITO_MIME_TYPE: &str = "application/x-norito";
 const JSON_MIME_TYPE: &str = "application/json";
+pub(crate) const MAX_ERROR_MESSAGE_CHARACTERS: usize = 1024;
+pub(crate) const MAX_ERROR_DETAIL_CHARACTERS: usize = 1024;
+pub(crate) const MAX_REJECT_CODE_BYTES: usize = 128;
 
 /// Bounded stable error code copied into response extensions for telemetry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,26 +70,76 @@ pub(crate) fn is_valid_error_code(code: &str) -> bool {
 /// characters so every first-party SDK observes the same finite contract.
 #[must_use]
 pub(crate) fn is_valid_error_message(message: &str) -> bool {
-    !message.is_empty()
-        && message.trim() == message
-        && !message.chars().any(char::is_control)
+    is_valid_bounded_public_text(message, MAX_ERROR_MESSAGE_CHARACTERS)
+}
+
+/// Return whether a public detail string is bounded exact text.
+#[must_use]
+pub(crate) fn is_valid_error_detail_text(value: &str) -> bool {
+    is_valid_bounded_public_text(value, MAX_ERROR_DETAIL_CHARACTERS)
+}
+
+/// Return whether a protocol/domain rejection identifier is safe to expose.
+#[must_use]
+pub(crate) fn is_valid_reject_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= MAX_REJECT_CODE_BYTES
+        && code.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':')
+        })
+}
+
+fn is_valid_bounded_public_text(value: &str, max_characters: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_characters.saturating_mul(4)
+        && value.trim() == value
+        && value.chars().take(max_characters + 1).count() <= max_characters
+        && !value.chars().any(char::is_control)
 }
 
 #[cfg(test)]
 mod public_error_grammar_tests {
-    use super::is_valid_error_message;
+    use super::{MAX_ERROR_MESSAGE_CHARACTERS, is_valid_error_message, is_valid_reject_code};
 
     #[test]
     fn error_messages_require_exact_non_control_text() {
-        for valid in ["invalid request", "再試行してください", "proof rejected: 42"] {
+        for valid in [
+            "invalid request",
+            "再試行してください",
+            "proof rejected: 42",
+        ] {
             assert!(is_valid_error_message(valid), "valid message: {valid:?}");
         }
-        for invalid in ["", " leading", "trailing ", "line\nbreak", "nul\0byte", "\u{85}"] {
+        for invalid in [
+            "",
+            " leading",
+            "trailing ",
+            "line\nbreak",
+            "nul\0byte",
+            "\u{85}",
+        ] {
             assert!(
                 !is_valid_error_message(invalid),
                 "invalid message: {invalid:?}"
             );
         }
+        assert!(!is_valid_error_message(
+            &"x".repeat(MAX_ERROR_MESSAGE_CHARACTERS + 1)
+        ));
+        assert!(is_valid_error_message(
+            &"界".repeat(MAX_ERROR_MESSAGE_CHARACTERS)
+        ));
+    }
+
+    #[test]
+    fn reject_codes_are_bounded_printable_identifiers() {
+        for valid in ["queue_full", "PRTRY:BAD", "ISO-20022.CODE"] {
+            assert!(is_valid_reject_code(valid), "valid code: {valid:?}");
+        }
+        for invalid in ["", " leading", "has/slash", "line\nbreak", "quote\""] {
+            assert!(!is_valid_reject_code(invalid), "invalid code: {invalid:?}");
+        }
+        assert!(!is_valid_reject_code(&"x".repeat(129)));
     }
 }
 
@@ -1374,12 +1427,16 @@ pub mod extractors {
     #[cfg(not(feature = "telemetry"))]
     fn record_norito_decode_failure(_: &'static str, _: &norito::Error) {}
 
+    #[derive(Clone, Copy, Debug)]
+    enum NoritoJsonFormat {
+        Json,
+        Norito,
+    }
+
     #[allow(clippy::result_large_err)]
-    fn decode_body_as_norito_or_json<T: JsonDeserializeOwned + SupportsNoritoDecode + 'static>(
-        body: &Bytes,
-        declared: Option<&str>,
-    ) -> Result<T, Response> {
-        let Some(ct) = declared else {
+    fn norito_json_format(headers: &axum::http::HeaderMap) -> Result<NoritoJsonFormat, Response> {
+        let mut content_types = headers.get_all(CONTENT_TYPE).iter();
+        let Some(value) = content_types.next() else {
             return Err(typed_request_rejection(
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "request_content_type_missing",
@@ -1389,20 +1446,56 @@ pub mod extractors {
                 ),
             ));
         };
-        if super::is_norito_media_type(ct) {
-            return decode_as_norito::<T>(body);
+        if content_types.next().is_some() {
+            return Err(typed_request_rejection(
+                StatusCode::BAD_REQUEST,
+                "request_content_type_invalid",
+                "Content-Type must appear exactly once.",
+            ));
         }
-        if super::is_json_media_type(ct) {
-            return decode_as_json::<T>(body);
+        let declared = value.to_str().map_err(|_| {
+            typed_request_rejection(
+                StatusCode::BAD_REQUEST,
+                "request_content_type_invalid",
+                "Content-Type is not valid ASCII.",
+            )
+        })?;
+        let declared = declared.trim();
+        if declared.is_empty() {
+            return Err(typed_request_rejection(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "request_content_type_missing",
+                format!(
+                    "missing Content-Type; use application/json or {}",
+                    super::NORITO_MIME_TYPE
+                ),
+            ));
+        }
+        if super::is_norito_media_type(declared) {
+            return Ok(NoritoJsonFormat::Norito);
+        }
+        if super::is_json_media_type(declared) {
+            return Ok(NoritoJsonFormat::Json);
         }
         Err(typed_request_rejection(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "request_content_type_unsupported",
             format!(
-                "unsupported Content-Type `{ct}`; use application/json or {}",
+                "unsupported Content-Type `{declared}`; use application/json or {}",
                 super::NORITO_MIME_TYPE
             ),
         ))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn decode_body_as_norito_or_json<T: JsonDeserializeOwned + SupportsNoritoDecode + 'static>(
+        body: &Bytes,
+        format: NoritoJsonFormat,
+    ) -> Result<T, Response> {
+        match format {
+            NoritoJsonFormat::Json => decode_as_json::<T>(body),
+            NoritoJsonFormat::Norito => decode_as_norito::<T>(body),
+        }
     }
 
     /// Extractor for request bodies supporting both Norito and JSON payloads.
@@ -1419,17 +1512,12 @@ pub mod extractors {
         type Rejection = Response;
 
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let content_type = req.headers().get(CONTENT_TYPE).cloned();
+            let format = norito_json_format(req.headers())?;
             let body = Bytes::from_request(req, state)
                 .await
                 .map_err(typed_body_rejection)?;
-            let declared = content_type
-                .as_ref()
-                .and_then(|hv| hv.to_str().ok())
-                .map(str::trim)
-                .filter(|ct| !ct.is_empty());
 
-            decode_body_as_norito_or_json::<T>(&body, declared).map(NoritoJson)
+            decode_body_as_norito_or_json::<T>(&body, format).map(NoritoJson)
         }
     }
 
@@ -1452,17 +1540,12 @@ pub mod extractors {
         type Rejection = Response;
 
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let content_type = req.headers().get(CONTENT_TYPE).cloned();
+            let format = norito_json_format(req.headers())?;
             let body = Bytes::from_request(req, state)
                 .await
                 .map_err(typed_body_rejection)?;
-            let declared = content_type
-                .as_ref()
-                .and_then(|hv| hv.to_str().ok())
-                .map(str::trim)
-                .filter(|ct| !ct.is_empty());
 
-            decode_body_as_norito_or_json::<T>(&body, declared)
+            decode_body_as_norito_or_json::<T>(&body, format)
                 .map(|value| NoritoJsonWithBytes { value, raw: body })
         }
     }
@@ -1560,19 +1643,36 @@ pub mod extractors {
     }
 
     fn decode_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
+        let pairs = query_pairs(query);
+        reject_duplicate_query_keys(&pairs)?;
         let mut object = json::Map::new();
-        for (key, value) in query_pairs(query) {
+        for (key, value) in pairs {
             object.insert(key, scalar_to_value(&value));
         }
         json::from_value(Value::Object(object))
     }
 
     fn decode_string_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
+        let pairs = query_pairs(query);
+        reject_duplicate_query_keys(&pairs)?;
         let mut object = json::Map::new();
-        for (key, value) in query_pairs(query) {
+        for (key, value) in pairs {
             object.insert(key, Value::String(value));
         }
         json::from_value(Value::Object(object))
+    }
+
+    fn reject_duplicate_query_keys(pairs: &[(String, String)]) -> Result<(), json::Error> {
+        // Structured query DTOs have exactly one value per field. Keep this
+        // check local to the DTO decoders so protocol-specific parsers can
+        // still define ordered or repeated-key semantics explicitly.
+        let mut seen = std::collections::BTreeSet::new();
+        for (key, _) in pairs {
+            if !seen.insert(key.as_str()) {
+                return Err(json::Error::duplicate_field(key));
+            }
+        }
+        Ok(())
     }
 
     fn query_pairs(query: &str) -> Vec<(String, String)> {
@@ -1673,6 +1773,70 @@ pub mod extractors {
             let envelope: iroha_torii_shared::ErrorEnvelope =
                 norito::json::from_slice(&bytes).expect("decode typed query error");
             assert_eq!(envelope.code(), "request_query_invalid");
+        }
+
+        #[tokio::test]
+        async fn duplicate_query_fields_are_rejected_before_deserialization() {
+            for query in [
+                "asset_definition_id=first&asset_definition_id=second",
+                "asset_definition_id=first&asset%5fdefinition%5fid=second",
+            ] {
+                let request = Request::builder()
+                    .uri(format!("/?{query}"))
+                    .body(())
+                    .expect("request");
+                let (mut parts, _) = request.into_parts();
+
+                let response = super::super::with_current_response_format(
+                    super::super::ResponseFormat::Json,
+                    NoritoQuery::<RequiredQueryForTest>::from_request_parts(&mut parts, &()),
+                )
+                .await
+                .expect_err("duplicate query field must fail");
+
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query={query}");
+                let bytes = response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("collect duplicate-query error")
+                    .to_bytes();
+                let envelope: iroha_torii_shared::ErrorEnvelope =
+                    norito::json::from_slice(&bytes).expect("decode duplicate-query error");
+                assert_eq!(envelope.code(), "request_query_invalid", "query={query}");
+                assert!(
+                    envelope.message().contains("duplicate field"),
+                    "query={query}, envelope={envelope:?}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn duplicate_string_query_fields_are_rejected_before_deserialization() {
+            let request = Request::builder()
+                .uri("/?asset_definition_id=first&asset_definition_id=second")
+                .body(())
+                .expect("request");
+            let (mut parts, _) = request.into_parts();
+
+            let response = super::super::with_current_response_format(
+                super::super::ResponseFormat::Json,
+                NoritoStringQuery::<RequiredQueryForTest>::from_request_parts(&mut parts, &()),
+            )
+            .await
+            .expect_err("duplicate string query field must fail");
+
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let bytes = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect duplicate string-query error")
+                .to_bytes();
+            let envelope: iroha_torii_shared::ErrorEnvelope =
+                norito::json::from_slice(&bytes).expect("decode duplicate string-query error");
+            assert_eq!(envelope.code(), "request_query_invalid");
+            assert!(envelope.message().contains("duplicate field"));
         }
 
         impl Version for Dummy {
@@ -2296,6 +2460,74 @@ pub mod extractors {
                 .await
                 .expect_err("missing content-type");
             assert_eq!(err.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        }
+
+        #[tokio::test]
+        async fn norito_json_rejects_invalid_content_type_before_body_collection() {
+            #[derive(
+                Clone,
+                Debug,
+                NoritoSerialize,
+                NoritoDeserialize,
+                crate::json_macros::JsonSerialize,
+                crate::json_macros::JsonDeserialize,
+            )]
+            struct Payload;
+
+            let mut duplicate = Request::builder()
+                .method("POST")
+                .body(Body::from("oversized"))
+                .expect("build duplicate-header request");
+            duplicate
+                .headers_mut()
+                .append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            duplicate.headers_mut().append(
+                CONTENT_TYPE,
+                HeaderValue::from_static(super::super::NORITO_MIME_TYPE),
+            );
+            DefaultBodyLimit::max(1).apply(&mut duplicate);
+            let duplicate_error = NoritoJson::<Payload>::from_request(duplicate, &())
+                .await
+                .expect_err("duplicate Content-Type must fail");
+            assert_eq!(duplicate_error.status(), StatusCode::BAD_REQUEST);
+
+            let mut non_ascii = Request::builder()
+                .method("POST")
+                .header(
+                    CONTENT_TYPE,
+                    HeaderValue::from_bytes(&[0x80]).expect("opaque header value"),
+                )
+                .body(Body::from("oversized"))
+                .expect("build non-ASCII-header request");
+            DefaultBodyLimit::max(1).apply(&mut non_ascii);
+            let non_ascii_error = NoritoJson::<Payload>::from_request(non_ascii, &())
+                .await
+                .expect_err("non-ASCII Content-Type must fail");
+            assert_eq!(non_ascii_error.status(), StatusCode::BAD_REQUEST);
+        }
+
+        #[tokio::test]
+        async fn norito_json_with_bytes_rejects_media_type_before_body_collection() {
+            #[derive(
+                Clone,
+                Debug,
+                NoritoSerialize,
+                NoritoDeserialize,
+                crate::json_macros::JsonSerialize,
+                crate::json_macros::JsonDeserialize,
+            )]
+            struct Payload;
+
+            let mut request = Request::builder()
+                .method("POST")
+                .header(CONTENT_TYPE, "text/plain")
+                .body(Body::from("oversized"))
+                .expect("build unsupported-media request");
+            DefaultBodyLimit::max(1).apply(&mut request);
+            let error = NoritoJsonWithBytes::<Payload>::from_request(request, &())
+                .await
+                .expect_err("unsupported Content-Type must fail");
+            assert_eq!(error.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
         }
 
         #[tokio::test]

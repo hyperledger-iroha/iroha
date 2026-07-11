@@ -18,7 +18,7 @@ summary: Operational plan for bringing the core Nexus validator cluster online b
 ## Network Environments
 - Operate two Nexus environments with distinct network prefixes:
 - **Sora Nexus (mainnet)** – production network prefix `nexus`, hosting canonical governance and SoraFS/SoraNet piggyback services (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Taira (testnet)** – staging network prefix `taira`, mirroring mainnet configuration for integration testing and pre-release validation (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Taira (testnet)** – staging network prefix `taira`, mirroring mainnet configuration for integration testing and pre-release validation (public Sumeragi-v2 chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`; the pre-v2 UUID is archived).
 - Maintain separate genesis files, governance keys, and infrastructure footprints for each environment. Taira acts as the proving ground for all SoraFS/SoraNet rollouts before promotion to Nexus.
 - CI/CD pipelines should deploy to Taira first, execute automated smoke tests, and require manual promotion to Nexus once checks pass.
 - Reference configuration bundles live under `configs/soranexus/nexus/` (mainnet) and `configs/soranexus/taira/` (testnet), each containing sample `config.toml`, `genesis.json`, and Torii admission directories.

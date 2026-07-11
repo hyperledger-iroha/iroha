@@ -28,7 +28,7 @@ description: Операционный план вывода базового к�
 ## Сетевые окружения
 - Эксплуатируйте два окружения Nexus с разными сетевыми префиксами:
 - **Sora Nexus (mainnet)** - префикс продакшн сети `nexus`, размещает каноническое управление и piggyback сервисы SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - префикс staging сети `testus`, зеркалирует mainnet конфигурацию для интеграционных тестов и pre-release валидации (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - префикс staging сети `testus`, зеркалирует mainnet конфигурацию для интеграционных тестов и pre-release валидации (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Держите отдельные genesis файлы, governance keys и инфраструктурные footprints для каждого окружения. Testus служит полигоном для всех rollouts SoraFS/SoraNet перед продвижением в Nexus.
 - CI/CD pipelines должны сначала деплоить в Testus, выполнять автоматические smoke tests и требовать ручной промоушн в Nexus после прохождения проверок.
 - Референсные конфигурационные bundles лежат в `configs/soranexus/nexus/` (mainnet) и `configs/soranexus/testus/` (testnet), каждая содержит образцы `config.toml`, `genesis.json` и каталоги admission Torii.

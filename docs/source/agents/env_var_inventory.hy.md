@@ -65,11 +65,11 @@ _Վերջին անգամ թարմացվել է `python3 scripts/inventory_env_to
 
 - թեստ՝ mochi/mochi-integration/tests/supervisor.rs:33 — `let kagami = env!("CARGO_BIN_EXE_kagami_mock");`
 
-## CARGO_BIN_EXE_koto_compile (թեստ՝ 3)
+## CARGO_BIN_EXE_koto build (թեստ՝ 3)
 
-- փորձարկում՝ crates/ivm/tests/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- փորձարկում՝ crates/ivm/tests/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- փորձարկում՝ crates/ivm/tests/cli_smoke.rs:88 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
+- փորձարկում՝ crates/ivm/tests/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto build");`
+- փորձարկում՝ crates/ivm/tests/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto build");`
+- փորձարկում՝ crates/ivm/tests/cli_smoke.rs:88 — `let bin = env!("CARGO_BIN_EXE_koto build");`
 
 ## CARGO_BIN_EXE_sorafs_chunk_dump (փորձարկում՝ 1)
 
@@ -653,7 +653,7 @@ _Վերջին անգամ թարմացվել է `python3 scripts/inventory_env_to
 
 ## LANG (թեստ՝ 3)
 
-- փորձարկում՝ crates/ivm/src/bin/koto_lint.rs:702 — `let previous = env::var("LANG").ok();`
+- փորձարկում՝ crates/ivm/src/bin/koto check.rs:702 — `let previous = env::var("LANG").ok();`
 - փորձարկում՝ crates/ivm/tests/i18n.rs:11 — `let old_lang = env::var("LANG").ok();`
 - փորձարկում՝ crates/ivm/tests/i18n.rs:69 — `let old_lang = env::var("LANG").ok();`
 
@@ -744,10 +744,6 @@ _Վերջին անգամ թարմացվել է `python3 scripts/inventory_env_to
 - արդ.՝ crates/ivm/src/cuda.rs:22 — `static BITONIC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx"));`
 - փորձարկում՝ crates/ivm/src/ptx_tests.rs:7 — `let out_dir = match std::env::var("OUT_DIR") {`
 - փորձարկում՝ crates/ivm/tests/ptx_kernels.rs:5 — `let out_dir = env!("OUT_DIR");`
-
-## P2P_TURN (արդյունք՝ 1)
-
-- արդ.՝ crates/iroha_p2p/src/transport.rs:296 — `let endpoint = std::env::var("P2P_TURN")`
 
 ## ՈՒՂԻ (արդյունք՝ 2, թեստ՝ 1)
 

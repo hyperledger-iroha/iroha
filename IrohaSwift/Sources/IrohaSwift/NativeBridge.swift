@@ -705,6 +705,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
+    private func hasKagemushaV2Symbol(_ symbol: String) -> Bool {
+        #if canImport(Darwin)
+        guard let bridgeHandle else { return false }
+        return dlsym(bridgeHandle, symbol) != nil
+        #else
+        _ = symbol
+        return false
+        #endif
+    }
+
     static func copyKagemushaNativeArchiveOutput(
         pointer: UnsafeMutablePointer<UInt8>?,
         length: CUnsignedLong,
@@ -2243,9 +2253,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var kagemushaRecursiveSpendLineageWitnessAppendResultFn: KagemushaRecursiveSpendLineageWitnessAppendResultFn? = nil
     private var kagemushaRecursiveSpendVerifyFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendRedeemFn: KagemushaRecursiveSpendArchiveFn? = nil
-    private var kagemushaRecursiveSpendInitV2Fn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendTopUpV2Fn: KagemushaRecursiveSpendArchiveFn? = nil
-    private var kagemushaRecursiveSpendAppendV2Fn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendVerifyV2Fn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendRedeemV2Fn: KagemushaRecursiveSpendArchiveFn? = nil
     private var privacyCapabilitiesFn: PrivacyCapabilitiesFn? = nil
@@ -2405,9 +2413,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let kagemushaRecursiveSpendLineageWitnessAppendResultFn: Any? = nil
     private let kagemushaRecursiveSpendVerifyFn: Any? = nil
     private let kagemushaRecursiveSpendRedeemFn: Any? = nil
-    private let kagemushaRecursiveSpendInitV2Fn: Any? = nil
     private let kagemushaRecursiveSpendTopUpV2Fn: Any? = nil
-    private let kagemushaRecursiveSpendAppendV2Fn: Any? = nil
     private let kagemushaRecursiveSpendVerifyV2Fn: Any? = nil
     private let kagemushaRecursiveSpendRedeemV2Fn: Any? = nil
     private let privacyCapabilitiesFn: Any? = nil
@@ -2727,17 +2733,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         } else {
             self.kagemushaRecursiveSpendRedeemFn = nil
         }
-        self.kagemushaRecursiveSpendInitV2Fn = Self.loadKagemushaArchiveFunction(
-            from: staticHandle,
-            symbol: "connect_norito_kagemusha_recursive_spend_init_v2"
-        )
         self.kagemushaRecursiveSpendTopUpV2Fn = Self.loadKagemushaArchiveFunction(
             from: staticHandle,
             symbol: "connect_norito_kagemusha_recursive_spend_topup_v2"
-        )
-        self.kagemushaRecursiveSpendAppendV2Fn = Self.loadKagemushaArchiveFunction(
-            from: staticHandle,
-            symbol: "connect_norito_kagemusha_recursive_spend_append_v2"
         )
         self.kagemushaRecursiveSpendVerifyV2Fn = Self.loadKagemushaArchiveFunction(
             from: staticHandle,
@@ -3638,17 +3636,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.kagemushaRecursiveSpendRedeemFn = nil
             }
-            self.kagemushaRecursiveSpendInitV2Fn = Self.loadKagemushaArchiveFunction(
-                from: handle,
-                symbol: "connect_norito_kagemusha_recursive_spend_init_v2"
-            )
             self.kagemushaRecursiveSpendTopUpV2Fn = Self.loadKagemushaArchiveFunction(
                 from: handle,
                 symbol: "connect_norito_kagemusha_recursive_spend_topup_v2"
-            )
-            self.kagemushaRecursiveSpendAppendV2Fn = Self.loadKagemushaArchiveFunction(
-                from: handle,
-                symbol: "connect_norito_kagemusha_recursive_spend_append_v2"
             )
             self.kagemushaRecursiveSpendVerifyV2Fn = Self.loadKagemushaArchiveFunction(
                 from: handle,
@@ -3825,9 +3815,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.kagemushaRecursiveSpendLineageWitnessAppendResultFn = nil
             self.kagemushaRecursiveSpendVerifyFn = nil
             self.kagemushaRecursiveSpendRedeemFn = nil
-            self.kagemushaRecursiveSpendInitV2Fn = nil
             self.kagemushaRecursiveSpendTopUpV2Fn = nil
-            self.kagemushaRecursiveSpendAppendV2Fn = nil
             self.kagemushaRecursiveSpendVerifyV2Fn = nil
             self.kagemushaRecursiveSpendRedeemV2Fn = nil
             self.privacyCapabilitiesFn = nil
@@ -4544,15 +4532,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     public var isKagemushaRecursiveSpendV2StubAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
+        let hasRequiredSymbols = (
+            KagemushaRecursiveSpendV2.requiredNativeSymbols + ["connect_norito_free"]
+        ).allSatisfy { hasKagemushaV2Symbol($0) }
         return loadedBridgeAbiVersion.map {
             $0 >= KagemushaRecursiveSpendV2.requiredNativeBridgeAbiVersion
         } == true
-            && kagemushaRecursiveSpendInitV2Fn != nil
-            && kagemushaRecursiveSpendTopUpV2Fn != nil
-            && kagemushaRecursiveSpendAppendV2Fn != nil
-            && kagemushaRecursiveSpendVerifyV2Fn != nil
-            && kagemushaRecursiveSpendRedeemV2Fn != nil
-            && freeFn != nil
+            && hasRequiredSymbols
         #else
         return false
         #endif
@@ -8061,25 +8047,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         )
     }
 
-    func kagemushaRecursiveSpendInitV2(requestArchive: Data) throws -> Data? {
-        try callKagemushaRecursiveSpend(
-            requestArchive: requestArchive,
-            function: kagemushaRecursiveSpendInitV2Fn
-        )
-    }
-
     func kagemushaRecursiveSpendTopUpV2(requestArchive: Data) throws -> Data? {
         try callKagemushaRecursiveSpend(
             requestArchive: requestArchive,
             function: kagemushaRecursiveSpendTopUpV2Fn
-        )
-    }
-
-    /// Returns a `KagemushaRecursiveSpendSplitResultV2` archive when enabled.
-    func kagemushaRecursiveSpendAppendV2(requestArchive: Data) throws -> Data? {
-        try callKagemushaRecursiveSpend(
-            requestArchive: requestArchive,
-            function: kagemushaRecursiveSpendAppendV2Fn
         )
     }
 

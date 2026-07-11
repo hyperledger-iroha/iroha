@@ -10,17 +10,12 @@ translator: manual
 
 <div dir="rtl">
 
-# קודי השגיאה של מהדר Kotodama
+# Kotodama Compiler Error Codes
 
-מהדר Kotodama מפיק קודי שגיאה יציבים כדי שכלי פיתוח ומשתמשי CLI יבינו במהירות את סיבת הכשל. השתמשו ב-`koto_compile --explain <code>` כדי להדפיס רמז מתאים.
+The canonical V1 diagnostic registry and reference are maintained in
+[`kotodama_error_codes.md`](./kotodama_error_codes.md).
 
-| קוד | תיאור | פתרון נפוץ |
-|-----|--------|-------------|
-| `E0001` | יעד הענף חורג מטווח הקפיצה שקיים בקידוד IVM. | חלקו פונקציות ענקיות או צמצמו אינליין כך שמרחקי הבלוקים יישארו בתוך ±1 MiB. |
-| `E0002` | נקודת קריאה מצביעה על פונקציה שלא הוגדרה. | בדקו שגיאות כתיב, הגדרות ניראות או דגלים שהסירו את הפונקציה. |
-| `E0003` | קריאות מצב Durable נוצרו בלי להפעיל ABI v1. | קבעו `CompilerOptions::abi_version = 1` או הוסיפו `meta { abi_version: 1 }` בתוך חוזה `seiyaku`. |
-| `E0004` | קריאות מערכת הקשורות לנכסים קיבלו מצביעים שאינם ליטרליים. | השתמשו ב-`account_id(...)`, ‏`asset_definition(...)` וכו׳, או שלחו 0 סנטינלי לברירות המחדל של ההוסט. |
-| `E0005` | חלק האתחול בלולאת `for` מורכב יותר מהתמיכה הנוכחית. | העבירו לוגיקה מורכבת לפני הלולאה; כרגע מתקבלת רק השמה/ביטוי פשוטים. |
-| `E0006` | חלק הצעד בלולאת `for` מורכב יותר מהתמיכה הנוכחית. | עדכנו את מונה הלולאה בביטוי פשוט (למשל `i = i + 1`). |
+This former translation is retained as a stable link only. `koto explain
+<code>` reads the same registry used by the compiler.
 
 </div>

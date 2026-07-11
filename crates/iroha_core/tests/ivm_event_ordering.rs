@@ -37,6 +37,17 @@ fn store_tlv(vm: &mut IVM, cursor: &mut u64, type_id: PointerType, payload: &[u8
     ptr
 }
 
+fn store_quantity(vm: &mut IVM, cursor: &mut u64, amount: u64) -> u64 {
+    let tlv = ivm::numeric_tlv::encode_quantity(&Quantity::from(amount))
+        .expect("encode quantity pointer envelope");
+    vm.memory
+        .preload_input(*cursor, &tlv)
+        .expect("preload quantity TLV into INPUT");
+    let ptr = Memory::INPUT_START + *cursor;
+    *cursor += (u64::try_from(tlv.len()).expect("quantity TLV length fits u64") + 7) & !7;
+    ptr
+}
+
 fn encode_prog_syscall(num: u32) -> Vec<u8> {
     let scall = ivm::instruction::wide::system::SCALL;
     let syscall = u8::try_from(num).expect("syscall number must fit in wide encoding");
@@ -132,13 +143,7 @@ fn ivm_syscall_data_events_follow_order() {
         PointerType::AssetDefinitionId,
         &asset_bytes,
     );
-    let amount_payload = norito::to_bytes(&Numeric::from(5_u64)).expect("encode amount");
-    let ptr_amount = store_tlv(
-        &mut vm,
-        &mut cursor,
-        PointerType::NoritoBytes,
-        &amount_payload,
-    );
+    let ptr_amount = store_quantity(&mut vm, &mut cursor, 5);
 
     let prog_set_detail = encode_prog_syscall(syscalls::SYSCALL_SET_ACCOUNT_DETAIL);
     let prog_mint = encode_prog_syscall(syscalls::SYSCALL_MINT_ASSET);

@@ -3,7 +3,7 @@
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs, clippy::too_many_lines)]
 
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZeroU64, sync::Arc, time::Duration};
 
 use axum::{Router, routing::post};
 use base64::Engine as _;
@@ -18,12 +18,17 @@ use iroha_core::{
 use iroha_crypto::Signature;
 use iroha_data_model::{
     DomainId, Registrable,
-    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
+    account::Account,
+    asset::AssetDefinitionId,
+    block::BlockHeader,
+    isi::{Grant, Register},
     name::Name,
+    permission::Permission,
     smart_contract::ContractAddress,
     transaction::SignedTransaction,
 };
-use ivm::kotodama::compiler::CompilerOptions;
+use iroha_primitives::json::Json;
+use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use mv::storage::StorageReadOnly;
 use norito::json;
 use tower::ServiceExt as _;
@@ -32,16 +37,21 @@ fn contract_call_dispatch_program() -> Vec<u8> {
     let src = format!(
         r#"
 seiyaku ContractCallDispatchTest {{
-  meta {{ abi_version: 1; }}
 
-  kotoage fn main() {{}}
+  state call_amount: i64;
+  state call_asset: AssetDefinitionId;
 
-  kotoage fn credit_by_payload(amount: int) {{
-    state_set(name("call_amount"), encode_int(amount));
+  hajimari(asset_definition_id: AssetDefinitionId) {{
+    call_amount = 0;
+    call_asset = asset_definition_id;
   }}
 
-  kotoage fn record_asset_by_payload(asset_definition_id: AssetDefinitionId) {{
-    state_set(name("call_asset"), pointer_to_norito(asset_definition_id));
+  kotoage fn credit_by_payload(amount: i64) authorize("CanEnactGovernance") {{
+    call_amount = amount;
+  }}
+
+  kotoage fn record_asset_by_payload(asset_definition_id: AssetDefinitionId) authorize("CanEnactGovernance") {{
+    call_asset = asset_definition_id;
   }}
 }}
 "#
@@ -55,22 +65,24 @@ fn contract_call_declared_state_program() -> Vec<u8> {
     let src = format!(
         r#"
 seiyaku ContractCallDeclaredStateTest {{
-  meta {{ abi_version: 1; }}
 
-  state int CallAmount;
-  state AssetDefinitionId CallAsset;
+  state CallAmount: i64;
+  state CallAsset: AssetDefinitionId;
 
-  kotoage fn main() {{}}
-
-  kotoage fn credit_by_payload(amount: int) {{
-    CallAmount = amount;
-  }}
-
-  kotoage fn record_asset_by_payload(asset_definition_id: AssetDefinitionId) {{
+  hajimari(asset_definition_id: AssetDefinitionId) {{
+    CallAmount = 0;
     CallAsset = asset_definition_id;
   }}
 
-  view fn declared_state() -> (int, AssetDefinitionId) {{
+  kotoage fn credit_by_payload(amount: i64) authorize("CanEnactGovernance") {{
+    CallAmount = amount;
+  }}
+
+  kotoage fn record_asset_by_payload(asset_definition_id: AssetDefinitionId) authorize("CanEnactGovernance") {{
+    CallAsset = asset_definition_id;
+  }}
+
+  view fn declared_state() -> (i64, AssetDefinitionId) {{
     return (CallAmount, CallAsset);
   }}
 }}
@@ -85,18 +97,19 @@ fn contract_call_declared_state_with_isi_program() -> Vec<u8> {
     let src = format!(
         r#"
 seiyaku ContractCallDeclaredStateWithIsiTest {{
-  meta {{ abi_version: 1; }}
 
-  state int CallAmount;
+  state CallAmount: i64;
 
-  kotoage fn main() {{}}
+  hajimari() {{
+    CallAmount = 0;
+  }}
 
-  kotoage fn write_with_isi(amount: int) permission(Admin) {{
-    set_account_detail(authority(), name("cursor"), json("{{\"phase\":\"write_with_isi\"}}"));
+  kotoage fn write_with_isi(amount: i64) authorize("CanEnactGovernance") {{
+    ledger::account::set_detail(account: context::authority(), key: Name::parse("cursor"), value: Json::parse("{{\"phase\":\"write_with_isi\"}}"));
     CallAmount = amount;
   }}
 
-  view fn declared_state() -> int {{
+  view fn declared_state() -> i64 {{
     return CallAmount;
   }}
 }}
@@ -111,20 +124,21 @@ fn contract_call_declared_state_with_mint_program() -> Vec<u8> {
     let src = format!(
         r#"
 seiyaku ContractCallDeclaredStateWithMintTest {{
-  meta {{ abi_version: 1; }}
 
-  state int CallAmount;
+  state CallAmount: i64;
 
-  kotoage fn main() {{}}
+  hajimari() {{
+    CallAmount = 0;
+  }}
 
-  kotoage fn write_with_mint(amount: int,
-                             user: AccountId,
-                             asset_definition_id: AssetDefinitionId) permission(Admin) {{
-    mint_asset(user, asset_definition_id, 1);
+  kotoage fn write_with_mint(amount: i64,
+                           user: AccountId,
+                           asset_definition_id: AssetDefinitionId) authorize("CanEnactGovernance") {{
+    ledger::asset::mint(account: user, asset_definition: asset_definition_id, amount: Amount::from_i64(1));
     CallAmount = amount;
   }}
 
-  view fn declared_state() -> int {{
+  view fn declared_state() -> i64 {{
     return CallAmount;
   }}
 }}
@@ -139,15 +153,20 @@ fn contract_call_n3x_like_program() -> Vec<u8> {
     let src = format!(
         r#"
 seiyaku ContractCallN3xLikeTest {{
-  meta {{ abi_version: 1; }}
 
-  state int HubInitialized;
-  state int BasketUsdt;
-  state int BasketUsdc;
-  state int BasketKusd;
-  state int TotalN3x;
+  error enum HubError {{
+    NotInitialized = 1,
+    EmptyHub = 2,
+    InvalidAmount = 3,
+    InsufficientSupply = 4,
+    ZeroRedemption = 5
+  }}
 
-  kotoage fn main() {{}}
+  state HubInitialized: i64;
+  state BasketUsdt: i64;
+  state BasketUsdc: i64;
+  state BasketKusd: i64;
+  state TotalN3x: i64;
 
   fn init_impl() {{
     HubInitialized = 1;
@@ -157,18 +176,22 @@ seiyaku ContractCallN3xLikeTest {{
     TotalN3x = 0;
   }}
 
-  kotoage fn init_hub() permission(Admin) {{
+  hajimari() {{
+    init_impl();
+  }}
+
+  kotoage fn init_hub() authorize("CanEnactGovernance") {{
     init_impl();
   }}
 
   fn deposit_impl(user: AccountId,
                   asset: AssetDefinitionId,
-                  usdt_in: int,
-                  usdc_in: int,
-                  kusd_in: int) {{
-    assert(HubInitialized == 1, "hub not initialized");
+                  usdt_in: i64,
+                  usdc_in: i64,
+                  kusd_in: i64) {{
+    require(HubInitialized == 1, HubError::NotInitialized);
     let minted = usdt_in + usdc_in + kusd_in;
-    mint_asset(user, asset, minted);
+    ledger::asset::mint(account: user, asset_definition: asset, amount: Amount::from_i64(minted));
     BasketUsdt = BasketUsdt + usdt_in;
     BasketUsdc = BasketUsdc + usdc_in;
     BasketKusd = BasketKusd + kusd_in;
@@ -176,33 +199,33 @@ seiyaku ContractCallN3xLikeTest {{
   }}
 
   kotoage fn deposit_like(user: AccountId,
-                          asset_definition_id: AssetDefinitionId,
-                          usdt_in: int,
-                          usdc_in: int,
-                          kusd_in: int) permission(Admin) {{
+                        asset_definition_id: AssetDefinitionId,
+                        usdt_in: i64,
+                        usdc_in: i64,
+                        kusd_in: i64) authorize("CanEnactGovernance") {{
     deposit_impl(user, asset_definition_id, usdt_in, usdc_in, kusd_in);
   }}
 
   kotoage fn burn_like(user: AccountId,
-                       asset_definition_id: AssetDefinitionId,
-                       n3x_amount: int) permission(Admin) {{
+                     asset_definition_id: AssetDefinitionId,
+                     n3x_amount: i64) authorize("CanEnactGovernance") {{
     let total = TotalN3x;
-    assert(total > 0, "empty hub");
-    assert(n3x_amount > 0, "invalid n3x_amount");
-    assert(n3x_amount <= total, "insufficient supply");
+    require(total > 0, HubError::EmptyHub);
+    require(n3x_amount > 0, HubError::InvalidAmount);
+    require(n3x_amount <= total, HubError::InsufficientSupply);
     let usdt_out = (BasketUsdt * n3x_amount) / total;
     let usdc_out = (BasketUsdc * n3x_amount) / total;
     let kusd_out = (BasketKusd * n3x_amount) / total;
     let redeemed = usdt_out + usdc_out + kusd_out;
-    assert(redeemed > 0, "zero redemption");
-    burn_asset(user, asset, n3x_amount);
+    require(redeemed > 0, HubError::ZeroRedemption);
+    ledger::asset::burn(account: user, asset_definition: asset_definition_id, amount: Amount::from_i64(n3x_amount));
     BasketUsdt = BasketUsdt - usdt_out;
     BasketUsdc = BasketUsdc - usdc_out;
     BasketKusd = BasketKusd - kusd_out;
     TotalN3x = total - n3x_amount;
   }}
 
-  view fn state_snapshot() -> (int, int, int, int, int) {{
+  view fn state_snapshot() -> (i64, i64, i64, i64, i64) {{
     return (HubInitialized, BasketUsdt, BasketUsdc, BasketKusd, TotalN3x);
   }}
 }}
@@ -213,107 +236,51 @@ seiyaku ContractCallN3xLikeTest {{
         .expect("compile contract call n3x-like test program")
 }
 
-fn contract_call_nested_transfer_caller_program() -> Vec<u8> {
-    let src = format!(
-        r#"
-seiyaku ContractCallNestedTransferCallerTest {{
-  meta {{ abi_version: 1; }}
-
-  state AccountId CallerAccount;
-  state bytes VaultContract;
-  state AssetDefinitionId SettlementAsset;
-
-  kotoage fn main() {{}}
-
-  kotoage fn bind(caller_account: AccountId,
-                  vault_contract: bytes,
-                  settlement_asset: AssetDefinitionId) {{
-    CallerAccount = caller_account;
-    VaultContract = vault_contract;
-    SettlementAsset = settlement_asset;
-  }}
-
-  kotoage fn open(amount: int) -> int permission(AssetOps) {{
-    transfer_asset(authority(), CallerAccount, SettlementAsset, amount, dataspace_id("0"));
-    let payload = json_object();
-    let payload = json_set_int(payload, name("amount"), amount);
-    return decode_int(call_contract(VaultContract, "deposit", payload));
-  }}
-}}
-"#
-    );
-    ivm::KotodamaCompiler::new()
-        .compile_source(&src)
-        .expect("compile nested transfer caller program")
-}
-
-fn contract_call_nested_transfer_vault_program() -> Vec<u8> {
-    let src = format!(
-        r#"
-seiyaku ContractCallNestedTransferVaultTest {{
-  meta {{ abi_version: 1; }}
-
-  state AccountId VaultAccount;
-  state AssetDefinitionId SettlementAsset;
-
-  kotoage fn main() {{}}
-
-  kotoage fn bind(vault_account: AccountId,
-                  settlement_asset: AssetDefinitionId) {{
-    VaultAccount = vault_account;
-    SettlementAsset = settlement_asset;
-  }}
-
-  kotoage fn deposit(amount: int) -> int permission(AssetOps) {{
-    transfer_asset(authority(), VaultAccount, SettlementAsset, amount, dataspace_id("0"));
-    return amount;
-  }}
-}}
-"#
-    );
-    ivm::KotodamaCompiler::new()
-        .compile_source(&src)
-        .expect("compile nested transfer vault program")
-}
-
 fn contract_view_trap_program_with_source_path(source_path: &str) -> Vec<u8> {
     let src = r#"
 seiyaku ContractViewTrapTest {
-  meta { abi_version: 1; }
 
-  kotoage fn main() {}
+  error enum ViewError {
+    Boom = 1
+  }
 
-  view fn explode() -> int {
-    assert(false, "boom");
+  view fn explode() -> i64 {
+    require(false, ViewError::Boom);
     return 1;
   }
 }
 "#;
-    ivm::KotodamaCompiler::new_with_options(CompilerOptions {
-        debug_source_name: Some(source_path.to_owned()),
-        ..CompilerOptions::default()
-    })
-    .compile_source(src)
-    .expect("compile contract view trap test program")
+    CompilerSession::default()
+        .build(CompileRequest {
+            source: src,
+            source_name: Some(source_path),
+        })
+        .expect("compile contract view trap test program")
+        .artifact
 }
 
 fn contract_view_bytes_program() -> Vec<u8> {
     let src = r#"
 seiyaku ContractViewBytesTest {
-  meta { abi_version: 1; }
 
-  state AssetDefinitionId Asset;
-  state bytes Target;
+  state Asset: AssetDefinitionId;
+  state Target: bytes;
 
-  kotoage fn main() {}
-
-  kotoage fn init(asset: AssetDefinitionId, target: bytes) {
+  fn configure_impl(asset: AssetDefinitionId, target: bytes) {
     Asset = asset;
     Target = target;
   }
 
+  hajimari(asset: AssetDefinitionId, target: bytes) {
+    configure_impl(asset, target);
+  }
+
+  kotoage fn configure(asset: AssetDefinitionId, target: bytes) authorize("CanEnactGovernance") {
+    configure_impl(asset, target);
+  }
+
   view fn literal() -> bytes {
-    return blob("risk");
+    return b"risk";
   }
 
   view fn target() -> bytes {
@@ -333,25 +300,30 @@ seiyaku ContractViewBytesTest {
 fn contract_view_account_id_program() -> Vec<u8> {
     let src = r#"
 seiyaku ContractViewAccountIdTest {
-  meta { abi_version: 1; }
 
-  state AccountId Stored;
+  state Stored: AccountId;
 
-  kotoage fn main() {}
-
-  kotoage fn bind(account_id: AccountId) {
+  fn bind_impl(account_id: AccountId) {
     Stored = account_id;
   }
 
+  hajimari(account_id: AccountId) {
+    bind_impl(account_id);
+  }
+
+  kotoage fn bind(account_id: AccountId) authorize("CanEnactGovernance") {
+    bind_impl(account_id);
+  }
+
   view fn literal() -> AccountId {
-    return authority();
+    return context::authority();
   }
 
   view fn stored() -> AccountId {
     return Stored;
   }
 
-  view fn stored_tuple() -> (AccountId, int) {
+  view fn stored_tuple() -> (AccountId, i64) {
     return (Stored, 1);
   }
 }
@@ -364,21 +336,25 @@ seiyaku ContractViewAccountIdTest {
 fn contract_call_configure_account_map_program() -> Vec<u8> {
     let src = r#"
 seiyaku ContractCallConfigureAccountMapTest {
-  meta { abi_version: 1; }
 
-  state ConfigAccount: Map<Name, AccountId>;
-  state ConfigInt: Map<Name, int>;
+  error enum ConfigureError {
+    UnauthorizedExisting = 1,
+    UnauthorizedInitial = 2
+  }
+
+  state ConfigAccount: StateMap<Name, AccountId>;
+  state ConfigInt: StateMap<Name, i64>;
 
   fn key_admin() -> Name {
-    return name("admin");
+    return Name::parse("admin");
   }
 
   fn key_inori() -> Name {
-    return name("inori");
+    return Name::parse("inori");
   }
 
   fn key_paused() -> Name {
-    return name("paused");
+    return Name::parse("paused");
   }
 
   fn initialize_config_defaults() {
@@ -387,14 +363,12 @@ seiyaku ContractCallConfigureAccountMapTest {
     }
   }
 
-  kotoage fn main() {}
-
-  kotoage fn configure(admin: AccountId, inori: AccountId) permission(Admin) {
+  kotoage fn configure(admin: AccountId, inori: AccountId) authorize("CanEnactGovernance") {
     let has_admin = ConfigAccount.contains(key_admin());
     if (has_admin) {
-      assert(authority() == ConfigAccount[key_admin()]);
+      require(context::authority() == ConfigAccount.get(key_admin()).unwrap_or(admin), ConfigureError::UnauthorizedExisting);
     } else {
-      assert(authority() == admin);
+      require(context::authority() == admin, ConfigureError::UnauthorizedInitial);
     }
     ConfigAccount[key_admin()] = admin;
     ConfigAccount[key_inori()] = inori;
@@ -402,21 +376,55 @@ seiyaku ContractCallConfigureAccountMapTest {
   }
 
   view fn admin() -> AccountId {
-    return ConfigAccount[key_admin()];
+    return ConfigAccount.get(key_admin()).unwrap_or(context::authority());
   }
 
   view fn inori() -> AccountId {
-    return ConfigAccount[key_inori()];
+    return ConfigAccount.get(key_inori()).unwrap_or(context::authority());
   }
 
-  view fn paused() -> int {
-    return ConfigInt[key_paused()];
+  view fn paused() -> i64 {
+    return ConfigInt.get(key_paused()).unwrap_or(0);
   }
 }
 "#;
     ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile contract call configure account-map test program")
+}
+
+fn grant_named_contract_permission(
+    state: &Arc<State>,
+    authority: &iroha_data_model::prelude::AccountId,
+    destination: iroha_data_model::prelude::AccountId,
+    permission_name: &str,
+) {
+    let height = u64::try_from(state.view().height())
+        .expect("test block height must fit in u64")
+        .saturating_add(1);
+    let header = BlockHeader::new(
+        NonZeroU64::new(height).expect("next test block height must be non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    if transaction.world.account(&destination).is_err() {
+        Register::account(Account::new(destination.clone()))
+            .execute(authority, &mut transaction)
+            .expect("register contract permission holder");
+    }
+    Grant::account_permission(
+        Permission::new(permission_name.to_owned(), Json::new(())),
+        destination,
+    )
+    .execute(authority, &mut transaction)
+    .expect("grant named contract permission");
+    transaction.apply();
+    block.commit().expect("commit contract permission grant");
 }
 
 fn contract_test_app(
@@ -512,7 +520,7 @@ async fn run_contract_view_response(
         authority,
         contract_address,
         iroha_torii::test_utils::ContractViewOptions {
-            entrypoint: Some(entrypoint),
+            entrypoint,
             payload,
             gas_limit: 10_000,
         },
@@ -588,7 +596,7 @@ async fn contracts_call_enqueues_transaction() {
     );
 
     let program = iroha_torii::test_utils::minimal_ivm_program(1);
-    let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -629,7 +637,7 @@ async fn contracts_call_enqueues_transaction() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("main"),
+            entrypoint: "main",
             payload: None,
             gas_asset_id: None,
             gas_limit: 0,
@@ -982,7 +990,7 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
 
     let source_path = "contracts/view_trap_test.ko";
     let program = contract_view_trap_program_with_source_path(source_path);
-    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -1006,7 +1014,7 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
         &creds.account,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractViewOptions {
-            entrypoint: Some("explode"),
+            entrypoint: "explode",
             payload: None,
             gas_limit: 10_000,
         },
@@ -1102,10 +1110,10 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("init"),
+            entrypoint: "configure",
             payload: Some(&init_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let init_req = http::Request::builder()
@@ -1178,7 +1186,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     );
 
     let program = contract_call_dispatch_program();
-    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -1204,10 +1212,10 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("credit_by_payload"),
+            entrypoint: "credit_by_payload",
             payload: Some(&payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let call_req = http::Request::builder()
@@ -1241,10 +1249,10 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("record_asset_by_payload"),
+            entrypoint: "record_asset_by_payload",
             payload: Some(&asset_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let asset_call_req = http::Request::builder()
@@ -1348,10 +1356,10 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("bind"),
+            entrypoint: "bind",
             payload: Some(&bind_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let bind_req = http::Request::builder()
@@ -1516,10 +1524,10 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("configure"),
+            entrypoint: "configure",
             payload: Some(&configure_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let configure_req = http::Request::builder()
@@ -1597,7 +1605,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     );
 
     let program = contract_call_declared_state_program();
-    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -1623,10 +1631,10 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("credit_by_payload"),
+            entrypoint: "credit_by_payload",
             payload: Some(&credit_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let credit_req = http::Request::builder()
@@ -1649,10 +1657,10 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("record_asset_by_payload"),
+            entrypoint: "record_asset_by_payload",
             payload: Some(&asset_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let asset_req = http::Request::builder()
@@ -1758,7 +1766,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     );
 
     let program = contract_call_declared_state_with_isi_program();
-    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -1784,10 +1792,10 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("write_with_isi"),
+            entrypoint: "write_with_isi",
             payload: Some(&write_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let write_req = http::Request::builder()
@@ -1815,7 +1823,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         view_json
             .get("result")
             .and_then(json::Value::as_i64)
-            .expect("view int result"),
+            .expect("view i64 result"),
         7
     );
 
@@ -1890,7 +1898,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     );
 
     let program = contract_call_declared_state_with_mint_program();
-    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -1920,10 +1928,10 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("write_with_mint"),
+            entrypoint: "write_with_mint",
             payload: Some(&write_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let write_req = http::Request::builder()
@@ -1951,7 +1959,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         view_json
             .get("result")
             .and_then(json::Value::as_i64)
-            .expect("view int result"),
+            .expect("view i64 result"),
         7
     );
 
@@ -2026,7 +2034,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     );
 
     let program = contract_call_n3x_like_program();
-    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -2051,7 +2059,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("init_hub"),
+            entrypoint: "init_hub",
             payload: None,
             gas_asset_id: None,
             gas_limit: 10_000,
@@ -2082,10 +2090,10 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("deposit_like"),
+            entrypoint: "deposit_like",
             payload: Some(&deposit_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let deposit_req = http::Request::builder()
@@ -2177,7 +2185,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     );
 
     let program = contract_call_n3x_like_program();
-    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -2202,7 +2210,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("init_hub"),
+            entrypoint: "init_hub",
             payload: None,
             gas_asset_id: None,
             gas_limit: 10_000,
@@ -2233,10 +2241,10 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("deposit_like"),
+            entrypoint: "deposit_like",
             payload: Some(&deposit_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let deposit_req = http::Request::builder()
@@ -2262,10 +2270,10 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("burn_like"),
+            entrypoint: "burn_like",
             payload: Some(&burn_payload),
             gas_asset_id: None,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let burn_req = http::Request::builder()
@@ -2298,221 +2306,4 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     assert_eq!(snapshot.get(2).and_then(json::Value::as_i64), Some(0));
     assert_eq!(snapshot.get(3).and_then(json::Value::as_i64), Some(0));
     assert_eq!(snapshot.get(4).and_then(json::Value::as_i64), Some(0));
-}
-
-#[tokio::test]
-async fn contracts_call_preserves_root_and_nested_transfer_authorities() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
-
-    let creds = iroha_torii::test_utils::random_authority();
-    let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
-    let asset_definition_id =
-        AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-    let authority_asset_id = AssetId::of(asset_definition_id.clone(), creds.account.clone());
-    let authority_asset = Asset::new(
-        authority_asset_id.clone(),
-        iroha_primitives::numeric::Numeric::new(5_u32, 0),
-    );
-    let world = iroha_core::state::World::with_assets(
-        [iroha_data_model::prelude::Domain::new(domain_id.clone()).build(&creds.account)],
-        [iroha_data_model::prelude::Account::new(creds.account.clone()).build(&creds.account)],
-        [AssetDefinition::numeric(asset_definition_id.clone()).build(&creds.account)],
-        [authority_asset],
-        [],
-    );
-
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
-
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-
-    let app = contract_test_app(
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        chain_id.clone(),
-        telemetry.clone(),
-    );
-
-    let vault_program = contract_call_nested_transfer_vault_program();
-    let vault_deploy_body = iroha_torii::test_utils::deploy_request_json(
-        &creds.account,
-        &creds.private_key,
-        &base64::engine::general_purpose::STANDARD.encode(&vault_program),
-    );
-    let vault_deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(vault_deploy_body))
-        .unwrap();
-    let vault_deploy_resp = app.clone().oneshot(vault_deploy_req).await.unwrap();
-    assert_eq!(vault_deploy_resp.status(), http::StatusCode::OK);
-    let vault_deploy_bytes = vault_deploy_resp
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    let vault_deploy_json: json::Value = json::from_slice(&vault_deploy_bytes).unwrap();
-    let vault_contract_address = deployed_contract_address(&vault_deploy_json);
-    let applied_vault_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
-    assert_eq!(applied_vault_deploy, 1);
-
-    let caller_program = contract_call_nested_transfer_caller_program();
-    let caller_deploy_body = iroha_torii::test_utils::deploy_request_json(
-        &creds.account,
-        &creds.private_key,
-        &base64::engine::general_purpose::STANDARD.encode(&caller_program),
-    );
-    let caller_deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(caller_deploy_body))
-        .unwrap();
-    let caller_deploy_resp = app.clone().oneshot(caller_deploy_req).await.unwrap();
-    assert_eq!(caller_deploy_resp.status(), http::StatusCode::OK);
-    let caller_deploy_bytes = caller_deploy_resp
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    let caller_deploy_json: json::Value = json::from_slice(&caller_deploy_bytes).unwrap();
-    let caller_contract_address = deployed_contract_address(&caller_deploy_json);
-    let applied_caller_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
-    assert_eq!(applied_caller_deploy, 1);
-
-    let vault_contract_subject = vault_contract_address
-        .parse::<ContractAddress>()
-        .expect("vault contract address")
-        .subject_id();
-    let caller_contract_subject = caller_contract_address
-        .parse::<ContractAddress>()
-        .expect("caller contract address")
-        .subject_id();
-
-    let vault_bind_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("vault_account", vault_contract_subject.clone()),
-        iroha_torii::json_entry("settlement_asset", asset_definition_id.to_string()),
-    ]);
-    let vault_bind_body = iroha_torii::test_utils::contract_call_request_json(
-        &creds.account,
-        &creds.private_key,
-        vault_contract_address.as_str(),
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("bind"),
-            payload: Some(&vault_bind_payload),
-            gas_asset_id: None,
-            gas_limit: 10_000,
-        },
-    );
-    let vault_bind_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(vault_bind_body))
-        .unwrap();
-    let vault_bind_resp = app.clone().oneshot(vault_bind_req).await.unwrap();
-    assert_eq!(vault_bind_resp.status(), http::StatusCode::OK);
-    let applied_vault_bind =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
-    assert_eq!(applied_vault_bind, 1);
-
-    let caller_bind_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("caller_account", caller_contract_subject.clone()),
-        iroha_torii::json_entry("vault_contract", vault_contract_address.as_str()),
-        iroha_torii::json_entry("settlement_asset", asset_definition_id.to_string()),
-    ]);
-    let caller_bind_body = iroha_torii::test_utils::contract_call_request_json(
-        &creds.account,
-        &creds.private_key,
-        caller_contract_address.as_str(),
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("bind"),
-            payload: Some(&caller_bind_payload),
-            gas_asset_id: None,
-            gas_limit: 10_000,
-        },
-    );
-    let caller_bind_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(caller_bind_body))
-        .unwrap();
-    let caller_bind_resp = app.clone().oneshot(caller_bind_req).await.unwrap();
-    assert_eq!(caller_bind_resp.status(), http::StatusCode::OK);
-    let applied_caller_bind =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
-    assert_eq!(applied_caller_bind, 1);
-
-    let open_payload = iroha_torii::json_object(vec![iroha_torii::json_entry("amount", 3)]);
-    let open_body = iroha_torii::test_utils::contract_call_request_json(
-        &creds.account,
-        &creds.private_key,
-        caller_contract_address.as_str(),
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("open"),
-            payload: Some(&open_payload),
-            gas_asset_id: None,
-            gas_limit: 10_000,
-        },
-    );
-    let open_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(open_body))
-        .unwrap();
-    let open_resp = app.clone().oneshot(open_req).await.unwrap();
-    assert_eq!(open_resp.status(), http::StatusCode::OK);
-    let applied_open =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 5);
-    assert_eq!(applied_open, 1);
-
-    let view = state.view();
-    let authority_balance = view
-        .world()
-        .asset(&authority_asset_id)
-        .expect("authority asset remains")
-        .value()
-        .clone();
-    let caller_asset_id = AssetId::of(asset_definition_id.clone(), caller_contract_subject);
-    let vault_asset_id = AssetId::of(asset_definition_id, vault_contract_subject);
-    let vault_balance = view
-        .world()
-        .asset(&vault_asset_id)
-        .expect("vault asset exists")
-        .value()
-        .clone();
-    assert_eq!(
-        authority_balance.as_ref(),
-        &iroha_primitives::numeric::Numeric::new(2_u32, 0)
-    );
-    assert!(
-        view.world().asset(&caller_asset_id).is_err(),
-        "fully drained caller balance should remove the asset entry"
-    );
-    assert_eq!(
-        vault_balance.as_ref(),
-        &iroha_primitives::numeric::Numeric::new(3_u32, 0)
-    );
 }

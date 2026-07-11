@@ -1971,6 +1971,31 @@ impl TieredStateBackend {
             SccpOutboundMessage,
             world.sccp_outbound_messages
         );
+        collect_map!(
+            TieredSegment::SccpOutboundMessageLocators,
+            SccpOutboundMessageLocator,
+            world.sccp_outbound_message_locator
+        );
+        collect_map!(
+            TieredSegment::SccpOutboundMessageIndex,
+            SccpOutboundMessageIndex,
+            world.sccp_outbound_message_index
+        );
+        collect_map!(
+            TieredSegment::SccpOutboundProofs,
+            SccpOutboundProof,
+            world.sccp_outbound_proofs
+        );
+        collect_map!(
+            TieredSegment::SccpInboundMessages,
+            SccpInboundMessage,
+            world.sccp_inbound_messages
+        );
+        collect_map!(
+            TieredSegment::SccpInboundAnchorHighWater,
+            SccpInboundAnchorHighWater,
+            world.sccp_inbound_anchor_high_water
+        );
         collect_map!(TieredSegment::TxSequences, TxSequence, world.tx_sequences);
         collect_map!(
             TieredSegment::VerifyingKeys,
@@ -2616,8 +2641,12 @@ mod measured_bytes_impls {
             },
         },
         bridge::{
-            BridgeHashFunction, BridgeIcsProof, BridgeProof, BridgeProofPayload, BridgeProofRange,
-            BridgeProofRecord, BridgeTransparentProof, SccpOutboundMessageRecord,
+            BridgeHashFunction, BridgeIcsProof, BridgeNativeProofBackendV1,
+            BridgeNativeProtocolProofV1, BridgeProof, BridgeProofPayload, BridgeProofRange,
+            BridgeProofRecord, BridgeSccpDestinationProofBackendV1, BridgeSccpDestinationProofV1,
+            BridgeTransparentProof, SccpNativeTrustAnchorV1, SccpOutboundMessageKeyV1,
+            SccpOutboundMessageRecordV1, SccpOutboundProofRecordV1,
+            sccp::SccpInboundMessageRecordV1,
         },
         common::Owned,
         confidential::ConfidentialStatus,
@@ -2627,7 +2656,7 @@ mod measured_bytes_impls {
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
-            RuntimeUpgradeProposal, SccpRouteManifestProposal,
+            RuntimeUpgradeProposal, SccpRouteGovernanceProposal,
         },
         ipfs::IpfsPath,
         isi::governance::CouncilDerivationKind,
@@ -2653,9 +2682,10 @@ mod measured_bytes_impls {
         rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
         smart_contract::ContractAddress,
         smart_contract::manifest::{
-            AccessSetHints, ContractManifest, DynamicAccessHint, EntryPointKind,
-            EntrypointDescriptor, KotobaTranslation, KotobaTranslationEntry, ManifestProvenance,
-            TriggerCallback, TriggerDescriptor,
+            AccessSetHints, ContractErrorCodeDescriptor, ContractManifest, DynamicAccessHint,
+            EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor, KotobaTranslation,
+            KotobaTranslationEntry, ManifestProvenance, StateDescriptor, TriggerCallback,
+            TriggerDescriptor,
         },
         sorafs_uri::SorafsUri,
         trigger::{TriggerId, action::Repeats},
@@ -2723,6 +2753,9 @@ mod measured_bytes_impls {
         AbiVersion,
         BackendTag,
         BridgeHashFunction,
+        BridgeNativeProofBackendV1,
+        BridgeSccpDestinationProofBackendV1,
+        SccpNativeTrustAnchorV1,
         CertPhase,
         ConfidentialPolicyMode,
         ConfidentialPolicyTransition,
@@ -3339,6 +3372,7 @@ mod measured_bytes_impls {
     impl MeasuredBytes for BridgeIcsProof {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BridgeIcsProof>();
+            total = total.saturating_add(self.verifier_manifest_hash.measured_bytes_extra());
             total = total.saturating_add(self.state_root.measured_bytes_extra());
             total = total.saturating_add(self.leaf_hash.measured_bytes_extra());
             total = total.saturating_add(self.proof.measured_bytes_extra());
@@ -3350,8 +3384,29 @@ mod measured_bytes_impls {
     impl MeasuredBytes for BridgeTransparentProof {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BridgeTransparentProof>();
+            total = total.saturating_add(self.verifier_manifest_hash.measured_bytes_extra());
             total = total.saturating_add(self.proof.measured_bytes_extra());
             total = total.saturating_add(self.recursion_depth.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for BridgeNativeProtocolProofV1 {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<BridgeNativeProtocolProofV1>();
+            total = total.saturating_add(self.backend.measured_bytes_extra());
+            total = total.saturating_add(self.route_configuration_hash.measured_bytes_extra());
+            total = total.saturating_add(self.encoded_envelope.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for BridgeSccpDestinationProofV1 {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<BridgeSccpDestinationProofV1>();
+            total = total.saturating_add(self.backend.measured_bytes_extra());
+            total = total.saturating_add(self.route_configuration_hash.measured_bytes_extra());
+            total = total.saturating_add(self.encoded_artifact.measured_bytes_extra());
             total
         }
     }
@@ -3364,6 +3419,12 @@ mod measured_bytes_impls {
                     total = total.saturating_add(proof.measured_bytes_extra());
                 }
                 BridgeProofPayload::TransparentZk(proof) => {
+                    total = total.saturating_add(proof.measured_bytes_extra());
+                }
+                BridgeProofPayload::NativeProtocol(proof) => {
+                    total = total.saturating_add(proof.measured_bytes_extra());
+                }
+                BridgeProofPayload::SccpDestination(proof) => {
                     total = total.saturating_add(proof.measured_bytes_extra());
                 }
             }
@@ -3381,9 +3442,7 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BridgeProof>();
             total = total.saturating_add(self.range.measured_bytes_extra());
-            total = total.saturating_add(self.manifest_hash.measured_bytes_extra());
             total = total.saturating_add(self.payload.measured_bytes_extra());
-            total = total.saturating_add(self.pinned.measured_bytes_extra());
             total
         }
     }
@@ -3398,11 +3457,38 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for SccpOutboundMessageRecord {
+    impl MeasuredBytes for SccpOutboundMessageRecordV1 {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<SccpOutboundMessageRecord>();
+            let mut total = size_of::<SccpOutboundMessageRecordV1>();
             total = total.saturating_add(self.payload_hash.measured_bytes_extra());
             total = total.saturating_add(self.recorded_at_height.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for SccpOutboundMessageKeyV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<SccpOutboundMessageKeyV1>()
+        }
+    }
+
+    impl MeasuredBytes for SccpOutboundProofRecordV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<SccpOutboundProofRecordV1>()
+        }
+    }
+
+    impl MeasuredBytes for SccpInboundMessageRecordV1 {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<SccpInboundMessageRecordV1>();
+            total = total.saturating_add(self.payload_hash.measured_bytes_extra());
+            total = total.saturating_add(self.source_identity_hash.measured_bytes_extra());
+            total = total.saturating_add(self.trust_anchor.measured_bytes_extra());
+            total = total.saturating_add(self.anchor_interval_height.measured_bytes_extra());
+            total = total.saturating_add(self.source_finality_height.measured_bytes_extra());
+            total = total.saturating_add(self.source_finality_hash.measured_bytes_extra());
+            total = total.saturating_add(self.source_proof_commitment.measured_bytes_extra());
+            total = total.saturating_add(self.admitted_at_height.measured_bytes_extra());
             total
         }
     }
@@ -3506,12 +3592,41 @@ mod measured_bytes_impls {
             let mut total = size_of::<EntrypointDescriptor>();
             total = total.saturating_add(self.name.measured_bytes_extra());
             total = total.saturating_add(self.kind.measured_bytes_extra());
+            total = total.saturating_add(self.params.measured_bytes_extra());
+            total = total.saturating_add(self.return_type.measured_bytes_extra());
             total = total.saturating_add(self.permission.measured_bytes_extra());
             total = total.saturating_add(self.read_keys.measured_bytes_extra());
             total = total.saturating_add(self.write_keys.measured_bytes_extra());
             total = total.saturating_add(self.access_hints_complete.measured_bytes_extra());
             total = total.saturating_add(self.access_hints_skipped.measured_bytes_extra());
             total = total.saturating_add(self.triggers.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for EntrypointParamDescriptor {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<EntrypointParamDescriptor>();
+            total = total.saturating_add(self.name.measured_bytes_extra());
+            total = total.saturating_add(self.type_name.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for StateDescriptor {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<StateDescriptor>();
+            total = total.saturating_add(self.name.measured_bytes_extra());
+            total = total.saturating_add(self.type_name.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ContractErrorCodeDescriptor {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ContractErrorCodeDescriptor>();
+            total = total.saturating_add(self.namespace.measured_bytes_extra());
+            total = total.saturating_add(self.name.measured_bytes_extra());
             total
         }
     }
@@ -3546,12 +3661,15 @@ mod measured_bytes_impls {
     impl MeasuredBytes for ContractManifest {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ContractManifest>();
+            total = total.saturating_add(self.seiyaku_name.measured_bytes_extra());
             total = total.saturating_add(self.code_hash.measured_bytes_extra());
             total = total.saturating_add(self.abi_hash.measured_bytes_extra());
             total = total.saturating_add(self.compiler_fingerprint.measured_bytes_extra());
             total = total.saturating_add(self.features_bitmap.measured_bytes_extra());
             total = total.saturating_add(self.access_set_hints.measured_bytes_extra());
             total = total.saturating_add(self.entrypoints.measured_bytes_extra());
+            total = total.saturating_add(self.states.measured_bytes_extra());
+            total = total.saturating_add(self.error_codes.measured_bytes_extra());
             total = total.saturating_add(self.kotoba.measured_bytes_extra());
             total = total.saturating_add(self.provenance.measured_bytes_extra());
             total
@@ -3684,10 +3802,10 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for SccpRouteManifestProposal {
+    impl MeasuredBytes for SccpRouteGovernanceProposal {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<SccpRouteManifestProposal>();
-            total = total.saturating_add(norito::codec::Encode::encode(&self.manifest).len());
+            let mut total = size_of::<SccpRouteGovernanceProposal>();
+            total = total.saturating_add(norito::codec::Encode::encode(&self.action).len());
             total
         }
     }
@@ -3702,7 +3820,7 @@ mod measured_bytes_impls {
                 ProposalKind::RuntimeUpgrade(payload) => {
                     total = total.saturating_add(payload.measured_bytes_extra());
                 }
-                ProposalKind::SccpRouteManifest(payload) => {
+                ProposalKind::SccpRouteGovernance(payload) => {
                     total = total.saturating_add(payload.measured_bytes_extra());
                 }
             }
@@ -4040,6 +4158,11 @@ enum TieredSegment {
     AccountPermissions,
     AccountRoles,
     SccpOutboundMessages,
+    SccpOutboundMessageLocators,
+    SccpOutboundMessageIndex,
+    SccpOutboundProofs,
+    SccpInboundMessages,
+    SccpInboundAnchorHighWater,
     TxSequences,
     VerifyingKeys,
     RuntimeUpgrades,
@@ -4082,6 +4205,11 @@ impl TieredSegment {
             TieredSegment::AccountPermissions => "account_permissions",
             TieredSegment::AccountRoles => "account_roles",
             TieredSegment::SccpOutboundMessages => "sccp_outbound_messages",
+            TieredSegment::SccpOutboundMessageLocators => "sccp_outbound_message_locator",
+            TieredSegment::SccpOutboundMessageIndex => "sccp_outbound_message_index",
+            TieredSegment::SccpOutboundProofs => "sccp_outbound_proofs",
+            TieredSegment::SccpInboundMessages => "sccp_inbound_messages",
+            TieredSegment::SccpInboundAnchorHighWater => "sccp_inbound_anchor_high_water",
             TieredSegment::TxSequences => "tx_sequences",
             TieredSegment::VerifyingKeys => "verifying_keys",
             TieredSegment::RuntimeUpgrades => "runtime_upgrades",
@@ -4136,6 +4264,11 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "roles" => TieredSegment::Roles,
             "account_permissions" => TieredSegment::AccountPermissions,
             "sccp_outbound_messages" => TieredSegment::SccpOutboundMessages,
+            "sccp_outbound_message_locator" => TieredSegment::SccpOutboundMessageLocators,
+            "sccp_outbound_message_index" => TieredSegment::SccpOutboundMessageIndex,
+            "sccp_outbound_proofs" => TieredSegment::SccpOutboundProofs,
+            "sccp_inbound_messages" => TieredSegment::SccpInboundMessages,
+            "sccp_inbound_anchor_high_water" => TieredSegment::SccpInboundAnchorHighWater,
             "account_roles" => TieredSegment::AccountRoles,
             "tx_sequences" => TieredSegment::TxSequences,
             "verifying_keys" => TieredSegment::VerifyingKeys,
@@ -4334,7 +4467,12 @@ pub(crate) enum TieredKeyHandle {
     Role(iroha_data_model::role::RoleId),
     AccountPermission(iroha_data_model::account::AccountId),
     AccountRole(crate::role::RoleIdWithOwner),
-    SccpOutboundMessage(iroha_data_model::bridge::SccpOutboundMessageKey),
+    SccpOutboundMessage(iroha_data_model::bridge::SccpOutboundMessageKeyV1),
+    SccpOutboundMessageLocator([u8; 32]),
+    SccpOutboundMessageIndex(iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1),
+    SccpOutboundProof(iroha_data_model::bridge::SccpOutboundMessageKeyV1),
+    SccpInboundMessage(iroha_data_model::bridge::sccp::SccpInboundMessageKeyV1),
+    SccpInboundAnchorHighWater(iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1),
     TxSequence(iroha_data_model::account::AccountId),
     VerifyingKey(iroha_data_model::proof::VerifyingKeyId),
     RuntimeUpgrade(iroha_data_model::runtime::RuntimeUpgradeId),
@@ -4377,6 +4515,15 @@ impl TieredKeyHandle {
             TieredKeyHandle::AccountPermission(_) => TieredSegment::AccountPermissions,
             TieredKeyHandle::AccountRole(_) => TieredSegment::AccountRoles,
             TieredKeyHandle::SccpOutboundMessage(_) => TieredSegment::SccpOutboundMessages,
+            TieredKeyHandle::SccpOutboundMessageLocator(_) => {
+                TieredSegment::SccpOutboundMessageLocators
+            }
+            TieredKeyHandle::SccpOutboundMessageIndex(_) => TieredSegment::SccpOutboundMessageIndex,
+            TieredKeyHandle::SccpOutboundProof(_) => TieredSegment::SccpOutboundProofs,
+            TieredKeyHandle::SccpInboundMessage(_) => TieredSegment::SccpInboundMessages,
+            TieredKeyHandle::SccpInboundAnchorHighWater(_) => {
+                TieredSegment::SccpInboundAnchorHighWater
+            }
             TieredKeyHandle::TxSequence(_) => TieredSegment::TxSequences,
             TieredKeyHandle::VerifyingKey(_) => TieredSegment::VerifyingKeys,
             TieredKeyHandle::RuntimeUpgrade(_) => TieredSegment::RuntimeUpgrades,
@@ -4423,6 +4570,17 @@ impl TieredKeyHandle {
             TieredKeyHandle::AccountPermission(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRole(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::SccpOutboundMessage(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::SccpOutboundMessageLocator(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
+            TieredKeyHandle::SccpOutboundMessageIndex(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
+            TieredKeyHandle::SccpOutboundProof(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::SccpInboundMessage(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::SccpInboundAnchorHighWater(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
             TieredKeyHandle::TxSequence(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::VerifyingKey(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::RuntimeUpgrade(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4489,6 +4647,19 @@ impl TieredKeyHandle {
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
             TieredKeyHandle::SccpOutboundMessage(id) => fetch!(world.sccp_outbound_messages, id),
+            TieredKeyHandle::SccpOutboundMessageLocator(id) => {
+                fetch!(world.sccp_outbound_message_locator, id)
+            }
+            TieredKeyHandle::SccpOutboundMessageIndex(id) => {
+                fetch!(world.sccp_outbound_message_index, id)
+            }
+            TieredKeyHandle::SccpOutboundProof(id) => {
+                fetch!(world.sccp_outbound_proofs, id)
+            }
+            TieredKeyHandle::SccpInboundMessage(id) => fetch!(world.sccp_inbound_messages, id),
+            TieredKeyHandle::SccpInboundAnchorHighWater(id) => {
+                fetch!(world.sccp_inbound_anchor_high_water, id)
+            }
             TieredKeyHandle::TxSequence(id) => fetch!(world.tx_sequences, id),
             TieredKeyHandle::VerifyingKey(id) => fetch!(world.verifying_keys, id),
             TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
@@ -4556,6 +4727,19 @@ impl TieredKeyHandle {
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
             TieredKeyHandle::SccpOutboundMessage(id) => fetch!(world.sccp_outbound_messages, id),
+            TieredKeyHandle::SccpOutboundMessageLocator(id) => {
+                fetch!(world.sccp_outbound_message_locator, id)
+            }
+            TieredKeyHandle::SccpOutboundMessageIndex(id) => {
+                fetch!(world.sccp_outbound_message_index, id)
+            }
+            TieredKeyHandle::SccpOutboundProof(id) => {
+                fetch!(world.sccp_outbound_proofs, id)
+            }
+            TieredKeyHandle::SccpInboundMessage(id) => fetch!(world.sccp_inbound_messages, id),
+            TieredKeyHandle::SccpInboundAnchorHighWater(id) => {
+                fetch!(world.sccp_inbound_anchor_high_water, id)
+            }
             TieredKeyHandle::TxSequence(id) => fetch!(world.tx_sequences, id),
             TieredKeyHandle::VerifyingKey(id) => fetch!(world.verifying_keys, id),
             TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
@@ -4615,11 +4799,49 @@ impl fmt::Display for TieredKeyHandle {
                 write!(
                     f,
                     "sccp_outbound_message:{}:{}:{}",
-                    id.source_domain,
-                    id.target_domain,
+                    id.lane.source.profile_key(),
+                    id.lane.target.profile_key(),
                     id.message_id.encode_hex::<String>()
                 )
             }
+            TieredKeyHandle::SccpOutboundMessageLocator(id) => {
+                write!(
+                    f,
+                    "sccp_outbound_message_locator:{}",
+                    id.encode_hex::<String>()
+                )
+            }
+            TieredKeyHandle::SccpOutboundMessageIndex(id) => write!(
+                f,
+                "sccp_outbound_message_index:{}:{}:{}:{}",
+                id.recorded_at_height,
+                id.lane.source.profile_key(),
+                id.lane.target.profile_key(),
+                id.message_id.encode_hex::<String>()
+            ),
+            TieredKeyHandle::SccpOutboundProof(id) => write!(
+                f,
+                "sccp_outbound_proof:{}:{}:{}",
+                id.lane.source.profile_key(),
+                id.lane.target.profile_key(),
+                id.message_id.encode_hex::<String>()
+            ),
+            TieredKeyHandle::SccpInboundMessage(id) => {
+                write!(
+                    f,
+                    "sccp_inbound_message:{}:{}:{}",
+                    id.lane.source.profile_key(),
+                    id.lane.target.profile_key(),
+                    id.message_id.encode_hex::<String>()
+                )
+            }
+            TieredKeyHandle::SccpInboundAnchorHighWater(id) => write!(
+                f,
+                "sccp_inbound_anchor_high_water:{}:{}:{}",
+                id.lane.source.profile_key(),
+                id.lane.target.profile_key(),
+                id.anchor_hash.encode_hex::<String>()
+            ),
             TieredKeyHandle::TxSequence(id) => write!(f, "tx_sequence:{id}"),
             TieredKeyHandle::VerifyingKey(id) => write!(f, "verifying_key:{id:?}"),
             TieredKeyHandle::RuntimeUpgrade(id) => write!(f, "runtime_upgrade:{id:?}"),
@@ -4719,6 +4941,13 @@ mod tests {
     use iroha_data_model::{
         account::OpaqueAccountId,
         block::BlockHeader,
+        bridge::{
+            BridgeNativeProofBackendV1, SccpNativeTrustAnchorV1, SccpOutboundMessageKeyV1,
+            SccpOutboundProofRecordV1,
+            sccp::{
+                SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
+            },
+        },
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         nexus::{LaneCatalog, LaneConfig, LaneId},
         peer::PeerId,
@@ -4727,6 +4956,55 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    fn sccp_inbound_fixture() -> (SccpInboundMessageKeyV1, SccpInboundMessageRecordV1) {
+        let key = SccpInboundMessageKeyV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::BscMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            [0xA6; 32],
+        )
+        .expect("valid inbound replay key");
+        let record = SccpInboundMessageRecordV1 {
+            payload_hash: [0x5B; 32],
+            route_configuration_hash: [0x5E; 32],
+            source_identity_hash: [0x5C; 32],
+            trust_anchor: SccpNativeTrustAnchorV1 {
+                backend: BridgeNativeProofBackendV1::BscParlia,
+                anchor_hash: [0x5D; 32],
+                checkpoint_height: 40_999_999,
+            },
+            anchor_interval_height: 40_999_999,
+            source_finality_height: 41_000_000,
+            source_finality_hash: [0x6C; 32],
+            source_proof_commitment: [0x7D; 32],
+            admitted_at_height: 43,
+        };
+        (key, record)
+    }
+
+    fn sccp_outbound_proof_fixture() -> (SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1) {
+        let key = SccpOutboundMessageKeyV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::SoraTaira,
+                target: SccpNetworkV1::EthereumMainnet,
+            },
+            [0xB1; 32],
+        )
+        .expect("valid outbound proof key");
+        let record = SccpOutboundProofRecordV1 {
+            payload_hash: [0xB2; 32],
+            destination_binding_hash: [0xB3; 32],
+            route_configuration_hash: [0xB4; 32],
+            finality_block_hash: [0xB5; 32],
+            destination_proof_commitment: [0xB6; 32],
+            finality_height: 42,
+            accepted_at_height: 43,
+        };
+        assert!(record.is_well_formed_for_key(&key));
+        (key, record)
+    }
 
     #[test]
     fn streamed_hash_matches_canonical_json() {
@@ -5039,12 +5317,16 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-        let key = iroha_data_model::bridge::SccpOutboundMessageKey {
-            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+        let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1 {
+            lane: iroha_data_model::bridge::SccpLaneIdV1 {
+                source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+            },
             message_id: [0xA5; 32],
         };
-        let record = iroha_data_model::bridge::SccpOutboundMessageRecord {
+        let record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+            destination_binding_hash: [0x4A; 32],
+            route_configuration_hash: [0x4B; 32],
             payload_hash: [0x5A; 32],
             recorded_at_height: 42,
         };
@@ -5069,6 +5351,194 @@ mod tests {
 
         assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
         assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
+    }
+
+    #[test]
+    fn record_world_snapshot_includes_exact_lane_sccp_outbound_proofs() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        let mut world = World::default();
+        let (key, record) = sccp_outbound_proof_fixture();
+        world.sccp_outbound_proofs.insert(key, record);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("snapshot with SCCP outbound proof replay entry");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        let key_payload = TieredKeyHandle::SccpOutboundProof(key)
+            .encode_key()
+            .expect("SCCP outbound proof key encodes");
+        let entry = manifest
+            .hot_entries
+            .iter()
+            .chain(&manifest.cold_entries)
+            .find(|entry| {
+                entry.segment == TieredSegment::SccpOutboundProofs
+                    && entry.key_payload == key_payload
+            })
+            .expect("SCCP outbound proof replay key should be snapshotted");
+
+        assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
+        assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
+        assert_eq!(entry.value_size_bytes, record.measured_bytes());
+    }
+
+    #[test]
+    fn payload_snapshot_updates_and_removes_sccp_outbound_proofs() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        let mut world = World::default();
+        let (key, record) = sccp_outbound_proof_fixture();
+        world.sccp_outbound_proofs.insert(key, record);
+        backend
+            .record_world_snapshot(&world)
+            .expect("initial outbound proof snapshot");
+
+        let updated = SccpOutboundProofRecordV1 {
+            destination_proof_commitment: [0xB7; 32],
+            accepted_at_height: record.accepted_at_height.saturating_add(1),
+            ..record
+        };
+        assert!(updated.is_well_formed_for_key(&key));
+        let mut payload = TieredSnapshotPayload::default();
+        payload.push_value(TieredKeyHandle::SccpOutboundProof(key), Some(updated));
+        backend
+            .record_world_snapshot_with_payload(&payload)
+            .expect("updated outbound proof payload snapshot");
+
+        let key_payload = TieredKeyHandle::SccpOutboundProof(key)
+            .encode_key()
+            .expect("outbound proof key encodes");
+        let manifest = backend.last_manifest().expect("updated manifest");
+        let entry = manifest
+            .hot_entries
+            .iter()
+            .chain(&manifest.cold_entries)
+            .find(|entry| {
+                entry.segment == TieredSegment::SccpOutboundProofs
+                    && entry.key_payload == key_payload
+            })
+            .expect("updated outbound proof entry remains tracked");
+        let expected_payload =
+            norito::json::to_vec(&updated).expect("updated proof record encodes");
+        assert_eq!(entry.value_hash_hex, hex::encode(sha256(&expected_payload)));
+
+        let mut removal = TieredSnapshotPayload::default();
+        removal
+            .push_value::<SccpOutboundProofRecordV1>(TieredKeyHandle::SccpOutboundProof(key), None);
+        backend
+            .record_world_snapshot_with_payload(&removal)
+            .expect("outbound proof removal payload snapshot");
+        let manifest = backend.last_manifest().expect("removal manifest");
+        assert!(
+            manifest
+                .hot_entries
+                .iter()
+                .chain(&manifest.cold_entries)
+                .all(|entry| {
+                    entry.segment != TieredSegment::SccpOutboundProofs
+                        || entry.key_payload != key_payload
+                }),
+            "removed outbound proof entry must leave the tiered manifest"
+        );
+    }
+
+    #[test]
+    fn record_world_snapshot_includes_exact_lane_sccp_inbound_messages() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        let mut world = World::default();
+        let (key, record) = sccp_inbound_fixture();
+        world.sccp_inbound_messages.insert(key, record);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("snapshot with SCCP inbound replay entry");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        let key_payload = TieredKeyHandle::SccpInboundMessage(key)
+            .encode_key()
+            .expect("SCCP inbound key encodes");
+        let entry = manifest
+            .hot_entries
+            .iter()
+            .chain(&manifest.cold_entries)
+            .find(|entry| {
+                entry.segment == TieredSegment::SccpInboundMessages
+                    && entry.key_payload == key_payload
+            })
+            .expect("SCCP inbound replay key should be snapshotted");
+
+        assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
+        assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
+        assert_eq!(entry.value_size_bytes, record.measured_bytes());
+    }
+
+    #[test]
+    fn payload_snapshot_updates_and_removes_sccp_inbound_entries() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        let mut world = World::default();
+        let (key, record) = sccp_inbound_fixture();
+        world.sccp_inbound_messages.insert(key, record);
+        backend
+            .record_world_snapshot(&world)
+            .expect("initial inbound snapshot");
+
+        let updated = SccpInboundMessageRecordV1 {
+            anchor_interval_height: record.anchor_interval_height + 1,
+            source_finality_height: record.source_finality_height + 1,
+            source_finality_hash: [0x8E; 32],
+            source_proof_commitment: [0x9F; 32],
+            admitted_at_height: record.admitted_at_height + 1,
+            ..record
+        };
+        let mut payload = TieredSnapshotPayload::default();
+        payload.push_value(TieredKeyHandle::SccpInboundMessage(key), Some(updated));
+        backend
+            .record_world_snapshot_with_payload(&payload)
+            .expect("updated inbound payload snapshot");
+
+        let manifest = backend.last_manifest().expect("updated manifest");
+        let key_payload = TieredKeyHandle::SccpInboundMessage(key)
+            .encode_key()
+            .expect("inbound key encodes");
+        let entry = manifest
+            .hot_entries
+            .iter()
+            .chain(&manifest.cold_entries)
+            .find(|entry| {
+                entry.segment == TieredSegment::SccpInboundMessages
+                    && entry.key_payload == key_payload
+            })
+            .expect("updated inbound entry remains tracked");
+        let expected_payload = norito::json::to_vec(&updated).expect("updated record encodes");
+        assert_eq!(entry.value_hash_hex, hex::encode(sha256(&expected_payload)));
+        assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
+
+        let mut removal = TieredSnapshotPayload::default();
+        removal.push_value::<SccpInboundMessageRecordV1>(
+            TieredKeyHandle::SccpInboundMessage(key),
+            None,
+        );
+        backend
+            .record_world_snapshot_with_payload(&removal)
+            .expect("inbound removal payload snapshot");
+        let manifest = backend.last_manifest().expect("removal manifest");
+        assert!(
+            manifest
+                .hot_entries
+                .iter()
+                .chain(&manifest.cold_entries)
+                .all(|entry| {
+                    entry.segment != TieredSegment::SccpInboundMessages
+                        || entry.key_payload != key_payload
+                }),
+            "removed inbound replay entry must leave the tiered manifest"
+        );
     }
 
     #[test]

@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 
 1. Установите набор инструментов Rust (1,76 или плюс) и восстановите его в хранилище.
 2. Создайте или зарядите бинарники поддержки:
-   - `koto_compile` - компилятор Kotodama, который принимает байт-код IVM/Norito
+   - `koto build` - компилятор Kotodama, который принимает байт-код IVM/Norito
    - `ivm_run` и `ivm_tool` — утилиты для локального выполнения и проверки
    - `iroha_cli` — использовать для развертывания контрактов через Torii.
 
    Файл Makefile du depot посещает ces binaires dans `PATH`. Вы можете использовать артефакты для предварительной компиляции или создания исходных текстов. Если вы скомпилировали локаль инструментальной цепочки, укажите помощники Makefile и бинарники:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Убедитесь, что Iroha находится в процессе выполнения, прежде чем выполнить этап развертывания. Примеры, предполагающие, что Torii доступны для настройки URL-адреса в вашем профиле `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -34,16 +34,15 @@ translation_last_reviewed: 2026-02-07
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Опции:
 
-- `--abi 1` verrouille le contrat sur la version ABI 1 (только поддерживается на момент редактирования).
-- `--max-cycles 0` требует неограниченного исполнения; fixez un nombre positif для заполнения циклов для предотвращения нулевых знаний.
+- `ABI V1` verrouille le contrat sur la version ABI 1 (только поддерживается на момент редактирования).
+- `--max-cycles 1000000` требует неограниченного исполнения; fixez un nombre positif для заполнения циклов для предотвращения нулевых знаний.
 
 ## 2. Инспектор артефактов Norito (опция)
 
@@ -70,7 +69,7 @@ ivm_run target/examples/hello.to --args '{}'
 Если вы удовлетворены контрактом, разверните его через интерфейс командной строки. Fournissez un compte d'autorite, sacle de Signature et soit un fichier `.to` soit un payload Base64 :
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -79,8 +78,8 @@ iroha_cli app contracts deploy \
 Команда соединяет манифест Norito + байт-код через Torii и добавляет статус результата транзакции. Если транзакция действительна, хеш-код, прикрепленный к ответу, может быть использован для восстановления манифестов или списка экземпляров:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ##5. Исполнитель через ToriiПосле регистрации байт-кода вы можете вызвать команду, которая будет ссылаться на стандартный код (например, через `iroha_cli ledger transaction submit` или ваше клиентское приложение). Убедитесь, что у вас есть разрешения на авторизацию системных вызовов (`set_account_detail`, `transfer_asset` и т. д.).
@@ -88,7 +87,7 @@ iroha_cli app contracts instances --namespace apps --table
 ## Советы и депаннаж
 
 - Используйте `make examples-run` для компиляции и выполнения примеров в отдельной команде. Дополните переменные среды `KOTO`/`IVM`, если двоичные файлы не включены в `PATH`.
-- Если `koto_compile` откажется от версии ABI, проверьте, что компилятор и работает ли он в ABI v1 (выполните `koto_compile --abi` без аргументов для поддержки списка).
+- Если `koto build` откажется от версии ABI, проверьте, что компилятор и работает ли он в ABI v1 (выполните `koto build --help` без аргументов для поддержки списка).
 - CLI принимает ключи подписи в шестнадцатеричном формате или Base64. Для проведения тестов вы можете использовать файлы, выданные по номеру `iroha_cli tools crypto keypair`.
 - Для отладки полезных нагрузок Norito, вспомогательная команда `ivm_tool disassemble` помогает коррелировать инструкции с исходным кодом Kotodama.
 

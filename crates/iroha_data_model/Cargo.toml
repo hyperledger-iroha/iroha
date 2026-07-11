@@ -51,10 +51,6 @@ zk-ballot = []
 # Not enabled by default; declared to silence unexpected-cfg warnings.
 packed-struct = []
 
-# Enable server-side evaluation of committed-transaction predicates via
-# an inherent `applies(&CommittedTransaction)` method on CompoundPredicate.
-tx_predicates = []
-
 ## The lightweight query DSL is now the default and unconditional.
 
 [dependencies]

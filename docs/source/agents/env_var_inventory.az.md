@@ -67,9 +67,9 @@ _Sonuncu dəfə `python3 scripts/inventory_env_toggles.py --json docs/source/age
 
 ## CARGO_BIN_EXE_koto_tərtibi (test: 3)
 
-- test: crates/ivm/tests/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- test: crates/ivm/tests/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- test: crates/ivm/tests/cli_smoke.rs:88 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
+- test: crates/ivm/tests/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto build");`
+- test: crates/ivm/tests/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto build");`
+- test: crates/ivm/tests/cli_smoke.rs:88 — `let bin = env!("CARGO_BIN_EXE_koto build");`
 
 ## CARGO_BIN_EXE_sorafs_chunk_dump (test: 1)
 
@@ -653,7 +653,7 @@ _Sonuncu dəfə `python3 scripts/inventory_env_toggles.py --json docs/source/age
 
 ## LANG (test: 3)
 
-- test: crates/ivm/src/bin/koto_lint.rs:702 — `let previous = env::var("LANG").ok();`
+- test: crates/ivm/src/bin/koto check.rs:702 — `let previous = env::var("LANG").ok();`
 - test: sandıqlar/ivm/testlər/i18n.rs:11 — `let old_lang = env::var("LANG").ok();`
 - test: sandıqlar/ivm/testlər/i18n.rs:69 — `let old_lang = env::var("LANG").ok();`
 
@@ -744,10 +744,6 @@ _Sonuncu dəfə `python3 scripts/inventory_env_toggles.py --json docs/source/age
 - məhsul: qutular/ivm/src/cuda.rs:22 — `static BITONIC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx"));`
 - test: crates/ivm/src/ptx_tests.rs:7 — `let out_dir = match std::env::var("OUT_DIR") {`
 - test: crates/ivm/tests/ptx_kernels.rs:5 — `let out_dir = env!("OUT_DIR");`
-
-## P2P_TURN (məhsul: 1)
-
-- məhsul: qutular/iroha_p2p/src/transport.rs:296 — `let endpoint = std::env::var("P2P_TURN")`
 
 ## PATH (məhsul: 2, sınaq: 1)
 

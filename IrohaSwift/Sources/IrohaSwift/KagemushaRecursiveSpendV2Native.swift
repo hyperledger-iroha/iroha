@@ -7,6 +7,9 @@ import Darwin
 extension NoritoNativeBridge {
     private typealias KagemushaV2SymbolProbeFn = @convention(c) () -> Void
     private typealias KagemushaV2FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
+    private typealias KagemushaV2ArchiveOnlyOutFn = @convention(c) (
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias KagemushaV2ArchiveOutFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
@@ -70,6 +73,25 @@ extension NoritoNativeBridge {
         #else
         _ = symbols
         return false
+        #endif
+    }
+
+    func kagemushaRecursiveSpendCapabilitiesV1() throws -> Data? {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+            as: KagemushaV2ArchiveOnlyOutFn.self
+        ) else { return nil }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = function(&output, &outputLength)
+        return try copyKagemushaV2Output(
+            status: status,
+            pointer: output,
+            length: outputLength
+        )
+        #else
+        return nil
         #endif
     }
 
@@ -273,6 +295,13 @@ extension NoritoNativeBridge {
     ) throws -> Data? {
         try callKagemushaV2Archive(
             symbol: "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
+            archive: requestArchive
+        )
+    }
+
+    func kagemushaRecursiveSpendInitV2(requestArchive: Data) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_recursive_spend_init_v2",
             archive: requestArchive
         )
     }

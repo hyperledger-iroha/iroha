@@ -120,3 +120,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   (`namespace.name@semver`) على المعرفات الرقمية.
 - ** تصميم CI ** – أضف المزيد إلى خطوط النشر حتى تنشر المنشورات والـ تركيبات
   وآرتيفاكت مانيفستات حتمية جنبًا إلى جنب مع بيانات وصفية موقعة.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

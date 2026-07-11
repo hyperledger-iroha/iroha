@@ -6,20 +6,19 @@ Library crate used for writing Iroha-compliant smart contracts targeting the Iro
 
 Kotodama sources (`.ko`) compile to IVM bytecode (`.to`) which can be submitted to
 the network or executed locally. The toolchain lives in this repository under the
-`ivm` crate and exposes the compiler binary:
+`ivm` crate and exposes one developer binary:
 
-- `koto_compile` – Kotodama compiler that produces `.to` bytecode (and optional
-  manifests)
+- `koto` – check, build, test, format, document, explain, and LSP commands
 
 ### 1. Install the toolchain
 
 Build the compiler directly from this workspace:
 
 ```bash
-cargo install --path crates/ivm --bin koto_compile
+cargo install --path crates/ivm --bin koto
 ```
 
-Alternatively, invoke it in-place via `cargo run -p ivm --bin koto_compile -- …`.
+Alternatively, invoke it in-place via `cargo run -p ivm --bin koto -- …`.
 For local execution and inspection flows, use the Rust examples under
 `crates/ivm/examples` or embed `ivm::IVM` in a small harness/test.
 
@@ -27,22 +26,19 @@ For local execution and inspection flows, use the Rust examples under
 
 ```bash
 # Compile examples/hello/hello.ko into target/examples/hello.to
-koto_compile examples/hello/hello.ko \
+koto build examples/hello/hello.ko \
   --out target/examples/hello.to \
-  --abi 1 \
-  --max-cycles 0
-# Lint runs automatically; use --no-lint to skip or --deny-lint-warnings to fail on lint output.
+  --max-cycles 1000000
 
 # Optional: emit a manifest alongside the bytecode
-koto_compile path/to/contract.ko \
+koto build path/to/contract.ko \
   --out target/contract.to \
-  --manifest-out target/contract.manifest.json \
-  --abi 1
+  --manifest-out target/contract.manifest.json
 ```
 
-The compiler enforces the IVM ABI header (default `abi_version = 1`). You can
-override the defaults with CLI flags or by embedding metadata blocks in Kotodama
-source (`meta { abi_version = 1; max_cycles = … }`).
+The compiler enforces ABI v1. Source cannot override ABI, vector width, or
+execution feature metadata; required capabilities are derived from the program,
+and the selected cycle ceiling is embedded in the hashed artifact header.
 
 ### 3. Exercise contracts locally (optional)
 

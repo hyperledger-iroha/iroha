@@ -2263,7 +2263,9 @@ contract as top-up. Clients follow `Location` to
 `pending`, `applied`, or `rejected` state. The applied redemption
 result reports finality without an unused top-up-anchor field. Repeating an
 identical signed request resolves to the original operation; reusing its
-operation id for different canonical request bytes is a conflict.
+operation id for different canonical request bytes is a conflict. Operation ids
+share one global namespace across authorities and operation kinds; nonces,
+payload digests, and exact-request replay markers remain authority-scoped.
 The profile-specific `kagemusha-recursive-spend-lineage-onehop-v1` and
 `kagemusha-recursive-spend-lineage-append-v1` proof ids identify the reserved
 verifier-slice profiles. Witnessless chain admission remains fail-closed for

@@ -1,7 +1,11 @@
 // Save a simple ForwardCursor-like value into account metadata at key "cursor".
-// Uses pointer-ABI inputs: account=authority(), key="cursor", value=ForwardCursor{"sc_dummy",1}.
+// Uses pointer-ABI inputs: account=context::authority(), key="cursor", value=ForwardCursor{"sc_dummy",1}.
 seiyaku QueryAssetsAndSaveCursor {
-  kotoage fn run() permission(Admin) {
-    set_account_detail(authority(), name!("cursor"), json!{ query: "sc_dummy", cursor: 1 });
-  }
+    kotoage fn run() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("cursor"),
+            value: Json::parse("{\"cursor\":1,\"query\":\"sc_dummy\"}"),
+        );
+    }
 }

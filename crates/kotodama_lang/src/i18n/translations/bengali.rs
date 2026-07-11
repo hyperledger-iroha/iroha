@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "ফাংশন `{func}`-এ প্যারামিটার `{name}` কখনও ব্যবহার করা হয় না",
     lint_unreachable_after_return: "{context}`-এ অপ্রাপ্য স্টেটমেন্ট পাওয়া গেছে: return-এর পরে থাকা কোড কখনও চালানো হয় না",
     lint_ok: "ঠিক আছে",
-    lint_usage: "ব্যবহার: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "ব্যবহার: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "প্রদত্ত সোর্সের উপর Kotodama এর lint পরীক্ষা চালান।",
     ..english::MESSAGES
 };

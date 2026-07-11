@@ -1,105 +1,140 @@
+//! Bridge and exact first-release SCCP commands.
+
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use base64::Engine as _;
 use clap::Subcommand;
-use eyre::Result;
+use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
-    client::{SccpCapabilities, SccpMessageProofQueryParams, SccpProofManifestSet},
-    data_model::prelude::*,
+    client::{
+        SccpBridgeSubmitResponse, SccpCapabilities, SccpDestinationProofSubmitRequest,
+        SccpNativeMessageSubmitRequest, SccpRecentMessages, SccpRecentMessagesQuery,
+        SccpRegistryLimits, SccpResourceLimits,
+    },
+    data_model::{bridge::SccpRegistryV1, prelude::*},
 };
 
 use crate::{CliOutputFormat, Run, RunContext};
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Emit a bridge receipt as a typed event
+    /// Emit a bridge receipt as a typed event.
     EmitReceipt(EmitReceiptArgs),
-    /// Inspect generic SCCP proof-discovery and artifact surfaces
+    /// Inspect the exact transfer-only SCCP registry and proof inputs.
     #[command(subcommand)]
     Sccp(SccpCommand),
 }
-
 #[derive(Subcommand, Debug)]
 pub enum SccpCommand {
-    /// Fetch the public SCCP capability snapshot
+    /// Fetch the closed first-release SCCP HTTP surface.
     Capabilities,
-    /// Fetch SCCP chain-specific proof manifests
-    Manifests,
-    /// Fetch a typed SCCP message proof artifact by message id
-    Artifact(ArtifactArgs),
-    /// Fetch a normalized SCCP counterparty proof job by message id
-    Job(ArtifactArgs),
+    /// Fetch the authoritative typed SCCP route registry.
+    Registry,
+    /// Discover newest-first finalized SORA-origin messages.
+    Recent(RecentArgs),
+    /// Fetch one finalized canonical SCCP message bundle.
+    Bundle(MessageArgs),
+    /// Fetch the exact state-derived Groth16 prover request for one message.
+    ProofRequest(MessageArgs),
+    /// Prepare or directly submit one closed destination-proof artifact.
+    SubmitDestinationProof(SubmitDestinationProofArgs),
+    /// Prepare or directly submit one protocol-native inbound proof.
+    SubmitNativeMessage(SubmitNativeMessageArgs),
+}
+#[derive(clap::Args, Debug, Clone)]
+pub struct DetachedSubmitArgs {
+    /// File containing the exact canonical padded-base64 transaction payload returned by prepare.
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires_all = ["signature_b64_file", "creation_time_ms"]
+    )]
+    transaction_payload_b64_file: Option<PathBuf>,
+    /// File containing one canonical padded-base64 detached signature over the prepared payload hash.
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires_all = ["transaction_payload_b64_file", "creation_time_ms"]
+    )]
+    signature_b64_file: Option<PathBuf>,
+    /// Positive transaction creation timestamp in Unix milliseconds.
+    ///
+    /// Direct submission must repeat the value returned by preparation.
+    #[arg(long)]
+    creation_time_ms: Option<u64>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SubmitDestinationProofArgs {
+    /// File containing one canonical Norito SCCP Groth16 destination artifact.
+    #[arg(long, value_name = "PATH")]
+    artifact: PathBuf,
+    #[command(flatten)]
+    detached: DetachedSubmitArgs,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SubmitNativeMessageArgs {
+    /// File containing one canonical Norito protocol-native SCCP inbound proof.
+    #[arg(long, value_name = "PATH")]
+    proof: PathBuf,
+    #[command(flatten)]
+    detached: DetachedSubmitArgs,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct EmitReceiptArgs {
-    /// Bridge lane id (numeric)
+    /// Bridge lane id (numeric).
     #[arg(long)]
     lane: u32,
-    /// Direction: lock|mint|burn|release
+    /// Direction: lock|mint|burn|release.
     #[arg(long)]
     direction: String,
-    /// Source tx hash (hex, 32 bytes)
+    /// Source transaction hash (hex, 32 bytes).
     #[arg(long)]
     source_tx: String,
-    /// Amount (integer units)
+    /// Amount in integer asset units.
     #[arg(long)]
     amount: u128,
-    /// Asset id (Iroha canonical), e.g., "wBTC#btc"
+    /// Canonical Iroha asset id.
     #[arg(long)]
     asset_id: String,
-    /// Recipient (Iroha account id or external address payload)
+    /// Iroha account id or external address payload.
     #[arg(long)]
     recipient: String,
-    /// Optional destination tx hash (hex, 32 bytes)
+    /// Optional destination transaction hash (hex, 32 bytes).
     #[arg(long)]
     dest_tx: Option<String>,
-    /// Proof hash (hex, 32 bytes)
+    /// Proof hash (hex, 32 bytes).
     #[arg(long)]
     proof_hash: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
-pub struct ArtifactArgs {
-    /// SCCP message id (hex, 32 bytes)
+pub struct MessageArgs {
+    /// Nonzero SCCP message id (hex, 32 bytes).
     #[arg(long, value_name = "HEX")]
     message_id: String,
-    /// Destination network id (hex, 32 bytes)
-    #[arg(long, value_name = "HEX")]
-    network_id_hex: Option<String>,
-    /// EVM verifier contract address (hex, 20 bytes)
-    #[arg(long, value_name = "HEX")]
-    verifier_address_hex: Option<String>,
-    /// EVM bridge contract address (hex, 20 bytes)
-    #[arg(long, value_name = "HEX")]
-    bridge_address_hex: Option<String>,
-    /// Destination verifier contract code hash (hex, 32 bytes)
-    #[arg(long, value_name = "HEX")]
-    verifier_code_hash_hex: Option<String>,
-    /// Destination verifier key hash (hex, 32 bytes)
-    #[arg(long, value_name = "HEX")]
-    verifier_key_hash_hex: Option<String>,
-    /// Expected canonical destination binding hash (hex, 32 bytes)
-    #[arg(long, value_name = "HEX")]
-    expected_destination_binding_hash_hex: Option<String>,
-    /// TRON verifier contract address
-    #[arg(long, value_name = "ADDRESS")]
-    tron_verifier_address: Option<String>,
-    /// Externally generated 384-byte Groth16 ABI proof tuple (hex)
-    #[arg(long, value_name = "HEX")]
-    proof_bytes_hex: Option<String>,
 }
 
-impl ArtifactArgs {
-    fn proof_query_params(&self) -> SccpMessageProofQueryParams {
-        SccpMessageProofQueryParams {
-            network_id_hex: self.network_id_hex.clone(),
-            verifier_address_hex: self.verifier_address_hex.clone(),
-            bridge_address_hex: self.bridge_address_hex.clone(),
-            verifier_code_hash_hex: self.verifier_code_hash_hex.clone(),
-            verifier_key_hash_hex: self.verifier_key_hash_hex.clone(),
-            expected_destination_binding_hash_hex: self
-                .expected_destination_binding_hash_hex
-                .clone(),
-            tron_verifier_address: self.tron_verifier_address.clone(),
-            proof_bytes_hex: self.proof_bytes_hex.clone(),
+#[derive(clap::Args, Debug)]
+pub struct RecentArgs {
+    /// Inclusive block height through which to scan backwards.
+    #[arg(long)]
+    from: Option<u64>,
+    /// Maximum number of messages to return (inclusive range `1..=50`).
+    #[arg(long)]
+    limit: Option<u64>,
+}
+
+impl RecentArgs {
+    fn query(&self) -> SccpRecentMessagesQuery {
+        SccpRecentMessagesQuery {
+            from: self.from,
+            limit: self.limit,
         }
     }
 }
@@ -107,49 +142,60 @@ impl ArtifactArgs {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
-            Command::EmitReceipt(args) => emit_receipt(context, args),
-            Command::Sccp(cmd) => match cmd {
+            Self::EmitReceipt(args) => emit_receipt(context, args),
+            Self::Sccp(command) => match command {
                 SccpCommand::Capabilities => sccp_capabilities(context),
-                SccpCommand::Manifests => sccp_manifests(context),
-                SccpCommand::Artifact(args) => sccp_artifact(context, args),
-                SccpCommand::Job(args) => sccp_job(context, args),
+                SccpCommand::Registry => sccp_registry(context),
+                SccpCommand::Recent(args) => sccp_recent(context, args),
+                SccpCommand::Bundle(args) => sccp_bundle(context, args),
+                SccpCommand::ProofRequest(args) => sccp_proof_request(context, args),
+                SccpCommand::SubmitDestinationProof(args) => {
+                    sccp_submit_destination_proof(context, args)
+                }
+                SccpCommand::SubmitNativeMessage(args) => sccp_submit_native_message(context, args),
             },
         }
     }
 }
 
-fn hex32(s: &str) -> Result<[u8; 32]> {
-    let bytes = hex::decode(s.trim_start_matches("0x"))?;
-    let mut out = [0u8; 32];
-    if bytes.len() != 32 {
-        return Err(eyre::eyre!("expected 32 bytes, got {}", bytes.len()));
+fn hex32(value: &str) -> Result<[u8; 32]> {
+    let value = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    if value.len() != 64 {
+        return Err(eyre::eyre!(
+            "expected exactly 32 hexadecimal bytes, got {} characters",
+            value.len()
+        ));
     }
-    out.copy_from_slice(&bytes);
+    let mut out = [0_u8; 32];
+    hex::decode_to_slice(value, &mut out)?;
     Ok(out)
 }
 
-fn emit_receipt(ctx: &mut impl RunContext, a: EmitReceiptArgs) -> Result<()> {
-    let source_tx = hex32(&a.source_tx)?;
-    let dest_tx = match &a.dest_tx {
-        Some(h) => Some(hex32(h)?),
-        None => None,
-    };
-    let proof_hash = match &a.proof_hash {
-        Some(h) => hex32(h)?,
-        None => [0u8; 32],
-    };
+fn emit_receipt(ctx: &mut impl RunContext, args: EmitReceiptArgs) -> Result<()> {
+    let source_tx = hex32(&args.source_tx)?;
+    let dest_tx = args.dest_tx.as_deref().map(hex32).transpose()?;
+    let proof_hash = args
+        .proof_hash
+        .as_deref()
+        .map(hex32)
+        .transpose()?
+        .unwrap_or([0; 32]);
     let receipt = BridgeReceipt {
-        lane: LaneId::new(a.lane),
-        direction: a.direction.into_bytes(),
+        lane: LaneId::new(args.lane),
+        direction: args.direction.into_bytes(),
         source_tx,
         dest_tx,
         proof_hash,
-        amount: a.amount,
-        asset_id: a.asset_id.into_bytes(),
-        recipient: a.recipient.into_bytes(),
+        amount: args.amount,
+        asset_id: args.asset_id.into_bytes(),
+        recipient: args.recipient.into_bytes(),
     };
-    let isi = RecordBridgeReceipt::new(receipt);
-    ctx.finish(vec![InstructionBox::from(isi)])
+    ctx.finish(vec![InstructionBox::from(RecordBridgeReceipt::new(
+        receipt,
+    ))])
 }
 
 fn sccp_capabilities(ctx: &mut impl RunContext) -> Result<()> {
@@ -160,1399 +206,1076 @@ fn sccp_capabilities(ctx: &mut impl RunContext) -> Result<()> {
     }
 }
 
-fn sccp_manifests(ctx: &mut impl RunContext) -> Result<()> {
+fn sccp_registry(ctx: &mut impl RunContext) -> Result<()> {
+    let registry = ctx.client_from_config().get_sccp_registry()?;
+    match ctx.output_format() {
+        CliOutputFormat::Text => ctx.println(render_sccp_registry_summary(&registry)),
+        CliOutputFormat::Json => ctx.print_data(&registry),
+    }
+}
+
+fn sccp_recent(ctx: &mut impl RunContext, args: RecentArgs) -> Result<()> {
+    let query = args.query();
     match ctx.output_format() {
         CliOutputFormat::Text => {
-            let manifests = ctx.client_from_config().get_sccp_proof_manifests()?;
-            ctx.println(render_sccp_manifests_summary(&manifests))
+            let messages = ctx
+                .client_from_config()
+                .get_sccp_recent_messages_with_query(query)?;
+            ctx.println(render_sccp_recent_messages_summary(&messages))
         }
         CliOutputFormat::Json => {
-            let manifests = ctx.client_from_config().get_sccp_proof_manifests_json()?;
-            ctx.print_data(&manifests)
+            let messages = ctx
+                .client_from_config()
+                .get_sccp_recent_messages_json_with_query(query)?;
+            ctx.print_data(&messages)
         }
     }
 }
 
-fn sccp_artifact(ctx: &mut impl RunContext, args: ArtifactArgs) -> Result<()> {
-    let query_params = args.proof_query_params();
+fn sccp_bundle(ctx: &mut impl RunContext, args: MessageArgs) -> Result<()> {
     match ctx.output_format() {
         CliOutputFormat::Text => {
-            let artifact = ctx
+            let bundle = ctx
                 .client_from_config()
-                .get_sccp_message_proof_artifact_with_params(&args.message_id, &query_params)?;
-            ctx.println(render_sccp_artifact_summary(&artifact))
+                .get_sccp_message_bundle(&args.message_id)?;
+            ctx.println(render_sccp_message_bundle_summary(&bundle))
         }
         CliOutputFormat::Json => {
-            let artifact = ctx
+            let bundle = ctx
                 .client_from_config()
-                .get_sccp_message_proof_artifact_json_with_params(
-                    &args.message_id,
-                    &query_params,
-                )?;
-            ctx.print_data(&artifact)
+                .get_sccp_message_bundle_json(&args.message_id)?;
+            ctx.print_data(&bundle)
         }
     }
 }
 
-fn sccp_job(ctx: &mut impl RunContext, args: ArtifactArgs) -> Result<()> {
-    let query_params = args.proof_query_params();
+fn sccp_proof_request(ctx: &mut impl RunContext, args: MessageArgs) -> Result<()> {
     match ctx.output_format() {
         CliOutputFormat::Text => {
-            let job = ctx
+            let request = ctx
                 .client_from_config()
-                .get_sccp_message_proof_job_with_params(&args.message_id, &query_params)?;
-            ctx.println(render_sccp_job_summary(&job))
+                .get_sccp_groth16_proof_request(&args.message_id)?;
+            ctx.println(render_sccp_proof_request_summary(&request))
         }
         CliOutputFormat::Json => {
-            let job = ctx
+            let request = ctx
                 .client_from_config()
-                .get_sccp_message_proof_job_json_with_params(&args.message_id, &query_params)?;
-            ctx.print_data(&job)
+                .get_sccp_groth16_proof_request_json(&args.message_id)?;
+            ctx.print_data(&request)
         }
     }
+}
+
+const MAX_SCCP_TRANSACTION_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+const MAX_SCCP_DETACHED_SIGNATURE_BYTES: usize = 16 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DetachedSubmitMaterial {
+    transaction_payload_b64: Option<String>,
+    signature_b64: Option<String>,
+    creation_time_ms: Option<u64>,
+}
+
+fn read_bounded_binary_artifact(path: &Path, maximum: usize, label: &str) -> Result<Vec<u8>> {
+    let metadata = fs::metadata(path)
+        .wrap_err_with(|| format!("failed to inspect {label} file `{}`", path.display()))?;
+    if metadata.len() == 0 || metadata.len() > maximum as u64 {
+        return Err(eyre!(
+            "{label} file must contain between 1 and {maximum} bytes"
+        ));
+    }
+    let bytes = fs::read(path)
+        .wrap_err_with(|| format!("failed to read {label} file `{}`", path.display()))?;
+    if bytes.is_empty() || bytes.len() > maximum {
+        return Err(eyre!(
+            "{label} file must contain between 1 and {maximum} bytes"
+        ));
+    }
+    Ok(bytes)
+}
+
+fn read_canonical_base64_file(path: &Path, maximum: usize, label: &str) -> Result<String> {
+    let maximum_encoded = 4 * maximum.div_ceil(3);
+    let metadata = fs::metadata(path)
+        .wrap_err_with(|| format!("failed to inspect {label} file `{}`", path.display()))?;
+    if metadata.len() == 0 || metadata.len() > (maximum_encoded + 2) as u64 {
+        return Err(eyre!(
+            "{label} file exceeds the {maximum}-byte decoded protocol bound"
+        ));
+    }
+    let mut bytes = fs::read(path)
+        .wrap_err_with(|| format!("failed to read {label} file `{}`", path.display()))?;
+    if bytes.ends_with(b"\r\n") {
+        bytes.truncate(bytes.len() - 2);
+    } else if bytes.ends_with(b"\n") {
+        bytes.truncate(bytes.len() - 1);
+    }
+    if bytes.is_empty() || bytes.iter().any(|byte| byte.is_ascii_whitespace()) {
+        return Err(eyre!(
+            "{label} file must contain exactly one canonical padded-base64 value"
+        ));
+    }
+    let value = String::from_utf8(bytes)
+        .map_err(|_| eyre!("{label} file must contain ASCII padded base64"))?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(value.as_bytes())
+        .map_err(|_| eyre!("{label} file is not valid padded base64"))?;
+    if decoded.is_empty()
+        || decoded.len() > maximum
+        || base64::engine::general_purpose::STANDARD.encode(&decoded) != value
+    {
+        return Err(eyre!(
+            "{label} file must contain one nonempty canonical padded-base64 value within the {maximum}-byte bound"
+        ));
+    }
+    Ok(value)
+}
+
+fn validate_detached_signature_matches_payload(
+    authority: &AccountId,
+    transaction_payload_b64: &str,
+    signature_b64: &str,
+) -> Result<()> {
+    let payload = base64::engine::general_purpose::STANDARD
+        .decode(transaction_payload_b64)
+        .map_err(|_| eyre!("transaction payload file is not canonical padded base64"))?;
+    let signature_bytes = base64::engine::general_purpose::STANDARD
+        .decode(signature_b64)
+        .map_err(|_| eyre!("signature file is not canonical padded base64"))?;
+    let signature = iroha_crypto::Signature::try_from_bytes(&signature_bytes)
+        .map_err(|error| eyre!("detached signature failed admission: {error}"))?;
+    let signatory = authority.try_signatory().ok_or_else(|| {
+        eyre!(
+            "direct SCCP submission requires a single-key authority; use the prepared payload with the multisig workflow instead"
+        )
+    })?;
+    let signing_hash = iroha_crypto::Hash::new(&payload);
+    signature
+        .verify(signatory, signing_hash.as_ref())
+        .map_err(|_| {
+            eyre!("detached signature does not verify the exact prepared transaction payload")
+        })
+}
+
+fn load_detached_submit_material(
+    args: &DetachedSubmitArgs,
+    authority: &AccountId,
+) -> Result<DetachedSubmitMaterial> {
+    if args.creation_time_ms == Some(0) {
+        return Err(eyre!("creation_time_ms must be a positive integer"));
+    }
+    match (
+        args.transaction_payload_b64_file.as_deref(),
+        args.signature_b64_file.as_deref(),
+    ) {
+        (None, None) => Ok(DetachedSubmitMaterial {
+            transaction_payload_b64: None,
+            signature_b64: None,
+            creation_time_ms: args.creation_time_ms,
+        }),
+        (Some(payload_path), Some(signature_path)) => {
+            if args.creation_time_ms.is_none() {
+                return Err(eyre!(
+                    "direct SCCP submission requires --creation-time-ms from the preparation response"
+                ));
+            }
+            let transaction_payload_b64 = read_canonical_base64_file(
+                payload_path,
+                MAX_SCCP_TRANSACTION_PAYLOAD_BYTES,
+                "transaction payload",
+            )?;
+            let signature_b64 = read_canonical_base64_file(
+                signature_path,
+                MAX_SCCP_DETACHED_SIGNATURE_BYTES,
+                "detached signature",
+            )?;
+            validate_detached_signature_matches_payload(
+                authority,
+                &transaction_payload_b64,
+                &signature_b64,
+            )?;
+            Ok(DetachedSubmitMaterial {
+                transaction_payload_b64: Some(transaction_payload_b64),
+                signature_b64: Some(signature_b64),
+                creation_time_ms: args.creation_time_ms,
+            })
+        }
+        _ => Err(eyre!(
+            "preparation requires neither signing file; direct submission requires both --transaction-payload-b64-file and --signature-b64-file"
+        )),
+    }
+}
+
+fn submit_sccp_once<T>(description: &str, submit: impl FnOnce() -> Result<T>) -> Result<T> {
+    submit().wrap_err_with(|| format!("{description} failed without retrying or rebuilding"))
+}
+
+fn is_nonzero_lower_hex32(value: &str) -> bool {
+    value.len() == 64
+        && value.bytes().any(|byte| byte != b'0')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn validate_sccp_submit_response_state(response: &SccpBridgeSubmitResponse) -> Result<()> {
+    if response.payload_kind != "transfer" {
+        return Err(eyre!(
+            "SCCP submit response payload_kind must be the closed first-release transfer kind"
+        ));
+    }
+    if !is_nonzero_lower_hex32(&response.message_id_hex) {
+        return Err(eyre!(
+            "SCCP submit response message_id_hex must be a nonzero lowercase 32-byte hash"
+        ));
+    }
+    if response.creation_time_ms == 0 {
+        return Err(eyre!(
+            "SCCP submit response creation_time_ms must be positive"
+        ));
+    }
+    if response.range_start_height == 0 || response.range_end_height < response.range_start_height {
+        return Err(eyre!(
+            "SCCP submit response proof height range must be positive and ordered"
+        ));
+    }
+    let route_hash = &response.route_configuration_hash_hex;
+    if !is_nonzero_lower_hex32(route_hash) {
+        return Err(eyre!(
+            "SCCP submit response route_configuration_hash_hex must be a nonzero lowercase 32-byte hash"
+        ));
+    }
+    match (
+        response.submitted,
+        response.tx_hash_hex.as_ref(),
+        response.transaction_payload_b64.as_ref(),
+        response.signing_message_b64.as_ref(),
+    ) {
+        (true, Some(tx_hash), None, None) if is_nonzero_lower_hex32(tx_hash) => Ok(()),
+        (false, None, Some(payload_b64), Some(signing_message_b64)) => {
+            let payload = base64::engine::general_purpose::STANDARD
+                .decode(payload_b64)
+                .map_err(|_| eyre!("prepared response transaction_payload_b64 is malformed"))?;
+            let signing_message = base64::engine::general_purpose::STANDARD
+                .decode(signing_message_b64)
+                .map_err(|_| eyre!("prepared response signing_message_b64 is malformed"))?;
+            if payload.is_empty()
+                || payload.len() > MAX_SCCP_TRANSACTION_PAYLOAD_BYTES
+                || signing_message.len() != iroha_crypto::Hash::LENGTH
+                || base64::engine::general_purpose::STANDARD.encode(&payload)
+                    != payload_b64.as_str()
+                || base64::engine::general_purpose::STANDARD.encode(&signing_message)
+                    != signing_message_b64.as_str()
+                || signing_message.as_slice() != iroha_crypto::Hash::new(&payload).as_ref()
+            {
+                return Err(eyre!(
+                    "prepared SCCP response signing message does not match the exact transaction payload"
+                ));
+            }
+            Ok(())
+        }
+        _ => Err(eyre!(
+            "SCCP submit response has an inconsistent prepared/submitted field state"
+        )),
+    }
+}
+
+fn render_sccp_submit_response(response: &SccpBridgeSubmitResponse) -> Result<String> {
+    validate_sccp_submit_response_state(response)?;
+    let prefix = format!(
+        "sccp submit: submitted={} message_id_hex={} backend={} counterparty_chain={} counterparty_domain={} route_configuration_hash_hex={} range_start_height={} range_end_height={} creation_time_ms={}",
+        response.submitted,
+        response.message_id_hex,
+        response.backend,
+        response.counterparty_chain,
+        response.counterparty_domain,
+        response.route_configuration_hash_hex,
+        response.range_start_height,
+        response.range_end_height,
+        response.creation_time_ms,
+    );
+    if response.submitted {
+        return Ok(format!(
+            "{prefix}\ntx_hash_hex={}",
+            response
+                .tx_hash_hex
+                .as_deref()
+                .expect("validated submitted response has a transaction hash")
+        ));
+    }
+    Ok(format!(
+        "{prefix}\ntransaction_payload_b64={}\nsigning_message_b64={}",
+        response
+            .transaction_payload_b64
+            .as_deref()
+            .expect("validated prepared response has a transaction payload"),
+        response
+            .signing_message_b64
+            .as_deref()
+            .expect("validated prepared response has a signing message"),
+    ))
+}
+
+fn print_sccp_submit_response(
+    ctx: &mut impl RunContext,
+    response: &SccpBridgeSubmitResponse,
+) -> Result<()> {
+    validate_sccp_submit_response_state(response)?;
+    match ctx.output_format() {
+        CliOutputFormat::Text => ctx.println(render_sccp_submit_response(response)?),
+        CliOutputFormat::Json => ctx.print_data(response),
+    }
+}
+
+fn sccp_submit_destination_proof(
+    ctx: &mut impl RunContext,
+    args: SubmitDestinationProofArgs,
+) -> Result<()> {
+    let authority = ctx.config().account.clone();
+    let artifact = read_bounded_binary_artifact(
+        &args.artifact,
+        iroha_sccp::SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1,
+        "SCCP destination artifact",
+    )?;
+    let detached = load_detached_submit_material(&args.detached, &authority)?;
+    let request = SccpDestinationProofSubmitRequest {
+        authority,
+        signature_b64: detached.signature_b64,
+        transaction_payload_b64: detached.transaction_payload_b64,
+        destination_proof_b64: base64::engine::general_purpose::STANDARD.encode(artifact),
+        creation_time_ms: detached.creation_time_ms,
+    };
+    let client = ctx.client_from_config();
+    let response = submit_sccp_once("SCCP destination-proof submission", || {
+        client.post_sccp_destination_proof(&request)
+    })?;
+    print_sccp_submit_response(ctx, &response)
+}
+
+fn sccp_submit_native_message(
+    ctx: &mut impl RunContext,
+    args: SubmitNativeMessageArgs,
+) -> Result<()> {
+    let authority = ctx.config().account.clone();
+    let proof = read_bounded_binary_artifact(
+        &args.proof,
+        iroha_sccp::SCCP_NATIVE_ADMISSION_MAX_ENCODED_BYTES_V1,
+        "SCCP native proof",
+    )?;
+    let detached = load_detached_submit_material(&args.detached, &authority)?;
+    let request = SccpNativeMessageSubmitRequest {
+        authority,
+        signature_b64: detached.signature_b64,
+        transaction_payload_b64: detached.transaction_payload_b64,
+        native_proof_b64: base64::engine::general_purpose::STANDARD.encode(proof),
+        creation_time_ms: detached.creation_time_ms,
+    };
+    let client = ctx.client_from_config();
+    let response = submit_sccp_once("SCCP native-message submission", || {
+        client.post_sccp_native_message(&request)
+    })?;
+    print_sccp_submit_response(ctx, &response)
 }
 
 fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
-    let payloads = capabilities.message_payload_kinds.join(",");
-    let codecs = capabilities
-        .codecs
-        .iter()
-        .map(|codec| codec.key.as_str())
-        .collect::<Vec<_>>()
-        .join(",");
-    let counterparties = capabilities
-        .counterparties
-        .iter()
-        .map(|counterparty| {
-            format!(
-                "{}({}:{}:{}:{}:{})",
-                counterparty.chain,
-                counterparty.domain,
-                counterparty.counterparty_account_codec_key,
-                counterparty.verifier_backend.key.as_str(),
-                render_sccp_destination_rollout_summary(&counterparty.destination_rollout),
-                if counterparty.production_ready {
-                    "ready"
-                } else {
-                    "disabled"
-                }
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
     format!(
-        "sccp capabilities: local={}({}) proof_family={} payloads={} codecs={} artifact={} job={} manifests={} counterparties=[{}]",
-        capabilities.local_chain,
-        capabilities.local_domain,
-        capabilities.proof_family,
-        payloads,
-        codecs,
-        capabilities.message_proof_path,
-        capabilities.message_job_path,
-        capabilities.proof_manifest_path,
-        counterparties
+        "sccp capabilities: version={} registry_revision={} registry={} bundle={} proof_request={} recent={} proof_submit={} native_submit={}\nregistry_limits: lanes={} live_total={} live_per_lane={} retained_routes_per_lane={} retained_anchors_per_lane={}\nresource_limits: proofs_tx/block={}/{} proof_bytes_each/tx/block={}/{}/{} native_headers_tx/block={}/{} eth_updates_tx/block={}/{} native_bytes_tx/block={}/{} secp_tx/block={}/{} bls_checks_tx/block={}/{} bls_contributions_tx/block={}/{} bn254_tx/block={}/{}",
+        capabilities.version,
+        capabilities.registry_revision,
+        capabilities.registry_path,
+        capabilities.message_bundle_path,
+        capabilities.proof_request_path,
+        capabilities.recent_messages_path,
+        capabilities
+            .proof_submit_path
+            .as_deref()
+            .unwrap_or("disabled"),
+        capabilities
+            .native_message_submit_path
+            .as_deref()
+            .unwrap_or("disabled"),
+        capabilities.registry_limits.max_governed_lanes,
+        capabilities.registry_limits.max_live_governed_routes,
+        capabilities.registry_limits.max_live_routes_per_lane,
+        capabilities.registry_limits.max_retained_routes_per_lane,
+        capabilities
+            .registry_limits
+            .max_retained_native_trust_anchors_per_lane,
+        capabilities.resource_limits.max_proofs_per_transaction,
+        capabilities.resource_limits.max_proofs_per_block,
+        capabilities.resource_limits.max_proof_bytes_per_proof,
+        capabilities.resource_limits.max_proof_bytes_per_transaction,
+        capabilities.resource_limits.max_proof_bytes_per_block,
+        capabilities
+            .resource_limits
+            .max_native_headers_per_transaction,
+        capabilities.resource_limits.max_native_headers_per_block,
+        capabilities
+            .resource_limits
+            .max_ethereum_light_client_updates_per_transaction,
+        capabilities
+            .resource_limits
+            .max_ethereum_light_client_updates_per_block,
+        capabilities
+            .resource_limits
+            .max_native_header_bytes_per_transaction,
+        capabilities
+            .resource_limits
+            .max_native_header_bytes_per_block,
+        capabilities
+            .resource_limits
+            .max_secp256k1_recoveries_per_transaction,
+        capabilities
+            .resource_limits
+            .max_secp256k1_recoveries_per_block,
+        capabilities
+            .resource_limits
+            .max_bls_aggregate_checks_per_transaction,
+        capabilities
+            .resource_limits
+            .max_bls_aggregate_checks_per_block,
+        capabilities
+            .resource_limits
+            .max_bls_signer_contributions_per_transaction,
+        capabilities
+            .resource_limits
+            .max_bls_signer_contributions_per_block,
+        capabilities
+            .resource_limits
+            .max_bn254_pairing_checks_per_transaction,
+        capabilities
+            .resource_limits
+            .max_bn254_pairing_checks_per_block,
     )
 }
 
-fn render_sccp_manifests_summary(manifests: &SccpProofManifestSet) -> String {
+fn render_sccp_registry_summary(registry: &SccpRegistryV1) -> String {
+    let route_count = registry
+        .lanes
+        .iter()
+        .map(|lane| lane.routes.len())
+        .sum::<usize>();
     let mut lines = vec![format!(
-        "sccp manifests: local={}({}) proof_family={} count={}",
-        manifests.local_chain,
-        manifests.local_domain,
-        manifests.proof_family,
-        manifests.manifests.len()
+        "sccp registry: version={} lanes={} routes={}",
+        registry.version,
+        registry.lanes.len(),
+        route_count
     )];
-    lines.extend(manifests.manifests.iter().map(|manifest| {
+    for lane in &registry.lanes {
+        let anchor = lane.current_native_trust_anchor().map_or_else(
+            || "none".to_owned(),
+            |anchor| {
+                format!(
+                    "{}@{}:{}",
+                    anchor.backend.backend_label(),
+                    anchor.checkpoint_height,
+                    hex::encode(anchor.anchor_hash)
+                )
+            },
+        );
+        lines.push(format!(
+            "lane {}->{} current_anchor={} retained_anchors={} routes={}",
+            lane.lane_id.source.profile_key(),
+            lane.lane_id.target.profile_key(),
+            anchor,
+            lane.native_trust_anchors.len(),
+            lane.routes.len()
+        ));
+        for route in &lane.routes {
+            let configuration = route
+                .route_configuration_hash()
+                .map(hex::encode)
+                .unwrap_or_else(|error| format!("invalid:{error}"));
+            lines.push(format!(
+                "  route={}/{} revision={} activation={:?} configuration={}",
+                route.route_id, route.asset_key, route.revision, route.activation, configuration
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
+fn render_sccp_recent_messages_summary(messages: &SccpRecentMessages) -> String {
+    let mut lines = vec![format!(
+        "sccp recent messages: count={}",
+        messages.items.len()
+    )];
+    lines.extend(messages.items.iter().map(|message| {
         format!(
-            "chain={} domain={} backend={} verifier_backend={} registry={} security={:?} anchors={:?} binding={} finality={:?} verifier={:?} codec={} rollout={} ready={} submit={}",
-            manifest.chain,
-            manifest.counterparty_domain,
-            manifest.message_backend,
-            manifest.verifier_backend.key.as_str(),
-            manifest.registry_backend,
-            manifest.security_model,
-            manifest.anchor_governance,
-            manifest.destination_binding.key,
-            manifest.finality_model,
-            manifest.verifier_target,
-            manifest.counterparty_account_codec_key,
-            render_sccp_destination_rollout_summary(&manifest.destination_rollout),
-            manifest.production_ready,
-            render_sccp_submission_template_summary(&manifest.submission_template)
+            "height={} id={} kind={} {}->{} target_domain={} binding={} configuration={} route={} asset={} amount={} bundle={} proof_request={}",
+            message.height,
+            message.message_id_hex,
+            message.kind,
+            message.source_profile,
+            message.target_profile,
+            message.target_domain,
+            message.destination_binding_hash,
+            message.route_configuration_hash,
+            message.route_id.as_deref().unwrap_or("none"),
+            message.asset_id.as_deref().unwrap_or("none"),
+            message.amount,
+            message.links.bundle_path,
+            message.links.proof_request_path,
         )
     }));
     lines.join("\n")
 }
 
-fn render_sccp_destination_rollout_summary(
-    rollout: &iroha_sccp::SccpDestinationRolloutV1,
+fn render_sccp_message_bundle_summary(bundle: &iroha_sccp::TairaSccpMessageProofV1) -> String {
+    let projection = iroha_sccp::sccp_payload_projection(&bundle.payload)
+        .map(|projection| render_sccp_payload_projection_summary(&projection))
+        .unwrap_or_else(|| "invalid-transfer".to_owned());
+    let finality = iroha_sccp::sccp_message_public_inputs(bundle)
+        .map(|inputs| {
+            format!(
+                "height={} block_hash={}",
+                inputs.finality_height,
+                hex::encode(inputs.finality_block_hash)
+            )
+        })
+        .unwrap_or_else(|| "invalid-finality".to_owned());
+    format!(
+        "sccp bundle: id={} lane={}->{} binding={} configuration={} root={} {} payload={}",
+        hex::encode(bundle.commitment.message_id),
+        bundle.commitment.context.lane.source.profile_key(),
+        bundle.commitment.context.lane.target.profile_key(),
+        hex::encode(bundle.commitment.context.destination_binding_hash),
+        hex::encode(bundle.commitment.context.route_configuration_hash),
+        hex::encode(bundle.commitment_root),
+        finality,
+        projection,
+    )
+}
+
+fn render_sccp_proof_request_summary(
+    request: &iroha_sccp::SccpGroth16Bn254ProofRequestV1,
 ) -> String {
     format!(
-        "{:?}/verifier_live={}/anchors_live={}",
-        rollout.verifier_plan, rollout.immutable_verifier_ready, rollout.anchors_ready
-    )
-}
-
-fn render_sccp_artifact_summary(
-    artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
-) -> String {
-    let projection_summary =
-        match iroha_sccp::build_sccp_counterparty_proof_job_from_artifact(artifact) {
-            Some(job) => format!(
-                " projection={} submit={}",
-                render_sccp_payload_projection_summary(&job.payload_projection),
-                render_sccp_submission_template_summary(&job.submission_template)
-            ),
-            None => String::new(),
-        };
-    let inner_summary = match iroha_sccp::build_sccp_message_transparent_inner_proof_from_artifact(
-        artifact,
-    ) {
-        Some(inner) => format!(
-            " inner_family={:?} inner_payload={} statement_hash={} verifier_backend={} proof_parameter=fastpq-lane-balanced",
-            inner.chain_family,
-            inner.payload_kind,
-            hex::encode(inner.statement_hash),
-            inner.verifier_backend.key.as_str()
-        ),
-        None => format!(" proof_bytes_len={}", artifact.proof_bytes.len()),
-    };
-    let open_verify_summary =
-        iroha_sccp::summarize_sccp_message_transparent_open_verify_proof_from_artifact(artifact)
-            .map(render_sccp_open_verify_summary)
-            .unwrap_or_default();
-    format!(
-        "sccp artifact: message_id={} payload={} chain={}({}) backend={} verifier_backend={} security={:?} anchors={:?} binding={} proof_family={} finality_height={} commitment_root={}{}{}{} package={}/{}",
-        hex::encode(artifact.public_inputs.message_id),
-        iroha_sccp::sccp_message_payload_kind_key(&artifact.bundle.payload),
-        iroha_sccp::sccp_chain_key_for_domain(artifact.counterparty_domain).unwrap_or("unknown"),
-        artifact.counterparty_domain,
-        artifact.message_backend,
-        artifact.verifier_backend.key.as_str(),
-        artifact.security_model,
-        artifact.anchor_governance,
-        artifact.destination_binding.key,
-        artifact.proof_family,
-        artifact.public_inputs.finality_height,
-        hex::encode(artifact.public_inputs.commitment_root),
-        projection_summary,
-        inner_summary,
-        open_verify_summary,
-        artifact.submission_package.submission_kind,
-        artifact.submission_package.envelope_encoding
-    )
-}
-
-fn render_sccp_job_summary(job: &iroha_sccp::SccpCounterpartyProofJobV1) -> String {
-    let open_verify_summary =
-        iroha_sccp::build_sccp_message_transparent_open_verify_summary_from_bundle(&job.bundle)
-            .map(render_sccp_open_verify_summary)
-            .unwrap_or_default();
-    format!(
-        "sccp job: message_id={} payload={} chain={}({}) backend={} verifier_backend={} registry={} security={:?} anchors={:?} binding={} finality={:?} verifier={:?} projection={} submit={}{} package={}/{}",
-        hex::encode(job.public_inputs.message_id),
-        job.payload_kind,
-        job.chain,
-        job.counterparty_domain,
-        job.message_backend,
-        job.verifier_backend.key.as_str(),
-        job.registry_backend,
-        job.security_model,
-        job.anchor_governance,
-        job.destination_binding.key,
-        job.finality_model,
-        job.verifier_target,
-        render_sccp_payload_projection_summary(&job.payload_projection),
-        render_sccp_submission_template_summary(&job.submission_template),
-        open_verify_summary,
-        job.submission_package.submission_kind,
-        job.submission_package.envelope_encoding
-    )
-}
-
-fn render_sccp_open_verify_summary(summary: iroha_sccp::SccpOpenVerifyEnvelopeSummaryV1) -> String {
-    format!(
-        " open_verify={}/{} vk_hash={} schema_hash={} columns={} words={} backend_proof_len={} aux_len={}",
-        summary.backend,
-        summary.circuit_id,
-        hex::encode(summary.vk_hash),
-        hex::encode(summary.public_inputs_schema_hash),
-        summary.public_input_column_count,
-        summary.public_input_word_count,
-        summary.backend_proof_len_bytes,
-        summary.aux_len_bytes
-    )
-}
-
-fn render_sccp_submission_template_summary(
-    template: &iroha_sccp::SccpCounterpartySubmissionTemplateV1,
-) -> String {
-    let arguments = template
-        .required_arguments
-        .iter()
-        .map(|argument| argument.key.as_str())
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        "{}/{}/{} args=[{}]",
-        template.submission_kind, template.encoding, template.verifier_entrypoint, arguments
+        "sccp proof request: id={} backend={} {}->{} finality_height={} request_hash={} statement_hash={} binding={} configuration={} verifier_key={} semantic_profile={} finality_anchor={}",
+        hex::encode(request.public_inputs.message_id),
+        request.backend.backend_label(),
+        request.source_network.profile_key(),
+        request.target_network.profile_key(),
+        request.public_inputs.finality_height,
+        hex::encode(request.request_hash),
+        hex::encode(request.statement_hash),
+        hex::encode(request.destination_binding_hash),
+        hex::encode(request.route_configuration_hash),
+        hex::encode(request.verifier_key_hash),
+        hex::encode(request.semantic_proof_profile_hash),
+        hex::encode(request.sora_finality_anchor_hash),
     )
 }
 
 fn render_sccp_payload_projection_summary(
     projection: &iroha_sccp::SccpPayloadProjectionV1,
 ) -> String {
-    match projection {
-        iroha_sccp::SccpPayloadProjectionV1::AssetRegister(asset) => format!(
-            "asset_register asset_id={} home_domain={} decimals={}",
-            render_sccp_normalized_codec_value(&asset.asset_id),
-            asset.home_domain,
-            asset.decimals
-        ),
-        iroha_sccp::SccpPayloadProjectionV1::RouteActivate(route) => format!(
-            "route_activate asset_id={} route_id={}",
-            render_sccp_normalized_codec_value(&route.asset_id),
-            render_sccp_normalized_codec_value(&route.route_id)
-        ),
-        iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) => format!(
-            "transfer asset_id={} amount={} sender={} recipient={} route_id={}",
-            render_sccp_normalized_codec_value(&transfer.asset_id),
-            transfer.amount,
-            render_sccp_normalized_codec_value(&transfer.sender),
-            render_sccp_normalized_codec_value(&transfer.recipient),
-            render_sccp_normalized_codec_value(&transfer.route_id)
-        ),
-        iroha_sccp::SccpPayloadProjectionV1::TokenAdd(token) => format!(
-            "token_add sora_asset_id={} decimals={} name={} symbol={}",
-            hex::encode(token.sora_asset_id),
-            token.decimals,
-            hex::encode(token.name),
-            hex::encode(token.symbol)
-        ),
-        iroha_sccp::SccpPayloadProjectionV1::TokenPause(token) => {
-            format!(
-                "token_pause sora_asset_id={}",
-                hex::encode(token.sora_asset_id)
-            )
-        }
-        iroha_sccp::SccpPayloadProjectionV1::TokenResume(token) => {
-            format!(
-                "token_resume sora_asset_id={}",
-                hex::encode(token.sora_asset_id)
-            )
-        }
-    }
+    let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) = projection;
+    format!(
+        "transfer revision={} asset_id={} amount={} sender={} recipient={} route_id={}",
+        transfer.route_revision,
+        render_sccp_normalized_codec_value(&transfer.asset_id),
+        transfer.amount,
+        render_sccp_normalized_codec_value(&transfer.sender),
+        render_sccp_normalized_codec_value(&transfer.recipient),
+        render_sccp_normalized_codec_value(&transfer.route_id)
+    )
 }
 
 fn render_sccp_normalized_codec_value(value: &iroha_sccp::SccpNormalizedCodecValueV1) -> String {
     match value {
-        iroha_sccp::SccpNormalizedCodecValueV1::TextUtf8 { value } => format!("text:{value}"),
-        iroha_sccp::SccpNormalizedCodecValueV1::EvmHex { bytes } => {
-            format!("evm:0x{}", hex::encode(bytes))
+        iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } => {
+            format!("canonical_text:{value}")
         }
-        iroha_sccp::SccpNormalizedCodecValueV1::SolanaBase58 { bytes } => {
-            format!("solana:{}", bs58::encode(bytes).into_string())
+        iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { bytes } => {
+            format!("evm_address20:0x{}", hex::encode(bytes))
         }
-        iroha_sccp::SccpNormalizedCodecValueV1::TonRaw { workchain, account } => {
-            format!("ton:{workchain}:{}", hex::encode(account))
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::TronBase58Check { payload } => {
-            format!("tron:{}", hex::encode(payload))
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::SoraAssetId { bytes } => {
-            format!("sora_asset_id:0x{}", hex::encode(bytes))
+        iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { bytes } => {
+            format!("tron_address21:0x{}", hex::encode(bytes))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, path::PathBuf};
+
+    use clap::Parser as _;
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use tempfile::tempdir;
+
     use super::*;
-    use iroha::client::{SccpCodecCapability, SccpCounterpartyCapability};
-    use iroha_i18n::{Bundle, Language, Localizer};
-    use norito::json::{JsonSerialize, Value as JsonValue};
-    use std::{
-        collections::BTreeMap,
-        io::Write,
-        net::{Shutdown, TcpListener, TcpStream},
-        sync::{
-            Arc, Mutex, MutexGuard, OnceLock,
-            atomic::{AtomicBool, Ordering},
-        },
-        thread,
-        time::Duration,
-    };
-    use url::Url;
 
-    fn mock_http_server_guard() -> MutexGuard<'static, ()> {
-        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-        GUARD
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("mock HTTP server test guard")
+    #[derive(clap::Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        command: Command,
     }
 
-    fn checked_bridge_cli_ed25519_key_fixture() -> KeyPair {
-        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-            .expect("generate checked bridge CLI Ed25519 key fixture")
+    fn detached_authority() -> (AccountId, KeyPair) {
+        let key_pair = KeyPair::try_from_seed(vec![0x57; 32], Algorithm::Ed25519)
+            .expect("detached CLI test key");
+        (AccountId::new(key_pair.public_key().clone()), key_pair)
     }
 
-    fn checked_bridge_cli_seeded_ed25519_key_fixture(seed_byte: u8) -> KeyPair {
-        KeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::Ed25519)
-            .expect("derive checked bridge CLI Ed25519 key fixture")
-    }
-
-    #[test]
-    fn bridge_cli_fixture_uses_checked_ed25519_key_generation() {
-        let key_pair = checked_bridge_cli_ed25519_key_fixture();
-        let algorithm = key_pair
-            .public_key()
-            .try_algorithm()
-            .expect("bridge CLI fixture key advertises a valid algorithm");
-
-        assert_eq!(algorithm, Algorithm::Ed25519);
-    }
-
-    struct TestContext {
-        cfg: iroha::config::Config,
-        i18n: Localizer,
-        captured: Option<Executable>,
-        output_format: CliOutputFormat,
-        printed_json: Option<JsonValue>,
-        printed_lines: Vec<String>,
-    }
-
-    impl TestContext {
-        fn new() -> Self {
-            Self::with_base_url(
-                CliOutputFormat::Json,
-                Url::parse("http://127.0.0.1/").unwrap(),
-            )
-        }
-
-        fn with_base_url(output_format: CliOutputFormat, torii_api_url: Url) -> Self {
-            let key_pair = checked_bridge_cli_ed25519_key_fixture();
-            let account_id = AccountId::new(key_pair.public_key().clone());
-            let cfg = iroha::config::Config {
-                chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
-                account: account_id,
-                account_chain_discriminant:
-                    iroha_config::parameters::defaults::common::chain_discriminant(),
-                key_pair,
-                basic_auth: None,
-                torii_api_url,
-                torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
-                transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
-                transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
-                transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
-                connect_queue_root: iroha::config::default_connect_queue_root(),
-                soracloud_http_witness_file: None,
-                sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
-                sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
-                sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),
-            };
-            Self {
-                cfg,
-                i18n: Localizer::new(Bundle::Cli, Language::English),
-                captured: None,
-                output_format,
-                printed_json: None,
-                printed_lines: Vec::new(),
-            }
-        }
-    }
-
-    impl RunContext for TestContext {
-        fn config(&self) -> &iroha::config::Config {
-            &self.cfg
-        }
-
-        fn transaction_metadata(&self) -> Option<&Metadata> {
-            None
-        }
-
-        fn input_instructions(&self) -> bool {
-            false
-        }
-
-        fn output_instructions(&self) -> bool {
-            false
-        }
-
-        fn i18n(&self) -> &Localizer {
-            &self.i18n
-        }
-
-        fn output_format(&self) -> CliOutputFormat {
-            self.output_format
-        }
-
-        fn print_data<T>(&mut self, data: &T) -> Result<()>
-        where
-            T: JsonSerialize + ?Sized,
-        {
-            self.printed_json = Some(norito::json::to_value(data)?);
-            Ok(())
-        }
-
-        fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
-            self.printed_lines.push(data.to_string());
-            Ok(())
-        }
-
-        fn finish_with_mode(
-            &mut self,
-            instructions: impl Into<Executable>,
-            _wait_for_confirmation: bool,
-        ) -> Result<()> {
-            self.captured = Some(instructions.into());
-            Ok(())
-        }
-    }
-
-    #[derive(Clone)]
-    struct MockHttpResponse {
-        content_type: &'static str,
-        body: Vec<u8>,
-    }
-
-    struct MockHttpServer {
-        base_url: Url,
-        address: String,
-        stop: Arc<AtomicBool>,
-        handle: Option<thread::JoinHandle<()>>,
-    }
-
-    impl MockHttpServer {
-        fn start(routes: BTreeMap<String, MockHttpResponse>) -> Self {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock http server");
-            listener
-                .set_nonblocking(true)
-                .expect("set mock listener nonblocking");
-            let address = listener
-                .local_addr()
-                .expect("mock listener address")
-                .to_string();
-            let base_url = Url::parse(&format!("http://{address}")).expect("mock base url");
-            let stop = Arc::new(AtomicBool::new(false));
-            let stop_flag = Arc::clone(&stop);
-            let handle = thread::spawn(move || {
-                while !stop_flag.load(Ordering::SeqCst) {
-                    match listener.accept() {
-                        Ok((mut stream, _)) => {
-                            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                            let path = read_mock_http_request_path(&mut stream);
-                            if stop_flag.load(Ordering::SeqCst) && path.is_empty() {
-                                continue;
-                            }
-                            let response = routes.get(&path).cloned().unwrap_or(MockHttpResponse {
-                                content_type: "text/plain",
-                                body: b"not found".to_vec(),
-                            });
-                            let status = if routes.contains_key(&path) {
-                                "200 OK"
-                            } else {
-                                "404 Not Found"
-                            };
-                            write!(
-                                stream,
-                                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
-                                response.body.len(),
-                                response.content_type
-                            )
-                            .expect("write mock headers");
-                            stream
-                                .write_all(&response.body)
-                                .expect("write mock response body");
-                            stream.flush().expect("flush mock response");
-                            let _ = stream.shutdown(Shutdown::Write);
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(10));
-                        }
-                        Err(error) => panic!("mock http server accept failed: {error}"),
-                    }
-                }
-            });
-            Self {
-                base_url,
-                address,
-                stop,
-                handle: Some(handle),
-            }
-        }
-    }
-
-    impl Drop for MockHttpServer {
-        fn drop(&mut self) {
-            self.stop.store(true, Ordering::SeqCst);
-            let _ = TcpStream::connect(&self.address);
-            if let Some(handle) = self.handle.take() {
-                handle.join().expect("join mock http server");
-            }
-        }
-    }
-
-    fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
-        let mut request = Vec::new();
-        let mut buffer = [0_u8; 1024];
-        loop {
-            match std::io::Read::read(stream, &mut buffer) {
-                Ok(0) => break,
-                Ok(read) => {
-                    request.extend_from_slice(&buffer[..read]);
-                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    break;
-                }
-                Err(error) => panic!("read mock http request failed: {error}"),
-            }
-        }
-
-        String::from_utf8_lossy(&request)
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .unwrap_or_default()
-            .to_owned()
-    }
-
-    fn sample_sccp_capabilities() -> SccpCapabilities {
-        SccpCapabilities {
-            local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            local_chain: "sora".to_owned(),
-            proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
-            burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
-            message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
-            message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
-            message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
-            proof_manifest_path: "/v1/sccp/manifests".to_owned(),
-            burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
-            proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
-            message_submit_path: Some("/v1/bridge/messages".to_owned()),
-            production_policy: iroha_sccp::sccp_production_policy_v1(),
-            launch_ready: false,
-            message_payload_kinds: vec![
-                "asset_register".to_owned(),
-                "route_activate".to_owned(),
-                "transfer".to_owned(),
-            ],
-            codecs: vec![
-                SccpCodecCapability {
-                    id: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                    key: "text_utf8".to_owned(),
-                    description: "Logical UTF-8 identifiers for SORA and route-local names."
-                        .to_owned(),
-                },
-                SccpCodecCapability {
-                    id: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                    key: "evm_hex".to_owned(),
-                    description: "0x-prefixed canonical EIP-55 EVM account addresses.".to_owned(),
-                },
-            ],
-            counterparties: vec![
-                SccpCounterpartyCapability {
-                    domain: iroha_sccp::SCCP_DOMAIN_TON,
-                    chain: "ton".to_owned(),
-                    verifier_backend: iroha_sccp::sccp_verifier_backend_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_TON,
-                    )
-                    .expect("ton verifier backend"),
-                    message_backend: "bridge/sccp/stark-fri-v1/ton".to_owned(),
-                    registry_backend: "bridge/sccp/registry-v1/ton".to_owned(),
-                    counterparty_account_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
-                    counterparty_account_codec_key: "ton_raw".to_owned(),
-                    destination_rollout: iroha_sccp::sccp_destination_rollout_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_TON,
-                    )
-                    .expect("ton destination rollout"),
-                    production_ready: false,
-                    disabled_reason: Some(
-                        iroha_sccp::sccp_lane_disabled_reason_for_domain(
-                            iroha_sccp::SCCP_DOMAIN_TON,
-                        )
-                        .expect("ton disabled reason")
-                        .to_owned(),
-                    ),
-                    production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_TON,
-                    )
-                    .expect("ton production readiness"),
-                },
-                SccpCounterpartyCapability {
-                    domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                    chain: "eth".to_owned(),
-                    verifier_backend: iroha_sccp::sccp_verifier_backend_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_ETH,
-                    )
-                    .expect("eth verifier backend"),
-                    message_backend: "bridge/sccp/stark-fri-v1/eth".to_owned(),
-                    registry_backend: "bridge/sccp/registry-v1/eth".to_owned(),
-                    counterparty_account_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                    counterparty_account_codec_key: "evm_hex".to_owned(),
-                    destination_rollout: iroha_sccp::sccp_destination_rollout_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_ETH,
-                    )
-                    .expect("eth destination rollout"),
-                    production_ready: false,
-                    disabled_reason: Some(
-                        iroha_sccp::sccp_lane_disabled_reason_for_domain(
-                            iroha_sccp::SCCP_DOMAIN_ETH,
-                        )
-                        .expect("eth disabled reason")
-                        .to_owned(),
-                    ),
-                    production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(
-                        iroha_sccp::SCCP_DOMAIN_ETH,
-                    )
-                    .expect("eth production readiness"),
-                },
-            ],
-        }
-    }
-
-    fn sample_sccp_proof_manifests_json() -> JsonValue {
-        JsonValue::Object(norito::json::Map::from_iter([
-            (
-                "local_domain".into(),
-                JsonValue::from(iroha_sccp::SCCP_DOMAIN_SORA),
-            ),
-            ("local_chain".into(), JsonValue::from("sora")),
-            (
-                "proof_family".into(),
-                JsonValue::from(iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1),
-            ),
-            (
-                "manifests".into(),
-                JsonValue::Array(vec![
-                    JsonValue::Object(norito::json::Map::from_iter([
-                        ("chain".into(), JsonValue::from("ton")),
-                        (
-                            "counterparty_domain".into(),
-                            JsonValue::from(iroha_sccp::SCCP_DOMAIN_TON),
-                        ),
-                    ])),
-                    JsonValue::Object(norito::json::Map::from_iter([
-                        ("chain".into(), JsonValue::from("tron")),
-                        (
-                            "counterparty_domain".into(),
-                            JsonValue::from(iroha_sccp::SCCP_DOMAIN_TRON),
-                        ),
-                    ])),
-                ]),
-            ),
-        ]))
-    }
-
-    fn sample_sccp_message_proof_artifact() -> iroha_sccp::NexusSccpMessageTransparentProofV1 {
-        use iroha_sccp::{
-            NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,
-            NexusSccpMessageProofV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
-            SccpPayloadV1, TransferPayloadV1, canonical_sccp_payload_bytes,
-            merkle_root_from_commitment, payload_hash, sccp_message_id,
-        };
-
-        let validator_public_keys = vec![
-            checked_bridge_cli_seeded_ed25519_key_fixture(0x5A)
-                .public_key()
-                .to_string(),
-        ];
-        let validator_set = validator_public_keys
-            .iter()
-            .map(|key| {
-                key.parse::<iroha_crypto::PublicKey>()
-                    .expect("sample validator public key should parse")
-            })
-            .map(PeerId::from)
-            .collect::<Vec<_>>();
-        let validator_set_hash = iroha_crypto::HashOf::<Vec<PeerId>>::new(&validator_set);
-        let mut validator_set_hash_bytes = [0u8; 32];
-        validator_set_hash_bytes.copy_from_slice(validator_set_hash.as_ref().as_ref());
-
-        let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_SOL,
-            nonce: 21,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
-            amount: 77,
-            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            sender: b"nexus:soraswap".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_SOLANA_BASE58,
-            recipient: b"11111111111111111111111111111111".to_vec(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"nexus:sol:xor".to_vec(),
-        });
-        let commitment = SccpHubCommitmentV1 {
-            version: 1,
-            kind: SccpHubMessageKind::Transfer,
-            target_domain: iroha_sccp::SCCP_DOMAIN_SOL,
-            message_id: sccp_message_id(&payload),
-            payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
-        };
-        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
-        let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
-        let mut block_header = iroha::data_model::block::BlockHeader::new(
-            core::num::NonZeroU64::new(19).expect("non-zero finality height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        block_header.set_sccp_commitment_root(Some(commitment_root));
-        let mut block_hash = [0u8; 32];
-        block_hash.copy_from_slice(block_header.hash().as_ref().as_ref());
-        let block_header_bytes =
-            norito::to_bytes(&block_header).expect("encode finality block header");
-        let finality_proof = NexusBridgeFinalityProofV1 {
-            version: 1,
-            chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
-            height: 19,
-            block_hash,
-            commitment_root,
-            block_header_bytes,
-            commit_qc: NexusCommitQcV1 {
-                version: 1,
-                phase: NexusConsensusPhaseV1::Commit,
-                height: 19,
-                view: 1,
-                epoch: 1,
-                mode_tag: "normal".to_owned(),
-                subject_block_hash: block_hash,
-                parent_state_root: [0u8; 32],
-                post_state_root: [0u8; 32],
-                chain_order_hash: [0u8; 32],
-                rechain_seq: 0,
-                highest_qc: None,
-                validator_set_hash: validator_set_hash_bytes,
-                validator_set_hash_version: 1,
-                validator_public_keys,
-                validator_set_pops: vec![vec![0xAA]],
-                signers_bitmap: vec![0x01],
-                bls_aggregate_signature: vec![0xBB],
-            },
-        };
-        let bundle = NexusSccpMessageProofV1 {
-            version: 1,
-            commitment_root,
-            commitment,
-            merkle_proof,
-            payload,
-            finality_proof: norito::to_bytes(&finality_proof).expect("encode finality proof"),
-        };
-        assert!(
-            iroha_sccp::verify_message_bundle_structure(&bundle),
-            "sample SCCP message bundle must satisfy current structure gates"
-        );
-        assert!(
-            iroha_sccp::sccp_message_transparent_public_inputs(&bundle).is_some(),
-            "sample SCCP message bundle must derive transparent public inputs"
-        );
-        assert!(
-            iroha_sccp::build_sccp_message_transparent_open_verify_summary_from_bundle(&bundle)
-                .is_some(),
-            "sample SCCP message bundle must build transparent OpenVerify proof bytes"
-        );
-
-        let manifest = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_SOL)
-            .expect("solana manifest");
-        let public_inputs = iroha_sccp::sccp_message_transparent_public_inputs(&bundle)
-            .expect("sample SCCP message bundle public inputs");
-        let public_inputs_bytes =
-            iroha_sccp::canonical_sccp_message_transparent_public_inputs_bytes(&public_inputs);
-        let bundle_bytes = iroha_sccp::canonical_nexus_sccp_message_bundle_bytes_checked(&bundle)
-            .expect("sample SCCP message bundle bytes");
-        let inner = iroha_sccp::build_sccp_message_transparent_inner_proof_from_bundle(&bundle)
-            .expect("sample SCCP message transparent inner proof");
-        let proof_bytes = vec![0xA5, 0x5A, 0xC3, 0x3C];
-        let destination_binding = manifest.destination_binding.clone();
-        let destination_binding_hash = destination_binding.binding_hash;
-        let proof_context_hash = iroha_sccp::sccp_solana_proof_context_hash(
-            inner.statement_hash,
-            destination_binding_hash,
-        );
-        let platform_payload =
-            iroha_sccp::SccpPlatformSubmissionPayloadV1::SolanaProgramInstruction(
-                iroha_sccp::SccpSolanaProgramSubmissionPayloadV1 {
-                    proof_bytes: proof_bytes.clone(),
-                    public_inputs_bytes: public_inputs_bytes.clone(),
-                    bundle_bytes: bundle_bytes.clone(),
-                    destination_binding: destination_binding.clone(),
-                    destination_binding_hash,
-                    statement_hash: inner.statement_hash,
-                    proof_context_hash,
-                },
-            );
-        let arguments = vec![
-            iroha_sccp::SccpSubmissionArgumentValueV1 {
-                key: "proof_bytes".to_owned(),
-                encoding: "raw_bytes".to_owned(),
-                bytes: proof_bytes.clone(),
-            },
-            iroha_sccp::SccpSubmissionArgumentValueV1 {
-                key: "public_inputs".to_owned(),
-                encoding: "raw_bytes".to_owned(),
-                bytes: public_inputs_bytes,
-            },
-            iroha_sccp::SccpSubmissionArgumentValueV1 {
-                key: "bundle_bytes".to_owned(),
-                encoding: "raw_bytes".to_owned(),
-                bytes: bundle_bytes,
-            },
-            iroha_sccp::SccpSubmissionArgumentValueV1 {
-                key: "statement_hash".to_owned(),
-                encoding: "raw_bytes".to_owned(),
-                bytes: inner.statement_hash.to_vec(),
-            },
-            iroha_sccp::SccpSubmissionArgumentValueV1 {
-                key: "destination_binding_hash".to_owned(),
-                encoding: "raw_bytes".to_owned(),
-                bytes: destination_binding_hash.to_vec(),
-            },
-            iroha_sccp::SccpSubmissionArgumentValueV1 {
-                key: "proof_context_hash".to_owned(),
-                encoding: "raw_bytes".to_owned(),
-                bytes: proof_context_hash.to_vec(),
-            },
-        ];
-        let submission_package = iroha_sccp::SccpCounterpartySubmissionPackageV1 {
-            version: 1,
-            proof_family: manifest.proof_family.clone(),
-            verifier_backend: manifest.verifier_backend.clone(),
-            envelope_encoding: manifest.submission_template.encoding.clone(),
-            submission_kind: manifest.submission_template.submission_kind.clone(),
-            verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
-            platform_payload,
-            arguments,
-            envelope_bytes: b"submit_sccp_message_proof".to_vec(),
-        };
-        iroha_sccp::NexusSccpMessageTransparentProofV1 {
-            version: 1,
-            local_domain: manifest.local_domain,
-            counterparty_domain: manifest.counterparty_domain,
-            security_model: manifest.security_model,
-            anchor_governance: manifest.anchor_governance,
-            destination_binding,
-            proof_family: manifest.proof_family,
-            verifier_backend: manifest.verifier_backend,
-            message_backend: manifest.message_backend,
-            registry_backend: manifest.registry_backend,
-            manifest_seed: manifest.manifest_seed,
-            finality_model: manifest.finality_model,
-            verifier_target: manifest.verifier_target,
-            public_inputs,
-            proof_bytes,
-            submission_package,
-            bundle,
-        }
-    }
-
-    fn sample_sccp_message_job() -> iroha_sccp::SccpCounterpartyProofJobV1 {
-        let artifact = sample_sccp_message_proof_artifact();
-        let manifest = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_SOL)
-            .expect("solana manifest");
-        iroha_sccp::SccpCounterpartyProofJobV1 {
-            version: 1,
-            chain_family: iroha_sccp::SccpTransparentChainFamilyV1::Solana,
-            chain: "sol".to_owned(),
-            local_domain: artifact.local_domain,
-            counterparty_domain: artifact.counterparty_domain,
-            security_model: artifact.security_model,
-            anchor_governance: artifact.anchor_governance,
-            destination_binding: artifact.destination_binding.clone(),
-            proof_family: artifact.proof_family.clone(),
-            verifier_backend: artifact.verifier_backend.clone(),
-            message_backend: artifact.message_backend.clone(),
-            registry_backend: artifact.registry_backend.clone(),
-            manifest_seed: artifact.manifest_seed.clone(),
-            finality_model: artifact.finality_model,
-            verifier_target: artifact.verifier_target,
-            public_inputs: artifact.public_inputs.clone(),
+    fn submit_response(
+        submitted: bool,
+        tx_hash_hex: Option<String>,
+        transaction_payload_b64: Option<String>,
+        signing_message_b64: Option<String>,
+    ) -> SccpBridgeSubmitResponse {
+        SccpBridgeSubmitResponse {
+            submitted,
             payload_kind: "transfer".to_owned(),
-            payload_projection: iroha_sccp::sccp_payload_projection(&artifact.bundle.payload)
-                .expect("payload projection"),
-            submission_template: manifest.submission_template,
-            submission_package: artifact.submission_package.clone(),
-            bundle: artifact.bundle,
+            message_id_hex: "11".repeat(32),
+            backend: "bridge/sccp/native/ethereum-beacon-v1".to_owned(),
+            counterparty_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            counterparty_chain: "ethereum-mainnet".to_owned(),
+            route_configuration_hash_hex: "22".repeat(32),
+            range_start_height: 7,
+            range_end_height: 7,
+            creation_time_ms: 9,
+            tx_hash_hex,
+            transaction_payload_b64,
+            signing_message_b64,
         }
     }
 
-    fn artifact_args(message_id: String) -> ArtifactArgs {
-        ArtifactArgs {
-            message_id,
-            network_id_hex: None,
-            verifier_address_hex: None,
-            bridge_address_hex: None,
-            verifier_code_hash_hex: None,
-            verifier_key_hash_hex: None,
-            expected_destination_binding_hash_hex: None,
-            tron_verifier_address: None,
-            proof_bytes_hex: None,
-        }
-    }
-
-    fn sccp_groth16_abi_word_hex(value: u32) -> String {
-        format!("{value:064x}")
-    }
-
-    fn sample_sccp_groth16_proof_hex_for_message_id(message_id_hex: &str) -> String {
-        [
-            sccp_groth16_abi_word_hex(1),
-            message_id_hex.trim_start_matches("0x").to_ascii_lowercase(),
-            sccp_groth16_abi_word_hex(0),
-            "33".repeat(32),
-            sccp_groth16_abi_word_hex(1),
-            sccp_groth16_abi_word_hex(2),
-            "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed".to_owned(),
-            "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2".to_owned(),
-            "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa".to_owned(),
-            "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b".to_owned(),
-            sccp_groth16_abi_word_hex(1),
-            sccp_groth16_abi_word_hex(2),
-        ]
-        .concat()
-    }
-
-    fn sample_sccp_groth16_proof_hex() -> String {
-        sample_sccp_groth16_proof_hex_for_message_id(&"11".repeat(32))
-    }
-
     #[test]
-    fn emit_receipt_builds_record_bridge_receipt() {
-        let mut ctx = TestContext::new();
-        let args = EmitReceiptArgs {
-            lane: 3,
-            direction: "mint".to_string(),
-            source_tx: "11".repeat(32),
-            amount: 5,
-            asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_string(),
-            recipient: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".to_string(),
-            dest_tx: Some("22".repeat(32)),
-            proof_hash: Some("33".repeat(32)),
-        };
-
-        emit_receipt(&mut ctx, args).expect("emit receipt");
-
-        let executable = ctx.captured.expect("captured executable");
-        let Executable::Instructions(instructions) = executable else {
-            panic!("expected instruction executable");
-        };
-        let instructions = instructions.into_vec();
-        assert_eq!(instructions.len(), 1, "expected one instruction");
-
-        let record = instructions[0]
-            .as_any()
-            .downcast_ref::<RecordBridgeReceipt>()
-            .expect("record bridge receipt instruction");
-        let receipt = &record.receipt;
-        assert_eq!(receipt.lane, LaneId::new(3));
-        assert_eq!(receipt.direction, b"mint".to_vec());
-        assert_eq!(receipt.source_tx, [0x11; 32]);
-        assert_eq!(receipt.dest_tx, Some([0x22; 32]));
-        assert_eq!(receipt.proof_hash, [0x33; 32]);
-        assert_eq!(receipt.amount, 5);
-        assert_eq!(receipt.asset_id, b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_vec());
-        assert_eq!(
-            receipt.recipient,
-            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-                .as_bytes()
-                .to_vec()
-        );
-    }
-
-    #[test]
-    fn sccp_capabilities_text_command_prints_summary() {
-        let _guard = mock_http_server_guard();
-        let capabilities = sample_sccp_capabilities();
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/sccp/capabilities".to_owned(),
-            MockHttpResponse {
-                content_type: "application/x-norito",
-                body: norito::to_bytes(&capabilities).expect("encode capabilities"),
-            },
-        )]));
-        let mut ctx = TestContext::with_base_url(CliOutputFormat::Text, server.base_url.clone());
-
-        Command::Sccp(SccpCommand::Capabilities)
-            .run(&mut ctx)
-            .expect("run capabilities command");
-
-        let rendered = ctx.printed_lines.join("\n");
-        assert!(rendered.contains("sccp capabilities:"));
-        assert!(rendered.contains("proof_family=stark-fri-v1"));
-        assert!(!rendered.contains("runtime_family="));
-        assert!(!rendered.contains("runtime_backend="));
-        assert!(!rendered.contains("runtime_message="));
-        assert!(rendered.contains(
-            "ton(4:ton_raw:ton-contract-v1:TonContractNativeRecursive/verifier_live=false/anchors_live=false:disabled)"
+    fn sccp_submit_cli_rejects_mixed_and_legacy_signing_flags() {
+        let prepared = TestCli::try_parse_from([
+            "iroha",
+            "sccp",
+            "submit-native-message",
+            "--proof",
+            "proof.norito",
+        ])
+        .expect("unsigned preparation must remain directly expressible");
+        assert!(matches!(
+            prepared.command,
+            Command::Sccp(SccpCommand::SubmitNativeMessage(_))
         ));
-        assert!(rendered.contains(
-            "eth(1:evm_hex:evm-groth16-bn254-v1:EvmGroth16Bn254Adapter/verifier_live=false/anchors_live=false:disabled)"
+
+        let direct = TestCli::try_parse_from([
+            "iroha",
+            "sccp",
+            "submit-destination-proof",
+            "--artifact",
+            "proof.norito",
+            "--transaction-payload-b64-file",
+            "payload.b64",
+            "--signature-b64-file",
+            "signature.b64",
+            "--creation-time-ms",
+            "7",
+        ])
+        .expect("complete direct submission grammar");
+        assert!(matches!(
+            direct.command,
+            Command::Sccp(SccpCommand::SubmitDestinationProof(_))
         ));
-    }
-
-    #[test]
-    fn sccp_manifests_json_command_prints_typed_payload() {
-        let _guard = mock_http_server_guard();
-        let manifests = sample_sccp_proof_manifests_json();
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/sccp/manifests".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: norito::json::to_vec(&manifests).expect("encode manifests json"),
-            },
-        )]));
-        let mut ctx = TestContext::with_base_url(CliOutputFormat::Json, server.base_url.clone());
-
-        Command::Sccp(SccpCommand::Manifests)
-            .run(&mut ctx)
-            .expect("run manifests command");
-
-        let payload = ctx.printed_json.expect("printed json");
-        assert_eq!(
-            payload.get("local_chain").and_then(JsonValue::as_str),
-            Some("sora")
-        );
-        assert_eq!(
-            payload
-                .get("manifests")
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
-    }
-
-    #[test]
-    fn sccp_artifact_text_command_prints_typed_snapshot_summary() {
-        let _guard = mock_http_server_guard();
-        let artifact = sample_sccp_message_proof_artifact();
-        let message_id_hex = hex::encode(artifact.public_inputs.message_id);
-        let server = MockHttpServer::start(BTreeMap::from([(
-            format!("/v1/sccp/artifacts/message/{message_id_hex}"),
-            MockHttpResponse {
-                content_type: "application/x-norito",
-                body: norito::to_bytes(&artifact).expect("encode artifact"),
-            },
-        )]));
-        let mut ctx = TestContext::with_base_url(CliOutputFormat::Text, server.base_url.clone());
-
-        Command::Sccp(SccpCommand::Artifact(artifact_args(format!(
-            "0x{message_id_hex}"
-        ))))
-        .run(&mut ctx)
-        .expect("run artifact command");
-
-        let rendered = ctx.printed_lines.join("\n");
-        assert!(rendered.contains("sccp artifact:"));
-        assert!(rendered.contains(&message_id_hex));
-        assert!(rendered.contains("payload=transfer"));
-        assert!(rendered.contains("chain=sol(3)"));
-        assert!(rendered.contains("verifier_backend=solana-program-v1"));
-        assert!(rendered.contains("finality_height=19"));
-        assert!(rendered.contains("inner_family=Solana"));
-        assert!(rendered.contains("inner_payload=transfer"));
-        assert!(!rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
-        assert!(rendered.contains("package=program_instruction/borsh_instruction_v1"));
-    }
-
-    #[test]
-    fn sccp_artifact_text_command_rejects_invalid_tron_verifier_address_before_request() {
-        for invalid_address in [
-            "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
-            "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+        for hostile in [
+            vec!["iroha", "sccp", "submit-native-message"],
+            vec!["iroha", "sccp", "submit-destination-proof"],
+            vec![
+                "iroha",
+                "sccp",
+                "submit-native-message",
+                "--proof",
+                "proof.norito",
+                "--transaction-payload-b64-file",
+                "payload.b64",
+                "--creation-time-ms",
+                "7",
+            ],
+            vec![
+                "iroha",
+                "sccp",
+                "submit-native-message",
+                "--proof",
+                "proof.norito",
+                "--signature-b64-file",
+                "signature.b64",
+                "--creation-time-ms",
+                "7",
+            ],
+            vec![
+                "iroha",
+                "sccp",
+                "submit-destination-proof",
+                "--artifact",
+                "proof.norito",
+                "--manifest-hash",
+                "11",
+            ],
+            vec![
+                "iroha",
+                "sccp",
+                "submit-destination-proof",
+                "--artifact",
+                "proof.norito",
+                "--transaction-payload-b64",
+                "secret-value",
+            ],
+            vec![
+                "iroha",
+                "sccp",
+                "submit-destination-proof",
+                "--artifact",
+                "proof.norito",
+                "--network-id-hex",
+                "11",
+            ],
+            vec![
+                "iroha",
+                "sccp",
+                "submit-native-message",
+                "--proof",
+                "proof.norito",
+                "--creation-time-ms=not-a-number",
+            ],
+            vec![
+                "iroha",
+                "sccp",
+                "submit-native-message",
+                "--proof",
+                "proof.norito",
+                "--transaction-payload-b64-file",
+                "payload.b64",
+                "--signature-b64-file",
+                "signature.b64",
+                "--creation-time-ms=-1",
+            ],
         ] {
-            let mut ctx = TestContext::with_base_url(
-                CliOutputFormat::Text,
-                Url::parse("http://127.0.0.1:1").expect("test base url"),
-            );
-            let mut args = artifact_args("11".repeat(32));
-            args.tron_verifier_address = Some(invalid_address.to_owned());
-            args.proof_bytes_hex = Some(format!("0x{}", sample_sccp_groth16_proof_hex()));
-
-            let err = Command::Sccp(SccpCommand::Artifact(args))
-                .run(&mut ctx)
-                .expect_err("invalid TRON verifier address must fail before request");
-
             assert!(
-                err.to_string().contains("tron_verifier_address"),
-                "unexpected error: {err:?}"
-            );
-            assert!(
-                ctx.printed_lines.is_empty(),
-                "invalid query params must not print an artifact summary"
+                TestCli::try_parse_from(hostile).is_err(),
+                "accepted mixed or retired SCCP submit grammar"
             );
         }
     }
 
     #[test]
-    fn sccp_job_text_command_prints_typed_snapshot_summary() {
-        let _guard = mock_http_server_guard();
-        let job = sample_sccp_message_job();
-        let message_id_hex = hex::encode(job.public_inputs.message_id);
-        let server = MockHttpServer::start(BTreeMap::from([(
-            format!("/v1/sccp/jobs/message/{message_id_hex}"),
-            MockHttpResponse {
-                content_type: "application/x-norito",
-                body: norito::to_bytes(&job).expect("encode job"),
-            },
-        )]));
-        let mut ctx = TestContext::with_base_url(CliOutputFormat::Text, server.base_url.clone());
+    fn bounded_sccp_artifact_reader_rejects_missing_empty_and_oversized_inputs() {
+        let directory = tempdir().expect("temporary SCCP artifact directory");
+        let path = directory.path().join("artifact.norito");
 
-        Command::Sccp(SccpCommand::Job(artifact_args(format!(
-            "0x{message_id_hex}"
-        ))))
-        .run(&mut ctx)
-        .expect("run job command");
-
-        let rendered = ctx.printed_lines.join("\n");
-        assert!(rendered.contains("sccp job:"));
-        assert!(rendered.contains(&message_id_hex));
-        assert!(rendered.contains("payload=transfer"));
-        assert!(rendered.contains("chain=sol(3)"));
-        assert!(rendered.contains("verifier_backend=solana-program-v1"));
-        assert!(rendered.contains("projection=transfer"));
-        assert!(rendered.contains("recipient=solana:11111111111111111111111111111111"));
-        assert!(rendered.contains(
-            "submit=program_instruction/borsh_instruction_v1/submit_sccp_message_proof args=[proof_bytes,public_inputs,bundle_bytes,statement_hash,destination_binding_hash,proof_context_hash]"
-        ));
-        assert!(rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
-        assert!(rendered.contains("package=program_instruction/borsh_instruction_v1"));
-    }
-
-    #[test]
-    fn sccp_job_text_command_forwards_tron_query_material() {
-        let _guard = mock_http_server_guard();
-        let job = sample_sccp_message_job();
-        let message_id_hex = hex::encode(job.public_inputs.message_id);
-        let network_id_hex = "11".repeat(32);
-        let verifier_code_hash_hex = "ab".repeat(32);
-        let verifier_key_hash_hex = "cd".repeat(32);
-        let expected_destination_binding_hash_hex = "ef".repeat(32);
-        let proof_bytes_hex = sample_sccp_groth16_proof_hex_for_message_id(&message_id_hex);
-        let query = format!(
-            "network_id_hex={network_id_hex}&verifier_code_hash_hex={verifier_code_hash_hex}&verifier_key_hash_hex={verifier_key_hash_hex}&expected_destination_binding_hash_hex={expected_destination_binding_hash_hex}&tron_verifier_address=TJRabPrwbZy45sbavfcjinPJC18kjpRTv8&proof_bytes_hex={proof_bytes_hex}"
-        );
-        let server = MockHttpServer::start(BTreeMap::from([(
-            format!("/v1/sccp/jobs/message/{message_id_hex}?{query}"),
-            MockHttpResponse {
-                content_type: "application/x-norito",
-                body: norito::to_bytes(&job).expect("encode job"),
-            },
-        )]));
-        let mut ctx = TestContext::with_base_url(CliOutputFormat::Text, server.base_url.clone());
-        let mut args = artifact_args(format!("0x{message_id_hex}"));
-        args.network_id_hex = Some(format!("0x{}", network_id_hex.to_uppercase()));
-        args.verifier_code_hash_hex = Some(format!("0x{}", verifier_code_hash_hex.to_uppercase()));
-        args.verifier_key_hash_hex = Some(format!("0x{}", verifier_key_hash_hex.to_uppercase()));
-        args.expected_destination_binding_hash_hex = Some(format!(
-            "0x{}",
-            expected_destination_binding_hash_hex.to_uppercase()
-        ));
-        args.tron_verifier_address = Some("  TJRabPrwbZy45sbavfcjinPJC18kjpRTv8  ".to_owned());
-        args.proof_bytes_hex = Some(format!("0x{}", proof_bytes_hex.to_uppercase()));
-
-        Command::Sccp(SccpCommand::Job(args))
-            .run(&mut ctx)
-            .expect("run job command");
-
-        let rendered = ctx.printed_lines.join("\n");
-        assert!(rendered.contains("sccp job:"));
-        assert!(rendered.contains(&message_id_hex));
-    }
-
-    #[test]
-    fn sccp_job_text_command_rejects_all_zero_proof_bytes_before_request() {
-        let mut ctx = TestContext::with_base_url(
-            CliOutputFormat::Text,
-            Url::parse("http://127.0.0.1:1").expect("test base url"),
-        );
-        let mut args = artifact_args("11".repeat(32));
-        args.proof_bytes_hex = Some("0x0000".to_owned());
-
-        let err = Command::Sccp(SccpCommand::Job(args))
-            .run(&mut ctx)
-            .expect_err("all-zero proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            err.to_string().contains("all zero"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            ctx.printed_lines.is_empty(),
-            "invalid query params must not print a job summary"
+        assert!(read_bounded_binary_artifact(&path, 4, "SCCP test artifact").is_err());
+        fs::write(&path, []).expect("write empty artifact");
+        assert!(read_bounded_binary_artifact(&path, 4, "SCCP test artifact").is_err());
+        fs::write(&path, [1_u8; 5]).expect("write oversized artifact");
+        assert!(read_bounded_binary_artifact(&path, 4, "SCCP test artifact").is_err());
+        fs::write(&path, [1_u8; 4]).expect("write bounded artifact");
+        assert_eq!(
+            read_bounded_binary_artifact(&path, 4, "SCCP test artifact")
+                .expect("maximum-size artifact"),
+            vec![1_u8; 4]
         );
     }
 
     #[test]
-    fn sccp_job_text_command_rejects_destination_material_without_proof_bytes() {
-        let mut ctx = TestContext::with_base_url(
-            CliOutputFormat::Text,
-            Url::parse("http://127.0.0.1:1").expect("test base url"),
+    fn detached_submit_material_rejects_zero_missing_and_mixed_state() {
+        let (authority, _) = detached_authority();
+        let none = || DetachedSubmitArgs {
+            transaction_payload_b64_file: None,
+            signature_b64_file: None,
+            creation_time_ms: None,
+        };
+        assert_eq!(
+            load_detached_submit_material(&none(), &authority).expect("preparation state"),
+            DetachedSubmitMaterial {
+                transaction_payload_b64: None,
+                signature_b64: None,
+                creation_time_ms: None,
+            }
         );
-        let mut args = artifact_args("11".repeat(32));
-        args.network_id_hex = Some("22".repeat(32));
-        args.verifier_code_hash_hex = Some("33".repeat(32));
-        args.verifier_key_hash_hex = Some("44".repeat(32));
-        args.expected_destination_binding_hash_hex = Some("55".repeat(32));
-        args.tron_verifier_address = Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned());
-
-        let err = Command::Sccp(SccpCommand::Job(args))
-            .run(&mut ctx)
-            .expect_err("destination proof material without proof bytes must fail before request");
-
+        let mut zero = none();
+        zero.creation_time_ms = Some(0);
         assert!(
-            err.to_string().contains("proof_bytes_hex is required"),
-            "unexpected error: {err:?}"
+            load_detached_submit_material(&zero, &authority)
+                .expect_err("zero creation time")
+                .to_string()
+                .contains("positive")
         );
+        let mut mixed = none();
+        mixed.transaction_payload_b64_file = Some(PathBuf::from("payload.b64"));
         assert!(
-            ctx.printed_lines.is_empty(),
-            "invalid query params must not print a job summary"
+            load_detached_submit_material(&mixed, &authority)
+                .expect_err("mixed signing state")
+                .to_string()
+                .contains("requires both")
+        );
+        mixed.signature_b64_file = Some(PathBuf::from("signature.b64"));
+        assert!(
+            load_detached_submit_material(&mixed, &authority)
+                .expect_err("missing direct creation time")
+                .to_string()
+                .contains("creation-time-ms")
         );
     }
 
     #[test]
-    fn sccp_job_text_command_rejects_partial_or_mixed_destination_tuple() {
-        let proof_bytes_hex = sample_sccp_groth16_proof_hex();
-        let mut partial_tron = artifact_args("11".repeat(32));
-        partial_tron.network_id_hex = Some("22".repeat(32));
-        partial_tron.verifier_code_hash_hex = Some("33".repeat(32));
-        partial_tron.verifier_key_hash_hex = Some("44".repeat(32));
-        partial_tron.tron_verifier_address = Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned());
-        partial_tron.proof_bytes_hex = Some(format!("0x{proof_bytes_hex}"));
+    fn detached_submit_files_bind_signature_to_exact_payload() {
+        let directory = tempdir().expect("temporary SCCP signing directory");
+        let payload_path = directory.path().join("payload.b64");
+        let signature_path = directory.path().join("signature.b64");
+        let (authority, key_pair) = detached_authority();
+        let payload = b"exact prepared transaction payload";
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(payload);
+        let signing_hash = iroha_crypto::Hash::new(payload);
+        let signature = Signature::try_new(key_pair.private_key(), signing_hash.as_ref())
+            .expect("sign exact payload hash");
+        let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
+        fs::write(&payload_path, format!("{payload_b64}\n")).expect("write payload fixture");
+        fs::write(&signature_path, format!("{signature_b64}\r\n"))
+            .expect("write signature fixture");
 
-        let mut mixed_evm_tron = artifact_args("11".repeat(32));
-        mixed_evm_tron.network_id_hex = Some("22".repeat(32));
-        mixed_evm_tron.verifier_address_hex = Some("66".repeat(20));
-        mixed_evm_tron.bridge_address_hex = Some("77".repeat(20));
-        mixed_evm_tron.verifier_code_hash_hex = Some("33".repeat(32));
-        mixed_evm_tron.verifier_key_hash_hex = Some("44".repeat(32));
-        mixed_evm_tron.expected_destination_binding_hash_hex = Some("55".repeat(32));
-        mixed_evm_tron.tron_verifier_address =
-            Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned());
-        mixed_evm_tron.proof_bytes_hex = Some(format!("0x{proof_bytes_hex}"));
+        let args = DetachedSubmitArgs {
+            transaction_payload_b64_file: Some(payload_path.clone()),
+            signature_b64_file: Some(signature_path.clone()),
+            creation_time_ms: Some(7),
+        };
+        let material =
+            load_detached_submit_material(&args, &authority).expect("exact detached signing files");
+        assert_eq!(
+            material.transaction_payload_b64.as_deref(),
+            Some(payload_b64.as_str())
+        );
+        assert_eq!(
+            material.signature_b64.as_deref(),
+            Some(signature_b64.as_str())
+        );
 
-        for (args, expected_error) in [
-            (
-                partial_tron,
-                "complete TRON SCCP deployment destination fields are required",
-            ),
-            (
-                mixed_evm_tron,
-                "EVM and TRON SCCP destination fields cannot be mixed",
+        let other_hash = iroha_crypto::Hash::new(b"different payload");
+        let wrong_signature = Signature::try_new(key_pair.private_key(), other_hash.as_ref())
+            .expect("sign different payload hash");
+        fs::write(
+            &signature_path,
+            base64::engine::general_purpose::STANDARD.encode(wrong_signature.payload()),
+        )
+        .expect("replace signature fixture");
+        let error = load_detached_submit_material(&args, &authority)
+            .expect_err("payload/signature mismatch must reject");
+        assert!(error.to_string().contains("does not verify"));
+
+        fs::write(&payload_path, format!(" {payload_b64}"))
+            .expect("replace payload fixture with whitespace");
+        assert!(load_detached_submit_material(&args, &authority).is_err());
+    }
+
+    #[test]
+    fn sccp_submit_is_attempted_once_even_for_ambiguous_errors() {
+        let calls = Cell::new(0_u8);
+        let error = submit_sccp_once::<()>("SCCP test submit", || {
+            calls.set(calls.get() + 1);
+            Err(eyre!("length mismatch from remote"))
+        })
+        .expect_err("ambiguous remote error must propagate");
+        assert_eq!(calls.get(), 1);
+        assert!(error.to_string().contains("without retrying or rebuilding"));
+    }
+
+    #[test]
+    fn submit_response_renderer_exposes_exact_prepared_fields_and_rejects_mixed_state() {
+        let payload = b"prepared payload";
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(payload);
+        let signing_message_b64 = base64::engine::general_purpose::STANDARD
+            .encode(iroha_crypto::Hash::new(payload).as_ref());
+        let prepared = submit_response(
+            false,
+            None,
+            Some(payload_b64.clone()),
+            Some(signing_message_b64.clone()),
+        );
+        let rendered = render_sccp_submit_response(&prepared).expect("prepared response");
+        assert!(rendered.contains("route_configuration_hash_hex="));
+        assert!(rendered.contains("creation_time_ms=9"));
+        assert!(rendered.contains(&format!("transaction_payload_b64={payload_b64}")));
+        assert!(rendered.contains(&format!("signing_message_b64={signing_message_b64}")));
+        assert!(!rendered.contains("manifest_hash"));
+
+        let submitted = submit_response(true, Some("33".repeat(32)), None, None);
+        let rendered = render_sccp_submit_response(&submitted).expect("submitted response");
+        assert!(rendered.contains("tx_hash_hex="));
+        assert!(!rendered.contains("transaction_payload_b64="));
+
+        for invalid in [
+            submit_response(true, None, None, None),
+            submit_response(true, Some("33".repeat(32)), Some(payload_b64.clone()), None),
+            submit_response(false, None, Some(payload_b64.clone()), None),
+            submit_response(
+                false,
+                None,
+                Some(payload_b64),
+                Some(base64::engine::general_purpose::STANDARD.encode([0_u8; 32])),
             ),
         ] {
-            let mut ctx = TestContext::with_base_url(
-                CliOutputFormat::Text,
-                Url::parse("http://127.0.0.1:1").expect("test base url"),
-            );
+            assert!(validate_sccp_submit_response_state(&invalid).is_err());
+        }
 
-            let err = Command::Sccp(SccpCommand::Job(args))
-                .run(&mut ctx)
-                .expect_err("partial or mixed destination tuple must fail before request");
+        let mut zero_creation = prepared.clone();
+        zero_creation.creation_time_ms = 0;
+        assert!(validate_sccp_submit_response_state(&zero_creation).is_err());
+        let mut zero_route = prepared.clone();
+        zero_route.route_configuration_hash_hex = "00".repeat(32);
+        assert!(validate_sccp_submit_response_state(&zero_route).is_err());
 
-            assert!(
-                err.to_string().contains(expected_error),
-                "unexpected error: {err:?}"
-            );
-            assert!(
-                ctx.printed_lines.is_empty(),
-                "invalid query params must not print a job summary"
-            );
+        for invalid_tx_hash in ["00".repeat(32), "AA".repeat(32), "11".repeat(31)] {
+            let invalid = submit_response(true, Some(invalid_tx_hash), None, None);
+            assert!(validate_sccp_submit_response_state(&invalid).is_err());
+        }
+        let mut zero_message = prepared.clone();
+        zero_message.message_id_hex = "00".repeat(32);
+        assert!(validate_sccp_submit_response_state(&zero_message).is_err());
+        let mut reversed_range = prepared.clone();
+        reversed_range.range_start_height = 8;
+        reversed_range.range_end_height = 7;
+        assert!(validate_sccp_submit_response_state(&reversed_range).is_err());
+        let mut retired_payload_kind = prepared;
+        retired_payload_kind.payload_kind = "generic".to_owned();
+        assert!(validate_sccp_submit_response_state(&retired_payload_kind).is_err());
+    }
+
+    #[test]
+    fn capabilities_summary_names_only_exact_first_release_paths() {
+        let summary = render_sccp_capabilities_summary(&SccpCapabilities {
+            version: 1,
+            registry_revision: format!("0x{}", "11".repeat(32)),
+            registry_path: "/v1/sccp/registry".to_owned(),
+            message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
+            proof_request_path: "/v1/sccp/proof-requests/{message_id}".to_owned(),
+            recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
+            registry_limits: SccpRegistryLimits {
+                max_governed_lanes: 16,
+                max_live_governed_routes: 64,
+                max_live_routes_per_lane: 8,
+                max_retained_routes_per_lane: 64,
+                max_retained_native_trust_anchors_per_lane: 4_096,
+            },
+            resource_limits: SccpResourceLimits {
+                max_proofs_per_transaction: 1,
+                max_proofs_per_block: 4,
+                max_proof_bytes_per_proof: 8 * 1024 * 1024,
+                max_proof_bytes_per_transaction: 8 * 1024 * 1024,
+                max_proof_bytes_per_block: 32 * 1024 * 1024,
+                max_native_headers_per_transaction: 1_004,
+                max_native_headers_per_block: 4_016,
+                max_ethereum_light_client_updates_per_transaction: 128,
+                max_ethereum_light_client_updates_per_block: 512,
+                max_native_header_bytes_per_transaction: 8 * 1024 * 1024,
+                max_native_header_bytes_per_block: 32 * 1024 * 1024,
+                max_secp256k1_recoveries_per_transaction: 1_005,
+                max_secp256k1_recoveries_per_block: 4_020,
+                max_bls_aggregate_checks_per_transaction: 1_004,
+                max_bls_aggregate_checks_per_block: 4_016,
+                max_bls_signer_contributions_per_transaction: 131_713,
+                max_bls_signer_contributions_per_block: 526_852,
+                max_bn254_pairing_checks_per_transaction: 1,
+                max_bn254_pairing_checks_per_block: 4,
+            },
+            proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
+            native_message_submit_path: Some("/v1/bridge/messages".to_owned()),
+        });
+        for required in ["registry=", "bundle=", "proof_request=", "proof_submit="] {
+            assert!(summary.contains(required));
+        }
+        for retired in ["manifest", "artifact", "job", "solana", "ton-"] {
+            assert!(!summary.contains(retired));
         }
     }
 
     #[test]
-    fn sccp_job_text_command_rejects_invalid_tron_verifier_address_before_request() {
-        for invalid_address in [
-            "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
-            "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+    fn recent_query_enforces_closed_first_release_bounds() {
+        let query = RecentArgs {
+            from: Some(1),
+            limit: Some(50),
+        }
+        .query();
+        query.validate().expect("maximum valid SCCP window");
+        for query in [
+            RecentArgs {
+                from: Some(0),
+                limit: Some(1),
+            }
+            .query(),
+            RecentArgs {
+                from: Some(1),
+                limit: Some(0),
+            }
+            .query(),
+            RecentArgs {
+                from: Some(1),
+                limit: Some(51),
+            }
+            .query(),
         ] {
-            let mut ctx = TestContext::with_base_url(
-                CliOutputFormat::Text,
-                Url::parse("http://127.0.0.1:1").expect("test base url"),
-            );
-            let mut args = artifact_args("11".repeat(32));
-            args.tron_verifier_address = Some(invalid_address.to_owned());
-            args.proof_bytes_hex = Some(format!("0x{}", sample_sccp_groth16_proof_hex()));
-
-            let err = Command::Sccp(SccpCommand::Job(args))
-                .run(&mut ctx)
-                .expect_err("invalid TRON verifier address must fail before request");
-
-            assert!(
-                err.to_string().contains("tron_verifier_address"),
-                "unexpected error: {err:?}"
-            );
-            assert!(
-                ctx.printed_lines.is_empty(),
-                "invalid query params must not print a job summary"
-            );
+            assert!(query.validate().is_err());
         }
     }
 
     #[test]
-    fn sccp_job_text_command_rejects_proof_bytes_without_destination_material() {
-        let mut ctx = TestContext::with_base_url(
-            CliOutputFormat::Text,
-            Url::parse("http://127.0.0.1:1").expect("test base url"),
-        );
-        let mut args = artifact_args("11".repeat(32));
-        args.proof_bytes_hex = Some(format!("0x{}", sample_sccp_groth16_proof_hex()));
-
-        let err = Command::Sccp(SccpCommand::Job(args))
-            .run(&mut ctx)
-            .expect_err("proof bytes without destination material must fail before request");
-
-        assert!(
-            err.to_string()
-                .contains("deployment destination fields are required"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            ctx.printed_lines.is_empty(),
-            "invalid query params must not print a job summary"
+    fn hex32_rejects_ambiguous_or_wrong_width_values() {
+        for hostile in [
+            "",
+            "00",
+            &format!(" {}", "11".repeat(32)),
+            &format!("0x0X{}", "11".repeat(32)),
+            &"gg".repeat(32),
+        ] {
+            assert!(hex32(hostile).is_err(), "accepted hostile hex: {hostile:?}");
+        }
+        assert_eq!(
+            hex32(&format!("0X{}", "AB".repeat(32))).expect("valid hash"),
+            [0xAB; 32]
         );
     }
 
     #[test]
-    fn sccp_job_text_command_rejects_short_proof_bytes_before_request() {
-        let mut ctx = TestContext::with_base_url(
-            CliOutputFormat::Text,
-            Url::parse("http://127.0.0.1:1").expect("test base url"),
-        );
-        let mut args = artifact_args("11".repeat(32));
-        args.proof_bytes_hex = Some("0x0102AB".to_owned());
-
-        let err = Command::Sccp(SccpCommand::Job(args))
-            .run(&mut ctx)
-            .expect_err("short proof bytes must fail before request");
-
-        assert!(
-            err.to_string().contains("proof_bytes_hex"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            err.to_string().contains("384-byte"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            ctx.printed_lines.is_empty(),
-            "invalid query params must not print a job summary"
-        );
+    fn recent_summary_includes_both_governed_hash_roles() {
+        let summary = render_sccp_recent_messages_summary(&SccpRecentMessages {
+            items: vec![iroha::client::SccpRecentMessage {
+                height: 9,
+                message_id_hex: "11".repeat(32),
+                kind: "transfer".to_owned(),
+                source_profile: "sora-taira".to_owned(),
+                target_profile: "ethereum-sepolia".to_owned(),
+                destination_binding_hash: format!("0x{}", "22".repeat(32)),
+                route_configuration_hash: format!("0x{}", "33".repeat(32)),
+                target_domain: 1,
+                asset_id: Some("xor".to_owned()),
+                route_id: Some("taira_eth_xor".to_owned()),
+                recipient: None,
+                amount: "5".to_owned(),
+                payload_projection: iroha_sccp::SccpPayloadProjectionV1::Transfer(
+                    iroha_sccp::SccpTransferProjectionV1 {
+                        version: 1,
+                        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                        nonce: 1,
+                        route_revision: 1,
+                        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        asset_id: iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
+                            value: "xor".to_owned(),
+                        },
+                        amount: 5,
+                        sender: iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
+                            value: "alice".to_owned(),
+                        },
+                        recipient: iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 {
+                            bytes: [0x44; 20],
+                        },
+                        route_id: iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
+                            value: "taira_eth_xor".to_owned(),
+                        },
+                    },
+                ),
+                links: iroha::client::SccpRecentMessageLinks {
+                    bundle_path: "/v1/sccp/proofs/message/id".to_owned(),
+                    proof_request_path: "/v1/sccp/proof-requests/id".to_owned(),
+                },
+            }],
+        });
+        assert!(summary.contains(&"22".repeat(32)));
+        assert!(summary.contains(&"33".repeat(32)));
+        assert!(summary.contains("proof_request="));
     }
 }

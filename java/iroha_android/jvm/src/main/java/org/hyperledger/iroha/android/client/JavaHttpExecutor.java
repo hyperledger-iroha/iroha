@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -10,34 +11,55 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import org.hyperledger.iroha.android.client.transport.BoundedResponseBodyReader;
+import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.transport.TransportStreamResponse;
-import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 
 /** Default executor that delegates to {@link HttpClient}. */
 final class JavaHttpExecutor implements HttpTransportExecutor, StreamingTransportExecutor {
 
   private final HttpClient httpClient;
+  private final long maximumResponseBytes;
   private static final Set<String> RESTRICTED_HEADERS =
       Set.of("connection", "content-length", "expect", "host", "upgrade");
 
   JavaHttpExecutor(final HttpClient httpClient) {
+    this(httpClient, BoundedResponseBodyReader.DEFAULT_MAXIMUM_RESPONSE_BYTES);
+  }
+
+  JavaHttpExecutor(final HttpClient httpClient, final long maximumResponseBytes) {
     this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
+    BoundedResponseBodyReader.validateMaximum(maximumResponseBytes);
+    this.maximumResponseBytes = maximumResponseBytes;
   }
 
   @Override
   public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
     final HttpRequest httpRequest = buildRequest(request);
+    final long responseLimit = responseLimit(request, maximumResponseBytes);
     return httpClient
-        .sendAsync(httpRequest, HttpResponse.BodyHandlers.ofByteArray())
+        .sendAsync(httpRequest, HttpResponse.BodyHandlers.ofInputStream())
         .thenApply(
-            response ->
-                new TransportResponse(
+            response -> {
+              try {
+                final byte[] body =
+                    BoundedResponseBodyReader.read(
+                        response.body(),
+                        response.headers().map(),
+                        responseLimit,
+                        responseMayHaveBody(httpRequest.method(), response.statusCode()));
+                return new TransportResponse(
                     response.statusCode(),
-                    response.body(),
+                    body,
                     response.statusCode() >= 400 ? httpRequest.uri().toString() : "",
-                    response.headers().map()));
+                    response.headers().map());
+              } catch (final IOException ex) {
+                throw new CompletionException("HTTP response body rejected", ex);
+              }
+            });
   }
 
   @Override
@@ -72,6 +94,21 @@ final class JavaHttpExecutor implements HttpTransportExecutor, StreamingTranspor
       return true;
     }
     return RESTRICTED_HEADERS.contains(name.toLowerCase(Locale.ROOT));
+  }
+
+  private static boolean responseMayHaveBody(final String requestMethod, final int status) {
+    return !"HEAD".equalsIgnoreCase(requestMethod)
+        && (status < 100 || status >= 200)
+        && status != 204
+        && status != 304;
+  }
+
+  private static long responseLimit(
+      final TransportRequest request, final long executorMaximumResponseBytes) {
+    final Long requestMaximum = request.maximumResponseBytes();
+    return requestMaximum == null
+        ? executorMaximumResponseBytes
+        : Math.min(executorMaximumResponseBytes, requestMaximum.longValue());
   }
 
   private static HttpRequest buildRequest(final TransportRequest request) {

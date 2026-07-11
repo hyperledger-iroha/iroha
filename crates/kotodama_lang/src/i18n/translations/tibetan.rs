@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "ལས་འཆར་ `{func}` ནང་གི་ཚད་བསྡུས་ `{name}` སྤྱོད་པ་མེད།",
     lint_unreachable_after_return: "{context} ནང་འཛུལ་མི་རུང་བའི་གསལ་བརྗོད་མཐོང་སྟེ་ return རྗེས་ཀྱི་ཨང་རྟགས་སྤྱོད་མེད།",
     lint_ok: "བདེ་ལེགས།",
-    lint_usage: "བཀོལ་སྤྱོད་: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "བཀོལ་སྤྱོད་: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Kotodama གི་ལིནཊི་བརྟག་ཞིབ་དེབ་གྲངས་འདིར་སྤྱོད།",
     ..english::MESSAGES
 };

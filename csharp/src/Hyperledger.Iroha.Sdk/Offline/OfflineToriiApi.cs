@@ -204,8 +204,8 @@ public sealed record OfflineTopUpResult
         OfflineTopUpAnchor anchor)
     {
         TransactionHash = OfflineApiValidation.RequireTransactionHash(transactionHash, nameof(transactionHash));
-        FinalizedBlockHeight = finalizedBlockHeight;
-        ServerTimeMs = serverTimeMs;
+        FinalizedBlockHeight = OfflineApiValidation.RequirePositive(finalizedBlockHeight, nameof(finalizedBlockHeight));
+        ServerTimeMs = OfflineApiValidation.RequirePositive(serverTimeMs, nameof(serverTimeMs));
         Anchor = anchor ?? throw new ArgumentNullException(nameof(anchor));
     }
 
@@ -224,8 +224,8 @@ public sealed record OfflineRedeemResult
     public OfflineRedeemResult(string transactionHash, ulong finalizedBlockHeight, ulong serverTimeMs)
     {
         TransactionHash = OfflineApiValidation.RequireTransactionHash(transactionHash, nameof(transactionHash));
-        FinalizedBlockHeight = finalizedBlockHeight;
-        ServerTimeMs = serverTimeMs;
+        FinalizedBlockHeight = OfflineApiValidation.RequirePositive(finalizedBlockHeight, nameof(finalizedBlockHeight));
+        ServerTimeMs = OfflineApiValidation.RequirePositive(serverTimeMs, nameof(serverTimeMs));
     }
 
     public string TransactionHash { get; }
@@ -1054,6 +1054,18 @@ public static class OfflineOperationCodec
 
 internal static class OfflineApiValidation
 {
+    internal static ulong RequirePositive(ulong value, string parameterName)
+    {
+        if (value == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                value,
+                "Applied result fields must be at least 1.");
+        }
+        return value;
+    }
+
     internal static string RequireOperationId(string? value, string parameterName)
     {
         if (value is null

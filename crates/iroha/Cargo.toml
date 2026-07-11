@@ -96,6 +96,7 @@ blake3.workspace = true
 
 [dev-dependencies]
 iroha_test_samples = { workspace = true }
+iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 tempfile = { workspace = true }
 assertables = { workspace = true }
 tokio-stream = { workspace = true }

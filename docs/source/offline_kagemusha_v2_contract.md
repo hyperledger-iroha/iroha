@@ -45,7 +45,10 @@ atomic note with a different scale is invalid. Top-up chain execution must also
 compare the request scale to the live asset definition before debiting funds.
 
 The chain-facing top-up and redeem requests bind a nonzero stable operation id
-so a retry cannot create a second economic operation. The local
+so a retry cannot create a second economic operation. Chain operation ids use
+one global namespace across authorities and operation kinds, matching the
+globally keyed top-up-anchor receipt; nonces, payload digests, and exact-request
+replay markers remain authority-scoped. The local
 `KagemushaRecursiveSpendInitRequestV2` is deliberately flat and anchor-derived.
 It contains exactly the finalized `topup_anchor`, checked one-hop
 `record_bundle`, `pallas_open_envelopes_archive`, `lineage_mode`, and optional
@@ -200,15 +203,18 @@ exports `connect_norito_kagemusha_recursive_spend_capabilities_v1`; callers
 must require its `proof_backend_available` field and must not infer readiness
 from symbols. It selects artifact manifest
 `kagemusha.offline.recursive_spend.artifact_manifest.v3`, mode
-`recursive_spend_v1`, proof backend `halo2/ipa-pasta-cycle-v1`, and transcript
+`recursive_spend_v2`, proof backend `halo2/ipa-pasta-cycle-v1`, and transcript
 profile `kagemusha-pasta-cycle-poseidon-v1`. V3 artifact files are framed with
 `KRV3KEY\0`; the older V2 artifact spool is not a production release contract.
 Use the maintained `kagemusha_recursive_spend_v3_bundle` binary documented in
 `offline_kagemusha_recursion_adapter.md` to frame an externally generated,
 reviewed 2×3 artifact set and its canonical top-up finality roster; ABI-7
 material and generators are not compatible. This packager is an unsigned
-staging step. Wallets and native verification must use the authenticated
-manifest SHA and exact roster/artifact digests, never generation labels alone.
+staging step. Its canonical `manifest.norito` is the runtime input and
+`manifest.norito.sha256` is only a content identifier until authenticated by
+the separate release envelope; `manifest.json` is an operator view. Wallets
+and native verification must use the authenticated manifest SHA and exact
+roster/artifact digests, never generation labels alone.
 The
 proof-independent `connect_norito_kagemusha_recursive_spend_topup_v2` path is
 part of the protocol-symbol inventory and validates the finalized transfer and
@@ -303,6 +309,12 @@ operation status resource. Polling returns a tagged `pending`,
 contains its typed finalized anchor, while redemption does not carry an
 irrelevant nullable anchor. Identical retries use the signed operation id and
 idempotency key to resolve to the same operation.
+Every applied result has a non-zero `finalized_block_height` and
+`server_time_ms` recovered from the exact canonical carrier block. Torii never
+substitutes zero for unavailable finality metadata; a missing or inconsistent
+index, carrier, timestamp, or finalized top-up anchor returns typed
+`503 offline_operation_index_inconsistent` (or the more specific documented
+index/history-unavailable code) instead of an applied status or client error.
 
 `Idempotency-Key` is required on both commands and is exactly the lowercase
 hexadecimal form of the request authorization's 32-byte `operation_id`. The
@@ -340,6 +352,13 @@ auxiliary admission registry is a process-local optimization, is not
 restart-persistent, and is pruned opportunistically on admitted-record lookup
 after the signed authorization's expiry plus 24 hours. Committed results remain
 discoverable while the corresponding block is retained.
+
+Both the pending lookup and Kura index bind the signed operation id to the
+configured outer Offline issuer authority. A different transaction authority
+cannot front-run an observed signed request, commit a rejected transaction, and
+shadow the later issuer submission under the same operation id. Deployments
+must retain the issuer identity for as long as they promise operation-status
+recovery; changing it creates a distinct recovery namespace.
 
 The in-flight coordinator, admission registry, and transaction queue are local
 to one Torii process. A load balancer must keep a command submitter and its

@@ -26,7 +26,8 @@ This overview summarises the core pieces and links to the canonical references.
 
 | Task | Command / API | Notes |
 | --- | --- | --- |
-| Inspect header/sections | `ivm_tool inspect <file>.to` | Shows ABI version, flags, and entrypoints. |
+| Inspect a Kotodama interface | `koto doc <file>.ko` | Uses the canonical compiler driver and embedded-interface model. |
+| Validate an IVM artifact locally | `iroha contract debug-call --code-file <file>.to --entrypoint <name>` | Verifies the artifact and reports gas, syscalls, and source-aware traps. |
 | Encode/decode in Rust | `norito::codec::{Encode, Decode}` | Implemented for all core data-model types. |
 | JSON interop | `norito::json::{to_json_pretty, from_json}` | Deterministic JSON backed by Norito values. |
 | Generate docs/specs | `norito.md`, `multicodec.md` | Source-of-truth documentation in the repo root. |

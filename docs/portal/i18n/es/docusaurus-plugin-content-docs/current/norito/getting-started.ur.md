@@ -16,14 +16,14 @@ El código de bytes Kotodama es un código de bytes Norito. کرنے، اسے م
 
 1. Cadena de herramientas Rust (1.76 یا جدید) انسٹال کریں اور اس ریپو کو چیک آؤٹ کریں۔
 2. معاون بائنریز کو بنائیں یا ڈاؤن لوڈ کریں:
-   - `koto_compile` - Kotodama Código de bytes y código de bytes IVM/Norito
+   - `koto build` - Kotodama Código de bytes y código de bytes IVM/Norito
    - `ivm_run` اور `ivm_tool` - مقامی اجرا اور معائنہ یوٹیلٹیز
    - `iroha_cli` - Torii کے ذریعے کنٹریکٹ ڈپلائے کرنے کے لئے استعمال ہوتا ہے
 
    ریپو کا Makefile ان بائنریز کو `PATH` میں توقع کرتا ہے۔ آپ پری بلٹ artefactos ڈاؤن لوڈ کر سکتے ہیں یا سورس سے بنا سکتے ہیں۔ Esta es la cadena de herramientas, los asistentes de Makefile y los asistentes de Makefile que están disponibles:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. جب آپ ڈپلائمنٹ مرحلے تک پہنچیں تو یقینی بنائیں کہ Iroha نوڈ چل رہا ہو۔ نیچے کی مثالیں فرض کرتی ہیں کہ Torii اس URL پر قابل رسائی ہے جو آپ کے `iroha_cli` پروفائل (`~/.config/iroha/cli.toml`) میں سیٹ ہے۔
@@ -34,14 +34,13 @@ El código de bytes Kotodama es un código de bytes Norito. کرنے، اسے م
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
-اہم فلیگز:- `--abi 1` کنٹریکٹ کو ABI ورژن 1 پر لاک کرتا ہے (تحریر کے وقت واحد سپورٹڈ ورژن).
-- `--max-cycles 0` لامحدود اجرا کی درخواست کرتا ہے؛ pruebas de conocimiento cero کے لئے ciclo de relleno کو محدود کرنے کے لئے مثبت عدد دیں۔
+اہم فلیگز:- `ABI V1` کنٹریکٹ کو ABI ورژن 1 پر لاک کرتا ہے (تحریر کے وقت واحد سپورٹڈ ورژن).
+- `--max-cycles 1000000` لامحدود اجرا کی درخواست کرتا ہے؛ pruebas de conocimiento cero کے لئے ciclo de relleno کو محدود کرنے کے لئے مثبت عدد دیں۔
 
 ## 2. Norito آرٹیفیکٹ کا معائنہ (اختیاری)
 
@@ -68,7 +67,7 @@ ivm_run target/examples/hello.to --args '{}'
 جب آپ کنٹریکٹ سے مطمئن ہوں تو CLI کے ذریعے اسے نوڈ پر ڈپلائے کریں۔ Esta autoridad tiene una clave de firma, y `.to` tiene una carga útil Base64:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -77,8 +76,8 @@ iroha_cli app contracts deploy \
 یہ کمانڈ Torii کے ذریعے Norito manifiesto + paquete de código de bytes جمع کرتی ہے اور نتیجے میں ٹرانزیکشن کی حیثیت پرنٹ کرتی ہے۔ ٹرانزیکشن commit ہونے کے بعد، جواب میں دکھایا گیا manifiestos hash de código حاصل کرنے یا instancias لسٹ کرنے کے لئے استعمال کیا جا سکتا ہے:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Torii کے خلاف چلائیںbytecode رجسٹر ہونے کے بعد، آپ ایک instrucción enviar کر کے اسے کال کر سکتے ہیں جو محفوظ شدہ کوڈ کو حوالہ دے (مثلا `iroha_cli ledger transaction submit` یا آپ کے ایپ کلائنٹ کے ذریعے). Varios permisos de llamadas al sistema (`set_account_detail`, `transfer_asset`, etc.) ہیں۔
@@ -86,7 +85,7 @@ iroha_cli app contracts instances --namespace apps --table
 ## تجاویز اور خرابیوں کا حل
 
 - `make examples-run` Utilice `PATH` para cambiar las variables de entorno y anular variables de entorno `KOTO`/`IVM`.
-- اگر `koto_compile` ABI ورژن مسترد کرے تو تصدیق کریں کہ کمپائلر اور نوڈ دونوں ABI v1 کو ہدف بنا رہے ہیں (`koto_compile --abi` بغیر دلائل کے چلائیں تاکہ سپورٹ دکھے).
+- اگر `koto build` ABI ورژن مسترد کرے تو تصدیق کریں کہ کمپائلر اور نوڈ دونوں ABI v1 کو ہدف بنا رہے ہیں (`koto build --help` بغیر دلائل کے چلائیں تاکہ سپورٹ دکھے).
 - CLI hexadecimal یا Claves de firma Base64 قبول کرتا ہے۔ ٹیسٹنگ کے لئے `iroha_cli tools crypto keypair` سے نکلے ہوئے teclas استعمال کیے جا سکتے ہیں۔
 - Cargas útiles Norito کی ڈیبگنگ میں `ivm_tool disassemble` سب کمانڈ مدد کرتی ہے تاکہ ہدایات کو Kotodama سورس سے جوڑا جا سکے۔
 

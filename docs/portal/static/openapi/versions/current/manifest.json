@@ -1,12 +1,14 @@
 {
   "version": 1,
-  "generated_unix_ms": 1783774265598,
-  "generator_commit": "5c89e079b5dc44aea68a020be748d5301a3ad37a",
+  "generated_unix_ms": 1783797289362,
+  "generator_commit": null,
+  "generator_dirty": true,
+  "generator_source_sha256_hex": "fee954fe81d5070c297ce7ae47e7909c8ce609ae942b2e34ed96c7a9ae5c0fec",
   "artifact": {
     "path": "versions/current/torii.json",
-    "bytes": 694889,
-    "sha256_hex": "dfb205b8115ff5297ea95855edc3756362e9a5d6a9ebffac601eecf36ea7c162",
-    "blake3_hex": "416c8feae30435ef27f47902a6f8b15b9e02e7329a8a2cc3ed2fbfcb9aa80c44",
+    "bytes": 723530,
+    "sha256_hex": "52c7115c588d61c77938ac85a859664457a758a9d4b3dee15f7f5440348278b9",
+    "blake3_hex": null,
     "signature": null
   }
 }

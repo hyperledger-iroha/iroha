@@ -1519,8 +1519,8 @@ type AppendLineageKeygenShape<const LEN: usize> =
         { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
     >;
 
-// TODO(kagemusha-v2-release): Replace this first-release safety boundary with
-// the compact, constraint-linked verifier composition described below.
+// First-release safety boundary: this must be replaced by the compact,
+// constraint-linked verifier composition described below before activation.
 // `KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE` must remain false
 // until this verifier-slice composition is replaced by a compact profile. The
 // current outer rectangularization pads every lineage instance column to the

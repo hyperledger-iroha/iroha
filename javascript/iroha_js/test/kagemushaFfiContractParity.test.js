@@ -21,6 +21,49 @@ const REQUIRED_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
 ]);
 
+const REQUIRED_KAGEMUSHA_V2_PROOF_SYMBOLS = Object.freeze([
+  "connect_norito_kagemusha_recursive_spend_init_v2",
+  "connect_norito_kagemusha_recursive_spend_append_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
+  "connect_norito_kagemusha_recursive_spend_verify_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_v2",
+]);
+
+const REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS = Object.freeze([
+  "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+  "connect_norito_kagemusha_topup_finality_verify_v2",
+  "connect_norito_kagemusha_recursive_spend_topup_v2",
+  "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
+  "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
+  "connect_norito_kagemusha_receiver_key_reference_v2",
+  "connect_norito_kagemusha_recipient_output_derive_v2",
+  "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
+  "connect_norito_kagemusha_recipient_payment_request_create_v2",
+  "connect_norito_kagemusha_recipient_payment_request_verify_v2",
+  "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
+  "connect_norito_kagemusha_request_authorization_create_v2",
+  "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
+  "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
+  "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
+  "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
+  "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
+  "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
+  "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
+  "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
+  "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+  "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+]);
+
+const REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS = Object.freeze([
+  ...REQUIRED_KAGEMUSHA_V2_PROOF_SYMBOLS,
+  ...REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS,
+]);
+
 const ABI18_V2_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_init_v2",
   "connect_norito_kagemusha_recursive_spend_append_v2",
@@ -37,10 +80,6 @@ const ABI18_V2_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
   "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
   "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
-  "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
-  "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
-  "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
-  "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
 ]);
 
 const ADDITIVE_ABI18_V3_C_SYMBOLS = Object.freeze([
@@ -117,6 +156,14 @@ const REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS = Object.freeze([
 const REQUIRED_HEADER_NEGATIVE_CONTROL_MODES = Object.freeze([
   "--negative-control-missing-recursive-header",
   "--negative-control-bad-recursive-signature",
+  "--negative-control-bad-recursive-v2-signature",
+  "--negative-control-bad-recursive-v2-artifact-signature",
+  "--negative-control-missing-recursive-v2-export-pair",
+  "--negative-control-missing-kagemusha-v2-protocol-export-pair",
+  "--negative-control-bad-kagemusha-v2-receiver-key-signature",
+  "--negative-control-bad-kagemusha-v2-verify-at-time-signature",
+  "--negative-control-bad-kagemusha-v2-ack-create-signature",
+  "--negative-control-bad-connect-norito-free-signature",
   "--negative-control-missing-rust-export",
   "--negative-control-umbrella-drift",
 ]);
@@ -605,9 +652,169 @@ test("recursive Kagemusha ABI-18 C exports and shipped headers stay in parity", 
   );
 });
 
-test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity", () => {
+test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity", () => {
+  const rustBridge = source("crates/connect_norito_bridge/src/lib.rs");
+  const header = source("crates/connect_norito_bridge/include/connect_norito_bridge.h");
+  const headerGuard = source("ci/check_connect_norito_bridge_header.sh");
   const androidJavaProver = source("java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java");
   const kotlinProver = source("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt");
+  const swiftNativeBridgeCore = source("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift");
+  const swiftRecursiveSpendV2 = source("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift");
+  const swiftRecursiveSpendV2Native = source("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift");
+  const swiftNativeBridge = [
+    swiftNativeBridgeCore,
+    swiftRecursiveSpendV2,
+    swiftRecursiveSpendV2Native,
+  ].join("\n");
+  const swiftV2Inventory = (name) => {
+    const match = swiftRecursiveSpendV2.match(
+      new RegExp(`public static let ${name} = \\[([\\s\\S]*?)\\n    \\]`, "u"),
+    );
+    assert.ok(match, `Swift V2 inventory missing ${name}`);
+    return namesFromMatches(match[1], /"([^"]+)"/gu);
+  };
+  const swiftV2ProofInventory = swiftV2Inventory("requiredProofSymbols");
+  const swiftV2ProtocolInventory = swiftV2Inventory("requiredProtocolSymbols");
+  const swiftV2NativeInventory = [
+    ...swiftV2ProofInventory,
+    ...swiftV2ProtocolInventory,
+  ];
+  const kagemushaV2InventoryFamily = String.raw`connect_norito_kagemusha_(?:topup_finality_verify_v2|receiver_key_reference_v2|recipient_output_derive_v2|recipient_payment_request_(?:signing_bytes|create|verify)_v2|request_authorization_(?:signing_bytes|create)_v2|receiver_acknowledgement_(?:payload|signing_bytes|create|verify)_v2|recursive_spend_(?:capabilities_v1|(?:init|topup|append|redeem_change|verify|redeem|topup_unsigned_payload_digest|topup_finalize_request|redeem_unsigned_payload_digest|redeem_finalize_request|peer_payment_from_split|peer_payment_validate|bundle_summary|build_split_intent|build_redemption_intent)_v2|artifact_(?:begin|write|finalize|cancel)_v3))`;
+  const rustV2Inventory = new Set(
+    namesFromMatches(
+      rustBridge,
+      new RegExp(
+        `#\\[unsafe\\(no_mangle\\)\\]\\s*pub\\s+unsafe\\s+extern\\s+"C"\\s+fn\\s+(${kagemushaV2InventoryFamily})\\s*\\(`,
+        "gu",
+      ),
+    ),
+  );
+  const headerV2Inventory = new Set(
+    namesFromMatches(
+      header,
+      new RegExp(`int32_t\\s+(${kagemushaV2InventoryFamily})\\s*\\(`, "gu"),
+    ),
+  );
+
+  assert.equal(
+    REQUIRED_KAGEMUSHA_V2_PROOF_SYMBOLS.length,
+    5,
+    "ABI-18 must pin exactly five Kagemusha V2 proof symbols",
+  );
+  assert.equal(
+    REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS.length,
+    27,
+    "ABI-18 must pin exactly twenty-seven Kagemusha V2 protocol symbols",
+  );
+  assert.equal(
+    new Set(swiftV2NativeInventory).size,
+    swiftV2NativeInventory.length,
+    "Swift V2 required native symbol inventory must not contain duplicates",
+  );
+  assertSameSet(
+    new Set(swiftV2ProofInventory),
+    REQUIRED_KAGEMUSHA_V2_PROOF_SYMBOLS,
+    "Swift V2 required proof symbol inventory",
+  );
+  assertSameSet(
+    new Set(swiftV2ProtocolInventory),
+    REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS,
+    "Swift V2 required protocol symbol inventory",
+  );
+  assertSameSet(
+    rustV2Inventory,
+    REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS,
+    "Rust ABI-18 Kagemusha V2 export inventory",
+  );
+  assertSameSet(
+    headerV2Inventory,
+    REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS,
+    "C header ABI-18 Kagemusha V2 declaration inventory",
+  );
+  assert.match(
+    swiftRecursiveSpendV2,
+    /requiredNativeSymbols = requiredProofSymbols \+ requiredProtocolSymbols/u,
+    "Swift V2 availability inventory must combine proof and protocol symbols",
+  );
+  const swiftV2Availability = swiftNativeBridgeCore.slice(
+    swiftNativeBridgeCore.indexOf("public var isKagemushaRecursiveSpendV2StubAvailable"),
+    swiftNativeBridgeCore.indexOf("public var isPrivacyNativeAvailable"),
+  );
+  assert.match(
+    swiftV2Availability,
+    /KagemushaRecursiveSpendV2\.requiredNativeSymbols \+ \["connect_norito_free"\][\s\S]*?\.allSatisfy \{ hasKagemushaV2Symbol\(\$0\) \}/u,
+    "Swift V2 availability must require every declared native symbol and the free function",
+  );
+  assert.doesNotMatch(
+    swiftV2Availability,
+    /unsafeBitCast/u,
+    "Swift V2 availability must probe symbol presence without casting function pointers",
+  );
+  assert.match(
+    rustBridge,
+    /#\[unsafe\(no_mangle\)\]\s*pub\s+extern\s+"C"\s+fn\s+connect_norito_free\s*\(\s*ptr_\s*:\s*\*mut\s+c_uchar\s*,?\s*\)\s*\{/u,
+    "Rust bridge must expose the exact mutable-byte connect_norito_free deallocator",
+  );
+  assert.match(
+    header,
+    /void\s+connect_norito_free\s*\(\s*uint8_t\s*\*\s*ptr\s*\)\s*;/u,
+    "C header must declare the exact mutable-byte connect_norito_free deallocator",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /typealias KagemushaV2FreeFn = @convention\(c\) \(UnsafeMutablePointer<UInt8>\?\) -> Void/u,
+    "Swift V2 bridge must resolve connect_norito_free with the exact mutable-byte signature",
+  );
+  assertContainsAll(
+    headerGuard,
+    REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS,
+    "NoritoBridge header guard ABI-18 Kagemusha V2 inventories",
+  );
+  assert.equal(
+    REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS.length,
+    32,
+    "ABI-18 must pin the complete five-proof and twenty-seven-protocol inventory",
+  );
+  assert.match(
+    headerGuard,
+    /expected_connect_norito_free_header_signature[\s\S]*expected_connect_norito_free_rust_signature[\s\S]*Rust connect_norito_free export has wrong signature[\s\S]*C header connect_norito_free declaration has wrong signature/u,
+    "NoritoBridge header guard must reject Rust and C connect_norito_free signature drift",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /typealias KagemushaV2KeyReferenceFn = @convention\(c\) \(\s*UInt8, UnsafePointer<UInt8>\?, CUnsignedLong,\s*UnsafeMutablePointer<UnsafeMutablePointer<UInt8>\?>\?, UnsafeMutablePointer<CUnsignedLong>\?\s*\) -> Int32/u,
+    "Swift V2 receiver-key resolver must preserve the UInt8 algorithm ABI shape",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /func kagemushaRecipientPaymentRequestVerifyV2\(\s*requestArchive: Data,\s*verifiedAtMilliseconds: UInt64\s*\) throws -> Data\?[\s\S]*?callKagemushaV2ArchiveAtTime\(\s*symbol: "connect_norito_kagemusha_recipient_payment_request_verify_v2",\s*archive: requestArchive,\s*milliseconds: verifiedAtMilliseconds\s*\)/u,
+    "Swift V2 request verification must preserve the authoritative UInt64 time ABI shape",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /func kagemushaReceiverAcknowledgementCreateV2\(\s*payloadArchive: Data,\s*signature: Data,\s*requestArchive: Data,\s*peerPaymentArchive: Data\s*\) throws -> Data\?[\s\S]*?callKagemushaV2FourArchives\(\s*symbol: "connect_norito_kagemusha_receiver_acknowledgement_create_v2",\s*first: payloadArchive,\s*second: signature,\s*third: requestArchive,\s*fourth: peerPaymentArchive\s*\)/u,
+    "Swift V2 ACK creation must preserve all four archive arguments",
+  );
+  assert.doesNotMatch(
+    swiftNativeBridgeCore,
+    /kagemushaRecursiveSpendAppendV2Fn/u,
+    "Swift bridge must not cache append_v2 under the one-archive C function type",
+  );
+  assert.doesNotMatch(
+    swiftNativeBridgeCore,
+    /func kagemushaRecursiveSpendAppendV2\(requestArchive: Data\)/u,
+    "Swift bridge must not expose a one-archive append_v2 overload",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /func kagemushaRecursiveSpendInitV2\(requestArchive: Data\) throws -> Data\?[\s\S]*?callKagemushaV2Archive\(\s*symbol: "connect_norito_kagemusha_recursive_spend_init_v2",\s*archive: requestArchive\s*\)/u,
+    "Swift V2 init wrapper must retain the canonical flat one-archive shape",
+  );
+  assert.match(
+    swiftRecursiveSpendV2Native,
+    /func kagemushaRecursiveSpendAppendV2\(\s*requestArchive: Data,\s*recipientRequestArchive: Data,\s*verifiedAtMilliseconds: UInt64\s*\)/u,
+    "Swift V2 append wrapper must retain the exact two-archive-plus-time shape",
+  );
 
   assertContainsAll(
     source("crates/iroha_js_host/src/lib.rs"),
@@ -647,9 +854,9 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
   );
 
   assertContainsAll(
-    source("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"),
+    swiftNativeBridge,
     REQUIRED_C_SYMBOLS,
-    "Swift native bridge loader",
+    "Swift native bridge loaders",
   );
   assertContainsAll(
     source("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"),
@@ -15025,7 +15232,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-unanchored-compact-token-symbol-removal",
     "--negative-control-mobile-halo2-vk-hash",
     "--negative-control-mobile-open-verify-public-input-hash-exactness",
-    "--negative-control-ton-sccp-public-input-validation-ordering",
     "--negative-control-rust-recursive-compact-unavailable-classifier",
     "--negative-control-rust-kagemusha-hop-public-instance-shape",
     "--negative-control-rust-kagemusha-fold-root-transition",
@@ -15083,6 +15289,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-android-device-lab-family-override-binding",
     "--negative-control-android-device-lab-assembler-identity-fields",
     "--negative-control-native-c-bridge-abi-version",
+    "--negative-control-abi18-pasta-cycle-mode-v2",
     "--negative-control-native-bridge-zero-envelope-pallas-guard",
     "--negative-control-native-bridge-recursive-compact-invalid-proof-isolation",
     "--negative-control-bridge-zk1-i10p-parser-exactness",
@@ -17130,7 +17337,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "JavaScript SDK package-dist UAID path literal focused selector",
       "Python UAID path literal exactness",
       "Python UAID path literal exactness tests",
-      "Kagemusha Python SDK script must run Torii query selector, bridge submit, and UAID path literal exactness regressions",
+      "Kagemusha Python SDK script must run Torii query selector, exact SCCP V1, and UAID path literal regressions",
       "Swift UAID path literal exactness",
       "Swift UAID path literal exactness tests",
       "Kagemusha Swift SDK script must run Torii query selector exactness tests",
@@ -17482,7 +17689,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const androidDeviceLabAssemblerIdentityBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-android-device-lab-assembler-identity-fields":'),
-    guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
+    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v2":'),
   );
   assert.match(
     guard,
@@ -17503,6 +17710,20 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     androidDeviceLabAssemblerIdentityBranch,
     /\n    raise\s+SystemExit\(0\)\n    raise\s+SystemExit\("negative control failed: Android device-lab assembler identity field drift was not detected"\)/u,
     "Android device-lab assembler identity negative control must not pass unconditionally after run_checks",
+  );
+  const abi18PastaCycleModeBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v2":'),
+    guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
+  );
+  assert.match(
+    guard,
+    /KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";[\s\S]*?Swift ABI-18 Pasta-cycle mode V2 contract[\s\S]*?Kotlin ABI-18 Pasta-cycle mode V2 contract[\s\S]*?Android Java ABI-18 Pasta-cycle mode V2 contract[\s\S]*?native bridge ABI-18 Pasta-cycle mode V2 fixture[\s\S]*?ABI-18 recursion adapter contract mode/u,
+    "SDK parity guard must pin recursive_spend_v2 across every ABI-18 Pasta-cycle surface",
+  );
+  assert.match(
+    abi18PastaCycleModeBranch,
+    /recursive_spend_v2[\s\S]*?recursive_spend_v1[\s\S]*?for target, old, new, expected_label in cases:[\s\S]*?negative control rejected every one-sided ABI-18 Pasta-cycle V1 substitution/u,
+    "ABI-18 Pasta-cycle mode negative control must reject one-sided recursive_spend_v1 substitutions",
   );
   const nativeCBridgeAbiVersionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
@@ -18379,7 +18600,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     {
       start: 'if mode == "--negative-control-python-sdk-torii-selector-test-filter-script":',
       end: 'if mode == "--negative-control-python-sdk-identifier-receipt-test-filter-script":',
-      marker: "Kagemusha Python SDK script must run Torii query selector, bridge submit, and UAID path literal exactness regressions",
+      marker: "Kagemusha Python SDK script must run Torii query selector, exact SCCP V1, and UAID path literal regressions",
       label: "Python Torii selector filter branch must require the selector exactness label",
     },
     {
@@ -27967,22 +28188,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileSccpBranch,
-    /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?proofRequestSkipsRelayContextBinding[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?tronRouteCanaryEvidenceHashDrifts[\s\S]*?derivesTonRouteCanaryEvidenceHash[\s\S]*?tonRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSolanaRouteCanaryEvidenceHash[\s\S]*?solanaRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?sourceAdapterVerifierVkHashesDriftForUiTooling/u,
-    "mobile SCCP negative control must mutate EVM, TRON, TON, Solana, and source proof hash coverage",
+    /commitmentDecoderRejectsTagTamperingCollisionsAndTrailingBytes[\s\S]*?commitmentDecoderRejectsTamperingCollisionsAndTrailingBytes[\s\S]*?original\.replace\(expected_marker, "sccpExactCoverageDrift"\)/u,
+    "mobile SCCP negative control must mutate Kotlin and Android exact V1 commitment coverage",
   );
   assert.match(
     mobileSccpBranch,
-    /extraneousSourceProofError[\s\S]*?staleRequestError[\s\S]*?sourceProofBytes"\) == true[\s\S]*?requestHash"\) == true[\s\S]*?ex\.getMessage\(\)\.contains\("sourceProofBytes"\)[\s\S]*?ex\.getMessage\(\)\.contains\("requestHash"\)[\s\S]*?submission must reject extraneous wrapped proof-result source proof bytes[\s\S]*?submission must reject stale wrapped proof-result request context[\s\S]*?sourceProofBytes must be empty for SORA source bundle[\s\S]*?TON request hash must bind bundle finality proof bytes[\s\S]*?TON request hash must bind bundle\/source-proof byte boundaries/u,
-    "mobile SCCP negative control must mutate sourceProofBytes fail-fast coverage",
+    /kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/sccp\/SccpV1Test\.kt[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/sccp\/SccpV1Tests\.java/u,
+    "mobile SCCP negative control must target only current closed SCCP V1 tests",
   );
   assert.match(
     mobileSccpBranch,
-    /Kotlin SCCP EVM prover tests[\s\S]*?Android SCCP EVM prover tests[\s\S]*?Kotlin SCCP TRON prover tests[\s\S]*?Android SCCP TRON prover tests[\s\S]*?Kotlin SCCP TON prover tests[\s\S]*?Android SCCP TON prover tests[\s\S]*?Kotlin SCCP Solana prover tests[\s\S]*?Android SCCP Solana prover tests[\s\S]*?Kotlin SCCP source proof hash tests[\s\S]*?Android SCCP source proof hash tests/u,
-    "mobile SCCP negative control must require all SCCP labels",
+    /Kotlin exact SCCP V1 tests[\s\S]*?Android exact SCCP V1 tests/u,
+    "mobile SCCP negative control must require both current SCCP V1 labels",
   );
   assert.match(
     mobileSccpBranch,
-    /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?derivesTonRouteCanaryEvidenceHash[\s\S]*?derivesSolanaRouteCanaryEvidenceHash[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?expected = f"\{label\} missing \{expected_marker\}"[\s\S]*?if expected not in message:[\s\S]*?mobile SCCP runner coverage drift was rejected for the wrong reason/u,
+    /commitmentDecoderRejectsTagTamperingCollisionsAndTrailingBytes[\s\S]*?commitmentDecoderRejectsTamperingCollisionsAndTrailingBytes[\s\S]*?expected = f"\{label\} missing \{expected_marker\}"[\s\S]*?if expected not in message:[\s\S]*?mobile SCCP runner coverage drift was rejected for the wrong reason/u,
     "mobile SCCP negative control must require exact missing-test diagnostics",
   );
   assert.match(
@@ -29137,6 +29358,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "TransportResponse.java",
       "TransportStreamResponse.java",
       "UrlConnectionTransportExecutor.java",
+      "BoundedResponseBodyReader.java",
       "TransportSecurity.java",
       "OfflineToriiClient.java",
       "ConfidentialAssetToriiClient.java",
@@ -29196,8 +29418,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "value.equals(value.trim())",
       "wireName.trim().isEmpty()",
       "wireName.isBlank()",
-      "try (InputStream responseBody = stream;",
-      "try (stream;",
+      "try (InputStream responseBody = input;",
+      "try (input;",
       "Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(values)))",
       "Set.of(values)",
       "java.util.Collections.unmodifiableList(new ArrayList<>(builder.observers))",
@@ -29269,7 +29491,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     androidJavaKagemushaJdk8ApiSurfaceBranch,
-    /Android Java Offline Note V2 JDK 8 collection factories[\s\S]*?Android Java Offline Note V2 tests JDK 8 file reads[\s\S]*?Android Java Kagemusha instruction archive transaction helper JDK 8 collection factories[\s\S]*?Android Java Offline Note outcome provider production JDK 8 API surface[\s\S]*?Android Java Offline Journal JDK 8 unsigned sort[\s\S]*?Android Java Offline List params production JDK 8 blank checks[\s\S]*?Android Java Offline Torii exception production JDK 8 blank checks[\s\S]*?Android Java Offline Note explorer outcome exactness source missing value\.equals\(value\.trim\(\)\)[\s\S]*?Android Java executable model production JDK 8 collection factories[\s\S]*?Android Java instruction box production JDK 8 blank checks[\s\S]*?Android Java client response production JDK 8 blank checks[\s\S]*?Android Java transport request production JDK 8 collection factories[\s\S]*?Android Java transport response production JDK 8 collection factories[\s\S]*?Android Java transport stream response production JDK 8 collection factories[\s\S]*?Android Java URL connection transport production JDK 8 API surface[\s\S]*?Android Java transport security production JDK 8 collection factories[\s\S]*?Android Java Offline Torii client production JDK 8 API surface[\s\S]*?Android Java confidential asset Torii client production JDK 8 blank checks[\s\S]*?Android Java transaction status exception production JDK 8 blank checks[\s\S]*?Android Java transaction status HTTP exception production JDK 8 blank checks[\s\S]*?Android Java Torii status JDK 8 compatibility tests[\s\S]*?Android Java HTTP client transport production JDK 8 API surface[\s\S]*?Android Java client config production JDK 8 observer copy[\s\S]*?Android Java Norito RPC client production JDK 8 API surface[\s\S]*?Android Java Norito RPC request options production JDK 8 blank checks[\s\S]*?Android Java subscription Torii client production JDK 8 API surface[\s\S]*?Android Java Torii WebSocket client production JDK 8 API surface[\s\S]*?Android Java Torii WebSocket subscription production JDK 8 API surface[\s\S]*?Android Java Torii WebSocket options production JDK 8 blank checks[\s\S]*?Android Java Torii event stream client production JDK 8 API surface[\s\S]*?Android Java Torii event stream subscription production JDK 8 observer copy[\s\S]*?Android Java public key codec production JDK 8 blank checks[\s\S]*?Android Java account alias JSON production JDK 8 blank checks[\s\S]*?Android Java contract JSON production JDK 8 blank checks[\s\S]*?Android Java identifier JSON production JDK 8 API surface[\s\S]*?Android Java RAM-LFE JSON production JDK 8 API surface[\s\S]*?Android Java identifier policy list response production JDK 8 item copy[\s\S]*?Android Java RAM-LFE policy list response production JDK 8 item copy[\s\S]*?Android Java identifier receipt verifier production JDK 8 blank checks[\s\S]*?Android Java pipeline status options production JDK 8 status defaults/u,
+    /Android Java Offline Note V2 JDK 8 collection factories[\s\S]*?Android Java Offline Note V2 tests JDK 8 file reads[\s\S]*?Android Java Kagemusha instruction archive transaction helper JDK 8 collection factories[\s\S]*?Android Java Offline Note outcome provider production JDK 8 API surface[\s\S]*?Android Java Offline Journal JDK 8 unsigned sort[\s\S]*?Android Java Offline List params production JDK 8 blank checks[\s\S]*?Android Java Offline Torii exception production JDK 8 blank checks[\s\S]*?Android Java Offline Note explorer outcome exactness source missing value\.equals\(value\.trim\(\)\)[\s\S]*?Android Java executable model production JDK 8 collection factories[\s\S]*?Android Java instruction box production JDK 8 blank checks[\s\S]*?Android Java client response production JDK 8 blank checks[\s\S]*?Android Java transport request production JDK 8 collection factories[\s\S]*?Android Java transport response production JDK 8 collection factories[\s\S]*?Android Java transport stream response production JDK 8 collection factories[\s\S]*?Android Java URL connection transport production JDK 8 API surface[\s\S]*?Android Java bounded response reader production JDK 8 API surface[\s\S]*?Android Java transport security production JDK 8 collection factories[\s\S]*?Android Java Offline Torii client production JDK 8 API surface[\s\S]*?Android Java confidential asset Torii client production JDK 8 blank checks[\s\S]*?Android Java transaction status exception production JDK 8 blank checks[\s\S]*?Android Java transaction status HTTP exception production JDK 8 blank checks[\s\S]*?Android Java Torii status JDK 8 compatibility tests[\s\S]*?Android Java HTTP client transport production JDK 8 API surface[\s\S]*?Android Java client config production JDK 8 observer copy[\s\S]*?Android Java Norito RPC client production JDK 8 API surface[\s\S]*?Android Java Norito RPC request options production JDK 8 blank checks[\s\S]*?Android Java subscription Torii client production JDK 8 API surface[\s\S]*?Android Java Torii WebSocket client production JDK 8 API surface[\s\S]*?Android Java Torii WebSocket subscription production JDK 8 API surface[\s\S]*?Android Java Torii WebSocket options production JDK 8 blank checks[\s\S]*?Android Java Torii event stream client production JDK 8 API surface[\s\S]*?Android Java Torii event stream subscription production JDK 8 observer copy[\s\S]*?Android Java public key codec production JDK 8 blank checks[\s\S]*?Android Java account alias JSON production JDK 8 blank checks[\s\S]*?Android Java contract JSON production JDK 8 blank checks[\s\S]*?Android Java identifier JSON production JDK 8 API surface[\s\S]*?Android Java RAM-LFE JSON production JDK 8 API surface[\s\S]*?Android Java identifier policy list response production JDK 8 item copy[\s\S]*?Android Java RAM-LFE policy list response production JDK 8 item copy[\s\S]*?Android Java identifier receipt verifier production JDK 8 blank checks[\s\S]*?Android Java pipeline status options production JDK 8 status defaults/u,
     "Android Java Kagemusha JDK 8 API negative control must require exact source/test diagnostics",
   );
   assertContainsAll(
@@ -30288,8 +30510,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRunner,
-    /python\/iroha_torii_client\/tests\/test_client\.py::test_call_contract_rejects_padded_selectors_before_dispatch[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_submit_bridge_proof_rejects_padded_signing_fields_before_request[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_submit_bridge_message_rejects_padded_signing_fields_before_request[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch/,
-    "Kagemusha Python SDK runner must exercise Torii query selector, bridge submit, and UAID path literal exactness tests",
+    /python\/iroha_torii_client\/tests\/test_client\.py::test_call_contract_rejects_padded_selectors_before_dispatch[\s\S]*python\/iroha_torii_client\/tests\/sccp_test\.py[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch/,
+    "Kagemusha Python SDK runner must exercise Torii query selector, exact SCCP V1, and UAID path literal tests",
   );
   assert.match(
     pythonRunner,
@@ -30303,8 +30525,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRunner,
-    /python\/iroha_torii_client\/tests\/test_client\.py::test_get_offline_readiness_parses_payload[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_get_offline_readiness_rejects_noncanonical_abi_versions[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_get_offline_readiness_rejects_removed_abi7_fields[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_get_offline_readiness_rejects_missing_recursive_compact_family/,
-    "Kagemusha Python SDK runner must exercise Torii offline readiness ABI exactness tests",
+    /test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers[\s\S]*test_get_offline_readiness_rejects_invalid_selector_before_network[\s\S]*test_get_offline_readiness_rejects_adversarial_snapshots[\s\S]*test_offline_readiness_uses_finite_codes_and_strips_unknown_members[\s\S]*test_submit_offline_top_up_sends_direct_json_and_derived_idempotency_key[\s\S]*test_submit_offline_redeem_uses_only_the_final_route[\s\S]*test_offline_command_validation_rejects_malformed_ids_and_payloads_before_network[\s\S]*test_offline_acceptance_cross_checks_reference_and_location[\s\S]*test_get_offline_operation_status_parses_all_tagged_states/,
+    "Kagemusha Python SDK runner must exercise the first-release Offline HTTP contract tests",
   );
   const pythonMultisigResponseFilterBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-sdk-multisig-response-test-filter-script":'),
@@ -30321,8 +30543,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonToriiSelectorFilterBranch,
-    /test_call_contract_rejects_padded_selectors_before_dispatch[\s\S]*?test_submit_bridge_proof_rejects_padded_signing_fields_before_request[\s\S]*?test_submit_bridge_message_rejects_padded_signing_fields_before_request[\s\S]*?test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch[\s\S]*?Python SDK Torii selector test filter drift was not detected[\s\S]*?negative control rejected Python SDK Torii selector test filter drift/u,
-    "Python Torii selector runner-filter negative control must mutate and detect all focused selector and bridge filters",
+    /test_call_contract_rejects_padded_selectors_before_dispatch[\s\S]*?sccp_test\.py[\s\S]*?test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch[\s\S]*?Python SDK Torii selector test filter drift was not detected[\s\S]*?negative control rejected Python SDK Torii selector test filter drift/u,
+    "Python Torii selector runner-filter negative control must mutate and detect selectors plus exact SCCP V1",
   );
   const pythonOfflineReadinessFilterBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-sdk-offline-readiness-test-filter-script":'),
@@ -30330,8 +30552,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonOfflineReadinessFilterBranch,
-    /test_get_offline_readiness_parses_payload[\s\S]*?test_get_offline_readiness_rejects_noncanonical_abi_versions[\s\S]*?test_get_offline_readiness_rejects_removed_abi7_fields[\s\S]*?test_get_offline_readiness_rejects_missing_recursive_compact_family[\s\S]*?Python SDK offline readiness test filter drift was not detected[\s\S]*?negative control rejected Python SDK offline readiness test filter drift/u,
-    "Python offline readiness runner-filter negative control must mutate and detect all focused test filters",
+    /test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers[\s\S]*?test_get_offline_readiness_rejects_invalid_selector_before_network[\s\S]*?test_get_offline_readiness_rejects_adversarial_snapshots[\s\S]*?test_offline_readiness_uses_finite_codes_and_strips_unknown_members[\s\S]*?test_submit_offline_top_up_sends_direct_json_and_derived_idempotency_key[\s\S]*?test_submit_offline_redeem_uses_only_the_final_route[\s\S]*?test_offline_command_validation_rejects_malformed_ids_and_payloads_before_network[\s\S]*?test_offline_acceptance_cross_checks_reference_and_location[\s\S]*?test_get_offline_operation_status_parses_all_tagged_states[\s\S]*?Python SDK offline readiness test filter drift was not detected[\s\S]*?negative control rejected Python SDK offline readiness test filter drift/u,
+    "Python Offline runner-filter negative control must mutate and detect every first-release contract test",
   );
   const pythonBlockHeightVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-block-height-vectors":'),

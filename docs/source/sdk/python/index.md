@@ -77,10 +77,9 @@ holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=ass
 print(assets, txs, holders)
 ```
 
-## Offline readiness
+## Offline lifecycle
 
-The first-release HTTP lifecycle consists of readiness, top-up, redemption, and
-operation status:
+The first-release HTTP lifecycle consists of exactly four canonical routes:
 
 - `GET /v1/offline/readiness?asset_definition_id=...`
 - `POST /v1/offline/top-up`
@@ -89,9 +88,10 @@ operation status:
 
 POSTs send the typed request directly as structured JSON or Norito and return
 `202 Accepted` with a typed operation reference and `Location`. They do not use
-whole-request base64 wrapper objects. A readiness response with `ready: false`
-is a successfully evaluated domain state; `503 readiness_unavailable` means the
-node could not perform the evaluation.
+whole-request base64 wrapper objects. Readiness requires
+`asset_definition_id`; a response with `ready: false` is a successfully
+evaluated domain state, while `503 readiness_unavailable` means the node could
+not perform the evaluation.
 
 ```python
 from iroha_python import ToriiClient

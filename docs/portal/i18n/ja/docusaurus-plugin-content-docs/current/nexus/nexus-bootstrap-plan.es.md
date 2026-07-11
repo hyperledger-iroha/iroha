@@ -33,7 +33,7 @@ title: ソラ Nexus のブートストラップと観察可能性
 ## エントルノス・デ・レッド
 - 赤いディスティントのオペレーター Nexus:
 - **Sora Nexus (メインネット)** - `nexus` の生産準備、SoraFS/SoraNet のピギーバック サービスの提供 (チェーン ID `0x02F1` / UUID) `00000000-0000-0000-0000-000000000753`)。
-- **Sora Testus (テストネット)** - ステージング `testus` の赤、リリース前の統合と検証におけるメインネットの構成の確認 (チェーン UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`)。
+- **Sora Testus (テストネット)** - ステージング `testus` の赤、リリース前の統合と検証におけるメインネットの構成の確認 (チェーン UUID `fc56984b-2be7-431d-840e-21514d1883f0`)。
 - セパラドスの発生源、ラベス デ ゴベルナンザ、およびインフラストラクチャーの管理を管理します。 Testus actua como el banco de pruebas de todos los rollouts SoraFS/SoraNet antes de promover a Nexus。
 - テスト用の CI/CD のパイプライン、自動排煙テスト、プロモーション マニュアル、Nexus の検査が必要です。
 - `configs/soranexus/nexus/` (メインネット) および `configs/soranexus/testus/` (テストネット) の参照用バンドルが失われ、`config.toml`、`genesis.json` および管理用ディレクトリ Torii が見つかりません。

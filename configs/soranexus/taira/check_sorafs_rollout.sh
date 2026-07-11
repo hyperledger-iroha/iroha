@@ -646,6 +646,7 @@ source_path, target_torii_url, output_path, time_to_live_ms, status_timeout_ms =
 with open(source_path, "rb") as handle:
     source = tomllib.load(handle)
 
+PUBLIC_TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 chain = source.get("chain")
 account = source.get("account") or {}
 public_key = account.get("public_key")
@@ -660,12 +661,19 @@ status_timeout_ms = int(status_timeout_ms)
 
 if not isinstance(chain, str) or not chain:
     raise SystemExit("write canary config is missing a top-level `chain` value")
+if chain != PUBLIC_TAIRA_CHAIN_ID:
+    raise SystemExit(
+        "write canary config must target the public Sumeragi-v2 Taira chain "
+        f"`{PUBLIC_TAIRA_CHAIN_ID}`"
+    )
 if not isinstance(public_key, str) or not public_key:
     raise SystemExit("write canary config is missing `account.public_key`")
 if not isinstance(private_key, str) or not private_key:
     raise SystemExit("write canary config is missing `account.private_key`")
 if chain_discriminant is not None and not isinstance(chain_discriminant, int):
     raise SystemExit("write canary config `account.chain_discriminant` must be an integer")
+if chain_discriminant is not None and chain_discriminant != 369:
+    raise SystemExit("write canary config must use Taira chain discriminant 369")
 if not isinstance(domain, str) or not domain:
     domain = "wonderland.universal"
 elif "." not in domain:
@@ -911,13 +919,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 
-KNOWN_PREFIXES = {
-    "iroha3-taira": 369,
-    "809574f5-fee7-5e69-bfcf-52451e42d50f": 369,
-    "fc56984b-2be7-431d-840e-21514d1883f0": 369,
-    "iroha3-nexus": 753,
-    "00000000-0000-0000-0000-000000000753": 753,
-}
+PUBLIC_TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 
 with open(sys.argv[1], "rb") as handle:
     source = tomllib.load(handle)
@@ -929,12 +931,17 @@ chain_discriminant = account.get("chain_discriminant")
 
 if not isinstance(public_key, str) or not public_key:
     raise SystemExit("write canary config is missing `account.public_key`")
-if chain_discriminant is None:
-    chain_discriminant = KNOWN_PREFIXES.get(chain)
-if not isinstance(chain_discriminant, int):
+if chain != PUBLIC_TAIRA_CHAIN_ID:
     raise SystemExit(
-        "write canary config must set `account.chain_discriminant` when `chain` is not a known Taira/Nexus chain id"
+        "write canary config must target the public Sumeragi-v2 Taira chain "
+        f"`{PUBLIC_TAIRA_CHAIN_ID}`"
     )
+if chain_discriminant is None:
+    chain_discriminant = 369
+if not isinstance(chain_discriminant, int):
+    raise SystemExit("write canary config `account.chain_discriminant` must be an integer")
+if chain_discriminant != 369:
+    raise SystemExit("write canary config must use Taira chain discriminant 369")
 
 print(public_key)
 print(chain_discriminant)

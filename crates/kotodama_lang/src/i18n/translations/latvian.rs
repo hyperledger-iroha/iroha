@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "parametrs `{name}` funkcijā `{func}` netiek izmantots",
     lint_unreachable_after_return: "konstatēts neaizsniedzams teikums {context}: kods pēc return nekad netiek izpildīts",
     lint_ok: "labi",
-    lint_usage: "Lietošana: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Lietošana: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Palaidiet Kotodama lint pārbaudes uz norādītajiem avotiem.",
     ..english::MESSAGES
 };

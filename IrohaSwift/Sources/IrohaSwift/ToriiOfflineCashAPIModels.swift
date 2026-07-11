@@ -178,8 +178,14 @@ public struct OfflineTopUpResult: Equatable, Sendable {
             transactionHash,
             field: "transaction_hash"
         )
-        self.finalizedBlockHeight = finalizedBlockHeight
-        self.serverTimeMs = serverTimeMs
+        self.finalizedBlockHeight = try OfflineOperationValidation.positive(
+            finalizedBlockHeight,
+            field: "finalized_block_height"
+        )
+        self.serverTimeMs = try OfflineOperationValidation.positive(
+            serverTimeMs,
+            field: "server_time_ms"
+        )
         self.anchor = anchor
     }
 }
@@ -198,8 +204,14 @@ public struct OfflineRedeemResult: Equatable, Sendable {
             transactionHash,
             field: "transaction_hash"
         )
-        self.finalizedBlockHeight = finalizedBlockHeight
-        self.serverTimeMs = serverTimeMs
+        self.finalizedBlockHeight = try OfflineOperationValidation.positive(
+            finalizedBlockHeight,
+            field: "finalized_block_height"
+        )
+        self.serverTimeMs = try OfflineOperationValidation.positive(
+            serverTimeMs,
+            field: "server_time_ms"
+        )
     }
 }
 
@@ -857,6 +869,13 @@ public enum OfflineOperationCodec {
 }
 
 private enum OfflineOperationValidation {
+    static func positive(_ value: UInt64, field: String) throws -> UInt64 {
+        guard value > 0 else {
+            throw OfflineOperationError.invalidField(field)
+        }
+        return value
+    }
+
     static func operationId(_ value: String) throws -> String {
         let bytes = Array(value.utf8)
         guard bytes.count == 64,

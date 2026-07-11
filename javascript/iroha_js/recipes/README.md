@@ -1,8 +1,12 @@
 # Recipes
 
-This directory hosts runnable JavaScript snippets that illustrate common
+This source-checkout directory hosts JavaScript snippets that illustrate common
 `@iroha/iroha-js` workflows. Each example favours deterministic Norito payloads
-and mirrors the validation logic exported by the SDK.
+and mirrors the validation logic exported by the SDK. The portable registry
+tarball includes only `iso_bridge_builder.mjs` and `nexus_app_transfer.mjs`;
+examples that require the Cargo workspace, verified native host, credentials,
+or a live Torii endpoint remain source-checkout tools and declare those
+prerequisites below.
 
 ## batching.mjs
 
@@ -25,6 +29,24 @@ The script uses deterministic sample key material; replace the sample
 authority/account values with real identities before attempting to submit
 transactions on a live network.
 
+## nexus_app_transfer.mjs
+
+- Runs the Nexus App facade from approval through canonical browser-codec
+  finalization, Torii submission, and terminal status observation.
+- Uses deterministic fake Connect and Torii dependencies so the installed
+  recipe is runnable offline while still checking the canonical payload and
+  signed-transaction hashes.
+
+Run with:
+
+```bash
+npm install
+node ./recipes/nexus_app_transfer.mjs
+```
+
+Browser applications can omit the fakes and configure `NexusAppClient` with a
+Connect base URL and Torii base URL to use its built-in browser paths.
+
 ## nft_account_iteration.mjs
 
 - Demonstrates the iterator helpers for NFTs and per-account asset balances
@@ -39,8 +61,9 @@ Run with:
 ```bash
 npm install
 TORII_URL=http://127.0.0.1:8080 \
-ACCOUNT_ID=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
+ACCOUNT_ID=sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB \
 TORII_AUTH_TOKEN=token \
+TORII_ALLOW_INSECURE=1 \
 node ./recipes/nft_account_iteration.mjs
 ```
 
@@ -80,11 +103,9 @@ If the bridge is protected by API tokens, export `X-API-Token` alongside
 
 ## iso_alias.mjs
 
-- Calls `ToriiClient.evaluateAliasVoprf` to hash blinded alias inputs and
-  demonstrates both literal (IBAN-style) and indexed lookups via
+- Demonstrates both literal (IBAN-style) and indexed lookups via
   `resolveAlias` / `resolveAliasByIndex`.
-- Prints backend/digest metadata for VOPRF requests, surfaces 404 vs runtime
-  disabled responses, and highlights the account bindings returned by the alias
+- Surfaces 404 vs runtime-disabled responses and highlights the account bindings returned by the alias
   APIs so ISO bridge drills can run without bespoke tooling.
 
 Run with:
@@ -92,7 +113,6 @@ Run with:
 ```bash
 npm install
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeef \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node ./recipes/iso_alias.mjs
@@ -100,10 +120,8 @@ node ./recipes/iso_alias.mjs
 
 Environment variables:
 
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element (defaults to `deadbeef`).
 - `ISO_ALIAS_LABEL` — resolve a literal alias; omit to skip the lookup.
 - `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index for deterministic lookups.
-- `ISO_SKIP_VOPRF=1` — suppress the VOPRF call (useful when only testing lookups).
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for secured Torii deployments.
 
 ## iso_bridge_builder.mjs
@@ -152,7 +170,7 @@ field.
   script also honours `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` and accepts private
   keys via `PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`.
 - Prints the Torii response including `contract_alias`, `contract_address`,
-  `previous_contract_address`, `upgraded`, `dataspace`, `tx_hash_hex`,
+  `previous_contract_address`, `kaizen`, `dataspace`, `tx_hash_hex`,
   `code_hash_hex`, and `abi_hash_hex` so CI jobs can archive evidence bundles
   alongside release artifacts.
 
@@ -160,12 +178,12 @@ Run with:
 
 ```bash
 npm install
-node ./recipes/contracts.mjs \
-  TORII_URL=https://torii.devnet.example \
-  AUTHORITY=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
-  PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
-  CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
-  CONTRACT_ALIAS=demo_contract::universal
+TORII_URL=https://torii.devnet.example \
+AUTHORITY=sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB \
+PRIVATE_KEY_HEX="$(tr -d '\\r\\n' < ~/.iroha/keys/alice.hex)" \
+CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
+CONTRACT_ALIAS=demo_contract::universal \
+node ./recipes/contracts.mjs
 ```
 
 Environment variables:
@@ -174,6 +192,7 @@ Environment variables:
 - `CONTRACT_ALIAS` — stable public alias for the deploy target (required).
 - `CONTRACT_LEASE_EXPIRY_MS` — optional lease-expiry override for the alias binding.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for locked-down deployments.
+- `TORII_ALLOW_INSECURE=1` — explicitly allow a loopback/dev HTTP Torii URL.
 - `PRIVATE_KEY` / `PRIVATE_KEY_HEX` — signer credentials; defaults to `ed25519` when unspecified.
 
 ## streaming.mjs
@@ -206,18 +225,20 @@ Environment variables:
   (`iterateNftsQuery`, `iterateAccountAssets`), applying Norito-style sort and
   filter envelopes (id equality for NFTs, optional quantity filters for assets)
   so the output mirrors Torii JSON responses.
-- Uses `requirePermissions: true` so secured Torii deployments fail fast when
-  API/auth tokens are missing; page sizes and caps can be tuned via env vars.
+- Enables `requirePermissions` automatically when credentials are configured;
+  `TORII_REQUIRE_PERMISSIONS=1|0` can override that fail-fast gate explicitly.
+  Page sizes and caps can be tuned via environment variables.
 
 Run with:
 
 ```bash
 npm install
 TORII_URL=http://localhost:8080 \
-ACCOUNT_ID=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
+ACCOUNT_ID=sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB \
 NFT_ID=61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D \
 PAGE_SIZE=25 \
 MAX_ITEMS=100 \
+TORII_ALLOW_INSECURE=1 \
 node ./recipes/assets_iterators.mjs
 ```
 
@@ -228,7 +249,9 @@ Environment variables:
 - `NFT_ID` — optional canonical NFT/asset-holding id (`<base58-asset-definition-id>#<i105-account-id>`) to filter on (exact match).
 - `PAGE_SIZE` / `MAX_ITEMS` — pagination controls.
 - `TORII_API_TOKEN` / `TORII_AUTH_TOKEN` — credentials for permissioned nodes.
-- `ALLOW_INSECURE=1` — allow HTTP while sending credentials (dev/test only).
+- `TORII_ALLOW_INSECURE=1` — allow HTTP while sending credentials (dev/test only).
+- `TORII_REQUIRE_PERMISSIONS=1|0` — override the default permission gate; by
+  default it is enabled when an API/auth token is configured.
 
 ## governance.mjs
 

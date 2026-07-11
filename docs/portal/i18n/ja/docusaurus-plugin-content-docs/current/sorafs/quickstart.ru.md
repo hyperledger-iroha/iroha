@@ -133,3 +133,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 - **CI 自動化** – 上記のコマンドをリリースパイプラインに追加し、ドキュメント、
   フィクスチャ、アーティファクトが署名済みメタデータ付きの決定的マニフェストを
   公開するようにします。
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

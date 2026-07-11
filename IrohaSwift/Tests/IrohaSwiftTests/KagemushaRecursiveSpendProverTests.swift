@@ -4,55 +4,33 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaRecursiveSpendProverTests: XCTestCase {
-    func testPreferredModeRetainsProofSurfaceCompatibility() {
+    func testPreferredModeIsExactFirstReleaseSurface() {
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable: true,
-                recursiveSpendAvailable: true
+                pastaCycleV3BackendAvailable: true
             ),
-            .recursiveCompactV1
+            .recursiveSpendV2
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable: true,
-                recursiveSpendAvailable: false
-            ),
-            .recursiveCompactV1
-        )
-        XCTAssertEqual(
-            KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable: false,
-                recursiveSpendAvailable: true
-            ),
-            .recursiveSpendV1
-        )
-        XCTAssertEqual(
-            KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable: false,
-                recursiveSpendAvailable: false
+                pastaCycleV3BackendAvailable: false
             ),
             nil
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredSpendableCashMode(
-                recursiveCompactAvailable: true,
-                recursiveSpendAvailable: true
+                pastaCycleV3BackendAvailable: true
             ),
-            .recursiveSpendV1
+            .recursiveSpendV2
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredSpendableCashMode(
-                recursiveCompactAvailable: true,
-                recursiveSpendAvailable: false
+                pastaCycleV3BackendAvailable: false
             ),
             nil
         )
-        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveCompactV1.rawValue, "recursive_compact_v1")
-        XCTAssertEqual(KagemushaRecursiveCompactPaymentTokenProver.requiredNativeBridgeAbiVersion, 7)
-        XCTAssertEqual(
-            KagemushaRecursiveCompactPaymentTokenProver.recursiveCompactCircuitIdV1,
-            "kagemusha-recursive-compact-v1"
-        )
+        XCTAssertEqual(KagemushaOfflineSpendMode.allCases.count, 1)
+        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpendV2.rawValue, "recursive_spend_v2")
     }
 
     func testLineageKeyArtifactPackagesValidateReleaseProfiles() throws {

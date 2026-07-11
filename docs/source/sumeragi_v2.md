@@ -230,6 +230,16 @@ discarded. A checksum failure, broken hash chain, non-monotonic sequence, or ide
 before that tail fails closed. Records are pruned only after the decided block and its certificate
 are durable in Kura.
 
+The production `SumeragiWorker` dispatches protocol 2 directly to the
+serialized height runner; it never executes the legacy actor under a v2
+handshake. For every height the runner replays context and WAL state before
+opening ingress, drains all tagged effects, validates the typed Kura receipt
+against the exact finality artifact, and only then builds the successor
+context. WAL, body, chunk, or cleanup-worker retirement after that durability
+boundary returns an ordered typed warning report. Those local cleanup warnings
+remain operator-visible but cannot turn a committed block back into an error or
+prevent successor-height progress.
+
 ## Correctness claim and trusted boundary
 
 Safety assumes authenticated signatures, collision-resistant hashes, deterministic validation,

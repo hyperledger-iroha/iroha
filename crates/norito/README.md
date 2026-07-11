@@ -157,6 +157,7 @@ Decode helpers return structured errors instead of panicking in common malformed
 - `LengthMismatch` — premature EOF or inconsistent length accounting
 - `ChecksumMismatch` — CRC64 does not match payload
 - `SchemaMismatch` — schema hash differs from the expected type
+- `NestingDepthExceeded` — a recursive owned value exceeds the deterministic 256-level decode bound
 - `InvalidUtf8`, `InvalidTag`, `InvalidNonZero` — malformed value encodings
 - `DecodePanic` — when `strict-safe` is enabled, panics inside `try_deserialize` are caught and mapped to this error
 
@@ -265,6 +266,37 @@ let mut buf = Vec::new();
 json::to_writer_pretty(&mut buf, &value)?;
 let parsed_pretty: S = json::from_reader(Cursor::new(&buf))?;
 assert_eq!(value, parsed_pretty);
+```
+
+JSON object derives ignore unknown fields by default. Protocol and API
+boundaries that require a closed object schema can opt in explicitly:
+
+```rust
+#[derive(norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ClosedRequest {
+    version: u8,
+    payload: ClosedPayload,
+}
+
+#[derive(norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ClosedPayload {
+    value: u32,
+}
+```
+
+The option is supported on structs with named fields and on tagged enums. It
+rejects unknown enum-envelope keys, unknown fields in named variant payloads,
+and keys left unclaimed by a flattened field. Strictness is intentionally
+opt-in per type, so every nested closed-schema type must also use the option.
+Norito's `from_slice`/`from_str` JSON helpers reject duplicate object keys at
+every depth before typed deserialization; tagged-enum `tag` and `content`
+duplicates are also rejected by the direct parser path. Recursive typed
+`Box<T>` values are limited to 256 levels. Typed `from_str`/`from_slice`
+decoding operates directly and does not allocate an intermediate JSON tree.
+Explicit dynamic JSON `Value` parsing has its own 256-level structural ceiling,
+so hostile input cannot recurse without bound during construction or drop.
 
 ## Telemetry (adaptive encoders and compression)
 

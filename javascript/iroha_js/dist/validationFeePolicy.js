@@ -5,6 +5,7 @@ import {
   normalizeAssetDefinitionId,
   normalizeI105AccountId,
 } from "./normalizers.js";
+import { verifyEd25519Strict } from "./ed25519Strict.js";
 
 export const VALIDATION_FEE_POLICY_SCHEMA_VERSION = 1;
 export const VALIDATION_FEE_DS_SCALE = 2;
@@ -27,6 +28,13 @@ const CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
 const HEX_RE = /^[0-9a-fA-F]+$/u;
 const ED25519_MULTIHASH_RE = /^(?:ed25519:)?ed0120([0-9a-fA-F]{64})$/u;
 const textEncoder = new TextEncoder();
+const MAX_VALIDATION_FEE_KEYSETS = 64;
+const MAX_VALIDATION_FEE_KEYS_PER_KEYSET = 256;
+const MAX_VALIDATION_FEE_REGISTRY_ENTRIES = 4096;
+const MAX_VALIDATION_FEE_SIGNATURES = 256;
+const MAX_VALIDATION_FEE_STRING_CODE_UNITS = 1024;
+const MAX_VALIDATION_FEE_STRING_BYTES = 4096;
+const MAX_VALIDATION_FEE_BYTE_SOURCE_LENGTH = 64;
 
 export class ValidationFeePolicyError extends Error {
   constructor(code, message) {
@@ -53,6 +61,26 @@ function readExclusiveAlias(record, aliases, label) {
 }
 
 function cloneByteSource(value) {
+  if (
+    typeof value === "string" &&
+    value.length > MAX_VALIDATION_FEE_STRING_CODE_UNITS
+  ) {
+    fail("INPUT_TOO_LARGE", "validation fee byte source is too large");
+  }
+  const byteLength =
+    value instanceof Uint8Array || ArrayBuffer.isView(value)
+      ? value.byteLength
+      : value instanceof ArrayBuffer
+        ? value.byteLength
+        : Array.isArray(value)
+          ? value.length
+          : null;
+  if (
+    byteLength !== null &&
+    byteLength > MAX_VALIDATION_FEE_BYTE_SOURCE_LENGTH
+  ) {
+    fail("INPUT_TOO_LARGE", "validation fee byte source is too large");
+  }
   if (value instanceof Uint8Array) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) {
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice();
@@ -68,6 +96,15 @@ function immutableByteSource(value, label) {
 
 function snapshotPolicy(value) {
   const policy = normalizeObject(value, "policy");
+  if (
+    Array.isArray(policy.exemption_classes) &&
+    policy.exemption_classes.length > 1
+  ) {
+    fail(
+      "INVALID_EXEMPTION_CLASSES",
+      "validation fee exemption classes exceed the supported release set",
+    );
+  }
   const exemptionClasses = Array.isArray(policy.exemption_classes)
     ? Object.freeze([...policy.exemption_classes])
     : policy.exemption_classes;
@@ -104,6 +141,15 @@ function snapshotRegistry(value) {
     fail(
       "EMPTY_POLICY_REGISTRY",
       "validation fee policy registry must contain registered_policies",
+    );
+  }
+  if (
+    registry.registered_policies.length >
+    MAX_VALIDATION_FEE_REGISTRY_ENTRIES
+  ) {
+    fail(
+      "INPUT_TOO_LARGE",
+      "validation fee policy registry contains too many entries",
     );
   }
   const registeredPolicies = registry.registered_policies.map((value, index) => {
@@ -165,6 +211,12 @@ function snapshotKeyset(value, index) {
         "validation fee governance keyset keys must be an array",
       );
     }
+    if (weightedKeys.length > MAX_VALIDATION_FEE_KEYS_PER_KEYSET) {
+      fail(
+        "INPUT_TOO_LARGE",
+        "validation fee governance keyset contains too many keys",
+      );
+    }
     snapshot.keys = Object.freeze(
       weightedKeys.map((value, keyIndex) => {
         const entry = normalizeObject(
@@ -185,6 +237,12 @@ function snapshotKeyset(value, index) {
       fail(
         "INVALID_GOVERNANCE_KEYSET",
         "validation fee governance keyset public_keys must be an array",
+      );
+    }
+    if (publicKeys.length > MAX_VALIDATION_FEE_KEYS_PER_KEYSET) {
+      fail(
+        "INPUT_TOO_LARGE",
+        "validation fee governance keyset contains too many keys",
       );
     }
     snapshot.public_keys = Object.freeze(
@@ -238,6 +296,30 @@ export function snapshotValidationFeePolicyVerificationContext(value) {
       "UNKNOWN_GOVERNANCE_KEYSET",
       "validation fee policy verification requires a governance keyset",
     );
+  }
+  if (keysets.length > MAX_VALIDATION_FEE_KEYSETS) {
+    fail(
+      "INPUT_TOO_LARGE",
+      "validation fee verification context contains too many governance keysets",
+    );
+  }
+  const seenKeysetIds = new Set();
+  for (let index = 0; index < keysets.length; index += 1) {
+    const keyset = normalizeObject(
+      keysets[index],
+      `context.governanceKeysets[${index}]`,
+    );
+    const keysetId = nonEmptyTrimmedString(
+      keyset.keyset_id,
+      `context.governanceKeysets[${index}].keyset_id`,
+    );
+    if (seenKeysetIds.has(keysetId)) {
+      fail(
+        "DUPLICATE_GOVERNANCE_KEYSET_ID",
+        `duplicate validation fee governance keyset id ${keysetId}`,
+      );
+    }
+    seenKeysetIds.add(keysetId);
   }
   return Object.freeze({
     networkId: readExclusiveAlias(
@@ -461,6 +543,18 @@ export function verifySignedValidationFeePolicy(signedPolicy, context) {
   if (!Array.isArray(signed.signatures) || signed.signatures.length === 0) {
     fail("NO_SIGNATURES", "validation fee policy has no signatures");
   }
+  if (signed.signatures.length > MAX_VALIDATION_FEE_SIGNATURES) {
+    fail(
+      "INPUT_TOO_LARGE",
+      "validation fee policy contains too many signatures",
+    );
+  }
+  if (signed.signatures.length > allowedKeys.size) {
+    fail(
+      "TOO_MANY_SIGNATURES",
+      "validation fee policy contains more signatures than governance keys",
+    );
+  }
   const signatures = Object.freeze(
     signed.signatures.map((value, index) => {
       const signature = normalizeObject(
@@ -523,9 +617,11 @@ export function verifySignedValidationFeePolicy(signedPolicy, context) {
     );
     let valid = false;
     try {
-      valid = ed25519.verify(signature, signingPayload, signerPublicKey, {
-        zip215: false,
-      });
+      valid = verifyEd25519Strict(
+        signingPayload,
+        signature,
+        signerPublicKey,
+      );
     } catch {
       fail(
         "MALFORMED_PUBLIC_KEY",
@@ -759,6 +855,12 @@ function validateKeyset(keyset) {
   }
   let entries;
   if (Array.isArray(weightedKeys)) {
+    if (weightedKeys.length > MAX_VALIDATION_FEE_KEYS_PER_KEYSET) {
+      fail(
+        "INPUT_TOO_LARGE",
+        "validation fee governance keyset contains too many keys",
+      );
+    }
     entries = weightedKeys.map((value, index) => {
       const entry = normalizeObject(value, `governanceKeyset.keys[${index}]`);
       const weight = toU16(
@@ -774,6 +876,12 @@ function validateKeyset(keyset) {
       return { publicKey: entry.public_key, weight };
     });
   } else if (Array.isArray(publicKeys)) {
+    if (publicKeys.length > MAX_VALIDATION_FEE_KEYS_PER_KEYSET) {
+      fail(
+        "INPUT_TOO_LARGE",
+        "validation fee governance keyset contains too many keys",
+      );
+    }
     entries = publicKeys.map((publicKey) => ({ publicKey, weight: 1n }));
   } else {
     fail(
@@ -884,6 +992,9 @@ function encodeString(value) {
     fail("INVALID_STRING", "Norito string value must be a string");
   }
   const encoded = textEncoder.encode(value);
+  if (encoded.length > MAX_VALIDATION_FEE_STRING_BYTES) {
+    fail("INPUT_TOO_LARGE", "validation fee string is too large");
+  }
   return concatBytes(encodeCompactLen(BigInt(encoded.length)), encoded);
 }
 
@@ -1027,6 +1138,9 @@ function nonEmptyTrimmedString(value, label) {
   ) {
     fail("INVALID_STRING", `${label} must be a non-empty trimmed string`);
   }
+  if (value.length > MAX_VALIDATION_FEE_STRING_CODE_UNITS) {
+    fail("INPUT_TOO_LARGE", `${label} is too large`);
+  }
   return value;
 }
 
@@ -1076,15 +1190,27 @@ function bytes32(value, label) {
 
 function bytes(value, label) {
   if (value instanceof Uint8Array) {
+    if (value.byteLength > MAX_VALIDATION_FEE_BYTE_SOURCE_LENGTH) {
+      fail("INPUT_TOO_LARGE", `${label} is too large`);
+    }
     return new Uint8Array(value);
   }
   if (ArrayBuffer.isView(value)) {
+    if (value.byteLength > MAX_VALIDATION_FEE_BYTE_SOURCE_LENGTH) {
+      fail("INPUT_TOO_LARGE", `${label} is too large`);
+    }
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice();
   }
   if (value instanceof ArrayBuffer) {
+    if (value.byteLength > MAX_VALIDATION_FEE_BYTE_SOURCE_LENGTH) {
+      fail("INPUT_TOO_LARGE", `${label} is too large`);
+    }
     return new Uint8Array(value.slice(0));
   }
   if (Array.isArray(value)) {
+    if (value.length > MAX_VALIDATION_FEE_BYTE_SOURCE_LENGTH) {
+      fail("INPUT_TOO_LARGE", `${label} is too large`);
+    }
     const out = new Uint8Array(value.length);
     for (let index = 0; index < value.length; index += 1) {
       const byte = value[index];
@@ -1097,6 +1223,9 @@ function bytes(value, label) {
   }
   if (typeof value !== "string") {
     fail("INVALID_BYTES", `${label} must be bytes or hex-encoded bytes`);
+  }
+  if (value.length > MAX_VALIDATION_FEE_BYTE_SOURCE_LENGTH * 2) {
+    fail("INPUT_TOO_LARGE", `${label} is too large`);
   }
   const normalized = value.trim();
   if (
@@ -1132,7 +1261,13 @@ function ed25519PublicKeyBytes(value, label) {
 }
 
 function normalizeSignatureValue(value, label) {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    !ArrayBuffer.isView(value) &&
+    !(value instanceof ArrayBuffer)
+  ) {
     return readExclusiveAlias(
       value,
       ["payload", "bytes", "signature"],

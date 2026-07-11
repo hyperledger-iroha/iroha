@@ -1,6 +1,6 @@
 //! IvmCache: a minimal pre-decode cache for instruction streams.
 //!
-//! Decodes a raw instruction byte stream (mixed 16/32) into a compact
+//! Decodes a raw fixed-width 32-bit instruction byte stream into a compact
 //! representation using the canonical decoder and caches the result keyed by
 //! `(sha256(code_bytes), version_major, version_minor)`.
 //!
@@ -21,7 +21,7 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
-use crate::{decoder, memory::Memory, metadata::ProgramMetadata};
+use crate::{decoder, metadata::ProgramMetadata};
 
 /// A decoded instruction with its byte offset and length.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,8 +175,6 @@ impl IvmCache {
             return Err(crate::VMError::MemoryOutOfBounds);
         }
         let start = Instant::now();
-        let mut mem = Memory::new(code.len() as u64);
-        mem.load_code(code);
         let result: Result<Vec<DecodedOp>, crate::VMError> = (|| {
             let mut pc = 0u64;
             let mut out = Vec::new();
@@ -186,7 +184,7 @@ impl IvmCache {
             // through `CacheLimitsGuard`.
             let max_ops = configured_max_decoded_ops();
             while (pc as usize) < code.len() {
-                let (inst, len) = decoder::decode(&mem, pc)?;
+                let (inst, len) = decoder::decode_slice(code, pc)?;
                 out.push(DecodedOp { pc, inst, len });
                 pc += len as u64;
                 if out.len() >= max_ops {

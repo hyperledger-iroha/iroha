@@ -79,6 +79,34 @@ test("Offline status normalization retains wide heights and nested amounts", () 
   );
 });
 
+test("Offline applied statuses reject zero finality fields", () => {
+  for (const kind of ["top_up", "redeem"]) {
+    for (const field of ["finalized_block_height", "server_time_ms"]) {
+      for (const zero of [0, 0n]) {
+        const result = {
+          transaction_hash: TRANSACTION_HASH,
+          finalized_block_height: 1,
+          server_time_ms: 1,
+        };
+        result[field] = zero;
+        if (kind === "top_up") result.anchor = {};
+        const status = {
+          state: "applied",
+          value: {
+            operation_id: OPERATION_ID,
+            result: { kind, result },
+          },
+        };
+
+        assert.throws(
+          () => normalizeOfflineOperationStatus(status, OPERATION_ID),
+          new RegExp(field, "u"),
+        );
+      }
+    }
+  }
+});
+
 function rejectedStatus(error) {
   return {
     state: "rejected",

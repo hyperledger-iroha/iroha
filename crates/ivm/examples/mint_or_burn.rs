@@ -32,6 +32,13 @@ impl AssetHost {
 }
 
 impl IVMHost for AssetHost {
+    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        match number {
+            syscalls::SYSCALL_MINT_ASSET | syscalls::SYSCALL_BURN_ASSET => Ok(0),
+            _ => Err(VMError::UnknownSyscall(number)),
+        }
+    }
+
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         let mut balances = self.balances.lock().expect("balance mutex poisoned");
         let mut supply = self.supply.lock().expect("supply mutex poisoned");

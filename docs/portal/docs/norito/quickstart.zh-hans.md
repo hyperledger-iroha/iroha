@@ -27,11 +27,11 @@ translator: machine-google-reviewed
   启动 `defaults/docker-compose.single.yml` 中定义的示例对等点）。
 - Rust 工具链（1.76+），用于构建辅助二进制文件（如果您不下载）
   已发表的。
-- `koto_compile`、`ivm_run` 和 `iroha` 二进制文件。您可以从以下位置构建它们
+- `koto build`、`ivm_run` 和 `iroha` 二进制文件。您可以从以下位置构建它们
   工作区结帐如下所示或下载匹配的发布工件：
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -58,28 +58,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
-  kotoage fn main() permission(Admin) {
-    info("Hello from Kotodama");
-    write_detail();
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() permission(Admin) {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -94,15 +88,14 @@ KO
 在接触网络之前确认主机系统调用成功：
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-运行程序打印 `info("Hello from Kotodama")` 日志并执行
+运行程序打印 `debug::info("Hello from Kotodama")` 日志并执行
 `SET_ACCOUNT_DETAIL` 针对模拟主机的系统调用。如果可选`ivm_tool`
 二进制可用，`ivm_tool inspect target/quickstart/hello.to` 显示
 ABI 标头、功能位和导出的入口点。

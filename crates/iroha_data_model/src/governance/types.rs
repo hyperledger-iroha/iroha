@@ -24,7 +24,7 @@ use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
 use crate::{
     account::AccountId,
     asset::AssetId,
-    isi::{bridge::SccpRouteManifest, governance::CouncilDerivationKind},
+    isi::{bridge::SccpRouteGovernanceActionV1, governance::CouncilDerivationKind},
     runtime::RuntimeUpgradeManifest,
     smart_contract::{ContractAddress, manifest::ManifestProvenance},
 };
@@ -404,8 +404,8 @@ pub enum ProposalKind {
     DeployContract(DeployContractProposal),
     /// Schedule a runtime upgrade manifest through governance.
     RuntimeUpgrade(RuntimeUpgradeProposal),
-    /// Publish or replace a SCCP route manifest through governance.
-    SccpRouteManifest(SccpRouteManifestProposal),
+    /// Apply one closed SCCP route-registry action through governance.
+    SccpRouteGovernance(SccpRouteGovernanceProposal),
 }
 
 /// Proposal payload for deploying an IVM contract via governance.
@@ -439,15 +439,15 @@ pub struct RuntimeUpgradeProposal {
     pub manifest: RuntimeUpgradeManifest,
 }
 
-/// Proposal payload for publishing an SCCP route manifest through governance.
+/// Proposal payload for applying one closed SCCP registry action.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct SccpRouteManifestProposal {
-    /// Canonical SCCP route manifest payload to publish on enactment.
-    pub manifest: Box<SccpRouteManifest>,
+pub struct SccpRouteGovernanceProposal {
+    /// Atomic closed SCCP registry action to execute on enactment.
+    pub action: Box<SccpRouteGovernanceActionV1>,
 }
 
 /// Inclusive execution window for enactment certificates.
@@ -1016,8 +1016,8 @@ mod tests {
                 );
             }
             ProposalKind::RuntimeUpgrade(_) => panic!("unexpected runtime-upgrade proposal"),
-            ProposalKind::SccpRouteManifest(_) => {
-                panic!("unexpected sccp-route-manifest proposal")
+            ProposalKind::SccpRouteGovernance(_) => {
+                panic!("unexpected sccp-route-governance proposal")
             }
         }
     }
@@ -1047,21 +1047,22 @@ mod tests {
                 assert_eq!(inner.manifest.start_height, 42);
             }
             ProposalKind::DeployContract(_) => panic!("unexpected deploy-contract proposal"),
-            ProposalKind::SccpRouteManifest(_) => {
-                panic!("unexpected sccp-route-manifest proposal")
+            ProposalKind::SccpRouteGovernance(_) => {
+                panic!("unexpected sccp-route-governance proposal")
             }
         }
     }
 
     #[test]
-    fn sccp_route_manifest_proposal_is_boxed_out_of_proposal_kind() {
+    fn sccp_route_governance_proposal_is_boxed_out_of_proposal_kind() {
         assert_eq!(
-            core::mem::size_of::<SccpRouteManifestProposal>(),
-            core::mem::size_of::<Box<SccpRouteManifest>>()
+            core::mem::size_of::<SccpRouteGovernanceProposal>(),
+            core::mem::size_of::<Box<SccpRouteGovernanceActionV1>>()
         );
         assert!(
-            core::mem::size_of::<ProposalKind>() < core::mem::size_of::<SccpRouteManifest>(),
-            "ProposalKind must not carry the large SCCP route manifest inline"
+            core::mem::size_of::<ProposalKind>()
+                < core::mem::size_of::<SccpRouteGovernanceActionV1>(),
+            "ProposalKind must not carry a complete SCCP route action inline"
         );
     }
 

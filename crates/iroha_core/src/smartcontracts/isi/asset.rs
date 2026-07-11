@@ -55,6 +55,12 @@ pub mod isi {
             amount: &Numeric,
         ) -> Result<(), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
+            if sccp_registry_references_custody_asset(self.sccp_registry.get(), &resolved_id) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP custody can only be debited by verified native inbound settlement".into(),
+                )
+                .into());
+            }
             ensure_non_negative(amount)?;
             let asset = self
                 .assets
@@ -1000,6 +1006,74 @@ pub mod isi {
         User,
         /// Permit debiting a recorded native escrow custody balance from escrow instructions.
         NativeEscrowCustody,
+        /// Permit exactly one verified SCCP native inbound release from governed custody.
+        SccpInboundSettlement,
+    }
+
+    fn sccp_registry_references_custody_asset(
+        registry: &iroha_data_model::bridge::SccpRegistryV1,
+        asset_id: &AssetId,
+    ) -> bool {
+        registry.lanes.iter().any(|lane| {
+            lane.routes.iter().any(|route| {
+                route.settlement.asset_definition_id == *asset_id.definition()
+                    && route.settlement.custody_account_id == *asset_id.account()
+            })
+        })
+    }
+
+    /// Return whether an asset is protected backing for any retained SCCP revision.
+    pub(crate) fn is_sccp_custody_asset(
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_id: &AssetId,
+    ) -> bool {
+        sccp_registry_references_custody_asset(
+            state_transaction.world.sccp_registry.get(),
+            asset_id,
+        )
+    }
+
+    /// Return whether an account is referenced as custody by any retained SCCP revision.
+    pub(crate) fn is_sccp_custody_account(
+        state_transaction: &StateTransaction<'_, '_>,
+        account_id: &AccountId,
+    ) -> bool {
+        state_transaction
+            .world
+            .sccp_registry
+            .get()
+            .lanes
+            .iter()
+            .flat_map(|lane| &lane.routes)
+            .any(|route| route.settlement.custody_account_id == *account_id)
+    }
+
+    /// Return whether a definition is referenced by any retained SCCP revision.
+    pub(crate) fn is_sccp_settlement_asset_definition(
+        state_transaction: &StateTransaction<'_, '_>,
+        definition_id: &AssetDefinitionId,
+    ) -> bool {
+        state_transaction
+            .world
+            .sccp_registry
+            .get()
+            .lanes
+            .iter()
+            .flat_map(|lane| &lane.routes)
+            .any(|route| route.settlement.asset_definition_id == *definition_id)
+    }
+
+    fn ensure_not_sccp_custody_source(
+        state_transaction: &StateTransaction<'_, '_>,
+        source_id: &AssetId,
+    ) -> Result<(), Error> {
+        if is_sccp_custody_asset(state_transaction, source_id) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP custody can only be debited by verified native inbound settlement".into(),
+            )
+            .into());
+        }
+        Ok(())
     }
 
     struct PreparedNumericTransferPlan {
@@ -1226,8 +1300,10 @@ pub mod isi {
             NumericAssetTransferSourcePolicy::User => {
                 ensure_not_offline_escrow_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
+                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
             NumericAssetTransferSourcePolicy::NativeEscrowCustody => {
+                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
                 if !crate::smartcontracts::isi::escrow::is_native_escrow_custody_asset(
                     state_transaction,
                     &source_id,
@@ -1236,6 +1312,15 @@ pub mod isi {
                         "native escrow settlement source is not a recorded custody asset".into(),
                     ));
                 }
+            }
+            NumericAssetTransferSourcePolicy::SccpInboundSettlement => {
+                if !is_sccp_custody_asset(state_transaction, &source_id) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "SCCP inbound settlement source is not governed custody".into(),
+                    ));
+                }
+                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
             }
         }
 
@@ -1447,6 +1532,7 @@ pub mod isi {
                 Some(self.object()),
             )?;
             ensure_not_native_escrow_source(state_transaction, &resolved_asset_id)?;
+            ensure_not_sccp_custody_source(state_transaction, &resolved_asset_id)?;
 
             // Withdraw from source asset balance and remove if it reaches zero
             let amount = self.object().clone();
@@ -1528,6 +1614,39 @@ pub mod isi {
             }),
         ]);
 
+        Ok(())
+    }
+
+    /// Release governed SCCP custody after an exact native inbound proof succeeds.
+    ///
+    /// This is the only balance-decreasing path carrying the SCCP custody permit.
+    pub(crate) fn execute_sccp_inbound_numeric_asset_release(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        source_id: AssetId,
+        destination: AccountId,
+        amount: Numeric,
+    ) -> Result<(), Error> {
+        state_transaction.world.account(&destination)?;
+        let destination_id = AssetId::new(source_id.definition().clone(), destination);
+        let (source_id, destination_id, delta) = apply_numeric_asset_transfer_delta(
+            state_transaction,
+            &source_id,
+            &destination_id,
+            &amount,
+            NumericAssetTransferSourcePolicy::SccpInboundSettlement,
+        )?;
+        state_transaction.record_transfer_transcript(submitting_authority, delta)?;
+        state_transaction.world.emit_events([
+            AssetEvent::Removed(AssetChanged {
+                asset: source_id,
+                amount: amount.clone(),
+            }),
+            AssetEvent::Added(AssetChanged {
+                asset: destination_id,
+                amount,
+            }),
+        ]);
         Ok(())
     }
 

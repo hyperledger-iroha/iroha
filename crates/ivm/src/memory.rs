@@ -31,6 +31,23 @@ use crate::{
     merkle_utils::compute_memory_leaf_digest,
 };
 
+#[cfg(test)]
+std::thread_local! {
+    static MEMORY_CLONE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Reset the current test thread's full-memory clone counter.
+#[cfg(test)]
+pub(crate) fn reset_memory_clone_count() {
+    MEMORY_CLONE_COUNT.set(0);
+}
+
+/// Return the number of full-memory clones on the current test thread.
+#[cfg(test)]
+pub(crate) fn memory_clone_count() -> u64 {
+    MEMORY_CLONE_COUNT.get()
+}
+
 /// Memory read range recorded for conflict detection in parallel execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessRange {
@@ -69,6 +86,11 @@ pub struct Memory {
     dirty: bool,
     /// Set of Merkle leaf indices modified since the last commit.
     dirty_chunks: HashSet<usize>,
+    /// Leaf indices modified since the last runtime-template reset.
+    ///
+    /// Unlike `dirty_chunks`, this set is not drained by Merkle commits. It
+    /// lets warm VM reuse restore only pages the guest actually changed.
+    modified_chunks: HashSet<usize>,
     /// Addresses read during execution when access tracking is enabled.
     read_log: Mutex<Vec<AccessRange>>,
     /// Log of writes performed during execution (byte-accurate).
@@ -306,6 +328,7 @@ impl Memory {
         let last = (start + len).div_ceil(CHUNK);
         for i in first..last {
             self.dirty_chunks.insert(i);
+            self.modified_chunks.insert(i);
         }
         // Mark the tree as dirty so the root is recomputed lazily on the next
         // `commit()` or `root()` call.
@@ -337,6 +360,7 @@ impl Memory {
             tree: ByteMerkleTree::new((total_size as usize / 32).max(1), 32),
             dirty: false,
             dirty_chunks: HashSet::new(),
+            modified_chunks: HashSet::new(),
             read_log: Mutex::new(Vec::new()),
             write_log: Mutex::new(Vec::new()),
         };
@@ -441,6 +465,11 @@ impl Memory {
     /// Current heap limit in bytes.
     pub fn heap_limit(&self) -> u64 {
         self.heap_limit
+    }
+
+    /// Number of heap bytes currently owned by successful allocations.
+    pub(crate) fn heap_allocated_len(&self) -> u64 {
+        self.heap_alloc
     }
 
     /// Override the active heap limit, keeping the already-allocated region valid.
@@ -636,10 +665,7 @@ impl Memory {
         Ok(())
     }
 
-    /// Load `len` bytes starting at `addr` and return a slice referencing the
-    /// underlying memory.
-    #[inline]
-    pub fn load_region(&self, addr: u64, len: u64) -> Result<&[u8], VMError> {
+    fn checked_region_bounds(&self, addr: u64, len: u64) -> Result<(usize, usize), VMError> {
         if len > u64::from(u32::MAX) {
             return Err(VMError::MemoryAccessViolation {
                 addr: addr as u32,
@@ -665,6 +691,25 @@ impl Memory {
                 perm: Perm::READ,
             });
         }
+        Ok((start, end))
+    }
+
+    /// Inspect `len` bytes without recording a guest-visible memory access.
+    ///
+    /// This is reserved for side-effect-free host quote preparation. Actual
+    /// syscall execution must use [`Self::load_region`] so access tracing
+    /// remains complete.
+    #[inline]
+    pub(crate) fn inspect_region(&self, addr: u64, len: u64) -> Result<&[u8], VMError> {
+        let (start, end) = self.checked_region_bounds(addr, len)?;
+        Ok(&self.data[start..end])
+    }
+
+    /// Load `len` bytes starting at `addr` and return a slice referencing the
+    /// underlying memory.
+    #[inline]
+    pub fn load_region(&self, addr: u64, len: u64) -> Result<&[u8], VMError> {
+        let (start, end) = self.checked_region_bounds(addr, len)?;
         self.record_read_range(addr, len);
         if crate::dev_env::debug_wsv_enabled() && len <= 64 {
             let win_start = start.saturating_sub(16);
@@ -771,6 +816,20 @@ impl Memory {
         &self.data[start..end]
     }
 
+    /// Number of bytes in the append-only prefix written by the guest.
+    #[inline]
+    pub fn output_used_len(&self) -> u64 {
+        self.output_cursor
+    }
+
+    /// Borrow only the append-only output prefix written by the guest.
+    #[inline]
+    pub fn read_output_used(&self) -> &[u8] {
+        let start = Memory::OUTPUT_START as usize;
+        let used = usize::try_from(self.output_cursor).unwrap_or(Memory::OUTPUT_SIZE as usize);
+        &self.data[start..start.saturating_add(used)]
+    }
+
     /// Clear the OUTPUT region and reset the append-only cursor.
     pub(crate) fn clear_output(&mut self) {
         let start = Memory::OUTPUT_START as usize;
@@ -831,11 +890,30 @@ impl Memory {
         self.dirty = false;
     }
 
+    /// Mark the current bytes as an immutable runtime-template baseline.
+    pub(crate) fn mark_template_clean(&mut self) {
+        self.modified_chunks.clear();
+        self.clear_tracking();
+    }
+
     pub(crate) fn reset_from_template(&mut self, template: &Memory) {
         if self.data.len() != template.data.len() {
             self.data = template.data.clone();
+            self.tree.reset_from(&template.tree);
         } else {
-            self.data.copy_from_slice(&template.data);
+            const CHUNK: usize = 32;
+            let mut modified = self.modified_chunks.drain().collect::<Vec<_>>();
+            modified.sort_unstable();
+            modified.dedup();
+            for index in &modified {
+                let start = index.saturating_mul(CHUNK);
+                if start >= self.data.len() {
+                    continue;
+                }
+                let end = (start + CHUNK).min(self.data.len());
+                self.data[start..end].copy_from_slice(&template.data[start..end]);
+            }
+            self.tree.reset_leaves_from(&template.tree, &modified);
         }
         self.heap_alloc = template.heap_alloc;
         self.heap_limit = template.heap_limit;
@@ -844,7 +922,7 @@ impl Memory {
         self.root = template.root;
         self.dirty = template.dirty;
         self.dirty_chunks = template.dirty_chunks.clone();
-        self.tree.reset_from(&template.tree);
+        self.modified_chunks.clear();
         self.clear_tracking();
     }
 
@@ -870,6 +948,8 @@ impl Memory {
 
 impl Clone for Memory {
     fn clone(&self) -> Self {
+        #[cfg(test)]
+        MEMORY_CLONE_COUNT.set(MEMORY_CLONE_COUNT.get().saturating_add(1));
         Self {
             data: self.data.clone(),
             stack_limit: self.stack_limit,
@@ -881,6 +961,7 @@ impl Clone for Memory {
             tree: self.tree.clone(),
             dirty: self.dirty,
             dirty_chunks: self.dirty_chunks.clone(),
+            modified_chunks: HashSet::new(),
             read_log: Mutex::new(Vec::new()),
             write_log: Mutex::new(Vec::new()),
         }
@@ -935,6 +1016,13 @@ mod tests {
             .store_u64(Memory::OUTPUT_START, 0xDEAD_BEEF_DEAD_BEEFu64)
             .expect("store output");
         worker.grow_heap(64).expect("grow heap");
+        assert!(!worker.modified_chunks.is_empty());
+        let _ = worker.root();
+        assert!(worker.dirty_chunks.is_empty());
+        assert!(
+            !worker.modified_chunks.is_empty(),
+            "Merkle commits must retain reset tracking"
+        );
 
         assert_ne!(&worker.read_output()[..8], &base.read_output()[..8],);
 
@@ -944,10 +1032,42 @@ mod tests {
         assert_eq!(worker.heap_limit(), base.heap_limit());
         assert_eq!(worker.code_len(), base.code_len());
         assert_eq!(worker.read_output(), base.read_output());
+        assert!(worker.modified_chunks.is_empty());
 
         let mut worker_clone = worker.clone();
         let mut base_clone = base.clone();
         assert_eq!(worker_clone.root(), base_clone.root());
+    }
+
+    #[test]
+    fn warm_reset_does_not_copy_unmodified_memory_chunks() {
+        let base = Memory::new(0);
+        let mut worker = base.clone();
+
+        let tracked_address = Memory::HEAP_START;
+        worker
+            .store_u8(tracked_address, 0xA5)
+            .expect("write tracked heap byte");
+
+        // Deliberately perturb a different chunk without going through a Memory
+        // write API. This is a test-only probe: a whole-image reset would erase
+        // it, while a dirty-chunk reset must leave it untouched.
+        const MERKLE_LEAF_BYTES: usize = 32;
+        let untracked_address = usize::try_from(Memory::HEAP_START).expect("heap start fits usize")
+            + 2 * MERKLE_LEAF_BYTES;
+        worker.data[untracked_address] = 0x5A;
+
+        worker.reset_from_template(&base);
+
+        assert_eq!(
+            worker.data[usize::try_from(tracked_address).expect("tracked address fits usize")],
+            0,
+            "tracked chunks must be restored from the template"
+        );
+        assert_eq!(
+            worker.data[untracked_address], 0x5A,
+            "warm reset must not copy the complete memory image"
+        );
     }
 
     #[test]
@@ -991,6 +1111,7 @@ mod tests {
             tree,
             dirty: false,
             dirty_chunks: HashSet::new(),
+            modified_chunks: HashSet::new(),
             read_log: Mutex::new(Vec::new()),
             write_log: Mutex::new(Vec::new()),
         };
@@ -1030,6 +1151,7 @@ mod tests {
             tree,
             dirty: false,
             dirty_chunks: HashSet::new(),
+            modified_chunks: HashSet::new(),
             read_log: Mutex::new(Vec::new()),
             write_log: Mutex::new(Vec::new()),
         };
@@ -1119,6 +1241,30 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn quote_inspection_does_not_mutate_memory_access_tracking() {
+        let mut mem = Memory::new(0);
+        let address = mem.alloc(4).expect("allocate quote fixture");
+        mem.store_bytes(address, &[1, 2, 3, 4])
+            .expect("write quote fixture");
+        mem.clear_tracking();
+
+        assert_eq!(
+            mem.inspect_region(address, 4).expect("inspect fixture"),
+            &[1, 2, 3, 4]
+        );
+        assert!(mem.read_set().is_empty());
+
+        mem.load_region(address, 4).expect("tracked load fixture");
+        assert_eq!(
+            mem.read_set(),
+            vec![AccessRange {
+                addr: address,
+                len: 4
+            }]
+        );
     }
 
     #[test]

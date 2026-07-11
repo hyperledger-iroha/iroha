@@ -53,20 +53,27 @@ client = create_torii_client(
 )
 ```
 
-## Offline readiness
+## Offline lifecycle
 
-Torii exposes only the Offline readiness endpoint for offline HTTP discovery.
-Retired Offline Note issuance, redemption, and audit transaction paths are
-retired. Kagemusha readiness fields advertise the active offline payment
-implementation.
+The first-release HTTP lifecycle has exactly four canonical routes:
+
+- `GET /v1/offline/readiness?asset_definition_id=...`
+- `POST /v1/offline/top-up`
+- `POST /v1/offline/redeem`
+- `GET /v1/offline/operations/{operation_id}`
+
+Top-up and redemption submit the typed request directly as JSON or Norito and
+return `202 Accepted` with a typed operation reference and `Location`. A
+readiness response with `ready: false` is a successfully evaluated domain
+state; `503 readiness_unavailable` means the node could not evaluate it.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 
-readiness = client.get_offline_readiness()
-print("kagemusha", readiness.offline_kagemusha_recursive_compact_available)
+readiness = client.get_offline_readiness(asset_definition_id="xor#wonderland")
+print("offline ready", readiness.ready, readiness.blockers)
 ```
 
 For app-facing offline cash flows, use `iroha_python.offline_cash` to keep the
@@ -373,7 +380,7 @@ call = client.call_contract_and_wait(
     contract_alias="boi-lock::is",
     entrypoint="create_lock",
     payload={"amount": "10"},
-    gas_limit=100_000,
+    gas_limit=1_500_000,
 )
 
 policy = client.get_sns_policy(2)

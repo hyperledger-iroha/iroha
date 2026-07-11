@@ -1,55 +1,19 @@
-//! Kotodama ZK-related builtin tests: ensure compiler emits expected syscalls
-//! and uses the NoritoBytes pointer-ABI when requested.
+//! Kotodama ZK-related builtin tests for the namespaced, typed V1 surface.
 
 use ivm::{encoding, instruction::wide, syscalls};
 
 #[test]
-fn compile_zk_verify_and_execute_instruction() {
-    // Program: verify transfer with a NoritoBytes env, then enqueue an instruction via vendor syscall
-    // The vendor payloads are complete canonical Norito literals so production access metadata stays complete.
-    use iroha_data_model::{
-        account::AccountId,
-        asset::id::{AssetDefinitionId, AssetId},
-        domain::DomainId,
-        isi::{InstructionBox, Mint},
-        query::{QueryRequest, SingularQueryBox, asset::FindAssetById},
-    };
-
-    let account = AccountId::new(
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            .parse()
-            .expect("public key"),
-    );
-    let asset_def = AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").expect("domain id"),
-        "rose".parse().expect("asset name"),
-    );
-    let asset_id = AssetId::of(asset_def, account);
-    let instruction = InstructionBox::from(Mint::asset_numeric(1_u32, asset_id.clone()));
-    let instruction_payload = format!(
-        "0x{}",
-        hex::encode(norito::to_bytes(&instruction).expect("encode InstructionBox"))
-    );
-    let query = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById::new(
-        asset_id,
-    )));
-    let query_payload = format!(
-        "0x{}",
-        hex::encode(norito::to_bytes(&query).expect("encode QueryRequest"))
-    );
-
-    let src = format!(
-        r#"
-fn main() {{
-  let ok = zk_verify_transfer(norito_bytes("ENV1"));
-  let ok2 = zk_verify_unshield(norito_bytes("ENV2"));
-  execute_instruction(norito_bytes("{instruction_payload}"));
-  execute_query(norito_bytes("{query_payload}"));
-}}
-"#
-    );
+fn compile_namespaced_zk_verification_without_opaque_submission() {
+    let src = r#"
+seiyaku ZkVerification {
+  kotoage fn verify() authorize("VerifyZk") {
+    let ok = crypto::zk::verify_transfer(b"ENV1");
+    let ok2 = crypto::zk::verify_unshield(b"ENV2");
+  }
+}
+"#;
     let code = ivm::kotodama::compiler::Compiler::new()
-        .compile_source(&src)
+        .compile_source(src)
         .expect("compile zk program");
     let off = ivm::ProgramMetadata::parse(&code).unwrap().code_offset;
     let mut words = Vec::new();
@@ -63,14 +27,38 @@ fn main() {{
         encoding::wide::encode_sys(scall, syscalls::SYSCALL_ZK_VERIFY_TRANSFER as u8);
     let want_verify_unshield =
         encoding::wide::encode_sys(scall, syscalls::SYSCALL_ZK_VERIFY_UNSHIELD as u8);
-    let want_exec = encoding::wide::encode_sys(
-        scall,
-        syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
-    );
-    let want_query =
-        encoding::wide::encode_sys(scall, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY as u8);
     assert!(words.contains(&want_verify_transfer));
     assert!(words.contains(&want_verify_unshield));
-    assert!(words.contains(&want_exec));
-    assert!(words.contains(&want_query));
+    assert!(!words.iter().any(|word| {
+        *word
+            == encoding::wide::encode_sys(
+                scall,
+                syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
+            )
+            || *word
+                == encoding::wide::encode_sys(
+                    scall,
+                    syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY as u8,
+                )
+    }));
+}
+
+#[test]
+fn raw_norito_and_opaque_submission_are_not_source_apis() {
+    let diagnostics = ivm::kotodama::session::CompilerSession::default()
+        .build(ivm::kotodama::session::CompileRequest {
+            source: r#"
+seiyaku RawSubmission {
+  kotoage fn submit() authorize("Submit") {
+    execute_instruction(norito_bytes(b"opaque"));
+  }
+}
+"#,
+            source_name: Some("raw_submission.ko"),
+        })
+        .expect_err("raw Norito construction and instruction submission must fail");
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "E_INTERNAL_BUILTIN"
+            || diagnostic.message.contains("execute_instruction")
+    }));
 }

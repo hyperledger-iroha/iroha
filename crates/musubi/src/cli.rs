@@ -43,13 +43,16 @@ use iroha_data_model::{
         ChunkerProfileHandle, ManifestDigest, PinPolicy as DataModelPinPolicy, StorageClass,
     },
 };
-use ivm::{
-    KotodamaCompiler,
-    kotodama::{
-        ast::{Block, Expr, Function, Item, Program, Statement},
-        compiler::CompilerOptions,
-        parser::parse as parse_kotodama,
+use ivm::kotodama::{
+    driver::{
+        BuildDriver, BuildStatus, LinkedSourceBuildRequest, PublishLayout, PublishMode,
+        SourceBuildRequest, read_source_file,
     },
+    linker::{
+        ImportBinding, ModuleBuildGraph, SourceLinkRequest, SourceModuleUnit,
+        SourcePackageGraphRequest, SourcePackageUnit, is_reserved_import_alias,
+    },
+    session::CompilerSession,
 };
 use sorafs_car::gateway::{
     GatewayFetchConfig as SorafsGatewayFetchConfig,
@@ -267,6 +270,7 @@ impl AddArgs {
                 .parse()
                 .expect("Musubi package names are valid Iroha names")
         });
+        validate_dependency_alias(&alias)?;
         if manifest
             .dependencies
             .iter()
@@ -504,9 +508,12 @@ struct BuildArgs {
     /// Optional contract manifest JSON output path
     #[arg(long)]
     manifest_out: Option<PathBuf>,
-    /// ABI version. First release supports only ABI 1.
-    #[arg(long, default_value_t = 1)]
-    abi: u8,
+    /// Build profile used below target/kotodama
+    #[arg(long, default_value = "dev")]
+    profile: String,
+    /// Root directory for standard content-addressed build outputs
+    #[arg(long, default_value = "target/kotodama")]
+    target_dir: PathBuf,
     /// Lockfile providing resolved dependency aliases
     #[arg(long, default_value = DEFAULT_LOCKFILE)]
     lockfile: PathBuf,
@@ -517,49 +524,67 @@ struct BuildArgs {
 
 impl BuildArgs {
     fn run(self) -> Result<()> {
-        if self.abi != 1 {
-            bail!("Musubi supports only Kotodama ABI 1 in the first release");
-        }
-        let source = fs::read_to_string(&self.source)
-            .wrap_err_with(|| format!("failed to read `{}`", self.source.display()))?;
+        let source = read_source_file(&self.source).map_err(|error| eyre!(error))?;
         let lockfile = read_lockfile_optional(&self.lockfile)?;
-        let program = if let Some(lockfile) = lockfile.as_ref() {
-            link_program_with_lockfile(&source, lockfile, &self.cache_dir)?
+        let source_name = self.source.display().to_string();
+        let stem = self
+            .source
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| eyre!("source path must have a UTF-8 file stem"))?;
+        let layout = if let Some(output) = self.out {
+            PublishLayout::for_artifact(output, self.manifest_out, None)
         } else {
-            parse_kotodama(&source).map_err(|err| eyre!("Kotodama parse error: {err}"))?
-        };
-        let opts = CompilerOptions {
-            abi_version: self.abi,
-            debug_source_name: Some(self.source.display().to_string()),
-            ..Default::default()
-        };
-        let compiler = KotodamaCompiler::new_with_options(opts);
-        let (bytecode, contract_manifest) = compiler
-            .compile_program_with_manifest(&program)
-            .map_err(|err| eyre!("Kotodama compile error: {err}"))?;
-
-        let output = self.out.unwrap_or_else(|| {
-            let mut output = self.source.clone();
-            output.set_extension("to");
-            output
-        });
-        if let Some(parent) = output
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent)
-                .wrap_err_with(|| format!("failed to create `{}`", parent.display()))?;
+            let mut layout = PublishLayout::standard(&self.target_dir, &self.profile, stem, false)?;
+            if let Some(manifest) = self.manifest_out {
+                layout.manifest = manifest;
+            }
+            Ok(layout)
         }
-        fs::write(&output, &bytecode)
-            .wrap_err_with(|| format!("failed to write `{}`", output.display()))?;
-        if let Some(manifest_out) = self.manifest_out {
-            let rendered = norito::json::to_json_pretty(&contract_manifest)
-                .map_err(|err| eyre!("failed to render contract manifest JSON: {err}"))?;
-            fs::write(&manifest_out, rendered)
-                .wrap_err_with(|| format!("failed to write `{}`", manifest_out.display()))?;
-            println!("wrote contract manifest {}", manifest_out.display());
+        .map_err(|error: ivm::kotodama::driver::BuildError| eyre!(error))?;
+        // Ensure an explicit manifest path is normalized through the same layout
+        // before the compiler or publisher runs.
+        if layout.manifest == Path::new("-") {
+            return Err(eyre!(
+                "musubi build requires --manifest-out to be a file path"
+            ));
         }
-        println!("wrote bytecode {}", output.display());
+        let driver = BuildDriver::for_current_executable(CompilerSession::default())
+            .map_err(|error| eyre!(error))?;
+        let outcome = if let Some(lockfile) = lockfile.as_ref() {
+            let graph = ModuleBuildGraph::default();
+            let source_graph = source_link_request_with_lockfile(
+                &source,
+                &self.source,
+                lockfile,
+                &self.cache_dir,
+            )?;
+            driver.build_linked_source(
+                &graph,
+                LinkedSourceBuildRequest {
+                    graph: source_graph,
+                    source_name,
+                    profile: self.profile,
+                    layout,
+                    mode: PublishMode::Write,
+                },
+            )
+        } else {
+            driver.build_source(SourceBuildRequest {
+                source,
+                source_name,
+                profile: self.profile,
+                layout,
+                mode: PublishMode::Write,
+            })
+        }
+        .map_err(|error| eyre!("Kotodama build error: {error}"))?;
+        let status = match outcome.status {
+            BuildStatus::Fresh => "fresh",
+            BuildStatus::Built => "built",
+        };
+        println!("{status} bytecode {}", outcome.paths.artifact.display());
+        println!("manifest {}", outcome.paths.manifest.display());
         Ok(())
     }
 }
@@ -661,6 +686,9 @@ struct PublishArgs {
     /// Lockfile used to pin resolved dependency versions in the release record
     #[arg(long, default_value = DEFAULT_LOCKFILE)]
     lockfile: PathBuf,
+    /// Authenticated source cache for locked dependency packages
+    #[arg(long, default_value = DEFAULT_CACHE_DIR)]
+    cache_dir: PathBuf,
     /// Print the release payload without submitting it
     #[arg(long)]
     dry_run: bool,
@@ -674,6 +702,17 @@ impl PublishArgs {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
+        validate_dapp_link(&manifest)?;
+        if manifest.exports.is_empty() {
+            bail!("Musubi releases must export at least one Kotodama function");
+        }
+        let lockfile = read_lockfile_optional(&self.lockfile)?;
+        validate_publish_package_graph(
+            manifest_dir,
+            &manifest,
+            lockfile.as_ref(),
+            &self.cache_dir,
+        )?;
         let archive_stats = hash_source_tree(manifest_dir)?;
         let archive_hash = match self.archive_hash {
             Some(value) => {
@@ -718,14 +757,9 @@ impl PublishArgs {
             archive_stats.source_bytes,
             archive_stats.source_file_count,
         );
-        validate_dapp_link(&manifest)?;
         if !archive.is_non_empty() {
             bail!("Musubi releases must include a non-empty source archive");
         }
-        if manifest.exports.is_empty() {
-            bail!("Musubi releases must export at least one Kotodama function");
-        }
-        validate_exported_functions_exist(manifest_dir, &manifest.exports)?;
 
         println!("package = {}", manifest.package.package_ref());
         println!(
@@ -773,7 +807,6 @@ impl PublishArgs {
                 None,
             ))?;
             println!("sorafs_pin_transaction_hash = {pin_hash}");
-            let lockfile = read_lockfile_optional(&self.lockfile)?;
             let release = release_from_manifest(
                 &manifest,
                 lockfile.as_ref(),
@@ -1823,9 +1856,19 @@ fn parse_contract_alias_array(table: &toml::Table, key: &str) -> Result<Vec<Cont
 fn validate_dependency_aliases(manifest: &MusubiManifest) -> Result<()> {
     let mut seen = BTreeSet::new();
     for dependency in &manifest.dependencies {
+        validate_dependency_alias(&dependency.alias)?;
         if !seen.insert(dependency.alias.clone()) {
             bail!("duplicate dependency alias `{}`", dependency.alias);
         }
+    }
+    Ok(())
+}
+
+fn validate_dependency_alias(alias: &Name) -> Result<()> {
+    if is_reserved_import_alias(alias.as_ref()) {
+        bail!(
+            "dependency alias `{alias}` collides with a Kotodama V1 builtin namespace or compiler name; choose an explicit non-reserved alias"
+        );
     }
     Ok(())
 }
@@ -1837,60 +1880,92 @@ fn validate_dapp_link(manifest: &MusubiManifest) -> Result<()> {
     Ok(())
 }
 
-fn validate_exported_functions_exist(root: &Path, exports: &[Name]) -> Result<()> {
-    if exports.is_empty() {
-        return Ok(());
-    }
-    let defined = collect_kotodama_functions(root)?;
-    if defined.is_empty() {
-        bail!(
-            "Musubi release exports functions but no Kotodama `.ko` source files were found under `{}`",
-            root.display()
-        );
-    }
-    for export in exports {
-        if !defined.contains(export) {
-            bail!(
-                "Musubi export `{export}` is not defined by any Kotodama source under `{}`",
-                root.display()
-            );
-        }
-    }
-    Ok(())
-}
-
-fn collect_kotodama_functions(root: &Path) -> Result<BTreeSet<Name>> {
+fn collect_kotodama_source_modules(root: &Path) -> Result<Vec<SourceModuleUnit>> {
     let root = root
         .canonicalize()
         .wrap_err_with(|| format!("failed to canonicalize `{}`", root.display()))?;
     let mut files = Vec::new();
     collect_source_files(&root, &root, &mut files)?;
-
-    let mut functions = BTreeSet::new();
+    files.sort();
+    let mut modules = Vec::new();
     for relative in files.into_iter().filter(|path| {
         path.extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extension == "ko")
     }) {
         let path = root.join(&relative);
-        let source = fs::read_to_string(&path)
-            .wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
-        let program = parse_kotodama(&source)
-            .map_err(|err| eyre!("failed to parse `{}`: {err}", path.display()))?;
-        for item in program.items {
-            if let Item::Function(function) = item {
-                functions.insert(function.name.parse::<Name>().map_err(|err| {
-                    eyre!(
-                        "Kotodama function `{}` in `{}` is not a valid Musubi export name: {}",
-                        function.name,
-                        path.display(),
-                        err.reason()
-                    )
-                })?);
-            }
-        }
+        let source = read_source_file(&path).map_err(|error| eyre!(error))?;
+        let source_name = relative
+            .to_str()
+            .ok_or_else(|| eyre!("Kotodama source path `{}` is not UTF-8", relative.display()))?
+            .replace('\\', "/");
+        modules.push(SourceModuleUnit {
+            source_name,
+            source,
+        });
     }
-    Ok(functions)
+    Ok(modules)
+}
+
+fn validate_publish_package_graph(
+    root: &Path,
+    manifest: &MusubiManifest,
+    lockfile: Option<&MusubiLockfile>,
+    cache_dir: &Path,
+) -> Result<()> {
+    let modules = collect_kotodama_source_modules(root)?;
+    if modules.is_empty() {
+        bail!(
+            "Musubi release exports functions but no Kotodama `.ko` module sources were found under `{}`",
+            root.display()
+        );
+    }
+
+    let (imports, dependencies) = if manifest.dependencies.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        let lockfile = lockfile.ok_or_else(|| {
+            eyre!(
+                "Musubi publish requires a resolved lockfile to validate dependency source graphs"
+            )
+        })?;
+        validate_lockfile_satisfies_manifest(lockfile, manifest)?;
+        let imports = manifest
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                let package = lockfile
+                    .packages
+                    .iter()
+                    .find(|package| package.direct && package.alias == dependency.alias)
+                    .ok_or_else(|| {
+                        eyre!(
+                            "dependency `{}` is not present in lockfile; run `musubi install`",
+                            dependency.alias
+                        )
+                    })?;
+                Ok(ImportBinding {
+                    alias: dependency.alias.to_string(),
+                    package: package.package.to_string(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        (imports, source_packages_with_lockfile(lockfile, cache_dir)?)
+    };
+
+    let request = SourcePackageGraphRequest {
+        package: SourcePackageUnit {
+            identity: manifest.package.package_ref().to_string(),
+            modules,
+            exports: manifest.exports.iter().map(ToString::to_string).collect(),
+            imports,
+        },
+        dependencies,
+    };
+    CompilerSession::default()
+        .validate_package_graph(&ModuleBuildGraph::default(), request)
+        .map_err(|error| eyre!("Kotodama package validation failed: {error}"))?;
+    Ok(())
 }
 
 fn release_from_manifest(
@@ -3154,19 +3229,65 @@ fn file_payload_bytes<'a>(
         .ok_or_else(|| eyre!("file payload range is outside the payload"))
 }
 
-fn link_program_with_lockfile(
+fn source_link_request_with_lockfile(
     source: &str,
+    source_path: &Path,
     lockfile: &MusubiLockfile,
     cache_dir: &Path,
-) -> Result<Program> {
-    let mut program = parse_kotodama(source).map_err(|err| eyre!("Kotodama parse error: {err}"))?;
-    let dependency_by_alias = lockfile
+) -> Result<SourceLinkRequest> {
+    let workspace_root = std::env::current_dir().wrap_err("failed to locate the workspace root")?;
+    let root = SourceModuleUnit {
+        source_name: logical_source_name(source_path, &workspace_root)?,
+        source: source.to_owned(),
+    };
+    let imports = lockfile
         .packages
         .iter()
         .filter(|package| package.direct)
-        .map(|package| (package.alias.to_string(), package))
-        .collect::<BTreeMap<_, _>>();
-    rewrite_namespaced_calls_in_program(&mut program, &dependency_by_alias)?;
+        .map(|package| ImportBinding {
+            alias: package.alias.to_string(),
+            package: package.package.to_string(),
+        })
+        .collect();
+
+    let packages = source_packages_with_lockfile(lockfile, cache_dir)?;
+
+    Ok(SourceLinkRequest {
+        root,
+        imports,
+        packages,
+    })
+}
+
+fn logical_source_name(source_path: &Path, workspace_root: &Path) -> Result<String> {
+    let source_path = if source_path.is_absolute() {
+        source_path.strip_prefix(workspace_root).wrap_err_with(|| {
+            format!(
+                "Kotodama source `{}` is outside workspace root `{}`; run the build from a common project root",
+                source_path.display(),
+                workspace_root.display()
+            )
+        })?
+    } else {
+        source_path
+    };
+    let source_name = source_path.to_str().ok_or_else(|| {
+        eyre!(
+            "Kotodama source path `{}` is not UTF-8",
+            source_path.display()
+        )
+    })?;
+    if source_name.is_empty() {
+        bail!("Kotodama source path must name a file below the workspace root");
+    }
+    Ok(source_name.replace('\\', "/"))
+}
+
+fn source_packages_with_lockfile(
+    lockfile: &MusubiLockfile,
+    cache_dir: &Path,
+) -> Result<Vec<SourcePackageUnit>> {
+    let mut packages = Vec::with_capacity(lockfile.packages.len());
     for package in &lockfile.packages {
         if !package.resolved {
             bail!(
@@ -3183,357 +3304,35 @@ fn link_program_with_lockfile(
             );
         }
         verify_cached_package(cache_dir, package)?;
-        let package_dependency_by_alias = package_dependency_map(lockfile, package)?;
-        let mut files = Vec::new();
-        collect_source_files(&source_root, &source_root, &mut files)?;
-        files.sort();
-        let package_functions = collect_package_function_names(&source_root)?;
-        let package_prefix = package_prefix_key(&package.package);
-        for relative in files.into_iter().filter(|path| {
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension == "ko")
-        }) {
-            let path = source_root.join(&relative);
-            let source = fs::read_to_string(&path)
-                .wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
-            let mut dependency_program = parse_kotodama(&source)
-                .map_err(|err| eyre!("failed to parse `{}`: {err}", path.display()))?;
-            validate_dependency_program_is_function_only(&dependency_program, package, &path)?;
-            rewrite_namespaced_calls_in_program(
-                &mut dependency_program,
-                &package_dependency_by_alias,
-            )?;
-            prefix_dependency_program(&mut dependency_program, &package_prefix, &package_functions);
-            program.items.extend(dependency_program.items);
-        }
+
+        let package_imports = package
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                lockfile
+                    .package_by_ref(&dependency.package)
+                    .ok_or_else(|| {
+                        eyre!(
+                            "dependency `{}` of `{}` is missing from Musubi.lock",
+                            dependency.package,
+                            package.package
+                        )
+                    })
+                    .map(|locked| ImportBinding {
+                        alias: dependency.alias.to_string(),
+                        package: locked.package.to_string(),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let modules = collect_kotodama_source_modules(&source_root)?;
+        packages.push(SourcePackageUnit {
+            identity: package.package.to_string(),
+            modules,
+            exports: package.exports.iter().map(ToString::to_string).collect(),
+            imports: package_imports,
+        });
     }
-    Ok(program)
-}
-
-fn package_dependency_map<'a>(
-    lockfile: &'a MusubiLockfile,
-    package: &LockedPackage,
-) -> Result<BTreeMap<String, &'a LockedPackage>> {
-    let mut dependencies = BTreeMap::new();
-    for dependency in &package.dependencies {
-        let locked = lockfile
-            .package_by_ref(&dependency.package)
-            .ok_or_else(|| {
-                eyre!(
-                    "dependency `{}` of `{}` is missing from Musubi.lock",
-                    dependency.package,
-                    package.package
-                )
-            })?;
-        dependencies.insert(dependency.alias.to_string(), locked);
-    }
-    Ok(dependencies)
-}
-
-fn validate_dependency_program_is_function_only(
-    program: &Program,
-    package: &LockedPackage,
-    path: &Path,
-) -> Result<()> {
-    for item in &program.items {
-        if !matches!(item, Item::Function(_)) {
-            bail!(
-                "dependency `{}` contains unsupported non-function item in `{}`; Musubi v1 libraries are function-only",
-                package.package,
-                path.display()
-            );
-        }
-    }
-    Ok(())
-}
-
-fn collect_package_function_names(root: &Path) -> Result<BTreeSet<String>> {
-    Ok(collect_kotodama_functions(root)?
-        .into_iter()
-        .map(|name| name.to_string())
-        .collect())
-}
-
-fn rewrite_namespaced_calls_in_program(
-    program: &mut Program,
-    dependency_by_alias: &BTreeMap<String, &LockedPackage>,
-) -> Result<()> {
-    for item in &mut program.items {
-        match item {
-            Item::Function(function) => {
-                rewrite_namespaced_calls_in_block(&mut function.body, dependency_by_alias)?;
-            }
-            Item::Const(decl) => {
-                rewrite_namespaced_calls_in_expr(&mut decl.value, dependency_by_alias)?;
-            }
-            Item::Trigger(decl) => {
-                for metadata in &mut decl.metadata {
-                    rewrite_namespaced_calls_in_expr(&mut metadata.value, dependency_by_alias)?;
-                }
-            }
-            Item::Struct(_) | Item::State(_) | Item::Kotoba(_) => {}
-        }
-    }
-    Ok(())
-}
-
-fn rewrite_namespaced_calls_in_block(
-    block: &mut Block,
-    dependency_by_alias: &BTreeMap<String, &LockedPackage>,
-) -> Result<()> {
-    for statement in &mut block.statements {
-        rewrite_namespaced_calls_in_statement(statement, dependency_by_alias)?;
-    }
-    Ok(())
-}
-
-fn rewrite_namespaced_calls_in_statement(
-    statement: &mut Statement,
-    dependency_by_alias: &BTreeMap<String, &LockedPackage>,
-) -> Result<()> {
-    match statement {
-        Statement::Let { value, .. } | Statement::Assign { value, .. } | Statement::Expr(value) => {
-            rewrite_namespaced_calls_in_expr(value, dependency_by_alias)?
-        }
-        Statement::AssignExpr { target, value, .. } => {
-            rewrite_namespaced_calls_in_expr(target, dependency_by_alias)?;
-            rewrite_namespaced_calls_in_expr(value, dependency_by_alias)?;
-        }
-        Statement::Return(Some(value)) => {
-            rewrite_namespaced_calls_in_expr(value, dependency_by_alias)?
-        }
-        Statement::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            rewrite_namespaced_calls_in_expr(cond, dependency_by_alias)?;
-            rewrite_namespaced_calls_in_block(then_branch, dependency_by_alias)?;
-            if let Some(block) = else_branch {
-                rewrite_namespaced_calls_in_block(block, dependency_by_alias)?;
-            }
-        }
-        Statement::While { cond, body } => {
-            rewrite_namespaced_calls_in_expr(cond, dependency_by_alias)?;
-            rewrite_namespaced_calls_in_block(body, dependency_by_alias)?;
-        }
-        Statement::For {
-            init,
-            cond,
-            step,
-            body,
-            ..
-        } => {
-            if let Some(init) = init {
-                rewrite_namespaced_calls_in_statement(init, dependency_by_alias)?;
-            }
-            if let Some(cond) = cond {
-                rewrite_namespaced_calls_in_expr(cond, dependency_by_alias)?;
-            }
-            if let Some(step) = step {
-                rewrite_namespaced_calls_in_statement(step, dependency_by_alias)?;
-            }
-            rewrite_namespaced_calls_in_block(body, dependency_by_alias)?;
-        }
-        Statement::ForEachMap { map, body, .. } => {
-            rewrite_namespaced_calls_in_expr(map, dependency_by_alias)?;
-            rewrite_namespaced_calls_in_block(body, dependency_by_alias)?;
-        }
-        Statement::Return(None) | Statement::Break | Statement::Continue => {}
-    }
-    Ok(())
-}
-
-fn rewrite_namespaced_calls_in_expr(
-    expr: &mut Expr,
-    dependency_by_alias: &BTreeMap<String, &LockedPackage>,
-) -> Result<()> {
-    match expr {
-        Expr::Call { name, args } => {
-            if let Some((alias, function)) = name.split_once("::") {
-                let package = dependency_by_alias.get(alias).ok_or_else(|| {
-                    eyre!("Kotodama dependency alias `{alias}` is not present in Musubi.lock")
-                })?;
-                let export = function.parse::<Name>().map_err(|err| {
-                    eyre!(
-                        "Kotodama function `{function}` is not a valid Musubi export: {}",
-                        err.reason()
-                    )
-                })?;
-                if !package.exports.contains(&export) {
-                    bail!(
-                        "function `{alias}::{function}` is not exported by `{}`",
-                        package.package
-                    );
-                }
-                *name = prefixed_function_name(&package_prefix_key(&package.package), function);
-            }
-            for arg in args {
-                rewrite_namespaced_calls_in_expr(arg, dependency_by_alias)?;
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            rewrite_namespaced_calls_in_expr(left, dependency_by_alias)?;
-            rewrite_namespaced_calls_in_expr(right, dependency_by_alias)?;
-        }
-        Expr::Unary { expr, .. } => rewrite_namespaced_calls_in_expr(expr, dependency_by_alias)?,
-        Expr::Conditional {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            rewrite_namespaced_calls_in_expr(cond, dependency_by_alias)?;
-            rewrite_namespaced_calls_in_expr(then_expr, dependency_by_alias)?;
-            rewrite_namespaced_calls_in_expr(else_expr, dependency_by_alias)?;
-        }
-        Expr::Member { object, .. } => {
-            rewrite_namespaced_calls_in_expr(object, dependency_by_alias)?
-        }
-        Expr::Index { target, index } => {
-            rewrite_namespaced_calls_in_expr(target, dependency_by_alias)?;
-            rewrite_namespaced_calls_in_expr(index, dependency_by_alias)?;
-        }
-        Expr::Tuple(items) => {
-            for item in items {
-                rewrite_namespaced_calls_in_expr(item, dependency_by_alias)?;
-            }
-        }
-        Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::String(_)
-        | Expr::Bytes(_)
-        | Expr::Ident(_) => {}
-    }
-    Ok(())
-}
-
-fn prefix_dependency_program(program: &mut Program, prefix: &str, functions: &BTreeSet<String>) {
-    for item in &mut program.items {
-        if let Item::Function(function) = item {
-            prefix_dependency_function(function, prefix, functions);
-        }
-    }
-}
-
-fn prefix_dependency_function(function: &mut Function, prefix: &str, functions: &BTreeSet<String>) {
-    let original_name = function.name.clone();
-    function.name = prefixed_function_name(prefix, &original_name);
-    prefix_internal_calls_in_block(&mut function.body, prefix, functions);
-}
-
-fn prefix_internal_calls_in_block(block: &mut Block, prefix: &str, functions: &BTreeSet<String>) {
-    for statement in &mut block.statements {
-        prefix_internal_calls_in_statement(statement, prefix, functions);
-    }
-}
-
-fn prefix_internal_calls_in_statement(
-    statement: &mut Statement,
-    prefix: &str,
-    functions: &BTreeSet<String>,
-) {
-    match statement {
-        Statement::Let { value, .. } | Statement::Assign { value, .. } | Statement::Expr(value) => {
-            prefix_internal_calls_in_expr(value, prefix, functions)
-        }
-        Statement::AssignExpr { target, value, .. } => {
-            prefix_internal_calls_in_expr(target, prefix, functions);
-            prefix_internal_calls_in_expr(value, prefix, functions);
-        }
-        Statement::Return(Some(value)) => prefix_internal_calls_in_expr(value, prefix, functions),
-        Statement::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            prefix_internal_calls_in_expr(cond, prefix, functions);
-            prefix_internal_calls_in_block(then_branch, prefix, functions);
-            if let Some(block) = else_branch {
-                prefix_internal_calls_in_block(block, prefix, functions);
-            }
-        }
-        Statement::While { cond, body } => {
-            prefix_internal_calls_in_expr(cond, prefix, functions);
-            prefix_internal_calls_in_block(body, prefix, functions);
-        }
-        Statement::For {
-            init,
-            cond,
-            step,
-            body,
-            ..
-        } => {
-            if let Some(init) = init {
-                prefix_internal_calls_in_statement(init, prefix, functions);
-            }
-            if let Some(cond) = cond {
-                prefix_internal_calls_in_expr(cond, prefix, functions);
-            }
-            if let Some(step) = step {
-                prefix_internal_calls_in_statement(step, prefix, functions);
-            }
-            prefix_internal_calls_in_block(body, prefix, functions);
-        }
-        Statement::ForEachMap { map, body, .. } => {
-            prefix_internal_calls_in_expr(map, prefix, functions);
-            prefix_internal_calls_in_block(body, prefix, functions);
-        }
-        Statement::Return(None) | Statement::Break | Statement::Continue => {}
-    }
-}
-
-fn prefix_internal_calls_in_expr(expr: &mut Expr, prefix: &str, functions: &BTreeSet<String>) {
-    match expr {
-        Expr::Call { name, args } => {
-            if functions.contains(name) {
-                *name = prefixed_function_name(prefix, name);
-            }
-            for arg in args {
-                prefix_internal_calls_in_expr(arg, prefix, functions);
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            prefix_internal_calls_in_expr(left, prefix, functions);
-            prefix_internal_calls_in_expr(right, prefix, functions);
-        }
-        Expr::Unary { expr, .. } => prefix_internal_calls_in_expr(expr, prefix, functions),
-        Expr::Conditional {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            prefix_internal_calls_in_expr(cond, prefix, functions);
-            prefix_internal_calls_in_expr(then_expr, prefix, functions);
-            prefix_internal_calls_in_expr(else_expr, prefix, functions);
-        }
-        Expr::Member { object, .. } => prefix_internal_calls_in_expr(object, prefix, functions),
-        Expr::Index { target, index } => {
-            prefix_internal_calls_in_expr(target, prefix, functions);
-            prefix_internal_calls_in_expr(index, prefix, functions);
-        }
-        Expr::Tuple(items) => {
-            for item in items {
-                prefix_internal_calls_in_expr(item, prefix, functions);
-            }
-        }
-        Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Decimal(_)
-        | Expr::String(_)
-        | Expr::Bytes(_)
-        | Expr::Ident(_) => {}
-    }
-}
-
-fn package_prefix_key(package: &MusubiPackageRef) -> String {
-    let digest = blake3::hash(package.canonical_ref().as_bytes());
-    format!("p{}", hex::encode(&digest.as_bytes()[..8]))
-}
-
-fn prefixed_function_name(prefix: &str, function: &str) -> String {
-    format!("__musubi_{prefix}_{function}")
+    Ok(packages)
 }
 
 fn release_status_label(status: &MusubiReleaseStatus) -> &'static str {
@@ -3630,6 +3429,30 @@ mod tests {
     }
 
     #[test]
+    fn dependency_alias_validation_rejects_builtin_namespaces() {
+        let manifest = parse_manifest(
+            r#"
+            [package]
+            namespace = "dex.universal"
+            name = "swap-core"
+            version = "1.2.3"
+
+            [dependencies]
+            math = "std.universal/math@1.0.0"
+            "#,
+        )
+        .expect("parse manifest");
+
+        let error = validate_dependency_aliases(&manifest)
+            .expect_err("builtin namespace aliases must fail before linking");
+        assert!(
+            error
+                .to_string()
+                .contains("collides with a Kotodama V1 builtin")
+        );
+    }
+
+    #[test]
     fn lockfile_marks_registry_resolution_as_pending() {
         let manifest = parse_manifest(
             r#"
@@ -3673,54 +3496,6 @@ mod tests {
     }
 
     #[test]
-    fn linker_rewrites_namespaced_calls_to_locked_exports() {
-        let mut program = Program {
-            items: vec![Item::Function(Function {
-                name: "main".to_owned(),
-                params: Vec::new(),
-                ret_ty: None,
-                body: Block {
-                    statements: vec![Statement::Expr(Expr::Call {
-                        name: "math::add".to_owned(),
-                        args: Vec::new(),
-                    })],
-                },
-                modifiers: ivm::kotodama::ast::FunctionModifiers::default(),
-                location: ivm::kotodama::ast::SourceLocation { line: 1, column: 1 },
-            })],
-            contract_meta: None,
-            test_target: None,
-            fixtures: Vec::new(),
-        };
-        let package = LockedPackage {
-            alias: "math".parse().unwrap(),
-            package: "std.universal/math@1.2.3".parse().unwrap(),
-            version_req: "^1.0.0".parse().unwrap(),
-            archive: None,
-            source_plan: None,
-            cache_path: None,
-            exports: vec!["add".parse().unwrap()],
-            dependencies: Vec::new(),
-            direct: true,
-            resolved: true,
-        };
-        let dependencies = BTreeMap::from([("math".to_owned(), &package)]);
-
-        rewrite_namespaced_calls_in_program(&mut program, &dependencies).expect("rewrite");
-
-        let Item::Function(function) = &program.items[0] else {
-            panic!("expected function");
-        };
-        let Statement::Expr(Expr::Call { name, .. }) = &function.body.statements[0] else {
-            panic!("expected call");
-        };
-        assert_eq!(
-            name,
-            &prefixed_function_name(&package_prefix_key(&package.package), "add")
-        );
-    }
-
-    #[test]
     fn cache_imported_source_verifies_against_lockfile_archive() {
         let source = tempfile::tempdir().expect("source tempdir");
         fs::write(
@@ -3729,7 +3504,11 @@ mod tests {
         )
         .expect("manifest");
         fs::create_dir(source.path().join("src")).expect("src dir");
-        fs::write(source.path().join("src/lib.ko"), "fn add() {}\n").expect("source");
+        fs::write(
+            source.path().join("src/lib.ko"),
+            "module Math { fn add() {} }\n",
+        )
+        .expect("source");
         let stats = hash_source_tree(source.path()).expect("source hash");
         let package = LockedPackage {
             alias: "math".parse().unwrap(),
@@ -3764,7 +3543,11 @@ mod tests {
         )
         .expect("manifest");
         fs::create_dir(source.path().join("src")).expect("src dir");
-        fs::write(source.path().join("src/lib.ko"), "fn add() {}\n").expect("source");
+        fs::write(
+            source.path().join("src/lib.ko"),
+            "module Math { fn add() {} }\n",
+        )
+        .expect("source");
         fs::write(source.path().join(DEFAULT_LOCKFILE), "ignored").expect("lockfile");
         fs::create_dir_all(source.path().join(".musubi/cache")).expect("musubi cache");
         fs::write(source.path().join(".musubi/cache/generated.ko"), "ignored").expect("generated");
@@ -3794,7 +3577,11 @@ mod tests {
         )
         .expect("manifest");
         fs::create_dir(source.path().join("src")).expect("src dir");
-        fs::write(source.path().join("src/lib.ko"), "fn add() {}\n").expect("source");
+        fs::write(
+            source.path().join("src/lib.ko"),
+            "module Math { fn add() {} }\n",
+        )
+        .expect("source");
 
         let manifest = read_manifest(&source.path().join("Musubi.toml")).expect("manifest");
         let archive_stats = hash_source_tree(source.path()).expect("archive hash");
@@ -3828,7 +3615,7 @@ mod tests {
         let fetched =
             fs::read_to_string(cache_source_path(cache.path(), &package).join("src/lib.ko"))
                 .expect("read fetched");
-        assert_eq!(fetched, "fn add() {}\n");
+        assert_eq!(fetched, "module Math { fn add() {} }\n");
         verify_cached_package(cache.path(), &package).expect("verify cache");
     }
 
@@ -3930,7 +3717,11 @@ mod tests {
         )
         .expect("manifest");
         fs::create_dir(source.path().join("src")).expect("src dir");
-        fs::write(source.path().join("src/lib.ko"), "fn add() {}\n").expect("source");
+        fs::write(
+            source.path().join("src/lib.ko"),
+            "module Math { fn add() {} }\n",
+        )
+        .expect("source");
 
         let manifest = read_manifest(&source.path().join("Musubi.toml")).expect("manifest");
         let archive = hash_source_tree(source.path()).expect("archive hash");
@@ -3995,7 +3786,11 @@ mod tests {
         )
         .expect("manifest");
         fs::create_dir(source.path().join("src")).expect("src dir");
-        fs::write(source.path().join("src/lib.ko"), "fn add() {}\n").expect("source");
+        fs::write(
+            source.path().join("src/lib.ko"),
+            "module Math { fn add() {} }\n",
+        )
+        .expect("source");
 
         let manifest = read_manifest(&source.path().join("Musubi.toml")).expect("manifest");
         let archive_stats = hash_source_tree(source.path()).expect("archive hash");
@@ -4060,7 +3855,7 @@ mod tests {
         let fetched =
             fs::read_to_string(cache_source_path(cache.path(), &package).join("src/lib.ko"))
                 .expect("read fetched");
-        assert_eq!(fetched, "fn add() {}\n");
+        assert_eq!(fetched, "module Math { fn add() {} }\n");
         verify_cached_package(cache.path(), &package).expect("verify cache");
     }
 
@@ -4135,34 +3930,15 @@ mod tests {
     }
 
     #[test]
-    fn dependency_programs_reject_non_function_items() {
-        let program = parse_kotodama("const answer = 1;").expect("parse const");
-        let package = LockedPackage {
-            alias: "math".parse().unwrap(),
-            package: "std.universal/math@1.2.3".parse().unwrap(),
-            version_req: "^1.0.0".parse().unwrap(),
-            archive: None,
-            source_plan: None,
-            cache_path: None,
-            exports: vec!["add".parse().unwrap()],
-            dependencies: Vec::new(),
-            direct: true,
-            resolved: true,
-        };
-
-        let err =
-            validate_dependency_program_is_function_only(&program, &package, Path::new("lib.ko"))
-                .expect_err("const rejected");
-
-        assert!(err.to_string().contains("function-only"));
-    }
-
-    #[test]
     fn source_tree_hash_is_deterministic_and_ignores_lockfile() {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::write(temp.path().join("Musubi.toml"), "[package]\n").expect("manifest");
         fs::create_dir(temp.path().join("src")).expect("src dir");
-        fs::write(temp.path().join("src/lib.ko"), "fn main() {}\n").expect("source");
+        fs::write(
+            temp.path().join("src/lib.ko"),
+            "module Main { fn main() {} }\n",
+        )
+        .expect("source");
         fs::write(temp.path().join(DEFAULT_LOCKFILE), "ignored").expect("lockfile");
 
         let first = hash_source_tree(temp.path()).expect("first hash");
@@ -4175,18 +3951,56 @@ mod tests {
     }
 
     #[test]
-    fn export_validation_requires_defined_kotodama_function() {
+    fn physical_source_paths_map_to_portable_workspace_relative_names() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let absolute = workspace.path().join("src/app.ko");
+        assert_eq!(
+            logical_source_name(&absolute, workspace.path()).expect("workspace source"),
+            "src/app.ko"
+        );
+        assert_eq!(
+            logical_source_name(Path::new(r"src\app.ko"), workspace.path())
+                .expect("relative Windows spelling"),
+            "src/app.ko"
+        );
+
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let error = logical_source_name(&outside.path().join("app.ko"), workspace.path())
+            .expect_err("absolute source outside the workspace must not enter graph identity");
+        assert!(error.to_string().contains("outside workspace root"));
+    }
+
+    #[test]
+    fn publish_validation_uses_typed_module_exports() {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::create_dir(temp.path().join("src")).expect("src dir");
-        fs::write(temp.path().join("src/lib.ko"), "fn quote() {}\n").expect("source");
+        fs::write(
+            temp.path().join("src/lib.ko"),
+            "module Quotes { fn quote() {} }\n",
+        )
+        .expect("source");
+        let manifest = parse_manifest(
+            r#"
+            [package]
+            namespace = "quotes.universal"
+            name = "core"
+            version = "1.0.0"
 
-        validate_exported_functions_exist(temp.path(), &["quote".parse().expect("export")])
-            .expect("export exists");
-        let err =
-            validate_exported_functions_exist(temp.path(), &["swap".parse().expect("export")])
-                .expect_err("missing export");
+            [exports]
+            functions = ["quote"]
+            "#,
+        )
+        .expect("manifest");
+        let modules = collect_kotodama_source_modules(temp.path()).expect("source modules");
+        assert_eq!(modules[0].source_name, "src/lib.ko");
+        validate_publish_package_graph(temp.path(), &manifest, None, temp.path())
+            .expect("typed export exists");
 
-        assert!(err.to_string().contains("not defined"));
+        let mut missing = manifest;
+        missing.exports = vec!["swap".parse().expect("export")];
+        let err = validate_publish_package_graph(temp.path(), &missing, None, temp.path())
+            .expect_err("missing export");
+        assert!(err.to_string().contains("exports missing function `swap`"));
     }
 
     #[test]

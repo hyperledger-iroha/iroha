@@ -27,11 +27,11 @@ Norito болон Kotodama нь анх удаа: тодорхойлогч нэг
   `defaults/docker-compose.single.yml`-д тодорхойлсон түүврийн үе тэнгийн загварыг эхлүүлэх).
 - Хэрэв та татаж авахгүй бол туслах хоёртын файлыг бүтээхэд зориулсан Rust toolchain (1.76+).
   хэвлэгдсэн нь.
-- `koto_compile`, `ivm_run`, `iroha` хоёртын файлууд. Та тэдгээрийг дээрээс нь барьж болно
+- `koto build`, `ivm_run`, `iroha` хоёртын файлууд. Та тэдгээрийг дээрээс нь барьж болно
   Доор үзүүлсэн шиг ажлын талбарыг шалгах эсвэл тохирох хувилбарыг татаж авах:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -58,28 +58,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
-  kotoage fn main() permission(Admin) {
-    info("Hello from Kotodama");
-    write_detail();
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() permission(Admin) {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -94,15 +88,14 @@ KO
 Сүлжээнд хүрэхээсээ өмнө хост системийн дуудлагууд амжилттай ажиллаж байгааг баталгаажуулна уу:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-Гүйгч нь `info("Hello from Kotodama")` бүртгэлийг хэвлэж, гүйцэтгэнэ
+Гүйгч нь `debug::info("Hello from Kotodama")` бүртгэлийг хэвлэж, гүйцэтгэнэ
 Дооглогдсон хостын эсрэг `SET_ACCOUNT_DETAIL` систем. Хэрэв нэмэлт `ivm_tool`
 хоёртын хувилбар боломжтой, `ivm_tool inspect target/quickstart/hello.to`-г харуулна
 ABI толгой хэсэг, онцлог битүүд болон экспортлогдсон нэвтрэх цэгүүд.

@@ -21,6 +21,11 @@ fn build_tlv(type_id: u16, version: u8, payload: &[u8], corrupt_hash: bool) -> V
     v
 }
 
+fn quantity_tlv(value: u64) -> Vec<u8> {
+    ivm::numeric_tlv::encode_quantity(&Quantity::from(value))
+        .expect("encode quantity pointer envelope")
+}
+
 #[test]
 fn mint_asset_rejects_assetid_tlv_instead_of_assetdefinitionid() {
     // Authority and host
@@ -54,8 +59,7 @@ fn mint_asset_rejects_assetid_tlv_instead_of_assetdefinitionid() {
         .preload_input(off, &assetid_tlv)
         .expect("preload input");
     let p_asset = Memory::INPUT_START + off;
-    let amount_payload = norito::to_bytes(&Numeric::from(42_u64)).expect("encode amount");
-    let amount_tlv = build_tlv(PointerType::NoritoBytes as u16, 1, &amount_payload, false);
+    let amount_tlv = quantity_tlv(42);
     let off_amount = (off + assetid_tlv.len() as u64 + 7) & !7;
     vm.memory
         .preload_input(off_amount, &amount_tlv)
@@ -98,8 +102,7 @@ fn mint_asset_rejects_corrupted_accountid_hash() {
         .preload_input(off, &assetdef_tlv)
         .expect("preload input");
     let p_assetdef = Memory::INPUT_START + off;
-    let amount_payload = norito::to_bytes(&Numeric::from(100_u64)).expect("encode amount");
-    let amount_tlv = build_tlv(PointerType::NoritoBytes as u16, 1, &amount_payload, false);
+    let amount_tlv = quantity_tlv(100);
     let off_amount = (off + assetdef_tlv.len() as u64 + 7) & !7;
     vm.memory
         .preload_input(off_amount, &amount_tlv)
@@ -141,8 +144,7 @@ fn mint_asset_rejects_unknown_typeid() {
         .preload_input(off, &bad_tlv)
         .expect("preload input");
     let p_bad = Memory::INPUT_START + off;
-    let amount_payload = norito::to_bytes(&Numeric::from(1_u64)).expect("encode amount");
-    let amount_tlv = build_tlv(PointerType::NoritoBytes as u16, 1, &amount_payload, false);
+    let amount_tlv = quantity_tlv(1);
     let off_amount = (off + bad_tlv.len() as u64 + 7) & !7;
     vm.memory
         .preload_input(off_amount, &amount_tlv)

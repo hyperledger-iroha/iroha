@@ -2,4024 +2,3841 @@ const fs = require("fs");
 const path = require("path");
 const assert = require("assert");
 const crypto = require("crypto");
-const { pathToFileURL } = require("url");
-const solc = require("solc");
-const ganache = require("ganache");
+const REPO = path.join(__dirname, "..", "..", "..", "..");
+const solc = process.env.SCCP_SOLJSON_PATH
+  ? require(path.join(REPO, "scripts", "contract_tooling", "authenticated-solc"))
+  : require("solc");
+const { createHardhatProvider } = require(path.join(
+  REPO,
+  "scripts",
+  "contract_tooling",
+  "evm-runtime",
+  "hardhat-provider.js",
+));
 const { ethers } = require("ethers");
 
-function contractPath(fileName) {
-  return path.join(__dirname, "..", fileName);
+const BSC_TESTNET_PROFILE = 5;
+const ETHEREUM_SEPOLIA_PROFILE = 3;
+const TRON_NILE_PROFILE = 11;
+const ROUTE_REVISION = 7;
+const DOMAIN_SORA = 0;
+const DOMAIN_ETHEREUM = 1;
+const DOMAIN_BSC = 2;
+const DOMAIN_TRON = 5;
+const CODEC_TEXT = 1;
+const CODEC_EVM20 = 2;
+const CODEC_TRON21 = 5;
+const SCALE = 1_000_000_000n;
+const MAX_RUNTIME_BYTES = 24_576;
+const MAX_INITCODE_BYTES = 49_152;
+// Stay below the EIP-7825 per-transaction gas cap enforced by the locked
+// Hardhat runtime while retaining ample headroom for the largest constructor.
+const MAX_DEPLOYMENT_GAS = 16_000_000n;
+const I105_ALPHABET = Array.from(
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz" +
+    "ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ",
+);
+const ED25519_FIELD = (1n << 255n) - 19n;
+const ED25519_TORSION_ENCODINGS = [
+  "0100000000000000000000000000000000000000000000000000000000000000",
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+  "0000000000000000000000000000000000000000000000000000000000000080",
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+  "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+  "0000000000000000000000000000000000000000000000000000000000000000",
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+];
+const CANONICAL_SORA_I105 =
+  "sorauﾛ1PYﾛ9ｵﾆﾘﾐ3Yf8wﾜｿﾋﾉajｼｱ6eﾑbHｱﾜｶBｳdUｺcヰｲnﾌNP21YC";
+// I105 checksums cover canonical AccountAddress bytes, while the named
+// sentinel carries the chain discriminant. Exercise Taira's exact `test` form.
+const CANONICAL_I105 = `test${CANONICAL_SORA_I105.slice(4)}`;
+const CANONICAL_I105_BYTES = ethers.toUtf8Bytes(CANONICAL_I105);
+const CHECKSUM_MUTATED_I105 = `${CANONICAL_I105.slice(0, -1)}D`;
+const NUMERIC_SENTINEL_ALIAS_I105 = `n369${CANONICAL_I105.slice(4)}`;
+// Produced by Rust `iroha tools address convert --network-prefix 369` from the
+// canonical compressed SEC1 generator key. This is an AccountId/I105 oracle,
+// not a value independently invented by the Solidity smoke.
+const RUST_TAIRA_SECP256K1_I105 =
+  "test2QHHｴﾒﾔBgfﾐdｹヱa6ﾊyqVﾐｻrpruﾖZﾗｾWkｳzqGGﾕdｳｳﾏｻiM2HYQ6";
+const SECP256K1_FIELD =
+  0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2fn;
+// Shared Rust/Solidity fixture commitments for the exact V1 semantic profile
+// and Taira finality anchor encodings.
+const SEMANTIC_PROOF_PROFILE_HASH =
+  "0xce5a1e17aca3cafe47a403fd66479f0a36339eb56092dafa67c8d97bdeeb60ef";
+const SORA_FINALITY_ANCHOR_HASH =
+  "0x7dda271d98d9e4333093da84236157e39ce67f6f68680fedbdc17fbe8b7b6a4a";
+const ALTERNATE_SEMANTIC_PROOF_PROFILE_HASH = ethers.keccak256(
+  ethers.toUtf8Bytes("sccp:test:semantic-proof-profile:alternate:v1"),
+);
+const ALTERNATE_SORA_FINALITY_ANCHOR_HASH = ethers.keccak256(
+  ethers.toUtf8Bytes("sccp:test:sora-finality-anchor:alternate:v1"),
+);
+const PROFILE_TAG = {
+  "ethereum-mainnet": 2,
+  "ethereum-sepolia": 3,
+  "bsc-mainnet": 4,
+  "bsc-testnet": 5,
+  "tron-mainnet": 10,
+  "tron-nile": 11,
+  "tron-shasta": 12,
+};
+const SCALAR_FIELD =
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+const BASE_FIELD =
+  21888242871839275222246405745257275088696311157297823662689037894645226208583n;
+// Deterministically generated from x=(1,2) on the BN254 twist. The point is
+// on-curve but r * P is non-infinity, so EIP-197 must reject it as outside G2.
+const NON_SUBGROUP_G2 = [
+  1n,
+  2n,
+  2318417032921752773706234968143028537016473046724237753379416958334661833740n,
+  12286822439340662745461952989251194370289180628671678316022104244014550321766n,
+];
+const SIGNAL_LABELS = [
+  "message-id",
+  "payload-hash",
+  "target-domain",
+  "commitment-root",
+  "finality-height",
+  "finality-block-hash",
+  "source-domain",
+  "statement-hash",
+  "destination-binding-hash",
+  "route-configuration-hash",
+  "sora-finality-anchor-hash",
+].map((name) =>
+  ethers.keccak256(ethers.toUtf8Bytes(`sccp:groth16-bn254:signal:${name}:v1`)),
+);
+const GROTH16_PROOF_ABI_TYPES = [
+  "uint256",
+  "bytes32",
+  "uint256",
+  "bytes32",
+  "uint256[2]",
+  "uint256[4]",
+  "uint256[2]",
+];
+const PINNED_EVM_SOLC_BUILD = "0.7.4+commit.3f05b770.Emscripten.clang";
+const PINNED_EVM_SOLJSON_SHA256 =
+  "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2";
+const PINNED_TRON_SOLC_BUILD = "0.7.4+commit.3f05b770.Emscripten.clang";
+const PINNED_TRON_SOLJSON_SHA256 =
+  "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2";
+const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
+
+function source(file) {
+  return { content: fs.readFileSync(path.join(REPO, file), "utf8") };
 }
 
-function repoPath(...segments) {
-  return path.join(__dirname, "..", "..", "..", "..", ...segments);
+function sha256Hex(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-function loadSource(fileName) {
+function readStableRegularFile(filePath, maximumBytes, readOnly) {
+  assert(path.isAbsolute(filePath), "authenticated input path must be absolute");
+  const noFollow = fs.constants.O_NOFOLLOW || 0;
+  const descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+  try {
+    const before = fs.fstatSync(descriptor, { bigint: true });
+    assert((before.mode & 0o170000n) === 0o100000n, "authenticated input is not regular");
+    assert(before.size > 0n && before.size <= BigInt(maximumBytes), "authenticated input is unbounded");
+    if (readOnly) {
+      assert((before.mode & 0o222n) === 0n, "authenticated runtime input must be read-only");
+    }
+    const payload = fs.readFileSync(descriptor);
+    const after = fs.fstatSync(descriptor, { bigint: true });
+    for (const field of ["dev", "ino", "mode", "size", "mtimeNs", "ctimeNs"]) {
+      assert.equal(after[field], before[field], "authenticated input changed during its read");
+    }
+    assert.equal(BigInt(payload.length), before.size, "authenticated input read was incomplete");
+    return payload;
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function checkedJson(payload, label) {
+  assert(payload[payload.length - 1] === 0x0a, `${label} must end in one newline`);
+  assert(payload[payload.length - 2] !== 0x0a, `${label} has noncanonical trailing data`);
+  const text = payload.subarray(0, payload.length - 1).toString("utf8");
+  assert(Buffer.from(text, "utf8").equals(payload.subarray(0, -1)), `${label} is not UTF-8`);
+  const parsed = JSON.parse(text);
+  assert(parsed && typeof parsed === "object" && !Array.isArray(parsed), `${label} is not an object`);
+  return { parsed, canonicalBytes: payload.subarray(0, payload.length - 1) };
+}
+
+function checkedBytecodeRecord(record, label) {
+  assert(record && typeof record === "object" && !Array.isArray(record), `${label} record is missing`);
+  assert(/^0x(?:[0-9a-f][0-9a-f])*$/.test(record.hex), `${label} hex is noncanonical`);
+  const bytes = Buffer.from(record.hex.slice(2), "hex");
+  assert.equal(record.byte_length, bytes.length, `${label} byte length drift`);
+  assert.equal(record.sha256_hex, sha256Hex(bytes), `${label} SHA-256 drift`);
+  assert.equal(record.keccak256_hex, ethers.keccak256(bytes).slice(2), `${label} Keccak-256 drift`);
+  return bytes;
+}
+
+function checkedImmutableReferences(references, runtimeLength, label) {
+  assert(Array.isArray(references), `${label} immutable references are missing`);
+  const occupied = [];
+  let previous = null;
+  for (const entry of references) {
+    assert.deepEqual(
+      Object.keys(entry).sort(),
+      ["ast_id", "length", "start"],
+      `${label} immutable reference fields drifted`,
+    );
+    assert(/^(?:0|[1-9][0-9]*)$/.test(entry.ast_id), `${label} immutable AST id is invalid`);
+    assert(Number.isSafeInteger(entry.start) && entry.start >= 0, `${label} immutable start is invalid`);
+    assert(Number.isSafeInteger(entry.length) && entry.length > 0, `${label} immutable length is invalid`);
+    assert(entry.start + entry.length <= runtimeLength, `${label} immutable reference is out of bounds`);
+    const ordering = [entry.start, entry.length, BigInt(entry.ast_id)];
+    if (previous) {
+      assert(
+        ordering[0] > previous[0] ||
+          (ordering[0] === previous[0] &&
+            (ordering[1] > previous[1] ||
+              (ordering[1] === previous[1] && ordering[2] >= previous[2]))),
+        `${label} immutable references are not canonical`,
+      );
+    }
+    previous = ordering;
+    occupied.push([entry.start, entry.start + entry.length]);
+  }
+  for (let index = 1; index < occupied.length; index++) {
+    assert(occupied[index - 1][1] <= occupied[index][0], `${label} immutable references overlap`);
+  }
+  return references;
+}
+
+function manifestArtifact(record, target, limits) {
+  const label = record.fully_qualified_name;
+  assert.equal(
+    label,
+    `${record.source_path}:${record.contract_name}`,
+    `${target} artifact identity drift`,
+  );
+  assert(Array.isArray(record.abi), `${label} ABI is missing`);
+  const creation = checkedBytecodeRecord(record.creation_bytecode, `${label} creation`);
+  const runtime = checkedBytecodeRecord(record.runtime_bytecode, `${label} runtime`);
+  assert.equal(
+    creation.length,
+    limits.creation_bytecode_bytes,
+    `${label} reviewed creation-byte size drift`,
+  );
+  assert.equal(
+    runtime.length,
+    limits.runtime_bytecode_bytes,
+    `${label} reviewed runtime-byte size drift`,
+  );
+  assert(creation.length <= MAX_INITCODE_BYTES, `${label} creation code exceeds its ceiling`);
+  assert(runtime.length <= MAX_RUNTIME_BYTES, `${label} runtime exceeds its ceiling`);
   return {
-    content: fs.readFileSync(contractPath(fileName), "utf8"),
+    abi: record.abi,
+    bytecode: record.creation_bytecode.hex,
+    runtimeBytecode: record.runtime_bytecode.hex,
+    runtimeImmutableReferences: checkedImmutableReferences(
+      record.runtime_immutable_references,
+      runtime.length,
+      label,
+    ),
+    fullyQualifiedName: label,
+    target,
+    authenticatedProductionArtifact: true,
   };
 }
 
-function loadRepoSource(...segments) {
+function loadAuthenticatedProductionArtifacts(manifestPayload, lockPayload) {
+  const manifestJson = checkedJson(manifestPayload, "artifact manifest");
+  const lockJson = checkedJson(lockPayload, "artifact lock");
+  const manifest = manifestJson.parsed;
+  const lock = lockJson.parsed;
+  assert.equal(manifest.schema, "iroha.sccp.contract-artifacts.v1", "artifact manifest schema drift");
+  assert.equal(lock.schema, "iroha.sccp.contract-artifact-lock.v1", "artifact lock schema drift");
+  assert.equal(
+    sha256Hex(manifestJson.canonicalBytes),
+    lock.corridor_manifest_sha256_hex,
+    "artifact manifest digest drift",
+  );
+  assert.equal(
+    manifest.compiler_lock_sha256_hex,
+    lock.compiler_lock_sha256_hex,
+    "compiler lock binding drift",
+  );
+  assert.deepEqual(Object.keys(manifest.targets).sort(), ["evm", "tron"]);
+  const expectedCompilers = {
+    evm: {
+      build: PINNED_EVM_SOLC_BUILD,
+      digest: PINNED_EVM_SOLJSON_SHA256,
+    },
+    tron: {
+      build: PINNED_TRON_SOLC_BUILD,
+      digest: PINNED_TRON_SOLJSON_SHA256,
+    },
+  };
+  const nested = {};
+  const runtimeSizes = [];
+  for (const target of ["evm", "tron"]) {
+    const targetManifest = manifest.targets[target];
+    assert.equal(targetManifest.target, target, `${target} target role drift`);
+    assert.equal(
+      targetManifest.compiler.reported_version,
+      expectedCompilers[target].build,
+      `${target} compiler version drift`,
+    );
+    assert.equal(
+      targetManifest.compiler.soljson_sha256_hex,
+      expectedCompilers[target].digest,
+      `${target} compiler digest drift`,
+    );
+    const limits = lock.targets[target].contract_sizes;
+    const byFile = {};
+    const seen = new Set();
+    for (const record of targetManifest.contracts) {
+      assert(!seen.has(record.fully_qualified_name), `${target} artifact is duplicated`);
+      seen.add(record.fully_qualified_name);
+      const reviewedSize = limits[record.fully_qualified_name];
+      assert(reviewedSize, `${record.fully_qualified_name} is absent from the review lock`);
+      const artifactLimits = {
+        creation_bytecode_bytes: reviewedSize.creation_bytecode_bytes,
+        runtime_bytecode_bytes: reviewedSize.runtime_bytecode_bytes,
+      };
+      const normalized = manifestArtifact(record, target, artifactLimits);
+      byFile[record.source_path] ||= {};
+      byFile[record.source_path][record.contract_name] = normalized;
+      runtimeSizes.push(`${target}:${record.fully_qualified_name}=${record.runtime_bytecode.byte_length}`);
+    }
+    assert.equal(seen.size, Object.keys(limits).length, `${target} review lock artifact set drift`);
+    nested[target] = byFile;
+  }
+  return { manifest, targets: nested, runtimeSizes };
+}
+
+function compilerArtifact(value, fullyQualifiedName, target = "evm-test-harness") {
+  assert(value && Array.isArray(value.abi), `${fullyQualifiedName} mock ABI is missing`);
+  const creationHex = `0x${value.evm.bytecode.object}`;
+  const runtimeHex = `0x${value.evm.deployedBytecode.object}`;
+  assert(/^0x(?:[0-9a-f][0-9a-f])*$/.test(creationHex), `${fullyQualifiedName} mock creation code is invalid`);
+  assert(/^0x(?:[0-9a-f][0-9a-f])*$/.test(runtimeHex), `${fullyQualifiedName} mock runtime is invalid`);
+  const references = [];
+  for (const [astId, locations] of Object.entries(value.evm.deployedBytecode.immutableReferences || {})) {
+    for (const location of locations) references.push({ ast_id: astId, ...location });
+  }
+  references.sort((left, right) =>
+    left.start - right.start || left.length - right.length || Number(BigInt(left.ast_id) - BigInt(right.ast_id)),
+  );
+  checkedImmutableReferences(references, ethers.getBytes(runtimeHex).length, fullyQualifiedName);
   return {
-    content: fs.readFileSync(repoPath(...segments), "utf8"),
+    abi: value.abi,
+    bytecode: creationHex,
+    runtimeBytecode: runtimeHex,
+    runtimeImmutableReferences: references,
+    fullyQualifiedName,
+    target,
+    authenticatedProductionArtifact: false,
   };
 }
 
-function compileContracts() {
-  const input = {
+function compile() {
+  const expectedCompilerBuild = process.env.SCCP_EXPECTED_SOLC_BUILD || PINNED_EVM_SOLC_BUILD;
+  assert.strictEqual(expectedCompilerBuild, PINNED_EVM_SOLC_BUILD, "SCCP V1 requires the locked EVM compiler build");
+  assert.strictEqual(solc.version(), PINNED_EVM_SOLC_BUILD, "unexpected Solidity compiler build");
+
+  const manifestPath = process.env.SCCP_CONTRACT_ARTIFACT_MANIFEST;
+  const artifactLockPath = process.env.SCCP_CONTRACT_ARTIFACT_LOCK;
+  assert(manifestPath && artifactLockPath, "authenticated artifact manifest and lock are required");
+  const manifestPayload = readStableRegularFile(manifestPath, MAX_MANIFEST_BYTES, true);
+  const lockPayload = readStableRegularFile(artifactLockPath, MAX_MANIFEST_BYTES, true);
+  const production = loadAuthenticatedProductionArtifacts(manifestPayload, lockPayload);
+
+  const mutatedManifest = Buffer.from(manifestPayload);
+  const mutationIndex = mutatedManifest.indexOf(Buffer.from('"abi":'));
+  assert(mutationIndex >= 0, "artifact manifest contains no ABI to authenticate");
+  mutatedManifest[mutationIndex + 1] ^= 1;
+  assert.throws(
+    () => loadAuthenticatedProductionArtifacts(mutatedManifest, lockPayload),
+    /artifact manifest digest drift|JSON/,
+    "artifact mutation must fail before any provider or deployment is created",
+  );
+
+  const files = [
+    "contracts/evm/sccp/ISccpMessageVerifier.sol",
+    "contracts/evm/sccp/SccpExactTransferCodec.sol",
+    "contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol",
+    "contracts/evm/sccp/TairaXorEvmToken.sol",
+    "contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol",
+    "contracts/bsc/sccp/TairaXOR.sol",
+    "contracts/bsc/sccp/TairaXorBscSccpBridge.sol",
+    "contracts/ethereum/sccp/TairaXOR.sol",
+    "contracts/ethereum/sccp/TairaXorEthereumSccpBridge.sol",
+    "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol",
+    "contracts/tron/sccp/TairaXOR.sol",
+    "contracts/tron/sccp/TairaXorSccpBridge.sol",
+  ];
+  const mocks = `
+// SPDX-License-Identifier: Apache-2.0
+pragma solidity 0.7.4;
+pragma experimental ABIEncoderV2;
+import "contracts/evm/sccp/SccpExactTransferCodec.sol";
+import "contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol";
+import {TairaXOR as BscTairaXOR} from "contracts/bsc/sccp/TairaXOR.sol";
+interface IReentryRoute { function transferToTaira(bytes calldata,uint256) external returns(bytes32); }
+contract InjectedBscRouteHarness is TairaXorExactEvmSccpBridge {
+  constructor(address tokenAddress, VerifierPolicyV1 memory policy, uint32 revision)
+    TairaXorExactEvmSccpBridge(tokenAddress, policy, 2, 5, revision)
+  {}
+}
+contract CodecHarness {
+  function isTairaRecipient(bytes calldata input) external pure returns(bool) {
+    bytes memory value = input;
+    return SccpExactTransferCodec.isCanonicalTairaRecipient(value);
+  }
+  function isTairaAccount(bytes calldata input) external pure returns(bool) {
+    bytes memory value = input;
+    return SccpExactTransferCodec.isCanonicalTairaAccountRange(value, 0, value.length);
+  }
+  function sourceVector(uint8 profile, bytes calldata canonicalPayload)
+    external pure returns(bytes memory,bytes32,bytes32,bytes32,bytes32)
+  {
+    bytes memory sourceNetwork;
+    if (profile == 2 || profile == 3) sourceNetwork = SccpExactTransferCodec.ethereumNetwork(profile);
+    else if (profile == 4 || profile == 5) sourceNetwork = SccpExactTransferCodec.bscNetwork(profile);
+    else sourceNetwork = SccpExactTransferCodec.tronNetwork(profile);
+    bytes memory exactLane = SccpExactTransferCodec.lane(
+      sourceNetwork, SccpExactTransferCodec.tairaNetwork()
+    );
+    bytes memory payload = canonicalPayload;
+    bytes32 laneHash = SccpExactTransferCodec.laneHash(exactLane);
+    bytes32 messageId = SccpExactTransferCodec.messageId(exactLane, payload);
+    bytes32 payloadHash = SccpExactTransferCodec.payloadHash(payload);
+    return (
+      exactLane,
+      laneHash,
+      messageId,
+      payloadHash,
+      SccpExactTransferCodec.sourceEventDigest(laneHash, messageId, payloadHash)
+    );
+  }
+  function evmHashVector(uint8 profile, bytes calldata canonicalPayload)
+    external view returns(bytes32,bytes32)
+  {
+    bytes memory sourceNetwork;
+    if (profile == 2 || profile == 3) sourceNetwork = SccpExactTransferCodec.ethereumNetwork(profile);
+    else if (profile == 4 || profile == 5) sourceNetwork = SccpExactTransferCodec.bscNetwork(profile);
+    else sourceNetwork = SccpExactTransferCodec.tronNetwork(profile);
+    bytes memory exactLane = SccpExactTransferCodec.lane(
+      sourceNetwork, SccpExactTransferCodec.tairaNetwork()
+    );
+    bytes memory payload = canonicalPayload;
+    return (
+      SccpExactTransferCodec.laneHashEvm(exactLane),
+      SccpExactTransferCodec.payloadHashEvm(payload)
+    );
+  }
+  function rawBlakeParity(bytes calldata input)
+    external view returns(bytes32,bytes32)
+  {
+    bytes memory value = input;
+    return (
+      SccpExactTransferCodec.blake2b256(value),
+      SccpExactTransferCodec.blake2b256Evm(value)
+    );
+  }
+}
+contract TokenRouteHarness {
+  BscTairaXOR public immutable token;
+  constructor() { token = new BscTairaXOR(address(this)); }
+  function mint(address to, uint256 value) external returns(bool) {
+    return token.mint(to, value);
+  }
+  function burn(address from, uint256 value) external returns(bool) {
+    return token.burnFrom(from, value);
+  }
+}
+contract FalseToken {
+  address public immutable bridge;
+  constructor(address routeBridge) { bridge = routeBridge; }
+  function mint(address,uint256) external pure returns(bool) { return false; }
+  function burnFrom(address,uint256) external pure returns(bool) { return false; }
+}
+contract ReentrantToken {
+  address public immutable bridge;
+  bytes private recipient;
+  bool private entered;
+  constructor(address routeBridge, bytes memory tairaRecipient) {
+    bridge = routeBridge;
+    recipient = tairaRecipient;
+  }
+  function mint(address,uint256) external pure returns(bool) { return true; }
+  function burnFrom(address,uint256) external returns(bool) {
+    require(msg.sender == bridge && !entered, "bad reentry setup");
+    entered = true;
+    (bool success,) = bridge.call(
+      abi.encodeWithSelector(IReentryRoute.transferToTaira.selector, recipient, uint256(1e9))
+    );
+    require(!success, "reentry was accepted");
+    entered = false;
+    return true;
+  }
+}
+contract CodeAliasedVerifier {
+  bytes32 private configuredNetworkId;
+  bool private anchorAliasesCode;
+  constructor(bytes32 networkIdValue, bool aliasAnchor) {
+    configuredNetworkId = networkIdValue;
+    anchorAliasesCode = aliasAnchor;
+  }
+  function networkId() external view returns(bytes32) { return configuredNetworkId; }
+  function expectedSourceDomain() external pure returns(uint32) { return 0; }
+  function expectedTargetDomain() external pure returns(uint32) { return 5; }
+  function verifyingKeyHash() external pure returns(bytes32) {
+    return keccak256("sccp:test:code-aliased-verifier:key:v1");
+  }
+  function _codeHash() private view returns(bytes32 value) {
+    assembly { value := extcodehash(address()) }
+  }
+  function semanticProofProfileHash() external view returns(bytes32) {
+    return anchorAliasesCode
+      ? keccak256("sccp:test:code-aliased-verifier:semantic:v1")
+      : _codeHash();
+  }
+  function soraFinalityAnchorHash() external view returns(bytes32) {
+    return anchorAliasesCode
+      ? _codeHash()
+      : keccak256("sccp:test:code-aliased-verifier:anchor:v1");
+  }
+  function verifySccpMessageProof(bytes calldata,bytes32[6] calldata,bytes32,bytes32,bytes32)
+    external pure returns(bytes32,uint32,bytes32)
+  {
+    return (bytes32(uint256(1)), 0, bytes32(uint256(2)));
+  }
+}`;
+  const sources = Object.fromEntries(files.map((file) => [file, source(file)]));
+  sources["Mocks.sol"] = { content: mocks };
+  const input = JSON.stringify({
     language: "Solidity",
-    sources: {
-      "ISccpMessageVerifier.sol": loadSource("ISccpMessageVerifier.sol"),
-      "Ownable.sol": loadSource("Ownable.sol"),
-      "SccpMessageBridge.sol": loadSource("SccpMessageBridge.sol"),
-      "SccpGroth16Bn254MessageVerifier.sol": loadSource(
-        "SccpGroth16Bn254MessageVerifier.sol"
-      ),
-      "SccpSecp256k1MessageVerifier.sol": loadSource(
-        "SccpSecp256k1MessageVerifier.sol"
-      ),
-      "contracts/evm/sccp/ISccpMessageVerifier.sol": loadRepoSource(
-        "contracts",
-        "evm",
-        "sccp",
-        "ISccpMessageVerifier.sol"
-      ),
-      "contracts/evm/sccp/Ownable.sol": loadRepoSource(
-        "contracts",
-        "evm",
-        "sccp",
-        "Ownable.sol"
-      ),
-      "contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol": loadRepoSource(
-        "contracts",
-        "evm",
-        "sccp",
-        "SccpGroth16Bn254MessageVerifier.sol"
-      ),
-      "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol":
-        loadRepoSource(
-          "contracts",
-          "tron",
-          "sccp",
-          "SccpTronGroth16Bn254MessageVerifier.sol"
-        ),
-      "contracts/tron/sccp/SccpTronSourceBridge.sol": loadRepoSource(
-        "contracts",
-        "tron",
-        "sccp",
-        "SccpTronSourceBridge.sol"
-      ),
-      "contracts/tron/sccp/TairaXOR.sol": loadRepoSource(
-        "contracts",
-        "tron",
-        "sccp",
-        "TairaXOR.sol"
-      ),
-      "contracts/tron/sccp/TairaXorSccpBridge.sol": loadRepoSource(
-        "contracts",
-        "tron",
-        "sccp",
-        "TairaXorSccpBridge.sol"
-      ),
-      "contracts/bsc/sccp/SccpBscSourceBridge.sol": loadRepoSource(
-        "contracts",
-        "bsc",
-        "sccp",
-        "SccpBscSourceBridge.sol"
-      ),
-      "contracts/bsc/sccp/TairaXOR.sol": loadRepoSource(
-        "contracts",
-        "bsc",
-        "sccp",
-        "TairaXOR.sol"
-      ),
-      "contracts/bsc/sccp/TairaXorBscSccpBridge.sol": loadRepoSource(
-        "contracts",
-        "bsc",
-        "sccp",
-        "TairaXorBscSccpBridge.sol"
-      ),
-    },
-    settings: {
-      optimizer: { enabled: true, runs: 200 },
-      outputSelection: {
-        "*": {
-          "*": ["abi", "evm.bytecode.object"],
-        },
-      },
-    },
-  };
-
-  const output = JSON.parse(solc.compile(JSON.stringify(input)));
+    sources,
+    settings: production.manifest.targets.evm.settings,
+  });
+  const output = JSON.parse(solc.compile(input));
   if (output.errors) {
-    const fatal = output.errors.filter((entry) => entry.severity === "error");
-    if (fatal.length > 0) {
-      throw new Error(fatal.map((entry) => entry.formattedMessage).join("\n"));
+    const rejected = output.errors.filter(
+      (entry) => entry.severity === "error" || entry.severity === "warning",
+    );
+    if (rejected.length) {
+      throw new Error(rejected.map((entry) => entry.formattedMessage).join("\n"));
     }
   }
-  return output.contracts;
-}
-
-function artifact(contracts, fileName, contractName) {
-  const contract = contracts[fileName][contractName];
+  const mocksByFile = { "Mocks.sol": {} };
+  for (const [name, value] of Object.entries(output.contracts["Mocks.sol"])) {
+    const normalized = compilerArtifact(value, `Mocks.sol:${name}`);
+    assert(
+      ethers.getBytes(normalized.runtimeBytecode).length <= MAX_RUNTIME_BYTES,
+      `${name} mock runtime exceeds the ${MAX_RUNTIME_BYTES}-byte ceiling`,
+    );
+    assert(
+      ethers.getBytes(normalized.bytecode).length <= MAX_INITCODE_BYTES,
+      `${name} mock creation code exceeds the ${MAX_INITCODE_BYTES}-byte ceiling`,
+    );
+    mocksByFile["Mocks.sol"][name] = normalized;
+  }
+  const tronCompatibilityByFile = {};
+  for (const file of [
+    "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol",
+    "contracts/tron/sccp/TairaXOR.sol",
+    "contracts/tron/sccp/TairaXorSccpBridge.sol",
+  ]) {
+    tronCompatibilityByFile[file] = {};
+    for (const [name, value] of Object.entries(output.contracts[file])) {
+      const normalized = compilerArtifact(
+        value,
+        `${file}:${name}`,
+        "tron-evm-compatibility-test",
+      );
+      assert(
+        ethers.getBytes(normalized.bytecode).length <= MAX_INITCODE_BYTES,
+        `${file}:${name} compatibility creation code exceeds its ceiling`,
+      );
+      assert(
+        ethers.getBytes(normalized.runtimeBytecode).length <= MAX_RUNTIME_BYTES,
+        `${file}:${name} compatibility runtime exceeds its ceiling`,
+      );
+      tronCompatibilityByFile[file][name] = normalized;
+    }
+  }
+  const exactTvmRoute = production.targets.tron[
+    "contracts/tron/sccp/TairaXorSccpBridge.sol"
+  ].TairaXorSccpBridge;
+  const compatibilityRoute = tronCompatibilityByFile[
+    "contracts/tron/sccp/TairaXorSccpBridge.sol"
+  ].TairaXorSccpBridge;
+  assert.equal(
+    compatibilityRoute.bytecode,
+    exactTvmRoute.bytecode,
+    "the shared pinned 0.7.4 compiler must reproduce the exact TRON route bytecode",
+  );
   return {
-    abi: contract.abi,
-    bytecode: `0x${contract.evm.bytecode.object}`,
+    evmContracts: production.targets.evm,
+    tvmContracts: production.targets.tron,
+    mockContracts: mocksByFile,
+    runtimeSizes: production.runtimeSizes,
   };
 }
 
-async function deploy(signer, abi, bytecode, args = []) {
-  const factory = new ethers.ContractFactory(abi, bytecode, signer);
-  const contract = await factory.deploy(...args);
-  await contract.waitForDeployment();
+function i105PolymodStep(current, value) {
+  const top = current >> 25n;
+  let next = ((current & 0x01ffffffn) << 5n) ^ BigInt(value);
+  if ((top & 1n) !== 0n) next ^= 0x3b6a57b2n;
+  if ((top & 2n) !== 0n) next ^= 0x26508e6dn;
+  if ((top & 4n) !== 0n) next ^= 0x1ea119fan;
+  if ((top & 8n) !== 0n) next ^= 0x3d4233ddn;
+  if ((top & 16n) !== 0n) next ^= 0x2a1462b3n;
+  return next;
+}
+
+function i105Checksum(canonical) {
+  let polymod = 1n;
+  for (const value of [3, 3, 3, 0, 19, 14, 24]) {
+    polymod = i105PolymodStep(polymod, value);
+  }
+  let accumulator = 0;
+  let bits = 0;
+  for (const byte of canonical) {
+    accumulator = (accumulator << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      polymod = i105PolymodStep(polymod, (accumulator >> bits) & 31);
+    }
+    accumulator &= bits === 0 ? 0 : (1 << bits) - 1;
+  }
+  if (bits !== 0) {
+    polymod = i105PolymodStep(polymod, (accumulator << (5 - bits)) & 31);
+  }
+  for (let i = 0; i < 6; i++) polymod = i105PolymodStep(polymod, 0);
+  polymod ^= 0x2bc830a3n;
+  return Array.from(
+    { length: 6 },
+    (_, i) => Number((polymod >> BigInt(5 * (5 - i))) & 31n),
+  );
+}
+
+function base105Digits(canonical) {
+  let leadingZeros = 0;
+  while (leadingZeros < canonical.length && canonical[leadingZeros] === 0) {
+    leadingZeros += 1;
+  }
+  let number = 0n;
+  for (const byte of canonical.subarray(leadingZeros)) {
+    number = (number << 8n) | BigInt(byte);
+  }
+  const digits = [];
+  while (number !== 0n) {
+    digits.unshift(Number(number % 105n));
+    number /= 105n;
+  }
+  if (digits.length === 0 && leadingZeros === 0) digits.push(0);
+  return [...Array(leadingZeros).fill(0), ...digits];
+}
+
+function encodeI105(canonical, sentinel = "test") {
+  const bytes = Buffer.from(canonical);
+  return `${sentinel}${[...base105Digits(bytes), ...i105Checksum(bytes)]
+    .map((digit) => I105_ALPHABET[digit])
+    .join("")}`;
+}
+
+function decodeI105Canonical(literal, sentinelLength = 4) {
+  const symbols = Array.from(literal.slice(sentinelLength));
+  const digits = symbols.map((symbol) => {
+    const digit = I105_ALPHABET.indexOf(symbol);
+    assert.notEqual(digit, -1, `unknown I105 symbol ${symbol}`);
+    return digit;
+  });
+  const payloadDigits = digits.slice(0, -6);
+  let leadingZeros = 0;
+  while (payloadDigits[leadingZeros] === 0) leadingZeros += 1;
+  let number = 0n;
+  for (const digit of payloadDigits.slice(leadingZeros)) {
+    number = number * 105n + BigInt(digit);
+  }
+  let hex = number.toString(16);
+  if (hex.length % 2 !== 0) hex = `0${hex}`;
+  const body = number === 0n ? Buffer.alloc(0) : Buffer.from(hex, "hex");
+  return Buffer.concat([Buffer.alloc(leadingZeros), body]);
+}
+
+function le32(value) {
+  const out = Buffer.alloc(32);
+  let current = BigInt(value);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Number(current & 0xffn);
+    current >>= 8n;
+  }
+  assert.equal(current, 0n);
+  return out;
+}
+
+function exactSingleKeyCanonical(key) {
+  const bytes = Buffer.from(key);
+  assert.equal(bytes.length, 32);
+  return Buffer.concat([Buffer.from([0x02, 0x00, 0x01, 0x20]), bytes]);
+}
+
+function universalTairaSenderCanonicals() {
+  const addressVectors = JSON.parse(
+    fs.readFileSync(
+      path.join(REPO, "fixtures/account/address_vectors.json"),
+      "utf8",
+    ),
+  );
+  const rustMultisig = addressVectors.cases.positive.find(
+    ({ case_id: caseId }) => caseId === "addr-multisig-wonderland-threshold2",
+  );
+  assert(rustMultisig, "Rust two-member multisig address vector is missing");
+  const multisig = Buffer.from(
+    rustMultisig.encodings.canonical_hex.slice(2),
+    "hex",
+  );
+  assert.equal(multisig.length, 81);
+  assert.equal(multisig.subarray(0, 7).toString("hex"), "0a010100020002");
+  assert.equal(
+    encodeI105(multisig, "sora"),
+    rustMultisig.encodings.i105.string,
+    "smoke I105 encoding must reproduce Rust's checked-in multisig vector",
+  );
+
+  const secp256k1 = Buffer.concat([
+    Buffer.from([0x02, 0x00, 0x04, 0x21]),
+    Buffer.from(
+      "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "hex",
+    ),
+  ]);
+  assert.equal(
+    encodeI105(secp256k1),
+    RUST_TAIRA_SECP256K1_I105,
+    "smoke I105 encoding must reproduce Rust's secp256k1 AccountId",
+  );
+  return [multisig, secp256k1];
+}
+
+function universalTairaSenders() {
+  return universalTairaSenderCanonicals().map((value) =>
+    ethers.toUtf8Bytes(encodeI105(value)),
+  );
+}
+
+function invalidI105Values() {
+  const canonical = decodeI105Canonical(CANONICAL_I105);
+  assert.equal(
+    canonical.subarray(0, 4).toString("hex"),
+    "02000120",
+    "positive fixture must use the exact Taira single-Ed25519 layout",
+  );
+  assert.equal(encodeI105(canonical), CANONICAL_I105);
+  const oversized = Buffer.concat([
+    Buffer.from(CANONICAL_I105_BYTES),
+    Buffer.alloc(257 - CANONICAL_I105_BYTES.length, 0x61),
+  ]);
+  assert.equal(oversized.length, 257);
+  const mutateCanonical = (offset, value) => {
+    const copy = Buffer.from(canonical);
+    copy[offset] = value;
+    return ethers.toUtf8Bytes(encodeI105(copy));
+  };
+  const payloadSymbols = Array.from(CANONICAL_I105);
+  payloadSymbols[12] = payloadSymbols[12] === "1" ? "2" : "1";
+  const malformedPayloadDigit = payloadSymbols.join("");
+  const hostileKeys = [
+    Buffer.alloc(32),
+    le32(ED25519_FIELD),
+    Buffer.from(`ee${"ff".repeat(30)}7f`, "hex"),
+    Buffer.from(`f0${"ff".repeat(30)}7f`, "hex"),
+    Buffer.alloc(32, 0x02),
+    ...ED25519_TORSION_ENCODINGS.map((value) => Buffer.from(value, "hex")),
+    Buffer.from(`01${"00".repeat(30)}80`, "hex"),
+  ];
+  const values = [
+    ethers.toUtf8Bytes(CANONICAL_SORA_I105),
+    ethers.toUtf8Bytes(`dev${CANONICAL_I105.slice(4)}`),
+    ethers.toUtf8Bytes(`n42${CANONICAL_I105.slice(4)}`),
+    ethers.toUtf8Bytes(CHECKSUM_MUTATED_I105),
+    ethers.toUtf8Bytes(NUMERIC_SENTINEL_ALIAS_I105),
+    ethers.toUtf8Bytes(malformedPayloadDigit),
+    ethers.toUtf8Bytes(CANONICAL_I105.slice(0, -1)),
+    ethers.toUtf8Bytes(`${CANONICAL_I105}1`),
+    Buffer.from(CANONICAL_I105_BYTES).subarray(0, CANONICAL_I105_BYTES.length - 1),
+    ethers.toUtf8Bytes("alice@taira"),
+    ethers.toUtf8Bytes("alice"),
+    ethers.toUtf8Bytes("sora雪"),
+    ethers.toUtf8Bytes(` ${CANONICAL_I105}`),
+    mutateCanonical(0, 0x00),
+    mutateCanonical(0, 0x03),
+    mutateCanonical(1, 0x01),
+    mutateCanonical(2, 0x04),
+    mutateCanonical(3, 0x1f),
+    ...hostileKeys.map((key) =>
+      ethers.toUtf8Bytes(encodeI105(exactSingleKeyCanonical(key))),
+    ),
+    oversized,
+  ];
+  return [...new Map(values.map((value) => [ethers.hexlify(value), value])).values()];
+}
+
+function invalidTairaSenderValues() {
+  const [multisig, secp256k1] = universalTairaSenderCanonicals();
+  const mutate = (value, mutation) => {
+    const copy = Buffer.from(value);
+    mutation(copy);
+    return copy;
+  };
+  const firstMember = multisig.subarray(7, 44);
+  const secondMember = multisig.subarray(44, 81);
+  assert.equal(firstMember.length, 37);
+  assert.equal(secondMember.length, 37);
+
+  const secpFieldBytes = Buffer.from(
+    SECP256K1_FIELD.toString(16).padStart(64, "0"),
+    "hex",
+  );
+  const nonminimalExtendedSecp = Buffer.concat([
+    Buffer.from([0x02, 0x02, 0x04, 0x00, 0x21]),
+    secp256k1.subarray(4),
+  ]);
+  const structuralCanonicals = [
+    mutate(multisig, (value) => {
+      value[2] = 0;
+    }), // unsupported multisig version
+    mutate(multisig, (value) => {
+      value[3] = 0;
+      value[4] = 0;
+    }), // zero threshold
+    mutate(multisig, (value) => {
+      value[5] = 0;
+      value[6] = 0;
+    }), // empty policy
+    mutate(multisig, (value) => {
+      value[3] = 0;
+      value[4] = 4;
+    }), // threshold exceeds total weight three
+    mutate(multisig, (value) => {
+      value[8] = 0;
+      value[9] = 0;
+    }), // zero member weight
+    mutate(multisig, (value) => {
+      value.copy(value, 49, 12, 44);
+    }), // duplicate member key, even with a different weight
+    Buffer.concat([multisig.subarray(0, 7), secondMember, firstMember]),
+    mutate(multisig, (value) => {
+      value.fill(0, 49, 81);
+    }), // weak second Ed25519 member
+    mutate(multisig, (value) => {
+      value[7] = 3;
+    }), // controller curve without an exact contract-side validator
+    mutate(secp256k1, (value) => {
+      value[4] = 4;
+    }), // uncompressed SEC1 prefix in a compressed-length payload
+    mutate(secp256k1, (value) => {
+      value.fill(0, 5, 37);
+    }), // x=0 has no secp256k1 square root
+    mutate(secp256k1, (value) => {
+      secpFieldBytes.copy(value, 5);
+    }), // x equal to the base field modulus
+    nonminimalExtendedSecp,
+  ];
+  const values = [
+    ...invalidI105Values(),
+    ...structuralCanonicals.map((value) =>
+      ethers.toUtf8Bytes(encodeI105(value)),
+    ),
+  ];
+  return [...new Map(values.map((value) => [ethers.hexlify(value), value])).values()];
+}
+
+function artifact(contracts, file, name) {
+  const value = contracts[file][name];
+  assert(value, `missing compiled artifact ${file}:${name}`);
+  return value;
+}
+
+async function assertRuntimeAtAddress(provider, address, value) {
+  const actual = ethers.getBytes(await provider.getCode(address));
+  const expected = ethers.getBytes(value.runtimeBytecode);
+  assert(expected.length > 0, `${value.fullyQualifiedName} has empty runtime bytecode`);
+  assert.equal(
+    actual.length,
+    expected.length,
+    `${value.fullyQualifiedName} deployed runtime length drift`,
+  );
+  assert(actual.length <= MAX_RUNTIME_BYTES, `${value.fullyQualifiedName} deployed runtime exceeds its ceiling`);
+  const immutable = new Uint8Array(expected.length);
+  for (const reference of value.runtimeImmutableReferences) {
+    immutable.fill(1, reference.start, reference.start + reference.length);
+  }
+  for (let offset = 0; offset < expected.length; offset++) {
+    if (!immutable[offset]) {
+      assert.equal(
+        actual[offset],
+        expected[offset],
+        `${value.fullyQualifiedName} deployed runtime drift outside immutable slot at byte ${offset}`,
+      );
+    }
+  }
+}
+
+async function assertDeployedRuntimeMatchesArtifact(contract, value) {
+  await assertRuntimeAtAddress(
+    contract.runner.provider,
+    await contract.getAddress(),
+    value,
+  );
+}
+
+async function deploy(signer, value, args = []) {
+  const factory = new ethers.ContractFactory(value.abi, value.bytecode, signer);
+  const deployment = await factory.getDeployTransaction(...args);
+  const creationBytes = ethers.getBytes(value.bytecode);
+  const initcodeBytes = ethers.getBytes(deployment.data);
+  assert(creationBytes.length <= MAX_INITCODE_BYTES, "artifact creation bytecode exceeds its ceiling");
+  assert(
+    initcodeBytes.length <= MAX_INITCODE_BYTES,
+    `deployment initcode exceeds the ${MAX_INITCODE_BYTES}-byte ceiling`,
+  );
+  assert(
+    Buffer.from(initcodeBytes.subarray(0, creationBytes.length)).equals(Buffer.from(creationBytes)),
+    "deployment did not use the authenticated creation bytecode prefix",
+  );
+  const estimatedGas = await signer.estimateGas(deployment);
+  assert(
+    estimatedGas <= MAX_DEPLOYMENT_GAS,
+    `deployment estimate exceeds the ${MAX_DEPLOYMENT_GAS} gas ceiling`,
+  );
+  const contract = await factory.deploy(...args, {
+    gasLimit: MAX_DEPLOYMENT_GAS,
+  });
+  const receipt = await contract.deploymentTransaction().wait();
+  assert.equal(receipt.status, 1, "contract deployment failed");
+  assert(
+    receipt.gasUsed <= MAX_DEPLOYMENT_GAS,
+    `deployment exceeds the ${MAX_DEPLOYMENT_GAS} gas ceiling`,
+  );
+  await assertDeployedRuntimeMatchesArtifact(contract, value);
   return contract;
 }
 
-async function contractCodeHash(provider, address) {
-  return ethers.keccak256(await provider.getCode(address));
-}
-
-function computeDestinationBindingHash(
-  abi,
-  {
-    verifierBackendHash,
-    proofFamilyHash,
-    networkId,
-    sourceDomain,
-    targetDomain,
-    verifierAddress,
-    wrapperAddress,
-    verifierCodeHash,
-    verifierKeyHash,
-  }
-) {
-  return ethers.keccak256(
-    abi.encode(
-      [
-        "bytes32",
-        "bytes32",
-        "bytes32",
-        "bytes32",
-        "uint256",
-        "uint256",
-        "address",
-        "address",
-        "bytes32",
-        "bytes32",
-      ],
-      [
-        ethers.keccak256(
-          ethers.toUtf8Bytes("iroha:sccp:evm-destination-binding:v1")
-        ),
-        verifierBackendHash,
-        proofFamilyHash,
-        networkId,
-        sourceDomain,
-        targetDomain,
-        verifierAddress,
-        wrapperAddress,
-        verifierCodeHash,
-        verifierKeyHash,
-      ]
-    )
+async function assertConstructorRevertsWith(signer, value, args, reason) {
+  const factory = new ethers.ContractFactory(value.abi, value.bytecode, signer);
+  const transaction = await factory.getDeployTransaction(...args);
+  const creationBytes = ethers.getBytes(value.bytecode);
+  const initcodeBytes = ethers.getBytes(transaction.data);
+  assert(
+    initcodeBytes.length <= MAX_INITCODE_BYTES,
+    `rejected deployment initcode exceeds the ${MAX_INITCODE_BYTES}-byte ceiling`,
+  );
+  assert(
+    Buffer.from(initcodeBytes.subarray(0, creationBytes.length)).equals(Buffer.from(creationBytes)),
+    "rejected deployment did not use the authenticated creation bytecode prefix",
+  );
+  await assert.rejects(
+    signer.call({ ...transaction, gasLimit: MAX_DEPLOYMENT_GAS }),
+    rejectedWith(reason),
   );
 }
 
-function computeTronSourceBridgeConfigHash(
-  abi,
-  { bridgeAddress, networkId, sourceDomain, targetDomain, owner }
-) {
-  return ethers.keccak256(
-    abi.encode(
-      ["bytes32", "address", "bytes32", "uint32", "uint32", "address"],
-      [
-        ethers.keccak256(
-          ethers.toUtf8Bytes("iroha:sccp:tron-source-bridge-config:v1")
-        ),
-        bridgeAddress,
-        networkId,
-        sourceDomain,
-        targetDomain,
-        owner,
-      ]
-    )
+async function nextCreateAddress(signer, offset = 0) {
+  const nonce = Number(
+    BigInt(
+      await signer.provider.send("eth_getTransactionCount", [
+        await signer.getAddress(),
+        "pending",
+      ]),
+    ),
   );
+  return ethers.getCreateAddress({
+    from: await signer.getAddress(),
+    nonce: nonce + offset,
+  });
 }
 
-function computeBscSourceBridgeConfigHash(
-  abi,
-  { bridgeAddress, networkId, sourceDomain, targetDomain, owner }
+async function deployPreboundRoute(
+  signer,
+  tokenArtifact,
+  routeArtifact,
+  routeArgs,
 ) {
-  return ethers.keccak256(
-    abi.encode(
-      ["bytes32", "address", "bytes32", "uint32", "uint32", "address"],
-      [
-        ethers.keccak256(
-          ethers.toUtf8Bytes("iroha:sccp:bsc-source-bridge-config:v1")
-        ),
-        bridgeAddress,
-        networkId,
-        sourceDomain,
-        targetDomain,
-        owner,
-      ]
-    )
+  const routeAddress = await nextCreateAddress(signer, 1);
+  const token = await deploy(signer, tokenArtifact, [routeAddress]);
+  assert.equal(
+    await nextCreateAddress(signer),
+    routeAddress,
+    "token deployment must leave the precomputed route address next",
   );
-}
-
-function computeTronDestinationBindingHash(
-  abi,
-  {
-    verifierBackendHash,
-    proofFamilyHash,
-    networkId,
-    sourceDomain,
-    targetDomain,
-    verifierAddress,
-    verifierCodeHash,
-    verifierKeyHash,
-  }
-) {
-  return ethers.keccak256(
-    abi.encode(
-      [
-        "bytes32",
-        "bytes32",
-        "bytes32",
-        "bytes32",
-        "uint256",
-        "uint256",
-        "bytes32",
-        "bytes32",
-        "bytes32",
-      ],
-      [
-        ethers.keccak256(
-          ethers.toUtf8Bytes("iroha:sccp:tron-destination-binding:v1")
-        ),
-        verifierBackendHash,
-        proofFamilyHash,
-        networkId,
-        sourceDomain,
-        targetDomain,
-        tronAddressWord(verifierAddress),
-        verifierCodeHash,
-        verifierKeyHash,
-      ]
-    )
-  );
-}
-
-function tronAddressWord(address) {
-  return ethers.zeroPadValue(`0x41${ethers.getAddress(address).slice(2)}`, 32);
-}
-
-function computeTairaXorBurnSourceEventDigest(
-  abi,
-  { routeIdHash, assetKeyHash, bridgeAddress, burner, tairaRecipientHash, amount, nonce }
-) {
-  return ethers.keccak256(
-    abi.encode(
-      [
-        "bytes32",
-        "bytes32",
-        "bytes32",
-        "address",
-        "address",
-        "bytes32",
-        "uint256",
-        "uint256",
-      ],
-      [
-        ethers.keccak256(
-          ethers.toUtf8Bytes("iroha:sccp:taira-xor:burn-source-event:v1")
-        ),
-        routeIdHash,
-        assetKeyHash,
-        bridgeAddress,
-        burner,
-        tairaRecipientHash,
-        amount,
-        nonce,
-      ]
-    )
-  );
-}
-
-function computeTairaXorBscBurnSourceEventDigest(
-  abi,
-  { routeIdHash, assetKeyHash, bridgeAddress, burner, tairaRecipientHash, amount, nonce }
-) {
-  return ethers.keccak256(
-    abi.encode(
-      [
-        "bytes32",
-        "bytes32",
-        "bytes32",
-        "address",
-        "address",
-        "bytes32",
-        "uint256",
-        "uint256",
-      ],
-      [
-        ethers.keccak256(
-          ethers.toUtf8Bytes("iroha:sccp:taira-xor:burn-source-event:v1")
-        ),
-        routeIdHash,
-        assetKeyHash,
-        bridgeAddress,
-        burner,
-        tairaRecipientHash,
-        amount,
-        nonce,
-      ]
-    )
-  );
-}
-
-const BASE58_ALPHABET =
-  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-function base58Encode(bytes) {
-  let value = BigInt(`0x${Buffer.from(bytes).toString("hex") || "0"}`);
-  let encoded = "";
-  while (value > 0n) {
-    const digit = Number(value % 58n);
-    encoded = BASE58_ALPHABET[digit] + encoded;
-    value /= 58n;
-  }
-  for (const byte of bytes) {
-    if (byte !== 0) break;
-    encoded = `${BASE58_ALPHABET[0]}${encoded}`;
-  }
-  return encoded || BASE58_ALPHABET[0];
-}
-
-function tronBase58CheckFromEvmAddress(address) {
-  const payload = Buffer.concat([
-    Buffer.from([0x41]),
-    Buffer.from(ethers.getAddress(address).slice(2), "hex"),
+  const route = await deploy(signer, routeArtifact, [
+    await token.getAddress(),
+    ...routeArgs,
   ]);
-  const checksum = crypto
-    .createHash("sha256")
-    .update(crypto.createHash("sha256").update(payload).digest())
-    .digest()
-    .subarray(0, 4);
-  return base58Encode(Buffer.concat([payload, checksum]));
+  assert.equal(
+    await route.getAddress(),
+    routeAddress,
+    "route deployment address drifted from the token's immutable binding",
+  );
+  assert.equal(await token.bridge(), routeAddress);
+  assert.equal(await route.token(), await token.getAddress());
+  return { route, token };
 }
 
-const BN254_BASE_FIELD_MODULUS =
-  21888242871839275222246405745257275088696311157297823662689037894645226208583n;
-const BN254_SCALAR_FIELD_MODULUS =
-  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-const G1_SCALAR_MUL_PRECOMPILE =
-  "0x0000000000000000000000000000000000000007";
-const GROTH16_SIGNAL_LABELS = [
-  "sccp:groth16-bn254:signal:message-id:v1",
-  "sccp:groth16-bn254:signal:payload-hash:v1",
-  "sccp:groth16-bn254:signal:target-domain:v1",
-  "sccp:groth16-bn254:signal:commitment-root:v1",
-  "sccp:groth16-bn254:signal:finality-height:v1",
-  "sccp:groth16-bn254:signal:finality-block-hash:v1",
-  "sccp:groth16-bn254:signal:source-domain:v1",
-  "sccp:groth16-bn254:signal:statement-hash:v1",
-  "sccp:groth16-bn254:signal:destination-binding-hash:v1",
-].map((label) => ethers.keccak256(ethers.toUtf8Bytes(label)));
+function le(value, bytes) {
+  let current = BigInt(value);
+  const out = Buffer.alloc(bytes);
+  for (let i = 0; i < bytes; i++) {
+    out[i] = Number(current & 0xffn);
+    current >>= 8n;
+  }
+  if (current !== 0n) throw new RangeError(`${value} exceeds ${bytes} bytes`);
+  return out;
+}
 
-function abiWordU32(value) {
+function vec(value) {
+  const bytes = Buffer.from(value);
+  return Buffer.concat([le(bytes.length, 4), bytes]);
+}
+
+function transferPayload({
+  sourceDomain,
+  destinationDomain,
+  nonce,
+  routeRevision = ROUTE_REVISION,
+  amount,
+  senderCodec,
+  sender,
+  recipientCodec,
+  recipient,
+  route = "taira_bsc_xor",
+}) {
+  return Buffer.concat([
+    Buffer.from([2, 1]),
+    le(sourceDomain, 4),
+    le(destinationDomain, 4),
+    le(nonce, 8),
+    le(routeRevision, 4),
+    le(DOMAIN_SORA, 4),
+    Buffer.from([CODEC_TEXT]),
+    vec(Buffer.from("xor")),
+    le(amount, 16),
+    Buffer.from([senderCodec]),
+    vec(sender),
+    Buffer.from([recipientCodec]),
+    vec(recipient),
+    Buffer.from([CODEC_TEXT]),
+    vec(Buffer.from(route)),
+  ]);
+}
+
+function network(profile) {
+  if (profile === "sora-taira") {
+    return Buffer.from("010100000000fc56984b2be7431d840e21514d1883f0", "hex");
+  }
+  if (profile === "sora-nexus") {
+    return Buffer.from("01000000000000000000000000000000000000000753", "hex");
+  }
+  if (profile === "bsc-mainnet")
+    return Buffer.concat([Buffer.from([1, 4]), le(2, 4), le(56, 8)]);
+  if (profile === "bsc-testnet")
+    return Buffer.concat([Buffer.from([1, 5]), le(2, 4), le(97, 8)]);
+  if (profile === "ethereum-mainnet")
+    return Buffer.concat([Buffer.from([1, 2]), le(1, 4), le(1, 8)]);
+  if (profile === "ethereum-sepolia") {
+    return Buffer.concat([Buffer.from([1, 3]), le(1, 4), le(11_155_111, 8)]);
+  }
+  if (profile === "tron-nile") {
+    return Buffer.concat([
+      Buffer.from([1, TRON_NILE_PROFILE]),
+      le(DOMAIN_TRON, 4),
+      le(0xcd8690dc, 4),
+    ]);
+  }
+  throw new Error(`unsupported profile ${profile}`);
+}
+
+function lane(sourceProfile, targetProfile) {
+  return Buffer.concat([
+    Buffer.from([1]),
+    vec(network(sourceProfile)),
+    vec(network(targetProfile)),
+  ]);
+}
+
+function messageId(sourceProfile, targetProfile, payload) {
+  return ethers.keccak256(
+    ethers.concat([
+      ethers.toUtf8Bytes("sccp:lane-message-id:v1"),
+      "0x01",
+      vec(lane(sourceProfile, targetProfile)),
+      vec(payload),
+    ]),
+  );
+}
+
+function word(value) {
   return ethers.zeroPadValue(ethers.toBeHex(value), 32);
 }
 
-function groth16PublicSignalWords(
-  abi,
-  { publicInputs, sourceDomain, statementHash, destinationBindingHash }
+function verifierPolicy(
+  verifierAddress,
+  verifierCodeHash,
+  verifierKeyHash,
+  semanticProofProfileHash = SEMANTIC_PROOF_PROFILE_HASH,
+  soraFinalityAnchorHash = SORA_FINALITY_ANCHOR_HASH,
 ) {
-  const signalValues = [
-    publicInputs[0],
-    publicInputs[1],
-    publicInputs[2],
-    publicInputs[3],
-    publicInputs[4],
-    publicInputs[5],
-    abiWordU32(sourceDomain),
-    statementHash,
-    destinationBindingHash,
+  return [
+    verifierAddress,
+    verifierCodeHash,
+    verifierKeyHash,
+    semanticProofProfileHash,
+    soraFinalityAnchorHash,
   ];
-  return signalValues.map(
+}
+
+function exactEvmRouteConfigHash({
+  abi,
+  domain,
+  profile,
+  chainId,
+  sourceLaneHash,
+  destinationLaneHash,
+  tokenAddress,
+  tokenCodeHash,
+  verifierAddress,
+  verifierCodeHash,
+  verifierKeyHash,
+  semanticProofProfileHash,
+  soraFinalityAnchorHash,
+  route,
+  routeRevision,
+}) {
+  const deploymentConfigHash = ethers.keccak256(
+    abi.encode(
+      [
+        "address",
+        "bytes32",
+        "address",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+      ],
+      [
+        tokenAddress,
+        tokenCodeHash,
+        verifierAddress,
+        verifierCodeHash,
+        verifierKeyHash,
+        semanticProofProfileHash,
+        soraFinalityAnchorHash,
+      ],
+    ),
+  );
+  const assetRouteConfigHash = ethers.keccak256(
+    abi.encode(
+      ["bytes32", "bytes32", "uint32", "uint256"],
+      [
+        ethers.keccak256(ethers.toUtf8Bytes("xor")),
+        ethers.keccak256(ethers.toUtf8Bytes(route)),
+        routeRevision,
+        SCALE,
+      ],
+    ),
+  );
+  return ethers.keccak256(
+    abi.encode(
+      [
+        "bytes32",
+        "uint32",
+        "uint8",
+        "uint256",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+      ],
+      [
+        ethers.keccak256(ethers.toUtf8Bytes("sccp:concrete-route-config:v1")),
+        domain,
+        profile,
+        chainId,
+        sourceLaneHash,
+        destinationLaneHash,
+        deploymentConfigHash,
+        assetRouteConfigHash,
+      ],
+    ),
+  );
+}
+
+function exactTronRouteConfigHash({
+  abi,
+  profile,
+  networkId,
+  sourceLaneHash,
+  destinationLaneHash,
+  tokenAddress,
+  tokenCodeHash,
+  verifierAddress,
+  verifierCodeHash,
+  verifierKeyHash,
+  semanticProofProfileHash,
+  soraFinalityAnchorHash,
+  destinationBindingHash,
+  routeRevision,
+}) {
+  const deploymentConfigHash = ethers.keccak256(
+    abi.encode(
+      [
+        "address",
+        "bytes32",
+        "address",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+      ],
+      [
+        tokenAddress,
+        tokenCodeHash,
+        verifierAddress,
+        verifierCodeHash,
+        verifierKeyHash,
+        semanticProofProfileHash,
+        soraFinalityAnchorHash,
+        destinationBindingHash,
+      ],
+    ),
+  );
+  const assetRouteConfigHash = ethers.keccak256(
+    abi.encode(
+      ["bytes32", "bytes32", "uint32", "uint256"],
+      [
+        ethers.keccak256(ethers.toUtf8Bytes("xor")),
+        ethers.keccak256(ethers.toUtf8Bytes("taira_tron_xor")),
+        routeRevision,
+        SCALE,
+      ],
+    ),
+  );
+  return ethers.keccak256(
+    abi.encode(
+      [
+        "bytes32",
+        "uint32",
+        "uint8",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+      ],
+      [
+        ethers.keccak256(ethers.toUtf8Bytes("sccp:concrete-route-config:v1")),
+        DOMAIN_TRON,
+        profile,
+        networkId,
+        sourceLaneHash,
+        destinationLaneHash,
+        deploymentConfigHash,
+        assetRouteConfigHash,
+      ],
+    ),
+  );
+}
+
+function exactTronDestinationBindingHash({
+  abi,
+  networkId,
+  verifierAddress,
+  bridgeAddress,
+  verifierCodeHash,
+  verifierKeyHash,
+  semanticProofProfileHash,
+  soraFinalityAnchorHash,
+}) {
+  const tronAddressWord = (address) =>
+    ethers.zeroPadValue(ethers.concat(["0x41", address]), 32);
+  return ethers.keccak256(
+    abi.encode(
+      [
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "uint256",
+        "uint256",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+      ],
+      [
+        ethers.keccak256(
+          ethers.toUtf8Bytes("iroha:sccp:tron-destination-binding:v1"),
+        ),
+        ethers.keccak256(ethers.toUtf8Bytes("tron-groth16-bn254-v1")),
+        networkId,
+        DOMAIN_SORA,
+        DOMAIN_TRON,
+        tronAddressWord(verifierAddress),
+        tronAddressWord(bridgeAddress),
+        verifierCodeHash,
+        verifierKeyHash,
+        semanticProofProfileHash,
+        soraFinalityAnchorHash,
+      ],
+    ),
+  );
+}
+
+function exactEvmDestinationBindingHash({
+  abi,
+  chainId,
+  targetDomain,
+  verifierAddress,
+  bridgeAddress,
+  verifierCodeHash,
+  verifierKeyHash,
+  semanticProofProfileHash,
+  soraFinalityAnchorHash,
+}) {
+  return ethers.keccak256(
+    abi.encode(
+      [
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "uint256",
+        "uint256",
+        "address",
+        "address",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+      ],
+      [
+        ethers.keccak256(
+          ethers.toUtf8Bytes("iroha:sccp:evm-destination-binding:v1"),
+        ),
+        ethers.keccak256(ethers.toUtf8Bytes("evm-groth16-bn254-v1")),
+        word(chainId),
+        DOMAIN_SORA,
+        targetDomain,
+        verifierAddress,
+        bridgeAddress,
+        verifierCodeHash,
+        verifierKeyHash,
+        semanticProofProfileHash,
+        soraFinalityAnchorHash,
+      ],
+    ),
+  );
+}
+
+function signalWords(
+  abi,
+  publicInputs,
+  statementHash,
+  binding,
+  routeConfigurationHash,
+  soraFinalityAnchorHash,
+) {
+  const values = [
+    ...publicInputs.slice(0, 6),
+    word(DOMAIN_SORA),
+    statementHash,
+    binding,
+    routeConfigurationHash,
+    soraFinalityAnchorHash,
+  ];
+  return values.map(
     (value, index) =>
       BigInt(
         ethers.keccak256(
-          abi.encode(["bytes32", "bytes32"], [GROTH16_SIGNAL_LABELS[index], value])
-        )
-      ) % BN254_SCALAR_FIELD_MODULUS
+          abi.encode(["bytes32", "bytes32"], [SIGNAL_LABELS[index], value]),
+        ),
+      ) % SCALAR_FIELD,
   );
 }
 
-async function g1ScalarMul(provider, abi, point, scalar) {
-  const encoded = abi.encode(
-    ["uint256", "uint256", "uint256"],
-    [point[0], point[1], scalar]
-  );
+async function scalarMul(provider, abi, point, scalar) {
   const result = await provider.call({
-    to: G1_SCALAR_MUL_PRECOMPILE,
-    data: encoded,
+    to: "0x0000000000000000000000000000000000000007",
+    data: abi.encode(
+      ["uint256", "uint256", "uint256"],
+      [point[0], point[1], scalar],
+    ),
   });
-  const decoded = abi.decode(["uint256", "uint256"], result);
-  return [decoded[0], decoded[1]];
+  return Array.from(abi.decode(["uint256", "uint256"], result));
 }
 
-function g1Negate(point) {
-  if (point[0] === 0n && point[1] === 0n) {
-    return [0n, 0n];
-  }
-  return [
-    point[0],
-    (BN254_BASE_FIELD_MODULUS -
-      (point[1] % BN254_BASE_FIELD_MODULUS)) %
-      BN254_BASE_FIELD_MODULUS,
-  ];
-}
-
-async function buildAcceptingGroth16ProofBytes(
+async function acceptingProof(
   provider,
   abi,
-  {
-    publicInputs,
-    sourceDomain,
-    statementHash,
-    destinationBindingHash,
-    g1,
-    g2,
-  }
+  publicInputs,
+  statementHash,
+  binding,
+  routeConfigurationHash,
+  soraFinalityAnchorHash,
+  g1,
+  g2,
 ) {
-  const signals = groth16PublicSignalWords(abi, {
+  const scalar = signalWords(
+    abi,
     publicInputs,
-    sourceDomain,
     statementHash,
-    destinationBindingHash,
-  });
-  const vkScalar = signals.reduce(
-    (sum, signal) => (sum + signal) % BN254_SCALAR_FIELD_MODULUS,
-    1n
-  );
-  const vkX = await g1ScalarMul(provider, abi, g1, vkScalar);
-  assert(
-    vkX[0] !== 0n || vkX[1] !== 0n,
-    "test verifying-key accumulator must be non-zero"
-  );
-  // The test key uses generator points for alpha/beta/gamma/delta and every IC,
-  // so c = -vkX makes e(-a,b) * e(alpha,beta) * e(vkX,gamma) * e(c,delta) = 1.
-  const c = g1Negate(vkX);
+    binding,
+    routeConfigurationHash,
+    soraFinalityAnchorHash,
+  ).reduce((sum, value) => (sum + value) % SCALAR_FIELD, 1n);
+  const vkX = await scalarMul(provider, abi, g1, scalar);
+  const c = [vkX[0], (BASE_FIELD - (vkX[1] % BASE_FIELD)) % BASE_FIELD];
   return abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, publicInputs[0], sourceDomain, publicInputs[3], g1, g2, c]
+    GROTH16_PROOF_ABI_TYPES,
+    [1, publicInputs[0], DOMAIN_SORA, publicInputs[3], g1, g2, c],
   );
 }
 
-function callException(error) {
-  return error && error.code === "CALL_EXCEPTION";
+async function assertDynamicVerifierRoleCollisionsRejected({
+  verifier,
+  provider,
+  abi,
+  publicInputs,
+  statement,
+  destination,
+  route,
+  g1,
+  g2,
+}) {
+  const roles = {
+    statement,
+    destination,
+    route,
+    key: await verifier.verifyingKeyHash(),
+    semantic: await verifier.semanticProofProfileHash(),
+    anchor: await verifier.soraFinalityAnchorHash(),
+  };
+  const labels = [
+    "statement",
+    "destination",
+    "route",
+    "key",
+    "semantic",
+    "anchor",
+  ];
+  assert.equal(new Set(Object.values(roles)).size, labels.length);
+  for (let dynamicIndex = 0; dynamicIndex < 3; dynamicIndex++) {
+    for (
+      let collidingIndex = dynamicIndex + 1;
+      collidingIndex < labels.length;
+      collidingIndex++
+    ) {
+      const colliding = { ...roles };
+      colliding[labels[dynamicIndex]] = colliding[labels[collidingIndex]];
+      const matchingProof = await acceptingProof(
+        provider,
+        abi,
+        publicInputs,
+        colliding.statement,
+        colliding.destination,
+        colliding.route,
+        colliding.anchor,
+        g1,
+        g2,
+      );
+      await assert.rejects(
+        verifier.verifySccpMessageProof(
+          matchingProof,
+          publicInputs,
+          colliding.statement,
+          colliding.destination,
+          colliding.route,
+        ),
+        rejectedWith("Protocol hash roles must differ"),
+        `${labels[dynamicIndex]} must not alias ${labels[collidingIndex]}`,
+      );
+    }
+  }
 }
 
-function errorMessage(error) {
-  return [
-    error && error.reason,
-    error && error.shortMessage,
-    error && error.message,
-    error && error.info && error.info.error && error.info.error.message,
-    error && error.data && error.data.message,
-  ]
-    .filter(Boolean)
-    .join("\n");
+function mutateGroth16Proof(abi, proofBytes, overrides) {
+  const decoded = abi.decode(GROTH16_PROOF_ABI_TYPES, proofBytes);
+  const field = (name, index) =>
+    Object.prototype.hasOwnProperty.call(overrides, name)
+      ? overrides[name]
+      : decoded[index];
+  return abi.encode(GROTH16_PROOF_ABI_TYPES, [
+    field("version", 0),
+    field("messageId", 1),
+    field("sourceDomain", 2),
+    field("commitmentRoot", 3),
+    field("a", 4),
+    field("b", 5),
+    field("c", 6),
+  ]);
 }
 
-function callExceptionWithReason(reason) {
-  return (error) => callException(error) && errorMessage(error).includes(reason);
+function rejectedWith(reason) {
+  return (error) => {
+    const candidates = [
+      error,
+      error?.error,
+      error?.info,
+      error?.info?.error,
+      error?.cause,
+      error?.cause?.error,
+    ].filter((value) => value && typeof value === "object");
+    const text = candidates
+      .flatMap((value) => [value.reason, value.shortMessage, value.message])
+      .filter(Boolean)
+      .join("\n");
+    const codes = candidates.map((value) => value.code).filter(Boolean);
+    const revertData = candidates
+      .map((value) => value.data)
+      .find((value) => typeof value === "string" && /^0x[0-9a-fA-F]*$/.test(value));
+    const isRevert =
+      codes.includes("CALL_EXCEPTION") ||
+      (codes.some((code) => code === 3 || code === "3") &&
+        (/revert|VM Exception/i.test(text) || revertData !== undefined));
+    if (!isRevert) return false;
+    if (!reason) return true;
+    if (text.includes(reason)) return true;
+    if (revertData?.startsWith("0x08c379a0")) {
+      try {
+        const [decoded] = ethers.AbiCoder.defaultAbiCoder().decode(
+          ["string"],
+          `0x${revertData.slice(10)}`,
+        );
+        return decoded === reason;
+      } catch (_error) {
+        return false;
+      }
+    }
+    return false;
+  };
 }
 
 async function main() {
   const {
-    sccpPayloadHash,
-    tairaXorBscCanonicalTransferPayloadBytes,
-    tairaXorBscTransferMessageId,
-    tairaXorCanonicalTransferPayloadBytes,
-    tairaXorTransferMessageId,
-  } = await import(
-    pathToFileURL(repoPath("javascript", "iroha_js", "src", "sccp.js")).href
-  );
-  const { AccountAddress } = await import(
-    pathToFileURL(repoPath("javascript", "iroha_js", "src", "address.js")).href
-  );
-  const tairaAccountId = AccountAddress.fromAccount({
-    publicKey: Uint8Array.from(
-      Buffer.from(
-        "641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201",
-        "hex"
-      )
-    ),
-  }).toI105(369);
-  const contracts = compileContracts();
-  const provider = new ethers.BrowserProvider(
-    ganache.provider({ logging: { quiet: true } })
-  );
-  const signer = await provider.getSigner();
+    evmContracts: contracts,
+    tvmContracts,
+    mockContracts,
+    runtimeSizes,
+  } = compile();
+  const bscEip1193Provider = createHardhatProvider({
+    chainId: 97,
+    blockGasLimit: Number(MAX_DEPLOYMENT_GAS + 5_000_000n),
+  });
+  const provider = new ethers.BrowserProvider(bscEip1193Provider);
+  assert.equal((await provider.getNetwork()).chainId, 97n);
+  const signer = await provider.getSigner(0);
   const outsider = await provider.getSigner(1);
   const abi = ethers.AbiCoder.defaultAbiCoder();
-  const attestor = ethers.Wallet.createRandom();
 
   const verifierArtifact = artifact(
     contracts,
-    "SccpSecp256k1MessageVerifier.sol",
-    "SccpSecp256k1MessageVerifier"
+    "contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol",
+    "SccpGroth16Bn254MessageVerifier",
+  );
+  const tokenArtifact = artifact(
+    contracts,
+    "contracts/bsc/sccp/TairaXOR.sol",
+    "TairaXOR",
   );
   const bridgeArtifact = artifact(
     contracts,
-    "SccpMessageBridge.sol",
-    "SccpMessageBridge"
-  );
-  const bridgeIface = new ethers.Interface(bridgeArtifact.abi);
-  const bridgeAcceptedEvent = bridgeArtifact.abi.find(
-    (entry) => entry.type === "event" && entry.name === "MessageProofAccepted"
-  );
-  assert.deepEqual(
-    bridgeAcceptedEvent.inputs.map((input) => input.name),
-    [
-      "messageId",
-      "sourceDomain",
-      "commitmentRoot",
-      "statementHash",
-      "destinationBindingHash",
-      "verifierBackendHash",
-      "proofFamilyHash",
-      "networkId",
-    ]
-  );
-  const groth16VerifierArtifact = artifact(
-    contracts,
-    "SccpGroth16Bn254MessageVerifier.sol",
-    "SccpGroth16Bn254MessageVerifier"
-  );
-  const ownableArtifact = artifact(contracts, "Ownable.sol", "Ownable");
-  const tronGroth16VerifierArtifact = artifact(
-    contracts,
-    "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol",
-    "SccpTronGroth16Bn254MessageVerifier"
-  );
-  const tronSourceBridgeArtifact = artifact(
-    contracts,
-    "contracts/tron/sccp/SccpTronSourceBridge.sol",
-    "SccpTronSourceBridge"
-  );
-  const tairaXorArtifact = artifact(
-    contracts,
-    "contracts/tron/sccp/TairaXOR.sol",
-    "TairaXOR"
-  );
-  const tairaXorBridgeArtifact = artifact(
-    contracts,
-    "contracts/tron/sccp/TairaXorSccpBridge.sol",
-    "TairaXorSccpBridge"
-  );
-  const bscSourceBridgeArtifact = artifact(
-    contracts,
-    "contracts/bsc/sccp/SccpBscSourceBridge.sol",
-    "SccpBscSourceBridge"
-  );
-  const bscTairaXorArtifact = artifact(
-    contracts,
-    "contracts/bsc/sccp/TairaXOR.sol",
-    "TairaXOR"
-  );
-  const bscTairaXorBridgeArtifact = artifact(
-    contracts,
     "contracts/bsc/sccp/TairaXorBscSccpBridge.sol",
-    "TairaXorBscSccpBridge"
+    "TairaXorBscSccpBridge",
   );
-  const tronAcceptedEvent = tronGroth16VerifierArtifact.abi.find(
-    (entry) => entry.type === "event" && entry.name === "MessageProofAccepted"
+  const ethereumTokenArtifact = artifact(
+    contracts,
+    "contracts/ethereum/sccp/TairaXOR.sol",
+    "TairaXOR",
+  );
+  const ethereumBridgeArtifact = artifact(
+    contracts,
+    "contracts/ethereum/sccp/TairaXorEthereumSccpBridge.sol",
+    "TairaXorEthereumSccpBridge",
+  );
+  const tronVerifierArtifact = artifact(
+    tvmContracts,
+    "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol",
+    "SccpTronGroth16Bn254MessageVerifier",
+  );
+  const tronTokenArtifact = artifact(
+    tvmContracts,
+    "contracts/tron/sccp/TairaXOR.sol",
+    "TairaXOR",
+  );
+  const tronBridgeArtifact = artifact(
+    tvmContracts,
+    "contracts/tron/sccp/TairaXorSccpBridge.sol",
+    "TairaXorSccpBridge",
+  );
+  const falseTokenArtifact = artifact(mockContracts, "Mocks.sol", "FalseToken");
+  const reentrantTokenArtifact = artifact(
+    mockContracts,
+    "Mocks.sol",
+    "ReentrantToken",
+  );
+  const codecHarnessArtifact = artifact(mockContracts, "Mocks.sol", "CodecHarness");
+  const tokenRouteHarnessArtifact = artifact(
+    mockContracts,
+    "Mocks.sol",
+    "TokenRouteHarness",
+  );
+  const codeAliasedVerifierArtifact = artifact(
+    mockContracts,
+    "Mocks.sol",
+    "CodeAliasedVerifier",
+  );
+  const injectedBscRouteArtifact = artifact(
+    mockContracts,
+    "Mocks.sol",
+    "InjectedBscRouteHarness",
+  );
+
+  for (const [label, deploymentArtifact] of [
+    ["EVM BN254 verifier", verifierArtifact],
+    ["TRON BN254 verifier", tronVerifierArtifact],
+    ["BSC token", tokenArtifact],
+    ["Ethereum token", ethereumTokenArtifact],
+    ["TRON token", tronTokenArtifact],
+    ["BSC", bridgeArtifact],
+    ["Ethereum", ethereumBridgeArtifact],
+    ["TRON", tronBridgeArtifact],
+  ]) {
+    assert(
+      ethers.getBytes(deploymentArtifact.runtimeBytecode).length <=
+        MAX_RUNTIME_BYTES,
+      `${label} runtime exceeds the ${MAX_RUNTIME_BYTES}-byte deployment ceiling`,
+    );
+  }
+
+  for (const exactTokenArtifact of [
+    tokenArtifact,
+    ethereumTokenArtifact,
+    tronTokenArtifact,
+  ]) {
+    for (const forbiddenEntrypoint of [
+      "owner",
+      "transferOwnership",
+      "setBridge",
+      "lockBridge",
+      "bridgeLocked",
+    ]) {
+      assert(
+        !exactTokenArtifact.abi.some(
+          (entry) => entry.name === forbiddenEntrypoint,
+        ),
+        `exact token unexpectedly exposes ${forbiddenEntrypoint}`,
+      );
+    }
+    await assertConstructorRevertsWith(
+      signer,
+      exactTokenArtifact,
+      [ethers.ZeroAddress],
+      "Bridge address is required",
+    );
+    const preboundToken = await deploy(signer, exactTokenArtifact, [
+      await outsider.getAddress(),
+    ]);
+    assert.equal(await preboundToken.bridge(), await outsider.getAddress());
+  }
+
+  for (const [label, exactRouteArtifact] of [
+    ["BSC", bridgeArtifact],
+    ["Ethereum", ethereumBridgeArtifact],
+    ["TRON", tronBridgeArtifact],
+  ]) {
+    const constructor = exactRouteArtifact.abi.find(
+      (entry) => entry.type === "constructor",
+    );
+    assert(constructor, `${label} route constructor ABI is missing`);
+    assert.equal(
+      constructor.inputs.length,
+      4,
+      `${label} route constructor must accept token, verifier policy, profile, and revision`,
+    );
+    assert.equal(constructor.inputs[0].name, "tokenAddress");
+    assert.equal(constructor.inputs[0].type, "address");
+    assert.equal(constructor.inputs[1].name, "configuredVerifierPolicy");
+    assert.equal(constructor.inputs[1].type, "tuple");
+    assert.deepEqual(
+      constructor.inputs[1].components.map(({ name, type }) => [name, type]),
+      [
+        ["verifierAddress", "address"],
+        ["verifierCodeHash", "bytes32"],
+        ["verifierKeyHash", "bytes32"],
+        ["semanticProofProfileHash", "bytes32"],
+        ["soraFinalityAnchorHash", "bytes32"],
+      ],
+      `${label} route verifier policy ABI drifted`,
+    );
+  }
+
+  assert(!bridgeArtifact.abi.some((entry) => entry.name === "burnToTaira"));
+  assert(
+    !bridgeArtifact.abi.some((entry) => entry.name === "submitSccpSourceEvent"),
+  );
+  assert(
+    !ethereumBridgeArtifact.abi.some((entry) => entry.name === "burnToTaira"),
+  );
+  assert(
+    !ethereumBridgeArtifact.abi.some(
+      (entry) => entry.name === "submitSccpSourceEvent",
+    ),
+  );
+  assert(!tronBridgeArtifact.abi.some((entry) => entry.name === "burnToTaira"));
+  assert(
+    !tronBridgeArtifact.abi.some(
+      (entry) => entry.name === "submitSccpSourceEvent",
+    ),
+  );
+  assert(
+    !tronVerifierArtifact.abi.some(
+      (entry) => entry.name === "submitSccpMessageProof",
+    ),
+  );
+  assert(
+    !tronVerifierArtifact.abi.some(
+      (entry) => entry.name === "usedMessageProofs",
+    ),
+  );
+  assert(
+    !tronVerifierArtifact.abi.some(
+      (entry) => entry.name === "destinationBindingHash",
+    ),
+  );
+  assert(
+    !Object.values(contracts).some((file) => file.SccpSecp256k1MessageVerifier),
+  );
+  for (const retiredSource of [
+    "contracts/evm/sccp/SccpEvmSourceBridge.sol",
+    "contracts/bsc/sccp/SccpBscSourceBridge.sol",
+    "contracts/tron/sccp/SccpTronSourceBridge.sol",
+    "contracts/ethereum/sccp/SccpEthereumSourceBridge.sol",
+  ]) {
+    assert(
+      !fs.existsSync(path.join(REPO, retiredSource)),
+      `${retiredSource} must stay deleted`,
+    );
+  }
+  const sourceEvent = bridgeArtifact.abi.find(
+    (entry) => entry.type === "event" && entry.name === "SccpTransfer",
   );
   assert.deepEqual(
-    tronAcceptedEvent.inputs.map((input) => input.name),
-    [
-      "messageId",
-      "sourceDomain",
-      "commitmentRoot",
-      "statementHash",
-      "destinationBindingHash",
-      "verifierBackendHash",
-      "proofFamilyHash",
-      "networkId",
-    ]
-  );
-
-  const verifier = await deploy(
-    signer,
-    verifierArtifact.abi,
-    verifierArtifact.bytecode,
-    [[attestor.address], 1]
-  );
-  const verifierAddress = await verifier.getAddress();
-  const verifierCodeHash = await contractCodeHash(provider, verifierAddress);
-  const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);
-  const bscMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(56), 32);
-  const bscTestnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(97), 32);
-  const unsupportedBscNetworkId = ethers.zeroPadValue(
-    ethers.toBeHex(31337),
-    32
-  );
-  const bridgeConstructorArgs = ({
-    bridgeVerifierAddress = verifierAddress,
-    bridgeVerifierCodeHash = verifierCodeHash,
-    bridgeVerifierKeyHash = ethers.ZeroHash,
-    verifierBackendKey = "evm-secp256k1-keccak-v1",
-    proofFamily = "stark-fri-v1",
-    networkId = ethMainnetNetworkId,
-    sourceDomain = 0,
-    targetDomain = 1,
-  } = {}) => [
-    bridgeVerifierAddress,
-    bridgeVerifierCodeHash,
-    bridgeVerifierKeyHash,
-    verifierBackendKey,
-    proofFamily,
-    networkId,
-    sourceDomain,
-    targetDomain,
-  ];
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        [
-          verifierAddress,
-          verifierCodeHash,
-          ethers.ZeroHash,
-          "evm-secp256k1-keccak-v1",
-          "stark-fri-v1",
-          ethMainnetNetworkId,
-          0,
-          1,
-        ]
-      );
-    },
-    callExceptionWithReason("Unsupported verifier backend")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({ sourceDomain: 99, targetDomain: 1 })
-      );
-    },
-    callExceptionWithReason("Source domain must be SORA")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({ sourceDomain: 0, targetDomain: 99 })
-      );
-    },
-    callExceptionWithReason("Target domain must be ETH or BSC")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({ verifierBackendKey: "evm-debug-verifier-v1" })
-      );
-    },
-    callExceptionWithReason("Unsupported verifier backend")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({ verifierBackendKey: "" })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({
-          networkId: bscMainnetNetworkId,
-        })
-      );
-    },
-    callExceptionWithReason("Network id must be ETH mainnet")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({
-          networkId: bscTestnetNetworkId,
-        })
-      );
-    },
-    callExceptionWithReason("Network id must be ETH mainnet")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({
-          networkId: ethMainnetNetworkId,
-          targetDomain: 2,
-        })
-      );
-    },
-    callExceptionWithReason("Network id must be BSC mainnet or testnet")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({
-          networkId: unsupportedBscNetworkId,
-          targetDomain: 2,
-        })
-      );
-    },
-    callExceptionWithReason("Network id must be BSC mainnet or testnet")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({
-          verifierBackendKey: "evm-groth16-bn254-v1",
-          proofFamily: "debug-proof-family",
-        })
-      );
-    },
-    callExceptionWithReason("Proof family must be stark-fri-v1")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({ proofFamily: "" })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({ networkId: ethers.ZeroHash })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({ sourceDomain: 1, targetDomain: 0 })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        bridgeConstructorArgs({ sourceDomain: 1, targetDomain: 1 })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-          bridgeConstructorArgs({
-            bridgeVerifierKeyHash: ethers.keccak256(
-              ethers.toUtf8Bytes("reference-verifier-key")
-            ),
-          })
-        );
-      },
-    callExceptionWithReason("Unsupported verifier backend")
-  );
-
-  const messageId = ethers.keccak256(ethers.toUtf8Bytes("message-1"));
-  const statementHash = ethers.keccak256(ethers.toUtf8Bytes("statement-1"));
-  const nativeProofBytes = ethers.toUtf8Bytes("native-fastpq-proof-bytes");
-  const publicInputs = [
-    messageId,
-    ethers.keccak256(ethers.toUtf8Bytes("payload-hash")),
-    ethers.zeroPadValue(ethers.toBeHex(1), 32),
-    ethers.keccak256(ethers.toUtf8Bytes("commitment-root")),
-    ethers.zeroPadValue(ethers.toBeHex(44), 32),
-    ethers.keccak256(ethers.toUtf8Bytes("finality-block")),
-  ];
-  const publicInputsHash = ethers.keccak256(
-    abi.encode(
-      ["bytes32", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32"],
-      publicInputs
-    )
-  );
-  const nativeProofHash = ethers.keccak256(nativeProofBytes);
-  const verifierBackendHash = ethers.keccak256(
-    ethers.toUtf8Bytes("evm-secp256k1-keccak-v1")
-  );
-  const proofFamilyHash = ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1"));
-  const networkId = ethMainnetNetworkId;
-  const referenceWrapperAddress = await signer.getAddress();
-  const destinationBindingHash = computeDestinationBindingHash(abi, {
-    verifierBackendHash,
-    proofFamilyHash,
-    networkId,
-    sourceDomain: 0,
-    targetDomain: 1,
-    verifierAddress,
-    wrapperAddress: referenceWrapperAddress,
-    verifierCodeHash,
-    verifierKeyHash: ethers.ZeroHash,
-  });
-  const attestationDigest = ethers.keccak256(
-    abi.encode(
-      [
-        "bytes32",
-        "bytes32",
-        "uint256",
-        "bytes32",
-        "bytes32",
-        "bytes32",
-        "bytes32",
-        "bytes32",
-      ],
-      [
-        ethers.keccak256(ethers.toUtf8Bytes("iroha:sccp:evm-attestation:v1")),
-        messageId,
-        0,
-        publicInputs[3],
-        publicInputsHash,
-        statementHash,
-        nativeProofHash,
-        destinationBindingHash,
-      ]
-    )
-  );
-  const attestationSignature = attestor.signingKey.sign(attestationDigest).serialized;
-  const proofBytes = abi.encode(
-    ["uint256", "bytes32", "uint256", "bytes32", "bytes32", "bytes32", "bytes"],
-    [
-      1,
-      messageId,
-      0,
-      publicInputs[3],
-      nativeProofHash,
-      destinationBindingHash,
-      attestationSignature,
-    ]
-  );
-
-  const directReferenceResult = await verifier.verifySccpMessageProof.staticCall(
-    proofBytes,
-    publicInputs,
-    statementHash,
-    destinationBindingHash
-  );
-  assert.equal(directReferenceResult[0], messageId);
-  assert.equal(directReferenceResult[1], 0n);
-  assert.equal(directReferenceResult[2], publicInputs[3]);
-
-  const attestationAbiHeadLength = 7 * 32;
-  const noncanonicalOffsetProof = ethers.getBytes(proofBytes);
-  noncanonicalOffsetProof.set(
-    ethers.getBytes(
-      ethers.zeroPadValue(ethers.toBeHex(attestationAbiHeadLength + 32), 32)
-    ),
-    6 * 32
-  );
-  const noncanonicalOffsetProofBytes = ethers.concat([
-    noncanonicalOffsetProof.slice(0, attestationAbiHeadLength),
-    ethers.ZeroHash,
-    noncanonicalOffsetProof.slice(attestationAbiHeadLength),
-  ]);
-  await assert.rejects(
-    () =>
-      verifier.verifySccpMessageProof.staticCall(
-        noncanonicalOffsetProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callExceptionWithReason("Invalid signatures offset")
-  );
-
-  await assert.rejects(
-    () =>
-      verifier.verifySccpMessageProof.staticCall(
-        ethers.concat([proofBytes, "0x00"]),
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  const zeroNativeProofDigest = ethers.keccak256(
-    abi.encode(
-      [
-        "bytes32",
-        "bytes32",
-        "uint256",
-        "bytes32",
-        "bytes32",
-        "bytes32",
-        "bytes32",
-        "bytes32",
-      ],
-      [
-        ethers.keccak256(ethers.toUtf8Bytes("iroha:sccp:evm-attestation:v1")),
-        messageId,
-        0,
-        publicInputs[3],
-        publicInputsHash,
-        statementHash,
-        ethers.ZeroHash,
-        destinationBindingHash,
-      ]
-    )
-  );
-  const zeroNativeProofBytes = abi.encode(
-    ["uint256", "bytes32", "uint256", "bytes32", "bytes32", "bytes32", "bytes"],
-    [
-      1,
-      messageId,
-      0,
-      publicInputs[3],
-      ethers.ZeroHash,
-      destinationBindingHash,
-      attestor.signingKey.sign(zeroNativeProofDigest).serialized,
-    ]
-  );
-  await assert.rejects(
-    () =>
-      verifier.verifySccpMessageProof.staticCall(
-        zeroNativeProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callExceptionWithReason("Native proof hash is required")
-  );
-
-  const mismatchedReferenceInputs = publicInputs.slice();
-  mismatchedReferenceInputs[0] = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-reference-message")
-  );
-  await assert.rejects(
-    () =>
-      verifier.verifySccpMessageProof.staticCall(
-        proofBytes,
-        mismatchedReferenceInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callExceptionWithReason("Public input message id mismatch")
-  );
-
-  const zeroReferenceTargetInputs = publicInputs.slice();
-  zeroReferenceTargetInputs[2] = ethers.ZeroHash;
-  await assert.rejects(
-    () =>
-      verifier.verifySccpMessageProof.staticCall(
-        proofBytes,
-        zeroReferenceTargetInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callExceptionWithReason("Target domain is required")
-  );
-
-  const mismatchedReferenceCommitmentInputs = publicInputs.slice();
-  mismatchedReferenceCommitmentInputs[3] = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-reference-commitment")
-  );
-  await assert.rejects(
-    () =>
-      verifier.verifySccpMessageProof.staticCall(
-        proofBytes,
-        mismatchedReferenceCommitmentInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callExceptionWithReason("Public input commitment root mismatch")
-  );
-
-  const tamperedProofBytes = abi.encode(
-    ["uint256", "bytes32", "uint256", "bytes32", "bytes32", "bytes32", "bytes"],
-    [
-      1,
-      ethers.keccak256(ethers.toUtf8Bytes("message-2")),
-      0,
-      publicInputs[3],
-      nativeProofHash,
-      destinationBindingHash,
-      attestationSignature,
-    ]
-  );
-
-  await assert.rejects(
-    () =>
-      verifier.verifySccpMessageProof.staticCall(
-        tamperedProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  await assert.rejects(
-    () =>
-      verifier.verifySccpMessageProof.staticCall(
-        proofBytes,
-        publicInputs,
-        ethers.keccak256(ethers.toUtf8Bytes("wrong-statement")),
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  const zeroPayloadInputs = publicInputs.slice();
-  zeroPayloadInputs[1] = ethers.ZeroHash;
-
-  const zeroFinalityHeightInputs = publicInputs.slice();
-  zeroFinalityHeightInputs[4] = ethers.ZeroHash;
-
-  const unauthorized = ethers.Wallet.createRandom();
-  const unauthorizedSignature = unauthorized.signingKey.sign(attestationDigest).serialized;
-  const unauthorizedProofBytes = abi.encode(
-    ["uint256", "bytes32", "uint256", "bytes32", "bytes32", "bytes32", "bytes"],
-    [
-      1,
-      messageId,
-      0,
-      publicInputs[3],
-      nativeProofHash,
-      destinationBindingHash,
-      unauthorizedSignature,
-    ]
-  );
-
-  await assert.rejects(
-    () =>
-      verifier.verifySccpMessageProof.staticCall(
-        unauthorizedProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
+    sourceEvent.inputs.map((input) => input.indexed),
+    [true, true, true, false, false, false],
   );
 
   const g1 = [1n, 2n];
-  const zeroG1 = [0n, 0n];
-  const zeroG2 = [0n, 0n, 0n, 0n];
   const g2 = [
     10857046999023057135944570762232829481370756359578518086990519993285655852781n,
     11559732032986387107991004021392285783925812861821192530917403151452391805634n,
     8495653923123431417604973247489272438418190587263600148770280649306958101930n,
     4082367875863433681332203403145435568316851327593401208105741076214120093531n,
   ];
-  const vkIc = Array.from({ length: 10 }, () => g1).flat();
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        groth16VerifierArtifact.abi,
-        groth16VerifierArtifact.bytecode,
-        [zeroG1, g2, g2, g2, vkIc]
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        groth16VerifierArtifact.abi,
-        groth16VerifierArtifact.bytecode,
-        [[1n, 1n], g2, g2, g2, vkIc]
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        groth16VerifierArtifact.abi,
-        groth16VerifierArtifact.bytecode,
-        [g1, zeroG2, g2, g2, vkIc]
-      );
-    },
-    callException
-  );
-
-  const invalidG2 = g2.slice();
-  invalidG2[0] = invalidG2[0] + 1n;
-  const nonSubgroupG2 = [
-    0n,
-    1n,
-    0x0cf32d3c49a2cb8a092f24ec3201e68dc299b6216e6321ee60573e3a7f596ea8n,
-    0x07bca656753ef8cbee60335acbffe3def91636952d4ab9eb0b839c7f3566c0e2n,
-  ];
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        groth16VerifierArtifact.abi,
-        groth16VerifierArtifact.bytecode,
-        [g1, invalidG2, g2, g2, vkIc]
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        groth16VerifierArtifact.abi,
-        groth16VerifierArtifact.bytecode,
-        [g1, g2, g2, g2, vkIc.slice(0, 9)]
-      );
-    },
-    callException
-  );
-
-  const groth16Verifier = await deploy(
-    signer,
-    groth16VerifierArtifact.abi,
-    groth16VerifierArtifact.bytecode,
-    [g1, g2, g2, g2, vkIc]
-  );
-  assert.equal(await groth16Verifier.publicInputCount(), 9n);
-  const groth16VerifierAddress = await groth16Verifier.getAddress();
-  const groth16VerifierCodeHash = await contractCodeHash(
-    provider,
-    groth16VerifierAddress
-  );
-  const groth16VerifierKeyHash = await groth16Verifier.verifyingKeyHash();
-  const nonVerifierContract = await deploy(
-    signer,
-    ownableArtifact.abi,
-    ownableArtifact.bytecode
-  );
-  const nonVerifierContractAddress = await nonVerifierContract.getAddress();
-  const nonVerifierContractCodeHash = await contractCodeHash(
-    provider,
-    nonVerifierContractAddress
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        [
-          groth16VerifierAddress,
-          ethers.keccak256(ethers.toUtf8Bytes("wrong-verifier-code")),
-          groth16VerifierKeyHash,
-          "evm-groth16-bn254-v1",
-          "stark-fri-v1",
-          networkId,
-          0,
-          1,
-        ]
-      );
-    },
-    callExceptionWithReason("Verifier code hash mismatch")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        [
-          groth16VerifierAddress,
-          groth16VerifierCodeHash,
-          ethers.ZeroHash,
-          "evm-groth16-bn254-v1",
-          "stark-fri-v1",
-          networkId,
-          0,
-          1,
-        ]
-      );
-    },
-    callExceptionWithReason("Verifier key hash is required")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        [
-          groth16VerifierAddress,
-          groth16VerifierCodeHash,
-          ethers.keccak256(ethers.toUtf8Bytes("wrong-verifier-key")),
-          "evm-groth16-bn254-v1",
-          "stark-fri-v1",
-          networkId,
-          0,
-          1,
-        ]
-      );
-    },
-    callExceptionWithReason("Verifier key hash mismatch")
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bridgeArtifact.abi,
-        bridgeArtifact.bytecode,
-        [
-          nonVerifierContractAddress,
-          nonVerifierContractCodeHash,
-          groth16VerifierKeyHash,
-          "evm-groth16-bn254-v1",
-          "stark-fri-v1",
-          networkId,
-          0,
-          1,
-        ]
-      );
-    },
-    callExceptionWithReason("Verifier key hash unavailable")
-  );
-
-  const groth16Bridge = await deploy(
-    signer,
-    bridgeArtifact.abi,
-    bridgeArtifact.bytecode,
-    [
-      groth16VerifierAddress,
-      groth16VerifierCodeHash,
-      groth16VerifierKeyHash,
-      "evm-groth16-bn254-v1",
-      "stark-fri-v1",
-      networkId,
-      0,
-      1,
-    ]
-  );
-  assert.equal(await groth16Bridge.verifierCodeHash(), groth16VerifierCodeHash);
-  assert.equal(await groth16Bridge.verifierKeyHash(), groth16VerifierKeyHash);
-  const bscTestnetGroth16Bridge = await deploy(
-    signer,
-    bridgeArtifact.abi,
-    bridgeArtifact.bytecode,
-    [
-      groth16VerifierAddress,
-      groth16VerifierCodeHash,
-      groth16VerifierKeyHash,
-      "evm-groth16-bn254-v1",
-      "stark-fri-v1",
-      bscTestnetNetworkId,
-      0,
-      2,
-    ]
-  );
-  const bscTestnetGroth16BridgeAddress =
-    await bscTestnetGroth16Bridge.getAddress();
-  const bscTestnetDestinationBindingHash = computeDestinationBindingHash(abi, {
-    verifierBackendHash: ethers.keccak256(
-      ethers.toUtf8Bytes("evm-groth16-bn254-v1")
-    ),
-    proofFamilyHash: ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1")),
-    networkId: bscTestnetNetworkId,
-    sourceDomain: 0,
-    targetDomain: 2,
-    verifierAddress: groth16VerifierAddress,
-    wrapperAddress: bscTestnetGroth16BridgeAddress,
-    verifierCodeHash: groth16VerifierCodeHash,
-    verifierKeyHash: groth16VerifierKeyHash,
-  });
-  assert.equal(await bscTestnetGroth16Bridge.networkId(), bscTestnetNetworkId);
-  assert.equal(await bscTestnetGroth16Bridge.expectedTargetDomain(), 2n);
-  assert.equal(
-    await bscTestnetGroth16Bridge.destinationBindingHash(),
-    bscTestnetDestinationBindingHash
-  );
-  const invalidGroth16ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 0, publicInputs[3], g1, g2, g1]
-  );
-
-  await assert.rejects(
-    async () => {
-      const zeroStatementTx = await groth16Bridge.submitSccpMessageProof(
-        invalidGroth16ProofBytes,
-        publicInputs,
-        ethers.ZeroHash
-      );
-      await zeroStatementTx.wait();
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      const zeroPayloadTx = await groth16Bridge.submitSccpMessageProof(
-        invalidGroth16ProofBytes,
-        zeroPayloadInputs,
-        statementHash
-      );
-      await zeroPayloadTx.wait();
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      const zeroFinalityHeightTx = await groth16Bridge.submitSccpMessageProof(
-        invalidGroth16ProofBytes,
-        zeroFinalityHeightInputs,
-        statementHash
-      );
-      await zeroFinalityHeightTx.wait();
-    },
-    callException
-  );
-
-  const wrongTargetBridgeInputs = publicInputs.slice();
-  wrongTargetBridgeInputs[2] = ethers.zeroPadValue(ethers.toBeHex(2), 32);
-  await assert.rejects(
-    async () => {
-      const wrongTargetTx = await groth16Bridge.submitSccpMessageProof(
-        invalidGroth16ProofBytes,
-        wrongTargetBridgeInputs,
-        statementHash
-      );
-      await wrongTargetTx.wait();
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      const badGrothTx = await groth16Bridge.submitSccpMessageProof(
-        invalidGroth16ProofBytes,
-        publicInputs,
-        statementHash
-      );
-      await badGrothTx.wait();
-    },
-    callException
-  );
-
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        invalidGroth16ProofBytes,
-        publicInputs,
-        ethers.ZeroHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        invalidGroth16ProofBytes,
-        publicInputs,
-        statementHash,
-        ethers.ZeroHash
-      ),
-    callExceptionWithReason("Destination binding hash is required")
-  );
-
-  const zeroTargetGrothInputs = publicInputs.slice();
-  zeroTargetGrothInputs[2] = ethers.ZeroHash;
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        invalidGroth16ProofBytes,
-        zeroTargetGrothInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        invalidGroth16ProofBytes,
-        zeroPayloadInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  const malformedGroth16ProofBytes = "0x1234";
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        malformedGroth16ProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  const trailingGroth16ProofBytes = ethers.concat([
-    invalidGroth16ProofBytes,
-    "0x00",
-  ]);
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        trailingGroth16ProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callExceptionWithReason("Unexpected Groth16 proof length")
-  );
-
-  const wrongVersionGroth16ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [2, messageId, 0, publicInputs[3], g1, g2, g1]
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        wrongVersionGroth16ProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  const overflowSourceDomainGroth16ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 4294967296n, publicInputs[3], g1, g2, g1]
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        overflowSourceDomainGroth16ProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callExceptionWithReason("Source domain overflow")
-  );
-
-  const overflowTargetDomainGrothInputs = publicInputs.slice();
-  overflowTargetDomainGrothInputs[2] = ethers.zeroPadValue(
-    ethers.toBeHex(4294967296n),
-    32
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        invalidGroth16ProofBytes,
-        overflowTargetDomainGrothInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callExceptionWithReason("Target domain overflow")
-  );
-
-  const sameDomainGroth16ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 1, publicInputs[3], g1, g2, g1]
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        sameDomainGroth16ProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callExceptionWithReason("Source and target domains must differ")
-  );
-
-  const zeroPointGroth16ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 0, publicInputs[3], zeroG1, g2, g1]
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        zeroPointGroth16ProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  const zeroG2Groth16ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 0, publicInputs[3], g1, zeroG2, g1]
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        zeroG2Groth16ProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callExceptionWithReason("G2 point is zero")
-  );
-
-  const zeroCGroth16ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 0, publicInputs[3], g1, g2, zeroG1]
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        zeroCGroth16ProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callExceptionWithReason("G1 point is zero")
-  );
-
-  const invalidG2Groth16ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 0, publicInputs[3], g1, invalidG2, g1]
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        invalidG2Groth16ProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  const nonSubgroupG2Groth16ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 0, publicInputs[3], g1, nonSubgroupG2, g1]
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        nonSubgroupG2Groth16ProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  const wrongCommitmentGroth16ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [
-      1,
-      messageId,
-      0,
-      ethers.keccak256(ethers.toUtf8Bytes("wrong-commitment-root")),
-      g1,
-      g2,
-      g1,
-    ]
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        wrongCommitmentGroth16ProofBytes,
-        publicInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  const mismatchedGrothInputs = publicInputs.slice();
-  mismatchedGrothInputs[0] = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-groth-message")
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        invalidGroth16ProofBytes,
-        mismatchedGrothInputs,
-        statementHash,
-        destinationBindingHash
-      ),
-    callException
-  );
-
-  const groth16BridgeAddress = await groth16Bridge.getAddress();
-  const groth16DestinationBindingHash = computeDestinationBindingHash(abi, {
-    verifierBackendHash: ethers.keccak256(
-      ethers.toUtf8Bytes("evm-groth16-bn254-v1")
-    ),
-    proofFamilyHash: ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1")),
-    networkId,
-    sourceDomain: 0,
-    targetDomain: 1,
-    verifierAddress: groth16VerifierAddress,
-    wrapperAddress: groth16BridgeAddress,
-    verifierCodeHash: groth16VerifierCodeHash,
-    verifierKeyHash: groth16VerifierKeyHash,
-  });
-  const acceptingGroth16ProofBytes = await buildAcceptingGroth16ProofBytes(
-    provider,
-    abi,
+  const configuredIc = Array(12).fill(g1).flat();
+  const constructorAdversaries = [
     {
-      publicInputs,
-      sourceDomain: 0,
-      statementHash,
-      destinationBindingHash: groth16DestinationBindingHash,
-      g1,
-      g2,
-    }
-  );
-  const acceptedGroth16Result =
-    await groth16Verifier.verifySccpMessageProof.staticCall(
-      acceptingGroth16ProofBytes,
-      publicInputs,
-      statementHash,
-      groth16DestinationBindingHash
-    );
-  assert.equal(acceptedGroth16Result[0], messageId);
-  assert.equal(acceptedGroth16Result[1], 0n);
-  assert.equal(acceptedGroth16Result[2], publicInputs[3]);
-  const wrongDestinationBindingHash = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-groth16-destination-binding")
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        acceptingGroth16ProofBytes,
-        publicInputs,
-        statementHash,
-        wrongDestinationBindingHash
-      ),
-    callExceptionWithReason("Groth16 proof verification failed")
-  );
-  const mismatchedPayloadGroth16Inputs = publicInputs.slice();
-  mismatchedPayloadGroth16Inputs[1] = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-accepted-groth16-payload")
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        acceptingGroth16ProofBytes,
-        mismatchedPayloadGroth16Inputs,
-        statementHash,
-        groth16DestinationBindingHash
-    ),
-    callExceptionWithReason("Groth16 proof verification failed")
-  );
-  const mismatchedFinalityHeightGroth16Inputs = publicInputs.slice();
-  mismatchedFinalityHeightGroth16Inputs[4] = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-accepted-groth16-finality-height")
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        acceptingGroth16ProofBytes,
-        mismatchedFinalityHeightGroth16Inputs,
-        statementHash,
-        groth16DestinationBindingHash
-      ),
-    callExceptionWithReason("Groth16 proof verification failed")
-  );
-  const mismatchedFinalityGroth16Inputs = publicInputs.slice();
-  mismatchedFinalityGroth16Inputs[5] = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-accepted-groth16-finality")
-  );
-  await assert.rejects(
-    () =>
-      groth16Verifier.verifySccpMessageProof.staticCall(
-        acceptingGroth16ProofBytes,
-        mismatchedFinalityGroth16Inputs,
-        statementHash,
-        groth16DestinationBindingHash
-      ),
-    callExceptionWithReason("Groth16 proof verification failed")
-  );
-  const crossDeploymentGroth16Bridge = await deploy(
-    signer,
-    bridgeArtifact.abi,
-    bridgeArtifact.bytecode,
-    [
-      groth16VerifierAddress,
-      groth16VerifierCodeHash,
-      groth16VerifierKeyHash,
-      "evm-groth16-bn254-v1",
-      "stark-fri-v1",
-      networkId,
-      0,
-      1,
-    ]
-  );
-  assert.notEqual(
-    await crossDeploymentGroth16Bridge.destinationBindingHash(),
-    groth16DestinationBindingHash
-  );
-  await assert.rejects(
-    async () => {
-      const crossDeploymentGroth16Tx =
-        await crossDeploymentGroth16Bridge.submitSccpMessageProof(
-          acceptingGroth16ProofBytes,
-          publicInputs,
-          statementHash
-        );
-      await crossDeploymentGroth16Tx.wait();
+      label: "truncated IC",
+      alpha: g1,
+      beta: g2,
+      gamma: g2,
+      delta: g2,
+      ic: Array(11).fill(g1).flat(),
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "Unexpected verifying key input count",
     },
-    callExceptionWithReason("Groth16 proof verification failed")
-  );
-  const acceptedGroth16Tx = await groth16Bridge.submitSccpMessageProof(
-    acceptingGroth16ProofBytes,
-    publicInputs,
-    statementHash
-  );
-  const acceptedGroth16Receipt = await acceptedGroth16Tx.wait();
-  assert.equal(await groth16Bridge.usedMessageProofs(messageId), true);
-  assert.equal(
-    await groth16Bridge.destinationBindingHash(),
-    groth16DestinationBindingHash
-  );
-  const acceptedGroth16Logs = acceptedGroth16Receipt.logs
-    .filter(
-      (log) => log.address.toLowerCase() === groth16BridgeAddress.toLowerCase()
-    )
-    .map((log) => {
-      try {
-        return bridgeIface.parseLog(log);
-      } catch (_error) {
-        return null;
-      }
-    })
-    .filter((log) => log && log.name === "MessageProofAccepted");
-  assert.equal(acceptedGroth16Logs.length, 1);
-  assert.equal(acceptedGroth16Logs[0].args.messageId, messageId);
-  assert.equal(acceptedGroth16Logs[0].args.sourceDomain, 0n);
-  assert.equal(acceptedGroth16Logs[0].args.commitmentRoot, publicInputs[3]);
-  assert.equal(acceptedGroth16Logs[0].args.statementHash, statementHash);
-  assert.equal(
-    acceptedGroth16Logs[0].args.destinationBindingHash,
-    groth16DestinationBindingHash
-  );
-  assert.equal(
-    acceptedGroth16Logs[0].args.verifierBackendHash,
-    ethers.keccak256(ethers.toUtf8Bytes("evm-groth16-bn254-v1"))
-  );
-  assert.equal(
-    acceptedGroth16Logs[0].args.proofFamilyHash,
-    ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1"))
-  );
-  assert.equal(acceptedGroth16Logs[0].args.networkId, networkId);
-
-  await assert.rejects(
-    async () => {
-      const replayGroth16Tx = await groth16Bridge.submitSccpMessageProof(
-        acceptingGroth16ProofBytes,
-        publicInputs,
-        statementHash
-      );
-      await replayGroth16Tx.wait();
+    {
+      label: "trailing IC",
+      alpha: g1,
+      beta: g2,
+      gamma: g2,
+      delta: g2,
+      ic: Array(13).fill(g1).flat(),
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "Unexpected verifying key input count",
     },
-    callExceptionWithReason("Message proof already used")
-  );
-
-  await assert.rejects(
-    async () => {
-      const duplicateInvalidGroth16Tx =
-        await groth16Bridge.submitSccpMessageProof(
-          invalidGroth16ProofBytes,
-          publicInputs,
-          statementHash
-        );
-      await duplicateInvalidGroth16Tx.wait();
+    {
+      label: "zero G1 alpha",
+      alpha: [0n, 0n],
+      beta: g2,
+      gamma: g2,
+      delta: g2,
+      ic: configuredIc,
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "G1 point is zero",
     },
-    callExceptionWithReason("Message proof already used")
-  );
-
-  const tronNetworkId = ethers.encodeBytes32String("tron-mainnet");
-  const tronConstructorArgs = ({
-    expectedVerifierKeyHash = groth16VerifierKeyHash,
-    proofFamily = "stark-fri-v1",
-    configuredNetworkId = tronNetworkId,
-    configuredSourceDomain = 0,
-    configuredTargetDomain = 5,
-  } = {}) => [
-    g1,
-    g2,
-    g2,
-    g2,
-    vkIc,
-    expectedVerifierKeyHash,
-    proofFamily,
-    configuredNetworkId,
-    configuredSourceDomain,
-    configuredTargetDomain,
+    {
+      label: "out-of-field G1 alpha",
+      alpha: [BASE_FIELD, 2n],
+      beta: g2,
+      gamma: g2,
+      delta: g2,
+      ic: configuredIc,
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "G1 point out of range",
+    },
+    {
+      label: "off-curve G1 alpha",
+      alpha: [1n, 3n],
+      beta: g2,
+      gamma: g2,
+      delta: g2,
+      ic: configuredIc,
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "G1 scalar multiplication failed",
+    },
+    {
+      label: "zero G2 beta",
+      alpha: g1,
+      beta: [0n, 0n, 0n, 0n],
+      gamma: g2,
+      delta: g2,
+      ic: configuredIc,
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "G2 point is zero",
+    },
+    {
+      label: "out-of-field G2 gamma",
+      alpha: g1,
+      beta: g2,
+      gamma: [BASE_FIELD, g2[1], g2[2], g2[3]],
+      delta: g2,
+      ic: configuredIc,
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "G2 point out of range",
+    },
+    {
+      label: "off-curve G2 delta",
+      alpha: g1,
+      beta: g2,
+      gamma: g2,
+      delta: [1n, 2n, 3n, 4n],
+      ic: configuredIc,
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "Pairing precompile failed",
+    },
+    {
+      label: "non-subgroup G2 beta",
+      alpha: g1,
+      beta: NON_SUBGROUP_G2,
+      gamma: g2,
+      delta: g2,
+      ic: configuredIc,
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "Pairing precompile failed",
+    },
+    {
+      label: "zero first IC point",
+      alpha: g1,
+      beta: g2,
+      gamma: g2,
+      delta: g2,
+      ic: [0n, 0n, ...configuredIc.slice(2)],
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "G1 point is zero",
+    },
+    {
+      label: "off-curve final IC point",
+      alpha: g1,
+      beta: g2,
+      gamma: g2,
+      delta: g2,
+      ic: [...configuredIc.slice(0, -2), 1n, 3n],
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "G1 scalar multiplication failed",
+    },
+    {
+      label: "zero semantic profile",
+      alpha: g1,
+      beta: g2,
+      gamma: g2,
+      delta: g2,
+      ic: configuredIc,
+      semantic: ethers.ZeroHash,
+      anchor: SORA_FINALITY_ANCHOR_HASH,
+      reason: "Semantic proof profile hash is required",
+    },
+    {
+      label: "zero finality anchor",
+      alpha: g1,
+      beta: g2,
+      gamma: g2,
+      delta: g2,
+      ic: configuredIc,
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: ethers.ZeroHash,
+      reason: "SORA finality anchor hash is required",
+    },
+    {
+      label: "aliased semantic and anchor",
+      alpha: g1,
+      beta: g2,
+      gamma: g2,
+      delta: g2,
+      ic: configuredIc,
+      semantic: SEMANTIC_PROOF_PROFILE_HASH,
+      anchor: SEMANTIC_PROOF_PROFILE_HASH,
+      reason: "Semantic profile and finality anchor must differ",
+    },
   ];
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronGroth16VerifierArtifact.abi,
-        tronGroth16VerifierArtifact.bytecode,
-        tronConstructorArgs({ configuredTargetDomain: 4 })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronGroth16VerifierArtifact.abi,
-        tronGroth16VerifierArtifact.bytecode,
-        tronConstructorArgs({ configuredSourceDomain: 1 })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronGroth16VerifierArtifact.abi,
-        tronGroth16VerifierArtifact.bytecode,
-        tronConstructorArgs({ proofFamily: "debug-proof-family" })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronGroth16VerifierArtifact.abi,
-        tronGroth16VerifierArtifact.bytecode,
-        tronConstructorArgs({ expectedVerifierKeyHash: ethers.ZeroHash })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronGroth16VerifierArtifact.abi,
-        tronGroth16VerifierArtifact.bytecode,
-        tronConstructorArgs({
-          expectedVerifierKeyHash: ethers.keccak256(
-            ethers.toUtf8Bytes("wrong-tron-key")
-          ),
-        })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronGroth16VerifierArtifact.abi,
-        tronGroth16VerifierArtifact.bytecode,
-        tronConstructorArgs({ proofFamily: "" })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronGroth16VerifierArtifact.abi,
-        tronGroth16VerifierArtifact.bytecode,
-        tronConstructorArgs({ configuredNetworkId: ethers.ZeroHash })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronGroth16VerifierArtifact.abi,
-        tronGroth16VerifierArtifact.bytecode,
-        tronConstructorArgs({ configuredTargetDomain: 0 })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronGroth16VerifierArtifact.abi,
-        tronGroth16VerifierArtifact.bytecode,
-        tronConstructorArgs({ configuredSourceDomain: 99 })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronGroth16VerifierArtifact.abi,
-        tronGroth16VerifierArtifact.bytecode,
-        tronConstructorArgs({
-          configuredSourceDomain: 5,
-          configuredTargetDomain: 5,
-        })
-      );
-    },
-    callException
-  );
-
-  const tronSourceBridgeConstructorArgs = ({
-    configuredNetworkId = tronNetworkId,
-    configuredSourceDomain = 5,
-    configuredTargetDomain = 0,
-  } = {}) => [
-    configuredNetworkId,
-    configuredSourceDomain,
-    configuredTargetDomain,
-  ];
-  const tronSourceDomain = 5;
-  const tronTargetDomain = 0;
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronSourceBridgeArtifact.abi,
-        tronSourceBridgeArtifact.bytecode,
-        tronSourceBridgeConstructorArgs({ configuredNetworkId: ethers.ZeroHash })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronSourceBridgeArtifact.abi,
-        tronSourceBridgeArtifact.bytecode,
-        tronSourceBridgeConstructorArgs({ configuredTargetDomain: 1 })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronSourceBridgeArtifact.abi,
-        tronSourceBridgeArtifact.bytecode,
-        tronSourceBridgeConstructorArgs({ configuredTargetDomain: 99 })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronSourceBridgeArtifact.abi,
-        tronSourceBridgeArtifact.bytecode,
-        tronSourceBridgeConstructorArgs({ configuredSourceDomain: 4 })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronSourceBridgeArtifact.abi,
-        tronSourceBridgeArtifact.bytecode,
-        tronSourceBridgeConstructorArgs({ configuredSourceDomain: 0 })
-      );
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tronSourceBridgeArtifact.abi,
-        tronSourceBridgeArtifact.bytecode,
-        tronSourceBridgeConstructorArgs({
-          configuredSourceDomain: 5,
-          configuredTargetDomain: 5,
-        })
-      );
-    },
-    callException
-  );
-
-  const tronSourceBridge = await deploy(
-    signer,
-    tronSourceBridgeArtifact.abi,
-    tronSourceBridgeArtifact.bytecode,
-    tronSourceBridgeConstructorArgs()
-  );
-  const sourceBridgeAddress = (await tronSourceBridge.getAddress()).toLowerCase();
-  const expectedSourceBridgeConfigHash = computeTronSourceBridgeConfigHash(abi, {
-    bridgeAddress: await tronSourceBridge.getAddress(),
-    networkId: tronNetworkId,
-    sourceDomain: 5,
-    targetDomain: 0,
-    owner: await signer.getAddress(),
-  });
-  assert.equal(await tronSourceBridge.owner(), await signer.getAddress());
-  assert.equal(await tronSourceBridge.networkId(), tronNetworkId);
-  assert.equal(await tronSourceBridge.sourceDomain(), 5n);
-  assert.equal(await tronSourceBridge.targetDomain(), 0n);
-  assert.equal(
-    await tronSourceBridge.sourceBridgeConfigHash(),
-    expectedSourceBridgeConfigHash
-  );
-  const sourceBridgeIface = new ethers.Interface(tronSourceBridgeArtifact.abi);
-  const sourceBridgeDeploymentReceipt = await tronSourceBridge
-    .deploymentTransaction()
-    .wait();
-  const configuredLogs = sourceBridgeDeploymentReceipt.logs
-    .filter((log) => log.address.toLowerCase() === sourceBridgeAddress)
-    .map((log) => {
-      try {
-        return sourceBridgeIface.parseLog(log);
-      } catch (_error) {
-        return null;
-      }
-    })
-    .filter((log) => log && log.name === "SourceBridgeConfigured");
-  assert.equal(configuredLogs.length, 1);
-  assert.equal(configuredLogs[0].args.bridge.toLowerCase(), sourceBridgeAddress);
-  assert.equal(configuredLogs[0].args.networkId, tronNetworkId);
-  assert.equal(configuredLogs[0].args.sourceDomain, 5n);
-  assert.equal(configuredLogs[0].args.targetDomain, 0n);
-  assert.equal(configuredLogs[0].args.ownerAddress, await signer.getAddress());
-  assert.equal(configuredLogs[0].args.configHash, expectedSourceBridgeConfigHash);
-
-  assert.equal(
-    await tronSourceBridge.emitSourceBridgeConfigHash.staticCall(),
-    expectedSourceBridgeConfigHash
-  );
-  const configHashTx = await tronSourceBridge.emitSourceBridgeConfigHash();
-  const configHashReceipt = await configHashTx.wait();
-  const configHashLogs = configHashReceipt.logs
-    .filter((log) => log.address.toLowerCase() === sourceBridgeAddress)
-    .map((log) => sourceBridgeIface.parseLog(log))
-    .filter((log) => log.name === "SourceBridgeConfigHash");
-  assert.equal(configHashLogs.length, 1);
-  assert.equal(configHashLogs[0].args.configHash, expectedSourceBridgeConfigHash);
-  assert.equal(configHashLogs[0].args.ownerAddress, await signer.getAddress());
-  await assert.rejects(
-    async () => {
-      const emitConfigHashTx = await tronSourceBridge
-        .connect(outsider)
-        .emitSourceBridgeConfigHash();
-      await emitConfigHashTx.wait();
-    },
-    callException
-  );
-
-  const transferSourceBridge = await deploy(
-    signer,
-    tronSourceBridgeArtifact.abi,
-    tronSourceBridgeArtifact.bytecode,
-    tronSourceBridgeConstructorArgs()
-  );
-  const transferSourceBridgeAddress = await transferSourceBridge.getAddress();
-  const preTransferConfigHash = computeTronSourceBridgeConfigHash(abi, {
-    bridgeAddress: transferSourceBridgeAddress,
-    networkId: tronNetworkId,
-    sourceDomain: 5,
-    targetDomain: 0,
-    owner: await signer.getAddress(),
-  });
-  assert.equal(
-    await transferSourceBridge.sourceBridgeConfigHash(),
-    preTransferConfigHash
-  );
-  const transferOwnershipTx = await transferSourceBridge.transferOwnership(
-    await outsider.getAddress()
-  );
-  const transferOwnershipReceipt = await transferOwnershipTx.wait();
-  const postTransferConfigHash = computeTronSourceBridgeConfigHash(abi, {
-    bridgeAddress: transferSourceBridgeAddress,
-    networkId: tronNetworkId,
-    sourceDomain: 5,
-    targetDomain: 0,
-    owner: await outsider.getAddress(),
-  });
-  const transferConfigHashLogs = transferOwnershipReceipt.logs
-    .filter(
-      (log) =>
-        log.address.toLowerCase() === transferSourceBridgeAddress.toLowerCase()
-    )
-    .map((log) => sourceBridgeIface.parseLog(log))
-    .filter((log) => log.name === "SourceBridgeConfigHash");
-  assert.equal(transferConfigHashLogs.length, 1);
-  assert.equal(transferConfigHashLogs[0].args.configHash, postTransferConfigHash);
-  assert.equal(
-    transferConfigHashLogs[0].args.ownerAddress,
-    await outsider.getAddress()
-  );
-  assert.notEqual(postTransferConfigHash, preTransferConfigHash);
-  assert.equal(await transferSourceBridge.owner(), await outsider.getAddress());
-  assert.equal(
-    await transferSourceBridge.sourceBridgeConfigHash(),
-    postTransferConfigHash
-  );
-  await assert.rejects(
-    async () => {
-      const staleOwnerConfigHashTx =
-        await transferSourceBridge.emitSourceBridgeConfigHash();
-      await staleOwnerConfigHashTx.wait();
-    },
-    callException
-  );
-  assert.equal(
-    await transferSourceBridge.connect(outsider).emitSourceBridgeConfigHash.staticCall(),
-    postTransferConfigHash
-  );
-  const transferDigest = ethers.keccak256(
-    ethers.toUtf8Bytes("tron-source-event-after-transfer")
-  );
-  await assert.rejects(
-    async () => {
-      const staleOwnerSubmitTx =
-        await transferSourceBridge.submitSccpSourceEvent(
-          tronSourceDomain,
-          tronTargetDomain,
-          transferDigest
-        );
-      await staleOwnerSubmitTx.wait();
-    },
-    callException
-  );
-  assert.equal(
-    await transferSourceBridge
-      .connect(outsider)
-      .submitSccpSourceEvent.staticCall(
-        tronSourceDomain,
-        tronTargetDomain,
-        transferDigest
-      ),
-    transferDigest
-  );
-  const transferSubmitTx = await transferSourceBridge
-    .connect(outsider)
-    .submitSccpSourceEvent(tronSourceDomain, tronTargetDomain, transferDigest);
-  await transferSubmitTx.wait();
-  assert.equal(
-    await transferSourceBridge.submittedSourceEvents(transferDigest),
-    true
-  );
-
-  const sourceEventDigest = ethers.keccak256(
-    ethers.toUtf8Bytes("tron-source-event-digest")
-  );
-  assert.equal(
-    await tronSourceBridge.submitSccpSourceEvent.staticCall(
-      tronSourceDomain,
-      tronTargetDomain,
-      sourceEventDigest
-    ),
-    sourceEventDigest
-  );
-
-  await assert.rejects(
-    async () => {
-      const zeroSourceEventTx = await tronSourceBridge.submitSccpSourceEvent(
-        tronSourceDomain,
-        tronTargetDomain,
-        ethers.ZeroHash
-      );
-      await zeroSourceEventTx.wait();
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      const wrongSourceDomainTx = await tronSourceBridge.submitSccpSourceEvent(
-        4,
-        tronTargetDomain,
-        sourceEventDigest
-      );
-      await wrongSourceDomainTx.wait();
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      const wrongTargetDomainTx = await tronSourceBridge.submitSccpSourceEvent(
-        tronSourceDomain,
-        1,
-        sourceEventDigest
-      );
-      await wrongTargetDomainTx.wait();
-    },
-    callException
-  );
-
-  await assert.rejects(
-    async () => {
-      const unauthorizedTx = await tronSourceBridge
-        .connect(outsider)
-        .submitSccpSourceEvent(
-          tronSourceDomain,
-          tronTargetDomain,
-          sourceEventDigest
-        );
-      await unauthorizedTx.wait();
-    },
-    callException
-  );
-
-  const sourceEventTx = await tronSourceBridge.submitSccpSourceEvent(
-    tronSourceDomain,
-    tronTargetDomain,
-    sourceEventDigest
-  );
-  const sourceEventReceipt = await sourceEventTx.wait();
-  assert.equal(
-    await tronSourceBridge.submittedSourceEvents(sourceEventDigest),
-    true
-  );
-  const sourceEventTopic = ethers.id("SccpSourceEvent(bytes32)");
-  const sourceEventLogs = sourceEventReceipt.logs.filter(
-    (log) =>
-      log.address.toLowerCase() === sourceBridgeAddress &&
-      log.topics[0] === sourceEventTopic
-  );
-  assert.equal(sourceEventLogs.length, 1);
-  assert.deepEqual(sourceEventLogs[0].topics, [
-    sourceEventTopic,
-    sourceEventDigest,
-  ]);
-  assert.equal(sourceEventLogs[0].data, "0x");
-
-  await assert.rejects(
-    async () => {
-      const replaySourceEventTx = await tronSourceBridge.submitSccpSourceEvent(
-        tronSourceDomain,
-        tronTargetDomain,
-        sourceEventDigest
-      );
-      await replaySourceEventTx.wait();
-    },
-    callException
-  );
-
-  const tronGroth16Verifier = await deploy(
-    signer,
-    tronGroth16VerifierArtifact.abi,
-    tronGroth16VerifierArtifact.bytecode,
-    tronConstructorArgs()
-  );
-  const tronGroth16Address = await tronGroth16Verifier.getAddress();
-  const tronRuntimeCodeHash = await contractCodeHash(provider, tronGroth16Address);
-  const expectedTronBackendHash = ethers.keccak256(
-    ethers.toUtf8Bytes("tron-groth16-bn254-v1")
-  );
-  const expectedTronProofFamilyHash = ethers.keccak256(
-    ethers.toUtf8Bytes("stark-fri-v1")
-  );
-  const tronGroth16Iface = new ethers.Interface(tronGroth16VerifierArtifact.abi);
-  const tronGroth16DeploymentReceipt = await tronGroth16Verifier
-    .deploymentTransaction()
-    .wait();
-  const verifierBoundLogs = tronGroth16DeploymentReceipt.logs
-    .filter(
-      (log) => log.address.toLowerCase() === tronGroth16Address.toLowerCase()
-    )
-    .map((log) => {
-      try {
-        return tronGroth16Iface.parseLog(log);
-      } catch (_error) {
-        return null;
-      }
-    })
-    .filter((log) => log && log.name === "VerifierBound");
-  assert.equal(verifierBoundLogs.length, 1);
-  assert.equal(
-    verifierBoundLogs[0].args.verifier.toLowerCase(),
-    tronGroth16Address.toLowerCase()
-  );
-  assert.equal(verifierBoundLogs[0].args.verifierKeyHash, groth16VerifierKeyHash);
-  assert.equal(
-    verifierBoundLogs[0].args.verifierBackendHash,
-    expectedTronBackendHash
-  );
-  assert.equal(
-    verifierBoundLogs[0].args.proofFamilyHash,
-    expectedTronProofFamilyHash
-  );
-  assert.equal(
-    await tronGroth16Verifier.verifierKeyHash(),
-    groth16VerifierKeyHash
-  );
-  assert.equal(await tronGroth16Verifier.verifierCodeHash(), tronRuntimeCodeHash);
-  assert.equal(
-    await tronGroth16Verifier.verifierBackendHash(),
-    expectedTronBackendHash
-  );
-  assert.equal(
-    await tronGroth16Verifier.proofFamilyHash(),
-    expectedTronProofFamilyHash
-  );
-  assert.equal(await tronGroth16Verifier.networkId(), tronNetworkId);
-  assert.equal(await tronGroth16Verifier.expectedSourceDomain(), 0n);
-  assert.equal(await tronGroth16Verifier.expectedTargetDomain(), 5n);
-  const expectedTronDestinationBindingHash =
-    computeTronDestinationBindingHash(abi, {
-      verifierBackendHash: expectedTronBackendHash,
-      proofFamilyHash: expectedTronProofFamilyHash,
-      networkId: tronNetworkId,
-      sourceDomain: 0,
-      targetDomain: 5,
-      verifierAddress: tronGroth16Address,
-      verifierCodeHash: tronRuntimeCodeHash,
-      verifierKeyHash: groth16VerifierKeyHash,
+  for (const adversary of constructorAdversaries) {
+    await assertConstructorRevertsWith(
+      signer,
+      verifierArtifact,
+      [
+        adversary.alpha,
+        adversary.beta,
+        adversary.gamma,
+        adversary.delta,
+        adversary.ic,
+        adversary.semantic,
+        adversary.anchor,
+      ],
+      adversary.reason,
+    ).catch((error) => {
+      error.message = `${adversary.label}: ${error.message}`;
+      throw error;
     });
+  }
+  const codecHarness = await deploy(signer, codecHarnessArtifact);
+  const invalidTairaRecipients = invalidI105Values();
+  const invalidTairaSenders = invalidTairaSenderValues();
+  const validTairaSenders = universalTairaSenders();
   assert.equal(
-    await tronGroth16Verifier.destinationBindingHash(),
-    expectedTronDestinationBindingHash
+    await codecHarness.isTairaRecipient(CANONICAL_I105_BYTES),
+    true,
   );
+  assert.equal(await codecHarness.isTairaAccount(CANONICAL_I105_BYTES), true);
+  for (const sender of validTairaSenders) {
+    assert.equal(await codecHarness.isTairaAccount(sender), true);
+    assert.equal(
+      await codecHarness.isTairaRecipient(sender),
+      false,
+      "multisig and non-Ed25519 accounts must not become irreversible burn recipients",
+    );
+  }
+  for (const invalidRecipient of invalidTairaRecipients) {
+    assert.equal(
+      await codecHarness.isTairaRecipient(invalidRecipient),
+      false,
+      `hostile Taira recipient was accepted: ${ethers.hexlify(invalidRecipient)}`,
+    );
+  }
+  for (const invalidSender of invalidTairaSenders) {
+    assert.equal(
+      await codecHarness.isTairaAccount(invalidSender),
+      false,
+      `hostile Taira sender was accepted: ${ethers.hexlify(invalidSender)}`,
+    );
+  }
+  const tokenRouteHarness = await deploy(signer, tokenRouteHarnessArtifact);
+  const arithmeticToken = new ethers.Contract(
+    await tokenRouteHarness.token(),
+    tokenArtifact.abi,
+    signer,
+  );
+  const arithmeticAccount = await signer.getAddress();
+  await (await tokenRouteHarness.mint(arithmeticAccount, ethers.MaxUint256)).wait();
+  assert.equal(await arithmeticToken.totalSupply(), ethers.MaxUint256);
   assert.equal(
-    await tronGroth16Verifier.emitDestinationBindingConfigured.staticCall(),
-    expectedTronDestinationBindingHash
+    await arithmeticToken.balanceOf(arithmeticAccount),
+    ethers.MaxUint256,
   );
-  const destinationBindingTx =
-    await tronGroth16Verifier.emitDestinationBindingConfigured();
-  const destinationBindingReceipt = await destinationBindingTx.wait();
-  const destinationBindingLogs = destinationBindingReceipt.logs
-    .filter(
-      (log) => log.address.toLowerCase() === tronGroth16Address.toLowerCase()
-    )
-    .map((log) => {
-      try {
-        return tronGroth16Iface.parseLog(log);
-      } catch (_error) {
-        return null;
-      }
-    })
-    .filter((log) => log && log.name === "DestinationBindingConfigured");
-  assert.equal(destinationBindingLogs.length, 1);
-  assert.equal(
-    destinationBindingLogs[0].args.destinationBindingHash,
-    expectedTronDestinationBindingHash
-  );
-  assert.equal(
-    destinationBindingLogs[0].args.verifierCodeHash,
-    tronRuntimeCodeHash
-  );
-  assert.equal(
-    destinationBindingLogs[0].args.verifierKeyHash,
-    groth16VerifierKeyHash
-  );
-  assert.equal(destinationBindingLogs[0].args.networkId, tronNetworkId);
-  assert.equal(destinationBindingLogs[0].args.sourceDomain, 0n);
-  assert.equal(destinationBindingLogs[0].args.targetDomain, 5n);
-
-  const tronInputs = publicInputs.slice();
-  tronInputs[2] = ethers.zeroPadValue(ethers.toBeHex(5), 32);
-
   await assert.rejects(
-    async () => {
-      const zeroStatementTx =
-        await tronGroth16Verifier.submitSccpMessageProof(
-          invalidGroth16ProofBytes,
-          tronInputs,
-          ethers.ZeroHash
-        );
-      await zeroStatementTx.wait();
-    },
-    callException
+    tokenRouteHarness.mint(arithmeticAccount, 1n),
+    rejectedWith(),
   );
-
-  const zeroTronMessageInputs = tronInputs.slice();
-  zeroTronMessageInputs[0] = ethers.ZeroHash;
+  assert.equal(await arithmeticToken.totalSupply(), ethers.MaxUint256);
+  assert.equal(
+    await arithmeticToken.balanceOf(arithmeticAccount),
+    ethers.MaxUint256,
+  );
   await assert.rejects(
-    async () => {
-      const zeroMessageTx = await tronGroth16Verifier.submitSccpMessageProof(
-        invalidGroth16ProofBytes,
-        zeroTronMessageInputs,
-        statementHash
-      );
-      await zeroMessageTx.wait();
-    },
-    callException
+    arithmeticToken.mint(arithmeticAccount, 1n),
+    rejectedWith("Caller is not the bridge"),
   );
-
-  const zeroTronPayloadInputs = tronInputs.slice();
-  zeroTronPayloadInputs[1] = ethers.ZeroHash;
+  await (await tokenRouteHarness.burn(arithmeticAccount, ethers.MaxUint256)).wait();
+  assert.equal(await arithmeticToken.totalSupply(), 0n);
+  assert.equal(await arithmeticToken.balanceOf(arithmeticAccount), 0n);
   await assert.rejects(
-    async () => {
-      const zeroPayloadTx = await tronGroth16Verifier.submitSccpMessageProof(
-        invalidGroth16ProofBytes,
-        zeroTronPayloadInputs,
-        statementHash
-      );
-      await zeroPayloadTx.wait();
-    },
-    callException
+    tokenRouteHarness.burn(arithmeticAccount, 1n),
+    rejectedWith("Uint256 underflow"),
+  );
+  assert.equal(await arithmeticToken.totalSupply(), 0n);
+  assert.equal(await arithmeticToken.balanceOf(arithmeticAccount), 0n);
+  const nativeVectors = JSON.parse(
+    fs.readFileSync(
+      path.join(REPO, "fixtures/sccp/native_transfer_event_v1.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(nativeVectors.version, 1);
+  assert.equal(nativeVectors.vectors.length, 7);
+  for (const vector of nativeVectors.vectors) {
+    const result = await codecHarness.sourceVector(
+      PROFILE_TAG[vector.source_profile],
+      `0x${vector.canonical_payload_hex}`,
+    );
+    assert.equal(result[0], `0x${vector.canonical_lane_hex}`);
+    assert.equal(result[1], `0x${vector.lane_hash_hex}`);
+    assert.equal(result[2], `0x${vector.message_id_hex}`);
+    assert.equal(result[3], `0x${vector.payload_hash_hex}`);
+    assert.equal(result[4], `0x${vector.source_event_digest_hex}`);
+    const evmHashes = await codecHarness.evmHashVector(
+      PROFILE_TAG[vector.source_profile],
+      `0x${vector.canonical_payload_hex}`,
+    );
+    assert.equal(evmHashes[0], result[1]);
+    assert.equal(evmHashes[1], result[3]);
+  }
+  for (const length of [0, 1, 63, 127, 128, 129, 255, 256, 257, 511]) {
+    const input = Buffer.from(
+      Array.from({ length }, (_, index) => (index * 197 + length) & 0xff),
+    );
+    const hashes = await codecHarness.rawBlakeParity(input);
+    assert.equal(
+      hashes[1],
+      hashes[0],
+      `EIP-152 BLAKE2b parity failed for ${length} bytes`,
+    );
+  }
+  const verifier = await deploy(signer, verifierArtifact, [
+    g1,
+    g2,
+    g2,
+    g2,
+    configuredIc,
+    SEMANTIC_PROOF_PROFILE_HASH,
+    SORA_FINALITY_ANCHOR_HASH,
+  ]);
+  const verifierAddress = await verifier.getAddress();
+  const verifierCodeHash = ethers.keccak256(
+    await provider.getCode(verifierAddress),
+  );
+  const verifierKeyHash = await verifier.verifyingKeyHash();
+  await assert.rejects(
+    deploy(signer, verifierArtifact, [
+      g1,
+      g2,
+      g2,
+      g2,
+      configuredIc,
+      verifierKeyHash,
+      SORA_FINALITY_ANCHOR_HASH,
+    ]),
+    rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(signer, verifierArtifact, [
+      g1,
+      g2,
+      g2,
+      g2,
+      configuredIc,
+      SEMANTIC_PROOF_PROFILE_HASH,
+      verifierKeyHash,
+    ]),
+    rejectedWith(),
+  );
+  assert.equal(
+    await verifier.semanticProofProfileHash(),
+    SEMANTIC_PROOF_PROFILE_HASH,
+  );
+  assert.equal(
+    await verifier.soraFinalityAnchorHash(),
+    SORA_FINALITY_ANCHOR_HASH,
   );
 
-  const zeroTronCommitmentInputs = tronInputs.slice();
-  zeroTronCommitmentInputs[3] = ethers.ZeroHash;
-  const zeroTronCommitmentProofBytes = abi.encode(
+  const tronNetworkId = word(0xcd8690dc);
+  await assertConstructorRevertsWith(
+    signer,
+    tronVerifierArtifact,
     [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
+      g1,
+      g2,
+      g2,
+      g2,
+      configuredIc,
+      SEMANTIC_PROOF_PROFILE_HASH,
+      SORA_FINALITY_ANCHOR_HASH,
+      verifierKeyHash,
+      tronNetworkId,
+      DOMAIN_SORA,
+      DOMAIN_TRON,
     ],
-    [1, messageId, 0, ethers.ZeroHash, g1, g2, g1]
+    undefined,
   );
-  await assert.rejects(
-    async () => {
-      const zeroCommitmentTx =
-        await tronGroth16Verifier.submitSccpMessageProof(
-          zeroTronCommitmentProofBytes,
-          zeroTronCommitmentInputs,
-          statementHash
-        );
-      await zeroCommitmentTx.wait();
-    },
-    callException
-  );
-
-  const zeroTronFinalityInputs = tronInputs.slice();
-  zeroTronFinalityInputs[4] = ethers.ZeroHash;
-  await assert.rejects(
-    async () => {
-      const zeroFinalityTx = await tronGroth16Verifier.submitSccpMessageProof(
-        invalidGroth16ProofBytes,
-        zeroTronFinalityInputs,
-        statementHash
-      );
-      await zeroFinalityTx.wait();
-    },
-    callException
+  await assertConstructorRevertsWith(
+    signer,
+    tronBridgeArtifact,
+    [
+      await outsider.getAddress(),
+      verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+    ],
+    undefined,
   );
 
-  const zeroTronFinalityBlockInputs = tronInputs.slice();
-  zeroTronFinalityBlockInputs[5] = ethers.ZeroHash;
-  await assert.rejects(
-    async () => {
-      const zeroFinalityBlockTx =
-        await tronGroth16Verifier.submitSccpMessageProof(
-          invalidGroth16ProofBytes,
-          zeroTronFinalityBlockInputs,
-          statementHash
-        );
-      await zeroFinalityBlockTx.wait();
-    },
-    callException
+  {
+  const tronEip1193Provider = createHardhatProvider({
+    chainId: 0xcd8690dc,
+    blockGasLimit: Number(MAX_DEPLOYMENT_GAS + 5_000_000n),
+  });
+  const provider = new ethers.BrowserProvider(tronEip1193Provider);
+  assert.equal((await provider.getNetwork()).chainId, 0xcd8690dcn);
+  const signer = await provider.getSigner(0);
+  const tronVerifier = await deploy(signer, tronVerifierArtifact, [
+    g1,
+    g2,
+    g2,
+    g2,
+    Array(12).fill(g1).flat(),
+    SEMANTIC_PROOF_PROFILE_HASH,
+    SORA_FINALITY_ANCHOR_HASH,
+    verifierKeyHash,
+    tronNetworkId,
+    DOMAIN_SORA,
+    DOMAIN_TRON,
+  ]);
+  const tronVerifierAddress = await tronVerifier.getAddress();
+  const tronVerifierCodeHash = ethers.keccak256(
+    await provider.getCode(tronVerifierAddress),
+  );
+  assert.equal(await tronVerifier.verifierCodeHash(), tronVerifierCodeHash);
+  assert.equal(await tronVerifier.verifyingKeyHash(), verifierKeyHash);
+  assert.equal(
+    await tronVerifier.semanticProofProfileHash(),
+    SEMANTIC_PROOF_PROFILE_HASH,
+  );
+  assert.equal(
+    await tronVerifier.soraFinalityAnchorHash(),
+    SORA_FINALITY_ANCHOR_HASH,
   );
 
-  const wrongTronTargetInputs = tronInputs.slice();
-  wrongTronTargetInputs[2] = ethers.zeroPadValue(ethers.toBeHex(6), 32);
-  await assert.rejects(
-    async () => {
-      const wrongTargetTx = await tronGroth16Verifier.submitSccpMessageProof(
-        invalidGroth16ProofBytes,
-        wrongTronTargetInputs,
-        statementHash
-      );
-      await wrongTargetTx.wait();
-    },
-    callException
+  const tronRoute = await deployPreboundRoute(
+    signer,
+    tronTokenArtifact,
+    tronBridgeArtifact,
+    [
+      verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+    ],
   );
-
+  const tronBridge = tronRoute.route;
+  const tronBridgeAddress = await tronBridge.getAddress();
+  const tronToken = tronRoute.token;
+  const tronTokenAddress = await tronToken.getAddress();
+  const tronTokenCodeHash = ethers.keccak256(
+    await provider.getCode(tronTokenAddress),
+  );
+  assert.equal(await tronToken.bridge(), tronBridgeAddress);
+  assert.equal(await tronBridge.networkId(), tronNetworkId);
+  assert.equal(await tronBridge.routeRevision(), BigInt(ROUTE_REVISION));
+  const secondTronRoute = await deployPreboundRoute(
+    signer,
+    tronTokenArtifact,
+    tronBridgeArtifact,
+    [
+      verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+    ],
+  );
+  const secondTronBridge = secondTronRoute.route;
+  const secondTronBridgeAddress = await secondTronBridge.getAddress();
+  const secondTronToken = secondTronRoute.token;
+  assert.equal(await secondTronToken.bridge(), secondTronBridgeAddress);
+  const rejectedTronRouteAddress = await nextCreateAddress(signer, 1);
+  const rejectedTronToken = await deploy(signer, tronTokenArtifact, [
+    rejectedTronRouteAddress,
+  ]);
+  const rejectedTronTokenAddress = await rejectedTronToken.getAddress();
   await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        "0x1234",
-        tronInputs,
-        statementHash
+    deploy(signer, tronBridgeArtifact, [
+      rejectedTronTokenAddress,
+      verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+      TRON_NILE_PROFILE,
+      0,
+    ]),
+    rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(signer, tronBridgeArtifact, [
+      rejectedTronTokenAddress,
+      verifierPolicy(
+        tronVerifierAddress,
+        tronVerifierCodeHash,
+        verifierKeyHash,
+        ALTERNATE_SEMANTIC_PROOF_PROFILE_HASH,
       ),
-    callExceptionWithReason("Unexpected Groth16 proof length")
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
   );
-
-  const trailingTronProofBytes = ethers.concat([
-    invalidGroth16ProofBytes,
-    "0x00",
+  await assert.rejects(
+    deploy(signer, tronBridgeArtifact, [
+      rejectedTronTokenAddress,
+      verifierPolicy(
+        tronVerifierAddress,
+        tronVerifierCodeHash,
+        verifierKeyHash,
+        SEMANTIC_PROOF_PROFILE_HASH,
+        ALTERNATE_SORA_FINALITY_ANCHOR_HASH,
+      ),
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+  const tronCodeAliasedVerifier = await deploy(
+    signer,
+    codeAliasedVerifierArtifact,
+    [tronNetworkId, true],
+  );
+  const tronCodeAliasedVerifierAddress =
+    await tronCodeAliasedVerifier.getAddress();
+  const tronCodeAliasedVerifierCodeHash = ethers.keccak256(
+    await provider.getCode(tronCodeAliasedVerifierAddress),
+  );
+  assert.equal(
+    await tronCodeAliasedVerifier.soraFinalityAnchorHash(),
+    tronCodeAliasedVerifierCodeHash,
+  );
+  const aliasedTronRouteAddress = await nextCreateAddress(signer, 1);
+  const aliasedTronToken = await deploy(signer, tronTokenArtifact, [
+    aliasedTronRouteAddress,
   ]);
   await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        trailingTronProofBytes,
-        tronInputs,
-        statementHash
+    deploy(signer, tronBridgeArtifact, [
+      await aliasedTronToken.getAddress(),
+      verifierPolicy(
+        tronCodeAliasedVerifierAddress,
+        tronCodeAliasedVerifierCodeHash,
+        await tronCodeAliasedVerifier.verifyingKeyHash(),
+        await tronCodeAliasedVerifier.semanticProofProfileHash(),
+        await tronCodeAliasedVerifier.soraFinalityAnchorHash(),
       ),
-    callExceptionWithReason("Unexpected Groth16 proof length")
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
   );
-
-  const wrongTronVersionProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [2, messageId, 0, publicInputs[3], g1, g2, g1]
-  );
-  await assert.rejects(
-    async () => {
-      const wrongVersionTx = await tronGroth16Verifier.submitSccpMessageProof(
-        wrongTronVersionProofBytes,
-        tronInputs,
-        statementHash
-      );
-      await wrongVersionTx.wait();
-    },
-    callException
-  );
-
-  const wrongTronMessageProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [
-      1,
-      ethers.keccak256(ethers.toUtf8Bytes("wrong-tron-message")),
-      0,
-      publicInputs[3],
-      g1,
-      g2,
-      g1,
-    ]
-  );
-  await assert.rejects(
-    async () => {
-      const wrongMessageTx = await tronGroth16Verifier.submitSccpMessageProof(
-        wrongTronMessageProofBytes,
-        tronInputs,
-        statementHash
-      );
-      await wrongMessageTx.wait();
-    },
-    callException
-  );
-
-  const wrongTronSourceProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 1, publicInputs[3], g1, g2, g1]
-  );
-  await assert.rejects(
-    async () => {
-      const wrongSourceTx = await tronGroth16Verifier.submitSccpMessageProof(
-        wrongTronSourceProofBytes,
-        tronInputs,
-        statementHash
-      );
-      await wrongSourceTx.wait();
-    },
-    callException
-  );
-
-  const overflowTronSourceProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 4294967296n, publicInputs[3], g1, g2, g1]
-  );
-  await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        overflowTronSourceProofBytes,
-        tronInputs,
-        statementHash
-      ),
-    callExceptionWithReason("Source domain overflow")
-  );
-
-  const wrongTronCommitmentProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [
-      1,
-      messageId,
-      0,
-      ethers.keccak256(ethers.toUtf8Bytes("wrong-tron-commitment-root")),
-      g1,
-      g2,
-      g1,
-    ]
-  );
-  await assert.rejects(
-    async () => {
-      const wrongCommitmentTx = await tronGroth16Verifier.submitSccpMessageProof(
-        wrongTronCommitmentProofBytes,
-        tronInputs,
-        statementHash
-      );
-      await wrongCommitmentTx.wait();
-    },
-    callException
-  );
-
-  const zeroTronAProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 0, publicInputs[3], zeroG1, g2, g1]
-  );
-  await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        zeroTronAProofBytes,
-        tronInputs,
-        statementHash
-      ),
-    callExceptionWithReason("G1 point is zero")
-  );
-
-  const zeroTronBProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 0, publicInputs[3], g1, zeroG2, g1]
-  );
-  await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        zeroTronBProofBytes,
-        tronInputs,
-        statementHash
-      ),
-    callExceptionWithReason("G2 point is zero")
-  );
-
-  const zeroTronCProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 0, publicInputs[3], g1, g2, zeroG1]
-  );
-  await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        zeroTronCProofBytes,
-        tronInputs,
-        statementHash
-      ),
-    callExceptionWithReason("G1 point is zero")
-  );
-
-  const invalidTronG2ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 0, publicInputs[3], g1, invalidG2, g1]
-  );
-  await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        invalidTronG2ProofBytes,
-        tronInputs,
-        statementHash
-      ),
-    callException
-  );
-
-  const nonSubgroupTronG2ProofBytes = abi.encode(
-    [
-      "uint256",
-      "bytes32",
-      "uint256",
-      "bytes32",
-      "uint256[2]",
-      "uint256[4]",
-      "uint256[2]",
-    ],
-    [1, messageId, 0, publicInputs[3], g1, nonSubgroupG2, g1]
-  );
-  await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        nonSubgroupTronG2ProofBytes,
-        tronInputs,
-        statementHash
-      ),
-    callException
-  );
-
-  const acceptingTronGroth16ProofBytes = await buildAcceptingGroth16ProofBytes(
-    provider,
-    abi,
-    {
-      publicInputs: tronInputs,
-      sourceDomain: 0,
-      statementHash,
-      destinationBindingHash: expectedTronDestinationBindingHash,
-      g1,
-      g2,
-    }
-  );
-  await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        acceptingTronGroth16ProofBytes,
-        tronInputs,
-        ethers.keccak256(ethers.toUtf8Bytes("wrong-tron-statement"))
-      ),
-    callException
-  );
-  const mismatchedTronPayloadInputs = tronInputs.slice();
-  mismatchedTronPayloadInputs[1] = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-accepted-tron-payload")
-  );
-  await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        acceptingTronGroth16ProofBytes,
-        mismatchedTronPayloadInputs,
-        statementHash
-    ),
-    callExceptionWithReason("Groth16 proof verification failed")
-  );
-  const mismatchedTronFinalityHeightInputs = tronInputs.slice();
-  mismatchedTronFinalityHeightInputs[4] = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-accepted-tron-finality-height")
-  );
-  await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        acceptingTronGroth16ProofBytes,
-        mismatchedTronFinalityHeightInputs,
-        statementHash
-      ),
-    callExceptionWithReason("Groth16 proof verification failed")
-  );
-  const mismatchedTronFinalityInputs = tronInputs.slice();
-  mismatchedTronFinalityInputs[5] = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-accepted-tron-finality")
-  );
-  await assert.rejects(
-    () =>
-      tronGroth16Verifier.submitSccpMessageProof.staticCall(
-        acceptingTronGroth16ProofBytes,
-        mismatchedTronFinalityInputs,
-        statementHash
-      ),
-    callExceptionWithReason("Groth16 proof verification failed")
-  );
-  const otherTronNetworkVerifier = await deploy(
-    signer,
-    tronGroth16VerifierArtifact.abi,
-    tronGroth16VerifierArtifact.bytecode,
-    tronConstructorArgs({
-      configuredNetworkId: ethers.encodeBytes32String("tron-alt-network"),
-    })
-  );
-  assert.notEqual(
-    await otherTronNetworkVerifier.destinationBindingHash(),
-    expectedTronDestinationBindingHash
-  );
-  await assert.rejects(
-    () =>
-      otherTronNetworkVerifier.submitSccpMessageProof.staticCall(
-        acceptingTronGroth16ProofBytes,
-        tronInputs,
-        statementHash
-      ),
-    callException
+  const tronDestinationBinding = await tronBridge.destinationBindingHash();
+  const secondTronDestinationBinding =
+    await secondTronBridge.destinationBindingHash();
+  assert.notEqual(tronDestinationBinding, secondTronDestinationBinding);
+  assert.equal(
+    tronDestinationBinding,
+    exactTronDestinationBindingHash({
+      abi,
+      networkId: tronNetworkId,
+      verifierAddress: tronVerifierAddress,
+      bridgeAddress: tronBridgeAddress,
+      verifierCodeHash: tronVerifierCodeHash,
+      verifierKeyHash,
+      semanticProofProfileHash: SEMANTIC_PROOF_PROFILE_HASH,
+      soraFinalityAnchorHash: SORA_FINALITY_ANCHOR_HASH,
+    }),
   );
   assert.equal(
-    await tronGroth16Verifier.submitSccpMessageProof.staticCall(
-      acceptingTronGroth16ProofBytes,
-      tronInputs,
-      statementHash
-    ),
-    messageId
-  );
-  const acceptedTronGroth16Tx =
-    await tronGroth16Verifier.submitSccpMessageProof(
-      acceptingTronGroth16ProofBytes,
-      tronInputs,
-      statementHash
-    );
-  const acceptedTronGroth16Receipt = await acceptedTronGroth16Tx.wait();
-  assert.equal(await tronGroth16Verifier.usedMessageProofs(messageId), true);
-  const acceptedTronGroth16Logs = acceptedTronGroth16Receipt.logs
-    .filter(
-      (log) => log.address.toLowerCase() === tronGroth16Address.toLowerCase()
-    )
-    .map((log) => {
-      try {
-        return tronGroth16Iface.parseLog(log);
-      } catch (_error) {
-        return null;
-      }
-    })
-    .filter((log) => log && log.name === "MessageProofAccepted");
-  assert.equal(acceptedTronGroth16Logs.length, 1);
-  assert.equal(acceptedTronGroth16Logs[0].args.messageId, messageId);
-  assert.equal(acceptedTronGroth16Logs[0].args.sourceDomain, 0n);
-  assert.equal(acceptedTronGroth16Logs[0].args.commitmentRoot, tronInputs[3]);
-  assert.equal(acceptedTronGroth16Logs[0].args.statementHash, statementHash);
-  assert.equal(
-    acceptedTronGroth16Logs[0].args.destinationBindingHash,
-    expectedTronDestinationBindingHash
+    secondTronDestinationBinding,
+    exactTronDestinationBindingHash({
+      abi,
+      networkId: tronNetworkId,
+      verifierAddress: tronVerifierAddress,
+      bridgeAddress: secondTronBridgeAddress,
+      verifierCodeHash: tronVerifierCodeHash,
+      verifierKeyHash,
+      semanticProofProfileHash: SEMANTIC_PROOF_PROFILE_HASH,
+      soraFinalityAnchorHash: SORA_FINALITY_ANCHOR_HASH,
+    }),
   );
   assert.equal(
-    acceptedTronGroth16Logs[0].args.verifierBackendHash,
-    ethers.keccak256(ethers.toUtf8Bytes("tron-groth16-bn254-v1"))
+    await tronBridge.routeConfigHash(),
+    exactTronRouteConfigHash({
+      abi,
+      profile: TRON_NILE_PROFILE,
+      networkId: tronNetworkId,
+      sourceLaneHash: await tronBridge.sourceLaneHash(),
+      destinationLaneHash: await tronBridge.destinationLaneHash(),
+      tokenAddress: tronTokenAddress,
+      tokenCodeHash: tronTokenCodeHash,
+      verifierAddress: tronVerifierAddress,
+      verifierCodeHash: tronVerifierCodeHash,
+      verifierKeyHash,
+      semanticProofProfileHash: SEMANTIC_PROOF_PROFILE_HASH,
+      soraFinalityAnchorHash: SORA_FINALITY_ANCHOR_HASH,
+      destinationBindingHash: tronDestinationBinding,
+      routeRevision: ROUTE_REVISION,
+    }),
   );
-  assert.equal(
-    acceptedTronGroth16Logs[0].args.proofFamilyHash,
-    ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1"))
-  );
-  assert.equal(acceptedTronGroth16Logs[0].args.networkId, tronNetworkId);
-
-  await assert.rejects(
-    async () => {
-      const replayTronGroth16Tx =
-        await tronGroth16Verifier.submitSccpMessageProof(
-          acceptingTronGroth16ProofBytes,
-          tronInputs,
-          statementHash
-        );
-      await replayTronGroth16Tx.wait();
-    },
-    callException
-  );
-
-  const routeIdHash = ethers.keccak256(ethers.toUtf8Bytes("taira_tron_xor"));
-  const assetKeyHash = ethers.keccak256(ethers.toUtf8Bytes("xor"));
-  const tairaXor = await deploy(
-    signer,
-    tairaXorArtifact.abi,
-    tairaXorArtifact.bytecode
-  );
-  const tairaXorAddress = await tairaXor.getAddress();
-  assert.equal(await tairaXor.name(), "TAIRA XOR");
-  assert.equal(await tairaXor.symbol(), "TairaXOR");
-  assert.equal(await tairaXor.decimals(), 18n);
-  assert.equal(await tairaXor.totalSupply(), 0n);
-
-  await assert.rejects(
-    async () => {
-      const nonOwnerBridgeTx = await tairaXor
-        .connect(outsider)
-        .setBridge(await outsider.getAddress());
-      await nonOwnerBridgeTx.wait();
-    },
-    callException
-  );
-  await assert.rejects(
-    async () => {
-      const zeroBridgeTx = await tairaXor.setBridge(ethers.ZeroAddress);
-      await zeroBridgeTx.wait();
-    },
-    callException
-  );
-  await assert.rejects(
-    async () => {
-      const unauthorizedMintTx = await tairaXor.mint(await signer.getAddress(), 1);
-      await unauthorizedMintTx.wait();
-    },
-    callException
-  );
-  await assert.rejects(
-    async () => {
-      const overdrawTx = await tairaXor.transfer(await outsider.getAddress(), 1);
-      await overdrawTx.wait();
-    },
-    callException
-  );
-  await assert.rejects(
-    async () => {
-      const zeroSenderTransferFromTx = await tairaXor.transferFrom(
-        ethers.ZeroAddress,
-        await outsider.getAddress(),
-        0
-      );
-      await zeroSenderTransferFromTx.wait();
-    },
-    callExceptionWithReason("Sender address is required")
-  );
-
-  const bridgeSourceBridge = await deploy(
-    signer,
-    tronSourceBridgeArtifact.abi,
-    tronSourceBridgeArtifact.bytecode,
-    tronSourceBridgeConstructorArgs()
-  );
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tairaXorBridgeArtifact.abi,
-        tairaXorBridgeArtifact.bytecode,
-        [
-          ethers.ZeroAddress,
-          tronGroth16Address,
-          await bridgeSourceBridge.getAddress(),
-          routeIdHash,
-          assetKeyHash,
-        ]
-      );
-    },
-    callException
-  );
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tairaXorBridgeArtifact.abi,
-        tairaXorBridgeArtifact.bytecode,
-        [
-          tairaXorAddress,
-          ethers.ZeroAddress,
-          await bridgeSourceBridge.getAddress(),
-          routeIdHash,
-          assetKeyHash,
-        ]
-      );
-    },
-    callExceptionWithReason("Verifier address is required")
-  );
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tairaXorBridgeArtifact.abi,
-        tairaXorBridgeArtifact.bytecode,
-        [
-          tairaXorAddress,
-          tronGroth16Address,
-          ethers.ZeroAddress,
-          routeIdHash,
-          assetKeyHash,
-        ]
-      );
-    },
-    callExceptionWithReason("Source bridge address is required")
-  );
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tairaXorBridgeArtifact.abi,
-        tairaXorBridgeArtifact.bytecode,
-        [
-          tronGroth16Address,
-          tronGroth16Address,
-          await bridgeSourceBridge.getAddress(),
-          routeIdHash,
-          assetKeyHash,
-        ]
-      );
-    },
-    callExceptionWithReason("Bridge addresses must differ")
-  );
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tairaXorBridgeArtifact.abi,
-        tairaXorBridgeArtifact.bytecode,
-        [
-          await bridgeSourceBridge.getAddress(),
-          tronGroth16Address,
-          await bridgeSourceBridge.getAddress(),
-          routeIdHash,
-          assetKeyHash,
-        ]
-      );
-    },
-    callExceptionWithReason("Bridge addresses must differ")
-  );
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tairaXorBridgeArtifact.abi,
-        tairaXorBridgeArtifact.bytecode,
-        [
-          tairaXorAddress,
-          tronGroth16Address,
-          tronGroth16Address,
-          routeIdHash,
-          assetKeyHash,
-        ]
-      );
-    },
-    callExceptionWithReason("Bridge addresses must differ")
-  );
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tairaXorBridgeArtifact.abi,
-        tairaXorBridgeArtifact.bytecode,
-        [
-          tairaXorAddress,
-          tronGroth16Address,
-          await bridgeSourceBridge.getAddress(),
-          routeIdHash,
-          ethers.ZeroHash,
-        ]
-      );
-    },
-    callExceptionWithReason("Asset key hash is required")
-  );
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        tairaXorBridgeArtifact.abi,
-        tairaXorBridgeArtifact.bytecode,
-        [
-          tairaXorAddress,
-          tronGroth16Address,
-          await bridgeSourceBridge.getAddress(),
-          ethers.ZeroHash,
-          assetKeyHash,
-        ]
-      );
-    },
-    callException
-  );
-
-  const tairaXorBridge = await deploy(
-    signer,
-    tairaXorBridgeArtifact.abi,
-    tairaXorBridgeArtifact.bytecode,
-    [
-      tairaXorAddress,
-      tronGroth16Address,
-      await bridgeSourceBridge.getAddress(),
-      routeIdHash,
-      assetKeyHash,
-    ]
-  );
-  const tairaXorBridgeAddress = await tairaXorBridge.getAddress();
-  assert.equal(await tairaXorBridge.routeIdHash(), routeIdHash);
-  assert.equal(await tairaXorBridge.assetKeyHash(), assetKeyHash);
-  assert.equal(await tairaXorBridge.networkId(), tronNetworkId);
-  assert.equal(
-    await tairaXorBridge.destinationBindingHash(),
-    expectedTronDestinationBindingHash
-  );
-  const setBridgeTx = await tairaXor.setBridge(tairaXorBridgeAddress);
-  await setBridgeTx.wait();
-  const lockBridgeTx = await tairaXor.lockBridge();
-  await lockBridgeTx.wait();
-  await assert.rejects(
-    async () => {
-      await tairaXor.lockBridge.staticCall();
-    },
-    callExceptionWithReason("Bridge is already locked")
-  );
-  await assert.rejects(
-    async () => {
-      const resetBridgeTx = await tairaXor.setBridge(await outsider.getAddress());
-      await resetBridgeTx.wait();
-    },
-    callException
-  );
-  const transferSourceOwnershipTx =
-    await bridgeSourceBridge.transferOwnership(tairaXorBridgeAddress);
-  await transferSourceOwnershipTx.wait();
-  assert.equal(await bridgeSourceBridge.owner(), tairaXorBridgeAddress);
-
-  const recipient = await outsider.getAddress();
-  const recipientTronAddress = tronBase58CheckFromEvmAddress(recipient);
-  const mintAmount = 12_345n;
-  const bridgePayloadInput = {
-    tairaAccountId,
-    recipientAddress: recipientTronAddress,
-    amount: mintAmount,
-    nonce: 42n,
-  };
-  const bridgeCanonicalPayload = tairaXorCanonicalTransferPayloadBytes(bridgePayloadInput);
-  const bridgePayloadHash = sccpPayloadHash(bridgeCanonicalPayload);
-  const bridgeMessageId = tairaXorTransferMessageId(bridgePayloadInput);
-  assert.equal(
-    await tairaXorBridge.tairaXorTransferMessageId.staticCall(bridgeCanonicalPayload),
-    bridgeMessageId
-  );
-  const bridgeInputs = [
-    bridgeMessageId,
-    bridgePayloadHash,
-    ethers.zeroPadValue(ethers.toBeHex(5), 32),
-    ethers.keccak256(ethers.toUtf8Bytes("taira-xor-commitment-root")),
-    ethers.zeroPadValue(ethers.toBeHex(77), 32),
-    ethers.keccak256(ethers.toUtf8Bytes("taira-xor-finality-block")),
-  ];
-  const bridgeStatementHash = ethers.keccak256(
-    ethers.toUtf8Bytes("taira-xor-statement")
-  );
-  const bridgeProofBytes = await buildAcceptingGroth16ProofBytes(
-    provider,
-    abi,
-    {
-      publicInputs: bridgeInputs,
-      sourceDomain: 0,
-      statementHash: bridgeStatementHash,
-      destinationBindingHash: expectedTronDestinationBindingHash,
-      g1,
-      g2,
-    }
-  );
-  const standaloneConsumeTx = await tronGroth16Verifier.submitSccpMessageProof(
-    bridgeProofBytes,
-    bridgeInputs,
-    bridgeStatementHash
-  );
-  await standaloneConsumeTx.wait();
-  assert.equal(await tronGroth16Verifier.usedMessageProofs(bridgeMessageId), true);
-  assert.equal(
-    await tairaXorBridge.finalizeFromTaira.staticCall(
-      bridgeProofBytes,
-      bridgeInputs,
-      bridgeStatementHash,
-      bridgeCanonicalPayload
-    ),
-    bridgeMessageId
-  );
-
-  const expectFinalizePayloadRejects = async (payload, expectedReason) => {
-    await assert.rejects(
-      async () => {
-        await tairaXorBridge.finalizeFromTaira.staticCall(
-          bridgeProofBytes,
-          bridgeInputs,
-          bridgeStatementHash,
-          payload
-        );
-      },
-      callExceptionWithReason(expectedReason)
-    );
-  };
-  const senderLengthOffset = 46;
-  const tairaSenderLength = new DataView(
-    bridgeCanonicalPayload.buffer,
-    bridgeCanonicalPayload.byteOffset + senderLengthOffset,
-    4
-  ).getUint32(0, true);
-  const recipientCodecOffset = senderLengthOffset + 4 + tairaSenderLength;
-  const recipientOffset = recipientCodecOffset + 1 + 4;
-
-  await expectFinalizePayloadRejects(
-    bridgeCanonicalPayload.slice(0, 20),
-    "Payload is too short"
-  );
-  const wrongVersionPayload = Uint8Array.from(bridgeCanonicalPayload);
-  wrongVersionPayload[0] = 2;
-  await expectFinalizePayloadRejects(wrongVersionPayload, "Unsupported payload version");
-  const wrongSourcePayload = Uint8Array.from(bridgeCanonicalPayload);
-  wrongSourcePayload[1] = 1;
-  await expectFinalizePayloadRejects(wrongSourcePayload, "Unexpected source domain");
-  const wrongDestinationPayload = Uint8Array.from(bridgeCanonicalPayload);
-  wrongDestinationPayload[5] = 0;
-  await expectFinalizePayloadRejects(
-    wrongDestinationPayload,
-    "Unexpected destination domain"
-  );
-  const wrongAssetHomePayload = Uint8Array.from(bridgeCanonicalPayload);
-  wrongAssetHomePayload[17] = 5;
-  await expectFinalizePayloadRejects(
-    wrongAssetHomePayload,
-    "Unexpected asset home domain"
-  );
-  const wrongAssetCodecPayload = Uint8Array.from(bridgeCanonicalPayload);
-  wrongAssetCodecPayload[21] = 2;
-  await expectFinalizePayloadRejects(wrongAssetCodecPayload, "Unexpected asset codec");
-  const wrongSenderCodecPayload = Uint8Array.from(bridgeCanonicalPayload);
-  wrongSenderCodecPayload[45] = 5;
-  await expectFinalizePayloadRejects(wrongSenderCodecPayload, "Unexpected sender codec");
-  const emptySenderPayload = Uint8Array.from(bridgeCanonicalPayload);
-  emptySenderPayload.fill(0, senderLengthOffset, senderLengthOffset + 4);
-  await expectFinalizePayloadRejects(emptySenderPayload, "Sender is required");
-  const wrongRecipientCodecPayload = Uint8Array.from(bridgeCanonicalPayload);
-  wrongRecipientCodecPayload[recipientCodecOffset] = 1;
-  await expectFinalizePayloadRejects(
-    wrongRecipientCodecPayload,
-    "Unexpected recipient codec"
-  );
-  const invalidBase58RecipientPayload = Uint8Array.from(bridgeCanonicalPayload);
-  invalidBase58RecipientPayload[recipientOffset + 1] = "0".charCodeAt(0);
-  await expectFinalizePayloadRejects(
-    invalidBase58RecipientPayload,
-    "Recipient must be base58"
-  );
-  await expectFinalizePayloadRejects(
-    Uint8Array.from([...bridgeCanonicalPayload, 0]),
-    "Trailing payload bytes"
-  );
-
-  const wrongRoutePayload = Uint8Array.from(bridgeCanonicalPayload);
-  wrongRoutePayload[wrongRoutePayload.length - 1] ^= 1;
-  await assert.rejects(
-    async () => {
-      const wrongRouteTx = await tairaXorBridge.finalizeFromTaira(
-        bridgeProofBytes,
-        bridgeInputs,
-        bridgeStatementHash,
-        wrongRoutePayload
-      );
-      await wrongRouteTx.wait();
-    },
-    callExceptionWithReason("Unexpected route")
-  );
-  const wrongAssetPayload = Uint8Array.from(bridgeCanonicalPayload);
-  wrongAssetPayload[26] = "y".charCodeAt(0);
-  await assert.rejects(
-    async () => {
-      const wrongAssetTx = await tairaXorBridge.finalizeFromTaira(
-        bridgeProofBytes,
-        bridgeInputs,
-        bridgeStatementHash,
-        wrongAssetPayload
-      );
-      await wrongAssetTx.wait();
-    },
-    callExceptionWithReason("Unexpected asset")
-  );
-  const wrongBridgePayloadInputs = bridgeInputs.slice();
-  wrongBridgePayloadInputs[1] = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-taira-xor-payload")
-  );
-  await assert.rejects(
-    async () => {
-      const wrongPayloadTx = await tairaXorBridge.finalizeFromTaira(
-        bridgeProofBytes,
-        wrongBridgePayloadInputs,
-        bridgeStatementHash,
-        bridgeCanonicalPayload
-      );
-      await wrongPayloadTx.wait();
-    },
-    callExceptionWithReason("Groth16 proof verification failed")
-  );
-  const wrongBridgeTargetInputs = bridgeInputs.slice();
-  wrongBridgeTargetInputs[2] = ethers.zeroPadValue(ethers.toBeHex(4), 32);
-  await assert.rejects(
-    async () => {
-      const wrongTargetTx = await tairaXorBridge.finalizeFromTaira(
-        bridgeProofBytes,
-        wrongBridgeTargetInputs,
-        bridgeStatementHash,
-        bridgeCanonicalPayload
-      );
-      await wrongTargetTx.wait();
-    },
-    callExceptionWithReason("Unexpected target domain")
-  );
-  const wrongMessageInputs = bridgeInputs.slice();
-  wrongMessageInputs[0] = ethers.keccak256(
-    ethers.toUtf8Bytes("wrong-taira-xor-message")
-  );
-  await assert.rejects(
-    async () => {
-      const wrongMessageTx = await tairaXorBridge.finalizeFromTaira(
-        bridgeProofBytes,
-        wrongMessageInputs,
-        bridgeStatementHash,
-        bridgeCanonicalPayload
-      );
-      await wrongMessageTx.wait();
-    },
-    callExceptionWithReason("Message id mismatch")
-  );
-  const zeroRecipientPayload = Uint8Array.from(bridgeCanonicalPayload);
-  zeroRecipientPayload.set(
-    Buffer.from("T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb"),
-    recipientOffset
-  );
-  await assert.rejects(
-    async () => {
-      const zeroRecipientTx = await tairaXorBridge.finalizeFromTaira(
-        bridgeProofBytes,
-        bridgeInputs,
-        bridgeStatementHash,
-        zeroRecipientPayload
-      );
-      await zeroRecipientTx.wait();
-    },
-    callExceptionWithReason("Recipient address is required")
-  );
-  const zeroAmountPayload = Uint8Array.from(bridgeCanonicalPayload);
-  zeroAmountPayload.fill(0, 29, 45);
-  await assert.rejects(
-    async () => {
-      const zeroAmountTx = await tairaXorBridge.finalizeFromTaira(
-        bridgeProofBytes,
-        bridgeInputs,
-        bridgeStatementHash,
-        zeroAmountPayload
-      );
-      await zeroAmountTx.wait();
-    },
-    callExceptionWithReason("Amount is required")
-  );
-
-  const bridgeMintTx = await tairaXorBridge.finalizeFromTaira(
-    bridgeProofBytes,
-    bridgeInputs,
-    bridgeStatementHash,
-    bridgeCanonicalPayload
-  );
-  const bridgeMintReceipt = await bridgeMintTx.wait();
-  assert.equal(await tairaXorBridge.usedMessageProofs(bridgeMessageId), true);
-  assert.equal(await tairaXor.balanceOf(recipient), mintAmount);
-  assert.equal(await tairaXor.totalSupply(), mintAmount);
-  const tairaXorBridgeIface = new ethers.Interface(tairaXorBridgeArtifact.abi);
-  const bridgeMintLogs = bridgeMintReceipt.logs
-    .filter((log) => log.address.toLowerCase() === tairaXorBridgeAddress.toLowerCase())
-    .map((log) => tairaXorBridgeIface.parseLog(log))
-    .filter((log) => log.name === "TairaXorMintFinalized");
-  assert.equal(bridgeMintLogs.length, 1);
-  assert.equal(bridgeMintLogs[0].args.messageId, bridgeMessageId);
-  assert.equal(bridgeMintLogs[0].args.recipient, recipient);
-  assert.equal(bridgeMintLogs[0].args.amount, mintAmount);
-  assert.equal(bridgeMintLogs[0].args.payloadHash, bridgePayloadHash);
-  await assert.rejects(
-    async () => {
-      const bridgeReplayTx = await tairaXorBridge.finalizeFromTaira(
-        bridgeProofBytes,
-        bridgeInputs,
-        bridgeStatementHash,
-        bridgeCanonicalPayload
-      );
-      await bridgeReplayTx.wait();
-    },
-    callExceptionWithReason("Message proof already used")
-  );
-
-  const transferAmount = 100n;
-  const transferTx = await tairaXor
-    .connect(outsider)
-    .transfer(await signer.getAddress(), transferAmount);
-  await transferTx.wait();
-  assert.equal(await tairaXor.balanceOf(await signer.getAddress()), transferAmount);
-  const approveTx = await tairaXor
-    .connect(outsider)
-    .approve(await signer.getAddress(), 7n);
-  await approveTx.wait();
-  const transferFromTx = await tairaXor.transferFrom(recipient, await signer.getAddress(), 7n);
-  await transferFromTx.wait();
-  assert.equal(await tairaXor.allowance(recipient, await signer.getAddress()), 0n);
-  assert.equal(await tairaXor.balanceOf(await signer.getAddress()), 107n);
-
-  const wrongRouteHash = ethers.keccak256(ethers.toUtf8Bytes("wrong-route"));
-  const wrongAssetHash = ethers.keccak256(ethers.toUtf8Bytes("wrong-asset"));
-  await assert.rejects(
-    async () => {
-      const badBurnRouteTx = await tairaXorBridge
-        .connect(outsider)
-        .burnToTaira(wrongRouteHash, assetKeyHash, ethers.toUtf8Bytes("testu1@taira"), 1);
-      await badBurnRouteTx.wait();
-    },
-    callExceptionWithReason("Unexpected route")
-  );
-  await assert.rejects(
-    async () => {
-      const badBurnAssetTx = await tairaXorBridge
-        .connect(outsider)
-        .burnToTaira(routeIdHash, wrongAssetHash, ethers.toUtf8Bytes("testu1@taira"), 1);
-      await badBurnAssetTx.wait();
-    },
-    callExceptionWithReason("Unexpected asset")
-  );
-  await assert.rejects(
-    async () => {
-      const zeroBurnAmountTx = await tairaXorBridge
-        .connect(outsider)
-        .burnToTaira(routeIdHash, assetKeyHash, ethers.toUtf8Bytes("testu1@taira"), 0);
-      await zeroBurnAmountTx.wait();
-    },
-    callException
-  );
-  await assert.rejects(
-    async () => {
-      const emptyRecipientTx = await tairaXorBridge
-        .connect(outsider)
-        .burnToTaira(routeIdHash, assetKeyHash, "0x", 1);
-      await emptyRecipientTx.wait();
-    },
-    callException
-  );
-  await assert.rejects(
-    async () => {
-      const longRecipientTx = await tairaXorBridge
-        .connect(outsider)
-        .burnToTaira(routeIdHash, assetKeyHash, `0x${"61".repeat(257)}`, 1);
-      await longRecipientTx.wait();
-    },
-    callExceptionWithReason("TAIRA recipient is too long")
-  );
-  await assert.rejects(
-    async () => {
-      const outsiderOverburnTx = await tairaXorBridge
-        .connect(outsider)
-        .burnToTaira(routeIdHash, assetKeyHash, ethers.toUtf8Bytes("testu1@taira"), mintAmount);
-      await outsiderOverburnTx.wait();
-    },
-    callException
-  );
-
-  const burnRecipient = ethers.toUtf8Bytes("testu2@taira");
-  const burnRecipientHash = ethers.keccak256(burnRecipient);
-  const burnAmount = 222n;
-  const expectedBurnDigest = computeTairaXorBurnSourceEventDigest(abi, {
-    routeIdHash,
-    assetKeyHash,
-    bridgeAddress: tairaXorBridgeAddress,
-    burner: recipient,
-    tairaRecipientHash: burnRecipientHash,
-    amount: burnAmount,
-    nonce: 0n,
-  });
-  assert.equal(
-    await tairaXorBridge.tairaXorBurnSourceEventDigest.staticCall(
-      routeIdHash,
-      assetKeyHash,
-      recipient,
-      burnRecipientHash,
-      burnAmount,
-      0
-    ),
-    expectedBurnDigest
-  );
-  const burnTx = await tairaXorBridge
-    .connect(outsider)
-    .burnToTaira(routeIdHash, assetKeyHash, burnRecipient, burnAmount);
-  const burnReceipt = await burnTx.wait();
-  assert.equal(await tairaXorBridge.burnNonce(), 1n);
-  assert.equal(await bridgeSourceBridge.submittedSourceEvents(expectedBurnDigest), true);
-  assert.equal(await tairaXor.balanceOf(recipient), mintAmount - transferAmount - 7n - burnAmount);
-  assert.equal(await tairaXor.totalSupply(), mintAmount - burnAmount);
-  const bridgeBurnLogs = burnReceipt.logs
-    .filter((log) => log.address.toLowerCase() === tairaXorBridgeAddress.toLowerCase())
-    .map((log) => tairaXorBridgeIface.parseLog(log))
-    .filter((log) => log.name === "TairaXorBurnStarted");
-  assert.equal(bridgeBurnLogs.length, 1);
-  assert.equal(bridgeBurnLogs[0].args.sourceEventDigest, expectedBurnDigest);
-  assert.equal(bridgeBurnLogs[0].args.burner, recipient);
-  assert.equal(bridgeBurnLogs[0].args.tairaRecipientHash, burnRecipientHash);
-  assert.equal(bridgeBurnLogs[0].args.amount, burnAmount);
-  assert.equal(bridgeBurnLogs[0].args.nonce, 0n);
-  assert.equal(ethers.hexlify(bridgeBurnLogs[0].args.tairaRecipient), ethers.hexlify(burnRecipient));
-  const bridgeSourceBridgeAddress = (await bridgeSourceBridge.getAddress()).toLowerCase();
-  const bridgeSourceEventLogs = burnReceipt.logs
-    .filter(
-      (log) =>
-        log.address.toLowerCase() === bridgeSourceBridgeAddress &&
-        log.topics[0] === sourceEventTopic
-    );
-  assert.equal(bridgeSourceEventLogs.length, 1);
-  assert.deepEqual(bridgeSourceEventLogs[0].topics, [
-    sourceEventTopic,
-    expectedBurnDigest,
+  const tronRecipient = Buffer.concat([
+    Buffer.from([0x41]),
+    Buffer.from((await signer.getAddress()).slice(2), "hex"),
   ]);
-  assert.equal(bridgeSourceEventLogs[0].data, "0x");
-
-  const bscRouteIdHash = ethers.keccak256(ethers.toUtf8Bytes("taira_bsc_xor"));
-  await assert.rejects(
-    async () => {
-      await deploy(signer, bscSourceBridgeArtifact.abi, bscSourceBridgeArtifact.bytecode, [
-        bscTestnetNetworkId,
-        5,
-        0,
-      ]);
-    },
-    callExceptionWithReason("Source domain must be BSC")
-  );
-  await assert.rejects(
-    async () => {
-      await deploy(signer, bscSourceBridgeArtifact.abi, bscSourceBridgeArtifact.bytecode, [
-        bscTestnetNetworkId,
-        2,
-        5,
-      ]);
-    },
-    callExceptionWithReason("Target domain must be SORA")
-  );
-  const bscSourceBridge = await deploy(
-    signer,
-    bscSourceBridgeArtifact.abi,
-    bscSourceBridgeArtifact.bytecode,
-    [bscTestnetNetworkId, 2, 0]
-  );
-  const bscSourceBridgeAddress = await bscSourceBridge.getAddress();
-  const expectedBscSourceBridgeConfigHash = computeBscSourceBridgeConfigHash(abi, {
-    bridgeAddress: bscSourceBridgeAddress,
-    networkId: bscTestnetNetworkId,
-    sourceDomain: 2,
-    targetDomain: 0,
-    owner: await signer.getAddress(),
+  const tronInboundPayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_TRON,
+    nonce: 23,
+    amount: 3,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_TRON21,
+    recipient: tronRecipient,
+    route: "taira_tron_xor",
   });
-  assert.equal(await bscSourceBridge.sourceDomain(), 2n);
-  assert.equal(await bscSourceBridge.targetDomain(), 0n);
+  const tronPayloadHex = ethers.hexlify(tronInboundPayload);
+  const tronMessageId =
+    await tronBridge.sccpDestinationMessageId(tronPayloadHex);
   assert.equal(
-    await bscSourceBridge.sourceBridgeConfigHash(),
-    expectedBscSourceBridgeConfigHash
+    tronMessageId,
+    messageId("sora-taira", "tron-nile", tronInboundPayload),
   );
-
-  const bscToken = await deploy(
-    signer,
-    bscTairaXorArtifact.abi,
-    bscTairaXorArtifact.bytecode
-  );
-  const bscTokenAddress = await bscToken.getAddress();
-  await assert.rejects(
-    async () => {
-      await deploy(
-        signer,
-        bscTairaXorBridgeArtifact.abi,
-        bscTairaXorBridgeArtifact.bytecode,
-        [
-          bscTokenAddress,
-          groth16VerifierAddress,
-          bscSourceBridgeAddress,
-          groth16VerifierCodeHash,
-          groth16VerifierKeyHash,
-          "evm-groth16-bn254-v1",
-          "stark-fri-v1",
-          bscTestnetNetworkId,
-          0,
-          5,
-          bscRouteIdHash,
-          assetKeyHash,
-        ]
-      );
-    },
-    callExceptionWithReason("Target domain must be BSC")
-  );
-  const bscRouteBridge = await deploy(
-    signer,
-    bscTairaXorBridgeArtifact.abi,
-    bscTairaXorBridgeArtifact.bytecode,
-    [
-      bscTokenAddress,
-      groth16VerifierAddress,
-      bscSourceBridgeAddress,
-      groth16VerifierCodeHash,
-      groth16VerifierKeyHash,
-      "evm-groth16-bn254-v1",
-      "stark-fri-v1",
-      bscTestnetNetworkId,
-      0,
-      2,
-      bscRouteIdHash,
-      assetKeyHash,
-    ]
-  );
-  const bscRouteBridgeAddress = await bscRouteBridge.getAddress();
-  const bscRouteDestinationBindingHash = computeDestinationBindingHash(abi, {
-    verifierBackendHash: ethers.keccak256(
-      ethers.toUtf8Bytes("evm-groth16-bn254-v1")
-    ),
-    proofFamilyHash: ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1")),
-    networkId: bscTestnetNetworkId,
-    sourceDomain: 0,
-    targetDomain: 2,
-    verifierAddress: groth16VerifierAddress,
-    wrapperAddress: bscRouteBridgeAddress,
-    verifierCodeHash: groth16VerifierCodeHash,
-    verifierKeyHash: groth16VerifierKeyHash,
-  });
-  assert.equal(await bscRouteBridge.networkId(), bscTestnetNetworkId);
-  assert.equal(await bscRouteBridge.expectedSourceDomain(), 0n);
-  assert.equal(await bscRouteBridge.expectedTargetDomain(), 2n);
-  assert.equal(await bscRouteBridge.verifierCodeHash(), groth16VerifierCodeHash);
-  assert.equal(await bscRouteBridge.verifierKeyHash(), groth16VerifierKeyHash);
-  assert.equal(
-    await bscRouteBridge.destinationBindingHash(),
-    bscRouteDestinationBindingHash
-  );
-  await (await bscToken.setBridge(bscRouteBridgeAddress)).wait();
-  await (await bscToken.lockBridge()).wait();
-  await (await bscSourceBridge.transferOwnership(bscRouteBridgeAddress)).wait();
-  assert.equal(await bscSourceBridge.owner(), bscRouteBridgeAddress);
-
-  const bscRecipient = ethers.getAddress(await outsider.getAddress());
-  const bscTairaToTokenScale = 1_000_000_000n;
-  const bscMintAmount = 45_678n;
-  const bscMintTokenAmount = bscMintAmount * bscTairaToTokenScale;
-  const bscPayloadInput = {
-    tairaAccountId,
-    bscRecipient,
-    amount: bscMintAmount,
-    nonce: 99n,
-  };
-  const bscCanonicalPayload =
-    tairaXorBscCanonicalTransferPayloadBytes(bscPayloadInput);
-  const bscPayloadHash = sccpPayloadHash(bscCanonicalPayload);
-  const bscMessageId = tairaXorBscTransferMessageId(bscPayloadInput);
-  const bscInputs = [
-    bscMessageId,
-    bscPayloadHash,
-    ethers.zeroPadValue(ethers.toBeHex(2), 32),
-    ethers.keccak256(ethers.toUtf8Bytes("taira-bsc-xor-commitment-root")),
-    ethers.zeroPadValue(ethers.toBeHex(97), 32),
-    ethers.keccak256(ethers.toUtf8Bytes("taira-bsc-xor-finality-block")),
+  const tronPublicInputs = [
+    tronMessageId,
+    await tronBridge.sccpPayloadHash(tronPayloadHex),
+    word(DOMAIN_TRON),
+    ethers.keccak256(ethers.toUtf8Bytes("tron-commitment-root")),
+    word(300),
+    ethers.keccak256(ethers.toUtf8Bytes("tron-finality-block")),
   ];
-  const bscStatementHash = ethers.keccak256(
-    ethers.toUtf8Bytes("taira-bsc-xor-statement")
+  const tronStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("exact-taira-tron-statement"),
   );
-  const bscProofBytes = await buildAcceptingGroth16ProofBytes(provider, abi, {
-    publicInputs: bscInputs,
-    sourceDomain: 0,
-    statementHash: bscStatementHash,
-    destinationBindingHash: bscRouteDestinationBindingHash,
+  const tronProof = await acceptingProof(
+    provider,
+    abi,
+    tronPublicInputs,
+    tronStatementHash,
+    tronDestinationBinding,
+    await tronBridge.routeConfigHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
+  await assertDynamicVerifierRoleCollisionsRejected({
+    verifier: tronVerifier,
+    provider,
+    abi,
+    publicInputs: tronPublicInputs,
+    statement: tronStatementHash,
+    destination: tronDestinationBinding,
+    route: await tronBridge.routeConfigHash(),
     g1,
     g2,
   });
-  assert.equal(
-    await bscRouteBridge.tairaXorTransferMessageId.staticCall(bscCanonicalPayload),
-    bscMessageId
+  const wrongTronRevisionPayload = Buffer.from(tronInboundPayload);
+  wrongTronRevisionPayload.writeUInt32LE(ROUTE_REVISION + 1, 18);
+  assert.notEqual(
+    messageId("sora-taira", "tron-nile", wrongTronRevisionPayload),
+    tronMessageId,
   );
-  assert.equal(
-    await bscRouteBridge.finalizeFromTaira.staticCall(
-      bscProofBytes,
-      bscInputs,
-      bscStatementHash,
-      bscCanonicalPayload
+  await assert.rejects(
+    tronBridge.finalizeFromTaira(
+      tronProof,
+      tronPublicInputs,
+      tronStatementHash,
+      wrongTronRevisionPayload,
     ),
-    bscMessageId
+    rejectedWith("Wrong route revision"),
   );
-  const bscRecipientCodecOffset = recipientCodecOffset;
-  const wrongBscRecipientCodecPayload = Uint8Array.from(bscCanonicalPayload);
-  wrongBscRecipientCodecPayload[bscRecipientCodecOffset] = 5;
-  await assert.rejects(
-    async () => {
-      await bscRouteBridge.finalizeFromTaira.staticCall(
-        bscProofBytes,
-        bscInputs,
-        bscStatementHash,
-        wrongBscRecipientCodecPayload
-      );
-    },
-    callExceptionWithReason("Unexpected recipient codec")
-  );
-  const bscRecipientOffset = bscRecipientCodecOffset + 1 + 4;
-  const zeroBscRecipientPayload = Uint8Array.from(bscCanonicalPayload);
-  zeroBscRecipientPayload.fill(
-    "0".charCodeAt(0),
-    bscRecipientOffset + 2,
-    bscRecipientOffset + 42
-  );
-  await assert.rejects(
-    async () => {
-      await bscRouteBridge.finalizeFromTaira.staticCall(
-        bscProofBytes,
-        bscInputs,
-        bscStatementHash,
-        zeroBscRecipientPayload
-      );
-    },
-    callExceptionWithReason("Recipient address is required")
-  );
-  const wrongBscRoutePayload = Uint8Array.from(bscCanonicalPayload);
-  wrongBscRoutePayload[wrongBscRoutePayload.length - 1] ^= 1;
-  await assert.rejects(
-    async () => {
-      await bscRouteBridge.finalizeFromTaira.staticCall(
-        bscProofBytes,
-        bscInputs,
-        bscStatementHash,
-        wrongBscRoutePayload
-      );
-    },
-    callExceptionWithReason("Unexpected route")
-  );
-
-  const bscMintTx = await bscRouteBridge.finalizeFromTaira(
-    bscProofBytes,
-    bscInputs,
-    bscStatementHash,
-    bscCanonicalPayload
-  );
-  await bscMintTx.wait();
-  assert.equal(await bscToken.balanceOf(bscRecipient), bscMintTokenAmount);
-  assert.equal(await bscToken.totalSupply(), bscMintTokenAmount);
-  await assert.rejects(
-    async () => {
-      const replayBscMintTx = await bscRouteBridge.finalizeFromTaira(
-        bscProofBytes,
-        bscInputs,
-        bscStatementHash,
-        bscCanonicalPayload
-      );
-      await replayBscMintTx.wait();
-    },
-    callExceptionWithReason("Message proof already used")
-  );
-
-  const bscBurnRecipient = ethers.toUtf8Bytes("testu-bsc@taira");
-  const bscBurnRecipientHash = ethers.keccak256(bscBurnRecipient);
-  const bscBurnAmount = 333n;
-  const bscBurnTokenAmount = bscBurnAmount * bscTairaToTokenScale;
-  const expectedBscBurnDigest = computeTairaXorBscBurnSourceEventDigest(abi, {
-    routeIdHash: bscRouteIdHash,
-    assetKeyHash,
-    bridgeAddress: bscRouteBridgeAddress,
-    burner: bscRecipient,
-    tairaRecipientHash: bscBurnRecipientHash,
-    amount: bscBurnAmount,
-    nonce: 0n,
-  });
-  assert.equal(
-    await bscRouteBridge.tairaXorBurnSourceEventDigest.staticCall(
-      bscRouteIdHash,
-      assetKeyHash,
-      bscRecipient,
-      bscBurnRecipientHash,
-      bscBurnAmount,
-      0
-    ),
-    expectedBscBurnDigest
-  );
-  await assert.rejects(
-    async () => {
-      const unalignedBscBurnTx = await bscRouteBridge
-        .connect(outsider)
-        .burnToTaira(
-          bscRouteIdHash,
-          assetKeyHash,
-          bscBurnRecipient,
-          bscBurnTokenAmount + 1n
-        );
-      await unalignedBscBurnTx.wait();
-    },
-    callExceptionWithReason("Amount must align to TAIRA scale")
-  );
-  const bscBurnTx = await bscRouteBridge
-    .connect(outsider)
-    .burnToTaira(
-      bscRouteIdHash,
-      assetKeyHash,
-      bscBurnRecipient,
-      bscBurnTokenAmount
+  for (const invalidSender of invalidTairaSenders) {
+    const invalidSenderPayload = transferPayload({
+      sourceDomain: DOMAIN_SORA,
+      destinationDomain: DOMAIN_TRON,
+      nonce: 23,
+      amount: 3,
+      senderCodec: CODEC_TEXT,
+      sender: invalidSender,
+      recipientCodec: CODEC_TRON21,
+      recipient: tronRecipient,
+      route: "taira_tron_xor",
+    });
+    await assert.rejects(
+      tronBridge.finalizeFromTaira(
+        tronProof,
+        tronPublicInputs,
+        tronStatementHash,
+        invalidSenderPayload,
+      ),
+      rejectedWith("Noncanonical sender"),
     );
-  const bscBurnReceipt = await bscBurnTx.wait();
-  assert.equal(await bscRouteBridge.burnNonce(), 1n);
-  assert.equal(await bscSourceBridge.submittedSourceEvents(expectedBscBurnDigest), true);
-  assert.equal(
-    await bscToken.balanceOf(bscRecipient),
-    bscMintTokenAmount - bscBurnTokenAmount
+  }
+  await assert.rejects(
+    secondTronBridge.finalizeFromTaira(
+      tronProof,
+      tronPublicInputs,
+      tronStatementHash,
+      tronPayloadHex,
+    ),
+    rejectedWith("Groth16 proof verification failed"),
   );
-  assert.equal(await bscToken.totalSupply(), bscMintTokenAmount - bscBurnTokenAmount);
-  const bscSourceEventLogs = bscBurnReceipt.logs
+  await (
+    await tronBridge.finalizeFromTaira(
+      tronProof,
+      tronPublicInputs,
+      tronStatementHash,
+      tronPayloadHex,
+    )
+  ).wait();
+  assert.equal(
+    await tronToken.balanceOf(await signer.getAddress()),
+    3n * SCALE,
+  );
+  await assert.rejects(
+    tronBridge.finalizeFromTaira(
+      tronProof,
+      tronPublicInputs,
+      tronStatementHash,
+      tronPayloadHex,
+    ),
+    rejectedWith("Destination message already used"),
+  );
+  for (let index = 0; index < validTairaSenders.length; index++) {
+    const recipientAddress = ethers.getAddress(
+      `0x${(0xb1 + index).toString(16).padStart(2, "0").repeat(20)}`,
+    );
+    const universalPayload = transferPayload({
+      sourceDomain: DOMAIN_SORA,
+      destinationDomain: DOMAIN_TRON,
+      nonce: 200 + index,
+      amount: 3,
+      senderCodec: CODEC_TEXT,
+      sender: validTairaSenders[index],
+      recipientCodec: CODEC_TRON21,
+      recipient: Buffer.concat([
+        Buffer.from([0x41]),
+        Buffer.from(recipientAddress.slice(2), "hex"),
+      ]),
+      route: "taira_tron_xor",
+    });
+    const universalPayloadHex = ethers.hexlify(universalPayload);
+    const universalInputs = [
+      await tronBridge.sccpDestinationMessageId(universalPayloadHex),
+      await tronBridge.sccpPayloadHash(universalPayloadHex),
+      word(DOMAIN_TRON),
+      ethers.keccak256(ethers.toUtf8Bytes(`tron-universal-account-root-${index}`)),
+      word(301 + index),
+      ethers.keccak256(ethers.toUtf8Bytes(`tron-universal-account-finality-${index}`)),
+    ];
+    const universalStatement = ethers.keccak256(
+      ethers.toUtf8Bytes(`tron-universal-account-statement-${index}`),
+    );
+    const universalProof = await acceptingProof(
+      provider,
+      abi,
+      universalInputs,
+      universalStatement,
+      tronDestinationBinding,
+      await tronBridge.routeConfigHash(),
+      SORA_FINALITY_ANCHOR_HASH,
+      g1,
+      g2,
+    );
+    await (
+      await tronBridge.finalizeFromTaira(
+        universalProof,
+        universalInputs,
+        universalStatement,
+        universalPayloadHex,
+      )
+    ).wait();
+    assert.equal(await tronToken.balanceOf(recipientAddress), 3n * SCALE);
+  }
+  await assert.rejects(
+    tronBridge.transferToTaira(CANONICAL_I105_BYTES, 1n),
+    rejectedWith("Amount is not aligned to Taira scale"),
+  );
+  const tronBurnAccount = await signer.getAddress();
+  const tronBalanceBeforeInvalidBurns = await tronToken.balanceOf(tronBurnAccount);
+  const tronNonceBeforeInvalidBurns = await tronBridge.transferNonce();
+  for (const invalidRecipient of invalidTairaRecipients) {
+    await assert.rejects(
+      tronBridge.transferToTaira(invalidRecipient, SCALE),
+      rejectedWith("Noncanonical Taira recipient"),
+    );
+  }
+  assert.equal(await tronToken.balanceOf(tronBurnAccount), tronBalanceBeforeInvalidBurns);
+  assert.equal(await tronBridge.transferNonce(), tronNonceBeforeInvalidBurns);
+  const tronSourceReceipt = await (
+    await tronBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE)
+  ).wait();
+  const tronSourceEvents = tronSourceReceipt.logs
+    .filter(
+      (log) => log.address.toLowerCase() === tronBridgeAddress.toLowerCase(),
+    )
+    .map((log) => {
+      try {
+        return tronBridge.interface.parseLog(log);
+      } catch (_) {
+        return null;
+      }
+    })
+    .filter((log) => log && log.name === "SccpTransfer");
+  assert.equal(tronSourceEvents.length, 1);
+  const tronSourceEvent = tronSourceEvents[0].args;
+  const tronSourcePayload = ethers.getBytes(tronSourceEvent.canonicalPayload);
+  assert.equal(Buffer.from(tronSourcePayload).readUInt32LE(18), ROUTE_REVISION);
+  assert.equal(
+    tronSourceEvent.messageId,
+    messageId("tron-nile", "sora-taira", tronSourcePayload),
+  );
+  assert.equal(tronSourceEvent.laneHash, await tronBridge.sourceLaneHash());
+  assert.equal(
+    tronSourceEvent.routeConfigHash,
+    await tronBridge.routeConfigHash(),
+  );
+  assert.equal(
+    tronSourceEvent.sourceEventDigest,
+    await tronBridge.sourceEventDigest(
+      tronSourceEvent.messageId,
+      tronSourceEvent.payloadHash,
+    ),
+  );
+  assert.equal(
+    await tronToken.balanceOf(await signer.getAddress()),
+    2n * SCALE,
+  );
+  assert.equal(await tronBridge.transferNonce(), 1n);
+  await tronEip1193Provider.disconnect();
+  }
+
+  const bscRoute = await deployPreboundRoute(
+    signer,
+    tokenArtifact,
+    bridgeArtifact,
+    [
+      verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+      BSC_TESTNET_PROFILE,
+      ROUTE_REVISION,
+    ],
+  );
+  const bridge = bscRoute.route;
+  const bridgeAddress = await bridge.getAddress();
+  const token = bscRoute.token;
+  const tokenAddress = await token.getAddress();
+  assert.equal(await token.bridge(), bridgeAddress);
+  assert.equal(await bridge.routeRevision(), BigInt(ROUTE_REVISION));
+  assert.equal(
+    await bridge.semanticProofProfileHash(),
+    SEMANTIC_PROOF_PROFILE_HASH,
+  );
+  assert.equal(
+    await bridge.soraFinalityAnchorHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+  );
+  const tokenCodeHash = ethers.keccak256(await provider.getCode(tokenAddress));
+  assert.equal(await bridge.tokenCodeHash(), tokenCodeHash);
+  assert.equal(
+    await bridge.routeConfigHash(),
+    exactEvmRouteConfigHash({
+      abi,
+      domain: DOMAIN_BSC,
+      profile: BSC_TESTNET_PROFILE,
+      chainId: 97,
+      sourceLaneHash: await bridge.sourceLaneHash(),
+      destinationLaneHash: await bridge.destinationLaneHash(),
+      tokenAddress,
+      tokenCodeHash,
+      verifierAddress,
+      verifierCodeHash,
+      verifierKeyHash,
+      semanticProofProfileHash: SEMANTIC_PROOF_PROFILE_HASH,
+      soraFinalityAnchorHash: SORA_FINALITY_ANCHOR_HASH,
+      route: "taira_bsc_xor",
+      routeRevision: ROUTE_REVISION,
+    }),
+  );
+  const wrongBoundToken = await deploy(signer, falseTokenArtifact, [
+    await outsider.getAddress(),
+  ]);
+  await assert.rejects(
+    deploy(signer, injectedBscRouteArtifact, [
+      await wrongBoundToken.getAddress(),
+      verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+  const rejectedBscRouteAddress = await nextCreateAddress(signer, 1);
+  const rejectedBscToken = await deploy(signer, tokenArtifact, [
+    rejectedBscRouteAddress,
+  ]);
+  const rejectedBscTokenAddress = await rejectedBscToken.getAddress();
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
+      verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+      BSC_TESTNET_PROFILE,
+      0,
+    ]),
+    rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
+      verifierPolicy(verifierAddress, ethers.ZeroHash, verifierKeyHash),
+      5,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
+      verifierPolicy(verifierAddress, verifierCodeHash, ethers.ZeroHash),
+      5,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
+      verifierPolicy(
+        verifierAddress,
+        verifierCodeHash,
+        verifierKeyHash,
+        ALTERNATE_SEMANTIC_PROOF_PROFILE_HASH,
+      ),
+      BSC_TESTNET_PROFILE,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
+      verifierPolicy(
+        verifierAddress,
+        verifierCodeHash,
+        verifierKeyHash,
+        SEMANTIC_PROOF_PROFILE_HASH,
+        ALTERNATE_SORA_FINALITY_ANCHOR_HASH,
+      ),
+      BSC_TESTNET_PROFILE,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+  const evmCodeAliasedVerifier = await deploy(
+    signer,
+    codeAliasedVerifierArtifact,
+    [ethers.ZeroHash, false],
+  );
+  const evmCodeAliasedVerifierAddress =
+    await evmCodeAliasedVerifier.getAddress();
+  const evmCodeAliasedVerifierCodeHash = ethers.keccak256(
+    await provider.getCode(evmCodeAliasedVerifierAddress),
+  );
+  assert.equal(
+    await evmCodeAliasedVerifier.semanticProofProfileHash(),
+    evmCodeAliasedVerifierCodeHash,
+  );
+  const aliasedBscRouteAddress = await nextCreateAddress(signer, 1);
+  const aliasedBscToken = await deploy(signer, tokenArtifact, [
+    aliasedBscRouteAddress,
+  ]);
+  const aliasedBscTokenAddress = await aliasedBscToken.getAddress();
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      aliasedBscTokenAddress,
+      verifierPolicy(
+        evmCodeAliasedVerifierAddress,
+        evmCodeAliasedVerifierCodeHash,
+        await evmCodeAliasedVerifier.verifyingKeyHash(),
+        await evmCodeAliasedVerifier.semanticProofProfileHash(),
+        await evmCodeAliasedVerifier.soraFinalityAnchorHash(),
+      ),
+      BSC_TESTNET_PROFILE,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      aliasedBscTokenAddress,
+      verifierPolicy(
+        verifierAddress,
+        verifierCodeHash,
+        verifierKeyHash,
+        ethers.ZeroHash,
+      ),
+      BSC_TESTNET_PROFILE,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      aliasedBscTokenAddress,
+      verifierPolicy(
+        verifierAddress,
+        verifierCodeHash,
+        verifierKeyHash,
+        SORA_FINALITY_ANCHOR_HASH,
+        SORA_FINALITY_ANCHOR_HASH,
+      ),
+      BSC_TESTNET_PROFILE,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      aliasedBscTokenAddress,
+      verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+      4,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+
+  const signerAddress = await signer.getAddress();
+  const recipient20 = Buffer.from(signerAddress.slice(2), "hex");
+  const inboundPayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_BSC,
+    nonce: 9,
+    amount: 5,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_EVM20,
+    recipient: recipient20,
+  });
+  const payloadHex = ethers.hexlify(inboundPayload);
+  const payloadHash = await bridge.sccpPayloadHash(payloadHex);
+  const exactMessageId = await bridge.sccpDestinationMessageId(payloadHex);
+  assert.equal(
+    exactMessageId,
+    messageId("sora-taira", "bsc-testnet", inboundPayload),
+  );
+  const destinationBinding = await bridge.destinationBindingHash();
+  assert.equal(
+    destinationBinding,
+    exactEvmDestinationBindingHash({
+      abi,
+      chainId: 97,
+      targetDomain: DOMAIN_BSC,
+      verifierAddress,
+      bridgeAddress,
+      verifierCodeHash,
+      verifierKeyHash,
+      semanticProofProfileHash: SEMANTIC_PROOF_PROFILE_HASH,
+      soraFinalityAnchorHash: SORA_FINALITY_ANCHOR_HASH,
+    }),
+  );
+  const publicInputs = [
+    exactMessageId,
+    payloadHash,
+    word(DOMAIN_BSC),
+    ethers.keccak256(ethers.toUtf8Bytes("commitment-root")),
+    word(100),
+    ethers.keccak256(ethers.toUtf8Bytes("finality-block")),
+  ];
+  const statementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("exact-taira-bsc-statement"),
+  );
+  const proof = await acceptingProof(
+    provider,
+    abi,
+    publicInputs,
+    statementHash,
+    destinationBinding,
+    await bridge.routeConfigHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
+  const routeConfigurationHash = await bridge.routeConfigHash();
+  const changedWord = (label) => ethers.keccak256(ethers.toUtf8Bytes(label));
+  const withInput = (index, value) => {
+    const changed = [...publicInputs];
+    changed[index] = value;
+    return changed;
+  };
+  const verifierTupleAdversaries = [
+    {
+      label: "unsupported embedded proof version",
+      proof: mutateGroth16Proof(abi, proof, { version: 2n }),
+      inputs: publicInputs,
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Unsupported Groth16 proof version",
+    },
+    {
+      label: "embedded message id mismatch",
+      proof: mutateGroth16Proof(abi, proof, { messageId: changedWord("wrong-embedded-message") }),
+      inputs: publicInputs,
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Public input message id mismatch",
+    },
+    {
+      label: "embedded commitment root mismatch",
+      proof: mutateGroth16Proof(abi, proof, {
+        commitmentRoot: changedWord("wrong-embedded-root"),
+      }),
+      inputs: publicInputs,
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Public input commitment root mismatch",
+    },
+    {
+      label: "embedded source domain substitution",
+      proof: mutateGroth16Proof(abi, proof, { sourceDomain: DOMAIN_ETHEREUM }),
+      inputs: publicInputs,
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Groth16 proof verification failed",
+    },
+    {
+      label: "embedded source domain overflow",
+      proof: mutateGroth16Proof(abi, proof, { sourceDomain: 1n << 32n }),
+      inputs: publicInputs,
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Source domain overflow",
+    },
+    {
+      label: "embedded source equals target",
+      proof: mutateGroth16Proof(abi, proof, { sourceDomain: DOMAIN_BSC }),
+      inputs: publicInputs,
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Source and target domains must differ",
+    },
+    {
+      label: "public message id mismatch",
+      proof,
+      inputs: withInput(0, changedWord("wrong-public-message")),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Public input message id mismatch",
+    },
+    {
+      label: "public payload signal mismatch",
+      proof,
+      inputs: withInput(1, changedWord("wrong-public-payload")),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Groth16 proof verification failed",
+    },
+    {
+      label: "public target signal mismatch",
+      proof,
+      inputs: withInput(2, word(DOMAIN_ETHEREUM)),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Groth16 proof verification failed",
+    },
+    {
+      label: "public target signal overflow",
+      proof,
+      inputs: withInput(2, word(1n << 32n)),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Target domain overflow",
+    },
+    {
+      label: "public commitment root mismatch",
+      proof,
+      inputs: withInput(3, changedWord("wrong-public-root")),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Public input commitment root mismatch",
+    },
+    {
+      label: "public finality height mismatch",
+      proof,
+      inputs: withInput(4, word(101)),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Groth16 proof verification failed",
+    },
+    {
+      label: "public finality block mismatch",
+      proof,
+      inputs: withInput(5, changedWord("wrong-finality-block")),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Groth16 proof verification failed",
+    },
+    {
+      label: "statement signal mismatch",
+      proof,
+      inputs: publicInputs,
+      statement: changedWord("wrong-statement"),
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Groth16 proof verification failed",
+    },
+    {
+      label: "destination signal mismatch",
+      proof,
+      inputs: publicInputs,
+      statement: statementHash,
+      destination: changedWord("wrong-destination"),
+      route: routeConfigurationHash,
+      reason: "Groth16 proof verification failed",
+    },
+    {
+      label: "route signal mismatch",
+      proof,
+      inputs: publicInputs,
+      statement: statementHash,
+      destination: destinationBinding,
+      route: changedWord("wrong-route"),
+      reason: "Groth16 proof verification failed",
+    },
+    {
+      label: "zero embedded and public message id",
+      proof: mutateGroth16Proof(abi, proof, { messageId: ethers.ZeroHash }),
+      inputs: withInput(0, ethers.ZeroHash),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Message id is required",
+    },
+    {
+      label: "zero payload hash",
+      proof,
+      inputs: withInput(1, ethers.ZeroHash),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Payload hash is required",
+    },
+    {
+      label: "zero target domain",
+      proof,
+      inputs: withInput(2, ethers.ZeroHash),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Target domain is required",
+    },
+    {
+      label: "zero embedded and public commitment root",
+      proof: mutateGroth16Proof(abi, proof, { commitmentRoot: ethers.ZeroHash }),
+      inputs: withInput(3, ethers.ZeroHash),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Commitment root is required",
+    },
+    {
+      label: "zero finality height",
+      proof,
+      inputs: withInput(4, ethers.ZeroHash),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Finality height is required",
+    },
+    {
+      label: "zero finality block hash",
+      proof,
+      inputs: withInput(5, ethers.ZeroHash),
+      statement: statementHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Finality block hash is required",
+    },
+    {
+      label: "zero statement hash",
+      proof,
+      inputs: publicInputs,
+      statement: ethers.ZeroHash,
+      destination: destinationBinding,
+      route: routeConfigurationHash,
+      reason: "Statement hash is required",
+    },
+    {
+      label: "zero destination binding",
+      proof,
+      inputs: publicInputs,
+      statement: statementHash,
+      destination: ethers.ZeroHash,
+      route: routeConfigurationHash,
+      reason: "Destination binding hash is required",
+    },
+    {
+      label: "zero route configuration",
+      proof,
+      inputs: publicInputs,
+      statement: statementHash,
+      destination: destinationBinding,
+      route: ethers.ZeroHash,
+      reason: "Route configuration hash is required",
+    },
+  ];
+  for (const adversary of verifierTupleAdversaries) {
+    await assert.rejects(
+      verifier.verifySccpMessageProof(
+        adversary.proof,
+        adversary.inputs,
+        adversary.statement,
+        adversary.destination,
+        adversary.route,
+      ),
+      rejectedWith(adversary.reason),
+      adversary.label,
+    );
+  }
+
+  const proofPointAdversaries = [
+    ["zero A", { a: [0n, 0n] }, "G1 point is zero"],
+    ["out-of-field A", { a: [BASE_FIELD, 2n] }, "G1 point out of range"],
+    ["off-curve A", { a: [1n, 3n] }, "G1 scalar multiplication failed"],
+    ["zero B", { b: [0n, 0n, 0n, 0n] }, "G2 point is zero"],
+    [
+      "out-of-field B",
+      { b: [BASE_FIELD, g2[1], g2[2], g2[3]] },
+      "G2 point out of range",
+    ],
+    ["off-curve B", { b: [1n, 2n, 3n, 4n] }, "Pairing precompile failed"],
+    ["non-subgroup B", { b: NON_SUBGROUP_G2 }, "Pairing precompile failed"],
+    ["zero C", { c: [0n, 0n] }, "G1 point is zero"],
+    ["out-of-field C", { c: [BASE_FIELD, 2n] }, "G1 point out of range"],
+    ["off-curve C", { c: [1n, 3n] }, "G1 scalar multiplication failed"],
+  ];
+  for (const [label, overrides, reason] of proofPointAdversaries) {
+    await assert.rejects(
+      verifier.verifySccpMessageProof(
+        mutateGroth16Proof(abi, proof, overrides),
+        publicInputs,
+        statementHash,
+        destinationBinding,
+        routeConfigurationHash,
+      ),
+      rejectedWith(reason),
+      label,
+    );
+  }
+
+  const proofBytes = ethers.getBytes(proof);
+  assert.equal(proofBytes.length, 12 * 32, "canonical Groth16 proof tuple length drift");
+  const proofFramingAdversaries = [
+    ...[0, 1, 32, proofBytes.length - 1].map((length) => [
+      `truncated proof length ${length}`,
+      ethers.hexlify(proofBytes.slice(0, length)),
+    ]),
+    ["one trailing proof byte", ethers.hexlify(Buffer.concat([proofBytes, Buffer.from([0])]))],
+    ["one trailing proof word", ethers.hexlify(Buffer.concat([proofBytes, Buffer.alloc(32)]))],
+  ];
+  for (const [label, malformedProof] of proofFramingAdversaries) {
+    await assert.rejects(
+      verifier.verifySccpMessageProof(
+        malformedProof,
+        publicInputs,
+        statementHash,
+        destinationBinding,
+        routeConfigurationHash,
+      ),
+      rejectedWith("Unexpected Groth16 proof length"),
+      label,
+    );
+  }
+  await assertDynamicVerifierRoleCollisionsRejected({
+    verifier,
+    provider,
+    abi,
+    publicInputs,
+    statement: statementHash,
+    destination: destinationBinding,
+    route: routeConfigurationHash,
+    g1,
+    g2,
+  });
+  const proofForSubstitutedFinalityAnchor = await acceptingProof(
+    provider,
+    abi,
+    publicInputs,
+    statementHash,
+    destinationBinding,
+    await bridge.routeConfigHash(),
+    ALTERNATE_SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
+  await assert.rejects(
+    verifier.verifySccpMessageProof(
+      proofForSubstitutedFinalityAnchor,
+      publicInputs,
+      statementHash,
+      destinationBinding,
+      await bridge.routeConfigHash(),
+    ),
+    rejectedWith("Groth16 proof verification failed"),
+  );
+  const wrongRouteConfigurationHash = ethers.keccak256(
+    ethers.toUtf8Bytes("adversarial-wrong-route-configuration"),
+  );
+  await assert.rejects(
+    verifier.verifySccpMessageProof(
+      proof,
+      publicInputs,
+      statementHash,
+      destinationBinding,
+      wrongRouteConfigurationHash,
+    ),
+    rejectedWith("Groth16 proof verification failed"),
+  );
+  await assert.rejects(
+    verifier.verifySccpMessageProof(
+      proof,
+      publicInputs,
+      statementHash,
+      destinationBinding,
+      ethers.ZeroHash,
+    ),
+    rejectedWith("Route configuration hash is required"),
+  );
+  const wrongRevisionPayload = Buffer.from(inboundPayload);
+  wrongRevisionPayload.writeUInt32LE(ROUTE_REVISION + 1, 18);
+  assert.notEqual(
+    messageId("sora-taira", "bsc-testnet", wrongRevisionPayload),
+    exactMessageId,
+  );
+  await assert.rejects(
+    bridge.finalizeFromTaira(
+      proof,
+      publicInputs,
+      statementHash,
+      wrongRevisionPayload,
+    ),
+    rejectedWith("Wrong route revision"),
+  );
+
+  await assert.rejects(
+    bridge.finalizeFromTaira(
+      proof,
+      [
+        messageId("sora-nexus", "bsc-testnet", inboundPayload),
+        ...publicInputs.slice(1),
+      ],
+      statementHash,
+      payloadHex,
+    ),
+    rejectedWith("Message id mismatch"),
+  );
+  await assert.rejects(
+    bridge.finalizeFromTaira(
+      proof,
+      [
+        messageId("sora-taira", "bsc-mainnet", inboundPayload),
+        ...publicInputs.slice(1),
+      ],
+      statementHash,
+      payloadHex,
+    ),
+    rejectedWith("Message id mismatch"),
+  );
+  const oldPayloadOnlyId = ethers.keccak256(
+    ethers.concat([ethers.toUtf8Bytes("sccp:transfer:v1"), payloadHex]),
+  );
+  await assert.rejects(
+    bridge.finalizeFromTaira(
+      proof,
+      [oldPayloadOnlyId, ...publicInputs.slice(1)],
+      statementHash,
+      payloadHex,
+    ),
+    rejectedWith("Message id mismatch"),
+  );
+  await assert.rejects(
+    bridge.finalizeFromTaira(
+      proof,
+      publicInputs,
+      statementHash,
+      ethers.concat([payloadHex, "0x00"]),
+    ),
+    rejectedWith("Trailing payload bytes"),
+  );
+  const wrongCodecPayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_BSC,
+    nonce: 9,
+    amount: 5,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_TEXT,
+    recipient: recipient20,
+  });
+  await assert.rejects(
+    bridge.finalizeFromTaira(
+      proof,
+      publicInputs,
+      statementHash,
+      wrongCodecPayload,
+    ),
+    rejectedWith("Wrong recipient codec"),
+  );
+  await assert.rejects(
+    bridge.finalizeFromTaira("0x00", publicInputs, statementHash, payloadHex),
+    rejectedWith("Unexpected Groth16 proof length"),
+  );
+
+  for (const invalidSender of invalidTairaSenders) {
+    const invalidSenderPayload = transferPayload({
+      sourceDomain: DOMAIN_SORA,
+      destinationDomain: DOMAIN_BSC,
+      nonce: 9,
+      amount: 5,
+      senderCodec: CODEC_TEXT,
+      sender: invalidSender,
+      recipientCodec: CODEC_EVM20,
+      recipient: recipient20,
+    });
+    await assert.rejects(
+      bridge.finalizeFromTaira(
+        proof,
+        publicInputs,
+        statementHash,
+        invalidSenderPayload,
+      ),
+      rejectedWith("Noncanonical sender"),
+    );
+  }
+
+  await (
+    await bridge.finalizeFromTaira(
+      proof,
+      publicInputs,
+      statementHash,
+      payloadHex,
+    )
+  ).wait();
+  assert.equal(await token.balanceOf(signerAddress), 5n * SCALE);
+  assert.equal(await bridge.usedDestinationMessages(exactMessageId), true);
+  await assert.rejects(
+    bridge.finalizeFromTaira(proof, publicInputs, statementHash, payloadHex),
+    rejectedWith("Destination message already used"),
+  );
+  for (let index = 0; index < validTairaSenders.length; index++) {
+    const recipientAddress = ethers.getAddress(
+      `0x${(0xa1 + index).toString(16).padStart(2, "0").repeat(20)}`,
+    );
+    const universalPayload = transferPayload({
+      sourceDomain: DOMAIN_SORA,
+      destinationDomain: DOMAIN_BSC,
+      nonce: 100 + index,
+      amount: 5,
+      senderCodec: CODEC_TEXT,
+      sender: validTairaSenders[index],
+      recipientCodec: CODEC_EVM20,
+      recipient: Buffer.from(recipientAddress.slice(2), "hex"),
+    });
+    const universalPayloadHex = ethers.hexlify(universalPayload);
+    const universalInputs = [
+      await bridge.sccpDestinationMessageId(universalPayloadHex),
+      await bridge.sccpPayloadHash(universalPayloadHex),
+      word(DOMAIN_BSC),
+      ethers.keccak256(ethers.toUtf8Bytes(`universal-account-root-${index}`)),
+      word(101 + index),
+      ethers.keccak256(ethers.toUtf8Bytes(`universal-account-finality-${index}`)),
+    ];
+    const universalStatement = ethers.keccak256(
+      ethers.toUtf8Bytes(`universal-account-statement-${index}`),
+    );
+    const universalProof = await acceptingProof(
+      provider,
+      abi,
+      universalInputs,
+      universalStatement,
+      destinationBinding,
+      await bridge.routeConfigHash(),
+      SORA_FINALITY_ANCHOR_HASH,
+      g1,
+      g2,
+    );
+    await (
+      await bridge.finalizeFromTaira(
+        universalProof,
+        universalInputs,
+        universalStatement,
+        universalPayloadHex,
+      )
+    ).wait();
+    assert.equal(await token.balanceOf(recipientAddress), 5n * SCALE);
+  }
+
+  const outsiderAddress = await outsider.getAddress();
+  await assert.rejects(
+    token.mint(signerAddress, SCALE),
+    rejectedWith("Caller is not the bridge"),
+  );
+  await assert.rejects(
+    token.burnFrom(signerAddress, SCALE),
+    rejectedWith("Caller is not the bridge"),
+  );
+  await assert.rejects(
+    token.approve(ethers.ZeroAddress, SCALE),
+    rejectedWith("Spender address is required"),
+  );
+  const signerBalanceBeforeAllowanceAttacks = await token.balanceOf(signerAddress);
+  const outsiderBalanceBeforeAllowanceAttacks = await token.balanceOf(outsiderAddress);
+  await (await token.approve(outsiderAddress, 2n * SCALE)).wait();
+  await assert.rejects(
+    token.connect(outsider).transferFrom(signerAddress, outsiderAddress, 3n * SCALE),
+    rejectedWith("Allowance exceeded"),
+  );
+  assert.equal(await token.allowance(signerAddress, outsiderAddress), 2n * SCALE);
+  await (await token.approve(outsiderAddress, ethers.MaxUint256)).wait();
+  await assert.rejects(
+    token.connect(outsider).transferFrom(signerAddress, outsiderAddress, 6n * SCALE),
+    rejectedWith("Uint256 underflow"),
+  );
+  assert.equal(
+    await token.allowance(signerAddress, outsiderAddress),
+    ethers.MaxUint256,
+    "allowance decrement must roll back when the balance transfer fails",
+  );
+  assert.equal(
+    await token.balanceOf(signerAddress),
+    signerBalanceBeforeAllowanceAttacks,
+  );
+  assert.equal(
+    await token.balanceOf(outsiderAddress),
+    outsiderBalanceBeforeAllowanceAttacks,
+  );
+  await assert.rejects(
+    token.transfer(ethers.ZeroAddress, SCALE),
+    rejectedWith("Recipient address is required"),
+  );
+  assert.equal(
+    await token.balanceOf(signerAddress),
+    signerBalanceBeforeAllowanceAttacks,
+  );
+
+  const invalidRecipients = [
+    "0x",
+    ethers.hexlify(Buffer.from(" bad")),
+    ...invalidTairaRecipients,
+  ];
+  const balanceBeforeInvalidBurns = await token.balanceOf(signerAddress);
+  const nonceBeforeInvalidBurns = await bridge.transferNonce();
+  for (const recipient of invalidRecipients) {
+    await assert.rejects(
+      bridge.transferToTaira(recipient, SCALE),
+      rejectedWith(),
+    );
+  }
+  for (const amount of [0n, SCALE + 1n, ((1n << 128n) + 1n) * SCALE]) {
+    await assert.rejects(
+      bridge.transferToTaira(CANONICAL_I105_BYTES, amount),
+      rejectedWith(),
+    );
+  }
+  assert.equal(await token.balanceOf(signerAddress), balanceBeforeInvalidBurns);
+  assert.equal(await bridge.transferNonce(), nonceBeforeInvalidBurns);
+  const sourceTx = await bridge.transferToTaira(
+    CANONICAL_I105_BYTES,
+    SCALE,
+  );
+  const sourceReceipt = await sourceTx.wait();
+  const parsedSource = sourceReceipt.logs
+    .filter((log) => log.address.toLowerCase() === bridgeAddress.toLowerCase())
+    .map((log) => {
+      try {
+        return bridge.interface.parseLog(log);
+      } catch (_) {
+        return null;
+      }
+    })
+    .filter((log) => log && log.name === "SccpTransfer");
+  assert.equal(parsedSource.length, 1);
+  assert.equal(parsedSource[0].args.laneHash, await bridge.sourceLaneHash());
+  assert.equal(
+    parsedSource[0].args.routeConfigHash,
+    await bridge.routeConfigHash(),
+  );
+  assert.equal(await bridge.transferNonce(), 1n);
+  assert.equal(await token.balanceOf(signerAddress), 4n * SCALE);
+  const sourcePayload = ethers.getBytes(parsedSource[0].args.canonicalPayload);
+  assert.equal(Buffer.from(sourcePayload).readUInt32LE(18), ROUTE_REVISION);
+  assert.equal(
+    parsedSource[0].args.messageId,
+    messageId("bsc-testnet", "sora-taira", sourcePayload),
+  );
+  assert.equal(
+    parsedSource[0].args.sourceEventDigest,
+    await bridge.sourceEventDigest(
+      parsedSource[0].args.messageId,
+      parsedSource[0].args.payloadHash,
+    ),
+  );
+
+  const retiredSelector = ethers
+    .id("submitSccpSourceEvent(bytes32,bytes32)")
+    .slice(0, 10);
+  await assert.rejects(
+    signer.sendTransaction({
+      to: bridgeAddress,
+      data: ethers.concat([retiredSelector, ethers.ZeroHash, ethers.ZeroHash]),
+    }),
+    rejectedWith(),
+  );
+
+  const predictedFalseBridgeAddress = await nextCreateAddress(signer, 1);
+  const falseToken = await deploy(signer, falseTokenArtifact, [
+    predictedFalseBridgeAddress,
+  ]);
+  const falseBridge = await deploy(signer, injectedBscRouteArtifact, [
+    await falseToken.getAddress(),
+    verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+    ROUTE_REVISION,
+  ]);
+  assert.equal(await falseBridge.getAddress(), predictedFalseBridgeAddress);
+  await assert.rejects(
+    falseBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE),
+    rejectedWith("Token burn failed"),
+  );
+  assert.equal(await falseBridge.transferNonce(), 0n);
+
+  const falseMintPayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_BSC,
+    nonce: 10,
+    amount: 1,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_EVM20,
+    recipient: recipient20,
+  });
+  const falseMintPayloadHex = ethers.hexlify(falseMintPayload);
+  const falseMintMessageId =
+    await falseBridge.sccpDestinationMessageId(falseMintPayloadHex);
+  const falseMintPublicInputs = [
+    falseMintMessageId,
+    await falseBridge.sccpPayloadHash(falseMintPayloadHex),
+    word(DOMAIN_BSC),
+    ethers.keccak256(ethers.toUtf8Bytes("false-mint-commitment-root")),
+    word(101),
+    ethers.keccak256(ethers.toUtf8Bytes("false-mint-finality-block")),
+  ];
+  const falseMintStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("false-mint-statement"),
+  );
+  const falseMintProof = await acceptingProof(
+    provider,
+    abi,
+    falseMintPublicInputs,
+    falseMintStatementHash,
+    await falseBridge.destinationBindingHash(),
+    await falseBridge.routeConfigHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
+  assert.equal(
+    await falseBridge.usedDestinationMessages(falseMintMessageId),
+    false,
+  );
+  await assert.rejects(
+    falseBridge.finalizeFromTaira(
+      falseMintProof,
+      falseMintPublicInputs,
+      falseMintStatementHash,
+      falseMintPayloadHex,
+    ),
+    rejectedWith("Token mint failed"),
+  );
+  assert.equal(
+    await falseBridge.usedDestinationMessages(falseMintMessageId),
+    false,
+    "destination-message consumption must roll back when minting fails",
+  );
+
+  const predictedReentrantBridgeAddress = await nextCreateAddress(signer, 1);
+  const reentrantToken = await deploy(signer, reentrantTokenArtifact, [
+    predictedReentrantBridgeAddress,
+    CANONICAL_I105_BYTES,
+  ]);
+  assert.equal(
+    await reentrantToken.bridge(),
+    await nextCreateAddress(signer),
+    "reentrant token must bind the immediately following CREATE address",
+  );
+  const reentrantBridge = await deploy(signer, injectedBscRouteArtifact, [
+    await reentrantToken.getAddress(),
+    verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+    ROUTE_REVISION,
+  ]);
+  assert.equal(
+    await reentrantBridge.getAddress(),
+    predictedReentrantBridgeAddress,
+  );
+  const reentrantReceipt = await (
+    await reentrantBridge
+      .connect(outsider)
+      .transferToTaira(CANONICAL_I105_BYTES, SCALE)
+  ).wait();
+  const reentrantBridgeAddress = await reentrantBridge.getAddress();
+  const reentrantEvents = reentrantReceipt.logs.filter(
+    (log) => log.address.toLowerCase() === reentrantBridgeAddress.toLowerCase(),
+  );
+  assert.equal(reentrantEvents.length, 1);
+  assert.equal(await reentrantBridge.transferNonce(), 1n);
+
+  const bscSourceLaneHash = await bridge.sourceLaneHash();
+  const bscDestinationLaneHash = await bridge.destinationLaneHash();
+  const bscRouteConfigHash = await bridge.routeConfigHash();
+  await bscEip1193Provider.disconnect();
+
+  const ethereumEip1193Provider = createHardhatProvider({
+    chainId: 11_155_111,
+    blockGasLimit: Number(MAX_DEPLOYMENT_GAS + 5_000_000n),
+  });
+  const ethereumProvider = new ethers.BrowserProvider(ethereumEip1193Provider);
+  assert.equal((await ethereumProvider.getNetwork()).chainId, 11_155_111n);
+  const ethereumSigner = await ethereumProvider.getSigner(0);
+  const ethereumVerifier = await deploy(ethereumSigner, verifierArtifact, [
+    g1,
+    g2,
+    g2,
+    g2,
+    Array(12).fill(g1).flat(),
+    SEMANTIC_PROOF_PROFILE_HASH,
+    SORA_FINALITY_ANCHOR_HASH,
+  ]);
+  const ethereumVerifierAddress = await ethereumVerifier.getAddress();
+  const ethereumVerifierCodeHash = ethers.keccak256(
+    await ethereumProvider.getCode(ethereumVerifierAddress),
+  );
+  const ethereumVerifierKeyHash = await ethereumVerifier.verifyingKeyHash();
+  assert.equal(
+    await ethereumVerifier.semanticProofProfileHash(),
+    SEMANTIC_PROOF_PROFILE_HASH,
+  );
+  assert.equal(
+    await ethereumVerifier.soraFinalityAnchorHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+  );
+  const ethereumRoute = await deployPreboundRoute(
+    ethereumSigner,
+    ethereumTokenArtifact,
+    ethereumBridgeArtifact,
+    [
+      verifierPolicy(
+        ethereumVerifierAddress,
+        ethereumVerifierCodeHash,
+        ethereumVerifierKeyHash,
+      ),
+      ETHEREUM_SEPOLIA_PROFILE,
+      ROUTE_REVISION,
+    ],
+  );
+  const ethereumBridge = ethereumRoute.route;
+  const ethereumBridgeAddress = await ethereumBridge.getAddress();
+  const ethereumToken = ethereumRoute.token;
+  const ethereumTokenAddress = await ethereumToken.getAddress();
+  assert.equal(await ethereumToken.bridge(), ethereumBridgeAddress);
+  assert.equal(
+    await ethereumBridge.semanticProofProfileHash(),
+    SEMANTIC_PROOF_PROFILE_HASH,
+  );
+  assert.equal(
+    await ethereumBridge.soraFinalityAnchorHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+  );
+  const ethereumTokenCodeHash = ethers.keccak256(
+    await ethereumProvider.getCode(ethereumTokenAddress),
+  );
+  assert.equal(await ethereumBridge.tokenCodeHash(), ethereumTokenCodeHash);
+  assert.equal(
+    await ethereumBridge.routeConfigHash(),
+    exactEvmRouteConfigHash({
+      abi,
+      domain: DOMAIN_ETHEREUM,
+      profile: ETHEREUM_SEPOLIA_PROFILE,
+      chainId: 11_155_111,
+      sourceLaneHash: await ethereumBridge.sourceLaneHash(),
+      destinationLaneHash: await ethereumBridge.destinationLaneHash(),
+      tokenAddress: ethereumTokenAddress,
+      tokenCodeHash: ethereumTokenCodeHash,
+      verifierAddress: ethereumVerifierAddress,
+      verifierCodeHash: ethereumVerifierCodeHash,
+      verifierKeyHash: ethereumVerifierKeyHash,
+      semanticProofProfileHash: SEMANTIC_PROOF_PROFILE_HASH,
+      soraFinalityAnchorHash: SORA_FINALITY_ANCHOR_HASH,
+      route: "taira_eth_xor",
+      routeRevision: ROUTE_REVISION,
+    }),
+  );
+  assert.equal(await ethereumBridge.ethereumProfile(), 3n);
+  assert.equal(await ethereumBridge.networkProfile(), 3n);
+  assert.equal(await ethereumBridge.externalDomain(), 1n);
+  assert.equal(await ethereumBridge.externalChainId(), 11_155_111n);
+  assert.equal(await ethereumBridge.routeRevision(), BigInt(ROUTE_REVISION));
+  assert.notEqual(await ethereumBridge.sourceLaneHash(), bscSourceLaneHash);
+  assert.notEqual(
+    await ethereumBridge.destinationLaneHash(),
+    bscDestinationLaneHash,
+  );
+  assert.notEqual(await ethereumBridge.routeConfigHash(), bscRouteConfigHash);
+
+  const rejectedEthereumRouteAddress = await nextCreateAddress(
+    ethereumSigner,
+    1,
+  );
+  const rejectedEthereumToken = await deploy(
+    ethereumSigner,
+    ethereumTokenArtifact,
+    [rejectedEthereumRouteAddress],
+  );
+  const rejectedEthereumTokenAddress = await rejectedEthereumToken.getAddress();
+  await assert.rejects(
+    deploy(ethereumSigner, ethereumBridgeArtifact, [
+      rejectedEthereumTokenAddress,
+      verifierPolicy(
+        ethereumVerifierAddress,
+        ethereumVerifierCodeHash,
+        ethereumVerifierKeyHash,
+      ),
+      2,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(ethereumSigner, bridgeArtifact, [
+      rejectedEthereumTokenAddress,
+      verifierPolicy(
+        ethereumVerifierAddress,
+        ethereumVerifierCodeHash,
+        ethereumVerifierKeyHash,
+      ),
+      ETHEREUM_SEPOLIA_PROFILE,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith(),
+  );
+
+  const ethereumSignerAddress = await ethereumSigner.getAddress();
+  const ethereumRecipient20 = Buffer.from(
+    ethereumSignerAddress.slice(2),
+    "hex",
+  );
+  const ethereumInboundPayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_ETHEREUM,
+    nonce: 17,
+    amount: 7,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_EVM20,
+    recipient: ethereumRecipient20,
+    route: "taira_eth_xor",
+  });
+  const ethereumPayloadHex = ethers.hexlify(ethereumInboundPayload);
+  const ethereumPayloadHash =
+    await ethereumBridge.sccpPayloadHash(ethereumPayloadHex);
+  const ethereumMessageId =
+    await ethereumBridge.sccpDestinationMessageId(ethereumPayloadHex);
+  assert.equal(
+    ethereumMessageId,
+    messageId("sora-taira", "ethereum-sepolia", ethereumInboundPayload),
+  );
+  const ethereumPublicInputs = [
+    ethereumMessageId,
+    ethereumPayloadHash,
+    word(DOMAIN_ETHEREUM),
+    ethers.keccak256(ethers.toUtf8Bytes("ethereum-commitment-root")),
+    word(200),
+    ethers.keccak256(ethers.toUtf8Bytes("ethereum-finality-block")),
+  ];
+  const ethereumStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("exact-taira-ethereum-statement"),
+  );
+  const ethereumProof = await acceptingProof(
+    ethereumProvider,
+    abi,
+    ethereumPublicInputs,
+    ethereumStatementHash,
+    await ethereumBridge.destinationBindingHash(),
+    await ethereumBridge.routeConfigHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
+
+  await assert.rejects(
+    ethereumBridge.finalizeFromTaira(
+      proof,
+      publicInputs,
+      statementHash,
+      payloadHex,
+    ),
+    rejectedWith("Unexpected target domain"),
+  );
+  await assert.rejects(
+    ethereumBridge.finalizeFromTaira(
+      ethereumProof,
+      [
+        messageId("sora-taira", "ethereum-mainnet", ethereumInboundPayload),
+        ...ethereumPublicInputs.slice(1),
+      ],
+      ethereumStatementHash,
+      ethereumPayloadHex,
+    ),
+    rejectedWith("Message id mismatch"),
+  );
+  const wrongEthereumRoutePayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_ETHEREUM,
+    nonce: 17,
+    amount: 7,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_EVM20,
+    recipient: ethereumRecipient20,
+    route: "taira_bsc_xor",
+  });
+  await assert.rejects(
+    ethereumBridge.finalizeFromTaira(
+      ethereumProof,
+      ethereumPublicInputs,
+      ethereumStatementHash,
+      wrongEthereumRoutePayload,
+    ),
+    rejectedWith("Wrong route"),
+  );
+  await assert.rejects(
+    ethereumBridge.finalizeFromTaira(
+      "0x00",
+      ethereumPublicInputs,
+      ethereumStatementHash,
+      ethereumPayloadHex,
+    ),
+    rejectedWith("Unexpected Groth16 proof length"),
+  );
+
+  await (
+    await ethereumBridge.finalizeFromTaira(
+      ethereumProof,
+      ethereumPublicInputs,
+      ethereumStatementHash,
+      ethereumPayloadHex,
+    )
+  ).wait();
+  assert.equal(
+    await ethereumToken.balanceOf(ethereumSignerAddress),
+    7n * SCALE,
+  );
+  await assert.rejects(
+    ethereumBridge.finalizeFromTaira(
+      ethereumProof,
+      ethereumPublicInputs,
+      ethereumStatementHash,
+      ethereumPayloadHex,
+    ),
+    rejectedWith("Destination message already used"),
+  );
+
+  const ethereumSourceReceipt = await (
+    await ethereumBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE)
+  ).wait();
+  const ethereumSourceEvents = ethereumSourceReceipt.logs
     .filter(
       (log) =>
-        log.address.toLowerCase() === bscSourceBridgeAddress.toLowerCase() &&
-        log.topics[0] === sourceEventTopic
-    );
-  assert.equal(bscSourceEventLogs.length, 1);
-  assert.deepEqual(bscSourceEventLogs[0].topics, [
-    sourceEventTopic,
-    expectedBscBurnDigest,
-  ]);
-  assert.equal(bscSourceEventLogs[0].data, "0x");
+        log.address.toLowerCase() === ethereumBridgeAddress.toLowerCase(),
+    )
+    .map((log) => {
+      try {
+        return ethereumBridge.interface.parseLog(log);
+      } catch (_) {
+        return null;
+      }
+    })
+    .filter((log) => log && log.name === "SccpTransfer");
+  assert.equal(ethereumSourceEvents.length, 1);
+  const ethereumSourceEvent = ethereumSourceEvents[0].args;
+  const ethereumSourcePayload = ethers.getBytes(
+    ethereumSourceEvent.canonicalPayload,
+  );
+  assert.equal(
+    Buffer.from(ethereumSourcePayload).readUInt32LE(18),
+    ROUTE_REVISION,
+  );
+  assert.equal(
+    ethereumSourceEvent.messageId,
+    messageId("ethereum-sepolia", "sora-taira", ethereumSourcePayload),
+  );
+  assert.equal(
+    ethereumSourceEvent.laneHash,
+    await ethereumBridge.sourceLaneHash(),
+  );
+  assert.equal(
+    ethereumSourceEvent.routeConfigHash,
+    await ethereumBridge.routeConfigHash(),
+  );
+  assert.equal(
+    ethereumSourceEvent.sourceEventDigest,
+    await ethereumBridge.sourceEventDigest(
+      ethereumSourceEvent.messageId,
+      ethereumSourceEvent.payloadHash,
+    ),
+  );
+  assert.equal(
+    await ethereumToken.balanceOf(ethereumSignerAddress),
+    6n * SCALE,
+  );
+  assert.equal(await ethereumBridge.transferNonce(), 1n);
 
+  await assert.rejects(
+    ethereumSigner.sendTransaction({
+      to: ethereumBridgeAddress,
+      data: ethers.concat([retiredSelector, ethers.ZeroHash, ethers.ZeroHash]),
+    }),
+    rejectedWith(),
+  );
+
+  await ethereumEip1193Provider.disconnect();
+  console.log(`sccp_runtime_bytes: ${runtimeSizes.join(", ")}`);
   console.log("sccp_message_bridge_smoke: ok");
 }
 

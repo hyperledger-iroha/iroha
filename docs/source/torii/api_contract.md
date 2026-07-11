@@ -92,8 +92,9 @@ Application errors use the closed `ErrorEnvelope { code, message, details? }`
 DTO in the selected JSON or Norito representation. `code` is the stable value
 for SDK logic. It is 1–64 lowercase ASCII letters, digits, or underscores,
 starts with a letter or digit, and is never a namespaced free-form string.
-`message` is exact, non-empty human-readable text with no surrounding
-whitespace or control characters; it may be reworded between builds. `details` is the
+`message` is exact, non-empty human-readable text of at most 1024 Unicode
+characters with no surrounding whitespace or control characters; it may be
+reworded between builds. `details` is the
 documented `ErrorDetails` record, not an arbitrary JSON object; it contains only
 the reusable typed fields declared by the shared Torii model. Clients must
 ignore detail fields they do not understand and must handle an unknown `code`
@@ -118,6 +119,11 @@ is a closed record whose optional members have these meanings:
 No error code may place an undocumented object, array, or scalar behind
 `details`. Adding a new detail member after `/v1` publication follows the DTO
 evolution rules below; it is not an escape hatch for dynamic payloads.
+Every textual detail is exact, non-empty, free of control characters, and
+bounded to 1024 Unicode characters. `reject_code` and `axt.code` instead use a
+1–128 byte ASCII identifier grammar consisting of letters, digits, `_`, `-`,
+`.`, and `:`. Values that do not satisfy these public grammars are omitted at
+the response boundary; they are never truncated into a second identifier.
 
 One finite response-boundary rule enforces this contract for every ordinary
 public, operator, diagnostic, router, authentication, rate-limit, timeout, and
@@ -127,7 +133,8 @@ status, empty body, ad-hoc JSON object, malformed typed body, or error body
 larger than 256 KiB is replaced with the generic envelope for its HTTP status.
 The rejected body is not copied into the replacement message or details. An
 invalid public `code` is likewise replaced with the generic status code; the
-rejected identifier may be retained only in the typed `reject_code` member.
+rejected identifier may be retained only when it independently satisfies the
+bounded typed `reject_code` grammar.
 An otherwise decodable envelope with an invalid `message` retains its valid
 stable code but receives the generic human-readable message for that HTTP
 status.
@@ -158,9 +165,12 @@ uses `method_not_allowed` and includes `Allow`, oversized typed bodies use
 `413 request_payload_too_large`, timeouts use `408 request_timeout`, and an
 unexpected panic is contained as `500 internal_server_error` without exposing
 panic text. Authentication failures use `401 api_token_required` with
-`WWW-Authenticate`; a node configured to require API tokens but containing no
-tokens reports `503 api_token_unavailable`. Every canonical finite `429` or
-`503` response includes both `Retry-After` and a matching typed retry hint.
+`WWW-Authenticate`. When token authentication is enabled, the request must
+carry exactly one `X-API-Token`; repeated fields fail closed even when every
+value is individually valid. A node configured to require API tokens but
+containing no tokens reports `503 api_token_unavailable`. Every canonical
+finite `429` or `503` response includes both `Retry-After` and a matching typed
+retry hint.
 
 ## Reviewed protocol exceptions
 
@@ -316,12 +326,23 @@ more than once into independent local queues, so the consensus/on-chain
 `operation_id` uniqueness rule is the final guard that permits at most one
 economic effect. This is not a distributed idempotency-cache guarantee.
 
+Pending and committed recovery is keyed by the configured outer issuer
+authority together with the signed operation id. A transaction under another
+outer authority therefore cannot shadow a Torii-issued operation merely by
+copying its signed request body into a transaction that later rejects. The
+issuer identity is consequently part of the durable operation-status contract;
+deployments must retain it for as long as they promise status recovery.
+
 After commit, synchronized replicas recover the terminal result through Kura's
 operation-id index while the indexed block body is retained. An index still
 being reconstructed returns typed `503`, and a replica that does not retain the
-indexed block returns the documented history-unavailable `503`. Deployments
-that cannot provide pre-commit affinity must not expose Offline command routes
-until shared admission coordination exists.
+indexed block returns the documented history-unavailable `503`. Applied
+results carry non-zero height and server-time values from that exact block;
+Torii never fabricates zero metadata from a local pipeline cache. Missing or
+inconsistent terminal metadata or result state returns
+`503 offline_operation_index_inconsistent`. Deployments that cannot provide
+pre-commit affinity must not expose Offline command routes until shared
+admission coordination exists.
 
 ## Sharp cutover and release gates
 

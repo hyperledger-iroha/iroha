@@ -209,6 +209,26 @@ function resolveNativeBinding() {
   return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
 }
 
+function resolveOptionalNativeBinding() {
+  if (globalThis.__IROHA_NATIVE_BINDING__ !== undefined) {
+    return globalThis.__IROHA_NATIVE_BINDING__;
+  }
+  try {
+    return getNativeBinding();
+  } catch (error) {
+    if (
+      error?.code === "ERR_IROHA_NATIVE_BINDING" &&
+      error?.nativeStatus === "missing_file"
+    ) {
+      return null;
+    }
+    // A present-but-invalid binding is a supply-chain failure, not an optional
+    // capability miss. Preserve checksum/manifest/load errors rather than
+    // silently falling back to the portable Ed25519 implementation.
+    throw error;
+  }
+}
+
 function cryptoAlgorithmAliasKey(value) {
   const raw = String(value);
   const trimmed = raw.trim();
@@ -219,8 +239,8 @@ function cryptoAlgorithmAliasKey(value) {
 }
 
 export function supportedCryptoAlgorithms() {
-  const native = resolveNativeBinding();
-  if (typeof native.supportedCryptoAlgorithms === "function") {
+  const native = resolveOptionalNativeBinding();
+  if (typeof native?.supportedCryptoAlgorithms === "function") {
     return native.supportedCryptoAlgorithms().map((algorithm) =>
       normalizeCryptoAlgorithm(algorithm),
     );
@@ -271,15 +291,20 @@ export function generateKeyPair(options = {}) {
     return normalizeNativeKeyPair(native.cryptoKeypair(algorithm, seed), algorithm);
   }
   const seed = options.seed ? normalizeSeed(options.seed) : undefined;
-  const native = resolveNativeBinding();
-  if (typeof native.ed25519Keypair !== "function") {
-    throw new Error("Native binding does not expose ed25519Keypair");
+  const native = resolveOptionalNativeBinding();
+  if (typeof native?.ed25519Keypair === "function") {
+    const result = native.ed25519Keypair(seed);
+    return {
+      algorithm: result.algorithm,
+      publicKey: Buffer.from(result.publicKey),
+      privateKey: Buffer.from(result.privateKey),
+    };
   }
-  const result = native.ed25519Keypair(seed);
+  const privateKey = seed ?? randomBytes(ED25519_SEED_LENGTH);
   return {
-    algorithm: result.algorithm,
-    publicKey: Buffer.from(result.publicKey),
-    privateKey: Buffer.from(result.privateKey),
+    algorithm: CRYPTO_ALGORITHMS.ED25519,
+    publicKey: exportPublicKey(privateKeyFromSeed(privateKey)),
+    privateKey: Buffer.from(privateKey),
   };
 }
 
@@ -298,11 +323,12 @@ export function publicKeyFromPrivate(privateKey, options = {}) {
     );
   }
   const buffer = toBuffer(privateKey, "privateKey");
-  const native = resolveNativeBinding();
-  if (typeof native.ed25519PublicKeyFromPrivate !== "function") {
-    throw new Error("Native binding does not expose ed25519PublicKeyFromPrivate");
+  const native = resolveOptionalNativeBinding();
+  if (typeof native?.ed25519PublicKeyFromPrivate === "function") {
+    return Buffer.from(native.ed25519PublicKeyFromPrivate(buffer));
   }
-  return Buffer.from(native.ed25519PublicKeyFromPrivate(buffer));
+  const seed = extractSeed(buffer);
+  return exportPublicKey(privateKeyFromSeed(seed));
 }
 
 export function loadKeyPair(privateKey, options = {}) {

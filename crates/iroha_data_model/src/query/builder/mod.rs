@@ -10,8 +10,8 @@ mod iter;
 
 use std::{marker::PhantomData, vec::Vec};
 
+pub use self::{batch_downcast::TypedBatchDowncastError, iter::QueryIterator};
 use derive_where::derive_where;
-pub use iter::QueryIterator;
 
 use crate::query::{
     Query, QueryBox, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithFilter,
@@ -234,6 +234,7 @@ where
         + norito::codec::Encode
         + 'static,
     E: QueryExecutor,
+    E::Error: From<TypedBatchDowncastError>,
     Q::Item: Send + Sync,
     T: HasTypedBatchIter + HasProjection<PredicateMarker> + 'static,
     QueryBox<QueryOutputBatchBox>: From<QueryWithFilter<Q::Item>>,
@@ -286,13 +287,11 @@ where
             },
         };
 
-        let (first_batch, remaining_items, continue_cursor) =
+        let (first_batch, _remaining_items, continue_cursor) =
             self.query_executor.start_query(query)?;
 
-        let iterator = QueryIterator::<E, T>::new(first_batch, remaining_items, continue_cursor)
-            .expect(
-                "INTERNAL BUG: iroha returned unexpected type in iterable query. Is there a schema mismatch?",
-            );
+        let iterator =
+            QueryIterator::<E, T>::new(first_batch, continue_cursor).map_err(E::Error::from)?;
 
         Ok(iterator)
     }
@@ -302,6 +301,7 @@ where
 pub trait QueryBuilderExt<E, Q, T>
 where
     E: QueryExecutor,
+    E::Error: From<TypedBatchDowncastError>,
     Q: Query
         + HasProjection<PredicateMarker>
         + HasProjection<SelectorMarker, AtomType = ()>
@@ -336,6 +336,7 @@ where
 impl<E, Q, T> QueryBuilderExt<E, Q, T> for QueryBuilder<'_, E, Q, T>
 where
     E: QueryExecutor,
+    E::Error: From<TypedBatchDowncastError>,
     Q: Query
         + HasProjection<PredicateMarker>
         + HasProjection<SelectorMarker, AtomType = ()>

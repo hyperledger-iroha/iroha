@@ -127,3 +127,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 - ** CI አውቶሜሽን *** - የቧንቧ መስመሮችን ለመልቀቅ ከላይ ያሉትን ትዕዛዞች ያክሉ ፣
   ዕቃዎች እና ቅርሶች ከተፈረመበት ጎን ለጎን የሚወስኑ መግለጫዎችን ያትማሉ
   ሜታዳታ
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

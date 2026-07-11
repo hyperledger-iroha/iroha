@@ -3,12 +3,132 @@ use std::vec::Vec;
 
 // --- CompactProofBundle helpers via syscalls (test-only utilities) ---
 use iroha_data_model::prelude::*;
-use iroha_primitives::json::Json;
+use iroha_primitives::{bigint::BigInt, json::Json, numeric_abi::IntValueV1};
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls};
 use ivm_abi::metadata::LITERAL_SECTION_MAGIC;
+use ivm_abi::state_value::{
+    StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
+    state_value_schema_hash_v1,
+};
 
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 pub const HALT: [u8; 4] = HALT_WORD.to_le_bytes();
+
+/// Select a named Kotodama V1 entrypoint after loading its artifact.
+///
+/// V1 artifacts deliberately begin with a non-dispatching `HALT`; raw VM tests
+/// must exercise the same CNTR selector-to-PC mapping used by production hosts
+/// instead of relying on source declaration order.
+pub fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
+    let parsed = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
+    let entrypoint = parsed
+        .contract_interface
+        .as_ref()
+        .expect("Kotodama V1 artifact must embed CNTR")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == name)
+        .unwrap_or_else(|| panic!("missing Kotodama V1 entrypoint `{name}`"));
+    let pc =
+        u64::try_from(parsed.prefix_len()).expect("program prefix fits u64") + entrypoint.entry_pc;
+    vm.set_program_counter(pc)
+        .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
+}
+
+fn i64_state_schema() -> StateValueSchemaV1 {
+    StateValueSchemaV1 {
+        nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
+    }
+}
+
+/// Encode an `i64` using the schema-bound Kotodama V1 durable-value record.
+pub fn encode_i64_state_value(value: i64) -> Vec<u8> {
+    let frame = IntValueV1::try_new(BigInt::from_i128(i128::from(value)))
+        .expect("i64 is inside V1 int domain")
+        .encode_frame()
+        .expect("encode canonical int frame");
+    encode_pointer_state_value(StateValueKindV1::Int, PointerType::Int, &frame)
+}
+
+/// Decode and validate an `i64` Kotodama V1 durable-value record.
+pub fn decode_i64_state_value(payload: &[u8]) -> i64 {
+    let envelope = decode_pointer_state_value(payload, StateValueKindV1::Int);
+    ivm::numeric_tlv::decode_int_bytes(&envelope)
+        .expect("decode canonical int envelope")
+        .try_to_i64()
+        .expect("test state int fits i64")
+}
+
+/// Decode one pointer-backed Kotodama `int` return register.
+pub fn decode_int_register(vm: &IVM, register: usize) -> BigInt {
+    let tlv = vm
+        .validate_tlv(vm.register(register))
+        .unwrap_or_else(|error| panic!("validate int return in r{register}: {error:?}"));
+    assert_eq!(
+        tlv.type_id,
+        PointerType::Int,
+        "r{register} must contain an Int pointer"
+    );
+    IntValueV1::decode_frame(tlv.payload)
+        .unwrap_or_else(|error| panic!("decode int return in r{register}: {error:?}"))
+        .into_int()
+}
+
+/// Decode one pointer-backed Kotodama `int` return known to fit an `i64`.
+pub fn decode_i64_register(vm: &IVM, register: usize) -> i64 {
+    decode_int_register(vm, register)
+        .try_to_i64()
+        .unwrap_or_else(|| panic!("int return in r{register} does not fit i64"))
+}
+
+/// Encode one pointer-backed value using the schema-bound Kotodama V1 record.
+pub fn encode_pointer_state_value(
+    kind: StateValueKindV1,
+    pointer_type: PointerType,
+    payload: &[u8],
+) -> Vec<u8> {
+    assert!(kind.is_pointer(), "state kind must use a pointer word");
+    let schema = StateValueSchemaV1 {
+        nodes: vec![StateValueNodeV1::Leaf(kind)],
+    };
+    let schema_bytes = norito::to_bytes(&schema).expect("encode pointer state schema");
+    let mut envelope = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
+    envelope.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+    envelope.push(1);
+    envelope.extend_from_slice(
+        &u32::try_from(payload.len())
+            .expect("test pointer payload fits u32")
+            .to_be_bytes(),
+    );
+    envelope.extend_from_slice(payload);
+    envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
+    norito::to_bytes(&StateValueRecordV1 {
+        schema_hash: state_value_schema_hash_v1(&schema_bytes),
+        atoms: vec![StateValueAtomV1::Pointer(envelope)],
+    })
+    .expect("encode pointer state record")
+}
+
+/// Decode and structurally validate one pointer-backed Kotodama V1 state record.
+pub fn decode_pointer_state_value(payload: &[u8], kind: StateValueKindV1) -> Vec<u8> {
+    assert!(kind.is_pointer(), "state kind must use a pointer word");
+    let schema = StateValueSchemaV1 {
+        nodes: vec![StateValueNodeV1::Leaf(kind)],
+    };
+    let schema_bytes = norito::to_bytes(&schema).expect("encode pointer state schema");
+    let record: StateValueRecordV1 =
+        norito::decode_from_bytes(payload).expect("decode pointer state record");
+    assert_eq!(
+        record.schema_hash,
+        state_value_schema_hash_v1(&schema_bytes),
+        "pointer state schema hash"
+    );
+    assert!(schema.validate_atoms(&record.atoms));
+    let [StateValueAtomV1::Pointer(envelope)] = record.atoms.as_slice() else {
+        panic!("pointer state record must contain exactly one pointer atom");
+    };
+    envelope.clone()
+}
 
 fn assemble_words(words: &[u32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(words.len() * 4);
@@ -158,11 +278,18 @@ pub fn assemble_with_literal_section(code: &[u8], literals: &[&[u8]]) -> (Vec<u8
     (program, literal_addrs)
 }
 
-/// Assemble a program that consists of one or more SCALL instructions followed by HALT.
-pub fn assemble_syscalls(syscalls: &[u8]) -> Vec<u8> {
+/// Assemble a program that consists of one or more syscall instructions followed by HALT.
+pub fn assemble_syscalls<T>(syscalls: &[T]) -> Vec<u8>
+where
+    T: Copy + Into<u32>,
+{
     let mut code = Vec::with_capacity((syscalls.len() + 1) * 4);
     for &num in syscalls {
-        let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, num);
+        let num = num.into();
+        let word = u8::try_from(num).map_or_else(
+            |_| encoding::wide::encode_syscallx(num),
+            |compact| encoding::wide::encode_sys(instruction::wide::system::SCALL, compact),
+        );
         code.extend_from_slice(&word.to_le_bytes());
     }
     code.extend_from_slice(&HALT);
@@ -171,13 +298,20 @@ pub fn assemble_syscalls(syscalls: &[u8]) -> Vec<u8> {
 
 /// Assemble a SCALL/HALT program with a literal-table prefix and return the
 /// program bytes plus literal addresses inside the loaded code region.
-pub fn assemble_syscalls_with_literal_section(
-    syscalls: &[u8],
+pub fn assemble_syscalls_with_literal_section<T>(
+    syscalls: &[T],
     literals: &[&[u8]],
-) -> (Vec<u8>, Vec<u64>) {
+) -> (Vec<u8>, Vec<u64>)
+where
+    T: Copy + Into<u32>,
+{
     let mut code = Vec::with_capacity((syscalls.len() + 1) * 4);
     for &num in syscalls {
-        let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, num);
+        let num = num.into();
+        let word = u8::try_from(num).map_or_else(
+            |_| encoding::wide::encode_syscallx(num),
+            |compact| encoding::wide::encode_sys(instruction::wide::system::SCALL, compact),
+        );
         code.extend_from_slice(&word.to_le_bytes());
     }
     code.extend_from_slice(&HALT);

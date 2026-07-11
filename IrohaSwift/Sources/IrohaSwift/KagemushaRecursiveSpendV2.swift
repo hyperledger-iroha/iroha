@@ -21,13 +21,74 @@ public enum KagemushaRecursiveSpendV2Error: Error, Equatable, LocalizedError {
     }
 }
 
+/// Exact capability record returned by the loaded ABI-18 native bridge.
+/// Wallet readiness uses this authenticated, canonical Norito record rather
+/// than inferring proof availability from symbol presence.
+public struct KagemushaRecursiveSpendNativeCapabilitiesV1: Equatable, Sendable {
+    public let bridgeABIVersion: UInt32
+    public let artifactManifestSchema: String
+    public let mode: String
+    public let proofBackend: String
+    public let transcriptProfile: String
+    public let proofEnvelopeVersion: UInt16
+    public let stateBoundaryVersion: UInt16
+    public let transitionCircuitID: String
+    public let stateCircuitID: String
+    public let maxProofBytes: UInt32
+    public let proofBackendAvailable: Bool
+    public let missingGates: [String]
+
+    public init(
+        bridgeABIVersion: UInt32,
+        artifactManifestSchema: String,
+        mode: String,
+        proofBackend: String,
+        transcriptProfile: String,
+        proofEnvelopeVersion: UInt16,
+        stateBoundaryVersion: UInt16,
+        transitionCircuitID: String,
+        stateCircuitID: String,
+        maxProofBytes: UInt32,
+        proofBackendAvailable: Bool,
+        missingGates: [String]
+    ) throws {
+        guard bridgeABIVersion == KagemushaRecursiveSpendV2.requiredNativeBridgeAbiVersion,
+              artifactManifestSchema == KagemushaRecursiveSpendV2.artifactManifestSchema,
+              mode == KagemushaRecursiveSpendV2.mode,
+              proofBackend == KagemushaRecursiveSpendV2.pastaCycleBackend,
+              transcriptProfile == KagemushaRecursiveSpendV2.pastaCycleTranscript,
+              proofEnvelopeVersion == KagemushaRecursiveSpendV2.pastaCycleProofEnvelopeVersion,
+              stateBoundaryVersion == KagemushaRecursiveSpendV2.stateBoundaryVersion,
+              transitionCircuitID == KagemushaRecursiveSpendV2.transitionEqCircuitID,
+              stateCircuitID == KagemushaRecursiveSpendV2.stateEpCircuitID,
+              maxProofBytes == UInt32(KagemushaRecursiveSpendV2.releaseMaximumProofBytes),
+              missingGates == (proofBackendAvailable
+                ? []
+                : KagemushaRecursiveSpendV2.unavailableProofBackendGates) else {
+            throw KagemushaRecursiveSpendV2Error.invalidField("nativeCapabilities")
+        }
+        self.bridgeABIVersion = bridgeABIVersion
+        self.artifactManifestSchema = artifactManifestSchema
+        self.mode = mode
+        self.proofBackend = proofBackend
+        self.transcriptProfile = transcriptProfile
+        self.proofEnvelopeVersion = proofEnvelopeVersion
+        self.stateBoundaryVersion = stateBoundaryVersion
+        self.transitionCircuitID = transitionCircuitID
+        self.stateCircuitID = stateCircuitID
+        self.maxProofBytes = maxProofBytes
+        self.proofBackendAvailable = proofBackendAvailable
+        self.missingGates = missingGates
+    }
+}
+
 /// Availability, canonical wire names, and high-level native entrypoints for
 /// exact-amount branch-safe recursive offline cash.
 public enum KagemushaRecursiveSpendV2 {
     public static let requiredNativeBridgeAbiVersion: UInt32 = 18
     public static let artifactManifestSchema =
         "kagemusha.offline.recursive_spend.artifact_manifest.v3"
-    public static let mode = "recursive_spend_v1"
+    public static let mode = "recursive_spend_v2"
     public static let pastaCycleBackend = "halo2/ipa-pasta-cycle-v1"
     public static let pastaCycleTranscript = "kagemusha-pasta-cycle-poseidon-v1"
     public static let pastaCycleProofEnvelopeVersion: UInt16 = 1
@@ -37,9 +98,14 @@ public enum KagemushaRecursiveSpendV2 {
     public static let stateEpCircuitID = "kagemusha-recursive-spend-state-ep-v1"
     public static let releaseMaximumProofBytes = 4_096
     public static let artifactMaximumFileBytes = 256 * 1024 * 1024
-    /// This remains false until init/append/verify/redeem all call the audited
-    /// V2 circuit and chain implementation in the same source revision.
-    public static let isProofBackendAvailable = false
+    public static let unavailableProofBackendGates = [
+        "opposite_field_pasta_loader",
+        "cross_field_poseidon_transcript",
+        "two_layer_recursive_accumulator",
+        "authenticated_release_envelope",
+        "independent_cryptographic_review",
+        "physical_device_performance_evidence",
+    ]
 
     public static let scaledAmountWireName = wire("KagemushaScaledAmountV2")
     public static let noteWireName = wire("KagemushaSpendableNoteDescriptorV2")
@@ -57,6 +123,8 @@ public enum KagemushaRecursiveSpendV2 {
         wire("KagemushaRecursiveSpendArtifactReferenceV2")
     public static let artifactManifestWireName =
         wire("KagemushaRecursiveSpendArtifactManifestV3")
+    public static let nativeCapabilitiesWireName =
+        wire("KagemushaRecursiveSpendNativeCapabilitiesV1")
     public static let initRequestWireName = wire("KagemushaRecursiveSpendInitRequestV2")
     public static let topUpUnsignedWireName = wire("KagemushaRecursiveSpendTopUpUnsignedV2")
     public static let topUpRequestWireName = "iroha.torii.v1.offline.top_up.request"
@@ -178,9 +246,33 @@ public enum KagemushaRecursiveSpendV2 {
             )
     }
 
+    private static let cachedNativeCapabilities: KagemushaRecursiveSpendNativeCapabilitiesV1? = {
+        guard let archive = try? NoritoNativeBridge.shared
+            .kagemushaRecursiveSpendCapabilitiesV1() else {
+            return nil
+        }
+        return try? KagemushaRecursiveSpendV2Codecs.decodeNativeCapabilities(archive)
+    }()
+
+    public static func nativeCapabilities() throws
+        -> KagemushaRecursiveSpendNativeCapabilitiesV1
+    {
+        guard let capabilities = cachedNativeCapabilities else {
+            throw KagemushaRecursiveSpendV2Error.nativeBridgeUnavailable
+        }
+        return capabilities
+    }
+
+    /// Authoritative first-release availability. Native capability archives
+    /// remain inspectable, but cannot activate a backend that this SDK release
+    /// has not audited and compiled in.
+    public static let isProofBackendAvailable = false
+
     /// Exact local production capability; Torii readiness remains an additional requirement.
     public static var isProductionAvailable: Bool {
-        isProofBackendAvailable && isNativeStubAvailable
+        isProofBackendAvailable
+            && isNativeStubAvailable
+            && cachedNativeCapabilities?.proofBackendAvailable == true
     }
 
     /// Select V2 only after the explicit ABI-18 proof capability is green.
@@ -195,7 +287,7 @@ public enum KagemushaRecursiveSpendV2 {
         proofBackendAvailable: Bool,
         nativeStubAvailable: Bool
     ) -> KagemushaOfflineSpendMode? {
-        proofBackendAvailable && nativeStubAvailable ? .recursiveSpendV1 : nil
+        proofBackendAvailable && nativeStubAvailable ? .recursiveSpendV2 : nil
     }
 
     public static func initSpend(

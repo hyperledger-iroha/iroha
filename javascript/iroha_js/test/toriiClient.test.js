@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import vm from "node:vm";
 import {
   ToriiClient,
   ToriiDataModelMismatchError,
@@ -28,8 +29,6 @@ import {
   buildMultisigProposeRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   normalizeAccountId,
-  evmSccpDestinationBindingHash,
-  tronSccpDestinationBindingHash,
   ValidationError,
   ValidationErrorCode,
 } from "../src/index.js";
@@ -39,9 +38,15 @@ import {
   AccountAddressErrorCode,
 } from "../src/address.js";
 import { sorafsGatewayFetch } from "../src/sorafs.js";
+import { IVM_ARTIFACT_MAX_BYTES } from "../src/ivmArtifact.js";
+import { blake2b256 } from "../src/blake2b.js";
 import { makeNativeTest, nativeBinding, nativeSkipMessage } from "./helpers/native.js";
 
 const BASE_URL = "https://localhost:8080";
+const IVM_ARTIFACT_MAX_BASE64_LENGTH =
+  Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+const CONTRACT_CODE_BYTES_JSON_MAX_BYTES =
+  IVM_ARTIFACT_MAX_BASE64_LENGTH + 1024;
 const SAMPLE_ACCOUNT_SIGNATORY =
   "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 const SAMPLE_ACCOUNT_DOMAIN = "wonderland";
@@ -8577,6 +8582,7 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
 
 test("submitTransaction wraps native Norito transaction payload for pipeline submit", async () => {
   const payload = new Uint8Array([0xab, 0xcd]);
+  const controller = new AbortController();
   let nativeEncodeCalls = 0;
   const nativeBinding = {
     encodeSignedTransactionNorito: (buffer) => {
@@ -8618,6 +8624,7 @@ test("submitTransaction wraps native Norito transaction payload for pipeline sub
     }
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
     assert.equal(init.method, "POST");
+    assert.equal(init.signal, controller.signal);
     assert.equal(init.headers["Content-Type"], "application/x-norito");
     assert.deepEqual([...Buffer.from(init.body).values()], [0x01, 0xca, 0xfe]);
     return createResponse({
@@ -8627,9 +8634,31 @@ test("submitTransaction wraps native Norito transaction payload for pipeline sub
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
-  const response = await client.submitTransaction(payload);
+  const response = await client.submitTransaction(payload, {
+    signal: controller.signal,
+  });
   assert.deepEqual(response, { ok: true });
   assert.equal(nativeEncodeCalls, 1);
+});
+
+test("submitTransaction rejects an aborted signal before any fetch", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("aborted transaction must not fetch");
+    },
+  });
+  const controller = new AbortController();
+  controller.abort(new Error("caller cancelled final submission"));
+  await assert.rejects(
+    () =>
+      client.submitTransaction(Uint8Array.of(1), {
+        signal: controller.signal,
+      }),
+    /caller cancelled final submission/,
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test("submitTransaction unwraps native NRT0 Norito frames before pipeline submit", async () => {
@@ -12021,2244 +12050,6 @@ test("getNodeCapabilities rejects unsupported option fields", async () => {
   );
 });
 
-test("getSccpCapabilities normalizes discovery response", async () => {
-  const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/sccp/capabilities`);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        local_domain: 0,
-        local_chain: "sora",
-        proof_family: "stark-fri-v1",
-        burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}",
-        message_bundle_path: "/v1/sccp/proofs/message/{message_id}",
-        message_proof_path: "/v1/sccp/artifacts/message/{message_id}",
-        message_job_path: "/v1/sccp/jobs/message/{message_id}",
-        recent_messages_path: "/v1/sccp/messages/recent",
-        proof_manifest_path: "/v1/sccp/manifests",
-        burn_registry_backend: "bridge/sccp/burn-v1",
-        proof_submit_path: "/v1/bridge/proofs/submit",
-        message_submit_path: "/v1/bridge/messages",
-        message_payload_kinds: [
-          "asset_register",
-          "route_activate",
-          "transfer",
-          "token_add",
-          "token_pause",
-          "token_resume",
-        ],
-        codecs: [
-          {
-            id: 4,
-            key: "ton_raw",
-            description: "Canonical TON raw addresses in workchain:account_hex form.",
-          },
-        ],
-        counterparties: [
-          {
-            domain: 4,
-            chain: "ton",
-            verifier_backend: { version: 1, key: "ton-contract-v1" },
-            message_backend: "sccp/stark-fri-v1/ton",
-            registry_backend: "bridge/sccp/stark-fri-v1/ton",
-            counterparty_account_codec: 4,
-            counterparty_account_codec_key: "ton_raw",
-            destination_rollout: {
-              version: 1,
-              verifier_plan: "TonContractNativeRecursive",
-              immutable_verifier_ready: false,
-              anchors_ready: false,
-              verifier_identity: null,
-              verifier_code_hash: null,
-              anchor_id: null,
-              blockers: [
-                "immutable TON verifier contract is not deployed for this SCCP lane",
-                "cryptographic trust anchor is not active for this SCCP lane",
-                "native recursive verifier contract submission is not wired into the SCCP relayer path",
-              ],
-            },
-            production_ready: false,
-            disabled_reason:
-              "disabled until the immutable TON recursive SCCP verifier and cryptographic trust anchors are live for this lane",
-          },
-          {
-            domain: 5,
-            chain: "tron",
-            verifier_backend: { version: 1, key: "tron-groth16-bn254-v1" },
-            message_backend: "sccp/stark-fri-v1/tron",
-            registry_backend: "bridge/sccp/stark-fri-v1/tron",
-            counterparty_account_codec: 5,
-            counterparty_account_codec_key: "tron_base58check",
-            destination_rollout: {
-              version: 1,
-              verifier_plan: "TronContractGroth16Bn254",
-              immutable_verifier_ready: false,
-              anchors_ready: false,
-              verifier_identity: null,
-              verifier_code_hash: null,
-              anchor_id: null,
-              blockers: [
-                "immutable TRON verifier contract is not deployed for this SCCP lane",
-                "cryptographic trust anchor is not active for this SCCP lane",
-                "Groth16/bn254 contract proof submission is not wired into the SCCP relayer path",
-              ],
-            },
-            production_ready: false,
-            disabled_reason:
-              "disabled until the immutable TRON Groth16/bn254 SCCP verifier contract and cryptographic trust anchors are live for this lane",
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSccpCapabilities();
-  assert.deepEqual(result, {
-    localDomain: 0,
-    localChain: "sora",
-    proofFamily: "stark-fri-v1",
-    burnBundlePath: "/v1/sccp/proofs/burn/{message_id}",
-    messageBundlePath: "/v1/sccp/proofs/message/{message_id}",
-    messageProofPath: "/v1/sccp/artifacts/message/{message_id}",
-    messageJobPath: "/v1/sccp/jobs/message/{message_id}",
-    recentMessagesPath: "/v1/sccp/messages/recent",
-    proofManifestPath: "/v1/sccp/manifests",
-    burnRegistryBackend: "bridge/sccp/burn-v1",
-    proofSubmitPath: "/v1/bridge/proofs/submit",
-    messageSubmitPath: "/v1/bridge/messages",
-    messagePayloadKinds: [
-      "asset_register",
-      "route_activate",
-      "transfer",
-      "token_add",
-      "token_pause",
-      "token_resume",
-    ],
-    codecs: [
-      {
-        id: 4,
-        key: "ton_raw",
-        description: "Canonical TON raw addresses in workchain:account_hex form.",
-      },
-    ],
-    counterparties: [
-      {
-        domain: 4,
-        chain: "ton",
-        verifierBackendKey: "ton-contract-v1",
-        messageBackend: "sccp/stark-fri-v1/ton",
-        registryBackend: "bridge/sccp/stark-fri-v1/ton",
-        counterpartyAccountCodec: 4,
-        counterpartyAccountCodecKey: "ton_raw",
-        destinationRollout: {
-          version: 1,
-          verifierPlan: "TonContractNativeRecursive",
-          immutableVerifierReady: false,
-          anchorsReady: false,
-          verifierIdentity: null,
-          verifierCodeHash: null,
-          verifierKeyHash: null,
-          destinationNetworkId: null,
-          destinationBridgeAddress: null,
-          destinationBindingKey: null,
-          destinationBindingHash: null,
-          anchorId: null,
-          blockers: [
-            "immutable TON verifier contract is not deployed for this SCCP lane",
-            "cryptographic trust anchor is not active for this SCCP lane",
-            "native recursive verifier contract submission is not wired into the SCCP relayer path",
-          ],
-        },
-        productionReady: false,
-        disabledReason:
-          "disabled until the immutable TON recursive SCCP verifier and cryptographic trust anchors are live for this lane",
-      },
-      {
-        domain: 5,
-        chain: "tron",
-        verifierBackendKey: "tron-groth16-bn254-v1",
-        messageBackend: "sccp/stark-fri-v1/tron",
-        registryBackend: "bridge/sccp/stark-fri-v1/tron",
-        counterpartyAccountCodec: 5,
-        counterpartyAccountCodecKey: "tron_base58check",
-        destinationRollout: {
-          version: 1,
-          verifierPlan: "TronContractGroth16Bn254",
-          immutableVerifierReady: false,
-          anchorsReady: false,
-          verifierIdentity: null,
-          verifierCodeHash: null,
-          verifierKeyHash: null,
-          destinationNetworkId: null,
-          destinationBridgeAddress: null,
-          destinationBindingKey: null,
-          destinationBindingHash: null,
-          anchorId: null,
-          blockers: [
-            "immutable TRON verifier contract is not deployed for this SCCP lane",
-            "cryptographic trust anchor is not active for this SCCP lane",
-            "Groth16/bn254 contract proof submission is not wired into the SCCP relayer path",
-          ],
-        },
-        productionReady: false,
-        disabledReason:
-          "disabled until the immutable TRON Groth16/bn254 SCCP verifier contract and cryptographic trust anchors are live for this lane",
-      },
-    ],
-  });
-});
-
-test("getSccpCapabilities rejects legacy burn registry backend field", async () => {
-  const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/sccp/capabilities`);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        local_domain: 0,
-        local_chain: "sora",
-        proof_family: "stark-fri-v1",
-        burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}",
-        message_bundle_path: "/v1/sccp/proofs/message/{message_id}",
-        message_proof_path: "/v1/sccp/artifacts/message/{message_id}",
-        message_job_path: "/v1/sccp/jobs/message/{message_id}",
-        recent_messages_path: "/v1/sccp/messages/recent",
-        proof_manifest_path: "/v1/sccp/manifests",
-        legacy_burn_registry_backend: "bridge/sccp/burn-v1",
-        proof_submit_path: "/v1/bridge/proofs/submit",
-        message_submit_path: "/v1/bridge/messages",
-        message_payload_kinds: ["transfer"],
-        codecs: [],
-        counterparties: [],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.getSccpCapabilities(),
-    /sccp capabilities response\.burn_registry_backend/u,
-  );
-});
-
-test("getSccpProofManifests normalizes typed manifest response", async () => {
-  const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/sccp/manifests`);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        local_domain: 0,
-        local_chain: "sora",
-        proof_family: "stark-fri-v1",
-        manifests: [
-          {
-            version: 1,
-            local_domain: 0,
-            local_chain: "sora",
-            counterparty_domain: 1,
-            chain: "eth",
-            security_model: "RecursiveZk",
-            anchor_governance: "CryptographicProof",
-            destination_binding: {
-              version: 1,
-              key: "sccp:eth:governed-recursive-zk:v1",
-              binding_hash: "ab".repeat(32),
-            },
-            proof_family: "stark-fri-v1",
-            verifier_backend: { version: 1, key: "evm-secp256k1-keccak-v1" },
-            message_backend: "sccp/stark-fri-v1/eth",
-            registry_backend: "bridge/sccp/stark-fri-v1/eth",
-            counterparty_account_codec: 2,
-            counterparty_account_codec_key: "evm_hex",
-            finality_model: "EthereumBeaconExecution",
-            verifier_target: "EvmContract",
-            manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
-            required_public_inputs: [
-              "message_id",
-              "payload_hash",
-              "target_domain",
-              "commitment_root",
-              "finality_height",
-              "finality_block_hash",
-            ],
-            message_payload_kinds: [
-              "asset_register",
-              "route_activate",
-              "transfer",
-              "token_add",
-              "token_pause",
-              "token_resume",
-            ],
-            destination_rollout: {
-              version: 1,
-              verifier_plan: "EvmGroth16Bn254Adapter",
-              immutable_verifier_ready: false,
-              anchors_ready: false,
-              verifier_identity: null,
-              verifier_code_hash: null,
-              verifier_key_hash: "cd".repeat(32),
-              destination_network_id: "ef".repeat(32),
-              destination_bridge_address: `0x${"12".repeat(20)}`,
-              destination_binding_key: "sccp:0:1:eth:evm-secp256k1-keccak-v1:1",
-              destination_binding_hash: "ab".repeat(32),
-              anchor_id: null,
-              blockers: [
-                "immutable EVM verifier contract is not deployed for this SCCP lane",
-                "cryptographic trust anchor is not active for this SCCP lane",
-                "Groth16/bn254 adapter proof submission is not wired into the SCCP relayer path",
-              ],
-            },
-            production_ready: false,
-            disabled_reason:
-              "disabled until the immutable EVM Groth16/bn254 SCCP verifier and cryptographic trust anchors are live for this lane",
-            submission_template: {
-              version: 1,
-              encoding: "abi_tuple_v1",
-              submission_kind: "contract_call",
-              verifier_entrypoint:
-                "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
-              required_arguments: [
-                {
-                  key: "proof_bytes",
-                  description: "Transparent SCCP proof bytes emitted by the prover backend.",
-                },
-                {
-                  key: "public_inputs",
-                  description: "Fixed-width ABI words for the SCCP public inputs in manifest order.",
-                },
-                {
-                  key: "statement_hash",
-                  description:
-                    "Canonical SCCP statement hash exposed as a bytes32 verifier input.",
-                },
-              ],
-            },
-            taira_xor_burn_record: {
-              settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-              contract_artifact_b64: "TnJ0MA==",
-              vk_ref: {
-                backend: "halo2/ipa",
-                name: "taira-xor-burn-record-v1",
-              },
-              gas_limit: 123456,
-            },
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSccpProofManifests();
-  assert.deepEqual(result, {
-    localDomain: 0,
-    localChain: "sora",
-    proofFamily: "stark-fri-v1",
-    routes: [],
-    manifests: [
-      {
-        version: 1,
-        localDomain: 0,
-        localChain: "sora",
-        counterpartyDomain: 1,
-        chain: "eth",
-        proofFamily: "stark-fri-v1",
-        securityModel: "RecursiveZk",
-        anchorGovernance: "CryptographicProof",
-        destinationBinding: {
-          version: 1,
-          key: "sccp:eth:governed-recursive-zk:v1",
-          bindingHash: "ab".repeat(32),
-        },
-        verifierBackendKey: "evm-secp256k1-keccak-v1",
-        messageBackend: "sccp/stark-fri-v1/eth",
-        registryBackend: "bridge/sccp/stark-fri-v1/eth",
-        counterpartyAccountCodec: 2,
-        counterpartyAccountCodecKey: "evm_hex",
-        finalityModel: "EthereumBeaconExecution",
-        verifierTarget: "EvmContract",
-        manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
-        requiredPublicInputs: [
-          "message_id",
-          "payload_hash",
-          "target_domain",
-          "commitment_root",
-          "finality_height",
-          "finality_block_hash",
-        ],
-        messagePayloadKinds: [
-          "asset_register",
-          "route_activate",
-          "transfer",
-          "token_add",
-          "token_pause",
-          "token_resume",
-        ],
-        destinationRollout: {
-          version: 1,
-          verifierPlan: "EvmGroth16Bn254Adapter",
-          immutableVerifierReady: false,
-          anchorsReady: false,
-          verifierIdentity: null,
-          verifierCodeHash: null,
-          verifierKeyHash: "cd".repeat(32),
-          destinationNetworkId: "ef".repeat(32),
-          destinationBridgeAddress: `0x${"12".repeat(20)}`,
-          destinationBindingKey: "sccp:0:1:eth:evm-secp256k1-keccak-v1:1",
-          destinationBindingHash: "ab".repeat(32),
-          anchorId: null,
-          blockers: [
-            "immutable EVM verifier contract is not deployed for this SCCP lane",
-            "cryptographic trust anchor is not active for this SCCP lane",
-            "Groth16/bn254 adapter proof submission is not wired into the SCCP relayer path",
-          ],
-        },
-        productionReady: false,
-        disabledReason:
-          "disabled until the immutable EVM Groth16/bn254 SCCP verifier and cryptographic trust anchors are live for this lane",
-        submissionTemplate: {
-          version: 1,
-          encoding: "abi_tuple_v1",
-          submissionKind: "contract_call",
-          verifierEntrypoint:
-            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
-          requiredArguments: [
-            {
-              key: "proof_bytes",
-              description: "Transparent SCCP proof bytes emitted by the prover backend.",
-            },
-            {
-              key: "public_inputs",
-              description: "Fixed-width ABI words for the SCCP public inputs in manifest order.",
-            },
-            {
-              key: "statement_hash",
-              description:
-                "Canonical SCCP statement hash exposed as a bytes32 verifier input.",
-            },
-          ],
-        },
-        tairaXorBurnRecord: {
-          settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-          contractArtifactB64: "TnJ0MA==",
-          vkRef: {
-            backend: "halo2/ipa",
-            name: "taira-xor-burn-record-v1",
-          },
-          gasLimit: 123456,
-        },
-      },
-    ],
-  });
-});
-
-test("getSccpProofManifests rejects malformed TAIRA burn-record material", async () => {
-  const rawManifest = {
-    version: 1,
-    local_domain: 0,
-    local_chain: "sora",
-    counterparty_domain: 5,
-    chain: "tron",
-    security_model: "RecursiveZk",
-    anchor_governance: "CryptographicProof",
-    destination_binding: {
-      version: 1,
-      key: "sccp:tron:governed-recursive-zk:v1",
-      binding_hash: "ab".repeat(32),
-    },
-    proof_family: "stark-fri-v1",
-    verifier_backend: { version: 1, key: "tron-groth16-bn254-v1" },
-    message_backend: "sccp/stark-fri-v1/tron",
-    registry_backend: "bridge/sccp/stark-fri-v1/tron",
-    counterparty_account_codec: 5,
-    counterparty_account_codec_key: "tron_base58check",
-    finality_model: "TronDpos",
-    verifier_target: "TronContract",
-    manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:tron",
-    required_public_inputs: ["message_id"],
-    message_payload_kinds: ["transfer"],
-    destination_rollout: {
-      version: 1,
-      verifier_plan: "TronContractGroth16Bn254",
-      immutable_verifier_ready: true,
-      anchors_ready: true,
-      verifier_identity: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-      verifier_code_hash: "cd".repeat(32),
-      verifier_key_hash: "ef".repeat(32),
-      destination_network_id: "12".repeat(32),
-      destination_bridge_address: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-      destination_binding_key: "sccp:0:5:tron:tron-groth16-bn254-v1:1",
-      destination_binding_hash: "34".repeat(32),
-      anchor_id: "tron-mainnet",
-      blockers: [],
-    },
-    production_ready: true,
-    disabled_reason: null,
-    submission_template: {
-      version: 1,
-      encoding: "tron_abi_tuple_v1",
-      submission_kind: "contract_call",
-      verifier_entrypoint:
-        "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
-      required_arguments: [],
-    },
-    taira_xor_burn_record: {
-      settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-      contract_artifact_b64: "not base64%%%!",
-      vk_ref: {
-        backend: "halo2/ipa",
-        name: "taira-xor-burn-record-v1",
-      },
-    },
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          local_domain: 0,
-          local_chain: "sora",
-          proof_family: "stark-fri-v1",
-          manifests: [rawManifest],
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-
-  await assert.rejects(
-    () => client.getSccpProofManifests(),
-    /taira_xor_burn_record\.contract_artifact_b64 must be a valid base64 string/,
-  );
-});
-
-const SCCP_TEST_MESSAGE_ID = "11".repeat(32);
-const SCCP_TEST_COMMITMENT_ROOT = "33".repeat(32);
-const SCCP_TEST_MESSAGE_BUNDLE = Object.freeze({
-  version: 1,
-  commitment_root: SCCP_TEST_COMMITMENT_ROOT,
-  commitment: Object.freeze({
-    version: 1,
-    kind: "Transfer",
-    target_domain: 5,
-    message_id: SCCP_TEST_MESSAGE_ID,
-    payload_hash: "22".repeat(32),
-  }),
-});
-const SCCP_TEST_TRON_NETWORK_ID = "71".repeat(32);
-const SCCP_TEST_TRON_VERIFIER_ADDRESS = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
-const SCCP_TEST_TRON_VERIFIER_CODE_HASH = "72".repeat(32);
-const SCCP_TEST_TRON_VERIFIER_KEY_HASH = "73".repeat(32);
-const SCCP_TEST_EVM_NETWORK_ID = "aa".repeat(32);
-const SCCP_TEST_EVM_VERIFIER_ADDRESS = "bb".repeat(20);
-const SCCP_TEST_EVM_BRIDGE_ADDRESS = "cc".repeat(20);
-const SCCP_TEST_EVM_VERIFIER_CODE_HASH = "dd".repeat(32);
-const SCCP_TEST_EVM_VERIFIER_KEY_HASH = "ee".repeat(32);
-
-function sampleSccpEvmDestinationBindingHash({
-  networkId = SCCP_TEST_EVM_NETWORK_ID,
-  verifierAddress = SCCP_TEST_EVM_VERIFIER_ADDRESS,
-  bridgeAddress = SCCP_TEST_EVM_BRIDGE_ADDRESS,
-  verifierCodeHash = SCCP_TEST_EVM_VERIFIER_CODE_HASH,
-  verifierKeyHash = SCCP_TEST_EVM_VERIFIER_KEY_HASH,
-} = {}) {
-  return evmSccpDestinationBindingHash({
-    networkIdHex: `0x${networkId}`,
-    verifierAddressHex: `0x${verifierAddress}`,
-    bridgeAddressHex: `0x${bridgeAddress}`,
-    verifierCodeHashHex: `0x${verifierCodeHash}`,
-    verifierKeyHashHex: `0x${verifierKeyHash}`,
-  }).replace(/^0x/u, "");
-}
-
-function sampleSccpTronDestinationBindingHash() {
-  return tronSccpDestinationBindingHash({
-    networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
-    verifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
-    verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
-    verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
-  }).replace(/^0x/u, "");
-}
-
-function abiWordHex(value) {
-  const out = Buffer.alloc(32);
-  out.writeUInt32BE(value, 28);
-  return out;
-}
-
-function abiWordBigInt(value) {
-  return Buffer.from(value.toString(16).padStart(64, "0"), "hex");
-}
-
-const SCCP_TEST_BN254_G2_GENERATOR_WORDS = Object.freeze([
-  abiWordBigInt(0x1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6edn),
-  abiWordBigInt(0x198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2n),
-  abiWordBigInt(0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daan),
-  abiWordBigInt(0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975bn),
-]);
-
-function sampleSccpGroth16ProofBytes({
-  messageId = SCCP_TEST_MESSAGE_ID,
-  sourceDomain = 0,
-  commitmentRoot = SCCP_TEST_COMMITMENT_ROOT,
-} = {}) {
-  const out = new Uint8Array(384);
-  [
-    abiWordHex(1),
-    Buffer.from(messageId, "hex"),
-    abiWordHex(sourceDomain),
-    Buffer.from(commitmentRoot, "hex"),
-    abiWordHex(1),
-    abiWordHex(2),
-    ...SCCP_TEST_BN254_G2_GENERATOR_WORDS,
-    abiWordHex(1),
-    abiWordHex(2),
-  ].forEach((word, index) => out.set(word, index * 32));
-  return out;
-}
-
-const SCCP_TEST_GROTH16_PROOF_BYTES = sampleSccpGroth16ProofBytes();
-const SCCP_TEST_GROTH16_PROOF_HEX = Buffer.from(SCCP_TEST_GROTH16_PROOF_BYTES).toString("hex");
-
-test("submitBridgeProof posts normalized TRON deployment proof material", async () => {
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: {
-        ok: true,
-        submitted: false,
-        proof_kind: "message",
-        counterparty_chain: "tron",
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const bindingHash = sampleSccpTronDestinationBindingHash();
-  const response = await client.submitBridgeProof({
-    authority: "alice@sora",
-    messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-    networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
-    verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
-    verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
-    expectedDestinationBindingHashHex: `0x${bindingHash}`,
-    tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
-    proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-    creationTimeMs: "1779660000000",
-  });
-
-  assert.deepEqual(response, {
-    ok: true,
-    submitted: false,
-    proof_kind: "message",
-    counterparty_chain: "tron",
-  });
-  assert.equal(captured.url, `${BASE_URL}/v1/bridge/proofs/submit`);
-  assert.equal(captured.init.method, "POST");
-  assert.equal(captured.init.headers["Content-Type"], "application/json");
-  assert.equal(captured.init.headers.Accept, "application/json");
-  assert.deepEqual(JSON.parse(captured.init.body), {
-    authority: "alice@sora",
-    message_bundle: SCCP_TEST_MESSAGE_BUNDLE,
-    network_id_hex: SCCP_TEST_TRON_NETWORK_ID,
-    verifier_code_hash_hex: SCCP_TEST_TRON_VERIFIER_CODE_HASH,
-    verifier_key_hash_hex: SCCP_TEST_TRON_VERIFIER_KEY_HASH,
-    expected_destination_binding_hash_hex: bindingHash,
-    tron_verifier_address: SCCP_TEST_TRON_VERIFIER_ADDRESS,
-    proof_bytes_hex: SCCP_TEST_GROTH16_PROOF_HEX,
-    creation_time_ms: "1779660000000",
-  });
-});
-
-test("submitBridgeProof rejects ambiguous or burn-bound destination payloads before fetch", async () => {
-  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
-  const bindingHash = sampleSccpTronDestinationBindingHash();
-  const canonicalSignature = canonicalSignatureBase64Fixture();
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeProof({
-        authority: "alice@sora",
-      }),
-    /exactly one of burnBundle or messageBundle/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeProof({
-        authority: "alice@sora",
-        burnBundle: { version: 1 },
-        messageBundle: { version: 1 },
-      }),
-    /exactly one of burnBundle or messageBundle/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeProof({
-        authority: "alice@sora",
-        burnBundle: { version: 1 },
-        networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
-        verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
-        verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
-        expectedDestinationBindingHashHex: `0x${bindingHash}`,
-        tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /messageBundle submissions/,
-  );
-
-  for (const signatureB64 of [
-    ` ${canonicalSignature} `,
-    canonicalSignature.replace(/=+$/u, ""),
-    noncanonicalStandardBase64PadBitAlias(canonicalSignature),
-  ]) {
-    await assert.rejects(
-      () =>
-        client.submitBridgeProof({
-          authority: "alice@sora",
-          signatureB64,
-          messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        }),
-      /exact standard-base64/,
-    );
-  }
-});
-
-test("submitBridgeMessage posts normalized TRON deployment proof material", async () => {
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: {
-        ok: true,
-        submitted: false,
-        message_kind: "transfer",
-        counterparty_chain: "tron",
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const bindingHash = sampleSccpTronDestinationBindingHash();
-  const response = await client.submitBridgeMessage({
-    authority: "alice@sora",
-    messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-    networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
-    verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
-    verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
-    expectedDestinationBindingHashHex: `0x${bindingHash}`,
-    tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
-    proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-    receiptLane: 7,
-    settlement: { route: "xor" },
-    creationTimeMs: "1779660000000",
-  });
-
-  assert.deepEqual(response, {
-    ok: true,
-    submitted: false,
-    message_kind: "transfer",
-    counterparty_chain: "tron",
-  });
-  assert.equal(captured.url, `${BASE_URL}/v1/bridge/messages`);
-  assert.equal(captured.init.method, "POST");
-  assert.equal(captured.init.headers["Content-Type"], "application/json");
-  assert.equal(captured.init.headers.Accept, "application/json");
-  assert.deepEqual(JSON.parse(captured.init.body), {
-    authority: "alice@sora",
-    message_bundle: SCCP_TEST_MESSAGE_BUNDLE,
-    network_id_hex: SCCP_TEST_TRON_NETWORK_ID,
-    verifier_code_hash_hex: SCCP_TEST_TRON_VERIFIER_CODE_HASH,
-    verifier_key_hash_hex: SCCP_TEST_TRON_VERIFIER_KEY_HASH,
-    expected_destination_binding_hash_hex: bindingHash,
-    tron_verifier_address: SCCP_TEST_TRON_VERIFIER_ADDRESS,
-    proof_bytes_hex: SCCP_TEST_GROTH16_PROOF_HEX,
-    receipt_lane: 7,
-    settlement: { route: "xor" },
-    creation_time_ms: "1779660000000",
-  });
-});
-
-test("TRON deployment proof material rejects destination binding hash mismatch", async () => {
-  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
-  const canonicalSignature = canonicalSignatureBase64Fixture();
-
-  for (const signatureB64 of [
-    ` ${canonicalSignature} `,
-    canonicalSignature.replace(/=+$/u, ""),
-    noncanonicalStandardBase64PadBitAlias(canonicalSignature),
-  ]) {
-    await assert.rejects(
-      () =>
-        client.submitBridgeMessage({
-          authority: "alice@sora",
-          signatureB64,
-          messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        }),
-      /exact standard-base64/,
-    );
-  }
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeMessage({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
-        verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
-        verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-        tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /canonical TRON destination binding/,
-  );
-});
-
-test("EVM deployment proof material rejects destination binding hash mismatch", async () => {
-  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeProof({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        networkIdHex: `0x${SCCP_TEST_EVM_NETWORK_ID}`,
-        verifierAddressHex: `0x${SCCP_TEST_EVM_VERIFIER_ADDRESS}`,
-        bridgeAddressHex: `0x${SCCP_TEST_EVM_BRIDGE_ADDRESS}`,
-        verifierCodeHashHex: `0x${SCCP_TEST_EVM_VERIFIER_CODE_HASH}`,
-        verifierKeyHashHex: `0x${SCCP_TEST_EVM_VERIFIER_KEY_HASH}`,
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /canonical EVM destination binding/,
-  );
-});
-
-test("SCCP raw bridge submit rejects proof bytes without message commitment context", async () => {
-  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
-  const bindingHash = sampleSccpTronDestinationBindingHash();
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeProof({
-        authority: "alice@sora",
-        messageBundle: { version: 1 },
-        networkIdHex: `0x${SCCP_TEST_TRON_NETWORK_ID}`,
-        verifierCodeHashHex: `0x${SCCP_TEST_TRON_VERIFIER_CODE_HASH}`,
-        verifierKeyHashHex: `0x${SCCP_TEST_TRON_VERIFIER_KEY_HASH}`,
-        expectedDestinationBindingHashHex: `0x${bindingHash}`,
-        tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /messageBundle\.commitment\.messageId is required/,
-  );
-});
-
-test("TRON deployment proof material rejects placeholder and short proof bytes", async () => {
-  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        proofBytesHex: new Uint8Array(),
-      }),
-    /proofBytesHex must be a non-empty byte-aligned hex string/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeProof({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        proofBytesHex: new Uint8Array([0, 0]),
-      }),
-    /proofBytesHex must not be all zero/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeMessage({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        proof_bytes_hex: "0x0000",
-      }),
-    /proofBytesHex must not be all zero/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        proofBytesHex: new Uint8Array([1, 2, 3]),
-      }),
-    /proofBytesHex must be a 384-byte hex string/,
-  );
-
-  const offCurveC = new Uint8Array(SCCP_TEST_GROTH16_PROOF_BYTES);
-  offCurveC[11 * 32 + 31] = 3;
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-        proofBytesHex: offCurveC,
-      }),
-    /proofBytesHex\.c must be a BN254 G1 point/,
-  );
-
-  const offCurveB = new Uint8Array(SCCP_TEST_GROTH16_PROOF_BYTES);
-  offCurveB[6 * 32 + 31] ^= 0x01;
-  await assert.rejects(
-    () =>
-      client.submitBridgeProof({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        verifierAddressHex: `0x${"22".repeat(20)}`,
-        proofBytesHex: offCurveB,
-      }),
-    /proofBytesHex\.b must be a BN254 G2 point/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeProof({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        proofBytesHex: sampleSccpGroth16ProofBytes({ messageId: "44".repeat(32) }),
-      }),
-    /proofBytesHex\.messageId must match messageBundle\.commitment\.messageId/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeMessage({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        proofBytesHex: sampleSccpGroth16ProofBytes({ sourceDomain: 5 }),
-      }),
-    /proofBytesHex\.sourceDomain must be SORA/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeMessage({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        proofBytesHex: sampleSccpGroth16ProofBytes({ commitmentRoot: "55".repeat(32) }),
-      }),
-    /proofBytesHex\.commitmentRoot must match messageBundle\.commitmentRoot/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        networkIdHex: `0x${"71".repeat(32)}`,
-        verifierCodeHashHex: `0x${"72".repeat(32)}`,
-        verifierKeyHashHex: `0x${"73".repeat(32)}`,
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-        proofBytesHex: sampleSccpGroth16ProofBytes({ sourceDomain: 5 }),
-      }),
-    /proofBytesHex\.sourceDomain must be SORA/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        networkIdHex: `0x${"71".repeat(32)}`,
-        verifierCodeHashHex: `0x${"72".repeat(32)}`,
-        verifierKeyHashHex: `0x${"73".repeat(32)}`,
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-        proofBytesHex: sampleSccpGroth16ProofBytes({ messageId: "22".repeat(32) }),
-      }),
-    /proofBytesHex\.messageId must match messageIdHex/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofArtifact(`0x${"11".repeat(32)}`, {
-        networkIdHex: `0x${"71".repeat(32)}`,
-        verifierCodeHashHex: `0x${"72".repeat(32)}`,
-        verifierKeyHashHex: `0x${"73".repeat(32)}`,
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-        proofBytesHex: sampleSccpGroth16ProofBytes({ messageId: "22".repeat(32) }),
-      }),
-    /proofBytesHex\.messageId must match messageIdHex/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        expectedDestinationBindingHashHex: "0x11",
-      }),
-    /expectedDestinationBindingHashHex must be a 32-byte hex string/,
-  );
-
-  for (const [field, value] of [
-    ["networkIdHex", `0x${"00".repeat(32)}`],
-    ["verifierAddressHex", `0x${"00".repeat(20)}`],
-    ["bridgeAddressHex", `0x${"00".repeat(20)}`],
-    ["verifierCodeHashHex", `0x${"00".repeat(32)}`],
-    ["verifierKeyHashHex", `0x${"00".repeat(32)}`],
-    ["expectedDestinationBindingHashHex", `0x${"00".repeat(32)}`],
-  ]) {
-    await assert.rejects(
-      () =>
-        client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-          [field]: value,
-          proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-        }),
-      new RegExp(`${field}.*all zero`),
-    );
-  }
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeMessage({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        verifierAddressHex: `0x${"00".repeat(20)}`,
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /verifierAddressHex.*all zero/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        tronVerifierAddress: " TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /tronVerifierAddress must be a TRON Base58Check address/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv9",
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /tronVerifierAddress must be a TRON Base58Check address/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        tronVerifierAddress: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /tronVerifierAddress must be a TRON Base58Check address/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        networkIdHex: ` 0x${"71".repeat(32)}`,
-        verifierCodeHashHex: `0x${"72".repeat(32)}`,
-        verifierKeyHashHex: `0x${"73".repeat(32)}`,
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /networkIdHex.*canonical hex string/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeMessage({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        networkIdHex: `0x${"71".repeat(32)}`,
-        verifierCodeHashHex: `0x${"72".repeat(32)}`,
-        verifierKeyHashHex: `0x${"73".repeat(32)}`,
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-        proofBytesHex: `0x${SCCP_TEST_GROTH16_PROOF_BYTES} `,
-      }),
-    /proofBytesHex.*canonical hex string/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        networkIdHex: `0x${"71".repeat(32)}`,
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-      }),
-    /proofBytesHex is required/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /deployment destination fields are required/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        networkIdHex: `0x${"71".repeat(32)}`,
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /complete EVM or TRON/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        networkIdHex: `0x${"71".repeat(32)}`,
-        verifierAddressHex: `0x${"22".repeat(20)}`,
-        verifierCodeHashHex: `0x${"72".repeat(32)}`,
-        verifierKeyHashHex: `0x${"73".repeat(32)}`,
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /complete EVM/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.getSccpMessageProofJob(`0x${"11".repeat(32)}`, {
-        networkIdHex: `0x${"71".repeat(32)}`,
-        verifierAddressHex: `0x${"22".repeat(20)}`,
-        bridgeAddressHex: `0x${"33".repeat(20)}`,
-        verifierCodeHashHex: `0x${"72".repeat(32)}`,
-        verifierKeyHashHex: `0x${"73".repeat(32)}`,
-        expectedDestinationBindingHashHex: `0x${"74".repeat(32)}`,
-        tronVerifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /cannot be mixed/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeProof({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        proofBytesHex: sampleSccpGroth16ProofBytes(),
-      }),
-    /deployment destination fields are required/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeMessage({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        tronVerifierAddress: "not-base58",
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /tronVerifierAddress must be a TRON Base58Check address/,
-  );
-
-  await assert.rejects(
-    () =>
-      client.submitBridgeMessage({
-        authority: "alice@sora",
-        messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
-        tronVerifierAddress: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
-        proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-      }),
-    /tronVerifierAddress must be a TRON Base58Check address/,
-  );
-});
-
-test("getSccpProofManifests rejects unsupported verifier target", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        local_domain: 0,
-        local_chain: "sora",
-        proof_family: "stark-fri-v1",
-        manifests: [
-          {
-            version: 1,
-            local_domain: 0,
-            local_chain: "sora",
-            counterparty_domain: 4,
-            chain: "ton",
-            security_model: "RecursiveZk",
-            anchor_governance: "CryptographicProof",
-            destination_binding: {
-              version: 1,
-              key: "sccp:ton:governed-recursive-zk:v1",
-              binding_hash: "ac".repeat(32),
-            },
-            proof_family: "stark-fri-v1",
-            verifier_backend: { version: 1, key: "ton-contract-v1" },
-            message_backend: "sccp/stark-fri-v1/ton",
-            registry_backend: "bridge/sccp/stark-fri-v1/ton",
-            counterparty_account_codec: 4,
-            counterparty_account_codec_key: "ton_raw",
-            finality_model: "TonMasterchain",
-            verifier_target: "UnknownVerifier",
-            manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
-            required_public_inputs: ["message_id"],
-            message_payload_kinds: [
-              "asset_register",
-              "route_activate",
-              "transfer",
-              "token_add",
-              "token_pause",
-              "token_resume",
-            ],
-            destination_rollout: {
-              version: 1,
-              verifier_plan: "TonContractNativeRecursive",
-              immutable_verifier_ready: false,
-              anchors_ready: false,
-              verifier_identity: null,
-              verifier_code_hash: null,
-              anchor_id: null,
-              blockers: [
-                "immutable TON verifier contract is not deployed for this SCCP lane",
-                "cryptographic trust anchor is not active for this SCCP lane",
-                "native recursive verifier contract submission is not wired into the SCCP relayer path",
-              ],
-            },
-            production_ready: false,
-            disabled_reason:
-              "disabled until the immutable TON recursive SCCP verifier and cryptographic trust anchors are live for this lane",
-            submission_template: {
-              version: 1,
-              encoding: "ton_message_body_boc_v1",
-              submission_kind: "internal_message",
-              verifier_entrypoint: "op::submit_sccp_message_proof",
-              required_arguments: [
-                {
-                  key: "message_body_boc",
-                  description:
-                    "TON Bag-of-Cells internal message body containing the SCCP submission root cell.",
-                },
-              ],
-            },
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.getSccpProofManifests(),
-    /verifier_target must be a supported SCCP verifier target/,
-  );
-});
-
-test("getSccpMessageProofArtifact normalizes typed artifact response", async () => {
-  const messageId = "11".repeat(32);
-  const payloadHash = "22".repeat(32);
-  const commitmentRoot = "33".repeat(32);
-  const finalityBlockHash = "44".repeat(32);
-  const destinationBindingHash = sampleSccpEvmDestinationBindingHash();
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.origin, BASE_URL);
-    assert.equal(parsed.pathname, `/v1/sccp/artifacts/message/${messageId}`);
-    assert.equal(parsed.searchParams.get("network_id_hex"), SCCP_TEST_EVM_NETWORK_ID);
-    assert.equal(parsed.searchParams.get("verifier_address_hex"), SCCP_TEST_EVM_VERIFIER_ADDRESS);
-    assert.equal(parsed.searchParams.get("bridge_address_hex"), SCCP_TEST_EVM_BRIDGE_ADDRESS);
-    assert.equal(parsed.searchParams.get("verifier_code_hash_hex"), SCCP_TEST_EVM_VERIFIER_CODE_HASH);
-    assert.equal(parsed.searchParams.get("verifier_key_hash_hex"), SCCP_TEST_EVM_VERIFIER_KEY_HASH);
-    assert.equal(
-      parsed.searchParams.get("expected_destination_binding_hash_hex"),
-      destinationBindingHash,
-    );
-    assert.equal(parsed.searchParams.get("proof_bytes_hex"), SCCP_TEST_GROTH16_PROOF_HEX);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        version: 1,
-        local_domain: 0,
-        counterparty_domain: 4,
-        security_model: "RecursiveZk",
-        anchor_governance: "CryptographicProof",
-        destination_binding: {
-          version: 1,
-          key: "sccp:ton:governed-recursive-zk:v1",
-          binding_hash: "56".repeat(32),
-        },
-        proof_family: "stark-fri-v1",
-        verifier_backend: { version: 1, key: "ton-contract-v1" },
-        message_backend: "sccp/stark-fri-v1/ton",
-        registry_backend: "bridge/sccp/stark-fri-v1/ton",
-        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
-        finality_model: "TonMasterchain",
-        verifier_target: "TonContract",
-        public_inputs: {
-          version: 1,
-          message_id: messageId,
-          payload_hash: payloadHash,
-          target_domain: 4,
-          commitment_root: commitmentRoot,
-          finality_height: "19",
-          finality_block_hash: finalityBlockHash,
-        },
-        proof_bytes: "aa55",
-        proof_envelope_summary: {
-          version: 1,
-          backend: "stark",
-          circuit_id: "sccp-message-transparent-v1",
-          vk_hash: "66".repeat(32),
-          public_inputs_schema_hash: "77".repeat(32),
-          public_inputs_schema_len_bytes: 3,
-          public_input_column_count: 1,
-          public_input_word_count: 1,
-          open_proof_len_bytes: 5,
-          backend_proof_len_bytes: 3,
-          aux_len_bytes: 2,
-        },
-        submission_package: {
-          version: 1,
-          proof_family: "stark-fri-v1",
-          verifier_backend: { version: 1, key: "ton-contract-v1" },
-          envelope_encoding: "ton_message_body_boc_v1",
-          submission_kind: "internal_message",
-          verifier_entrypoint: "op::submit_sccp_message_proof",
-          platform_payload: {
-            TonInternalMessage: {
-              message_body_boc: "b5ee9c72",
-              query_id: "18446744073709551615",
-              destination_binding: {
-                version: 1,
-                key: "sccp:ton:governed-recursive-zk:v1",
-                binding_hash: "56".repeat(32),
-              },
-              destination_binding_hash: "56".repeat(32),
-              proof_bytes: "aa55",
-              public_inputs_bytes: "cc77",
-              bundle_bytes: "dd88",
-              statement_hash: "99".repeat(32),
-            },
-          },
-          arguments: [{ key: "message_body_boc", encoding: "ton_boc", bytes: "b5ee9c72" }],
-          envelope_bytes: "b5ee9c72",
-        },
-        bundle: {
-          version: 1,
-          commitment_root: commitmentRoot,
-          commitment: {
-            version: 1,
-            kind: "Transfer",
-            target_domain: 4,
-            message_id: messageId,
-            payload_hash: payloadHash,
-          },
-          merkle_proof: {
-            steps: [{ sibling_hash: "55".repeat(32), sibling_is_left: false }],
-          },
-          payload: {
-            Transfer: {
-              version: 1,
-              source_domain: 0,
-              dest_domain: 4,
-              nonce: "21",
-              amount: "77",
-            },
-          },
-          finality_proof: "bb66",
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSccpMessageProofArtifact(`0x${messageId}`, {
-    networkIdHex: `0x${SCCP_TEST_EVM_NETWORK_ID}`,
-    verifierAddressHex: `0x${SCCP_TEST_EVM_VERIFIER_ADDRESS}`,
-    bridgeAddressHex: `0x${SCCP_TEST_EVM_BRIDGE_ADDRESS}`,
-    verifierCodeHashHex: `0x${SCCP_TEST_EVM_VERIFIER_CODE_HASH}`,
-    verifierKeyHashHex: `0x${SCCP_TEST_EVM_VERIFIER_KEY_HASH}`,
-    expectedDestinationBindingHashHex: `0x${destinationBindingHash}`,
-    proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-  });
-  assert.deepEqual(result, {
-    version: 1,
-    localDomain: 0,
-    counterpartyDomain: 4,
-    proofFamily: "stark-fri-v1",
-    securityModel: "RecursiveZk",
-    anchorGovernance: "CryptographicProof",
-    destinationBinding: {
-      version: 1,
-      key: "sccp:ton:governed-recursive-zk:v1",
-      bindingHash: "56".repeat(32),
-    },
-    verifierBackendKey: "ton-contract-v1",
-    messageBackend: "sccp/stark-fri-v1/ton",
-    registryBackend: "bridge/sccp/stark-fri-v1/ton",
-    manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
-    finalityModel: "TonMasterchain",
-    verifierTarget: "TonContract",
-    publicInputs: {
-      version: 1,
-      messageId,
-      payloadHash,
-      targetDomain: 4,
-      commitmentRoot,
-      finalityHeight: 19,
-      finalityBlockHash,
-    },
-    proofBytes: "aa55",
-    proofEnvelopeSummary: {
-      version: 1,
-      backend: "stark",
-      circuitId: "sccp-message-transparent-v1",
-      vkHash: "66".repeat(32),
-      publicInputsSchemaHash: "77".repeat(32),
-      publicInputsSchemaLenBytes: 3,
-      publicInputColumnCount: 1,
-      publicInputWordCount: 1,
-      openProofLenBytes: 5,
-      backendProofLenBytes: 3,
-      auxLenBytes: 2,
-    },
-    submissionPackage: {
-      version: 1,
-      proofFamily: "stark-fri-v1",
-      verifierBackendKey: "ton-contract-v1",
-      envelopeEncoding: "ton_message_body_boc_v1",
-      submissionKind: "internal_message",
-      verifierEntrypoint: "op::submit_sccp_message_proof",
-      platformPayload: {
-        kind: "ton_internal_message",
-        value: {
-          messageBodyBoc: "b5ee9c72",
-          queryId: "18446744073709551615",
-          destinationBinding: {
-            version: 1,
-            key: "sccp:ton:governed-recursive-zk:v1",
-            bindingHash: "56".repeat(32),
-          },
-          destinationBindingHash: "56".repeat(32),
-          proofBytes: "aa55",
-          publicInputsBytes: "cc77",
-          bundleBytes: "dd88",
-          statementHash: "99".repeat(32),
-        },
-      },
-      arguments: [{ key: "message_body_boc", encoding: "ton_boc", bytes: "b5ee9c72" }],
-      envelopeBytes: "b5ee9c72",
-    },
-    bundle: {
-      version: 1,
-      commitmentRoot,
-      commitment: {
-        version: 1,
-        kind: "Transfer",
-        targetDomain: 4,
-        messageId,
-        payloadHash,
-      },
-      merkleProof: {
-        steps: [{ siblingHash: "55".repeat(32), siblingIsLeft: false }],
-      },
-      payload: {
-        kind: "Transfer",
-        value: {
-          version: 1,
-          source_domain: 0,
-          dest_domain: 4,
-          nonce: "21",
-          amount: "77",
-        },
-      },
-      finalityProof: "bb66",
-    },
-  });
-});
-
-test("getSccpMessageProofArtifact rejects TON query_id above uint64", async () => {
-  const messageId = "11".repeat(32);
-  const payloadHash = "22".repeat(32);
-  const commitmentRoot = "33".repeat(32);
-  const finalityBlockHash = "44".repeat(32);
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        version: 1,
-        local_domain: 0,
-        counterparty_domain: 4,
-        security_model: "RecursiveZk",
-        anchor_governance: "CryptographicProof",
-        destination_binding: {
-          version: 1,
-          key: "sccp:ton:governed-recursive-zk:v1",
-          binding_hash: "56".repeat(32),
-        },
-        proof_family: "stark-fri-v1",
-        verifier_backend: { version: 1, key: "ton-contract-v1" },
-        message_backend: "sccp/stark-fri-v1/ton",
-        registry_backend: "bridge/sccp/stark-fri-v1/ton",
-        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
-        finality_model: "TonMasterchain",
-        verifier_target: "TonContract",
-        public_inputs: {
-          version: 1,
-          message_id: messageId,
-          payload_hash: payloadHash,
-          target_domain: 4,
-          commitment_root: commitmentRoot,
-          finality_height: "19",
-          finality_block_hash: finalityBlockHash,
-        },
-        proof_bytes: "aa55",
-        submission_package: {
-          version: 1,
-          proof_family: "stark-fri-v1",
-          verifier_backend: { version: 1, key: "ton-contract-v1" },
-          envelope_encoding: "ton_message_body_boc_v1",
-          submission_kind: "internal_message",
-          verifier_entrypoint: "op::submit_sccp_message_proof",
-          platform_payload: {
-            TonInternalMessage: {
-              message_body_boc: "b5ee9c72",
-              query_id: "18446744073709551616",
-              destination_binding: {
-                version: 1,
-                key: "sccp:ton:governed-recursive-zk:v1",
-                binding_hash: "56".repeat(32),
-              },
-              destination_binding_hash: "56".repeat(32),
-              proof_bytes: "aa55",
-              public_inputs_bytes: "cc77",
-              bundle_bytes: "dd88",
-              statement_hash: "99".repeat(32),
-            },
-          },
-          arguments: [{ key: "message_body_boc", encoding: "ton_boc", bytes: "b5ee9c72" }],
-          envelope_bytes: "b5ee9c72",
-        },
-        bundle: {
-          version: 1,
-          commitment_root: commitmentRoot,
-          commitment: {
-            version: 1,
-            kind: "Transfer",
-            target_domain: 4,
-            message_id: messageId,
-            payload_hash: payloadHash,
-          },
-          merkle_proof: { steps: [] },
-          payload: { Transfer: { version: 1 } },
-          finality_proof: "bb66",
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-
-  await assert.rejects(
-    () => client.getSccpMessageProofArtifact(`0x${messageId}`),
-    /payload\.query_id must be at most 18446744073709551615/u,
-  );
-});
-
-test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        version: 1,
-        local_domain: 0,
-        counterparty_domain: 1,
-        security_model: "RecursiveZk",
-        anchor_governance: "CryptographicProof",
-        destination_binding: {
-          version: 1,
-          key: "sccp:eth:governed-recursive-zk:v1",
-          binding_hash: "57".repeat(32),
-        },
-        proof_family: "stark-fri-v1",
-        verifier_backend: { version: 1, key: "evm-secp256k1-keccak-v1" },
-        message_backend: "sccp/stark-fri-v1/eth",
-        registry_backend: "bridge/sccp/stark-fri-v1/eth",
-        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
-        finality_model: "EthereumBeaconExecution",
-        verifier_target: "EvmContract",
-        public_inputs: {
-          version: 1,
-          message_id: "11".repeat(32),
-          payload_hash: "22".repeat(32),
-          target_domain: 1,
-          commitment_root: "33".repeat(32),
-          finality_height: "7",
-          finality_block_hash: "44".repeat(32),
-        },
-        proof_bytes: "aa55",
-        submission_package: {
-          version: 1,
-          proof_family: "stark-fri-v1",
-          verifier_backend: { version: 1, key: "evm-secp256k1-keccak-v1" },
-          envelope_encoding: "abi_tuple_v1",
-          submission_kind: "contract_call",
-          verifier_entrypoint:
-            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
-          platform_payload: {
-            platform: "EvmGroth16ContractCall",
-            payload: {
-              proof_bytes: "aa55",
-              public_inputs: {
-                message_id: "11".repeat(32),
-                payload_hash: "22".repeat(32),
-                target_domain_word: "00".repeat(31) + "01",
-                commitment_root: "33".repeat(32),
-                finality_height_word: "00".repeat(31) + "07",
-                finality_block_hash: "44".repeat(32),
-              },
-              public_inputs_hash: "88".repeat(32),
-              statement_hash: "55".repeat(32),
-              attestation: {
-                version: 1,
-                message_id: "11".repeat(32),
-                source_domain: 0,
-                commitment_root: "33".repeat(32),
-                native_proof_hash: "99".repeat(32),
-                signatures: [
-                  {
-                    signer_address: "12".repeat(20),
-                    signature_bytes: "34".repeat(65),
-                  },
-                ],
-              },
-            },
-          },
-          arguments: [
-            { key: "proof_bytes", encoding: "raw_bytes", bytes: "aa55" },
-            { key: "public_inputs", encoding: "abi_bytes32x6", bytes: "66".repeat(32 * 6) },
-            { key: "statement_hash", encoding: "abi_bytes32", bytes: "55".repeat(32) },
-          ],
-          envelope_bytes: "77",
-        },
-        bundle: {
-          version: 1,
-          commitment_root: "33".repeat(32),
-          commitment: {
-            version: 1,
-            kind: "Transfer",
-            target_domain: 1,
-            message_id: "99".repeat(32),
-            payload_hash: "22".repeat(32),
-          },
-          merkle_proof: { steps: [] },
-          payload: { Transfer: { version: 1 } },
-          finality_proof: "bb66",
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.getSccpMessageProofArtifact("11".repeat(32)),
-    /bundle\.commitment\.message_id must match public_inputs\.message_id/,
-  );
-});
-
-test("getSccpMessageProofArtifact preserves Solana submission binding fields", async () => {
-  const messageId = "11".repeat(32);
-  const payloadHash = "22".repeat(32);
-  const commitmentRoot = "33".repeat(32);
-  const bindingHash = "56".repeat(32);
-  const statementHash = "99".repeat(32);
-  const proofContextHash = "ab".repeat(32);
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        version: 1,
-        local_domain: 0,
-        counterparty_domain: 3,
-        security_model: "RecursiveZk",
-        anchor_governance: "CryptographicProof",
-        destination_binding: {
-          version: 1,
-          key: "sccp:sol:governed-recursive-zk:v1",
-          binding_hash: bindingHash,
-        },
-        proof_family: "stark-fri-v1",
-        verifier_backend: { version: 1, key: "solana-program-v1" },
-        message_backend: "sccp/stark-fri-v1/sol",
-        registry_backend: "bridge/sccp/stark-fri-v1/sol",
-        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:sol",
-        finality_model: "SolanaFinalizedSlot",
-        verifier_target: "SolanaProgram",
-        public_inputs: {
-          version: 1,
-          message_id: messageId,
-          payload_hash: payloadHash,
-          target_domain: 3,
-          commitment_root: commitmentRoot,
-          finality_height: "321",
-          finality_block_hash: "44".repeat(32),
-        },
-        proof_bytes: "aa55",
-        submission_package: {
-          version: 1,
-          proof_family: "stark-fri-v1",
-          verifier_backend: { version: 1, key: "solana-program-v1" },
-          envelope_encoding: "borsh_instruction_v1",
-          submission_kind: "program_instruction",
-          verifier_entrypoint: "submit_sccp_message_proof",
-          platform_payload: {
-            platform: "solana_program_instruction",
-            payload: {
-              proof_bytes: "aa55",
-              public_inputs_bytes: "cc77",
-              bundle_bytes: "dd88",
-              destination_binding: {
-                version: 1,
-                key: "sccp:sol:governed-recursive-zk:v1",
-                binding_hash: bindingHash,
-              },
-              destination_binding_hash: bindingHash,
-              statement_hash: statementHash,
-              proof_context_hash: proofContextHash,
-            },
-          },
-          arguments: [
-            { key: "proof_bytes", encoding: "raw_bytes", bytes: "aa55" },
-            { key: "public_inputs", encoding: "raw_bytes", bytes: "cc77" },
-            { key: "bundle_bytes", encoding: "raw_bytes", bytes: "dd88" },
-            { key: "statement_hash", encoding: "raw_bytes", bytes: statementHash },
-            { key: "destination_binding_hash", encoding: "raw_bytes", bytes: bindingHash },
-            { key: "proof_context_hash", encoding: "raw_bytes", bytes: proofContextHash },
-          ],
-          envelope_bytes: "ee99",
-        },
-        bundle: {
-          version: 1,
-          commitment_root: commitmentRoot,
-          commitment: {
-            version: 1,
-            kind: "Transfer",
-            target_domain: 3,
-            message_id: messageId,
-            payload_hash: payloadHash,
-          },
-          merkle_proof: { steps: [] },
-          payload: { Transfer: { version: 1 } },
-          finality_proof: "bb66",
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSccpMessageProofArtifact(`0x${messageId}`);
-  assert.deepEqual(result.submissionPackage.platformPayload, {
-    kind: "solana_program_instruction",
-    value: {
-      proofBytes: "aa55",
-      publicInputsBytes: "cc77",
-      bundleBytes: "dd88",
-      destinationBinding: {
-        version: 1,
-        key: "sccp:sol:governed-recursive-zk:v1",
-        bindingHash,
-      },
-      destinationBindingHash: bindingHash,
-      statementHash,
-      proofContextHash,
-    },
-  });
-});
-
-test("getSccpMessageProofJob normalizes typed job response", async () => {
-  const messageId = "11".repeat(32);
-  const payloadHash = "22".repeat(32);
-  const commitmentRoot = "33".repeat(32);
-  const finalityBlockHash = "44".repeat(32);
-  const destinationBindingHash = tronSccpDestinationBindingHash({
-    networkIdHex: `0x${"aa".repeat(32)}`,
-    verifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
-    verifierCodeHashHex: `0x${"dd".repeat(32)}`,
-    verifierKeyHashHex: `0x${"ee".repeat(32)}`,
-  }).replace(/^0x/u, "");
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.origin, BASE_URL);
-    assert.equal(parsed.pathname, `/v1/sccp/jobs/message/${messageId}`);
-    assert.equal(parsed.searchParams.get("network_id_hex"), "aa".repeat(32));
-    assert.equal(parsed.searchParams.get("verifier_code_hash_hex"), "dd".repeat(32));
-    assert.equal(parsed.searchParams.get("verifier_key_hash_hex"), "ee".repeat(32));
-    assert.equal(
-      parsed.searchParams.get("expected_destination_binding_hash_hex"),
-      destinationBindingHash,
-    );
-    assert.equal(
-      parsed.searchParams.get("tron_verifier_address"),
-      SCCP_TEST_TRON_VERIFIER_ADDRESS,
-    );
-    assert.equal(parsed.searchParams.get("proof_bytes_hex"), SCCP_TEST_GROTH16_PROOF_HEX);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        version: 1,
-        chain_family: "Ton",
-        chain: "ton",
-        local_domain: 0,
-        counterparty_domain: 4,
-        security_model: "RecursiveZk",
-        anchor_governance: "CryptographicProof",
-        destination_binding: {
-          version: 1,
-          key: "sccp:ton:governed-recursive-zk:v1",
-          binding_hash: "58".repeat(32),
-        },
-        proof_family: "stark-fri-v1",
-        verifier_backend: { version: 1, key: "ton-contract-v1" },
-        message_backend: "sccp/stark-fri-v1/ton",
-        registry_backend: "bridge/sccp/stark-fri-v1/ton",
-        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
-        finality_model: "TonMasterchain",
-        verifier_target: "TonContract",
-        submission_template: {
-          version: 1,
-          encoding: "ton_message_body_boc_v1",
-          submission_kind: "internal_message",
-          verifier_entrypoint: "op::submit_sccp_message_proof",
-          required_arguments: [
-            {
-              key: "message_body_boc",
-              description:
-                "TON Bag-of-Cells internal message body containing the SCCP submission root cell.",
-            },
-          ],
-        },
-        submission_package: {
-          version: 1,
-          proof_family: "stark-fri-v1",
-          verifier_backend: { version: 1, key: "ton-contract-v1" },
-          envelope_encoding: "ton_message_body_boc_v1",
-          submission_kind: "internal_message",
-          verifier_entrypoint: "op::submit_sccp_message_proof",
-          platform_payload: {
-            platform: "ton_internal_message",
-            payload: {
-              message_body_boc: "b5ee9c72",
-              query_id: "7",
-              destination_binding: {
-                version: 1,
-                key: "sccp:ton:governed-recursive-zk:v1",
-                binding_hash: "58".repeat(32),
-              },
-              destination_binding_hash: "58".repeat(32),
-              proof_bytes: "aa55",
-              public_inputs_bytes: "cc77",
-              bundle_bytes: "dd88",
-              statement_hash: "99".repeat(32),
-            },
-          },
-          arguments: [{ key: "message_body_boc", encoding: "ton_boc", bytes: "b5ee9c72" }],
-          envelope_bytes: "b5ee9c72",
-        },
-        proof_envelope_summary: {
-          version: 1,
-          backend: "stark",
-          circuit_id: "sccp-message-transparent-v1",
-          vk_hash: "88".repeat(32),
-          public_inputs_schema_hash: "99".repeat(32),
-          public_inputs_schema_len_bytes: 7,
-          public_input_column_count: 6,
-          public_input_word_count: 6,
-          open_proof_len_bytes: 42,
-          backend_proof_len_bytes: 21,
-          aux_len_bytes: 0,
-        },
-        public_inputs: {
-          version: 1,
-          message_id: messageId,
-          payload_hash: payloadHash,
-          target_domain: 4,
-          commitment_root: commitmentRoot,
-          finality_height: "19",
-          finality_block_hash: finalityBlockHash,
-        },
-        payload_kind: "transfer",
-        payload_projection: {
-          Transfer: {
-            version: 1,
-            source_domain: 0,
-            dest_domain: 4,
-            nonce: "21",
-            asset_home_domain: 0,
-            asset_id: { TextUtf8: { value: "xor#universal" } },
-            amount: "77",
-            sender: { TextUtf8: { value: "nexus:soraswap" } },
-            recipient: {
-              TronBase58Check: { payload: "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7" },
-            },
-            route_id: { TextUtf8: { value: "nexus:ton:xor" } },
-          },
-        },
-        bundle: {
-          version: 1,
-          commitment_root: commitmentRoot,
-          commitment: {
-            version: 1,
-            kind: "Transfer",
-            target_domain: 4,
-            message_id: messageId,
-            payload_hash: payloadHash,
-          },
-          merkle_proof: { steps: [] },
-          payload: { Transfer: { version: 1, amount: "77" } },
-          finality_proof: "bb66",
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSccpMessageProofJob(`0x${messageId}`, {
-    networkIdHex: `0x${"aa".repeat(32)}`,
-    verifierCodeHashHex: `0x${"dd".repeat(32)}`,
-    verifierKeyHashHex: `0x${"ee".repeat(32)}`,
-    expectedDestinationBindingHashHex: `0x${destinationBindingHash}`,
-    tronVerifierAddress: SCCP_TEST_TRON_VERIFIER_ADDRESS,
-    proofBytesHex: SCCP_TEST_GROTH16_PROOF_BYTES,
-  });
-  assert.deepEqual(result, {
-    version: 1,
-    chainFamily: "Ton",
-    chain: "ton",
-    localDomain: 0,
-    counterpartyDomain: 4,
-    proofFamily: "stark-fri-v1",
-    securityModel: "RecursiveZk",
-    anchorGovernance: "CryptographicProof",
-    destinationBinding: {
-      version: 1,
-      key: "sccp:ton:governed-recursive-zk:v1",
-      bindingHash: "58".repeat(32),
-    },
-    verifierBackendKey: "ton-contract-v1",
-    messageBackend: "sccp/stark-fri-v1/ton",
-    registryBackend: "bridge/sccp/stark-fri-v1/ton",
-    manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
-    finalityModel: "TonMasterchain",
-    verifierTarget: "TonContract",
-    submissionTemplate: {
-      version: 1,
-      encoding: "ton_message_body_boc_v1",
-      submissionKind: "internal_message",
-      verifierEntrypoint: "op::submit_sccp_message_proof",
-      requiredArguments: [
-        {
-          key: "message_body_boc",
-          description:
-            "TON Bag-of-Cells internal message body containing the SCCP submission root cell.",
-        },
-      ],
-    },
-    submissionPackage: {
-      version: 1,
-      proofFamily: "stark-fri-v1",
-      verifierBackendKey: "ton-contract-v1",
-      envelopeEncoding: "ton_message_body_boc_v1",
-      submissionKind: "internal_message",
-      verifierEntrypoint: "op::submit_sccp_message_proof",
-      platformPayload: {
-        kind: "ton_internal_message",
-        value: {
-          messageBodyBoc: "b5ee9c72",
-          queryId: "7",
-          destinationBinding: {
-            version: 1,
-            key: "sccp:ton:governed-recursive-zk:v1",
-            bindingHash: "58".repeat(32),
-          },
-          destinationBindingHash: "58".repeat(32),
-          proofBytes: "aa55",
-          publicInputsBytes: "cc77",
-          bundleBytes: "dd88",
-          statementHash: "99".repeat(32),
-        },
-      },
-      arguments: [{ key: "message_body_boc", encoding: "ton_boc", bytes: "b5ee9c72" }],
-      envelopeBytes: "b5ee9c72",
-    },
-    proofEnvelopeSummary: {
-      version: 1,
-      backend: "stark",
-      circuitId: "sccp-message-transparent-v1",
-      vkHash: "88".repeat(32),
-      publicInputsSchemaHash: "99".repeat(32),
-      publicInputsSchemaLenBytes: 7,
-      publicInputColumnCount: 6,
-      publicInputWordCount: 6,
-      openProofLenBytes: 42,
-      backendProofLenBytes: 21,
-      auxLenBytes: 0,
-    },
-    publicInputs: {
-      version: 1,
-      messageId,
-      payloadHash,
-      targetDomain: 4,
-      commitmentRoot,
-      finalityHeight: 19,
-      finalityBlockHash,
-    },
-    payloadKind: "transfer",
-    payloadProjection: {
-      kind: "Transfer",
-      value: {
-        version: 1,
-        source_domain: 0,
-        dest_domain: 4,
-        nonce: 21,
-        asset_home_domain: 0,
-        asset_id: { kind: "TextUtf8", value: "xor#universal" },
-        amount: 77,
-        sender: { kind: "TextUtf8", value: "nexus:soraswap" },
-        recipient: {
-          kind: "TronBase58Check",
-          payload: "4174472e7d35395a6b5add427eecb7f4b62ad2b071",
-        },
-        route_id: { kind: "TextUtf8", value: "nexus:ton:xor" },
-      },
-    },
-    bundle: {
-      version: 1,
-      commitmentRoot,
-      commitment: {
-        version: 1,
-        kind: "Transfer",
-        targetDomain: 4,
-        messageId,
-        payloadHash,
-      },
-      merkleProof: { steps: [] },
-      payload: {
-        kind: "Transfer",
-        value: { version: 1, amount: "77" },
-      },
-      finalityProof: "bb66",
-    },
-  });
-});
-
-test("getSccpMessageProofJob preserves Groth16 proof summary destination binding", async () => {
-  const messageId = "11".repeat(32);
-  const payloadHash = "22".repeat(32);
-  const commitmentRoot = "33".repeat(32);
-  const finalityBlockHash = "44".repeat(32);
-  const staleDestinationBindingHash = "58".repeat(32);
-  const summaryDestinationBindingHash = "59".repeat(32);
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        version: 1,
-        chain_family: "Evm",
-        chain: "bsc-testnet",
-        local_domain: 0,
-        counterparty_domain: 2,
-        security_model: "RecursiveZk",
-        anchor_governance: "CryptographicProof",
-        destination_binding: {
-          version: 1,
-          key: "sccp:0:2:bsc:evm-groth16-bn254-v1:1",
-          binding_hash: staleDestinationBindingHash,
-        },
-        proof_family: "groth16-bn254-v1",
-        verifier_backend: { version: 1, key: "evm-groth16-bn254-v1" },
-        message_backend: "sccp/groth16-bn254-v1/bsc",
-        registry_backend: "bridge/sccp/groth16-bn254-v1/bsc",
-        manifest_seed: "iroha:sccp:bridge-proof:message:groth16:v1:bsc",
-        finality_model: "EthereumBeaconExecution",
-        verifier_target: "EvmContract",
-        submission_template: {
-          version: 1,
-          encoding: "evm_abi_tuple_v1",
-          submission_kind: "contract_call",
-          verifier_entrypoint:
-            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
-          required_arguments: [
-            { key: "proof_bytes", description: "Groth16 proof bytes." },
-            { key: "public_inputs", description: "SCCP public input words." },
-            { key: "statement_hash", description: "SCCP statement hash." },
-          ],
-        },
-        submission_package: {
-          version: 1,
-          proof_family: "groth16-bn254-v1",
-          verifier_backend: { version: 1, key: "evm-groth16-bn254-v1" },
-          envelope_encoding: "evm_abi_tuple_v1",
-          submission_kind: "contract_call",
-          verifier_entrypoint:
-            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
-          platform_payload: {
-            platform: "EvmGroth16ContractCall",
-            payload: {
-              proof_bytes: "aa55",
-              public_inputs: {
-                message_id: messageId,
-                payload_hash: payloadHash,
-                target_domain_word: "00".repeat(31) + "02",
-                commitment_root: commitmentRoot,
-                finality_height_word: "00".repeat(31) + "13",
-                finality_block_hash: finalityBlockHash,
-              },
-              statement_hash: "55".repeat(32),
-            },
-          },
-          arguments: [
-            { key: "proof_bytes", encoding: "raw_bytes", bytes: "aa55" },
-            { key: "public_inputs", encoding: "abi_bytes32x6", bytes: "66".repeat(32 * 6) },
-            { key: "statement_hash", encoding: "abi_bytes32", bytes: "55".repeat(32) },
-          ],
-          envelope_bytes: "77",
-        },
-        groth16_proof_summary: {
-          platform_payload: "evm_groth16_contract_call",
-          version: 1,
-          proof_len_bytes: 384,
-          public_input_word_count: 6,
-          groth16_public_signal_count: 9,
-          message_id: messageId,
-          source_domain: 0,
-          commitment_root: commitmentRoot,
-          destination_binding_key: "sccp:0:2:bsc:evm-groth16-bn254-v1:1",
-          destination_binding_hash: summaryDestinationBindingHash,
-        },
-        public_inputs: {
-          version: 1,
-          message_id: messageId,
-          payload_hash: payloadHash,
-          target_domain: 2,
-          commitment_root: commitmentRoot,
-          finality_height: "19",
-          finality_block_hash: finalityBlockHash,
-        },
-        payload_kind: "transfer",
-        payload_projection: {
-          Transfer: {
-            version: 1,
-            source_domain: 0,
-            dest_domain: 2,
-            nonce: "21",
-            asset_home_domain: 0,
-            asset_id: { TextUtf8: { value: "xor#universal" } },
-            amount: "77",
-            sender: { TextUtf8: { value: "nexus:soraswap" } },
-            recipient: { EvmHex: { bytes: "12".repeat(20) } },
-            route_id: { TextUtf8: { value: "nexus:bsc:xor" } },
-          },
-        },
-        bundle: {
-          version: 1,
-          commitment_root: commitmentRoot,
-          commitment: {
-            version: 1,
-            kind: "Transfer",
-            target_domain: 2,
-            message_id: messageId,
-            payload_hash: payloadHash,
-          },
-          merkle_proof: { steps: [] },
-          payload: { Transfer: { version: 1, amount: "77" } },
-          finality_proof: "bb66",
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSccpMessageProofJob(`0x${messageId}`);
-
-  assert.equal(result.destinationBinding.bindingHash, staleDestinationBindingHash);
-  assert.deepEqual(result.groth16ProofSummary, {
-    platformPayload: "evm_groth16_contract_call",
-    version: 1,
-    proofLenBytes: 384,
-    publicInputWordCount: 6,
-    groth16PublicSignalCount: 9,
-    messageId,
-    sourceDomain: 0,
-    commitmentRoot,
-    destinationBindingKey: "sccp:0:2:bsc:evm-groth16-bn254-v1:1",
-    destinationBindingHash: summaryDestinationBindingHash,
-  });
-  assert.equal(result.proofEnvelopeSummary, null);
-  assert.equal(result.submissionPackage.platformPayload.kind, "evm_groth16_contract_call");
-});
-
-test("getSccpMessageProofJob rejects invalid TRON payload projection", async () => {
-  const messageId = "11".repeat(32);
-  const payloadHash = "22".repeat(32);
-  const commitmentRoot = "33".repeat(32);
-  const finalityBlockHash = "44".repeat(32);
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        version: 1,
-        chain_family: "Tron",
-        chain: "tron",
-        local_domain: 0,
-        counterparty_domain: 5,
-        security_model: "RecursiveZk",
-        anchor_governance: "CryptographicProof",
-        destination_binding: {
-          version: 1,
-          key: "sccp:tron:governed-recursive-zk:v1",
-          binding_hash: "58".repeat(32),
-        },
-        proof_family: "groth16-bn254-v1",
-        verifier_backend: { version: 1, key: "tron-contract-v1" },
-        message_backend: "sccp/groth16-bn254-v1/tron",
-        registry_backend: "bridge/sccp/groth16-bn254-v1/tron",
-        manifest_seed: "iroha:sccp:bridge-proof:message:groth16:v1:tron",
-        finality_model: "TronDpos",
-        verifier_target: "TronContract",
-        public_inputs: {
-          version: 1,
-          message_id: messageId,
-          payload_hash: payloadHash,
-          target_domain: 5,
-          commitment_root: commitmentRoot,
-          finality_height: "19",
-          finality_block_hash: finalityBlockHash,
-        },
-        payload_kind: "transfer",
-        payload_projection: {
-          Transfer: {
-            version: 1,
-            source_domain: 0,
-            dest_domain: 5,
-            nonce: "21",
-            asset_home_domain: 0,
-            asset_id: { TextUtf8: { value: "xor#universal" } },
-            amount: "77",
-            sender: { TextUtf8: { value: "nexus:soraswap" } },
-            recipient: {
-              TronBase58Check: { payload: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb" },
-            },
-            route_id: { TextUtf8: { value: "nexus:tron:xor" } },
-          },
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-
-  await assert.rejects(
-    () => client.getSccpMessageProofJob(`0x${messageId}`),
-    /TronBase58Check\.payload.*TRON Base58Check/,
-  );
-});
-
 test("getRuntimeAbiActive normalizes ABI version", async () => {
   const fetchImpl = async () =>
     createResponse({
@@ -15075,7 +12866,7 @@ test("governanceProposeDeployContract normalizes payloads", async () => {
     abiHash: Buffer.alloc(32, 0xbb),
     abiVersion: "1",
     window: { lower: 10, upper: 42 },
-    mode: "plain",
+    mode: "Plain",
     limits: { maxTx: 5 },
   });
   assert.equal(
@@ -15113,6 +12904,68 @@ test("governanceProposeDeployContract accepts byte-array hashes", async () => {
   assert.equal(capturedBody.abi_hash, "bb".repeat(32));
 });
 
+test("governanceProposeDeployContract normalizes the supported voting-mode aliases", async () => {
+  const capturedModes = [];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      capturedModes.push(JSON.parse(init.body).mode);
+      return createResponse({
+        status: 200,
+        jsonData: cloneFixture(toriiFixtures.governance.deployContractDraft),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const base = {
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    codeHash: `0x${"1a".repeat(32)}`,
+    abiHash: Buffer.alloc(32, 0xbb),
+  };
+  for (const mode of [
+    "Zk",
+    "zk",
+    "ZKBALLOT",
+    "zk_vote",
+    " Plain ",
+    "plainballot",
+  ]) {
+    await client.governanceProposeDeployContract({ ...base, mode });
+  }
+  assert.deepEqual(capturedModes, ["Zk", "Zk", "Zk", "Zk", "Plain", "Plain"]);
+  for (const mode of [
+    "zero-knowledge",
+    "zkp",
+    "plaintext",
+    "plain_text",
+    "quadratic",
+    "ranked-choice",
+    1,
+  ]) {
+    await assert.rejects(
+      () => client.governanceProposeDeployContract({ ...base, mode }),
+      /must be either 'Zk' or 'Plain'/u,
+    );
+  }
+  assert.equal(capturedModes.length, 6, "invalid modes must fail before fetch");
+});
+
+test("ToriiClient omits retired SCCP compatibility methods", () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch must not run");
+    },
+  });
+  for (const name of [
+    "getSccpProofManifests",
+    "getSccpMessageProofArtifact",
+    "getSccpMessageProofJob",
+    "governanceProposeSccpRouteManifest",
+  ]) {
+    assert.equal(Object.getOwnPropertyDescriptor(ToriiClient.prototype, name), undefined);
+    assert.equal(client[name], undefined);
+  }
+});
+
 test("governanceProposeDeployContract rejects non-byte hash arrays", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
@@ -15133,58 +12986,6 @@ test("governanceProposeDeployContract rejects non-byte hash arrays", async () =>
     (error) =>
       error?.name === "ValidationError" &&
       /governanceProposeDeployContract\.code_hash\[0\]/i.test(error.message),
-  );
-});
-
-test("governanceProposeSccpRouteManifest normalizes payloads", async () => {
-  let captured;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url, init) => {
-      captured = { url, body: JSON.parse(init.body), signal: init.signal };
-      return createResponse({
-        status: 200,
-        jsonData: cloneFixture(toriiFixtures.governance.sccpRouteManifestDraft),
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const controller = new AbortController();
-  const manifest = {
-    route: "taira_sol_xor",
-    asset: "xor",
-    verifier: { target: "SolanaProgram" },
-  };
-
-  const result = await client.governanceProposeSccpRouteManifest(
-    {
-      routeManifest: manifest,
-      authority: FIXTURE_ALICE_ID,
-      window: { lower: 10, upper: 42 },
-      mode: "zk_vote",
-    },
-    { signal: controller.signal },
-  );
-
-  assert.equal(captured.url, `${BASE_URL}/v1/gov/proposals/sccp-route-manifest`);
-  assert.deepEqual(captured.body.manifest, manifest);
-  assert.equal(captured.body.authority, FIXTURE_ALICE_ID);
-  assert.equal(captured.body.mode, "Zk");
-  assert.deepEqual(captured.body.window, { lower: 10, upper: 42 });
-  assert.equal(captured.signal, controller.signal);
-  assert.equal(result.proposal_id, "ef".repeat(32));
-  assert.deepEqual(result.tx_instructions, [{ wire_id: "ProposeSccpRouteManifest" }]);
-});
-
-test("governanceProposeSccpRouteManifest rejects invalid manifests", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run");
-    },
-  });
-
-  await assert.rejects(
-    () => client.governanceProposeSccpRouteManifest({ manifest: "nope" }),
-    /governanceProposeSccpRouteManifest\.manifest must be an object/i,
   );
 });
 
@@ -17442,7 +15243,7 @@ test("listNfts hits nft endpoint", async () => {
   assert.deepEqual(payload.items[0], { id: "nft#1" });
 });
 
-test("listExplorerNfts encodes owner/domain filters and pagination", async () => {
+test("listExplorerNfts retains generic JSON parsing and encodes filters", async () => {
   const calls = [];
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
@@ -21668,7 +19469,8 @@ test("registerContractCode posts manifest JSON", async () => {
     authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
     manifest: {
-      codeHash: "a".repeat(64),
+      seiyakuName: "Ledger",
+      codeHash: "ab".repeat(32),
       compilerFingerprint: "rustc",
       accessSetHints: {
         readKeys: ["account:alice"],
@@ -21691,7 +19493,7 @@ test("registerContractCode posts manifest JSON", async () => {
         ],
       },
       entrypoints: [
-        { name: "upgrade_ledger", kind: "Kaizen", permission: "can_upgrade" },
+        { name: "kaizen", kind: "Kaizen" },
       ],
       kotoba: [
         {
@@ -21714,7 +19516,8 @@ test("registerContractCode posts manifest JSON", async () => {
     authority: FIXTURE_ALICE_ID,
     private_key: "ed25519:deadbeef",
     manifest: {
-      code_hash: "a".repeat(64),
+      seiyaku_name: "Ledger",
+      code_hash: "ab".repeat(32),
       compiler_fingerprint: "rustc",
       abi_hash: null,
       features_bitmap: null,
@@ -21739,8 +19542,23 @@ test("registerContractCode posts manifest JSON", async () => {
         ],
       },
       entrypoints: [
-        { name: "upgrade_ledger", kind: "Kaizen", permission: "can_upgrade" },
+        {
+          name: "kaizen",
+          kind: { kind: "Kaizen", value: null },
+          params: [],
+          argument_schema: null,
+          return_type: null,
+          return_schema: null,
+          permission: null,
+          read_keys: [],
+          write_keys: [],
+          access_hints_complete: null,
+          access_hints_skipped: [],
+          triggers: [],
+        },
       ],
+      states: null,
+      error_codes: null,
       kotoba: [
         {
           msg_id: "contract.title",
@@ -21754,6 +19572,500 @@ test("registerContractCode posts manifest JSON", async () => {
     },
     code_bytes: Buffer.from("hello").toString("base64"),
   });
+});
+
+test("registerContractCode rejects retired English entrypoint kinds", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 202 });
+    },
+  });
+
+  for (const retired of ["Public", "public", "Init", "init", "Upgrade", "upgrade"]) {
+    await assert.rejects(
+      client.registerContractCode({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        manifest: {
+          entrypoints: [{ name: "legacy", kind: retired }],
+        },
+      }),
+      /must be Kotoage, View, Hajimari, or Kaizen/,
+    );
+  }
+  assert.equal(called, false);
+});
+
+test("registerContractCode preserves branded romanized and Japanese lifecycle selectors", async () => {
+  let body;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      body = JSON.parse(init.body);
+      return createResponse({ status: 202 });
+    },
+  });
+
+  await client.registerContractCode({
+    authority: FIXTURE_ALICE_ID,
+    privateKey: "ed25519:deadbeef",
+    manifest: {
+      seiyakuName: "BrandedLedger",
+      entrypoints: [
+        { name: "hajimari", kind: "Hajimari" },
+        { name: "改善", kind: "Kaizen" },
+        {
+          name: "transfer",
+          kind: "Kotoage",
+          permission: "TransferAsset",
+          params: [{ name: "amount", typeName: "Option<int>" }],
+          argumentSchema: {
+            fields: [
+              {
+                name: "amount",
+                ty: {
+                  nodes: [
+                    { kind: "Option", value: null },
+                    { kind: "Leaf", value: { kind: "Int", value: null } },
+                  ],
+                },
+              },
+            ],
+          },
+          returnType: "Result<bool, string>",
+          returnSchema: {
+            nodes: [
+              { kind: "Result", value: null },
+              { kind: "Leaf", value: { kind: "Bool", value: null } },
+              { kind: "Leaf", value: { kind: "String", value: null } },
+            ],
+          },
+        },
+        { name: "balance", kind: "View" },
+      ],
+    },
+  });
+
+  assert.deepEqual(
+    body.manifest.entrypoints.map(({ name, kind }) => [name, kind.kind]),
+    [
+      ["hajimari", "Hajimari"],
+      ["改善", "Kaizen"],
+      ["transfer", "Kotoage"],
+      ["balance", "View"],
+    ],
+  );
+});
+
+const QUERY_VIEW_LAYOUTS = new Map([
+  ["AccountView", { fields: ["id", "metadata"], children: ["AccountId", "Json"] }],
+  ["AssetView", { fields: ["id", "amount"], children: ["AssetId", "Quantity"] }],
+  [
+    "AssetDefinitionView",
+    {
+      fields: ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+      children: [
+        "AssetDefinitionId",
+        "String",
+        ["Option", "String"],
+        "AccountId",
+        "Quantity",
+        "Json",
+      ],
+    },
+  ],
+  [
+    "DomainView",
+    { fields: ["id", "owned_by", "metadata"], children: ["DomainId", "AccountId", "Json"] },
+  ],
+  [
+    "NftView",
+    { fields: ["id", "owned_by", "content"], children: ["NftId", "AccountId", "Json"] },
+  ],
+]);
+
+function entrypointLeaf(kind) {
+  return { kind: "Leaf", value: { kind, value: null } };
+}
+
+function queryViewNodes(name) {
+  const layout = QUERY_VIEW_LAYOUTS.get(name);
+  assert.notEqual(layout, undefined);
+  const children = layout.children.flatMap((child) =>
+    Array.isArray(child)
+      ? [{ kind: child[0], value: null }, entrypointLeaf(child[1])]
+      : [entrypointLeaf(child)],
+  );
+  return [
+    { kind: "Struct", value: { name, fields: layout.fields } },
+    ...children,
+  ];
+}
+
+function queryPageNodes(name) {
+  return [
+    {
+      kind: "Struct",
+      value: { name: "QueryPage", fields: ["items", "next_offset"] },
+    },
+    { kind: "List", value: { capacity: 64 } },
+    ...queryViewNodes(name),
+    { kind: "Option", value: null },
+    entrypointLeaf("Int"),
+  ];
+}
+
+test("registerContractCode accepts all exact query views, pages, and ordinary structs", async () => {
+  let body;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      body = JSON.parse(init.body);
+      return createResponse({ status: 202 });
+    },
+  });
+  const entrypoints = [];
+  for (const name of QUERY_VIEW_LAYOUTS.keys()) {
+    entrypoints.push(
+      {
+        name: `get_${name.toLowerCase()}`,
+        kind: "View",
+        returnType: `Option<${name}>`,
+        returnSchema: {
+          nodes: [{ kind: "Option", value: null }, ...queryViewNodes(name)],
+        },
+      },
+      {
+        name: `page_${name.toLowerCase()}`,
+        kind: "View",
+        returnType: `QueryPage<${name}>`,
+        returnSchema: { nodes: queryPageNodes(name) },
+      },
+    );
+  }
+  entrypoints.push({
+    name: "pair",
+    kind: "View",
+    returnType: "struct Pair",
+    returnSchema: {
+      nodes: [
+        {
+          kind: "Struct",
+          value: { name: "Pair", fields: ["left", "right"] },
+        },
+        entrypointLeaf("Int"),
+        entrypointLeaf("Bool"),
+      ],
+    },
+  });
+
+  await client.registerContractCode({
+    authority: FIXTURE_ALICE_ID,
+    privateKey: "ed25519:deadbeef",
+    manifest: { seiyakuName: "QuerySchemas", entrypoints },
+  });
+
+  assert.equal(body.manifest.entrypoints.length, QUERY_VIEW_LAYOUTS.size * 2 + 1);
+  assert.deepEqual(
+    body.manifest.entrypoints.at(-1).return_schema.nodes[0].value,
+    { name: "Pair", fields: ["left", "right"] },
+  );
+});
+
+test("registerContractCode rejects every forged reserved query view and page", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 202 });
+    },
+  });
+  const submit = (returnType, nodes) =>
+    client.registerContractCode({
+      authority: FIXTURE_ALICE_ID,
+      privateKey: "ed25519:deadbeef",
+      manifest: {
+        entrypoints: [
+          { name: "read", kind: "View", returnType, returnSchema: { nodes } },
+        ],
+      },
+    });
+
+  for (const name of QUERY_VIEW_LAYOUTS.keys()) {
+    const wrongFields = structuredClone(queryViewNodes(name));
+    wrongFields[0].value.fields[0] = "forged";
+    await assert.rejects(submit(name, wrongFields), /forged reserved query-view/u);
+
+    const wrongLeaf = structuredClone(queryViewNodes(name));
+    wrongLeaf[1].value.kind = "Bool";
+    await assert.rejects(submit(name, wrongLeaf), /forged reserved query-view/u);
+
+    const wrongPageCapacity = structuredClone(queryPageNodes(name));
+    wrongPageCapacity[1].value.capacity = 32;
+    await assert.rejects(
+      submit(`QueryPage<${name}>`, wrongPageCapacity),
+      /forged QueryPage/u,
+    );
+
+    const wrongPageOffset = structuredClone(queryPageNodes(name));
+    wrongPageOffset.at(-1).value.kind = "String";
+    await assert.rejects(
+      submit(`QueryPage<${name}>`, wrongPageOffset),
+      /forged QueryPage/u,
+    );
+  }
+  assert.equal(called, false);
+});
+
+test("registerContractCode accepts the flat List tape at depth 256", async () => {
+  let body;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      body = JSON.parse(init.body);
+      return createResponse({ status: 202 });
+    },
+  });
+  const listNodes = Array.from({ length: 255 }, () => ({
+    kind: "List",
+    value: { capacity: 1 },
+  }));
+  listNodes.push({ kind: "Leaf", value: { kind: "Int", value: null } });
+  let returnType = "int";
+  for (let depth = 0; depth < 255; depth += 1) {
+    returnType = `List<${returnType}, 1>`;
+  }
+
+  await client.registerContractCode({
+    authority: FIXTURE_ALICE_ID,
+    privateKey: "ed25519:deadbeef",
+    manifest: {
+      seiyakuName: "DeepList",
+      entrypoints: [
+        {
+          name: "read",
+          kind: "View",
+          returnType,
+          returnSchema: { nodes: listNodes },
+        },
+      ],
+    },
+  });
+
+  assert.equal(body.manifest.entrypoints[0].return_schema.nodes.length, 256);
+  assert.deepEqual(body.manifest.entrypoints[0].return_schema.nodes[0].value, {
+    capacity: 1,
+  });
+});
+
+test("registerContractCode rejects malformed and over-depth flat List tapes before fetch", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 202 });
+    },
+  });
+  const submit = (nodes, returnType = "List<int, 1>") =>
+    client.registerContractCode({
+      authority: FIXTURE_ALICE_ID,
+      privateKey: "ed25519:deadbeef",
+      manifest: {
+        entrypoints: [
+          { name: "read", kind: "View", returnType, returnSchema: { nodes } },
+        ],
+      },
+    });
+
+  await assert.rejects(
+    submit([{ kind: "List", value: { capacity: 1 } }]),
+    /not one complete canonical prefix type tree/u,
+  );
+  await assert.rejects(
+    submit([
+      { kind: "List", value: { capacity: 1, element: { nodes: [] } } },
+      { kind: "Leaf", value: { kind: "Int", value: null } },
+    ]),
+    /must contain exactly capacity/u,
+  );
+  await assert.rejects(
+    submit([
+      ...Array.from({ length: 256 }, () => ({
+        kind: "List",
+        value: { capacity: 1 },
+      })),
+      { kind: "Leaf", value: { kind: "Int", value: null } },
+    ]),
+    /nodes must contain 1\.\.256 canonical type nodes/u,
+  );
+  assert.equal(called, false);
+});
+
+test("registerContractCode rejects forged branded manifest declarations before fetch", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 202 });
+    },
+  });
+  const submit = (manifest) =>
+    client.registerContractCode({
+      authority: FIXTURE_ALICE_ID,
+      privateKey: "ed25519:deadbeef",
+      manifest,
+    });
+
+  for (const seiyakuName of [
+    "",
+    "seiyaku",
+    "match",
+    "int",
+    "state_map_get",
+    "__kotodama_link_forged",
+    "９ledger",
+  ]) {
+    await assert.rejects(
+      submit({ seiyakuName }),
+      /seiyaku_name must (?:not be empty|be a canonical Kotodama V1 identifier)/u,
+    );
+  }
+  await assert.rejects(
+    submit({ entrypoints: [{ name: "hajimari", kind: "Kotoage", permission: "Init" }] }),
+    /kind does not match its branded lifecycle selector/u,
+  );
+  await assert.rejects(
+    submit({ entrypoints: [{ name: "setup", kind: "Hajimari" }] }),
+    /kind does not match its branded lifecycle selector/u,
+  );
+  await assert.rejects(
+    submit({ entrypoints: [{ name: "kaizen", kind: "Kaizen", permission: "Upgrade" }] }),
+    /permission must be null for hajimari\/始まり and kaizen\/改善/u,
+  );
+  await assert.rejects(
+    submit({ entrypoints: [{ name: "mutate", kind: "Kotoage" }] }),
+    /permission is required for kotoage\/言挙げ/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        { name: "same", kind: "View" },
+        { name: "same", kind: "Kotoage", permission: "Same" },
+      ],
+    }),
+    /entrypoints contains duplicate name same/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        {
+          name: "read",
+          kind: "View",
+          accessHintsComplete: false,
+          accessHintsSkipped: [],
+        },
+      ],
+    }),
+    /marks access hints incomplete without a reason/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        { name: "read", kind: "View" },
+        {
+          name: "schedule",
+          kind: "Kotoage",
+          permission: "Schedule",
+          triggers: [
+            {
+              id: "bad-callback",
+              repeats: { Indefinitely: null },
+              filter: "AQ==",
+              callback: { entrypoint: "read" },
+            },
+          ],
+        },
+      ],
+    }),
+    /local callback must target kotoage\/言挙げ/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        {
+          name: "mutate",
+          kind: "Kotoage",
+          permission: "Mutate",
+          params: [{ name: "value", typeName: "int" }],
+        },
+      ],
+    }),
+    /has parameters but no exact argument schema/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        {
+          name: "mutate",
+          kind: "Kotoage",
+          permission: "Mutate",
+          params: [{ name: "match", typeName: "int" }],
+        },
+      ],
+    }),
+    /params\[0\]\.name must be a canonical Kotodama V1 identifier/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        {
+          name: "read",
+          kind: "View",
+          returnType: "List<int, 0>",
+          returnSchema: {
+            nodes: [
+              {
+                kind: "List",
+                value: { capacity: 0 },
+              },
+              { kind: "Leaf", value: { kind: "Int", value: null } },
+            ],
+          },
+        },
+      ],
+    }),
+    /capacity must be in the V1 range 1\.\.64/u,
+  );
+  await assert.rejects(
+    submit({
+      entrypoints: [
+        {
+          name: "read",
+          kind: "View",
+          returnType: "int",
+          returnSchema: {
+            nodes: [
+              { kind: "Leaf", value: { kind: "Int", value: null } },
+              { kind: "Leaf", value: { kind: "Bool", value: null } },
+            ],
+          },
+        },
+      ],
+    }),
+    /not one complete canonical prefix type tree/u,
+  );
+  await assert.rejects(
+    submit({ contractName: "Legacy" }),
+    /contains unsupported fields: contractName/u,
+  );
+  await assert.rejects(
+    submit({ seiyakuName: "Ledger", seiyaku_name: "Other" }),
+    /contains conflicting aliases: seiyaku_name, seiyakuName/u,
+  );
+  await assert.rejects(
+    submit({ codeHash: "aa".repeat(32) }),
+    /must set the Iroha Hash marker bit/u,
+  );
+  assert.equal(called, false);
 });
 
 test("deployContract submits base64 payload and returns response", async () => {
@@ -21773,7 +20085,7 @@ test("deployContract submits base64 payload and returns response", async () => {
         contract_alias: "router::universal",
         contract_address: contractAddress,
         previous_contract_address: null,
-        upgraded: false,
+        kaizen: false,
         dataspace: "universal",
         deploy_nonce: 7,
         tx_hash_hex: "a".repeat(64),
@@ -21782,7 +20094,7 @@ test("deployContract submits base64 payload and returns response", async () => {
         status: "submitted",
       },
     ],
-    init_calls: [],
+    hajimari_calls: [],
     assertions: [],
     operation_receipt: {
       operation_kind: "contract_deploy",
@@ -21831,6 +20143,38 @@ test("deployContract submits base64 payload and returns response", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
+test("deployContract rejects the retired init_calls response field", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        ok: true,
+        bundle_name: "single:router::universal",
+        bundle_digest: "d".repeat(64),
+        chain_fingerprint: `0@${"e".repeat(64)}`,
+        dry_run: false,
+        completed_stages: ["deploy:router::universal"],
+        failure_point: null,
+        contracts: [],
+        init_calls: [],
+        assertions: [],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  await assert.rejects(
+    () =>
+      client.deployContract({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        contractAlias: "router::universal",
+        codeB64: Buffer.from("payload"),
+      }),
+    /hajimari_calls must be an array/,
+  );
+});
+
 test("deployContract exposes optional pipeline_status diagnostics", async () => {
   const txHash = "a".repeat(64);
   const pipelineStatus = {
@@ -21858,7 +20202,7 @@ test("deployContract exposes optional pipeline_status diagnostics", async () => 
             contract_alias: "router::universal",
             contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
             previous_contract_address: null,
-            upgraded: false,
+            kaizen: false,
             dataspace: "universal",
             deploy_nonce: 7,
             tx_hash_hex: txHash,
@@ -21868,7 +20212,7 @@ test("deployContract exposes optional pipeline_status diagnostics", async () => 
             status: "submitted",
           },
         ],
-        init_calls: [],
+        hajimari_calls: [],
         assertions: [],
       },
       headers: { "content-type": "application/json" },
@@ -21903,6 +20247,42 @@ test("deployContract rejects invalid base64 payloads", async () => {
       error.code === ValidationErrorCode.INVALID_STRING &&
       /deployContract\.codeB64/.test(error.message),
   );
+});
+
+test("contract registration and deployment cap exact artifact bytes before fetch", async () => {
+  const maxBase64Length = Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+  const attacks = [
+    ["A".repeat(maxBase64Length + 1), /4194304-byte artifact limit/],
+    [Buffer.alloc(IVM_ARTIFACT_MAX_BYTES + 1), /4194304-byte artifact limit/],
+    ["Y29kZQ==\n", /canonical standard base64/],
+  ];
+  for (const [artifact, expected] of attacks) {
+    for (const operation of ["register", "deploy"]) {
+      let fetchCalls = 0;
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          throw new Error("fetch must not run for invalid artifact bytes");
+        },
+      });
+      const promise =
+        operation === "register"
+          ? client.registerContractCode({
+              authority: FIXTURE_ALICE_ID,
+              privateKey: "ed25519:deadbeef",
+              manifest: {},
+              codeBytes: artifact,
+            })
+          : client.deployContract({
+              authority: FIXTURE_ALICE_ID,
+              privateKey: "ed25519:deadbeef",
+              contractAlias: "router::universal",
+              codeB64: artifact,
+            });
+      await assert.rejects(promise, expected);
+      assert.equal(fetchCalls, 0, `${operation} must validate before fetch`);
+    }
+  }
 });
 
 test("deployContract rejects empty code bytes", async () => {
@@ -22046,7 +20426,27 @@ test("callContract posts payload metadata and normalizes response", async () => 
     abi_hash_hex: "2".repeat(64),
     tx_hash_hex: "3".repeat(64),
     creation_time_ms: 42,
+    transaction_ttl_ms: 5_000,
     entrypoint: "increment",
+    entrypoint_hash_hex: "4".repeat(64),
+    operation_receipt: {
+      operation_kind: "contract_call",
+      status: "submitted",
+      transport: "torii",
+      dataspace: "universal",
+      contract_alias: null,
+      contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+      code_hash_hex: "1".repeat(64),
+      abi_hash_hex: "2".repeat(64),
+      tx_hash_hex: "3".repeat(64),
+      entrypoint: "increment",
+      entrypoint_hash_hex: "4".repeat(64),
+      gas_limit: 42,
+      gas_used: null,
+      gas_asset_id: FIXTURE_ASSET_ID_D,
+      fee_sponsor: FIXTURE_BOB_ID,
+      payload_digest_hex: "5".repeat(64),
+    },
   };
   const fetchImpl = async (url, init) => {
     captured = { url, init };
@@ -22089,10 +20489,13 @@ test("callContract posts payload metadata and normalizes response", async () => 
     abi_hash_hex: "2".repeat(64),
     tx_hash_hex: "3".repeat(64),
     creation_time_ms: 42,
+    transaction_ttl_ms: 5_000,
+    entrypoint_hash_hex: "4".repeat(64),
     entrypoint: "increment",
     transaction_scaffold_b64: null,
     signed_transaction_b64: null,
     signing_message_b64: null,
+    operation_receipt: responsePayload.operation_receipt,
   });
 });
 
@@ -22119,6 +20522,25 @@ test("callContract exposes optional pipeline_status diagnostics", async () => {
         },
         creation_time_ms: 42,
         entrypoint: "increment",
+        entrypoint_hash_hex: "4".repeat(64),
+        operation_receipt: {
+          operation_kind: "contract_call",
+          status: "submitted",
+          transport: "torii",
+          dataspace: "universal",
+          contract_alias: null,
+          contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          code_hash_hex: "1".repeat(64),
+          abi_hash_hex: "2".repeat(64),
+          tx_hash_hex: txHash,
+          entrypoint: "increment",
+          entrypoint_hash_hex: "4".repeat(64),
+          gas_limit: 42,
+          gas_used: null,
+          gas_asset_id: null,
+          fee_sponsor: null,
+          payload_digest_hex: "5".repeat(64),
+        },
       },
       headers: { "content-type": "application/json" },
     });
@@ -22127,10 +20549,41 @@ test("callContract exposes optional pipeline_status diagnostics", async () => {
     authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
     contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    entrypoint: "increment",
     gasLimit: 42,
   });
   assert.equal(result.pipeline_status?.status?.kind, "Rejected");
   assert.equal(result.pipeline_status?.content?.hash, txHash);
+});
+
+test("callContract response requires operation_receipt", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        ok: true,
+        submitted: true,
+        dataspace: "universal",
+        code_hash_hex: "1".repeat(64),
+        abi_hash_hex: "2".repeat(64),
+        creation_time_ms: 42,
+        entrypoint: "increment",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  await assert.rejects(
+    () =>
+      client.callContract({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        entrypoint: "increment",
+        gasLimit: 42,
+      }),
+    /contractCall response\.operation_receipt must be an object/,
+  );
 });
 
 test("callContract rejects missing gasLimit", async () => {
@@ -22145,8 +20598,46 @@ test("callContract rejects missing gasLimit", async () => {
         authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
         contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        entrypoint: "ping",
       }),
     /contractCall\.gasLimit/,
+  );
+});
+
+test("callContract rejects zero gasLimit", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not be invoked");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.callContract({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        entrypoint: "ping",
+        gasLimit: 0,
+      }),
+    /contractCall\.gasLimit must be a positive integer/,
+  );
+});
+
+test("callContract rejects an implicit entrypoint", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not be invoked");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.callContract({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        gasLimit: 42,
+      }),
+    /contractCall\.entrypoint/,
   );
 });
 
@@ -22835,7 +21326,7 @@ test("IVM proved contract helpers simulate, derive, prove, and poll authoritativ
   };
   const attachment = {
     backend: "halo2/ipa",
-    proof: { backend: "halo2/ipa", bytes: [1, 2, 3] },
+    proof: { backend: "halo2/ipa", bytes_b64: "AQID" },
     vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
   };
   const calls = [];
@@ -22843,7 +21334,7 @@ test("IVM proved contract helpers simulate, derive, prove, and poll authoritativ
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("/v1/contracts/call/simulate")) {
-      return createResponse({
+      return createStreamedJsonResponse({
         status: 200,
         jsonData: {
           ok: true,
@@ -22864,14 +21355,14 @@ test("IVM proved contract helpers simulate, derive, prove, and poll authoritativ
       });
     }
     if (url.endsWith("/v1/zk/ivm/derive")) {
-      return createResponse({
+      return createStreamedJsonResponse({
         status: 200,
         jsonData: { proved },
         headers: { "content-type": "application/json" },
       });
     }
     if (url.endsWith("/v1/zk/ivm/prove") && init.method === "POST") {
-      return createResponse({
+      return createStreamedJsonResponse({
         status: 202,
         jsonData: { job_id: jobId },
         headers: { "content-type": "application/json" },
@@ -22879,21 +21370,17 @@ test("IVM proved contract helpers simulate, derive, prove, and poll authoritativ
     }
     if (url.endsWith(`/v1/zk/ivm/prove/${jobId}`)) {
       statusReads += 1;
-      return createResponse({
+      return createStreamedJsonResponse({
         status: 200,
         jsonData:
           statusReads === 1
             ? {
                 job_id: jobId,
                 status: "running",
-                error: null,
-                proved: null,
-                attachment: null,
               }
             : {
                 job_id: jobId,
                 status: "done",
-                error: null,
                 proved,
                 attachment,
               },
@@ -22943,30 +21430,990 @@ test("IVM proved contract helpers simulate, derive, prove, and poll authoritativ
 
   const deriveBody = JSON.parse(calls[1].init.body);
   const proveBody = JSON.parse(calls[2].init.body);
-  assert.deepEqual(deriveBody.metadata, proofRequest.metadata);
-  assert.deepEqual(proveBody.metadata, proofRequest.metadata);
-  assert.deepEqual(proveBody.proved, proved);
+  assert.equal(
+    JSON.stringify(deriveBody.metadata),
+    JSON.stringify(proofRequest.metadata),
+  );
+  assert.equal(
+    JSON.stringify(proveBody.metadata),
+    JSON.stringify(proofRequest.metadata),
+  );
+  assert.equal(Object.hasOwn(proveBody, "proved"), false);
+});
+
+test("IVM response endpoints enforce declared caps before reads and forward signals", async () => {
+  const jobId = "ab".repeat(16);
+  const controller = new AbortController();
+  const executionRequest = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: "Y29kZQ==",
+  };
+  const cases = [
+    {
+      name: "simulation",
+      invoke: (client) =>
+        client.simulateContractCall(
+          {
+            authority: SAMPLE_ACCOUNT_ID,
+            contractAlias: "dlmm_router::dlmm.universal",
+            gasLimit: 5000,
+          },
+          { signal: controller.signal },
+        ),
+    },
+    {
+      name: "derive",
+      invoke: (client) =>
+        client.deriveIvmProved(executionRequest, {
+          signal: controller.signal,
+        }),
+    },
+    {
+      name: "prove creation",
+      invoke: (client) =>
+        client.startIvmProve(executionRequest, {
+          signal: controller.signal,
+        }),
+    },
+    {
+      name: "prove status",
+      invoke: (client) =>
+        client.getIvmProveJob(jobId, { signal: controller.signal }),
+    },
+    {
+      name: "prove cancellation",
+      invoke: (client) =>
+        client.cancelIvmProveJob(jobId, { signal: controller.signal }),
+    },
+  ];
+
+  for (const { name, invoke } of cases) {
+    let bodyReads = 0;
+    let capturedSignal;
+    const response = {
+      status: 200,
+      headers: new Headers({
+        "content-type": "application/json",
+        "content-length": "1000000000",
+      }),
+      get body() {
+        bodyReads += 1;
+        throw new Error("oversized body must not be read");
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async (_url, init) => {
+        capturedSignal = init.signal;
+        return response;
+      },
+    });
+    await assert.rejects(invoke(client), /exceeds the .*response limit/, name);
+    assert.equal(bodyReads, 0, `${name} must reject before reading`);
+    assert.equal(capturedSignal, controller.signal, `${name} signal`);
+  }
+});
+
+test("IVM bounded responses reject invalid UTF-8 and malformed JSON", async () => {
+  const request = {
+    authority: SAMPLE_ACCOUNT_ID,
+    contractAlias: "dlmm_router::dlmm.universal",
+    gasLimit: 5000,
+  };
+  for (const [body, expected] of [
+    [Uint8Array.of(0xc3, 0x28), /must be valid UTF-8/],
+    [new TextEncoder().encode("{"), /must contain valid JSON/],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.simulateContractCall(request), expected);
+  }
+});
+
+test("IVM derive and prove requests reject oversized or noncanonical bytecode before fetch", async () => {
+  const executionRequest = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+  };
+  const maxBase64Length = Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+  const attacks = [
+    ["A".repeat(maxBase64Length + 1), /4194304-byte artifact limit/],
+    [Buffer.alloc(IVM_ARTIFACT_MAX_BYTES + 1), /4194304-byte artifact limit/],
+    ["Y29kZQ==\n", /canonical standard base64/],
+  ];
+  if (typeof SharedArrayBuffer === "function") {
+    const shared = new Uint8Array(new SharedArrayBuffer(4));
+    Object.defineProperties(shared, {
+      buffer: { value: Uint8Array.of(1, 2, 3, 4).buffer },
+      byteOffset: { value: 0 },
+      byteLength: { value: 4 },
+    });
+    attacks.push([shared, /must not use SharedArrayBuffer/]);
+  }
+
+  for (const method of ["deriveIvmProved", "startIvmProve"]) {
+    for (const [bytecode, expected] of attacks) {
+      let fetchCalls = 0;
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          throw new Error("fetch must not run for invalid bytecode");
+        },
+      });
+      await assert.rejects(
+        () => client[method]({ ...executionRequest, bytecode }),
+        expected,
+      );
+      assert.equal(fetchCalls, 0, `${method} must validate before fetch`);
+    }
+  }
+});
+
+test("IVM proof requests enforce the aggregate Torii body limit before fetch", async () => {
+  const baseRequest = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    bytecode: "Y29kZQ==",
+  };
+  const maxBytecode = Buffer.alloc(IVM_ARTIFACT_MAX_BYTES, 0x61).toString(
+    "base64",
+  );
+  const proved = {
+    bytecode: maxBytecode,
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  for (const [method, request] of [
+    [
+      "deriveIvmProved",
+      { ...baseRequest, metadata: { attacker: "x".repeat(8 * 1024 * 1024) } },
+    ],
+    [
+      "startIvmProve",
+      {
+        ...baseRequest,
+        metadata: {},
+        bytecode: maxBytecode,
+        proved,
+      },
+    ],
+  ]) {
+    let fetchCalls = 0;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("oversized proof request must not fetch");
+      },
+    });
+    await assert.rejects(
+      () => client[method](request),
+      /exceeds the 8388608-byte request limit/,
+    );
+    assert.equal(fetchCalls, 0, method);
+  }
+});
+
+test("proveIvmAndWait sends one maximum artifact without duplicating proved", async () => {
+  const jobId = "ab".repeat(16);
+  const maxBytecode = Buffer.alloc(IVM_ARTIFACT_MAX_BYTES, 0x61).toString(
+    "base64",
+  );
+  const proved = {
+    bytecode: maxBytecode,
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  let postedBody;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      postedBody = init.body;
+      return createStreamedJsonResponse({
+        status: 202,
+        jsonData: { job_id: jobId },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  client.waitForIvmProveJob = async () => ({
+    job_id: jobId,
+    status: "done",
+    error: null,
+    proved,
+    attachment: {
+      backend: "halo2/ipa",
+      proof: { backend: "halo2/ipa", bytes_b64: "AQID" },
+      vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    },
+  });
+  await client.proveIvmAndWait({
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: maxBytecode,
+    proved,
+  });
+  assert.ok(Buffer.byteLength(postedBody, "utf8") <= 8 * 1024 * 1024);
+  const posted = JSON.parse(postedBody);
+  assert.equal(posted.bytecode, maxBytecode);
+  assert.equal(Object.hasOwn(posted, "proved"), false);
+});
+
+test("proveIvmAndWait rejects a completed payload that differs from local proved", async () => {
+  const jobId = "ab".repeat(16);
+  const proved = {
+    bytecode: "Y29kZQ==",
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("focused method stubs should replace fetch");
+    },
+  });
+  client.startIvmProve = async (request) => {
+    assert.equal(Object.hasOwn(request, "proved"), false);
+    return { job_id: jobId };
+  };
+  client.waitForIvmProveJob = async () => ({
+    job_id: jobId,
+    status: "done",
+    proved: { ...proved, events_commitment: "03".repeat(32) },
+    attachment: {},
+  });
+  client.cancelIvmProveJob = async () => ({ job_id: jobId });
+  await assert.rejects(
+    () =>
+      client.proveIvmAndWait({
+        vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+        authority: SAMPLE_ACCOUNT_ID,
+        metadata: {},
+        bytecode: proved.bytecode,
+        proved,
+      }),
+    /differs from the locally derived payload/,
+  );
+});
+
+test("IVM request JSON cloning rejects accessors, cycles, symbols, and deep values", async () => {
+  const baseRequest = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    bytecode: "Y29kZQ==",
+  };
+  let getterCalls = 0;
+  const accessorMetadata = {};
+  Object.defineProperty(accessorMetadata, "secret", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return "stolen";
+    },
+  });
+  const cyclicMetadata = {};
+  cyclicMetadata.self = cyclicMetadata;
+  const symbolMetadata = { [Symbol("hidden")]: true };
+  let deepMetadata = {};
+  for (let index = 0; index < 130; index += 1) {
+    deepMetadata = { nested: deepMetadata };
+  }
+  for (const [metadata, expected] of [
+    [accessorMetadata, /enumerable data property/],
+    [cyclicMetadata, /cyclic references/],
+    [symbolMetadata, /keys must be strings without symbols/],
+    [deepMetadata, /JSON nesting limit/],
+    [{ nodes: new Array(100_001).fill(null) }, /JSON value limit/],
+  ]) {
+    let fetchCalls = 0;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("invalid metadata must not fetch");
+      },
+    });
+    await assert.rejects(
+      () => client.deriveIvmProved({ ...baseRequest, metadata }),
+      expected,
+    );
+    assert.equal(fetchCalls, 0);
+  }
+  assert.equal(getterCalls, 0);
+});
+
+test("IVM request bytecode accepts genuine cross-realm binary views without user getters", async () => {
+  const expectedBytecode = "Y29kZQ==";
+  const crossRealmInputs = [
+    vm.runInNewContext("Uint8Array.from([99,111,100,101]).buffer"),
+    vm.runInNewContext("Uint8Array.from([99,111,100,101])"),
+    vm.runInNewContext(
+      "new DataView(Uint8Array.from([0,99,111,100,101,0]).buffer,1,4)",
+    ),
+  ];
+  for (const bytecode of crossRealmInputs) {
+    Object.defineProperties(bytecode, {
+      byteLength: {
+        get() {
+          throw new Error("shadow byteLength must not be read");
+        },
+      },
+      ...(ArrayBuffer.isView(bytecode)
+        ? {
+            buffer: {
+              get() {
+                throw new Error("shadow buffer must not be read");
+              },
+            },
+            byteOffset: {
+              get() {
+                throw new Error("shadow byteOffset must not be read");
+              },
+            },
+          }
+        : {
+            slice: {
+              value() {
+                throw new Error("shadow slice must not run");
+              },
+            },
+          }),
+    });
+    let posted;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async (_url, init) => {
+        posted = JSON.parse(init.body);
+        return createStreamedJsonResponse({
+          status: 200,
+          jsonData: {
+            proved: {
+              bytecode: expectedBytecode,
+              overlay: [],
+              events_commitment: "01".repeat(32),
+              gas_policy_commitment: "02".repeat(32),
+            },
+          },
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    await client.deriveIvmProved({
+      vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+      authority: SAMPLE_ACCOUNT_ID,
+      metadata: {},
+      bytecode,
+    });
+    assert.equal(posted.bytecode, expectedBytecode);
+  }
+});
+
+test("IVM derive and proof status responses cap and canonicalize proved bytecode", async () => {
+  const baseProved = {
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const maxBase64Length = Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+  const deriveClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: {
+          proved: { ...baseProved, bytecode: "A".repeat(maxBase64Length) },
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () =>
+      deriveClient.deriveIvmProved({
+        vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+        authority: SAMPLE_ACCOUNT_ID,
+        metadata: {},
+        bytecode: "Y29kZQ==",
+      }),
+    /4194304-byte artifact limit/,
+  );
+
+  const jobId = "ab".repeat(16);
+  const statusClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: {
+          job_id: jobId,
+          status: "done",
+          proved: { ...baseProved, bytecode: "Y29kZQ==\n" },
+          attachment: {},
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => statusClient.getIvmProveJob(jobId),
+    /canonical standard base64/,
+  );
+});
+
+test("IVM derive response envelope and overlay arrays require exact data properties", async () => {
+  const request = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: "Y29kZQ==",
+  };
+  const baseProved = {
+    bytecode: "Y29kZQ==",
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  let getterCalls = 0;
+  const accessorEnvelope = {};
+  Object.defineProperty(accessorEnvelope, "proved", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return baseProved;
+    },
+  });
+  const symbolEnvelope = { proved: baseProved, [Symbol("hidden")]: true };
+  const accessorOverlay = [];
+  Object.defineProperty(accessorOverlay, "0", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      getterCalls += 1;
+      return { Log: { message: "attacker" } };
+    },
+  });
+  accessorOverlay.length = 1;
+  const sparseOverlay = new Array(1);
+  const extraOverlay = [];
+  extraOverlay.extra = true;
+  for (const [body, expected] of [
+    [{ proved: baseProved, extra: true }, /must contain exactly/],
+    [symbolEnvelope, /must contain exactly/],
+    [accessorEnvelope, /enumerable data property/],
+    [{ proved: { ...baseProved, overlay: accessorOverlay } }, /enumerable data property/],
+    [{ proved: { ...baseProved, overlay: sparseOverlay } }, /dense exact JSON array/],
+    [{ proved: { ...baseProved, overlay: extraOverlay } }, /dense exact JSON array/],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({ status: 200 }),
+    });
+    client._maybeBoundedJson = async () => body;
+    await assert.rejects(() => client.deriveIvmProved(request), expected);
+  }
+  assert.equal(getterCalls, 0);
+});
+
+test("IVM JSON cloning preserves dangerous-looking own keys without inheritance", async () => {
+  const overlayEntry = JSON.parse(
+    '{"Log":{"message":"safe"},"__proto__":{"Transfer":{"Asset":{"source":"fee#alice","destination":"treasury","object":"1"}}},"constructor":"literal","prototype":"literal","":7}',
+  );
+  const proved = {
+    bytecode: "Y29kZQ==",
+    overlay: [overlayEntry],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: { proved },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  const result = await client.deriveIvmProved({
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: proved.bytecode,
+  });
+  const normalized = result.proved.overlay[0];
+  assert.equal(Object.getPrototypeOf(normalized), null);
+  assert.equal(Object.hasOwn(normalized, "__proto__"), true);
+  assert.equal(Object.hasOwn(normalized, "Transfer"), false);
+  assert.equal(normalized.Transfer, undefined);
+  assert.equal(normalized.constructor, "literal");
+  assert.equal(normalized.prototype, "literal");
+  assert.equal(normalized[""], 7);
+  assert.deepEqual(JSON.parse(JSON.stringify(normalized)), overlayEntry);
+});
+
+test("IVM proved DTOs and proof-job states are exact and internally consistent", async () => {
+  const jobId = "ab".repeat(16);
+  const validProved = {
+    bytecode: "Y29kZQ==",
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const validAttachment = {
+    backend: "halo2/ipa",
+    proof: { backend: "halo2/ipa", bytes_b64: "AQID" },
+    vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+  };
+  const canonicalStatuses = [
+    { job_id: jobId, status: "pending" },
+    { job_id: jobId, status: "running" },
+    { job_id: jobId, status: "error", error: "prover failed" },
+    {
+      job_id: jobId,
+      status: "done",
+      proved: validProved,
+      attachment: validAttachment,
+    },
+  ];
+  for (const jsonData of canonicalStatuses) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createStreamedJsonResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    const normalized = await client.getIvmProveJob(jobId);
+    assert.equal(normalized.status, jsonData.status);
+    assert.equal(normalized.error, jsonData.error ?? null);
+    assert.deepEqual(normalized.proved, jsonData.proved ?? null);
+    assert.deepEqual(normalized.attachment, jsonData.attachment ?? null);
+  }
+  const statusCases = [
+    [
+      { job_id: jobId.toUpperCase(), status: "running" },
+      /exact lowercase/,
+    ],
+    [
+      { job_id: jobId, status: "RUNNING" },
+      /must be pending, running, done, or error/,
+    ],
+    [
+      { job_id: jobId, status: " running " },
+      /surrounding whitespace/,
+    ],
+    [
+      {
+        job_id: jobId,
+        status: "done",
+        error: "attacker error",
+        proved: validProved,
+        attachment: {},
+      },
+      /must contain exactly/,
+    ],
+    [
+      {
+        job_id: jobId,
+        status: "done",
+        proved: { bytecode: "Y29kZQ==", overlay: [] },
+        attachment: {},
+      },
+      /must contain exactly/,
+    ],
+    [
+      {
+        job_id: jobId,
+        status: "running",
+        proved: validProved,
+        attachment: {},
+      },
+      /must contain exactly/,
+    ],
+    [
+      {
+        job_id: jobId,
+        status: "error",
+        error: null,
+      },
+      /must be a string|must not be empty/,
+    ],
+  ];
+  for (const [jsonData, expected] of statusCases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createStreamedJsonResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.getIvmProveJob(jobId), expected);
+  }
+
+  for (const proved of [
+    { ...validProved, extra: true },
+    { ...validProved, overlay: {} },
+    { ...validProved, events_commitment: "01" },
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createStreamedJsonResponse({
+          status: 200,
+          jsonData: { proved },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () =>
+        client.deriveIvmProved({
+          vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+          authority: SAMPLE_ACCOUNT_ID,
+          metadata: {},
+          bytecode: "Y29kZQ==",
+        }),
+      /must contain exactly|overlay must be an array|32-byte hex string/,
+    );
+  }
+});
+
+test("IVM proof jobs bind returned ids and provided proved bytecode", async () => {
+  const requestedJobId = "ab".repeat(16);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: {
+          job_id: "cd".repeat(16),
+          status: "running",
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.getIvmProveJob(requestedJobId),
+    /returned a different job id/,
+  );
+
+  let fetchCalls = 0;
+  const startClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("mismatched proved bytecode must not fetch");
+    },
+  });
+  await assert.rejects(
+    () =>
+      startClient.startIvmProve({
+        vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+        authority: SAMPLE_ACCOUNT_ID,
+        metadata: {},
+        bytecode: "Y29kZQ==",
+        proved: {
+          bytecode: "YXR0YWNrZXI=",
+          overlay: [],
+          events_commitment: "01".repeat(32),
+          gas_policy_commitment: "02".repeat(32),
+        },
+      }),
+    /proved\.bytecode must exactly match .*\.bytecode/,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("IVM proof job attachments enforce structural hashes and rolling wire compatibility", async () => {
+  const jobId = "ab".repeat(16);
+  const proved = {
+    bytecode: "Y29kZQ==",
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const valid = {
+    backend: "halo2/ipa",
+    proof: { backend: "halo2/ipa", bytes_b64: "AQID" },
+    vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+  };
+  const envelopeHash = [...blake2b256(Uint8Array.of(1, 2, 3))];
+  envelopeHash[31] |= 1;
+  for (const attachment of [
+    { ...valid, envelope_hash: envelopeHash },
+    {
+      backend: "halo2/ipa",
+      proof: { backend: "halo2/ipa", bytes: [1, 2, 3] },
+      vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+      vk_commitment: null,
+      envelope_hash: null,
+      lane_privacy: null,
+    },
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createStreamedJsonResponse({
+          status: 200,
+          jsonData: { job_id: jobId, status: "done", proved, attachment },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    const result = await client.getIvmProveJob(jobId);
+    assert.deepEqual(result.attachment.proof, {
+      backend: "halo2/ipa",
+      bytes_b64: "AQID",
+    });
+    if (attachment.envelope_hash === null) {
+      assert.equal(Object.hasOwn(result.attachment, "envelope_hash"), false);
+      assert.equal(Object.hasOwn(result.attachment, "vk_commitment"), false);
+      assert.equal(Object.hasOwn(result.attachment, "lane_privacy"), false);
+    } else {
+      assert.deepEqual(result.attachment.envelope_hash, envelopeHash);
+    }
+  }
+
+  const proofMaxBase64Length = Math.ceil((8 * 1024 * 1024) / 3) * 4;
+  let accessorCalls = 0;
+  const accessorProof = { backend: "halo2/ipa" };
+  Object.defineProperty(accessorProof, "bytes", {
+    enumerable: true,
+    get() {
+      accessorCalls += 1;
+      return [1, 2, 3];
+    },
+  });
+  const oversizedLegacy = new Array(8 * 1024 * 1024 + 1);
+  const attacks = [
+    [{ ...valid, extra: true }, /only supported optional fields/],
+    [
+      {
+        ...valid,
+        proof: {
+          backend: "halo2/ipa",
+          bytes_b64: "AQID",
+          bytes: [1, 2, 3],
+        },
+      },
+      /exactly backend and one of/,
+    ],
+    [
+      { ...valid, proof: { backend: "halo2/ipa" } },
+      /exactly backend and one of/,
+    ],
+    [
+      {
+        ...valid,
+        proof: { backend: "halo2/ipa", bytes_b64: "AQID", extra: true },
+      },
+      /exactly backend and one of/,
+    ],
+    [
+      { ...valid, proof: { backend: "stark/fri", bytes_b64: "AQID" } },
+      /proof\.backend must match/,
+    ],
+    [
+      { ...valid, proof: { backend: "halo2/ipa", bytes_b64: "AQID\n" } },
+      /canonical standard base64/,
+    ],
+    [
+      { ...valid, proof: { backend: "halo2/ipa", bytes_b64: "AB==" } },
+      /canonical standard base64/,
+    ],
+    [
+      {
+        ...valid,
+        proof: {
+          backend: "halo2/ipa",
+          bytes_b64: "A".repeat(proofMaxBase64Length),
+        },
+      },
+      /8388608-byte proof limit/,
+    ],
+    [{ ...valid, proof: { backend: "halo2/ipa", bytes: [1, 256] } }, /unsigned byte/],
+    [{ ...valid, proof: { backend: "halo2/ipa", bytes: oversizedLegacy } }, /proof limit/],
+    [{ ...valid, proof: accessorProof }, /enumerable data property/],
+    [{ ...valid, vk_commitment: null }, /exact byte array/],
+    [{ ...valid, vk_commitment: Array(32).fill(0) }, /must be non-zero/],
+    [{ ...valid, envelope_hash: Array(32).fill(0) }, /must be non-zero/],
+    [{ ...valid, envelope_hash: Array(32).fill(7) }, /must match proof bytes/],
+  ];
+  for (const [attachment, expected] of attacks) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({ status: 200 }),
+    });
+    client._maybeBoundedJson = async () => ({
+      job_id: jobId,
+      status: "done",
+      proved,
+      attachment,
+    });
+    await assert.rejects(() => client.getIvmProveJob(jobId), expected);
+  }
+  assert.equal(accessorCalls, 0);
+});
+
+test("simulateContractCall rejects fail-open ok coercion and inconsistent errors", async () => {
+  const baseResponse = {
+    dataspace: "universal",
+    contract_address: "tairac1routerfixture",
+    code_hash_hex: "11".repeat(32),
+    abi_hash_hex: "22".repeat(32),
+    entrypoint: "route_swap",
+    normalized_payload: null,
+    gas_limit: 5000,
+    gas_used: 0,
+    queued_instructions: [],
+    result: null,
+    vm_diagnostic: null,
+  };
+  const request = {
+    authority: SAMPLE_ACCOUNT_ID,
+    contractAlias: "dlmm_router::dlmm.universal",
+    gasLimit: 5000,
+  };
+  async function rejectsResponse(jsonData, expected) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createStreamedJsonResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.simulateContractCall(request), expected);
+  }
+
+  await rejectsResponse(
+    { ...baseResponse, ok: "false", error: "VM failed" },
+    /response\.ok must be a boolean/,
+  );
+  await rejectsResponse(
+    { ...baseResponse, ok: 1, error: null },
+    /response\.ok must be a boolean/,
+  );
+  await rejectsResponse(
+    { ...baseResponse, ok: true, error: "attacker diagnostic" },
+    /successful .* must not contain an error/,
+  );
+  await rejectsResponse(
+    { ...baseResponse, ok: false, error: null },
+    /failed .* must contain a non-empty error/,
+  );
+});
+
+test("proveIvmAndWait validates polling options before creating a proof job", async () => {
+  let requests = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      requests += 1;
+      throw new Error("proof job must not be created");
+    },
+  });
+  await assert.rejects(
+    () => client.proveIvmAndWait({}, { intervalMs: -1 }),
+    /intervalMs.*non-negative/i,
+  );
+  await assert.rejects(
+    () => client.proveIvmAndWait({}, { timeoutMs: Number.NaN }),
+    /timeoutMs.*integer/i,
+  );
+  assert.equal(requests, 0);
+});
+
+test("proveIvmAndWait best-effort cancels a job when polling fails", async () => {
+  const jobId = "ef".repeat(16);
+  const request = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: "Y29kZQ==",
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("focused method stubs should replace network access");
+    },
+  });
+  let startCalls = 0;
+  let waitCalls = 0;
+  let cancelCalls = 0;
+  client.startIvmProve = async () => {
+    startCalls += 1;
+    return { job_id: jobId };
+  };
+  client.waitForIvmProveJob = async () => {
+    waitCalls += 1;
+    throw new Error("synthetic timeout");
+  };
+  client.cancelIvmProveJob = async (actualJobId, options) => {
+    cancelCalls += 1;
+    assert.equal(actualJobId, jobId);
+    assert.deepEqual(options, undefined);
+    return { job_id: jobId };
+  };
+  await assert.rejects(
+    () => client.proveIvmAndWait(request, { timeoutMs: 0 }),
+    /synthetic timeout/,
+  );
+  assert.equal(startCalls, 1);
+  assert.equal(waitCalls, 1);
+  assert.equal(cancelCalls, 1);
+
+  client.cancelIvmProveJob = async () => {
+    throw new Error("synthetic cancellation failure");
+  };
+  await assert.rejects(
+    () => client.proveIvmAndWait(request, { timeoutMs: 0 }),
+    /synthetic timeout/,
+  );
+});
+
+test("cancelIvmProveJob sends DELETE and rejects a mismatched response id", async () => {
+  const jobId = "ab".repeat(16);
+  const calls = [];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return createStreamedJsonResponse({
+        status: 200,
+        jsonData: { job_id: jobId },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  assert.deepEqual(await client.cancelIvmProveJob(jobId.toUpperCase()), {
+    job_id: jobId,
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].init.method, "DELETE");
+  assert.ok(calls[0].url.endsWith(`/v1/zk/ivm/prove/${jobId}`));
+
+  const mismatched = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: { job_id: "cd".repeat(16) },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => mismatched.cancelIvmProveJob(jobId),
+    /returned a different job id/,
+  );
 });
 
 test("waitForIvmProveJob fails closed when a done job omits proof material", async () => {
   const jobId = "cd".repeat(16);
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
-      createResponse({
+      createStreamedJsonResponse({
         status: 200,
         jsonData: {
           job_id: jobId,
           status: "done",
-          error: null,
-          proved: null,
-          attachment: null,
         },
         headers: { "content-type": "application/json" },
       }),
   });
   await assert.rejects(
     () => client.waitForIvmProveJob(jobId, { intervalMs: 0 }),
-    /completed without proved payload and attachment/,
+    /must contain exactly|requires proved payload and attachment/,
   );
 });
 
@@ -22976,12 +22423,20 @@ test("getContractManifest returns normalized payload", async () => {
   const signerCanonical = signer.split(":")[1];
   const signatureCanonical = signature.split(":")[1].toUpperCase();
   const fetchImpl = async () =>
-    createResponse({
+    createStreamedJsonResponse({
       status: 200,
       jsonData: {
         manifest: {
-          code_hash: "0".repeat(64),
+          seiyaku_name: "Ledger",
+          code_hash:
+            "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
           abi_hash: null,
+          compiler_fingerprint: null,
+          features_bitmap: null,
+          access_set_hints: null,
+          entrypoints: null,
+          states: null,
+          error_codes: null,
           kotoba: [
             {
               msg_id: "contract.title",
@@ -22993,14 +22448,15 @@ test("getContractManifest returns normalized payload", async () => {
             signature: signatureCanonical,
           },
         },
-        code_bytes: null,
+        code_hash: "11".repeat(32),
       },
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const manifest = await client.getContractManifest("0".repeat(64));
+  const manifest = await client.getContractManifest("11".repeat(32));
   assert.ok(manifest);
-  assert.equal(manifest?.manifest.code_hash, "0".repeat(64));
+  assert.equal(manifest?.manifest.seiyaku_name, "Ledger");
+  assert.equal(manifest?.manifest.code_hash, "11".repeat(32));
   assert.equal(manifest?.manifest.abi_hash ?? null, null);
   assert.deepEqual(manifest?.manifest.kotoba, [
     {
@@ -23012,27 +22468,862 @@ test("getContractManifest returns normalized payload", async () => {
     signer: signerCanonical,
     signature: signatureCanonical,
   });
-  assert.equal(manifest?.code_bytes, null);
+  assert.equal(manifest?.code_hash, "11".repeat(32));
+  assert.equal(manifest?.abi_hash, null);
+});
+
+test("getContractManifest rejects noncanonical or inconsistent hash projections", async () => {
+  const canonical =
+    "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2";
+  const makeClient = (payload) =>
+    new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: payload,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+  await assert.rejects(
+    () =>
+      makeClient({
+        manifest: { code_hash: canonical.toLowerCase(), abi_hash: null },
+        code_hash: "bb".repeat(32),
+      }).getContractManifest("bb".repeat(32)),
+    /canonical uppercase Norito Hash literal/u,
+  );
+  await assert.rejects(
+    () =>
+      makeClient({
+        manifest: { code_hash: canonical, abi_hash: null },
+        code_hash: "dd".repeat(32),
+      }).getContractManifest("bb".repeat(32)),
+    /does not match manifest.code_hash/u,
+  );
+  await assert.rejects(
+    () =>
+      makeClient({
+        manifest: { code_hash: canonical, abi_hash: null },
+        code_hash: "bb".repeat(32),
+        code_bytes: null,
+      }).getContractManifest("bb".repeat(32)),
+    /must not include code_bytes/u,
+  );
+  await assert.rejects(
+    () =>
+      makeClient({
+        manifest: {
+          code_hash:
+            "hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#0E5B",
+          abi_hash: null,
+        },
+        code_hash: "aa".repeat(32),
+      }).getContractManifest("bb".repeat(32)),
+    /must set the Iroha Hash marker bit/u,
+  );
 });
 
 test("getContractManifest returns null on 404", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
   });
-  const result = await client.getContractManifest("0".repeat(64));
+  const result = await client.getContractManifest("11".repeat(32));
   assert.equal(result, null);
 });
 
-test("getContractCodeBytes returns record", async () => {
-  const fetchImpl = async () =>
-    createResponse({
+test("contract code lookups reject hashes without the Iroha marker before fetch", async () => {
+  let called = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      called = true;
+      return createResponse({ status: 404 });
+    },
+  });
+
+  await assert.rejects(
+    () => client.getContractManifest("aa".repeat(32)),
+    /must set the Iroha Hash marker bit/u,
+  );
+  await assert.rejects(
+    () => client.getContractCodeBytes("22".repeat(32)),
+    /must set the Iroha Hash marker bit/u,
+  );
+  assert.equal(called, false);
+});
+
+test("getContractCodeBytes returns a bounded record and forwards AbortSignal", async () => {
+  const controller = new AbortController();
+  let capturedSignal;
+  const fetchImpl = async (_url, init) => {
+    capturedSignal = init.signal;
+    return new Response(JSON.stringify({ code_b64: "Y29kZQ==" }), {
       status: 200,
-      jsonData: { code_b64: "Y29kZQ==" },
       headers: { "content-type": "application/json" },
     });
+  };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getContractCodeBytes("1".repeat(64));
+  const result = await client.getContractCodeBytes("1".repeat(64), {
+    signal: controller.signal,
+  });
   assert.deepEqual(result, { code_b64: "Y29kZQ==" });
+  assert.equal(capturedSignal, controller.signal);
+});
+
+test("getContractCodeBytes validates options before fetch", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("fetch must not run");
+    },
+  });
+  await assert.rejects(
+    () => client.getContractCodeBytes("1".repeat(64), { limit: 1 }),
+    /getContractCodeBytes options contains unsupported fields: limit/,
+  );
+  await assert.rejects(
+    () => client.getContractCodeBytes("1".repeat(64), { signal: {} }),
+    /signal.*AbortSignal/i,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("bounded code-byte responses cancel on early rejection and 404", async () => {
+  const cases = [
+    {
+      name: "wrong content type",
+      status: 200,
+      headers: { "content-type": "text/plain" },
+      expected: null,
+    },
+    {
+      name: "oversized Content-Length",
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(CONTRACT_CODE_BYTES_JSON_MAX_BYTES + 1),
+      },
+      error: /response limit/,
+    },
+    {
+      name: "missing byte stream",
+      status: 200,
+      headers: { "content-type": "application/json" },
+      error: /requires a byte-stream response body/,
+    },
+    {
+      name: "not found",
+      status: 404,
+      headers: { "content-type": "application/json" },
+      expected: null,
+    },
+  ];
+  for (const entry of cases) {
+    let cancelCalls = 0;
+    const body = {
+      cancel() {
+        cancelCalls += 1;
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({
+        status: entry.status,
+        headers: new Headers(entry.headers),
+        body,
+      }),
+    });
+    const operation = client.getContractCodeBytes("1".repeat(64));
+    if (entry.error) {
+      await assert.rejects(operation, entry.error, entry.name);
+    } else {
+      assert.equal(await operation, entry.expected, entry.name);
+    }
+    assert.equal(cancelCalls, 1, `${entry.name} cancellation`);
+  }
+});
+
+test("bounded JSON responses require one exact application/json media type", async () => {
+  for (const contentType of [
+    "application/json",
+    "APPLICATION/JSON",
+    " application/json ; charset=utf-8 ",
+    'application/json; charset="utf-8"; profile="a,b"',
+    'application/json; title="caf\u00e9"',
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ code_b64: "Y29kZQ==" }), {
+          status: 200,
+          headers: { "content-type": contentType },
+        }),
+    });
+    assert.deepEqual(
+      await client.getContractCodeBytes("1".repeat(64)),
+      { code_b64: "Y29kZQ==" },
+      contentType,
+    );
+  }
+
+  for (const contentType of [
+    "text/application/json",
+    "application/json-evil",
+    "application/json, application/json",
+    "application/json, text/plain",
+    "application/json; charset=utf-8, application/json",
+    "application/json;",
+    "application/json; charset",
+    "application/json; charset =utf-8",
+    "application/j\u017fon",
+    "\u0430pplication/json",
+    "application/js\u03bfn",
+    "application\uff0fjson",
+  ]) {
+    let bodyReads = 0;
+    let cancelCalls = 0;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({
+        status: 200,
+        headers: {
+          get(name) {
+            return name.toLowerCase() === "content-type" ? contentType : null;
+          },
+        },
+        body: {
+          getReader() {
+            bodyReads += 1;
+            throw new Error("confused media type body must not be read");
+          },
+          cancel() {
+            cancelCalls += 1;
+          },
+        },
+      }),
+    });
+    assert.equal(
+      await client.getContractCodeBytes("1".repeat(64)),
+      null,
+      contentType,
+    );
+    assert.equal(bodyReads, 0, `${contentType} body reads`);
+    assert.equal(cancelCalls, 1, `${contentType} cancellation`);
+  }
+});
+
+test("bounded code-byte response reads enforce timeout and caller abort", async () => {
+  for (const mode of ["timeout", "abort"]) {
+    let cancelCalls = 0;
+    const reader = {
+      read() {
+        return new Promise(() => {});
+      },
+      cancel() {
+        cancelCalls += 1;
+      },
+      releaseLock() {},
+    };
+    const body = {
+      getReader() {
+        return reader;
+      },
+    };
+    const controller = new AbortController();
+    const client = new ToriiClient(BASE_URL, {
+      timeoutMs: mode === "timeout" ? 10 : 1_000,
+      fetchImpl: async () => ({
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        body,
+      }),
+    });
+    if (mode === "abort") {
+      setTimeout(() => controller.abort(new Error("caller stopped body read")), 10);
+    }
+    const startedAt = Date.now();
+    await assert.rejects(
+      () =>
+        client.getContractCodeBytes("1".repeat(64), {
+          ...(mode === "abort" ? { signal: controller.signal } : {}),
+        }),
+      mode === "timeout" ? /body read timed out after 10ms/ : /caller stopped body read/,
+    );
+    assert.ok(Date.now() - startedAt < 500, `${mode} must terminate promptly`);
+    assert.equal(cancelCalls, 1, `${mode} reader cancellation`);
+  }
+});
+
+test("bounded readers close reentrant abort and hostile signal cleanup races", async () => {
+  for (const abortPoint of ["content-length", "getReader"]) {
+    const controller = new AbortController();
+    const reason = new Error(`abort from ${abortPoint}`);
+    let cancelCalls = 0;
+    let releaseCalls = 0;
+    let reads = 0;
+    const reader = {
+      async read() {
+        reads += 1;
+        return reads === 1
+          ? {
+              done: false,
+              value: new TextEncoder().encode('{"code_b64":"Y29kZQ=="}'),
+            }
+          : { done: true, value: undefined };
+      },
+      cancel() {
+        cancelCalls += 1;
+      },
+      releaseLock() {
+        releaseCalls += 1;
+      },
+    };
+    const body = {
+      getReader() {
+        if (abortPoint === "getReader") controller.abort(reason);
+        return reader;
+      },
+    };
+    const headers = {
+      get(name) {
+        if (name.toLowerCase() === "content-type") return "application/json";
+        if (name.toLowerCase() === "content-length") {
+          if (abortPoint === "content-length") controller.abort(reason);
+          return null;
+        }
+        return null;
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({ status: 200, headers, body }),
+    });
+    await assert.rejects(
+      () =>
+        client.getContractCodeBytes("1".repeat(64), {
+          signal: controller.signal,
+        }),
+      new RegExp(`abort from ${abortPoint}`),
+    );
+    assert.equal(cancelCalls, 1, abortPoint);
+    assert.equal(releaseCalls, 1, abortPoint);
+  }
+
+  const shadowedController = new AbortController();
+  const shadowedReason = new Error("intrinsic aborted state wins");
+  shadowedController.abort(shadowedReason);
+  Object.defineProperties(shadowedController.signal, {
+    aborted: { value: false },
+    reason: { value: undefined },
+    addEventListener: { value() {} },
+    removeEventListener: { value() {} },
+    throwIfAborted: { value() {} },
+  });
+  let shadowBodyCancels = 0;
+  const shadowClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        cancel() {
+          shadowBodyCancels += 1;
+        },
+      },
+    }),
+  });
+  await assert.rejects(
+    () =>
+      shadowClient.getContractCodeBytes("1".repeat(64), {
+        signal: shadowedController.signal,
+      }),
+    /intrinsic aborted state wins/,
+  );
+  assert.equal(shadowBodyCancels, 1);
+
+  for (const mode of ["add throws", "remove throws"]) {
+    let readerCancels = 0;
+    let releases = 0;
+    const customSignal = {
+      aborted: false,
+      addEventListener() {
+        if (mode === "add throws") throw new Error("listener boom");
+      },
+      removeEventListener() {
+        if (mode === "remove throws") throw new Error("cleanup boom");
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        body: {
+          getReader() {
+            return {
+              async read() {
+                if (mode === "remove throws") {
+                  return { done: false, value: "not bytes" };
+                }
+                return { done: true, value: undefined };
+              },
+              cancel() {
+                readerCancels += 1;
+              },
+              releaseLock() {
+                releases += 1;
+              },
+            };
+          },
+        },
+      }),
+    });
+    await assert.rejects(
+      () =>
+        client.getContractCodeBytes("1".repeat(64), {
+          signal: customSignal,
+        }),
+      mode === "add throws" ? /listener boom/ : /non-byte chunk/,
+    );
+    assert.equal(readerCancels, 1, mode);
+    assert.equal(releases, 1, mode);
+  }
+});
+
+test("bounded readers cancel when custom header methods throw", async () => {
+  let cancelCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 200,
+      headers: {
+        get() {
+          throw new Error("hostile header getter");
+        },
+      },
+      body: {
+        cancel() {
+          cancelCalls += 1;
+        },
+      },
+    }),
+  });
+  await assert.rejects(
+    () => client.getContractCodeBytes("1".repeat(64)),
+    /hostile header getter/,
+  );
+  assert.equal(cancelCalls, 1);
+});
+
+test("bounded code-byte responses cancel after UTF-8 and JSON rejection", async () => {
+  for (const [bytes, expected] of [
+    [Uint8Array.of(0xc3, 0x28), /must be valid UTF-8/],
+    [new TextEncoder().encode("{"), /must contain valid JSON/],
+  ]) {
+    let bodyCancelCalls = 0;
+    let reads = 0;
+    const body = {
+      getReader() {
+        return {
+          async read() {
+            reads += 1;
+            return reads === 1
+              ? { done: false, value: bytes }
+              : { done: true, value: undefined };
+          },
+          releaseLock() {},
+        };
+      },
+      cancel() {
+        bodyCancelCalls += 1;
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        body,
+      }),
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      expected,
+    );
+    assert.equal(bodyCancelCalls, 1);
+  }
+});
+
+test("IVM request and bounded response copies never consult buffer species", async () => {
+  const requestBuffer = Uint8Array.from([99, 111, 100, 101]).buffer;
+  let requestConstructorReads = 0;
+  Object.defineProperty(requestBuffer, "constructor", {
+    get() {
+      requestConstructorReads += 1;
+      throw new Error("request buffer constructor must not run");
+    },
+  });
+  const deriveClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createStreamedJsonResponse({
+        status: 200,
+        jsonData: {
+          proved: {
+            bytecode: "Y29kZQ==",
+            overlay: [],
+            events_commitment: "01".repeat(32),
+            gas_policy_commitment: "02".repeat(32),
+          },
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await deriveClient.deriveIvmProved({
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: requestBuffer,
+  });
+  assert.equal(requestConstructorReads, 0);
+
+  const responseChunk = new TextEncoder().encode('{"code_b64":"Y29kZQ=="}');
+  let responseConstructorReads = 0;
+  Object.defineProperty(responseChunk.buffer, "constructor", {
+    get() {
+      responseConstructorReads += 1;
+      throw new Error("response buffer constructor must not run");
+    },
+  });
+  let reads = 0;
+  const responseClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              reads += 1;
+              return reads === 1
+                ? { done: false, value: responseChunk }
+                : { done: true, value: undefined };
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    }),
+  });
+  assert.deepEqual(await responseClient.getContractCodeBytes("1".repeat(64)), {
+    code_b64: "Y29kZQ==",
+  });
+  assert.equal(responseConstructorReads, 0);
+});
+
+test("bounded response readers reject accessor read results without invoking them", async () => {
+  let getterCalls = 0;
+  let cancelCalls = 0;
+  const readResult = { value: Uint8Array.of(1) };
+  Object.defineProperty(readResult, "done", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return false;
+    },
+  });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              return readResult;
+            },
+            cancel() {
+              cancelCalls += 1;
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    }),
+  });
+  await assert.rejects(
+    () => client.getContractCodeBytes("1".repeat(64)),
+    /done must be an enumerable data property/,
+  );
+  assert.equal(getterCalls, 0);
+  assert.equal(cancelCalls, 1);
+});
+
+test("getContractCodeBytes rejects oversized declared bodies before reading", async () => {
+  for (const contentLength of [
+    String(CONTRACT_CODE_BYTES_JSON_MAX_BYTES + 1),
+    "-1",
+    "1.5",
+    "9007199254740993",
+  ]) {
+    let bodyReads = 0;
+    const response = {
+      status: 200,
+      headers: new Headers({
+        "content-type": "application/json",
+        "content-length": contentLength,
+      }),
+      get body() {
+        bodyReads += 1;
+        throw new Error("body must not be read");
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => response,
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      /Content-Length|response limit/,
+    );
+    assert.equal(bodyReads, 0);
+  }
+});
+
+test("getContractCodeBytes bounds actual streamed bytes with absent or lying headers", async () => {
+  for (const contentLength of [null, "1"]) {
+    let cancelled = false;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new Uint8Array(CONTRACT_CODE_BYTES_JSON_MAX_BYTES),
+        );
+        controller.enqueue(Uint8Array.of(0x20));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const headers = new Headers({ "content-type": "application/json" });
+    if (contentLength !== null) headers.set("content-length", contentLength);
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => new Response(body, { status: 200, headers }),
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      /exceeds the .*response limit/,
+    );
+    assert.equal(cancelled, true);
+  }
+});
+
+test("getContractCodeBytes fails closed without a bounded byte stream", async () => {
+  let textCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ code_b64: "Y29kZQ==" }),
+      text: async () => {
+        textCalls += 1;
+        return JSON.stringify({ code_b64: "Y29kZQ==" });
+      },
+    }),
+  });
+  await assert.rejects(
+    () => client.getContractCodeBytes("1".repeat(64)),
+    /requires a byte-stream response body/,
+  );
+  assert.equal(textCalls, 0);
+});
+
+test("getContractCodeBytes rejects shared and snapshots reused stream chunks", async () => {
+  if (typeof SharedArrayBuffer === "function") {
+    let read = false;
+    let cancelled = false;
+    const sharedChunk = new Uint8Array(new SharedArrayBuffer(1));
+    Object.defineProperties(sharedChunk, {
+      buffer: { value: new ArrayBuffer(1) },
+      byteOffset: { value: 0 },
+      byteLength: { value: 1 },
+    });
+    const sharedResponse = {
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              if (read) return { done: true, value: undefined };
+              read = true;
+              return {
+                done: false,
+                value: sharedChunk,
+              };
+            },
+            async cancel() {
+              cancelled = true;
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    };
+    const sharedClient = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => sharedResponse,
+    });
+    await assert.rejects(
+      () => sharedClient.getContractCodeBytes("1".repeat(64)),
+      /must not use SharedArrayBuffer-backed chunks/,
+    );
+    assert.equal(cancelled, true);
+  }
+
+  const first = new TextEncoder().encode('{"code_b64":"');
+  Object.defineProperties(first, {
+    buffer: {
+      get() {
+        throw new Error("shadow buffer must not be read");
+      },
+    },
+    byteOffset: {
+      get() {
+        throw new Error("shadow byteOffset must not be read");
+      },
+    },
+    byteLength: {
+      get() {
+        throw new Error("shadow byteLength must not be read");
+      },
+    },
+  });
+  const second = new TextEncoder().encode('Y29kZQ=="}');
+  let readIndex = 0;
+  const response = {
+    status: 200,
+    headers: new Headers({ "content-type": "application/json" }),
+    body: {
+      getReader() {
+        return {
+          async read() {
+            readIndex += 1;
+            if (readIndex === 1) return { done: false, value: first };
+            if (readIndex === 2) {
+              first.fill(0x78);
+              return { done: false, value: second };
+            }
+            return { done: true, value: undefined };
+          },
+          releaseLock() {},
+        };
+      },
+    },
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => response,
+  });
+  assert.deepEqual(await client.getContractCodeBytes("1".repeat(64)), {
+    code_b64: "Y29kZQ==",
+  });
+});
+
+test("getContractCodeBytes cancels non-progress and fragmented streams", async () => {
+  for (const mode of ["empty", "fragmented"]) {
+    let reads = 0;
+    let cancelled = false;
+    const response = {
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              reads += 1;
+              return {
+                done: false,
+                value:
+                  mode === "empty" ? new Uint8Array(0) : Uint8Array.of(0x20),
+              };
+            },
+            async cancel() {
+              cancelled = true;
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => response,
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      mode === "empty" ? /empty non-progress chunk/ : /too many fragmented chunks/,
+    );
+    assert.equal(cancelled, true);
+    assert.equal(
+      reads,
+      mode === "empty" ? 1 : 64 * 1024 + 1,
+      `${mode} stream read bound`,
+    );
+  }
+});
+
+test("getContractCodeBytes rejects oversized base64 before decoding", async () => {
+  const attacks = [
+    "A".repeat(IVM_ARTIFACT_MAX_BASE64_LENGTH + 1),
+    Buffer.alloc(IVM_ARTIFACT_MAX_BYTES + 1).toString("base64"),
+  ];
+  for (const code_b64 of attacks) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ code_b64 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      /exceeds the 4194304-byte artifact limit/,
+    );
+  }
+});
+
+test("getContractCodeBytes rejects non-string code_b64 JSON values", async () => {
+  for (const code_b64 of [null, [], {}, [89, 50, 57, 107, 90, 81]]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ code_b64 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      /code_b64 must be a base64 string/,
+    );
+  }
+});
+
+test("getContractCodeBytes rejects ambiguous or active DTO shapes", async () => {
+  let accessorReads = 0;
+  const accessor = {};
+  Object.defineProperty(accessor, "code_b64", {
+    enumerable: true,
+    get() {
+      accessorReads += 1;
+      return "Y29kZQ==";
+    },
+  });
+  const withSymbol = { code_b64: "Y29kZQ==" };
+  withSymbol[Symbol("attacker")] = true;
+  for (const payload of [
+    {},
+    { code_b64: "Y29kZQ==", extra: true },
+    withSymbol,
+    accessor,
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => ({ status: 200 }),
+    });
+    client._maybeBoundedJson = async () => payload;
+    await assert.rejects(
+      () => client.getContractCodeBytes("1".repeat(64)),
+      /exactly the code_b64 field|enumerable data property/,
+    );
+  }
+  assert.equal(accessorReads, 0, "accessor payload must be rejected without invocation");
 });
 
 test("getGovernanceContract mirrors response handling", async () => {
@@ -25129,6 +25420,277 @@ test("listTelemetryPeersInfo rejects malformed payloads", async () => {
   );
 });
 
+test("submitTransaction bounds node capabilities before any pipeline side effect", async () => {
+  for (const mode of ["declared oversized", "stalled"]) {
+    let pipelineCalls = 0;
+    let cancelCalls = 0;
+    const body =
+      mode === "stalled"
+        ? {
+            getReader() {
+              return {
+                read() {
+                  return new Promise(() => {});
+                },
+                cancel() {
+                  cancelCalls += 1;
+                },
+                releaseLock() {},
+              };
+            },
+          }
+        : {
+            cancel() {
+              cancelCalls += 1;
+            },
+          };
+    const client = new ToriiClient(BASE_URL, {
+      timeoutMs: 10,
+      __nativeBinding: {},
+      fetchImpl: async (url) => {
+        if (url.endsWith("/v1/node/capabilities")) {
+          return {
+            status: 200,
+            headers: new Headers({
+              "content-type": "application/json",
+              ...(mode === "declared oversized"
+                ? { "content-length": String(1024 * 1024 + 1) }
+                : {}),
+            }),
+            body,
+          };
+        }
+        pipelineCalls += 1;
+        throw new Error("pipeline must not be reached");
+      },
+    });
+    await assert.rejects(
+      () => client.submitTransaction(Uint8Array.of(1)),
+      mode === "stalled" ? /body read timed out after 10ms/ : /response limit/,
+    );
+    assert.equal(pipelineCalls, 0, mode);
+    assert.equal(cancelCalls, 1, mode);
+  }
+});
+
+test("submitTransaction caller abort does not wait for shared capability validation", async () => {
+  const controller = new AbortController();
+  let pipelineCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    timeoutMs: 30,
+    __nativeBinding: {},
+    fetchImpl: async (url) => {
+      if (url.endsWith("/v1/node/capabilities")) {
+        return {
+          status: 200,
+          headers: new Headers({ "content-type": "application/json" }),
+          body: {
+            getReader() {
+              return {
+                read() {
+                  return new Promise(() => {});
+                },
+                cancel() {},
+                releaseLock() {},
+              };
+            },
+          },
+        };
+      }
+      pipelineCalls += 1;
+      throw new Error("pipeline must not be reached");
+    },
+  });
+  const reason = new Error("caller abandoned validation");
+  setTimeout(() => controller.abort(reason), 5);
+  const startedAt = Date.now();
+  await assert.rejects(
+    () =>
+      client.submitTransaction(Uint8Array.of(1), {
+        signal: controller.signal,
+      }),
+    /caller abandoned validation/,
+  );
+  assert.ok(Date.now() - startedAt < 200);
+  assert.equal(pipelineCalls, 0);
+});
+
+test("submitTransaction bounds JSON and Norito success receipts after one submit", async () => {
+  for (const contentType of ["application/json", "application/x-norito"]) {
+    for (const mode of ["declared oversized", "stalled"]) {
+      let pipelineCalls = 0;
+      let cancelCalls = 0;
+      const body =
+        mode === "stalled"
+          ? {
+              getReader() {
+                return {
+                  read() {
+                    return new Promise(() => {});
+                  },
+                  cancel() {
+                    cancelCalls += 1;
+                  },
+                  releaseLock() {},
+                };
+              },
+            }
+          : {
+              cancel() {
+                cancelCalls += 1;
+              },
+            };
+      const client = new ToriiClient(BASE_URL, {
+        timeoutMs: 10,
+        __nativeBinding: {},
+        fetchImpl: async (url) => {
+          if (url.endsWith("/v1/node/capabilities")) {
+            return createResponse({
+              status: 200,
+              jsonData: validNodeCapabilitiesPayload(),
+              headers: { "content-type": "application/json" },
+            });
+          }
+          pipelineCalls += 1;
+          return {
+            status: 202,
+            headers: new Headers({
+              "content-type": contentType,
+              ...(mode === "declared oversized"
+                ? { "content-length": String(1024 * 1024 + 1) }
+                : {}),
+            }),
+            body,
+          };
+        },
+      });
+      await assert.rejects(
+        () => client.submitTransaction(Uint8Array.of(1)),
+        mode === "stalled" ? /body read timed out after 10ms/ : /response limit/,
+      );
+      assert.equal(pipelineCalls, 1, `${contentType} ${mode}`);
+      assert.equal(cancelCalls, 1, `${contentType} ${mode}`);
+    }
+  }
+});
+
+test("transaction status bodies are bounded and 404 bodies are cancelled", async () => {
+  const hash = "11".repeat(32);
+  for (const mode of ["not found", "declared oversized", "stalled"]) {
+    let cancelCalls = 0;
+    const body =
+      mode === "stalled"
+        ? {
+            getReader() {
+              return {
+                read() {
+                  return new Promise(() => {});
+                },
+                cancel() {
+                  cancelCalls += 1;
+                },
+                releaseLock() {},
+              };
+            },
+          }
+        : {
+            cancel() {
+              cancelCalls += 1;
+            },
+          };
+    const client = new ToriiClient(BASE_URL, {
+      timeoutMs: 10,
+      fetchImpl: async () => ({
+        status: mode === "not found" ? 404 : 200,
+        headers: new Headers({
+          "content-type": "application/json",
+          ...(mode === "declared oversized"
+            ? { "content-length": String(1024 * 1024 + 1) }
+            : {}),
+        }),
+        body,
+      }),
+    });
+    const operation = client.getTransactionStatus(hash);
+    if (mode === "not found") {
+      assert.equal(await operation, null);
+    } else {
+      await assert.rejects(
+        operation,
+        mode === "stalled" ? /body read timed out after 10ms/ : /response limit/,
+      );
+    }
+    assert.equal(cancelCalls, 1, mode);
+  }
+});
+
+test("HTTP error diagnostics abort stalled bodies and retry cleanup cancels discarded bodies", async () => {
+  const controller = new AbortController();
+  let errorBodyCancels = 0;
+  const errorClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => ({
+      status: 500,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: {
+        getReader() {
+          return {
+            read() {
+              return new Promise(() => {});
+            },
+            cancel() {
+              errorBodyCancels += 1;
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    }),
+  });
+  setTimeout(() => controller.abort(new Error("stop stalled error body")), 5);
+  await assert.rejects(
+    () =>
+      errorClient.simulateContractCall(
+        {
+          authority: SAMPLE_ACCOUNT_ID,
+          contractAlias: "dlmm_router::dlmm.universal",
+          gasLimit: 5000,
+        },
+        { signal: controller.signal },
+      ),
+    /stop stalled error body/,
+  );
+  assert.equal(errorBodyCancels, 1);
+
+  let requests = 0;
+  let retryBodyCancels = 0;
+  const retryClient = new ToriiClient(BASE_URL, {
+    maxRetries: 1,
+    backoffInitialMs: 0,
+    fetchImpl: async () => {
+      requests += 1;
+      if (requests === 1) {
+        return {
+          status: 503,
+          headers: new Headers({ "content-type": "application/json" }),
+          body: {
+            cancel() {
+              retryBodyCancels += 1;
+            },
+          },
+        };
+      }
+      return createResponse({
+        status: 200,
+        jsonData: validNodeCapabilitiesPayload(),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  assert.equal((await retryClient.getNodeCapabilities()).abiVersion, 1);
+  assert.equal(requests, 2);
+  assert.equal(retryBodyCancels, 1);
+});
+
 test("methods surface HTTP errors with body", async () => {
   const fetchImpl = async () =>
     createResponse({ status: 500, textBody: "boom", jsonData: { error: "boom" } });
@@ -25168,7 +25730,7 @@ test("http errors expose structured fields", async () => {
       assert.deepEqual(error.expected, [200]);
       assert.equal(error.code, payload.code);
       assert.equal(error.errorMessage, payload.message);
-      assert.equal(error.bodyJson, payload);
+      assert.deepEqual(error.bodyJson, payload);
       return true;
     },
   );
@@ -25246,7 +25808,45 @@ function requireSorafsNative(t) {
   return native;
 }
 
+function validNodeCapabilitiesPayload() {
+  return {
+    abi_version: 1,
+    data_model_version: 1,
+    crypto: {
+      sm: {
+        enabled: false,
+        default_hash: "sha2_256",
+        allowed_signing: ["ed25519"],
+        sm2_distid_default: "",
+        openssl_preview: false,
+        acceleration: {
+          scalar: true,
+          neon_sm3: false,
+          neon_sm4: false,
+          policy: "scalar-only",
+        },
+      },
+      curves: {
+        registry_version: 1,
+        allowed_curve_ids: [1],
+      },
+    },
+  };
+}
+
 function createResponse({ status, jsonData = {}, arrayData, textBody, headers }) {
+  const responseText =
+    typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {});
+  const bodyBytes =
+    arrayData instanceof ArrayBuffer
+      ? new Uint8Array(arrayData)
+      : ArrayBuffer.isView(arrayData)
+        ? new Uint8Array(
+            arrayData.buffer,
+            arrayData.byteOffset,
+            arrayData.byteLength,
+          )
+        : new TextEncoder().encode(responseText);
   return {
     status,
     json: async () => jsonData,
@@ -25257,9 +25857,18 @@ function createResponse({ status, jsonData = {}, arrayData, textBody, headers })
       if (ArrayBuffer.isView(arrayData)) {
         return arrayData.buffer.slice(arrayData.byteOffset, arrayData.byteOffset + arrayData.byteLength);
       }
-      return new TextEncoder().encode(textBody ?? JSON.stringify(jsonData ?? {})).buffer;
+      return bodyBytes.buffer.slice(
+        bodyBytes.byteOffset,
+        bodyBytes.byteOffset + bodyBytes.byteLength,
+      );
     },
-    text: async () => (typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {})),
+    text: async () => responseText,
+    body: new ReadableStream({
+      start(controller) {
+        if (bodyBytes.byteLength > 0) controller.enqueue(bodyBytes);
+        controller.close();
+      },
+    }),
     headers: {
       get(name) {
         if (!headers) {
@@ -25275,6 +25884,13 @@ function createResponse({ status, jsonData = {}, arrayData, textBody, headers })
       },
     },
   };
+}
+
+function createStreamedJsonResponse({ status, jsonData, headers = {} }) {
+  return new Response(JSON.stringify(jsonData), {
+    status,
+    headers,
+  });
 }
 
 function markFetchSupportsRawUtf8Headers(fetchImpl) {

@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "tham số `{name}` trong hàm `{func}` không bao giờ được sử dụng",
     lint_unreachable_after_return: "phát hiện câu lệnh không thể tới trong {context}: mã sau return sẽ không bao giờ chạy",
     lint_ok: "ok",
-    lint_usage: "Cách dùng: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Cách dùng: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Chạy các kiểm tra lint Kotodama trên mã nguồn đã cung cấp.",
     ..english::MESSAGES
 };

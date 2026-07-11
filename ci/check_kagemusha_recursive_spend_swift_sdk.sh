@@ -58,7 +58,6 @@ cd "${ROOT_DIR}"
   IrohaSwift/Sources/IrohaSwift/OfflineCashLifecycle.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineIssuerPublicKey.swift \
-  IrohaSwift/Sources/IrohaSwift/OfflineKagemushaAbi7CapabilityContract.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineNote.swift \
@@ -123,7 +122,6 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift \
-  IrohaSwift/Tests/IrohaSwiftTests/OfflineKagemushaAbi7CapabilityContractTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineNoritoEncodingTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteNfcApduPayloadBudgetTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteRedeemPlannerTests.swift \

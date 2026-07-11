@@ -56,8 +56,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "query_assets_and_save_cursor" => build_program_set_account_detail_defaults(),
             // Just succeed; embed a harmless metadata write so the executor path succeeds
             "smart_contract_can_filter_queries" => build_program_set_account_detail_defaults(),
-            // Set SmartContract execution depth parameter to 111
-            "trigger_cat_and_mouse" => build_program_set_sc_exec_depth(111),
             _ => build_minimal_valid_program(i as u8),
         };
         file.write_all(&payload)?;
@@ -137,6 +135,7 @@ fn build_minimal_valid_program(tag: u8) -> Vec<u8> {
 
 fn build_program_mint_rose_for_authority() -> Vec<u8> {
     use iroha_data_model::prelude::AssetDefinitionId;
+    use iroha_primitives::numeric::Quantity;
     use ivm::{
         PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
         syscalls as ivm_sys,
@@ -148,6 +147,13 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
     );
     let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
     let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
+    let amount_tlv =
+        ivm::numeric_tlv::encode_quantity(&Quantity::from(1_u64)).expect("encode quantity");
+    let amount_literal_offset = i16::try_from(
+        i32::from(LITERAL_DATA_START)
+            + i32::try_from(asset_tlv.len()).expect("asset literal length fits i32"),
+    )
+    .expect("amount literal offset fits i16");
 
     let mut code = Vec::new();
     // r10 <- &AccountId(authority)
@@ -170,15 +176,30 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
         .to_le_bytes(),
     );
     code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = asset ptr
+    // r10 <- &Quantity(1) (literal TLV), then publish it into VM-owned memory.
+    code.extend_from_slice(
+        &encode_addi(10, 0, amount_literal_offset)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
+    code.extend_from_slice(
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
+        )
+        .to_le_bytes(),
+    );
+    code.extend_from_slice(&encode_addi(12, 10, 0).expect("encode addi").to_le_bytes()); // r12 = quantity ptr
     code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
-    code.extend_from_slice(&encode_addi(12, 0, 1).expect("encode addi").to_le_bytes()); // amount = 1
     code.extend_from_slice(
         &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_MINT_ASSET as u8)
             .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-    assemble_program_with_literals(&code, &asset_tlv)
+    let mut literals = asset_tlv;
+    literals.extend_from_slice(&amount_tlv);
+    assemble_program_with_literals(&code, &literals)
 }
 
 fn build_program_create_nft_for_authority() -> Vec<u8> {
@@ -188,32 +209,6 @@ fn build_program_create_nft_for_authority() -> Vec<u8> {
         &encoding::wide::encode_sys(
             wide::system::SCALL,
             ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS as u8,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
-    let mut v = Vec::new();
-    v.extend_from_slice(b"IVM\0");
-    v.extend_from_slice(&[1, 1, 0, 4]);
-    v.extend_from_slice(&default_max_cycles().to_le_bytes());
-    v.push(1);
-    v.extend_from_slice(&code);
-    v
-}
-
-fn build_program_set_sc_exec_depth(depth: u8) -> Vec<u8> {
-    use ivm::{encoding, instruction::wide, kotodama::compiler::encode_addi, syscalls as ivm_sys};
-    let mut code = Vec::new();
-    code.extend_from_slice(
-        &encode_addi(10, 0, depth.into())
-            .expect("encode addi")
-            .to_le_bytes(),
-    );
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH as u8,
         )
         .to_le_bytes(),
     );
@@ -318,7 +313,6 @@ mod tests {
         assert_parses_with_abi(&build_program_mint_rose_for_authority());
         assert_parses_with_abi(&build_program_create_nft_for_authority());
         assert_parses_with_abi(&build_program_set_account_detail_defaults());
-        assert_parses_with_abi(&build_program_set_sc_exec_depth(5));
     }
 
     #[test]

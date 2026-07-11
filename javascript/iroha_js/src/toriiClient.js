@@ -36,6 +36,11 @@ import { normaliseGatewayProvider, sorafsGatewayFetch } from "./sorafs.js";
 import { buildPacs008Message, buildPacs009Message } from "./isoBridge.js";
 import { looksLikeIban, normalizeIban } from "./identifiers.js";
 import {
+  isCanonicalKotodamaEntrypoint,
+  isCanonicalKotodamaIdentifier,
+} from "./kotodamaIdentifiers.js";
+import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+import {
   createValidationError,
   ValidationErrorCode,
   ValidationError,
@@ -49,10 +54,19 @@ import {
 import {
   noritoEncodeMultisigProposeRequest,
   noritoEncodeTransactionPayloadBatch,
+  validateNoritoFrame,
 } from "./norito.js";
 import {
-  evmSccpDestinationBindingHash,
-  tronSccpDestinationBindingHash,
+  normalizeBridgeMessageSubmitPayload,
+  normalizeBridgeProofSubmitPayload,
+  normalizeSccpCapabilities,
+  normalizeSccpMessageBundle,
+  normalizeSccpProofRequest,
+  normalizeSccpRecentMessages,
+  normalizeSccpRegistry,
+  normalizeSccpRouteGovernanceAction,
+  parseSccpJsonObject,
+  parseSccpBridgeSubmitResponseJson,
 } from "./sccp.js";
 import { snapshotValidationFeePolicyVerificationContext } from "./validationFeePolicy.js";
 import {
@@ -70,16 +84,166 @@ import {
   requireOfflineJsonContentType,
   requireOfflineOperationId,
 } from "./offlineApi.js";
+import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 const VALIDATION_FEE_VERIFICATION_CONTEXTS = new WeakMap();
+const APPLICATION_JSON = "application/json";
+const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: APPLICATION_JSON });
+const JSON_REQUEST_HEADERS = Object.freeze({
+  "Content-Type": APPLICATION_JSON,
+  Accept: APPLICATION_JSON,
+});
 
 const DEFAULT_SUCCESS_STATUSES = ["Approved", "Committed", "Applied"];
 const DEFAULT_FAILURE_STATUSES = ["Rejected", "Expired"];
 const DEFAULT_TX_STATUS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TX_STATUS_TIMEOUT_MS = 30_000;
+const IVM_ARTIFACT_MAX_BASE64_LENGTH =
+  Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+const CONTRACT_CODE_BYTES_JSON_MAX_BYTES =
+  IVM_ARTIFACT_MAX_BASE64_LENGTH + 1024;
+const CONTRACT_MANIFEST_JSON_MAX_BYTES =
+  IVM_ARTIFACT_MAX_BASE64_LENGTH + 256 * 1024;
+const CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES = 8 * 1024 * 1024;
+const IVM_DERIVE_JSON_MAX_BYTES = 32 * 1024 * 1024;
+const IVM_PROOF_REQUEST_MAX_BYTES = 8 * 1024 * 1024;
+const IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES = 16 * 1024;
+const IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES = 32 * 1024 * 1024;
+const IVM_PROOF_MAX_BYTES = 8 * 1024 * 1024;
+const NODE_CAPABILITIES_JSON_MAX_BYTES = 1024 * 1024;
+const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
+const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
+const BOUNDED_JSON_MAX_STREAM_CHUNKS = 64 * 1024;
+const JSON_CLONE_MAX_DEPTH = 128;
+const JSON_CLONE_MAX_NODES = 100_000;
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "buffer",
+).get;
+const typedArrayByteOffsetGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteOffset",
+).get;
+const typedArrayByteLengthGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteLength",
+).get;
+const typedArrayTagGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  Symbol.toStringTag,
+).get;
+const typedArraySet = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "set",
+).value;
+const Uint8ArrayIntrinsic = Uint8Array;
+const dataViewBufferGetter = Object.getOwnPropertyDescriptor(
+  DataView.prototype,
+  "buffer",
+).get;
+const dataViewByteOffsetGetter = Object.getOwnPropertyDescriptor(
+  DataView.prototype,
+  "byteOffset",
+).get;
+const dataViewByteLengthGetter = Object.getOwnPropertyDescriptor(
+  DataView.prototype,
+  "byteLength",
+).get;
+const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  "byteLength",
+).get;
+const sharedArrayBufferByteLengthGetter =
+  typeof SharedArrayBuffer === "undefined"
+    ? null
+    : Object.getOwnPropertyDescriptor(
+        SharedArrayBuffer.prototype,
+        "byteLength",
+      ).get;
+const responseBodyGetter =
+  typeof Response === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(Response.prototype, "body")?.get ?? null);
+const responseHeadersGetter =
+  typeof Response === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(Response.prototype, "headers")?.get ?? null);
+const responseStatusGetter =
+  typeof Response === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(Response.prototype, "status")?.get ?? null);
+const responseStatusTextGetter =
+  typeof Response === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(Response.prototype, "statusText")?.get ??
+      null);
+const headersGet =
+  typeof Headers === "undefined" ? null : Headers.prototype.get;
+const readableStreamGetReader =
+  typeof ReadableStream === "undefined"
+    ? null
+    : ReadableStream.prototype.getReader;
+const readableStreamCancel =
+  typeof ReadableStream === "undefined"
+    ? null
+    : ReadableStream.prototype.cancel;
+const readableStreamLockedGetter =
+  typeof ReadableStream === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(
+        ReadableStream.prototype,
+        "locked",
+      )?.get ?? null);
+const readerRead =
+  typeof ReadableStreamDefaultReader === "undefined"
+    ? null
+    : ReadableStreamDefaultReader.prototype.read;
+const readerCancel =
+  typeof ReadableStreamDefaultReader === "undefined"
+    ? null
+    : ReadableStreamDefaultReader.prototype.cancel;
+const readerReleaseLock =
+  typeof ReadableStreamDefaultReader === "undefined"
+    ? null
+    : ReadableStreamDefaultReader.prototype.releaseLock;
+const abortSignalAbortedGetter =
+  typeof AbortSignal === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get ??
+      null);
+const abortSignalReasonGetter =
+  typeof AbortSignal === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")?.get ??
+      null);
+const eventTargetAddEventListener =
+  typeof EventTarget === "undefined" ? null : EventTarget.prototype.addEventListener;
+const eventTargetRemoveEventListener =
+  typeof EventTarget === "undefined"
+    ? null
+    : EventTarget.prototype.removeEventListener;
+const BOUNDED_JSON_MAX_READ_TIMEOUT_MS = 30_000;
+const HTTP_ERROR_BODY_MAX_BYTES = 64 * 1024;
+const EXACT_JSON_MEDIA_TYPE_PATTERN =
+  /^[ \t]*application\/json(?:[ \t]*;[ \t]*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:[!#$%&'*+\-.^_`|~0-9A-Za-z]+|"(?:[ \t!#-\[\]-~\u0080-\u00ff]|\\[ \t!-~\u0080-\u00ff])*"))*[ \t]*$/i;
 const DEFAULT_ISO_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_ISO_POLL_ATTEMPTS = 12;
+// SCCP response limits are part of the client-side resource boundary. They
+// apply to bytes emitted by the decoded response stream, not just advertised
+// Content-Length values, so compressed or chunked responses cannot bypass them.
+const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64 * 1024;
+const SCCP_RECENT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+const SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+const SCCP_SUBMIT_RESPONSE_MAX_BYTES = SCCP_JSON_RESPONSE_MAX_BYTES;
+const SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES =
+  SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024;
+const SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME =
+  "iroha_sccp::TairaSccpMessageProofV1";
+const SCCP_PROOF_REQUEST_NORITO_TYPE_NAME =
+  "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
 const EXPECTED_DATA_MODEL_VERSION = 1;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
@@ -220,6 +384,234 @@ const EVIDENCE_PHASE_VALUES = new Set(["Prepare", "Commit", "NewView"]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
 const KAIGI_EVENT_KIND_VALUES = new Set(["registration", "health"]);
+
+function ownDataMethod(target, name) {
+  if (target === null || (typeof target !== "object" && typeof target !== "function")) {
+    return null;
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(target, name);
+  return descriptor && "value" in descriptor && typeof descriptor.value === "function"
+    ? descriptor.value
+    : null;
+}
+
+function callIntrinsicOrOwnMethod(target, intrinsic, name, ...args) {
+  const isStreamIntrinsic =
+    intrinsic === readableStreamGetReader || intrinsic === readableStreamCancel;
+  let branded = true;
+  if (isStreamIntrinsic && readableStreamLockedGetter !== null) {
+    try {
+      readableStreamLockedGetter.call(target);
+    } catch {
+      branded = false;
+    }
+  }
+  if (typeof intrinsic === "function" && branded) {
+    return Reflect.apply(intrinsic, target, args);
+  }
+  const own = ownDataMethod(target, name);
+  if (own === null) {
+    throw new TypeError(`${name} is unavailable`);
+  }
+  return Reflect.apply(own, target, args);
+}
+
+function responseBodyWithoutUserGetter(response) {
+  if (responseBodyGetter !== null) {
+    try {
+      return responseBodyGetter.call(response);
+    } catch {
+      // Custom fetch responses may expose an own data property instead.
+    }
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(response, "body");
+  return descriptor && "value" in descriptor ? descriptor.value : null;
+}
+
+function responseHeadersWithoutUserGetter(response) {
+  if (responseHeadersGetter !== null) {
+    try {
+      return responseHeadersGetter.call(response);
+    } catch {
+      // Custom fetch responses may expose an own data property instead.
+    }
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(response, "headers");
+  return descriptor && "value" in descriptor ? descriptor.value : null;
+}
+
+function headerValueWithoutUserGetter(headers, name) {
+  if (!headers) return null;
+  if (headersGet !== null) {
+    try {
+      return Reflect.apply(headersGet, headers, [name]);
+    } catch {
+      // Custom header bags may expose an own data method instead.
+    }
+  }
+  const get = ownDataMethod(headers, "get");
+  if (get === null) return null;
+  return Reflect.apply(get, headers, [name]);
+}
+
+function responseStatusWithoutUserGetter(response) {
+  let status;
+  if (responseStatusGetter !== null) {
+    try {
+      status = responseStatusGetter.call(response);
+    } catch {
+      // Custom fetch responses may expose an own data property instead.
+    }
+  }
+  if (status === undefined) {
+    const descriptor = Object.getOwnPropertyDescriptor(response, "status");
+    if (!descriptor || !("value" in descriptor)) {
+      throw new TypeError("Torii response status must be an own data property");
+    }
+    status = descriptor.value;
+  }
+  if (!Number.isInteger(status) || status < 0 || status > 999) {
+    throw new TypeError("Torii response status must be an integer HTTP status");
+  }
+  return status;
+}
+
+function responseStatusTextWithoutUserGetter(response) {
+  if (responseStatusTextGetter !== null) {
+    try {
+      return responseStatusTextGetter.call(response);
+    } catch {
+      // Custom fetch responses may expose an own data property instead.
+    }
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(response, "statusText");
+  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : null;
+}
+
+function ignoreCancellationResult(result) {
+  if (result && typeof result.then === "function") {
+    Promise.resolve(result).catch(() => {});
+  }
+}
+
+function cancelReadableBodyBestEffort(body, reason) {
+  if (!body) return;
+  try {
+    ignoreCancellationResult(
+      callIntrinsicOrOwnMethod(body, readableStreamCancel, "cancel", reason),
+    );
+  } catch {
+    // Cancellation is cleanup and must not replace the authoritative error.
+  }
+}
+
+function cancelResponseBodyBestEffort(response, reason) {
+  cancelReadableBodyBestEffort(responseBodyWithoutUserGetter(response), reason);
+}
+
+function cancelReaderBestEffort(reader, reason, genuineReader = false) {
+  try {
+    ignoreCancellationResult(
+      callIntrinsicOrOwnMethod(
+        reader,
+        genuineReader ? readerCancel : null,
+        "cancel",
+        reason,
+      ),
+    );
+  } catch {
+    // Cancellation is cleanup and must not replace the authoritative error.
+  }
+}
+
+function hasReadableStreamBrand(value) {
+  if (readableStreamLockedGetter === null) return false;
+  try {
+    readableStreamLockedGetter.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasAbortSignalBrand(value) {
+  if (abortSignalAbortedGetter === null) return false;
+  try {
+    abortSignalAbortedGetter.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function signalIsAborted(signal) {
+  if (!signal) return false;
+  if (hasAbortSignalBrand(signal)) {
+    return abortSignalAbortedGetter.call(signal);
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(signal, "aborted");
+  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "boolean") {
+    throw new TypeError("signal.aborted must be an own boolean data property");
+  }
+  return descriptor.value;
+}
+
+function signalAbortReason(signal) {
+  if (!signal) return undefined;
+  if (hasAbortSignalBrand(signal)) {
+    return abortSignalReasonGetter === null
+      ? undefined
+      : abortSignalReasonGetter.call(signal);
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(signal, "reason");
+  return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+
+function addSignalAbortListener(signal, listener) {
+  if (!signal) return;
+  if (hasAbortSignalBrand(signal) && eventTargetAddEventListener !== null) {
+    Reflect.apply(eventTargetAddEventListener, signal, ["abort", listener, { once: true }]);
+    return;
+  }
+  const add = ownDataMethod(signal, "addEventListener");
+  if (add === null) throw new TypeError("signal.addEventListener is unavailable");
+  Reflect.apply(add, signal, ["abort", listener, { once: true }]);
+}
+
+function removeSignalAbortListener(signal, listener) {
+  if (!signal) return;
+  try {
+    if (hasAbortSignalBrand(signal) && eventTargetRemoveEventListener !== null) {
+      Reflect.apply(eventTargetRemoveEventListener, signal, ["abort", listener]);
+      return;
+    }
+    const remove = ownDataMethod(signal, "removeEventListener");
+    if (remove !== null) Reflect.apply(remove, signal, ["abort", listener]);
+  } catch {
+    // Listener removal is cleanup and must not replace the authoritative error.
+  }
+}
+
+function bodyReadAbortError(signal, context) {
+  const reason = signalAbortReason(signal);
+  if (reason instanceof Error) return reason;
+  const error = new Error(`${context} body read was aborted`);
+  error.name = "AbortError";
+  return error;
+}
+
+function copyArrayBufferBytes(buffer, byteOffset, byteLength) {
+  const source = new Uint8ArrayIntrinsic(buffer, byteOffset, byteLength);
+  const copy = new Uint8ArrayIntrinsic(byteLength);
+  Reflect.apply(typedArraySet, copy, [source]);
+  return copy;
+}
+
+function isExactJsonMediaType(value) {
+  return typeof value === "string" && EXACT_JSON_MEDIA_TYPE_PATTERN.test(value);
+}
 const KAIGI_CALL_EVENT_KIND_VALUES = new Set(["roster_updated", "ended"]);
 const SORAFS_REPLICATION_STATUS_VALUES = new Set(["pending", "completed", "expired"]);
 const SORAFS_PIN_STATUS_VALUES = new Set(["pending", "approved", "retired"]);
@@ -232,40 +624,6 @@ const VERIFYING_KEY_STATUS_VALUES = new Set([
 const VERIFYING_KEY_STATUS_ALIASES = new Map(
   [...VERIFYING_KEY_STATUS_VALUES].map((value) => [value.toLowerCase(), value]),
 );
-const SCCP_FINALITY_MODEL_VALUES = new Set([
-  "EthereumBeaconExecution",
-  "BscValidatorSet",
-  "SolanaFinalizedSlot",
-  "TonMasterchain",
-  "TronDpos",
-]);
-const SCCP_PROOF_SECURITY_MODEL_VALUES = new Set(["RecursiveZk"]);
-const SCCP_ANCHOR_GOVERNANCE_VALUES = new Set(["CryptographicProof"]);
-const SCCP_VERIFIER_TARGET_VALUES = new Set([
-  "EvmContract",
-  "SolanaProgram",
-  "TonContract",
-  "TronContract",
-]);
-const SCCP_DESTINATION_VERIFIER_PLAN_VALUES = new Set([
-  "Unknown",
-  "EvmGroth16Bn254Adapter",
-  "SolanaProgramNativeRecursive",
-  "TonContractNativeRecursive",
-  "TronContractNativeRecursive",
-  "TronContractGroth16Bn254",
-]);
-const SCCP_HUB_MESSAGE_KIND_VALUES = new Set([
-  "Burn",
-  "TokenAdd",
-  "TokenPause",
-  "TokenResume",
-  "AssetRegister",
-  "RouteActivate",
-  "Transfer",
-]);
-const SCCP_CHAIN_FAMILY_VALUES = new Set(["Evm", "Solana", "Ton", "Tron"]);
-const SCCP_MESSAGE_PAYLOAD_KIND_VALUES = new Set(["AssetRegister", "RouteActivate", "Transfer"]);
 const SUBSCRIPTION_STATUS_VALUES = new Set([
   "active",
   "paused",
@@ -290,17 +648,6 @@ const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
 ]);
 const NORITO_FRAME_HEADER_LENGTH = 40;
 const VERSIONED_TRANSACTION_PAYLOAD_VERSION = 1;
-const SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384;
-const SCCP_GROTH16_BN254_BASE_FIELD_MODULUS =
-  0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47n;
-const SCCP_GROTH16_BN254_G2_B_C0 =
-  0x2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5n;
-const SCCP_GROTH16_BN254_G2_B_C1 =
-  0x009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2n;
-const SCCP_DOMAIN_SORA = 0;
-const SCCP_DOMAIN_ETH = 1;
-const SCCP_DOMAIN_BSC = 2;
-
 const CRC64_TABLE = (() => {
   const table = new Array(256);
   for (let index = 0; index < 256; index += 1) {
@@ -1567,7 +1914,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/explorer/nfts", {
       params,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal: normalized.signal,
     });
     await this._expectStatus(response, [200]);
@@ -1724,7 +2071,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/explorer/rwas", {
       params,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal: normalized.signal,
     });
     await this._expectStatus(response, [200]);
@@ -1748,7 +2095,7 @@ export class ToriiClient {
       "GET",
       `/v1/explorer/rwas/${encodeURIComponent(normalizedId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -1861,7 +2208,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", `/v1/accounts/${encodedId}/assets`, {
       params: Object.keys(params).length > 0 ? params : undefined,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
     });
@@ -2130,7 +2477,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/contracts/events", {
       params: Object.keys(params).length > 0 ? params : undefined,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
     });
@@ -2213,7 +2560,7 @@ export class ToriiClient {
       "GET",
       `/v1/accounts/${encodedId}/permissions`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         params: params ?? undefined,
         signal,
       },
@@ -2319,7 +2666,7 @@ export class ToriiClient {
   async listVerifyingKeys(options = {}) {
     const { signal, params } = buildVerifyingKeyListQuery(options);
     const response = await this._request("GET", "/v1/zk/vk", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -2373,7 +2720,7 @@ export class ToriiClient {
       "GET",
       `/v1/zk/vk/${normalizedBackend}/${normalizedName}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -2406,10 +2753,7 @@ export class ToriiClient {
       "registerVerifyingKey",
     );
     const response = await this._request("POST", "/v1/zk/vk/register", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -2426,10 +2770,7 @@ export class ToriiClient {
     const body = JSON.stringify(normalizeVerifyingKeyUpdatePayload(payload));
     const { signal } = normalizeSignalOnlyOption(options, "updateVerifyingKey");
     const response = await this._request("POST", "/v1/zk/vk/update", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -2457,10 +2798,7 @@ export class ToriiClient {
     const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
     const payload = { alias: normalizedAlias };
     const response = await this._request("POST", "/v1/aliases/resolve", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
       canonicalAuth,
@@ -2501,10 +2839,7 @@ export class ToriiClient {
     );
     const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
     const response = await this._request("POST", "/v1/aliases/resolve-index", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
       canonicalAuth,
@@ -2551,10 +2886,7 @@ export class ToriiClient {
         ? undefined
         : requireNonEmptyString(rest.domain, "lookupAliasesByAccount.options.domain");
     const response = await this._request("POST", "/v1/aliases/by-account", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify({
         account_id: normalizedAccountId,
         ...(dataspace ? { dataspace } : {}),
@@ -2606,10 +2938,7 @@ export class ToriiClient {
     );
     const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
     const response = await this._request("POST", "/v1/retail/recipients/lookup", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify({
         account_id: accountId,
         alias_fqn: aliasFqn,
@@ -2637,7 +2966,7 @@ export class ToriiClient {
     );
     assertSupportedOptionKeys(rest, new Set([]), "listIdentifierPolicies options");
     const response = await this._request("GET", "/v1/identifier-policies", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -2660,7 +2989,7 @@ export class ToriiClient {
     );
     assertSupportedOptionKeys(rest, new Set([]), "listRamLfeProgramPolicies options");
     const response = await this._request("GET", "/v1/ram-lfe/program-policies", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -2687,10 +3016,7 @@ export class ToriiClient {
     );
     const payload = buildIdentifierResolveRequest(rest, "resolveIdentifier");
     const response = await this._request("POST", "/v1/identifiers/resolve", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -2733,10 +3059,7 @@ export class ToriiClient {
       "POST",
       `/v1/ram-lfe/programs/${encodeURIComponent(normalizedProgramId)}/execute`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -2783,7 +3106,7 @@ export class ToriiClient {
       "GET",
       `/v1/identifiers/receipts/${encodeURIComponent(normalizedReceiptHash)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -2819,10 +3142,7 @@ export class ToriiClient {
       "POST",
       `/v1/accounts/${encodeURIComponent(normalizedAccountId)}/identifiers/claim-receipt`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -2857,10 +3177,7 @@ export class ToriiClient {
     );
     const payload = buildRamLfeReceiptVerifyRequest(rest, "verifyRamLfeReceipt");
     const response = await this._request("POST", "/v1/ram-lfe/receipts/verify", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -2887,7 +3204,7 @@ export class ToriiClient {
     );
     const params = buildSorafsAliasListParams(rest);
     const response = await this._request("GET", "/v1/sorafs/aliases", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -2925,7 +3242,7 @@ export class ToriiClient {
     );
     const params = buildSorafsPinListParams(rest);
     const response = await this._request("GET", "/v1/sorafs/pin", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -2963,7 +3280,7 @@ export class ToriiClient {
     );
     const params = buildSorafsReplicationListParams(rest);
     const response = await this._request("GET", "/v1/sorafs/replication", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -3508,7 +3825,7 @@ export class ToriiClient {
       "getSorafsPinManifest",
     );
     const headers = {
-      Accept: "application/json",
+      Accept: APPLICATION_JSON,
       ...(rest.headers ?? {}),
     };
     const response = await this._request(
@@ -3554,10 +3871,7 @@ export class ToriiClient {
       buildSorafsPinRegisterPayload(record, "registerSorafsPinManifest"),
     );
     const response = await this._request("POST", "/v1/sorafs/pin/register", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -3603,10 +3917,7 @@ export class ToriiClient {
       payload_b64: payloadB64,
     });
     const response = await this._request("POST", "/v1/sorafs/storage/pin", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal: record.signal,
     });
@@ -3667,10 +3978,7 @@ export class ToriiClient {
       );
     }
     const response = await this._request("POST", "/v1/sorafs/storage/fetch", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(body),
       signal: record.signal,
     });
@@ -3690,7 +3998,7 @@ export class ToriiClient {
   async getSorafsStorageState(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSorafsStorageState");
     const response = await this._request("GET", "/v1/sorafs/storage/state", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -3714,7 +4022,7 @@ export class ToriiClient {
       "GET",
       `/v1/sorafs/storage/manifest/${normalized}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -3754,7 +4062,7 @@ export class ToriiClient {
       "GET",
       path,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -3827,7 +4135,7 @@ export class ToriiClient {
       };
     }
     const response = await this._request("POST", "/v1/da/ingest", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(request),
       signal,
     });
@@ -4134,7 +4442,7 @@ export class ToriiClient {
       ),
     };
     const response = await this._request("POST", "/v1/sorafs/capacity/uptime", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -4173,7 +4481,7 @@ export class ToriiClient {
       ),
     };
     const response = await this._request("POST", "/v1/sorafs/capacity/por-proof", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -4212,7 +4520,7 @@ export class ToriiClient {
       ),
     };
     const response = await this._request("POST", "/v1/sorafs/capacity/por-verdict", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -4311,7 +4619,7 @@ export class ToriiClient {
       "GET",
       `/v1/accounts/${encodeURIComponent(canonicalUaid)}/portfolio`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
         params: Object.keys(params).length === 0 ? undefined : params,
       },
@@ -4337,7 +4645,7 @@ export class ToriiClient {
       "GET",
       `/v1/space-directory/uaids/${encodeURIComponent(canonicalUaid)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -4374,7 +4682,7 @@ export class ToriiClient {
       "GET",
       `/v1/space-directory/uaids/${encodeURIComponent(canonicalUaid)}/manifests`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         params,
         signal,
       },
@@ -4399,10 +4707,7 @@ export class ToriiClient {
     );
     const payload = normalizePublishSpaceDirectoryManifestRequest(request);
     const response = await this._request("POST", "/v1/space-directory/manifests", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -4425,10 +4730,7 @@ export class ToriiClient {
       "POST",
       "/v1/space-directory/manifests/revoke",
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -4441,10 +4743,14 @@ export class ToriiClient {
    * Submit a Norito-encoded transaction payload.
    * Throws ToriiDataModelMismatchError when the node data model version mismatches.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
+   * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<any>} Submission receipt (decoded from Norito) or JSON when present; otherwise null.
    */
-  async submitTransaction(payload) {
-    await this._ensureDataModelValidation();
+  async submitTransaction(payload, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "submitTransaction");
+    throwIfAborted(signal);
+    await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
+    throwIfAborted(signal);
     const rawPayload = toBuffer(payload);
     const pipelinePayload = toVersionedTransactionPayload(rawPayload, this._nativeBinding);
     const requestOptions = {
@@ -4454,13 +4760,14 @@ export class ToriiClient {
       },
       body: pipelinePayload,
       retryProfile: "pipeline",
+      signal,
     };
     const response = await this._request(
       "POST",
       "/v1/pipeline/transactions",
       requestOptions,
     );
-    await this._expectStatus(response, [200, 201, 202, 204]);
+    await this._expectStatus(response, [200, 201, 202, 204], { signal });
     const route = this._extractSubmissionRoute(response);
     const contentType = this._getHeader(response, "content-type");
     const enrichSubmission = (value) => {
@@ -4475,14 +4782,34 @@ export class ToriiClient {
       }
       return { value, route };
     };
+    if (response.status === 204) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding empty transaction submission response body",
+      );
+      return enrichSubmission(null);
+    }
     if (contentType && contentType.toLowerCase().includes("application/x-norito")) {
-      const body = Buffer.from(await response.arrayBuffer());
+      const { bytes } = await this._readBoundedResponseBytes(
+        response,
+        PIPELINE_RECEIPT_MAX_BYTES,
+        "transaction submission receipt",
+        { signal },
+      );
+      const body = Buffer.from(bytes);
       if (body.length === 0) {
         return enrichSubmission(null);
       }
       return enrichSubmission(decodeTransactionReceiptPayload(body));
     }
-    return enrichSubmission(await this._maybeJson(response));
+    return enrichSubmission(
+      await this._maybeBoundedJson(
+        response,
+        PIPELINE_RECEIPT_MAX_BYTES,
+        "transaction submission receipt",
+        { signal },
+      ),
+    );
   }
 
   /**
@@ -4503,21 +4830,23 @@ export class ToriiClient {
     const versionedPayloads = payloads.map((payload) =>
       toVersionedTransactionPayloadStrict(toBuffer(payload), this._nativeBinding),
     );
-    await this._ensureDataModelValidation();
+    throwIfAborted(signal);
+    await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
+    throwIfAborted(signal);
     const response = await this._request(
       "POST",
       "/v1/pipeline/transactions/batch",
       {
         headers: {
           "Content-Type": "application/x-norito",
-          Accept: "application/json",
+          Accept: APPLICATION_JSON,
         },
         body: encodeTransactionPayloadBatch(versionedPayloads, this._nativeBinding),
         retryProfile: "pipeline",
         signal,
       },
     );
-    await this._expectStatus(response, [202]);
+    await this._expectStatus(response, [202], { signal });
     const acceptedHeader = this._getHeader(response, "x-iroha-transactions-accepted");
     const acceptedCount =
       acceptedHeader == null || String(acceptedHeader).trim() === ""
@@ -4527,6 +4856,10 @@ export class ToriiClient {
             "submitTransactionBatch.acceptedCount",
           );
     const route = this._extractSubmissionRoute(response);
+    cancelResponseBodyBestEffort(
+      response,
+      "discarding transaction batch submission response body",
+    );
     return route ? { acceptedCount, route } : { acceptedCount };
   }
 
@@ -4712,10 +5045,26 @@ export class ToriiClient {
       },
     );
     if (response.status === 404) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding transaction status not-found response body",
+      );
       return null;
     }
-    await this._expectStatus(response, [200, 202, 204]);
-    const payload = await this._maybeJson(response);
+    await this._expectStatus(response, [200, 202, 204], { signal });
+    if (response.status === 204) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding empty transaction status response body",
+      );
+      return null;
+    }
+    const payload = await this._maybeBoundedJson(
+      response,
+      PIPELINE_STATUS_JSON_MAX_BYTES,
+      "transaction status response",
+      { signal },
+    );
     if (!payload) {
       return null;
     }
@@ -4862,7 +5211,7 @@ export class ToriiClient {
     );
     const { hashHex, ...pollOptions } = record;
     const normalizedHash = requireHexString(hashHex, "options.hashHex");
-    await this.submitTransaction(payload);
+    await this.submitTransaction(payload, { signal: pollOptions.signal });
     return this.waitForTransactionStatus(normalizedHash, pollOptions);
   }
 
@@ -4893,7 +5242,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/pipeline/recovery/${normalizedHeight}`,
-      { headers: { Accept: "application/json" } },
+      { headers: JSON_ACCEPT_HEADERS },
     );
     if (response.status === 404) {
       return null;
@@ -4927,7 +5276,7 @@ export class ToriiClient {
   async getPipelinePreflight(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getPipelinePreflight");
     const response = await this._request("GET", "/v1/pipeline/preflight", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -4957,7 +5306,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/pipeline/recovery/${normalizedHeight}/fastpq-proofs`,
-      { headers: { Accept: "application/json" }, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal },
     );
     if (response.status === 404) {
       return null;
@@ -4992,7 +5341,7 @@ export class ToriiClient {
   async getHealth(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getHealth");
     const response = await this._request("GET", "/v1/health", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5009,7 +5358,7 @@ export class ToriiClient {
    */
   async getConfiguration() {
     const response = await this._request("GET", "/v1/configuration", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
     });
     if (response.status === 404 || response.status === 503) {
       return null;
@@ -5056,7 +5405,7 @@ export class ToriiClient {
   async getStatusSnapshot(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getStatusSnapshot");
     const response = await this._request("GET", "/v1/status", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5114,7 +5463,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/soracloud/apps/status", {
       params,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5143,7 +5492,7 @@ export class ToriiClient {
       `/v1/soracloud/apps/${normalizedAppName}/status`,
       {
         params,
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -5161,10 +5510,7 @@ export class ToriiClient {
       );
     }
     const response = await this._request("POST", path, {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(request),
       signal,
     });
@@ -5180,7 +5526,7 @@ export class ToriiClient {
   async getNetworkTimeNow(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getNetworkTimeNow");
     const response = await this._request("GET", "/v1/time/now", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5196,7 +5542,7 @@ export class ToriiClient {
   async getNetworkTimeStatus(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getNetworkTimeStatus");
     const response = await this._request("GET", "/v1/time/status", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5212,11 +5558,16 @@ export class ToriiClient {
   async getNodeCapabilities(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getNodeCapabilities");
     const response = await this._request("GET", "/v1/node/capabilities", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._maybeBoundedJson(
+      response,
+      NODE_CAPABILITIES_JSON_MAX_BYTES,
+      "node capabilities response",
+      { signal },
+    );
     return normalizeNodeCapabilitiesResponse(payload);
   }
 
@@ -5228,32 +5579,183 @@ export class ToriiClient {
   async getSccpCapabilities(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSccpCapabilities");
     const response = await this._request("GET", "/v1/sccp/capabilities", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeSccpCapabilitiesResponse(payload);
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP capabilities",
+      signal,
+    });
+    return readSccpJsonResponse(
+      response,
+      normalizeSccpCapabilities,
+      "SCCP capabilities",
+      SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
+    );
   }
 
   /**
-   * Fetch typed SCCP proof manifests (`GET /v1/sccp/manifests`).
+   * Fetch the authoritative typed SCCP registry (`GET /v1/sccp/registry`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
-  async getSccpProofManifests(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getSccpProofManifests");
-    const response = await this._request("GET", "/v1/sccp/manifests", {
-      headers: { Accept: "application/json" },
+  async getSccpRegistry(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getSccpRegistry");
+    const response = await this._request("GET", "/v1/sccp/registry", {
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeSccpProofManifestSetResponse(payload);
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_JSON_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP registry",
+      signal,
+    });
+    return readSccpJsonResponse(
+      response,
+      normalizeSccpRegistry,
+      "SCCP registry",
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+    );
   }
 
   /**
-   * Submit a bridge proof DTO (`POST /v1/bridge/proofs/submit`).
+   * Fetch one state-derived message/finality bundle by canonical message id.
+   * Native responses are preflighted as canonical uncompressed Norito frames
+   * bound to `TairaSccpMessageProofV1`. This lightweight client returns the
+   * opaque frame and does not decode its embedded message id; callers that need
+   * independent path-to-payload binding must decode the returned typed value.
+   * @param {string} messageId
+   * @param {{format?: "json" | "norito", signal?: AbortSignal}} [options]
+   * @returns {Promise<object | Uint8Array>}
+   */
+  async getSccpMessageBundle(messageId, options = {}) {
+    const id = normalizeSccpMessageIdPath(messageId, "getSccpMessageBundle.messageId");
+    const { format, signal } = normalizeSccpTypedReadOptions(
+      options,
+      "getSccpMessageBundle",
+    );
+    const response = await this._request("GET", `/v1/sccp/proofs/message/${id}`, {
+      headers: { Accept: sccpAcceptHeader(format) },
+      signal,
+    });
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes:
+        format === "norito"
+          ? SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES
+          : SCCP_JSON_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP message bundle",
+      signal,
+    });
+    return format === "norito"
+      ? readSccpNoritoResponse(
+          response,
+          "SCCP message bundle",
+          SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES,
+          SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME,
+        )
+      : readSccpJsonResponse(
+          response,
+          normalizeSccpMessageBundle,
+          "SCCP message bundle",
+          SCCP_JSON_RESPONSE_MAX_BYTES,
+        );
+  }
+
+  /**
+   * Fetch one query-free, state-derived Groth16 prover request by message id.
+   * Native responses are preflighted as canonical uncompressed Norito frames
+   * bound to `SccpGroth16Bn254ProofRequestV1`. This lightweight client returns
+   * the opaque frame and does not decode its embedded message id; callers that
+   * need independent path-to-payload binding must decode the returned typed value.
+   * @param {string} messageId
+   * @param {{format?: "json" | "norito", signal?: AbortSignal}} [options]
+   * @returns {Promise<object | Uint8Array>}
+   */
+  async getSccpProofRequest(messageId, options = {}) {
+    const id = normalizeSccpMessageIdPath(messageId, "getSccpProofRequest.messageId");
+    const { format, signal } = normalizeSccpTypedReadOptions(
+      options,
+      "getSccpProofRequest",
+    );
+    const response = await this._request("GET", `/v1/sccp/proof-requests/${id}`, {
+      headers: { Accept: sccpAcceptHeader(format) },
+      signal,
+    });
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes:
+        format === "norito"
+          ? SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES
+          : SCCP_JSON_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP proof request",
+      signal,
+    });
+    return format === "norito"
+      ? readSccpNoritoResponse(
+          response,
+          "SCCP proof request",
+          SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES,
+          SCCP_PROOF_REQUEST_NORITO_TYPE_NAME,
+        )
+      : readSccpJsonResponse(
+          response,
+          normalizeSccpProofRequest,
+          "SCCP proof request",
+          SCCP_JSON_RESPONSE_MAX_BYTES,
+        );
+  }
+
+  /**
+   * Fetch newest-first SCCP message discovery (`GET /v1/sccp/messages/recent`).
+   * @param {{from?: number, limit?: number, signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getSccpRecentMessages(options = {}) {
+    const record = requirePlainObjectOption(options, "getSccpRecentMessages.options", {
+      message: "must be a plain object",
+    });
+    const unknown = Object.keys(record).find(
+      (key) => key !== "from" && key !== "limit" && key !== "signal",
+    );
+    if (unknown !== undefined) {
+      throw new TypeError(`getSccpRecentMessages.options contains unknown field \`${unknown}\``);
+    }
+    const params = {};
+    if (record.from !== undefined) {
+      if (!Number.isSafeInteger(record.from) || record.from < 1) {
+        throw new TypeError(
+          "getSccpRecentMessages.options.from must be a positive safe integer",
+        );
+      }
+      params.from = String(record.from);
+    }
+    if (record.limit !== undefined) {
+      if (!Number.isSafeInteger(record.limit) || record.limit < 1 || record.limit > 50) {
+        throw new TypeError("getSccpRecentMessages.options.limit must be an integer in 1..50");
+      }
+      params.limit = String(record.limit);
+    }
+    const response = await this._request("GET", "/v1/sccp/messages/recent", {
+      headers: { Accept: "application/json" },
+      params,
+      signal: record.signal,
+    });
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_RECENT_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP recent messages",
+      signal: record.signal,
+    });
+    return readSccpJsonResponse(
+      response,
+      normalizeSccpRecentMessages,
+      "SCCP recent messages",
+      SCCP_RECENT_RESPONSE_MAX_BYTES,
+    );
+  }
+
+  /**
+   * Prepare or submit a bridge proof DTO (`POST /v1/bridge/proofs/submit`). Signed submission
+   * resends the byte-identical prepared transaction payload with its detached signature.
    * @param {object} payload
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
@@ -5262,21 +5764,21 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "submitBridgeProof");
     const body = normalizeBridgeProofSubmitPayload(payload, "submitBridgeProof.payload");
     const response = await this._request("POST", "/v1/bridge/proofs/submit", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(body),
       signal,
     });
-    await this._expectStatus(response, [200]);
-    const responsePayload = await this._maybeJson(response);
-    return requirePlainObjectOption(
-      responsePayload ?? {},
-      "submitBridgeProof response",
-      { message: "must be a JSON object" },
-    );
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_SUBMIT_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP bridge proof submit",
+      signal,
+    });
+    return readSccpBridgeSubmitResponse(response, body);
   }
 
   /**
-   * Submit an inbound bridge message DTO (`POST /v1/bridge/messages`).
+   * Prepare or submit an inbound bridge message DTO (`POST /v1/bridge/messages`). Signed
+   * submission resends the byte-identical prepared transaction payload with its detached signature.
    * @param {object} payload
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
@@ -5285,77 +5787,16 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "submitBridgeMessage");
     const body = normalizeBridgeMessageSubmitPayload(payload, "submitBridgeMessage.payload");
     const response = await this._request("POST", "/v1/bridge/messages", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(body),
       signal,
     });
-    await this._expectStatus(response, [200]);
-    const responsePayload = await this._maybeJson(response);
-    return requirePlainObjectOption(
-      responsePayload ?? {},
-      "submitBridgeMessage response",
-      { message: "must be a JSON object" },
-    );
-  }
-
-  /**
-   * Fetch a typed SCCP transparent message-proof artifact (`GET /v1/sccp/artifacts/message/{message_id}`).
-   * @param {string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView} messageIdHex
-   * @param {{signal?: AbortSignal, networkIdHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, verifierAddressHex?: string, bridgeAddressHex?: string, verifierCodeHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, verifierKeyHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, expectedDestinationBindingHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, tronVerifierAddress?: string, proofBytesHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView}} [options]
-   * @returns {Promise<object>}
-   */
-  async getSccpMessageProofArtifact(messageIdHex, options = {}) {
-    const normalizedMessageId = normalizeHex32String(
-      messageIdHex,
-      "getSccpMessageProofArtifact.messageIdHex",
-    );
-    const { signal, params } = normalizeSccpEvmDestinationQueryOptions(
-      options,
-      "getSccpMessageProofArtifact",
-      normalizedMessageId,
-    );
-    const response = await this._request(
-      "GET",
-      `/v1/sccp/artifacts/message/${normalizedMessageId}`,
-      {
-        headers: { Accept: "application/json" },
-        params,
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeSccpMessageTransparentProofArtifact(payload);
-  }
-
-  /**
-   * Fetch a normalized SCCP counterparty proof job (`GET /v1/sccp/jobs/message/{message_id}`).
-   * @param {string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView} messageIdHex
-   * @param {{signal?: AbortSignal, networkIdHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, verifierAddressHex?: string, bridgeAddressHex?: string, verifierCodeHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, verifierKeyHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, expectedDestinationBindingHashHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView, tronVerifierAddress?: string, proofBytesHex?: string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView}} [options]
-   * @returns {Promise<object>}
-   */
-  async getSccpMessageProofJob(messageIdHex, options = {}) {
-    const normalizedMessageId = normalizeHex32String(
-      messageIdHex,
-      "getSccpMessageProofJob.messageIdHex",
-    );
-    const { signal, params } = normalizeSccpEvmDestinationQueryOptions(
-      options,
-      "getSccpMessageProofJob",
-      normalizedMessageId,
-    );
-    const response = await this._request(
-      "GET",
-      `/v1/sccp/jobs/message/${normalizedMessageId}`,
-      {
-        headers: { Accept: "application/json" },
-        params,
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeSccpCounterpartyProofJob(payload);
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_SUBMIT_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP bridge message submit",
+      signal,
+    });
+    return readSccpBridgeSubmitResponse(response, body);
   }
 
   /**
@@ -5366,7 +5807,7 @@ export class ToriiClient {
   async getRuntimeAbiActive(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getRuntimeAbiActive");
     const response = await this._request("GET", "/v1/runtime/abi/active", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5382,7 +5823,7 @@ export class ToriiClient {
   async getRuntimeAbiHash(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getRuntimeAbiHash");
     const response = await this._request("GET", "/v1/runtime/abi/hash", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5398,7 +5839,7 @@ export class ToriiClient {
   async getRuntimeMetrics(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getRuntimeMetrics");
     const response = await this._request("GET", "/v1/runtime/metrics", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5414,7 +5855,7 @@ export class ToriiClient {
   async listRuntimeUpgrades(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "listRuntimeUpgrades");
     const response = await this._request("GET", "/v1/runtime/upgrades", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5438,7 +5879,7 @@ export class ToriiClient {
       "proposeRuntimeUpgrade.manifest",
     );
     const response = await this._request("POST", "/v1/runtime/upgrades/propose", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -5460,7 +5901,7 @@ export class ToriiClient {
       "POST",
       `/v1/runtime/upgrades/activate/0x${hash}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -5482,7 +5923,7 @@ export class ToriiClient {
       "POST",
       `/v1/runtime/upgrades/cancel/0x${hash}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -5499,7 +5940,7 @@ export class ToriiClient {
   async listPeers(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "listPeers");
     const response = await this._request("GET", "/v1/peers", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5526,7 +5967,7 @@ export class ToriiClient {
       allowExtras: false,
     });
     const response = await this._request("GET", "/v1/telemetry/peers-info", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5546,7 +5987,7 @@ export class ToriiClient {
   async getExplorerMetrics(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getExplorerMetrics");
     const response = await this._request("GET", "/v1/explorer/metrics", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     if (response.status === 403 || response.status === 404 || response.status === 503) {
@@ -5573,7 +6014,7 @@ export class ToriiClient {
       "GET",
       `/v1/explorer/accounts/${encodeURIComponent(normalizedId)}/qr`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -5594,7 +6035,7 @@ export class ToriiClient {
   async getVpnProfile(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getVpnProfile");
     const response = await this._request("GET", "/v1/vpn/profile", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     if (response.status === 404 || response.status === 503) {
@@ -5622,10 +6063,7 @@ export class ToriiClient {
       "createVpnQuote",
     );
     const response = await this._request("POST", "/v1/vpn/quotes", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnQuoteCreateRequest(request)),
       signal,
       canonicalAuth,
@@ -5651,10 +6089,7 @@ export class ToriiClient {
       "createVpnSession",
     );
     const response = await this._request("POST", "/v1/vpn/sessions", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnSessionCreateRequest(request)),
       signal,
       canonicalAuth,
@@ -5684,7 +6119,7 @@ export class ToriiClient {
       "GET",
       `/v1/vpn/sessions/${encodeURIComponent(normalizedSessionId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
         canonicalAuth,
       },
@@ -5717,7 +6152,7 @@ export class ToriiClient {
       "DELETE",
       `/v1/vpn/sessions/${encodeURIComponent(normalizedSessionId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
         canonicalAuth,
       },
@@ -5746,10 +6181,7 @@ export class ToriiClient {
       "submitVpnReceipt",
     );
     const response = await this._request("POST", "/v1/vpn/receipts", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnReceiptSubmitRequest(request)),
       signal,
       canonicalAuth,
@@ -5773,7 +6205,7 @@ export class ToriiClient {
       "listVpnReceipts",
     );
     const response = await this._request("GET", "/v1/vpn/receipts", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
     });
@@ -5802,7 +6234,7 @@ export class ToriiClient {
     }
     const { signal } = normalizeSignalOnlyOption(options, "getSnsPolicy");
     const response = await this._request("GET", `/v1/sns/policies/${resolvedId}`, {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5842,7 +6274,7 @@ export class ToriiClient {
       "GET",
       `/v1/sns/names/domain/${encodeURIComponent(literal)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -5864,10 +6296,7 @@ export class ToriiClient {
     const payload = normalizeSnsRegisterRequest(request, "registerSnsName");
     const { signal } = normalizeSignalOnlyOption(options, "registerSnsName");
     const response = await this._request("POST", "/v1/sns/names", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -5894,10 +6323,7 @@ export class ToriiClient {
       "POST",
       `/v1/sns/names/domain/${encodeURIComponent(literal)}/renew`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -5925,10 +6351,7 @@ export class ToriiClient {
       "POST",
       `/v1/sns/names/domain/${encodeURIComponent(literal)}/transfer`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -5956,10 +6379,7 @@ export class ToriiClient {
       "POST",
       `/v1/sns/names/domain/${encodeURIComponent(literal)}/freeze`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -5987,10 +6407,7 @@ export class ToriiClient {
       "DELETE",
       `/v1/sns/names/domain/${encodeURIComponent(literal)}/freeze`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -6015,7 +6432,7 @@ export class ToriiClient {
       "GET",
       `/v1/gov/proposals/${encodeURIComponent(normalized)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6055,7 +6472,7 @@ export class ToriiClient {
       "GET",
       `/v1/gov/referenda/${encodeURIComponent(normalized)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6095,7 +6512,7 @@ export class ToriiClient {
       "GET",
       `/v1/gov/tally/${encodeURIComponent(normalized)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6137,7 +6554,7 @@ export class ToriiClient {
       "GET",
       `/v1/gov/locks/${encodeURIComponent(normalized)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6173,7 +6590,7 @@ export class ToriiClient {
   async getGovernanceUnlockStats(options) {
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceUnlockStats");
     const response = await this._request("GET", "/v1/gov/unlocks/stats", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6207,7 +6624,7 @@ export class ToriiClient {
       "getGovernanceCouncilCurrent",
     );
     const response = await this._request("GET", "/v1/gov/council/current", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6227,10 +6644,7 @@ export class ToriiClient {
       "governanceDeriveCouncilVrf",
     );
     const response = await this._request("POST", "/v1/gov/council/derive-vrf", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6251,10 +6665,7 @@ export class ToriiClient {
       "governancePersistCouncil",
     );
     const response = await this._request("POST", "/v1/gov/council/persist", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6275,10 +6686,7 @@ export class ToriiClient {
       "governanceReplaceCouncil",
     );
     const response = await this._request("POST", "/v1/gov/council/replace", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6295,7 +6703,7 @@ export class ToriiClient {
   async getGovernanceCouncilAudit(options = {}) {
     const { signal, params } = buildGovernanceCouncilAuditQuery(options);
     const response = await this._request("GET", "/v1/gov/council/audit", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -6319,10 +6727,7 @@ export class ToriiClient {
       "POST",
       "/v1/ministry/agenda/proposals/draft",
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body,
         signal,
       },
@@ -6350,7 +6755,7 @@ export class ToriiClient {
       "GET",
       `/v1/ministry/agenda/proposals/${encodeURIComponent(normalizedProposalId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6377,10 +6782,7 @@ export class ToriiClient {
       "governanceFinalizeReferendum",
     );
     const response = await this._request("POST", "/v1/gov/finalize", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6408,10 +6810,7 @@ export class ToriiClient {
     const body = JSON.stringify(normalizeGovernanceEnactPayload(payload));
     const { signal } = normalizeSignalOnlyOption(options, "governanceEnactProposal");
     const response = await this._request("POST", "/v1/gov/enact", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6442,10 +6841,7 @@ export class ToriiClient {
     );
     const body = JSON.stringify(normalizeGovernanceDeployContractProposalPayload(payload));
     const response = await this._request("POST", "/v1/gov/proposals/deploy-contract", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6455,42 +6851,6 @@ export class ToriiClient {
       throw new Error("governance deploy-contract endpoint returned no payload");
     }
     return normalizeGovernanceDraftResponse(draft, "governance deploy-contract response");
-  }
-
-  /**
-   * Draft a governance SCCP route-manifest proposal (`POST /v1/gov/proposals/sccp-route-manifest`).
-   * @param {Record<string, unknown>} payload
-   * @returns {Promise<ToriiGovernanceDraftResponse>}
-   */
-  async governanceProposeSccpRouteManifest(payload, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "governanceProposeSccpRouteManifest",
-    );
-    const body = JSON.stringify(
-      normalizeGovernanceSccpRouteManifestProposalPayload(payload),
-    );
-    const response = await this._request(
-      "POST",
-      "/v1/gov/proposals/sccp-route-manifest",
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body,
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const draft = await this._maybeJson(response);
-    if (!draft) {
-      throw new Error("governance SCCP route-manifest endpoint returned no payload");
-    }
-    return normalizeGovernanceDraftResponse(
-      draft,
-      "governance SCCP route-manifest response",
-    );
   }
 
   /**
@@ -6505,10 +6865,7 @@ export class ToriiClient {
       "governanceSubmitPlainBallot",
     );
     const response = await this._request("POST", "/v1/gov/ballots/plain", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6529,10 +6886,7 @@ export class ToriiClient {
     const body = JSON.stringify(normalizeGovernanceZkBallotPayload(payload));
     const { signal } = normalizeSignalOnlyOption(options, "governanceSubmitZkBallot");
     const response = await this._request("POST", "/v1/gov/ballots/zk", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6553,10 +6907,7 @@ export class ToriiClient {
     const body = JSON.stringify(normalizeGovernanceZkBallotV1Payload(payload));
     const { signal } = normalizeSignalOnlyOption(options, "governanceSubmitZkBallotV1");
     const response = await this._request("POST", "/v1/gov/ballots/zk-v1", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6580,10 +6931,7 @@ export class ToriiClient {
       "governanceSubmitZkBallotProofV1",
     );
     const response = await this._request("POST", "/v1/gov/ballots/zk-v1/ballot-proof", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6608,10 +6956,7 @@ export class ToriiClient {
     const values = normalizeProtectedNamespaceList(namespaces);
     const { signal } = normalizeSignalOnlyOption(options, "setProtectedNamespaces");
     const response = await this._request("POST", "/v1/gov/protected-namespaces", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify({ namespaces: values }),
       signal,
     });
@@ -6631,7 +6976,7 @@ export class ToriiClient {
   async getProtectedNamespaces(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getProtectedNamespaces");
     const response = await this._request("GET", "/v1/gov/protected-namespaces", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6678,7 +7023,7 @@ export class ToriiClient {
   async getSumeragiStatus(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiStatus");
     const response = await this._request("GET", "/v1/sumeragi/status", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6707,7 +7052,7 @@ export class ToriiClient {
       "getSumeragiPacemaker",
     );
     const response = await this._request("GET", "/v1/sumeragi/pacemaker", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     if (response.status === 403 || response.status === 503) {
@@ -6729,7 +7074,7 @@ export class ToriiClient {
   async getSumeragiQc(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiQc");
     const response = await this._request("GET", "/v1/sumeragi/qc", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6760,7 +7105,7 @@ export class ToriiClient {
       "GET",
       `/v1/sumeragi/commit-qcs/${normalizedHash}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6780,7 +7125,7 @@ export class ToriiClient {
   async getSumeragiPhases(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiPhases");
     const response = await this._request("GET", "/v1/sumeragi/phases", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6802,7 +7147,7 @@ export class ToriiClient {
       "getSumeragiBlsKeys",
     );
     const response = await this._request("GET", "/v1/sumeragi/bls-keys", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6821,7 +7166,7 @@ export class ToriiClient {
   async getSumeragiLeader(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiLeader");
     const response = await this._request("GET", "/v1/sumeragi/leader", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6843,7 +7188,7 @@ export class ToriiClient {
       "getSumeragiCollectors",
     );
     const response = await this._request("GET", "/v1/sumeragi/collectors", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6865,7 +7210,7 @@ export class ToriiClient {
       "getSumeragiParams",
     );
     const response = await this._request("GET", "/v1/sumeragi/params", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6887,7 +7232,7 @@ export class ToriiClient {
       "getSumeragiTelemetry",
     );
     const response = await this._request("GET", "/v1/sumeragi/telemetry", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6917,7 +7262,7 @@ export class ToriiClient {
   async getSumeragiRbc(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiRbc");
     const response = await this._request("GET", "/v1/sumeragi/rbc", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     if (response.status === 403 || response.status === 503) {
@@ -6945,7 +7290,7 @@ export class ToriiClient {
       "getSumeragiRbcSessions",
     );
     const response = await this._request("GET", "/v1/sumeragi/rbc/sessions", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     if (response.status === 403 || response.status === 503) {
@@ -6984,7 +7329,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/sumeragi/rbc/delivered/${normalizedHeight}/${normalizedView}`,
-      { headers: { Accept: "application/json" }, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal },
     );
     if (response.status === 404) {
       return null;
@@ -7066,8 +7411,8 @@ export class ToriiClient {
       });
     }
     const headers = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
+      "Content-Type": APPLICATION_JSON,
+      Accept: APPLICATION_JSON,
     };
     if (record.apiToken) {
       headers["X-API-Token"] = String(record.apiToken);
@@ -7133,7 +7478,7 @@ export class ToriiClient {
       params.kind = kind;
     }
     const response = await this._request("GET", "/v1/sumeragi/evidence", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params: Object.keys(params).length > 0 ? params : undefined,
       signal,
     });
@@ -7147,7 +7492,7 @@ export class ToriiClient {
    */
   async getSumeragiEvidenceCount() {
     const response = await this._request("GET", "/v1/sumeragi/evidence/count", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
     });
     await this._expectStatus(response, [200]);
     const payload = ensureRecord(
@@ -7177,8 +7522,8 @@ export class ToriiClient {
       );
     }
     const headers = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
+      "Content-Type": APPLICATION_JSON,
+      Accept: APPLICATION_JSON,
     };
     if (record.apiToken) {
       headers["X-API-Token"] = String(record.apiToken);
@@ -7224,7 +7569,7 @@ export class ToriiClient {
       asText = normalizedOptions.asText;
     }
     const response = await this._request("GET", "/v1/metrics", {
-      headers: { Accept: asText ? "text/plain" : "application/json" },
+      headers: { Accept: asText ? "text/plain" : APPLICATION_JSON },
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -7249,7 +7594,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "getBlock");
     const response = await this._request("GET", `/v1/explorer/blocks/${encodeURIComponent(normalized)}`, {
       signal,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
     });
     if (response.status === 404) {
       return null;
@@ -7278,7 +7623,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/explorer/blocks", {
       params: Object.keys(params).length > 0 ? params : undefined,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal: normalizedOptions.signal,
     });
     await this._expectStatus(response, [200]);
@@ -7419,7 +7764,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}`,
-      { headers: { Accept: "application/json" }, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal },
     );
     if (response.status === 404) {
       return null;
@@ -7445,7 +7790,7 @@ export class ToriiClient {
       "GET",
       `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}/signals`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         params,
         signal,
       },
@@ -7499,7 +7844,7 @@ export class ToriiClient {
   async listKaigiRelays(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "listKaigiRelays");
     const response = await this._request("GET", "/v1/kaigi/relays", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -7519,7 +7864,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/kaigi/relays/${encodeURIComponent(normalizedRelay)}`,
-      { headers: { Accept: "application/json" }, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal },
     );
     if (response.status === 404) {
       return null;
@@ -7540,7 +7885,7 @@ export class ToriiClient {
   async getKaigiRelaysHealth(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getKaigiRelaysHealth");
     const response = await this._request("GET", "/v1/kaigi/relays/health", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -7631,7 +7976,7 @@ export class ToriiClient {
    */
   async getConnectStatus() {
     const response = await this._request("GET", "/v1/connect/status", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
     });
     if (response.status === 404) {
       return null;
@@ -7664,10 +8009,7 @@ export class ToriiClient {
       payload.node = requireNonEmptyString(input.node, "node");
     }
     const response = await this._request("POST", "/v1/connect/session", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
     });
     await this._expectStatus(response, [200]);
@@ -7734,7 +8076,7 @@ export class ToriiClient {
       params.cursor = requireNonEmptyString(resolvedOptions.cursor, "connectApps.cursor");
     }
     const response = await this._request("GET", "/v1/connect/app/apps", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params: Object.keys(params).length === 0 ? undefined : params,
       signal,
     });
@@ -7765,7 +8107,7 @@ export class ToriiClient {
       "GET",
       `/v1/connect/app/apps/${encodeURIComponent(normalizedId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -7784,10 +8126,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "registerConnectApp");
     const payload = toConnectAppWritePayload(record, "registerConnectApp.record");
     const response = await this._request("POST", "/v1/connect/app/apps", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -7825,7 +8164,7 @@ export class ToriiClient {
   async getConnectAppPolicy(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getConnectAppPolicy");
     const response = await this._request("GET", "/v1/connect/app/policy", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -7843,10 +8182,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "updateConnectAppPolicy");
     const payload = toConnectAppPolicyPayload(updates, "updateConnectAppPolicy.updates");
     const response = await this._request("POST", "/v1/connect/app/policy", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -7866,7 +8202,7 @@ export class ToriiClient {
       "getConnectAdmissionManifest",
     );
     const response = await this._request("GET", "/v1/connect/app/manifest", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -7890,10 +8226,7 @@ export class ToriiClient {
       "setConnectAdmissionManifest.manifest",
     );
     const response = await this._request("PUT", "/v1/connect/app/manifest", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -7984,10 +8317,7 @@ export class ToriiClient {
   async registerContractCode(request = {}) {
     const payload = normalizeRegisterContractCodeRequest(request);
     const response = await this._request("POST", "/v1/contracts/code", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
     });
     await this._expectStatus(response, [200, 202]);
@@ -8002,10 +8332,7 @@ export class ToriiClient {
   async deployContract(request = {}) {
     const payload = normalizeDeployContractRequest(request);
     const response = await this._request("POST", "/v1/contracts/deploy", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
     });
     await this._expectStatus(response, [200, 202]);
@@ -8021,10 +8348,7 @@ export class ToriiClient {
   async setContractAlias(request = {}) {
     const payload = normalizeSetContractAliasRequest(request);
     const response = await this._request("POST", "/v1/contracts/aliases", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
     });
     await this._expectStatus(response, [200, 202]);
@@ -8042,10 +8366,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "callContract");
     const payload = normalizeContractCallRequest(request);
     const response = await this._request("POST", "/v1/contracts/call", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8068,15 +8389,17 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "simulateContractCall");
     const payload = normalizeContractCallSimulateRequest(request);
     const response = await this._request("POST", "/v1/contracts/call/simulate", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const body = await this._maybeBoundedJson(
+      response,
+      CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+      "contract call simulation response",
+      { signal },
+    );
     if (!body) {
       throw new Error("contract call simulation endpoint returned no payload");
     }
@@ -8096,16 +8419,23 @@ export class ToriiClient {
       context: "deriveIvmProved",
       includeProved: false,
     });
+    const requestBody = stringifyBoundedJsonRequest(
+      payload,
+      IVM_PROOF_REQUEST_MAX_BYTES,
+      "IVM derive request",
+    );
     const response = await this._request("POST", "/v1/zk/ivm/derive", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
+      headers: JSON_REQUEST_HEADERS,
+      body: requestBody,
       signal,
     });
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const body = await this._maybeBoundedJson(
+      response,
+      IVM_DERIVE_JSON_MAX_BYTES,
+      "IVM derive response",
+      { signal },
+    );
     if (!body) {
       throw new Error("IVM derive endpoint returned no payload");
     }
@@ -8126,16 +8456,23 @@ export class ToriiClient {
       context: "startIvmProve",
       includeProved: true,
     });
+    const requestBody = stringifyBoundedJsonRequest(
+      payload,
+      IVM_PROOF_REQUEST_MAX_BYTES,
+      "IVM prove request",
+    );
     const response = await this._request("POST", "/v1/zk/ivm/prove", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
+      headers: JSON_REQUEST_HEADERS,
+      body: requestBody,
       signal,
     });
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
+    await this._expectStatus(response, [200, 202], { signal });
+    const body = await this._maybeBoundedJson(
+      response,
+      IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES,
+      "IVM prove job creation response",
+      { signal },
+    );
     if (!body) {
       throw new Error("IVM prove endpoint returned no payload");
     }
@@ -8155,16 +8492,57 @@ export class ToriiClient {
       "GET",
       `/v1/zk/ivm/prove/${encodeURIComponent(normalizedJobId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const body = await this._maybeBoundedJson(
+      response,
+      IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES,
+      "IVM prove job status response",
+      { signal },
+    );
     if (!body) {
       throw new Error("IVM prove job endpoint returned no payload");
     }
-    return normalizeZkIvmProveJobResponse(body);
+    const job = normalizeZkIvmProveJobResponse(body);
+    if (job.job_id !== normalizedJobId) {
+      throw new Error("IVM prove job status returned a different job id");
+    }
+    return job;
+  }
+
+  /**
+   * Delete and cancel an asynchronous IVM proof job
+   * (`DELETE /v1/zk/ivm/prove/{job_id}`).
+   * @param {string} jobId
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<{job_id: string}>}
+   */
+  async cancelIvmProveJob(jobId, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "cancelIvmProveJob");
+    const normalizedJobId = normalizeIvmProveJobId(jobId, "jobId");
+    const response = await this._request(
+      "DELETE",
+      `/v1/zk/ivm/prove/${encodeURIComponent(normalizedJobId)}`,
+      { headers: JSON_ACCEPT_HEADERS, signal },
+    );
+    await this._expectStatus(response, [200], { signal });
+    const body = await this._maybeBoundedJson(
+      response,
+      IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES,
+      "IVM prove job cancellation response",
+      { signal },
+    );
+    if (!body) {
+      throw new Error("IVM prove job cancellation endpoint returned no payload");
+    }
+    const cancelled = normalizeZkIvmProveJobCreatedResponse(body);
+    if (cancelled.job_id !== normalizedJobId) {
+      throw new Error("IVM prove job cancellation returned a different job id");
+    }
+    return cancelled;
   }
 
   /**
@@ -8228,13 +8606,57 @@ export class ToriiClient {
    */
   async proveIvmAndWait(request = {}, options = {}) {
     const record = ensureRecord(options, "proveIvmAndWait options");
-    const { signal, intervalMs, timeoutMs } = record;
-    const created = await this.startIvmProve(request, { signal });
-    return this.waitForIvmProveJob(created.job_id, {
-      signal,
-      ...(intervalMs === undefined ? {} : { intervalMs }),
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    const signal = record.signal;
+    const intervalMs =
+      record.intervalMs === undefined
+        ? undefined
+        : ToriiClient._normalizeUnsignedInteger(
+            record.intervalMs,
+            "proveIvmAndWait options.intervalMs",
+            { allowZero: true },
+          );
+    const timeoutMs =
+      record.timeoutMs === undefined
+        ? undefined
+        : record.timeoutMs === null
+          ? null
+          : ToriiClient._normalizeUnsignedInteger(
+              record.timeoutMs,
+              "proveIvmAndWait options.timeoutMs",
+              { allowZero: true },
+            );
+    const normalizedRequest = normalizeZkIvmExecutionRequest(request, {
+      context: "proveIvmAndWait",
+      includeProved: true,
     });
+    const expectedProved = normalizedRequest.proved ?? null;
+    const { proved: _omittedProved, ...requestWithoutProved } = normalizedRequest;
+    const created = await this.startIvmProve(requestWithoutProved, { signal });
+    try {
+      const completed = await this.waitForIvmProveJob(created.job_id, {
+        signal,
+        ...(intervalMs === undefined ? {} : { intervalMs }),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      });
+      if (
+        expectedProved !== null &&
+        JSON.stringify(completed.proved) !== JSON.stringify(expectedProved)
+      ) {
+        throw new Error(
+          "IVM proof job returned a proved payload that differs from the locally derived payload",
+        );
+      }
+      return completed;
+    } catch (error) {
+      try {
+        // Do not reuse an aborted caller signal: cancellation is best-effort
+        // cleanup and must never mask the original wait failure.
+        await this.cancelIvmProveJob(created.job_id);
+      } catch {
+        // Preserve the original timeout, abort, or proof error.
+      }
+      throw error;
+    }
   }
 
   /**
@@ -8250,7 +8672,7 @@ export class ToriiClient {
     const response = await this._request("POST", "/v1/multisig/propose", {
       headers: {
         "Content-Type": "application/x-norito",
-        Accept: "application/json",
+        Accept: APPLICATION_JSON,
       },
       body: noritoEncodeMultisigProposeRequest(payload),
       signal,
@@ -8273,10 +8695,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "proposeMultisigContractCall");
     const payload = normalizeMultisigContractCallProposeRequest(request);
     const response = await this._request("POST", "/v1/contracts/call/multisig/propose", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8301,10 +8720,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "approveMultisigContractCall");
     const payload = normalizeMultisigContractCallApproveRequest(request);
     const response = await this._request("POST", "/v1/contracts/call/multisig/approve", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8329,14 +8745,11 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "getMultisigSpec");
     const payload = normalizeMultisigSelectorOnlyRequest(request, "getMultisigSpec request");
     const response = await this._request("POST", "/v1/multisig/spec", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], { signal });
     const body = await this._maybeJson(response);
     if (!body) {
       throw new Error("multisig spec endpoint returned no payload");
@@ -8357,10 +8770,7 @@ export class ToriiClient {
       "listMultisigProposals request",
     );
     const response = await this._request("POST", "/v1/multisig/proposals/query", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8382,10 +8792,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "getMultisigProposal");
     const payload = normalizeMultisigProposalLookupRequest(request);
     const response = await this._request("POST", "/v1/multisig/proposals/lookup", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8403,15 +8810,23 @@ export class ToriiClient {
    * @returns {Promise<ContractManifestRecord | null>}
    */
   async getContractManifest(codeHashHex) {
-    const normalizedHash = normalizeHex32String(codeHashHex, "codeHashHex");
+    const normalizedHash = normalizeIrohaHashHex32(codeHashHex, "codeHashHex");
     const response = await this._request("GET", `/v1/contracts/code/${normalizedHash}`, {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
     });
     if (response.status === 404) {
+      cancelResponseBodyBestEffort(
+        response,
+        "contract manifest response was not found",
+      );
       return null;
     }
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._maybeBoundedJson(
+      response,
+      CONTRACT_MANIFEST_JSON_MAX_BYTES,
+      "contract manifest response",
+    );
     if (!payload) {
       return null;
     }
@@ -8421,20 +8836,39 @@ export class ToriiClient {
   /**
    * Fetch stored contract code bytes (`GET /v1/contracts/code-bytes/{hash}`).
    * @param {string} codeHashHex
+   * @param {{signal?: AbortSignalLike}} [options]
    * @returns {Promise<ContractCodeBytesRecord | null>}
    */
-  async getContractCodeBytes(codeHashHex) {
-    const normalizedHash = normalizeHex32String(codeHashHex, "codeHashHex");
+  async getContractCodeBytes(codeHashHex, options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getContractCodeBytes",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      new Set(),
+      "getContractCodeBytes options",
+    );
+    const normalizedHash = normalizeIrohaHashHex32(codeHashHex, "codeHashHex");
     const response = await this._request(
       "GET",
       `/v1/contracts/code-bytes/${normalizedHash}`,
-      { headers: { Accept: "application/json" } },
+      { headers: JSON_ACCEPT_HEADERS, signal },
     );
     if (response.status === 404) {
+      cancelResponseBodyBestEffort(
+        response,
+        "contract code bytes response was not found",
+      );
       return null;
     }
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._maybeBoundedJson(
+      response,
+      CONTRACT_CODE_BYTES_JSON_MAX_BYTES,
+      "contract code bytes response",
+      { signal },
+    );
     if (!payload) {
       return null;
     }
@@ -8454,7 +8888,7 @@ export class ToriiClient {
       "GET",
       `/v1/gov/contracts/${encodeURIComponent(normalizedAddress)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal: signal ?? undefined,
       },
     );
@@ -8471,7 +8905,7 @@ export class ToriiClient {
   async listTriggers(options = {}) {
     const { signal, params } = buildTriggerListQuery(options);
     const response = await this._request("GET", "/v1/triggers", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -8493,7 +8927,7 @@ export class ToriiClient {
       "GET",
       `/v1/triggers/${encodeURIComponent(normalizedId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -8518,10 +8952,7 @@ export class ToriiClient {
     const payload = normalizeTriggerUpsertPayload(trigger);
     const { signal } = normalizeSignalOnlyOption(options, "registerTrigger");
     const response = await this._request("POST", "/v1/triggers", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8556,7 +8987,7 @@ export class ToriiClient {
       "DELETE",
       `/v1/triggers/${encodeURIComponent(normalizedId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -8591,10 +9022,7 @@ export class ToriiClient {
     const { signal, ...rest } = normalizedOptions;
     const envelope = ToriiClient._buildIterableQueryEnvelope(rest);
     const response = await this._request("POST", "/v1/triggers/query", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(envelope),
       signal,
     });
@@ -8629,7 +9057,7 @@ export class ToriiClient {
   async listSubscriptionPlans(options = {}) {
     const { signal, params } = buildSubscriptionPlanListQuery(options);
     const response = await this._request("GET", "/v1/subscriptions/plans", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -8657,10 +9085,7 @@ export class ToriiClient {
     const payload = normalizeSubscriptionPlanCreateRequest(request);
     const { signal } = normalizeSignalOnlyOption(options, "createSubscriptionPlan");
     const response = await this._request("POST", "/v1/subscriptions/plans", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8680,7 +9105,7 @@ export class ToriiClient {
   async listSubscriptions(options = {}) {
     const { signal, params } = buildSubscriptionListQuery(options);
     const response = await this._request("GET", "/v1/subscriptions", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -8708,10 +9133,7 @@ export class ToriiClient {
     const payload = normalizeSubscriptionCreateRequest(request);
     const { signal } = normalizeSignalOnlyOption(options, "createSubscription");
     const response = await this._request("POST", "/v1/subscriptions", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8736,7 +9158,7 @@ export class ToriiClient {
       "GET",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -8766,10 +9188,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/pause`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -8797,10 +9216,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/resume`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -8828,10 +9244,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/cancel`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -8859,10 +9272,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/keep`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -8893,10 +9303,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/charge-now`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -8924,10 +9331,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/usage`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -8946,7 +9350,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "getOfflineReadiness");
     const response = await this._request("GET", OFFLINE_READINESS_PATH, {
       params: { asset_definition_id: asset },
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -9072,7 +9476,7 @@ export class ToriiClient {
     const body = normalizeIsoPayload(message, "submitIsoPacs008.message");
     const headers = {
       "Content-Type": contentType ?? "application/xml",
-      Accept: "application/json",
+      Accept: APPLICATION_JSON,
     };
     if (profile) {
       headers["X-Iroha-Iso-Profile"] = profile;
@@ -9104,7 +9508,7 @@ export class ToriiClient {
     const body = normalizeIsoPayload(message, "submitIsoPacs009.message");
     const headers = {
       "Content-Type": contentType ?? "application/xml",
-      Accept: "application/json",
+      Accept: APPLICATION_JSON,
     };
     if (profile) {
       headers["X-Iroha-Iso-Profile"] = profile;
@@ -9134,7 +9538,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/iso20022/messages/${encodeURIComponent(normalizedId)}`,
-      { headers: { Accept: "application/json" }, signal, retryProfile },
+      { headers: JSON_ACCEPT_HEADERS, signal, retryProfile },
     );
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -9638,14 +10042,28 @@ export class ToriiClient {
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
+        let responseStatus;
+        try {
+          responseStatus = responseStatusWithoutUserGetter(response);
+        } catch (error) {
+          cancelResponseBodyBestEffort(
+            response,
+            "discarding Torii response with an invalid status field",
+          );
+          throw error;
+        }
         if (
-          !this._shouldRetryResponse(methodUpper, response.status, retryPolicy) ||
+          !this._shouldRetryResponse(methodUpper, responseStatus, retryPolicy) ||
           attempt > maxRetries
         ) {
           return response;
         }
+        cancelResponseBodyBestEffort(
+          response,
+          "discarding retryable Torii response body",
+        );
         const durationMs = Math.max(0, Date.now() - attemptStartedAt);
-        lastError = new Error(`retryable status ${response.status}`);
+        lastError = new Error(`retryable status ${responseStatus}`);
         this._emitRetryTelemetry({
           phase: "response",
           attempt,
@@ -9653,7 +10071,7 @@ export class ToriiClient {
           maxRetries,
           method: methodUpper,
           url: url.toString(),
-          status: response.status,
+          status: responseStatus,
           backoffMs,
           profile: retryProfileName,
           durationMs,
@@ -9662,7 +10080,7 @@ export class ToriiClient {
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
-        if (options.signal && options.signal.aborted) {
+        if (options.signal && signalIsAborted(options.signal)) {
           throw error;
         }
         if (
@@ -9992,15 +10410,15 @@ export class ToriiClient {
     return error.name === "AbortError";
   }
 
-  async _expectStatus(response, expected) {
-    if (expected.includes(response.status)) {
+  async _expectStatus(response, expected, options = {}) {
+    if (expected.includes(responseStatusWithoutUserGetter(response))) {
       return;
     }
-    throw await this._buildHttpError(response, expected);
+    throw await this._buildHttpError(response, expected, options);
   }
 
-  async _buildHttpError(response, expected) {
-    const { bodyText, bodyJson } = await this._readErrorBody(response);
+  async _buildHttpError(response, expected, options = {}) {
+    const { bodyText, bodyJson } = await this._readErrorBody(response, options);
     const details = this._extractErrorDetails(bodyJson);
     const rejectCode = this._extractRejectCode(response, bodyJson);
     const code =
@@ -10010,8 +10428,8 @@ export class ToriiClient {
       null;
     const errorMessage = this._extractErrorMessage(bodyJson, bodyText);
     return new ToriiHttpError({
-      status: response.status,
-      statusText: response.statusText ?? null,
+      status: responseStatusWithoutUserGetter(response),
+      statusText: responseStatusTextWithoutUserGetter(response),
       expected,
       code,
       rejectCode,
@@ -10022,33 +10440,71 @@ export class ToriiClient {
     });
   }
 
-  async _readErrorBody(response) {
-    const contentType = this._getHeader(response, "content-type");
-    const looksLikeJson =
-      typeof contentType === "string" &&
-      contentType.toLowerCase().includes("application/json");
-    if (looksLikeJson && typeof response.json === "function") {
-      try {
-        const bodyJson = await response.json();
-        const bodyText =
-          bodyJson == null
-            ? null
-            : typeof bodyJson === "string"
-              ? bodyJson
-              : JSON.stringify(bodyJson);
-        return { bodyText, bodyJson };
-      } catch {
-        // fall through to text parsing
-      }
+  async _readErrorBody(response, options = {}) {
+    const { signal, maximumBodyBytes, responseLabel = "Torii" } = options;
+    let contentType;
+    try {
+      contentType = this._getHeader(response, "content-type");
+    } catch (error) {
+      cancelResponseBodyBestEffort(
+        response,
+        "Torii HTTP error response had unreadable headers",
+      );
+      throw error;
     }
-    if (typeof response.text !== "function") {
+    const looksLikeJson =
+      maximumBodyBytes !== undefined || isExactJsonMediaType(contentType);
+    const maxBytes = maximumBodyBytes ?? HTTP_ERROR_BODY_MAX_BYTES;
+    const context =
+      maximumBodyBytes === undefined
+        ? "Torii HTTP error response"
+        : `${responseLabel} error`;
+    let bytes;
+    try {
+      ({ bytes } = await this._readBoundedResponseBytes(
+        response,
+        maxBytes,
+        context,
+        { signal },
+      ));
+    } catch (error) {
+      if (
+        signalIsAborted(signal) ||
+        error?.name === "AbortError" ||
+        error?.name === "TimeoutError"
+      ) {
+        throw error;
+      }
+      if (maximumBodyBytes !== undefined) {
+        if (
+          error instanceof RangeError ||
+          /Content-Length exceeds the safe integer range/u.test(error?.message ?? "")
+        ) {
+          throw new TypeError(
+            `${context} response exceeds its ${maxBytes}-byte size bound`,
+            { cause: error },
+          );
+        }
+        if (/Content-Length header/u.test(error?.message ?? "")) {
+          throw new TypeError(
+            `${context} response Content-Length must be a canonical unsigned decimal integer`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
       return { bodyText: null, bodyJson: null };
     }
-    let text = null;
+    let text;
     try {
-      text = await response.text();
-    } catch {
-      text = null;
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (error) {
+      if (maximumBodyBytes !== undefined) {
+        throw new TypeError(`${context} response body must be strict UTF-8`, {
+          cause: error,
+        });
+      }
+      return { bodyText: null, bodyJson: null };
     }
     if (!text) {
       return { bodyText: null, bodyJson: null };
@@ -10057,6 +10513,7 @@ export class ToriiClient {
     if (!trimmed) {
       return { bodyText: "", bodyJson: null };
     }
+    if (!looksLikeJson) return { bodyText: text, bodyJson: null };
     try {
       return { bodyText: text, bodyJson: JSON.parse(trimmed) };
     } catch {
@@ -10441,10 +10898,8 @@ export class ToriiClient {
   }
 
   _getHeader(response, name) {
-    if (!response.headers || typeof response.headers.get !== "function") {
-      return null;
-    }
-    const value = response.headers.get(name);
+    const headers = responseHeadersWithoutUserGetter(response);
+    const value = headerValueWithoutUserGetter(headers, name);
     return value === undefined ? null : value;
   }
 
@@ -10455,12 +10910,15 @@ export class ToriiClient {
         return String(value);
       }
     }
-    return "application/json";
+    return APPLICATION_JSON;
   }
 
   async _maybeJson(response) {
     const contentType = this._getHeader(response, "content-type");
-    if (!contentType || !contentType.toLowerCase().includes("application/json")) {
+    if (
+      typeof contentType !== "string" ||
+      !contentType.toLowerCase().includes(APPLICATION_JSON)
+    ) {
       return null;
     }
     try {
@@ -10485,6 +10943,258 @@ export class ToriiClient {
     return null;
   }
 
+  async _maybeBoundedJson(response, maxBytes, context, { signal } = {}) {
+    let contentType;
+    try {
+      contentType = this._getHeader(response, "content-type");
+    } catch (error) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected an unreadable Content-Type header`,
+      );
+      throw error;
+    }
+    if (!isExactJsonMediaType(contentType)) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected a non-JSON response body`,
+      );
+      return null;
+    }
+    const { bytes, body } = await this._readBoundedResponseBytes(
+      response,
+      maxBytes,
+      context,
+      { signal },
+    );
+    let text;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (error) {
+      cancelReadableBodyBestEffort(body, `${context} rejected invalid UTF-8`);
+      throw new TypeError(`${context} must be valid UTF-8`, { cause: error });
+    }
+    try {
+      const parsed = JSON.parse(text);
+      if (signalIsAborted(signal)) {
+        cancelReadableBodyBestEffort(body, `${context} was aborted`);
+        throw bodyReadAbortError(signal, context);
+      }
+      return parsed;
+    } catch (error) {
+      if (signalIsAborted(signal) || error?.name === "AbortError") {
+        cancelReadableBodyBestEffort(body, `${context} was aborted`);
+        throw error;
+      }
+      cancelReadableBodyBestEffort(body, `${context} rejected invalid JSON`);
+      throw new TypeError(`${context} must contain valid JSON`, { cause: error });
+    }
+  }
+
+  async _readBoundedResponseBytes(response, maxBytes, context, { signal } = {}) {
+    const rejectResponse = (error) => {
+      cancelResponseBodyBestEffort(response, `${context} rejected its response body`);
+      throw error;
+    };
+    if (signalIsAborted(signal)) {
+      rejectResponse(bodyReadAbortError(signal, context));
+    }
+    let contentLength;
+    try {
+      contentLength = this._getHeader(response, "content-length");
+    } catch (error) {
+      rejectResponse(error);
+    }
+    if (contentLength !== null) {
+      if (typeof contentLength !== "string") {
+        rejectResponse(
+          new TypeError(`${context} has a non-string Content-Length header`),
+        );
+      }
+      if (!/^(?:0|[1-9][0-9]*)$/u.test(contentLength)) {
+        rejectResponse(
+          new TypeError(`${context} has an invalid Content-Length header`),
+        );
+      }
+      const declaredBytes = Number(contentLength);
+      if (!Number.isSafeInteger(declaredBytes)) {
+        rejectResponse(
+          new RangeError(
+            `${context} Content-Length exceeds the safe integer range`,
+          ),
+        );
+      }
+      if (declaredBytes > maxBytes) {
+        rejectResponse(
+          new RangeError(
+            `${context} exceeds the ${maxBytes}-byte response limit`,
+          ),
+        );
+      }
+    }
+
+    const body = responseBodyWithoutUserGetter(response);
+    if (!body) {
+      rejectResponse(
+        new TypeError(
+          `${context} requires a byte-stream response body so its size can be bounded`,
+        ),
+      );
+    }
+    const genuineReader = hasReadableStreamBrand(body);
+    let reader;
+    try {
+      reader = callIntrinsicOrOwnMethod(
+        body,
+        readableStreamGetReader,
+        "getReader",
+      );
+    } catch (error) {
+      cancelReadableBodyBestEffort(
+        body,
+        `${context} could not acquire a bounded body reader`,
+      );
+      throw new TypeError(
+        `${context} requires a byte-stream response body so its size can be bounded`,
+        { cause: error },
+      );
+    }
+
+    const configuredTimeoutMs = Number(this._config?.timeoutMs);
+    const readTimeoutMs =
+      Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+        ? Math.min(configuredTimeoutMs, BOUNDED_JSON_MAX_READ_TIMEOUT_MS)
+        : BOUNDED_JSON_MAX_READ_TIMEOUT_MS;
+    let rejectDeadline;
+    const deadline = new Promise((_, reject) => {
+      rejectDeadline = reject;
+    });
+    // A rejection may race with synchronous completion; keep it handled even
+    // after all read races have settled.
+    deadline.catch(() => {});
+    const timeoutId = setTimeout(() => {
+      const error = new Error(
+        `${context} body read timed out after ${readTimeoutMs}ms`,
+      );
+      error.name = "TimeoutError";
+      rejectDeadline(error);
+    }, readTimeoutMs);
+    const onAbort = () => rejectDeadline(bodyReadAbortError(signal, context));
+
+    const chunks = [];
+    let byteLength = 0;
+    let abortListenerAttempted = false;
+    try {
+      if (signal) {
+        abortListenerAttempted = true;
+        addSignalAbortListener(signal, onAbort);
+        if (signalIsAborted(signal)) onAbort();
+      }
+      while (true) {
+        const read = Promise.resolve().then(() =>
+          callIntrinsicOrOwnMethod(
+            reader,
+            genuineReader ? readerRead : null,
+            "read",
+          ),
+        );
+        const readResult = exactEnumerableDataRecord(
+          await Promise.race([read, deadline]),
+          ["done", "value"],
+          `${context} body stream read result`,
+        );
+        if (typeof readResult.done !== "boolean") {
+          throw new TypeError(
+            `${context} body stream read result.done must be a boolean`,
+          );
+        }
+        if (readResult.done) {
+          if (readResult.value !== undefined) {
+            throw new TypeError(
+              `${context} completed body stream read must not return a value`,
+            );
+          }
+          break;
+        }
+        const value = readResult.value;
+        let buffer;
+        let byteOffset;
+        let chunkByteLength;
+        try {
+          if (typedArrayTagGetter.call(value) !== "Uint8Array") {
+            throw new TypeError("not Uint8Array");
+          }
+          buffer = typedArrayBufferGetter.call(value);
+          byteOffset = typedArrayByteOffsetGetter.call(value);
+          chunkByteLength = typedArrayByteLengthGetter.call(value);
+        } catch {
+          throw new TypeError(`${context} body stream returned a non-byte chunk`);
+        }
+        let isShared = false;
+        if (sharedArrayBufferByteLengthGetter !== null) {
+          try {
+            sharedArrayBufferByteLengthGetter.call(buffer);
+            isShared = true;
+          } catch {
+            // A normal ArrayBuffer fails the SharedArrayBuffer brand check.
+          }
+        }
+        if (isShared) {
+          throw new TypeError(
+            `${context} body stream must not use SharedArrayBuffer-backed chunks`,
+          );
+        }
+        if (chunkByteLength === 0) {
+          throw new TypeError(
+            `${context} body stream returned an empty non-progress chunk`,
+          );
+        }
+        if (chunks.length >= BOUNDED_JSON_MAX_STREAM_CHUNKS) {
+          throw new RangeError(
+            `${context} body stream returned too many fragmented chunks`,
+          );
+        }
+        byteLength += chunkByteLength;
+        if (byteLength > maxBytes) {
+          throw new RangeError(`${context} exceeds the ${maxBytes}-byte response limit`);
+        }
+        // Snapshot immediately: custom readers may reuse or mutate their views.
+        chunks.push(copyArrayBufferBytes(buffer, byteOffset, chunkByteLength));
+      }
+    } catch (error) {
+      cancelReaderBestEffort(
+        reader,
+        `${context} rejected its response body`,
+        genuineReader,
+      );
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      try {
+        callIntrinsicOrOwnMethod(
+          reader,
+          genuineReader ? readerReleaseLock : null,
+          "releaseLock",
+        );
+      } catch {
+        // Some custom readers do not implement lock release correctly.
+      }
+      if (abortListenerAttempted) {
+        removeSignalAbortListener(signal, onAbort);
+      }
+    }
+    const bytes = new Uint8ArrayIntrinsic(byteLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      Reflect.apply(typedArraySet, bytes, [chunk, offset]);
+      offset += typedArrayByteLengthGetter.call(chunk);
+    }
+    if (signalIsAborted(signal)) {
+      rejectResponse(bodyReadAbortError(signal, context));
+    }
+    return { bytes, body };
+  }
+
   async _listIterable(
     path,
     options = {},
@@ -10502,7 +11212,7 @@ export class ToriiClient {
     const params = ToriiClient._encodeIterableListParams(rest, optionContext, allowedKeys);
     const response = await this._request("GET", path, {
       params: params ?? undefined,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
     });
@@ -10544,10 +11254,7 @@ export class ToriiClient {
         )
       : undefined;
     const response = await this._request("POST", path, {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(envelope),
       params: params ?? undefined,
       signal,
@@ -14326,25 +15033,29 @@ function parseGovernanceProposalKind(payload, context) {
   const [variantRaw, details] = entries[0];
   const variant = requireNonEmptyString(variantRaw, `${context}.variant`);
   let deployContract = null;
-  let sccpRouteManifest = null;
+  let sccpRouteGovernance = null;
   if (variant === "DeployContract") {
     if (!isPlainObject(details)) {
       throw new TypeError("DeployContract proposal kind expects an object payload");
     }
     deployContract = parseGovernanceDeployContract(details, `${context}.DeployContract`);
-  } else if (variant === "SccpRouteManifest") {
+  } else if (variant === "SccpRouteGovernance") {
     if (!isPlainObject(details)) {
-      throw new TypeError("SccpRouteManifest proposal kind expects an object payload");
+      throw new TypeError("SccpRouteGovernance proposal kind expects an object payload");
     }
-    sccpRouteManifest = parseGovernanceSccpRouteManifest(
-      details,
-      `${context}.SccpRouteManifest`,
-    );
+    const proposal = ensureRecord(details, `${context}.SccpRouteGovernance`);
+    const fields = Object.keys(proposal);
+    if (fields.length !== 1 || fields[0] !== "action") {
+      throw new TypeError(
+        `${context}.SccpRouteGovernance must contain only \`action\``,
+      );
+    }
+    sccpRouteGovernance = normalizeSccpRouteGovernanceAction(proposal.action);
   }
   return {
     variant,
     deploy_contract: deployContract,
-    sccp_route_manifest: sccpRouteManifest,
+    sccp_route_governance: sccpRouteGovernance,
     raw: cloneGovernanceKindRaw(details),
   };
 }
@@ -14359,16 +15070,6 @@ function parseGovernanceDeployContract(payload, context) {
     code_hash_hex: requireNonEmptyString(record.code_hash_hex, `${context}.code_hash_hex`),
     abi_hash_hex: requireNonEmptyString(record.abi_hash_hex, `${context}.abi_hash_hex`),
     abi_version: requireNonEmptyString(record.abi_version, `${context}.abi_version`),
-  };
-}
-
-function parseGovernanceSccpRouteManifest(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    manifest: cloneJsonValue(
-      ensureRecord(record.manifest, `${context}.manifest`),
-      `${context}.manifest`,
-    ),
   };
 }
 
@@ -14925,1188 +15626,6 @@ function normalizeNodeCapabilitiesResponse(payload) {
         "node capabilities response.crypto.curves",
       ),
     },
-  };
-}
-
-function normalizeSccpCapabilitiesResponse(payload) {
-  const record = ensureRecord(payload, "sccp capabilities response");
-  return {
-    localDomain: ToriiClient._normalizeUnsignedInteger(
-      record.local_domain,
-      "sccp capabilities response.local_domain",
-      { allowZero: true },
-    ),
-    localChain: requireNonEmptyString(
-      record.local_chain,
-      "sccp capabilities response.local_chain",
-    ),
-    proofFamily: requireNonEmptyString(
-      record.proof_family,
-      "sccp capabilities response.proof_family",
-    ),
-    burnBundlePath: requireNonEmptyString(
-      record.burn_bundle_path,
-      "sccp capabilities response.burn_bundle_path",
-    ),
-    messageBundlePath: requireNonEmptyString(
-      record.message_bundle_path,
-      "sccp capabilities response.message_bundle_path",
-    ),
-    messageProofPath: requireNonEmptyString(
-      record.message_proof_path,
-      "sccp capabilities response.message_proof_path",
-    ),
-    messageJobPath: requireNonEmptyString(
-      record.message_job_path,
-      "sccp capabilities response.message_job_path",
-    ),
-    recentMessagesPath: requireNonEmptyString(
-      record.recent_messages_path,
-      "sccp capabilities response.recent_messages_path",
-    ),
-    proofManifestPath: requireNonEmptyString(
-      record.proof_manifest_path,
-      "sccp capabilities response.proof_manifest_path",
-    ),
-    burnRegistryBackend: requireNonEmptyString(
-      record.burn_registry_backend,
-      "sccp capabilities response.burn_registry_backend",
-    ),
-    proofSubmitPath: optionalString(
-      record.proof_submit_path ?? null,
-      "sccp capabilities response.proof_submit_path",
-    ),
-    messageSubmitPath: optionalString(
-      record.message_submit_path ?? null,
-      "sccp capabilities response.message_submit_path",
-    ),
-    messagePayloadKinds: parseStringArray(
-      record.message_payload_kinds,
-      "sccp capabilities response.message_payload_kinds",
-    ).map((value, index) =>
-      requireNonEmptyString(value, `sccp capabilities response.message_payload_kinds[${index}]`),
-    ),
-    codecs: parseRecordArray(
-      record.codecs,
-      "sccp capabilities response.codecs",
-    ).map((entry, index) =>
-      normalizeSccpCodecCapability(entry, `sccp capabilities response.codecs[${index}]`),
-    ),
-    counterparties: parseRecordArray(
-      record.counterparties,
-      "sccp capabilities response.counterparties",
-    ).map((entry, index) =>
-      normalizeSccpCounterpartyCapability(
-        entry,
-        `sccp capabilities response.counterparties[${index}]`,
-      ),
-    ),
-  };
-}
-
-function normalizeSccpCodecCapability(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    id: ToriiClient._normalizeUnsignedInteger(record.id, `${context}.id`, { allowZero: false }),
-    key: requireNonEmptyString(record.key, `${context}.key`),
-    description: requireNonEmptyString(record.description, `${context}.description`),
-  };
-}
-
-function normalizeSccpCounterpartyCapability(value, context) {
-  const record = ensureRecord(value, context);
-  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
-  return {
-    domain: ToriiClient._normalizeUnsignedInteger(record.domain, `${context}.domain`, {
-      allowZero: true,
-    }),
-    chain: requireNonEmptyString(record.chain, `${context}.chain`),
-    verifierBackendKey: requireNonEmptyString(
-      verifierBackend.key,
-      `${context}.verifier_backend.key`,
-    ),
-    messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
-    registryBackend: requireNonEmptyString(
-      record.registry_backend,
-      `${context}.registry_backend`,
-    ),
-    counterpartyAccountCodec: ToriiClient._normalizeUnsignedInteger(
-      record.counterparty_account_codec,
-      `${context}.counterparty_account_codec`,
-      { allowZero: false },
-    ),
-    counterpartyAccountCodecKey: requireNonEmptyString(
-      record.counterparty_account_codec_key,
-      `${context}.counterparty_account_codec_key`,
-    ),
-    destinationRollout:
-      record.destination_rollout == null
-        ? null
-        : normalizeSccpDestinationRollout(
-            record.destination_rollout,
-            `${context}.destination_rollout`,
-          ),
-    productionReady: requireBooleanLike(record.production_ready, `${context}.production_ready`),
-    disabledReason: optionalString(
-      record.disabled_reason ?? null,
-      `${context}.disabled_reason`,
-    ),
-  };
-}
-
-function normalizeSccpDestinationRollout(value, context) {
-  const record = ensureRecord(value, context);
-  const verifierPlan = requireNonEmptyString(record.verifier_plan, `${context}.verifier_plan`);
-  if (!SCCP_DESTINATION_VERIFIER_PLAN_VALUES.has(verifierPlan)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.verifier_plan must be a supported SCCP destination verifier plan`,
-      `${context}.verifier_plan`,
-    );
-  }
-  return {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    verifierPlan,
-    immutableVerifierReady: requireBooleanLike(
-      record.immutable_verifier_ready,
-      `${context}.immutable_verifier_ready`,
-    ),
-    anchorsReady: requireBooleanLike(record.anchors_ready, `${context}.anchors_ready`),
-    verifierIdentity: optionalString(record.verifier_identity ?? null, `${context}.verifier_identity`),
-    verifierCodeHash: optionalString(
-      record.verifier_code_hash ?? null,
-      `${context}.verifier_code_hash`,
-    ),
-    verifierKeyHash: optionalString(
-      record.verifier_key_hash ?? null,
-      `${context}.verifier_key_hash`,
-    ),
-    destinationNetworkId: optionalString(
-      record.destination_network_id ?? null,
-      `${context}.destination_network_id`,
-    ),
-    destinationBridgeAddress: optionalString(
-      record.destination_bridge_address ?? null,
-      `${context}.destination_bridge_address`,
-    ),
-    destinationBindingKey: optionalString(
-      record.destination_binding_key ?? null,
-      `${context}.destination_binding_key`,
-    ),
-    destinationBindingHash: optionalString(
-      record.destination_binding_hash ?? null,
-      `${context}.destination_binding_hash`,
-    ),
-    anchorId: optionalString(record.anchor_id ?? null, `${context}.anchor_id`),
-    blockers: parseStringArray(record.blockers ?? [], `${context}.blockers`).map((entry, index) =>
-      requireNonEmptyString(entry, `${context}.blockers[${index}]`),
-    ),
-  };
-}
-
-function normalizeSccpSubmissionArgument(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    key: requireNonEmptyString(record.key, `${context}.key`),
-    description: requireNonEmptyString(record.description, `${context}.description`),
-  };
-}
-
-function normalizeSccpCounterpartySubmissionTemplate(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    encoding: requireNonEmptyString(record.encoding, `${context}.encoding`),
-    submissionKind: requireNonEmptyString(record.submission_kind, `${context}.submission_kind`),
-    verifierEntrypoint: requireNonEmptyString(
-      record.verifier_entrypoint,
-      `${context}.verifier_entrypoint`,
-    ),
-    requiredArguments: parseRecordArray(
-      record.required_arguments,
-      `${context}.required_arguments`,
-    ).map((entry, index) =>
-      normalizeSccpSubmissionArgument(entry, `${context}.required_arguments[${index}]`),
-    ),
-  };
-}
-
-function normalizeSccpSubmissionArgumentValue(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    key: requireNonEmptyString(record.key, `${context}.key`),
-    encoding: requireNonEmptyString(record.encoding, `${context}.encoding`),
-    bytes: normalizeArbitraryHex(record.bytes, `${context}.bytes`),
-  };
-}
-
-function normalizeSccpEvmWordPublicInputs(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
-    payloadHash: normalizeHex32String(record.payload_hash, `${context}.payload_hash`),
-    targetDomainWord: normalizeHex32String(
-      record.target_domain_word,
-      `${context}.target_domain_word`,
-    ),
-    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
-    finalityHeightWord: normalizeHex32String(
-      record.finality_height_word,
-      `${context}.finality_height_word`,
-    ),
-    finalityBlockHash: normalizeHex32String(
-      record.finality_block_hash,
-      `${context}.finality_block_hash`,
-    ),
-  };
-}
-
-function normalizeSccpPlatformSubmissionPayloadRecord(value, context) {
-  const record = ensureRecord(value, context);
-  if (record.platform !== undefined || record.payload !== undefined) {
-    return record;
-  }
-  const enumKeys = Object.keys(record).filter((key) => record[key] !== undefined);
-  if (enumKeys.length !== 1) {
-    return record;
-  }
-  const platformByEnumKey = {
-    EvmContractCall: "evm_contract_call",
-    EvmGroth16ContractCall: "evm_groth16_contract_call",
-    TronContractCall: "tron_contract_call",
-    SolanaProgramInstruction: "solana_program_instruction",
-    TonInternalMessage: "ton_internal_message",
-  };
-  const enumKey = enumKeys[0];
-  const platform = platformByEnumKey[enumKey];
-  if (!platform) {
-    return record;
-  }
-  return {
-    platform,
-    payload: record[enumKey],
-  };
-}
-
-function normalizeSccpPlatformSubmissionPayload(value, context) {
-  const record = normalizeSccpPlatformSubmissionPayloadRecord(value, context);
-  const rawPlatform = requireNonEmptyString(record.platform, `${context}.platform`);
-  const platform =
-    {
-      EvmContractCall: "evm_contract_call",
-      EvmGroth16ContractCall: "evm_groth16_contract_call",
-      TronContractCall: "tron_contract_call",
-      SolanaProgramInstruction: "solana_program_instruction",
-      TonInternalMessage: "ton_internal_message",
-    }[rawPlatform] ?? rawPlatform;
-  const payload = ensureRecord(record.payload, `${context}.payload`);
-  switch (platform) {
-    case "evm_contract_call":
-    case "evm_groth16_contract_call":
-    case "tron_contract_call":
-      return {
-        kind: platform,
-        value: {
-          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
-          publicInputs: normalizeSccpEvmWordPublicInputs(
-            payload.public_inputs,
-            `${context}.payload.public_inputs`,
-          ),
-          statementHash: normalizeHex32String(
-            payload.statement_hash,
-            `${context}.payload.statement_hash`,
-          ),
-        },
-      };
-    case "solana_program_instruction":
-      return {
-        kind: platform,
-        value: {
-          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
-          publicInputsBytes: normalizeArbitraryHex(
-            payload.public_inputs_bytes,
-            `${context}.payload.public_inputs_bytes`,
-          ),
-          bundleBytes: normalizeArbitraryHex(
-            payload.bundle_bytes,
-            `${context}.payload.bundle_bytes`,
-          ),
-          destinationBinding: normalizeSccpDestinationBinding(
-            payload.destination_binding,
-            `${context}.payload.destination_binding`,
-          ),
-          destinationBindingHash: normalizeHex32String(
-            payload.destination_binding_hash,
-            `${context}.payload.destination_binding_hash`,
-          ),
-          statementHash: normalizeHex32String(
-            payload.statement_hash,
-            `${context}.payload.statement_hash`,
-          ),
-          proofContextHash: normalizeHex32String(
-            payload.proof_context_hash,
-            `${context}.payload.proof_context_hash`,
-          ),
-        },
-      };
-    case "ton_internal_message":
-      return {
-        kind: platform,
-        value: {
-          messageBodyBoc: normalizeArbitraryHex(
-            payload.message_body_boc,
-            `${context}.payload.message_body_boc`,
-          ),
-          queryId: normalizeUint64DecimalString(
-            payload.query_id,
-            `${context}.payload.query_id`,
-            { allowZero: true },
-          ),
-          destinationBinding: normalizeSccpDestinationBinding(
-            payload.destination_binding,
-            `${context}.payload.destination_binding`,
-          ),
-          destinationBindingHash: normalizeHex32String(
-            payload.destination_binding_hash,
-            `${context}.payload.destination_binding_hash`,
-          ),
-          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
-          publicInputsBytes: normalizeArbitraryHex(
-            payload.public_inputs_bytes,
-            `${context}.payload.public_inputs_bytes`,
-          ),
-          bundleBytes: normalizeArbitraryHex(
-            payload.bundle_bytes,
-            `${context}.payload.bundle_bytes`,
-          ),
-          statementHash: normalizeHex32String(
-            payload.statement_hash,
-            `${context}.payload.statement_hash`,
-          ),
-        },
-      };
-    default:
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.platform must be a supported SCCP platform payload`,
-        `${context}.platform`,
-      );
-  }
-}
-
-function normalizeSccpCounterpartySubmissionPackage(value, context) {
-  const record = ensureRecord(value, context);
-  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
-  return {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
-    verifierBackendKey: requireNonEmptyString(
-      verifierBackend.key,
-      `${context}.verifier_backend.key`,
-    ),
-    envelopeEncoding: requireNonEmptyString(
-      record.envelope_encoding,
-      `${context}.envelope_encoding`,
-    ),
-    submissionKind: requireNonEmptyString(
-      record.submission_kind,
-      `${context}.submission_kind`,
-    ),
-    verifierEntrypoint: requireNonEmptyString(
-      record.verifier_entrypoint,
-      `${context}.verifier_entrypoint`,
-    ),
-    platformPayload: normalizeSccpPlatformSubmissionPayload(
-      record.platform_payload,
-      `${context}.platform_payload`,
-    ),
-    arguments: parseRecordArray(record.arguments, `${context}.arguments`).map((entry, index) =>
-      normalizeSccpSubmissionArgumentValue(entry, `${context}.arguments[${index}]`),
-    ),
-    envelopeBytes: normalizeArbitraryHex(record.envelope_bytes, `${context}.envelope_bytes`),
-  };
-}
-
-function normalizeSccpDestinationBinding(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    key: requireNonEmptyString(record.key, `${context}.key`),
-    bindingHash: normalizeHex32String(record.binding_hash, `${context}.binding_hash`),
-  };
-}
-
-function normalizeSccpTairaXorBurnRecord(value, context) {
-  const record = ensureRecord(value, context);
-  const vkRef = ensureRecord(record.vk_ref ?? record.vkRef, `${context}.vk_ref`);
-  const material = {
-    settlementAssetDefinitionId: requireNonEmptyString(
-      record.settlement_asset_definition_id ??
-        record.settlementAssetDefinitionId ??
-        record.settlement_asset ??
-        record.settlementAsset,
-      `${context}.settlement_asset_definition_id`,
-    ),
-    contractArtifactB64: normalizeRequiredBase64Payload(
-      record.contract_artifact_b64 ??
-        record.contractArtifactB64 ??
-        record.artifact_b64 ??
-        record.artifactB64 ??
-        record.bytecode,
-      `${context}.contract_artifact_b64`,
-    ),
-    vkRef: {
-      backend: requireNonEmptyString(vkRef.backend, `${context}.vk_ref.backend`),
-      name: requireNonEmptyString(vkRef.name, `${context}.vk_ref.name`),
-    },
-  };
-  const gasLimit = record.gas_limit ?? record.gasLimit;
-  if (gasLimit !== undefined && gasLimit !== null) {
-    material.gasLimit = ToriiClient._normalizeUnsignedInteger(
-      gasLimit,
-      `${context}.gas_limit`,
-      { allowZero: false },
-    );
-  }
-  return material;
-}
-
-function normalizeSccpProofEnvelopeSummary(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    backend: requireNonEmptyString(record.backend, `${context}.backend`),
-    circuitId: requireNonEmptyString(record.circuit_id, `${context}.circuit_id`),
-    vkHash: normalizeHex32String(record.vk_hash, `${context}.vk_hash`),
-    publicInputsSchemaHash: normalizeHex32String(
-      record.public_inputs_schema_hash,
-      `${context}.public_inputs_schema_hash`,
-    ),
-    publicInputsSchemaLenBytes: ToriiClient._normalizeUnsignedInteger(
-      record.public_inputs_schema_len_bytes,
-      `${context}.public_inputs_schema_len_bytes`,
-      { allowZero: true },
-    ),
-    publicInputColumnCount: ToriiClient._normalizeUnsignedInteger(
-      record.public_input_column_count,
-      `${context}.public_input_column_count`,
-      { allowZero: true },
-    ),
-    publicInputWordCount: ToriiClient._normalizeUnsignedInteger(
-      record.public_input_word_count,
-      `${context}.public_input_word_count`,
-      { allowZero: true },
-    ),
-    openProofLenBytes: ToriiClient._normalizeUnsignedInteger(
-      record.open_proof_len_bytes,
-      `${context}.open_proof_len_bytes`,
-      { allowZero: true },
-    ),
-    backendProofLenBytes: ToriiClient._normalizeUnsignedInteger(
-      record.backend_proof_len_bytes,
-      `${context}.backend_proof_len_bytes`,
-      { allowZero: true },
-    ),
-    auxLenBytes: ToriiClient._normalizeUnsignedInteger(
-      record.aux_len_bytes,
-      `${context}.aux_len_bytes`,
-      { allowZero: true },
-    ),
-  };
-}
-
-function normalizeSccpProofManifestSetResponse(payload) {
-  const record = ensureRecord(payload, "sccp proof manifests response");
-  return {
-    localDomain: ToriiClient._normalizeUnsignedInteger(
-      record.local_domain,
-      "sccp proof manifests response.local_domain",
-      { allowZero: true },
-    ),
-    localChain: requireNonEmptyString(
-      record.local_chain,
-      "sccp proof manifests response.local_chain",
-    ),
-    proofFamily: requireNonEmptyString(
-      record.proof_family,
-      "sccp proof manifests response.proof_family",
-    ),
-    manifests: parseRecordArray(
-      record.manifests,
-      "sccp proof manifests response.manifests",
-    ).map((entry, index) =>
-      normalizeSccpProofManifest(entry, `sccp proof manifests response.manifests[${index}]`),
-    ),
-    routes: parseRecordArray(
-      record.routes ?? [],
-      "sccp proof manifests response.routes",
-    ),
-  };
-}
-
-function normalizeSccpProofManifest(value, context) {
-  const record = ensureRecord(value, context);
-  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
-  const securityModel = requireNonEmptyString(record.security_model, `${context}.security_model`);
-  const anchorGovernance = requireNonEmptyString(
-    record.anchor_governance,
-    `${context}.anchor_governance`,
-  );
-  const finalityModel = requireNonEmptyString(record.finality_model, `${context}.finality_model`);
-  const verifierTarget = requireNonEmptyString(
-    record.verifier_target,
-    `${context}.verifier_target`,
-  );
-  if (!SCCP_PROOF_SECURITY_MODEL_VALUES.has(securityModel)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.security_model must be a supported SCCP proof security model`,
-      `${context}.security_model`,
-    );
-  }
-  if (!SCCP_ANCHOR_GOVERNANCE_VALUES.has(anchorGovernance)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.anchor_governance must be a supported SCCP anchor governance mode`,
-      `${context}.anchor_governance`,
-    );
-  }
-  if (!SCCP_FINALITY_MODEL_VALUES.has(finalityModel)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.finality_model must be a supported SCCP finality model`,
-      `${context}.finality_model`,
-    );
-  }
-  if (!SCCP_VERIFIER_TARGET_VALUES.has(verifierTarget)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.verifier_target must be a supported SCCP verifier target`,
-      `${context}.verifier_target`,
-    );
-  }
-  return {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    localDomain: ToriiClient._normalizeUnsignedInteger(record.local_domain, `${context}.local_domain`, {
-      allowZero: true,
-    }),
-    localChain: requireNonEmptyString(record.local_chain, `${context}.local_chain`),
-    counterpartyDomain: ToriiClient._normalizeUnsignedInteger(
-      record.counterparty_domain,
-      `${context}.counterparty_domain`,
-      { allowZero: true },
-    ),
-    chain: requireNonEmptyString(record.chain, `${context}.chain`),
-    proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
-    securityModel,
-    anchorGovernance,
-    destinationBinding: normalizeSccpDestinationBinding(
-      record.destination_binding,
-      `${context}.destination_binding`,
-    ),
-    verifierBackendKey: requireNonEmptyString(
-      verifierBackend.key,
-      `${context}.verifier_backend.key`,
-    ),
-    messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
-    registryBackend: requireNonEmptyString(record.registry_backend, `${context}.registry_backend`),
-    counterpartyAccountCodec: ToriiClient._normalizeUnsignedInteger(
-      record.counterparty_account_codec,
-      `${context}.counterparty_account_codec`,
-      { allowZero: false },
-    ),
-    counterpartyAccountCodecKey: requireNonEmptyString(
-      record.counterparty_account_codec_key,
-      `${context}.counterparty_account_codec_key`,
-    ),
-    finalityModel,
-    verifierTarget,
-    manifestSeed: requireNonEmptyString(record.manifest_seed, `${context}.manifest_seed`),
-    requiredPublicInputs: parseStringArray(
-      record.required_public_inputs,
-      `${context}.required_public_inputs`,
-    ).map((entry, index) =>
-      requireNonEmptyString(entry, `${context}.required_public_inputs[${index}]`),
-    ),
-    messagePayloadKinds: parseStringArray(
-      record.message_payload_kinds,
-      `${context}.message_payload_kinds`,
-    ).map((entry, index) =>
-      requireNonEmptyString(entry, `${context}.message_payload_kinds[${index}]`),
-    ),
-    destinationRollout:
-      record.destination_rollout == null
-        ? null
-        : normalizeSccpDestinationRollout(
-            record.destination_rollout,
-            `${context}.destination_rollout`,
-          ),
-    productionReady: requireBooleanLike(record.production_ready, `${context}.production_ready`),
-    disabledReason: optionalString(
-      record.disabled_reason ?? null,
-      `${context}.disabled_reason`,
-    ),
-    submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
-      record.submission_template,
-      `${context}.submission_template`,
-    ),
-    tairaXorBurnRecord:
-      record.taira_xor_burn_record == null && record.tairaXorBurnRecord == null
-        ? null
-        : normalizeSccpTairaXorBurnRecord(
-            record.taira_xor_burn_record ?? record.tairaXorBurnRecord,
-            `${context}.taira_xor_burn_record`,
-          ),
-  };
-}
-
-function normalizeSccpGroth16ProofSummary(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    platformPayload: requireNonEmptyString(record.platform_payload, `${context}.platform_payload`),
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    proofLenBytes: ToriiClient._normalizeUnsignedInteger(
-      record.proof_len_bytes,
-      `${context}.proof_len_bytes`,
-      { allowZero: false },
-    ),
-    publicInputWordCount: ToriiClient._normalizeUnsignedInteger(
-      record.public_input_word_count,
-      `${context}.public_input_word_count`,
-      { allowZero: false },
-    ),
-    groth16PublicSignalCount: ToriiClient._normalizeUnsignedInteger(
-      record.groth16_public_signal_count,
-      `${context}.groth16_public_signal_count`,
-      { allowZero: false },
-    ),
-    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
-    sourceDomain: ToriiClient._normalizeUnsignedInteger(
-      record.source_domain,
-      `${context}.source_domain`,
-      { allowZero: true },
-    ),
-    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
-    destinationBindingKey: requireNonEmptyString(
-      record.destination_binding_key,
-      `${context}.destination_binding_key`,
-    ),
-    destinationBindingHash: normalizeHex32String(
-      record.destination_binding_hash,
-      `${context}.destination_binding_hash`,
-    ),
-  };
-}
-
-function normalizeSccpMessageTransparentProofArtifact(payload) {
-  const context = "sccp message proof artifact response";
-  const record = ensureRecord(payload, context);
-  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
-  const securityModel = requireNonEmptyString(record.security_model, `${context}.security_model`);
-  const anchorGovernance = requireNonEmptyString(
-    record.anchor_governance,
-    `${context}.anchor_governance`,
-  );
-  const finalityModel = requireNonEmptyString(record.finality_model, `${context}.finality_model`);
-  const verifierTarget = requireNonEmptyString(
-    record.verifier_target,
-    `${context}.verifier_target`,
-  );
-  if (!SCCP_PROOF_SECURITY_MODEL_VALUES.has(securityModel)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.security_model must be a supported SCCP proof security model`,
-      `${context}.security_model`,
-    );
-  }
-  if (!SCCP_ANCHOR_GOVERNANCE_VALUES.has(anchorGovernance)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.anchor_governance must be a supported SCCP anchor governance mode`,
-      `${context}.anchor_governance`,
-    );
-  }
-  if (!SCCP_FINALITY_MODEL_VALUES.has(finalityModel)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.finality_model must be a supported SCCP finality model`,
-      `${context}.finality_model`,
-    );
-  }
-  if (!SCCP_VERIFIER_TARGET_VALUES.has(verifierTarget)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.verifier_target must be a supported SCCP verifier target`,
-      `${context}.verifier_target`,
-    );
-  }
-  const artifact = {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    localDomain: ToriiClient._normalizeUnsignedInteger(record.local_domain, `${context}.local_domain`, {
-      allowZero: true,
-    }),
-    counterpartyDomain: ToriiClient._normalizeUnsignedInteger(
-      record.counterparty_domain,
-      `${context}.counterparty_domain`,
-      { allowZero: true },
-    ),
-    proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
-    securityModel,
-    anchorGovernance,
-    destinationBinding: normalizeSccpDestinationBinding(
-      record.destination_binding,
-      `${context}.destination_binding`,
-    ),
-    verifierBackendKey: requireNonEmptyString(
-      verifierBackend.key,
-      `${context}.verifier_backend.key`,
-    ),
-    messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
-    registryBackend: requireNonEmptyString(record.registry_backend, `${context}.registry_backend`),
-    manifestSeed: requireNonEmptyString(record.manifest_seed, `${context}.manifest_seed`),
-    finalityModel,
-    verifierTarget,
-    publicInputs: normalizeSccpMessageTransparentPublicInputs(
-      record.public_inputs,
-      `${context}.public_inputs`,
-    ),
-    proofBytes: normalizeArbitraryHex(record.proof_bytes, `${context}.proof_bytes`),
-    proofEnvelopeSummary:
-      record.proof_envelope_summary === undefined || record.proof_envelope_summary === null
-        ? null
-        : normalizeSccpProofEnvelopeSummary(
-            record.proof_envelope_summary,
-            `${context}.proof_envelope_summary`,
-          ),
-    ...(record.groth16_proof_summary === undefined || record.groth16_proof_summary === null
-      ? {}
-      : {
-          groth16ProofSummary: normalizeSccpGroth16ProofSummary(
-            record.groth16_proof_summary,
-            `${context}.groth16_proof_summary`,
-          ),
-        }),
-    submissionPackage: normalizeSccpCounterpartySubmissionPackage(
-      record.submission_package,
-      `${context}.submission_package`,
-    ),
-    bundle: normalizeSccpMessageProofBundle(record.bundle, `${context}.bundle`),
-  };
-  if (artifact.bundle.commitment.messageId !== artifact.publicInputs.messageId) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.bundle.commitment.message_id must match public_inputs.message_id`,
-      `${context}.bundle.commitment.message_id`,
-    );
-  }
-  if (artifact.bundle.commitment.payloadHash !== artifact.publicInputs.payloadHash) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.bundle.commitment.payload_hash must match public_inputs.payload_hash`,
-      `${context}.bundle.commitment.payload_hash`,
-    );
-  }
-  if (artifact.bundle.commitmentRoot !== artifact.publicInputs.commitmentRoot) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.bundle.commitment_root must match public_inputs.commitment_root`,
-      `${context}.bundle.commitment_root`,
-    );
-  }
-  return artifact;
-}
-
-function normalizeSccpCounterpartyProofJob(payload) {
-  const context = "sccp message proof job response";
-  const record = ensureRecord(payload, context);
-  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
-  const chainFamily = requireNonEmptyString(record.chain_family, `${context}.chain_family`);
-  const securityModel = requireNonEmptyString(record.security_model, `${context}.security_model`);
-  const anchorGovernance = requireNonEmptyString(
-    record.anchor_governance,
-    `${context}.anchor_governance`,
-  );
-  const finalityModel = requireNonEmptyString(record.finality_model, `${context}.finality_model`);
-  const verifierTarget = requireNonEmptyString(
-    record.verifier_target,
-    `${context}.verifier_target`,
-  );
-  if (!SCCP_CHAIN_FAMILY_VALUES.has(chainFamily)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.chain_family must be a supported SCCP chain family`,
-      `${context}.chain_family`,
-    );
-  }
-  if (!SCCP_PROOF_SECURITY_MODEL_VALUES.has(securityModel)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.security_model must be a supported SCCP proof security model`,
-      `${context}.security_model`,
-    );
-  }
-  if (!SCCP_ANCHOR_GOVERNANCE_VALUES.has(anchorGovernance)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.anchor_governance must be a supported SCCP anchor governance mode`,
-      `${context}.anchor_governance`,
-    );
-  }
-  if (!SCCP_FINALITY_MODEL_VALUES.has(finalityModel)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.finality_model must be a supported SCCP finality model`,
-      `${context}.finality_model`,
-    );
-  }
-  if (!SCCP_VERIFIER_TARGET_VALUES.has(verifierTarget)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.verifier_target must be a supported SCCP verifier target`,
-      `${context}.verifier_target`,
-    );
-  }
-  const job = {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    chainFamily,
-    chain: requireNonEmptyString(record.chain, `${context}.chain`),
-    localDomain: ToriiClient._normalizeUnsignedInteger(record.local_domain, `${context}.local_domain`, {
-      allowZero: true,
-    }),
-    counterpartyDomain: ToriiClient._normalizeUnsignedInteger(
-      record.counterparty_domain,
-      `${context}.counterparty_domain`,
-      { allowZero: true },
-    ),
-    proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
-    securityModel,
-    anchorGovernance,
-    destinationBinding: normalizeSccpDestinationBinding(
-      record.destination_binding,
-      `${context}.destination_binding`,
-    ),
-    verifierBackendKey: requireNonEmptyString(
-      verifierBackend.key,
-      `${context}.verifier_backend.key`,
-    ),
-    messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
-    registryBackend: requireNonEmptyString(record.registry_backend, `${context}.registry_backend`),
-    manifestSeed: requireNonEmptyString(record.manifest_seed, `${context}.manifest_seed`),
-    finalityModel,
-    verifierTarget,
-    publicInputs: normalizeSccpMessageTransparentPublicInputs(
-      record.public_inputs,
-      `${context}.public_inputs`,
-    ),
-    payloadKind: requireNonEmptyString(record.payload_kind, `${context}.payload_kind`),
-    payloadProjection: normalizeSccpPayloadProjection(
-      record.payload_projection,
-      `${context}.payload_projection`,
-    ),
-    proofEnvelopeSummary:
-      record.proof_envelope_summary === undefined || record.proof_envelope_summary === null
-        ? null
-        : normalizeSccpProofEnvelopeSummary(
-            record.proof_envelope_summary,
-            `${context}.proof_envelope_summary`,
-          ),
-    ...(record.groth16_proof_summary === undefined || record.groth16_proof_summary === null
-      ? {}
-      : {
-          groth16ProofSummary: normalizeSccpGroth16ProofSummary(
-            record.groth16_proof_summary,
-            `${context}.groth16_proof_summary`,
-          ),
-        }),
-    submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
-      record.submission_template,
-      `${context}.submission_template`,
-    ),
-    submissionPackage: normalizeSccpCounterpartySubmissionPackage(
-      record.submission_package,
-      `${context}.submission_package`,
-    ),
-    bundle: normalizeSccpMessageProofBundle(record.bundle, `${context}.bundle`),
-  };
-  if (job.bundle.commitment.messageId !== job.publicInputs.messageId) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.bundle.commitment.message_id must match public_inputs.message_id`,
-      `${context}.bundle.commitment.message_id`,
-    );
-  }
-  if (job.bundle.commitment.payloadHash !== job.publicInputs.payloadHash) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.bundle.commitment.payload_hash must match public_inputs.payload_hash`,
-      `${context}.bundle.commitment.payload_hash`,
-    );
-  }
-  if (job.bundle.commitmentRoot !== job.publicInputs.commitmentRoot) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.bundle.commitment_root must match public_inputs.commitment_root`,
-      `${context}.bundle.commitment_root`,
-    );
-  }
-  return job;
-}
-
-function normalizeSccpPayloadProjection(value, context) {
-  const record = ensureRecord(value, context);
-  const entries = Object.entries(record);
-  if (entries.length !== 1) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must contain exactly one SCCP payload projection variant`,
-      context,
-    );
-  }
-  const [[kind, body]] = entries;
-  const variant = ensureRecord(body, `${context}.${kind}`);
-  if (!SCCP_MESSAGE_PAYLOAD_KIND_VALUES.has(kind)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} has unsupported SCCP payload projection variant`,
-      context,
-    );
-  }
-  const payload = { ...variant };
-  const numericFields = {
-    AssetRegister: ["version", "target_domain", "home_domain", "nonce", "decimals"],
-    RouteActivate: ["version", "source_domain", "target_domain", "nonce"],
-    Transfer: [
-      "version",
-      "source_domain",
-      "dest_domain",
-      "nonce",
-      "asset_home_domain",
-      "amount",
-    ],
-  }[kind];
-  for (const field of numericFields) {
-    payload[field] = ToriiClient._normalizeUnsignedInteger(
-      payload[field],
-      `${context}.${kind}.${field}`,
-      { allowZero: true },
-    );
-  }
-  if (kind === "AssetRegister" || kind === "RouteActivate" || kind === "Transfer") {
-    payload.asset_id = normalizeSccpNormalizedCodecValue(
-      payload.asset_id,
-      `${context}.${kind}.asset_id`,
-    );
-  }
-  if (kind === "RouteActivate" || kind === "Transfer") {
-    payload.route_id = normalizeSccpNormalizedCodecValue(
-      payload.route_id,
-      `${context}.${kind}.route_id`,
-    );
-  }
-  if (kind === "Transfer") {
-    payload.sender = normalizeSccpNormalizedCodecValue(
-      payload.sender,
-      `${context}.${kind}.sender`,
-    );
-    payload.recipient = normalizeSccpNormalizedCodecValue(
-      payload.recipient,
-      `${context}.${kind}.recipient`,
-    );
-  }
-  return { kind, value: payload };
-}
-
-function normalizeSccpNormalizedCodecValue(value, context) {
-  const record = ensureRecord(value, context);
-  const entries = Object.entries(record);
-  if (entries.length !== 1) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must contain exactly one SCCP codec variant`,
-      context,
-    );
-  }
-  const [[kind, body]] = entries;
-  const variant = ensureRecord(body, `${context}.${kind}`);
-  switch (kind) {
-    case "TextUtf8":
-      return {
-        kind,
-        value: requireNonEmptyString(variant.value, `${context}.${kind}.value`),
-      };
-    case "EvmHex":
-    case "SolanaBase58":
-      return {
-        kind,
-        bytes: normalizeSccpCodecScalarValue(variant.bytes, `${context}.${kind}.bytes`),
-      };
-    case "TonRaw":
-      return {
-        kind,
-        workchain: coerceInteger(variant.workchain, `${context}.${kind}.workchain`),
-        account: normalizeSccpCodecScalarValue(variant.account, `${context}.${kind}.account`),
-      };
-    case "TronBase58Check":
-      return {
-        kind,
-        payload: normalizeTronBase58CheckPayloadValue(
-          variant.payload,
-          `${context}.${kind}.payload`,
-        ),
-      };
-    default:
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} has unsupported SCCP codec variant`,
-        context,
-      );
-  }
-}
-
-function normalizeSccpCodecScalarValue(value, context) {
-  if (Buffer.isBuffer(value)) {
-    return value.toString("hex");
-  }
-  if (ArrayBuffer.isView(value)) {
-    return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("hex");
-  }
-  if (value instanceof ArrayBuffer) {
-    return Buffer.from(value).toString("hex");
-  }
-  if (Array.isArray(value)) {
-    return normalizeByteArray(value, context).toString("hex");
-  }
-  const text = requireNonEmptyString(value, context).trim();
-  if (/^(0x)?[0-9a-fA-F]+$/.test(text)) {
-    return normalizeArbitraryHex(text, context);
-  }
-  return text;
-}
-
-function normalizeSccpMessageTransparentPublicInputs(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
-    payloadHash: normalizeHex32String(record.payload_hash, `${context}.payload_hash`),
-    targetDomain: ToriiClient._normalizeUnsignedInteger(record.target_domain, `${context}.target_domain`, {
-      allowZero: true,
-    }),
-    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
-    finalityHeight: ToriiClient._normalizeUnsignedInteger(
-      record.finality_height,
-      `${context}.finality_height`,
-      { allowZero: true },
-    ),
-    finalityBlockHash: normalizeHex32String(
-      record.finality_block_hash,
-      `${context}.finality_block_hash`,
-    ),
-  };
-}
-
-function normalizeSccpMessageProofBundle(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
-    commitment: normalizeSccpHubCommitment(record.commitment, `${context}.commitment`),
-    merkleProof: normalizeSccpMerkleProof(record.merkle_proof, `${context}.merkle_proof`),
-    payload: normalizeSccpPayloadEnvelope(record.payload, `${context}.payload`),
-    finalityProof: normalizeArbitraryHex(record.finality_proof, `${context}.finality_proof`),
-  };
-}
-
-function normalizeSccpHubCommitment(value, context) {
-  const record = ensureRecord(value, context);
-  const kind = requireNonEmptyString(record.kind, `${context}.kind`);
-  if (!SCCP_HUB_MESSAGE_KIND_VALUES.has(kind)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.kind must be a supported SCCP message kind`,
-      `${context}.kind`,
-    );
-  }
-  return {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    kind,
-    targetDomain: ToriiClient._normalizeUnsignedInteger(record.target_domain, `${context}.target_domain`, {
-      allowZero: true,
-    }),
-    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
-    payloadHash: normalizeHex32String(record.payload_hash, `${context}.payload_hash`),
-  };
-}
-
-function normalizeSccpMerkleProof(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    steps: parseRecordArray(record.steps, `${context}.steps`).map((entry, index) =>
-      normalizeSccpMerkleStep(entry, `${context}.steps[${index}]`),
-    ),
-  };
-}
-
-function normalizeSccpMerkleStep(value, context) {
-  const record = ensureRecord(value, context);
-  if (typeof record.sibling_is_left !== "boolean") {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.sibling_is_left must be boolean`,
-      `${context}.sibling_is_left`,
-    );
-  }
-  return {
-    siblingHash: normalizeHex32String(record.sibling_hash, `${context}.sibling_hash`),
-    siblingIsLeft: record.sibling_is_left,
-  };
-}
-
-function normalizeSccpPayloadEnvelope(value, context) {
-  const record = ensureRecord(value, context);
-  const keys = Object.keys(record);
-  if (keys.length !== 1) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must contain exactly one SCCP payload variant`,
-      context,
-    );
-  }
-  const [kind] = keys;
-  if (!SCCP_MESSAGE_PAYLOAD_KIND_VALUES.has(kind)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must use a supported SCCP payload variant`,
-      context,
-    );
-  }
-  return {
-    kind,
-    value: ensureRecord(record[kind], `${context}.${kind}`),
   };
 }
 
@@ -18748,7 +18267,7 @@ async function performNodeRawUtf8Request({
       }
     };
     const onAbort = () => {
-      const reason = signal?.reason ?? createAbortError();
+      const reason = signalAbortReason(signal) ?? createAbortError();
       try {
         socket.destroy(reason instanceof Error ? reason : undefined);
       } catch {
@@ -18762,7 +18281,7 @@ async function performNodeRawUtf8Request({
       socket.removeListener("end", onEnd);
       socket.removeListener("close", onClose);
       if (signal) {
-        signal.removeEventListener("abort", onAbort);
+        removeSignalAbortListener(signal, onAbort);
       }
     };
     const onError = (error) => {
@@ -18789,7 +18308,8 @@ async function performNodeRawUtf8Request({
     socket.once("end", onEnd);
     socket.once("close", onClose);
     if (signal) {
-      signal.addEventListener("abort", onAbort, { once: true });
+      addSignalAbortListener(signal, onAbort);
+      if (signalIsAborted(signal)) onAbort();
     }
     try {
       socket.write(requestBuffer);
@@ -19090,14 +18610,15 @@ function delay(ms, signal) {
   return new Promise((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason ?? new Error("The operation was aborted"));
+      removeSignalAbortListener(signal, onAbort);
+      reject(signalAbortReason(signal) ?? new Error("The operation was aborted"));
     };
     const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
+      removeSignalAbortListener(signal, onAbort);
       resolve();
     }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
+    addSignalAbortListener(signal, onAbort);
+    if (signalIsAborted(signal)) onAbort();
   });
 }
 
@@ -19114,16 +18635,38 @@ function throwIfAborted(signal) {
   if (!signal) {
     return;
   }
-  if (typeof signal.throwIfAborted === "function") {
-    signal.throwIfAborted();
-    return;
+  if (signalIsAborted(signal)) {
+    throw signalAbortReason(signal) ?? createAbortError();
   }
-  if (signal.aborted) {
-    throw (
-      signal.reason ??
-      new Error("The operation was aborted")
+}
+
+function waitForPromiseWithSignal(promise, signal) {
+  if (!signal) {
+    return promise;
+  }
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      removeSignalAbortListener(signal, onAbort);
+      callback(value);
+    };
+    const onAbort = () =>
+      finish(
+        reject,
+        signalAbortReason(signal) instanceof Error
+          ? signalAbortReason(signal)
+          : createAbortError(),
+      );
+    addSignalAbortListener(signal, onAbort);
+    if (signalIsAborted(signal)) onAbort();
+    Promise.resolve(promise).then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
     );
-  }
+  });
 }
 
 const CONNECT_SID_BYTES = 32;
@@ -19508,30 +19051,90 @@ function formatAuthorityPrivateKeyHex(value, record, context, label) {
   return `${normalizedAlgorithm}:${hex}`;
 }
 
+function requireCanonicalKotodamaIdentifier(value, context, options) {
+  const identifier = requireExactNonEmptyString(value, context);
+  if (!isCanonicalKotodamaIdentifier(identifier, options)) {
+    throw new TypeError(`${context} must be a canonical Kotodama V1 identifier`);
+  }
+  return identifier;
+}
+
+function requireCanonicalKotodamaEntrypoint(value, context) {
+  const name = requireExactNonEmptyString(value, context);
+  if (!isCanonicalKotodamaEntrypoint(name)) {
+    throw new TypeError(
+      `${context} must be a canonical Kotodama V1 identifier or branded lifecycle selector`,
+    );
+  }
+  return name;
+}
+
 function normalizeManifestPayload(manifest, context) {
   if (!isPlainObject(manifest)) {
     throw new TypeError(`${context} must be an object`);
   }
+  const allowedFields = new Set([
+    "seiyaku_name",
+    "seiyakuName",
+    "code_hash",
+    "codeHash",
+    "abi_hash",
+    "abiHash",
+    "compiler_fingerprint",
+    "compilerFingerprint",
+    "features_bitmap",
+    "featuresBitmap",
+    "access_set_hints",
+    "accessSetHints",
+    "entrypoints",
+    "entryPoints",
+    "states",
+    "error_codes",
+    "errorCodes",
+    "kotoba",
+    "provenance",
+  ]);
+  const unknownFields = Object.keys(manifest).filter((field) => !allowedFields.has(field));
+  if (unknownFields.length !== 0) {
+    throw new TypeError(
+      `${context} contains unsupported fields: ${unknownFields.sort().join(", ")}`,
+    );
+  }
   const hasField = (...keys) =>
     keys.some((key) => Object.prototype.hasOwnProperty.call(manifest, key));
   const getField = (...keys) => {
-    for (const key of keys) {
-      if (Object.prototype.hasOwnProperty.call(manifest, key)) {
-        return manifest[key];
-      }
+    const present = keys.filter((key) =>
+      Object.prototype.hasOwnProperty.call(manifest, key),
+    );
+    if (present.length > 1) {
+      throw new TypeError(`${context} contains conflicting aliases: ${present.join(", ")}`);
     }
-    return undefined;
+    return present.length === 0 ? undefined : manifest[present[0]];
   };
   const normalized = {
+    seiyaku_name: null,
     code_hash: null,
     abi_hash: null,
     compiler_fingerprint: null,
     features_bitmap: null,
     access_set_hints: null,
     entrypoints: null,
+    states: null,
+    error_codes: null,
     kotoba: null,
     provenance: null,
   };
+  if (hasField("seiyaku_name", "seiyakuName")) {
+    const seiyakuName = getField("seiyaku_name", "seiyakuName") ?? null;
+    normalized.seiyaku_name =
+      seiyakuName === null
+        ? null
+        : requireCanonicalKotodamaIdentifier(
+            seiyakuName,
+            `${context}.seiyaku_name`,
+            { declaration: true },
+          );
+  }
   if (hasField("code_hash", "codeHash")) {
     normalized.code_hash = normalizeOptionalHex32(
       getField("code_hash", "codeHash"),
@@ -19577,12 +19180,24 @@ function normalizeManifestPayload(manifest, context) {
       throw new TypeError(`${context}.entrypoints must be an array`);
     } else {
       normalized.entrypoints = entries.map((entry, index) => {
-        if (!isPlainObject(entry)) {
-          throw new TypeError(`${context}.entrypoints[${index}] must be an object`);
-        }
-        return entry;
+        return normalizeManifestEntrypointPayload(
+          entry,
+          `${context}.entrypoints[${index}]`,
+        );
       });
     }
+  }
+  if (hasField("states")) {
+    const states = getField("states");
+    normalized.states =
+      states === null ? null : normalizeManifestStatesPayload(states, `${context}.states`);
+  }
+  if (hasField("error_codes", "errorCodes")) {
+    const errorCodes = getField("error_codes", "errorCodes");
+    normalized.error_codes =
+      errorCodes === null
+        ? null
+        : normalizeManifestErrorCodesPayload(errorCodes, `${context}.error_codes`);
   }
   if (hasField("kotoba")) {
     const kotoba = getField("kotoba");
@@ -19596,7 +19211,105 @@ function normalizeManifestPayload(manifest, context) {
         ? null
         : normalizeManifestProvenancePayload(provenance, `${context}.provenance`);
   }
+  validateNormalizedManifestPayload(normalized, context);
   return normalized;
+}
+
+function validateNormalizedManifestPayload(manifest, context) {
+  const entrypointKinds = new Map();
+  const entrypointNames = new Set();
+  const lifecycleKinds = new Set();
+  const triggerIds = new Set();
+  for (const [index, entrypoint] of (manifest.entrypoints ?? []).entries()) {
+    if (entrypointNames.has(entrypoint.name)) {
+      throw new TypeError(`${context}.entrypoints contains duplicate name ${entrypoint.name}`);
+    }
+    entrypointNames.add(entrypoint.name);
+    entrypointKinds.set(entrypoint.name, entrypoint.kind.kind);
+    if (entrypoint.kind.kind === "Hajimari" || entrypoint.kind.kind === "Kaizen") {
+      if (lifecycleKinds.has(entrypoint.kind.kind)) {
+        throw new TypeError(
+          `${context}.entrypoints contains duplicate ${entrypoint.kind.kind} declarations`,
+        );
+      }
+      lifecycleKinds.add(entrypoint.kind.kind);
+    }
+    for (const trigger of entrypoint.triggers) {
+      if (triggerIds.has(trigger.id)) {
+        throw new TypeError(`${context}.entrypoints contains duplicate trigger ${trigger.id}`);
+      }
+      triggerIds.add(trigger.id);
+    }
+    if (
+      entrypoint.access_hints_complete === true &&
+      entrypoint.access_hints_skipped.length !== 0
+    ) {
+      throw new TypeError(
+        `${context}.entrypoints[${index}] marks access hints complete but records skipped reasons`,
+      );
+    }
+    if (
+      entrypoint.access_hints_complete === false &&
+      entrypoint.access_hints_skipped.length === 0
+    ) {
+      throw new TypeError(
+        `${context}.entrypoints[${index}] marks access hints incomplete without a reason`,
+      );
+    }
+  }
+  for (const [entrypointIndex, entrypoint] of (manifest.entrypoints ?? []).entries()) {
+    for (const [triggerIndex, trigger] of entrypoint.triggers.entries()) {
+      if (trigger.callback.namespace === null) {
+        const targetKind = entrypointKinds.get(trigger.callback.entrypoint);
+        if (targetKind === undefined) {
+          throw new TypeError(
+            `${context}.entrypoints[${entrypointIndex}].triggers[${triggerIndex}] targets an undeclared local entrypoint`,
+          );
+        }
+        if (targetKind !== "Kotoage") {
+          throw new TypeError(
+            `${context}.entrypoints[${entrypointIndex}].triggers[${triggerIndex}] local callback must target kotoage/言挙げ`,
+          );
+        }
+      }
+    }
+  }
+
+  const stateNames = new Set();
+  for (const state of manifest.states ?? []) {
+    if (stateNames.has(state.name)) {
+      throw new TypeError(`${context}.states contains duplicate name ${state.name}`);
+    }
+    stateNames.add(state.name);
+  }
+
+  const errorPaths = new Set();
+  const errorNumbers = new Set();
+  for (const errorCode of manifest.error_codes ?? []) {
+    const path = `${errorCode.namespace}::${errorCode.name}`;
+    if (errorPaths.has(path) || errorNumbers.has(errorCode.code)) {
+      throw new TypeError(`${context}.error_codes contains a duplicate path or numeric code`);
+    }
+    errorPaths.add(path);
+    errorNumbers.add(errorCode.code);
+  }
+
+  const messageIds = new Set();
+  for (const [entryIndex, entry] of (manifest.kotoba ?? []).entries()) {
+    if (messageIds.has(entry.msg_id)) {
+      throw new TypeError(`${context}.kotoba contains duplicate msg_id ${entry.msg_id}`);
+    }
+    messageIds.add(entry.msg_id);
+    const languages = new Set();
+    for (const translation of entry.translations) {
+      if (languages.has(translation.lang)) {
+        throw new TypeError(
+          `${context}.kotoba[${entryIndex}] contains duplicate language ${translation.lang}`,
+        );
+      }
+      languages.add(translation.lang);
+    }
+  }
 }
 
 function normalizeManifestKotobaPayload(value, context) {
@@ -19606,14 +19319,32 @@ function normalizeManifestKotobaPayload(value, context) {
   return value.map((entry, index) => {
     const record = ensureRecord(entry, `${context}[${index}]`);
     return {
-      msg_id: requireNonEmptyString(
+      msg_id: requireExactNonEmptyString(
         record.msg_id ?? record.msgId,
         `${context}[${index}].msg_id`,
       ),
-      translations: cloneJsonValue(
+      translations: normalizeManifestKotobaTranslationsPayload(
         record.translations,
         `${context}[${index}].translations`,
       ),
+    };
+  });
+}
+
+function normalizeManifestKotobaTranslationsPayload(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((translation, index) => {
+    const record = ensureRecord(translation, `${context}[${index}]`);
+    return {
+      lang: requireExactNonEmptyString(record.lang, `${context}[${index}].lang`),
+      text:
+        typeof record.text === "string"
+          ? record.text
+          : (() => {
+              throw new TypeError(`${context}[${index}].text must be a string`);
+            })(),
     };
   });
 }
@@ -19655,21 +19386,26 @@ function normalizeManifestPublicKeyPayload(value, context) {
 }
 
 function normalizeManifestSignaturePayload(value, context) {
+  let body;
   if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
-    return Buffer.from(value).toString("hex").toUpperCase();
+    body = Buffer.from(value).toString("hex");
+  } else if (Array.isArray(value)) {
+    body = normalizeByteArray(value, context).toString("hex");
+  } else {
+    const literal = requireNonEmptyString(value, context).trim();
+    body =
+      literal.includes(":") && literal.indexOf(":") > 0
+        ? literal.slice(literal.indexOf(":") + 1)
+        : literal;
   }
-  if (Array.isArray(value)) {
-    return normalizeByteArray(value, context).toString("hex").toUpperCase();
-  }
-  const literal = requireNonEmptyString(value, context).trim();
-  const body =
-    literal.includes(":") && literal.indexOf(":") > 0
-      ? literal.slice(literal.indexOf(":") + 1)
-      : literal;
   if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9A-Fa-f]+$/u.test(body)) {
     throw new TypeError(`${context} must be an even-length hexadecimal string`);
   }
-  return body.toUpperCase();
+  const canonical = body.toUpperCase();
+  if (/^0+$/u.test(canonical)) {
+    throw new TypeError(`${context} must not be all zero`);
+  }
+  return canonical;
 }
 
 function normalizeManifestProvenancePayload(value, context) {
@@ -19745,6 +19481,437 @@ function normalizeAccessSetHintsPayload(payload, context) {
       `${context}.dynamic_writes`,
     ),
   };
+}
+
+function normalizeManifestEntrypointPayload(value, context) {
+  const record = ensureRecord(value, context);
+  const name = requireCanonicalKotodamaEntrypoint(record.name, `${context}.name`);
+  const kind = normalizeManifestEntrypointKind(record.kind, `${context}.kind`);
+  const lifecycleKind =
+    name === "hajimari" || name === "始まり"
+      ? "Hajimari"
+      : name === "kaizen" || name === "改善"
+        ? "Kaizen"
+        : null;
+  if (
+    (lifecycleKind !== null && kind.kind !== lifecycleKind) ||
+    (lifecycleKind === null && (kind.kind === "Hajimari" || kind.kind === "Kaizen"))
+  ) {
+    throw new TypeError(`${context}.kind does not match its branded lifecycle selector`);
+  }
+  const permission = normalizeOptionalManifestString(
+    record.permission,
+    `${context}.permission`,
+  );
+  if (kind.kind === "Kotoage" && permission === null) {
+    throw new TypeError(`${context}.permission is required for kotoage/言挙げ`);
+  }
+  if ((kind.kind === "Hajimari" || kind.kind === "Kaizen") && permission !== null) {
+    throw new TypeError(
+      `${context}.permission must be null for hajimari/始まり and kaizen/改善`,
+    );
+  }
+  const params = normalizeManifestEntrypointParams(record.params, `${context}.params`);
+  const argumentSchema = normalizeManifestArgumentSchema(
+    record.argument_schema ?? record.argumentSchema,
+    `${context}.argument_schema`,
+  );
+  if (params.length === 0 && argumentSchema !== null) {
+    throw new TypeError(`${context} has an argument schema but no parameters`);
+  }
+  if (params.length !== 0 && argumentSchema === null) {
+    throw new TypeError(`${context} has parameters but no exact argument schema`);
+  }
+  if (
+    argumentSchema !== null &&
+    (argumentSchema.fields.length !== params.length ||
+      argumentSchema.fields.some(
+        (field, index) =>
+          field.name !== params[index].name ||
+          analyzeManifestValueType(field.ty, `${context}.argument_schema.fields[${index}].ty`)
+            .canonicalName !== params[index].type_name,
+      ))
+  ) {
+    throw new TypeError(`${context}.argument_schema does not exactly match its parameters`);
+  }
+  const returnType = normalizeOptionalManifestString(
+    record.return_type ?? record.returnType,
+    `${context}.return_type`,
+  );
+  const returnSchema = normalizeManifestValueType(
+    record.return_schema ?? record.returnSchema,
+    `${context}.return_schema`,
+  );
+  if ((returnType === null) !== (returnSchema === null)) {
+    throw new TypeError(`${context} must declare return_type and return_schema together`);
+  }
+  if (
+    returnSchema !== null
+  ) {
+    const analysis = analyzeManifestValueType(returnSchema, `${context}.return_schema`);
+    if (analysis.canonicalName !== returnType) {
+      throw new TypeError(`${context}.return_schema does not match return_type`);
+    }
+    if (analysis.wordCount > 13) {
+      throw new TypeError(`${context}.return_schema exceeds the V1 13-word return window`);
+    }
+  }
+  return {
+    name,
+    kind,
+    params,
+    argument_schema: argumentSchema,
+    return_type: returnType,
+    return_schema: returnSchema,
+    permission,
+    read_keys: normalizeManifestStringArray(
+      record.read_keys ?? record.readKeys,
+      `${context}.read_keys`,
+    ),
+    write_keys: normalizeManifestStringArray(
+      record.write_keys ?? record.writeKeys,
+      `${context}.write_keys`,
+    ),
+    access_hints_complete: normalizeOptionalManifestBoolean(
+      record.access_hints_complete ?? record.accessHintsComplete,
+      `${context}.access_hints_complete`,
+    ),
+    access_hints_skipped: normalizeManifestStringArray(
+      record.access_hints_skipped ?? record.accessHintsSkipped,
+      `${context}.access_hints_skipped`,
+    ),
+    triggers: normalizeManifestTriggersPayload(record.triggers, `${context}.triggers`),
+  };
+}
+
+function normalizeManifestEntrypointParams(value, context) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  if (value.length > 13) {
+    throw new TypeError(`${context} exceeds the V1 13-parameter limit`);
+  }
+  const names = new Set();
+  return value.map((param, index) => {
+    const record = ensureRecord(param, `${context}[${index}]`);
+    const name = requireCanonicalKotodamaIdentifier(
+      record.name,
+      `${context}[${index}].name`,
+    );
+    if (names.has(name)) {
+      throw new TypeError(`${context} contains duplicate parameter ${name}`);
+    }
+    names.add(name);
+    return {
+      name,
+      type_name: requireExactNonEmptyString(
+        record.type_name ?? record.typeName,
+        `${context}[${index}].type_name`,
+      ),
+    };
+  });
+}
+
+function normalizeManifestArgumentSchema(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const record = ensureRecord(value, context);
+  if (!Array.isArray(record.fields)) {
+    throw new TypeError(`${context}.fields must be an array`);
+  }
+  if (record.fields.length === 0 || record.fields.length > 13) {
+    throw new TypeError(`${context}.fields must contain 1..13 entries`);
+  }
+  const names = new Set();
+  let wordCount = 0;
+  const fields = record.fields.map((field, index) => {
+      const fieldRecord = ensureRecord(field, `${context}.fields[${index}]`);
+      const name = requireCanonicalKotodamaIdentifier(
+        fieldRecord.name,
+        `${context}.fields[${index}].name`,
+      );
+      if (names.has(name)) {
+        throw new TypeError(`${context}.fields contains duplicate name ${name}`);
+      }
+      names.add(name);
+      const ty = normalizeRequiredManifestValueType(
+        fieldRecord.ty,
+        `${context}.fields[${index}].ty`,
+      );
+      wordCount += analyzeManifestValueType(ty, `${context}.fields[${index}].ty`).wordCount;
+      return { name, ty };
+    });
+  if (wordCount > 13) {
+    throw new TypeError(`${context} exceeds the V1 13-word argument window`);
+  }
+  return { fields };
+}
+
+function normalizeManifestValueType(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return normalizeRequiredManifestValueType(value, context);
+}
+
+function normalizeRequiredManifestValueType(value, context) {
+  const record = ensureRecord(value, context);
+  if (!Array.isArray(record.nodes)) {
+    throw new TypeError(`${context}.nodes must be an array`);
+  }
+  const normalized = {
+    nodes: record.nodes.map((node, index) =>
+      normalizeManifestValueTypeNode(node, `${context}.nodes[${index}]`),
+    ),
+  };
+  analyzeManifestValueType(normalized, context);
+  return normalized;
+}
+
+function normalizeManifestValueTypeNode(value, context) {
+  const record = ensureRecord(value, context);
+  const kind = requireNonEmptyString(record.kind, `${context}.kind`);
+  switch (kind) {
+    case "Struct": {
+      const struct = ensureRecord(record.value, `${context}.value`);
+      return {
+        kind,
+        value: {
+          name: requireNonEmptyString(struct.name, `${context}.value.name`),
+          fields: normalizeManifestStringArray(
+            struct.fields,
+            `${context}.value.fields`,
+          ),
+        },
+      };
+    }
+    case "Tuple": {
+      const arity = ToriiClient._normalizeUnsignedInteger(
+        record.value,
+        `${context}.value`,
+        { allowZero: true },
+      );
+      if (arity > 0xffff) {
+        throw new TypeError(`${context}.value must fit in u16`);
+      }
+      return { kind, value: arity };
+    }
+    case "Option":
+    case "Result":
+      requireManifestNull(record.value, `${context}.value`);
+      return { kind, value: null };
+    case "List": {
+      const list = ensureRecord(record.value, `${context}.value`);
+      const fields = Object.keys(list);
+      if (fields.length !== 1 || fields[0] !== "capacity") {
+        throw new TypeError(
+          `${context}.value must contain exactly capacity; the element subtree follows in the nodes tape`,
+        );
+      }
+      const capacity = ToriiClient._normalizeUnsignedInteger(
+        list.capacity,
+        `${context}.value.capacity`,
+        { allowZero: true },
+      );
+      if (capacity < 1 || capacity > 64) {
+        throw new TypeError(`${context}.value.capacity must be in the V1 range 1..64`);
+      }
+      return {
+        kind,
+        value: { capacity },
+      };
+    }
+    case "Leaf":
+      return {
+        kind,
+        value: normalizeManifestValueKind(record.value, `${context}.value`),
+      };
+    default:
+      throw new TypeError(`${context}.kind is not a V1 entrypoint value-type node`);
+  }
+}
+
+function normalizeManifestValueKind(value, context) {
+  const record = ensureRecord(value, context);
+  const kind = requireNonEmptyString(record.kind, `${context}.kind`);
+  const allowed = new Set([
+    "Int",
+    "Decimal",
+    "Quantity",
+    "Bool",
+    "String",
+    "Json",
+    "Name",
+    "AccountId",
+    "AssetDefinitionId",
+    "AssetId",
+    "DomainId",
+    "NftId",
+    "DataSpaceId",
+    "Blob",
+  ]);
+  if (!allowed.has(kind)) {
+    throw new TypeError(`${context}.kind is not a V1 entrypoint value kind`);
+  }
+  requireManifestNull(record.value, `${context}.value`);
+  return { kind, value: null };
+}
+
+function analyzeManifestValueType(value, context) {
+  return analyzeEntrypointValueTypeV1(value, context);
+}
+function normalizeOptionalManifestString(value, context) {
+  return value === undefined || value === null
+    ? null
+    : requireExactNonEmptyString(value, context);
+}
+
+function normalizeOptionalManifestBoolean(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${context} must be a boolean`);
+  }
+  return value;
+}
+
+function normalizeManifestStringArray(value, context) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((entry, index) =>
+    requireExactNonEmptyString(entry, `${context}[${index}]`),
+  );
+}
+
+function requireManifestNull(value, context) {
+  if (value !== undefined && value !== null) {
+    throw new TypeError(`${context} must be null`);
+  }
+}
+
+function normalizeManifestStatesPayload(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((state, index) => {
+    const record = ensureRecord(state, `${context}[${index}]`);
+    return {
+      name: requireCanonicalKotodamaIdentifier(
+        record.name,
+        `${context}[${index}].name`,
+        { declaration: true },
+      ),
+      type_name: requireExactNonEmptyString(
+        record.type_name ?? record.typeName,
+        `${context}[${index}].type_name`,
+      ),
+    };
+  });
+}
+
+function normalizeManifestErrorCodesPayload(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((errorCode, index) => {
+    const record = ensureRecord(errorCode, `${context}[${index}]`);
+    const code = ToriiClient._normalizeUnsignedInteger(
+      record.code,
+      `${context}[${index}].code`,
+      { allowZero: true },
+    );
+    if (code > 0xffff_ffff) {
+      throw new TypeError(`${context}[${index}].code must fit in u32`);
+    }
+    if (code === 0) {
+      throw new TypeError(`${context}[${index}].code must be non-zero`);
+    }
+    return {
+      namespace: requireCanonicalKotodamaIdentifier(
+        record.namespace,
+        `${context}[${index}].namespace`,
+        { declaration: true },
+      ),
+      name: requireCanonicalKotodamaIdentifier(
+        record.name,
+        `${context}[${index}].name`,
+      ),
+      code,
+    };
+  });
+}
+
+function normalizeManifestTriggersPayload(value, context) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((trigger, index) => {
+    const record = ensureRecord(trigger, `${context}[${index}]`);
+    const callback = ensureRecord(record.callback, `${context}[${index}].callback`);
+    const metadata = ensureRecord(record.metadata ?? {}, `${context}[${index}].metadata`);
+    return {
+      id: requireExactNonEmptyString(record.id, `${context}[${index}].id`),
+      repeats: normalizeManifestRepeatsPayload(
+        record.repeats,
+        `${context}[${index}].repeats`,
+      ),
+      filter: normalizeRequiredExactBase64Payload(
+        record.filter,
+        `${context}[${index}].filter`,
+      ),
+      authority:
+        record.authority === undefined || record.authority === null
+          ? null
+          : normalizeAccountId(record.authority, `${context}[${index}].authority`),
+      metadata: cloneJsonValue(metadata, `${context}[${index}].metadata`),
+      callback: {
+        namespace: normalizeOptionalManifestString(
+          callback.namespace,
+          `${context}[${index}].callback.namespace`,
+        ),
+        entrypoint: requireCanonicalKotodamaEntrypoint(
+          callback.entrypoint,
+          `${context}[${index}].callback.entrypoint`,
+        ),
+      },
+    };
+  });
+}
+
+function normalizeManifestRepeatsPayload(value, context) {
+  const record = ensureRecord(value, context);
+  const keys = Object.keys(record);
+  if (keys.length !== 1) {
+    throw new TypeError(`${context} must contain exactly one repeat variant`);
+  }
+  if (keys[0] === "Indefinitely") {
+    requireManifestNull(record.Indefinitely, `${context}.Indefinitely`);
+    return { Indefinitely: null };
+  }
+  if (keys[0] === "Exactly") {
+    const count = ToriiClient._normalizeUnsignedInteger(
+      record.Exactly,
+      `${context}.Exactly`,
+      { allowZero: true },
+    );
+    if (count > 0xffff_ffff) {
+      throw new TypeError(`${context}.Exactly must fit in u32`);
+    }
+    return { Exactly: count };
+  }
+  throw new TypeError(`${context} must be Indefinitely or Exactly`);
 }
 
 function normalizeOptionalBase64Payload(value, name) {
@@ -19873,7 +20040,15 @@ function normalizeOptionalHex32(value, name) {
   if (value === null) {
     return null;
   }
-  return normalizeHex32String(value, name);
+  return normalizeIrohaHashHex32(value, name);
+}
+
+function normalizeIrohaHashHex32(value, name) {
+  const hex = normalizeHex32String(value, name);
+  if ((Number.parseInt(hex.slice(-2), 16) & 1) !== 1) {
+    throw new TypeError(`${name} must set the Iroha Hash marker bit`);
+  }
+  return hex;
 }
 
 function normalizeHex32String(value, name, options = {}) {
@@ -20064,457 +20239,6 @@ function normalizeTronBase58CheckAddress(value, name) {
   return normalized;
 }
 
-function decodeTronBase58CheckAddressPayload(value, name) {
-  let number = 0n;
-  for (const character of value) {
-    const digit = TRON_BASE58_INDEX.get(character);
-    if (digit === undefined) {
-      throw invalidTronBase58CheckAddress(name);
-    }
-    number = number * 58n + BigInt(digit);
-  }
-  let hex = number === 0n ? "" : number.toString(16);
-  if (hex.length % 2 === 1) {
-    hex = `0${hex}`;
-  }
-  let decoded = hex ? Buffer.from(hex, "hex") : Buffer.alloc(0);
-  const leadingZeroes = value.match(/^1*/)[0].length;
-  if (leadingZeroes > 0) {
-    decoded = Buffer.concat([Buffer.alloc(leadingZeroes), decoded]);
-  }
-  if (decoded.length !== 25) {
-    throw invalidTronBase58CheckAddress(name);
-  }
-  const payload = decoded.subarray(0, 21);
-  const checksum = decoded.subarray(21);
-  const expectedChecksum = createHash("sha256")
-    .update(createHash("sha256").update(payload).digest())
-    .digest()
-    .subarray(0, 4);
-  if (!checksum.equals(expectedChecksum)) {
-    throw invalidTronBase58CheckAddress(name);
-  }
-  if (payload[0] !== 0x41 || payload.subarray(1).every((byte) => byte === 0)) {
-    throw invalidTronBase58CheckAddress(name);
-  }
-  return payload;
-}
-
-function normalizeTronBase58CheckPayloadValue(value, name) {
-  let payload;
-  if (Buffer.isBuffer(value)) {
-    payload = value;
-  } else if (ArrayBuffer.isView(value)) {
-    payload = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
-  } else if (value instanceof ArrayBuffer) {
-    payload = Buffer.from(value);
-  } else if (Array.isArray(value)) {
-    payload = normalizeByteArray(value, name);
-  } else {
-    const text = requireNonEmptyString(value, name);
-    if (text !== value) {
-      throw invalidTronBase58CheckPayload(name);
-    }
-    const hex = text.startsWith("0x") || text.startsWith("0X") ? text.slice(2) : text;
-    if (hex.length > 0 && hex.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(hex)) {
-      payload = Buffer.from(normalizeArbitraryHex(text, name), "hex");
-    } else {
-      payload = decodeTronBase58CheckAddressPayload(text, name);
-    }
-  }
-  if (
-    payload.length !== 21 ||
-    payload[0] !== 0x41 ||
-    payload.subarray(1).every((byte) => byte === 0)
-  ) {
-    throw invalidTronBase58CheckPayload(name);
-  }
-  return payload.toString("hex");
-}
-
-function invalidTronBase58CheckAddress(name) {
-  return createValidationError(
-    ValidationErrorCode.INVALID_STRING,
-    `${name} must be a TRON Base58Check address`,
-    name,
-  );
-}
-
-function invalidTronBase58CheckPayload(name) {
-  return createValidationError(
-    ValidationErrorCode.INVALID_STRING,
-    `${name} must be a 21-byte TRON Base58Check payload`,
-    name,
-  );
-}
-
-function abiWordU32Hex(value) {
-  const normalized = Number(value);
-  if (!Number.isSafeInteger(normalized) || normalized < 0 || normalized > 0xffffffff) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_NUMERIC,
-      "SCCP ABI word value must be a u32",
-      "SCCP ABI word value",
-    );
-  }
-  const word = Buffer.alloc(32);
-  word.writeUInt32BE(normalized, 28);
-  return word.toString("hex");
-}
-
-function sccpGroth16ProofHexWord(proofHex, index) {
-  return proofHex.slice(index * 64, (index + 1) * 64);
-}
-
-function sccpGroth16ProofHexWordValue(proofHex, index) {
-  return BigInt(`0x${sccpGroth16ProofHexWord(proofHex, index)}`);
-}
-
-function sccpGroth16ProofHexWordIsZero(proofHex, index) {
-  return sccpGroth16ProofHexWordValue(proofHex, index) === 0n;
-}
-
-function throwSccpGroth16ProofHexError(label, message) {
-  throw createValidationError(ValidationErrorCode.INVALID_HEX, `${label} ${message}`, label);
-}
-
-function requireSccpGroth16BaseFieldWord(proofHex, index, label) {
-  if (sccpGroth16ProofHexWordValue(proofHex, index) >= SCCP_GROTH16_BN254_BASE_FIELD_MODULUS) {
-    throwSccpGroth16ProofHexError(label, "must be a BN254 base-field element");
-  }
-}
-
-function requireSccpGroth16NonZeroPoint(proofHex, indexes, label) {
-  if (indexes.every((index) => sccpGroth16ProofHexWordIsZero(proofHex, index))) {
-    throwSccpGroth16ProofHexError(label, "must not be zero");
-  }
-}
-
-function sccpBn254Fq(value) {
-  const reduced = value % SCCP_GROTH16_BN254_BASE_FIELD_MODULUS;
-  return reduced >= 0n ? reduced : reduced + SCCP_GROTH16_BN254_BASE_FIELD_MODULUS;
-}
-
-const sccpBn254FqAdd = (left, right) => sccpBn254Fq(left + right);
-const sccpBn254FqSub = (left, right) => sccpBn254Fq(left - right);
-const sccpBn254FqMul = (left, right) => sccpBn254Fq(left * right);
-const sccpBn254Fq2Add = ([left0, left1], [right0, right1]) => [
-  sccpBn254FqAdd(left0, right0),
-  sccpBn254FqAdd(left1, right1),
-];
-const sccpBn254Fq2Mul = ([left0, left1], [right0, right1]) => [
-  sccpBn254FqSub(sccpBn254FqMul(left0, right0), sccpBn254FqMul(left1, right1)),
-  sccpBn254FqAdd(sccpBn254FqMul(left0, right1), sccpBn254FqMul(left1, right0)),
-];
-const sccpBn254Fq2Eq = ([left0, left1], [right0, right1]) =>
-  left0 === right0 && left1 === right1;
-
-function requireSccpGroth16G1Point(proofHex, [xIndex, yIndex], label) {
-  requireSccpGroth16NonZeroPoint(proofHex, [xIndex, yIndex], label);
-  const x = sccpGroth16ProofHexWordValue(proofHex, xIndex);
-  const y = sccpGroth16ProofHexWordValue(proofHex, yIndex);
-  const left = sccpBn254FqMul(y, y);
-  const right = sccpBn254FqAdd(sccpBn254FqMul(sccpBn254FqMul(x, x), x), 3n);
-  if (left !== right) {
-    throwSccpGroth16ProofHexError(label, "must be a BN254 G1 point");
-  }
-}
-
-function requireSccpGroth16G2Point(proofHex, [x0Index, x1Index, y0Index, y1Index], label) {
-  requireSccpGroth16NonZeroPoint(proofHex, [x0Index, x1Index, y0Index, y1Index], label);
-  const x = [
-    sccpGroth16ProofHexWordValue(proofHex, x0Index),
-    sccpGroth16ProofHexWordValue(proofHex, x1Index),
-  ];
-  const y = [
-    sccpGroth16ProofHexWordValue(proofHex, y0Index),
-    sccpGroth16ProofHexWordValue(proofHex, y1Index),
-  ];
-  const left = sccpBn254Fq2Mul(y, y);
-  const x2 = sccpBn254Fq2Mul(x, x);
-  const right = sccpBn254Fq2Add(sccpBn254Fq2Mul(x2, x), [
-    SCCP_GROTH16_BN254_G2_B_C0,
-    SCCP_GROTH16_BN254_G2_B_C1,
-  ]);
-  if (!sccpBn254Fq2Eq(left, right)) {
-    throwSccpGroth16ProofHexError(label, "must be a BN254 G2 point");
-  }
-}
-
-function validateSccpGroth16ProofHex(proofHex, context) {
-  if (sccpGroth16ProofHexWordValue(proofHex, 0) !== 1n) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context}.proofBytesHex.version must be 1`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  if (sccpGroth16ProofHexWordIsZero(proofHex, 1)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context}.proofBytesHex.messageId must not be zero`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  const sourceDomain = sccpGroth16ProofHexWordValue(proofHex, 2);
-  if (sourceDomain > 0xffff_ffffn) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context}.proofBytesHex.sourceDomain must fit u32`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  if (sourceDomain !== BigInt(SCCP_DOMAIN_SORA)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context}.proofBytesHex.sourceDomain must be SORA`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  if (sccpGroth16ProofHexWordIsZero(proofHex, 3)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context}.proofBytesHex.commitmentRoot must not be zero`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  [
-    "a.x",
-    "a.y",
-    "b.x0",
-    "b.x1",
-    "b.y0",
-    "b.y1",
-    "c.x",
-    "c.y",
-  ].forEach((field, offset) => {
-    requireSccpGroth16BaseFieldWord(proofHex, 4 + offset, `${context}.proofBytesHex.${field}`);
-  });
-  requireSccpGroth16G1Point(proofHex, [4, 5], `${context}.proofBytesHex.a`);
-  requireSccpGroth16G2Point(proofHex, [6, 7, 8, 9], `${context}.proofBytesHex.b`);
-  requireSccpGroth16G1Point(proofHex, [10, 11], `${context}.proofBytesHex.c`);
-}
-
-function optionalSccpMessageProofContext(messageBundle, context) {
-  if (messageBundle === undefined) {
-    return null;
-  }
-  if (!isPlainObject(messageBundle)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.messageBundle must contain commitment metadata`,
-      `${context}.messageBundle`,
-    );
-  }
-  const commitment =
-    messageBundle.commitment && isPlainObject(messageBundle.commitment)
-      ? messageBundle.commitment
-      : null;
-  if (!commitment) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.messageBundle.commitment.messageId is required`,
-      `${context}.messageBundle.commitment.messageId`,
-    );
-  }
-  const messageId = commitment.message_id ?? commitment.messageId;
-  const commitmentRoot = messageBundle.commitment_root ?? messageBundle.commitmentRoot;
-  if (messageId === undefined || commitmentRoot === undefined) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.messageBundle.commitment.messageId and messageBundle.commitmentRoot are required`,
-      `${context}.messageBundle.commitment.messageId`,
-    );
-  }
-  return {
-    messageId: normalizeHex32String(messageId, `${context}.messageBundle.commitment.messageId`),
-    commitmentRoot: normalizeHex32String(
-      commitmentRoot,
-      `${context}.messageBundle.commitmentRoot`,
-    ),
-  };
-}
-
-function validateSccpGroth16ProofHexForMessageBundle(proofHex, messageBundle, context) {
-  validateSccpGroth16ProofHex(proofHex, context);
-  const proofContext = optionalSccpMessageProofContext(messageBundle, context);
-  if (proofContext === null) {
-    return;
-  }
-  const word = (index) => proofHex.slice(index * 64, (index + 1) * 64);
-  if (word(0) !== abiWordU32Hex(1)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context}.proofBytesHex.version must be 1`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  if (word(1) !== proofContext.messageId) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context}.proofBytesHex.messageId must match messageBundle.commitment.messageId`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  if (word(2) !== abiWordU32Hex(SCCP_DOMAIN_SORA)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context}.proofBytesHex.sourceDomain must be SORA`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  if (word(3) !== proofContext.commitmentRoot) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context}.proofBytesHex.commitmentRoot must match messageBundle.commitmentRoot`,
-      `${context}.proofBytesHex`,
-    );
-  }
-}
-
-const SCCP_DESTINATION_PROOF_MATERIAL_KEYS = [
-  "network_id_hex",
-  "verifier_address_hex",
-  "bridge_address_hex",
-  "verifier_code_hash_hex",
-  "verifier_key_hash_hex",
-  "expected_destination_binding_hash_hex",
-  "tron_verifier_address",
-];
-
-function hasOwnRecordField(record, key) {
-  return Object.prototype.hasOwnProperty.call(record, key);
-}
-
-function hasSccpDestinationProofMaterial(record) {
-  return SCCP_DESTINATION_PROOF_MATERIAL_KEYS.some((key) => hasOwnRecordField(record, key));
-}
-
-function validateSccpDestinationProofMaterialRelationship(record, context) {
-  const hasDestinationMaterial = hasSccpDestinationProofMaterial(record);
-  const hasProofBytes = hasOwnRecordField(record, "proof_bytes_hex");
-  if (hasDestinationMaterial && !hasProofBytes) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.proofBytesHex is required when SCCP destination proof parameters are supplied`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  if (hasProofBytes && !hasDestinationMaterial) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} deployment destination fields are required when proofBytesHex is supplied`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  if (hasDestinationMaterial && hasProofBytes) {
-    requireSccpDestinationProofMaterialTuple(record, context);
-  }
-}
-
-function requireSccpDestinationProofMaterialTuple(record, context) {
-  const hasEvmFields =
-    hasOwnRecordField(record, "verifier_address_hex") ||
-    hasOwnRecordField(record, "bridge_address_hex");
-  const hasTronFields = hasOwnRecordField(record, "tron_verifier_address");
-  if (hasEvmFields && hasTronFields) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} EVM and TRON SCCP destination fields cannot be mixed`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  const sharedFields = [
-    "network_id_hex",
-    "verifier_code_hash_hex",
-    "verifier_key_hash_hex",
-    "expected_destination_binding_hash_hex",
-  ];
-  const hasSharedFields = sharedFields.some((key) => hasOwnRecordField(record, key));
-  if (hasTronFields) {
-    const required = [
-      "network_id_hex",
-      "tron_verifier_address",
-      "verifier_code_hash_hex",
-      "verifier_key_hash_hex",
-      "expected_destination_binding_hash_hex",
-    ];
-    const missing = required.filter((key) => !hasOwnRecordField(record, key));
-    if (missing.length > 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} complete TRON SCCP deployment destination fields are required; missing ${missing.join(", ")}`,
-        `${context}.proofBytesHex`,
-      );
-    }
-    requireTronSccpDestinationBindingHashMatches(record, context);
-    return;
-  }
-  if (hasEvmFields) {
-    const required = [
-      "network_id_hex",
-      "verifier_address_hex",
-      "bridge_address_hex",
-      "verifier_code_hash_hex",
-      "verifier_key_hash_hex",
-      "expected_destination_binding_hash_hex",
-    ];
-    const missing = required.filter((key) => !hasOwnRecordField(record, key));
-    if (missing.length > 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} complete EVM SCCP deployment destination fields are required; missing ${missing.join(", ")}`,
-        `${context}.proofBytesHex`,
-      );
-    }
-    requireEvmSccpDestinationBindingHashMatches(record, context);
-    return;
-  }
-  if (hasSharedFields) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} complete EVM or TRON SCCP deployment destination fields are required`,
-      `${context}.proofBytesHex`,
-    );
-  }
-}
-
-function requireEvmSccpDestinationBindingHashMatches(record, context) {
-  const candidateHashes = [SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC].map((targetDomain) =>
-    evmSccpDestinationBindingHash({
-      targetDomain,
-      networkIdHex: record.network_id_hex,
-      verifierAddressHex: record.verifier_address_hex,
-      bridgeAddressHex: record.bridge_address_hex,
-      verifierCodeHashHex: record.verifier_code_hash_hex,
-      verifierKeyHashHex: record.verifier_key_hash_hex,
-    }).replace(/^0x/u, ""),
-  );
-  if (!candidateHashes.includes(record.expected_destination_binding_hash_hex)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.expectedDestinationBindingHashHex must match canonical EVM destination binding`,
-      `${context}.expectedDestinationBindingHashHex`,
-    );
-  }
-}
-
-function requireTronSccpDestinationBindingHashMatches(record, context) {
-  const expected = tronSccpDestinationBindingHash({
-    network_id_hex: record.network_id_hex,
-    verifierAddress: record.tron_verifier_address,
-    verifier_code_hash_hex: record.verifier_code_hash_hex,
-    verifier_key_hash_hex: record.verifier_key_hash_hex,
-  }).replace(/^0x/u, "");
-  if (record.expected_destination_binding_hash_hex !== expected) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.expectedDestinationBindingHashHex must match canonical TRON destination binding`,
-      `${context}.expectedDestinationBindingHashHex`,
-    );
-  }
-}
-
 function normalizeHashLike32(value, name, options = {}) {
   if (Buffer.isBuffer(value)) {
     return normalizeHex32String(value.toString("hex"), name, options);
@@ -20552,7 +20276,11 @@ function parseHashLiteralToHex(literal, name) {
   if (expected !== checksum.toUpperCase()) {
     throw new TypeError(`${name} has invalid checksum; expected ${expected}`);
   }
-  return body.toLowerCase();
+  const hex = body.toLowerCase();
+  if ((Number.parseInt(hex.slice(-2), 16) & 1) !== 1) {
+    throw new TypeError(`${name} must set the Iroha Hash marker bit`);
+  }
+  return hex;
 }
 
 function formatHashLiteral(bodyHex) {
@@ -20678,7 +20406,26 @@ function normalizeOptionalHexString(value, name) {
   return requireHexString(value, name);
 }
 
-function cloneJsonValue(value, path) {
+function cloneJsonValue(value, path, { nullPrototype = false } = {}) {
+  return cloneJsonValueInternal(value, path, {
+    ancestors: new Set(),
+    nodes: 0,
+    nullPrototype,
+  }, 0);
+}
+
+function cloneJsonValueInternal(value, path, state, depth) {
+  state.nodes += 1;
+  if (state.nodes > JSON_CLONE_MAX_NODES) {
+    throw new RangeError(
+      `${path} exceeds the ${JSON_CLONE_MAX_NODES}-node JSON value limit`,
+    );
+  }
+  if (depth > JSON_CLONE_MAX_DEPTH) {
+    throw new RangeError(
+      `${path} exceeds the ${JSON_CLONE_MAX_DEPTH}-level JSON nesting limit`,
+    );
+  }
   if (
     value === null ||
     typeof value === "string" ||
@@ -20695,20 +20442,76 @@ function cloneJsonValue(value, path) {
   if (typeof value === "bigint") {
     return value.toString(10);
   }
-  if (Array.isArray(value)) {
-    return value.map((entry, index) => cloneJsonValue(entry, `${path}[${index}]`));
+  if (typeof value !== "object") {
+    throw new TypeError(`${path} contains unsupported value type: ${typeof value}`);
   }
-  if (typeof value === "object") {
-    const result = {};
-    for (const [key, nested] of Object.entries(value)) {
-      if (typeof key !== "string" || key.length === 0) {
-        throw new TypeError(`${path} keys must be non-empty strings`);
+  if (state.ancestors.has(value)) {
+    throw new TypeError(`${path} must not contain cyclic references`);
+  }
+  state.ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      const length = lengthDescriptor?.value;
+      if (!Number.isSafeInteger(length) || length < 0) {
+        throw new TypeError(`${path} must be an exact JSON array`);
       }
-      result[key] = cloneJsonValue(nested, `${path}.${key}`);
+      if (length > JSON_CLONE_MAX_NODES) {
+        throw new RangeError(
+          `${path} exceeds the ${JSON_CLONE_MAX_NODES}-node JSON value limit`,
+        );
+      }
+      const ownKeys = Reflect.ownKeys(value);
+      if (
+        ownKeys.length !== length + 1 ||
+        ownKeys.some(
+          (key, index) =>
+            (index < length && key !== String(index)) ||
+            (index === length && key !== "length"),
+        )
+      ) {
+        throw new TypeError(`${path} must be a dense exact JSON array`);
+      }
+      const result = new Array(length);
+      for (let index = 0; index < length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+          throw new TypeError(`${path}[${index}] must be an enumerable data property`);
+        }
+        result[index] = cloneJsonValueInternal(
+          descriptor.value,
+          `${path}[${index}]`,
+          state,
+          depth + 1,
+        );
+      }
+      return result;
+    }
+    const result = state.nullPrototype ? Object.create(null) : {};
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") {
+        throw new TypeError(`${path} keys must be strings without symbols`);
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new TypeError(`${path}.${key} must be an enumerable data property`);
+      }
+      Object.defineProperty(result, key, {
+        value: cloneJsonValueInternal(
+          descriptor.value,
+          `${path}.${key}`,
+          state,
+          depth + 1,
+        ),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     }
     return result;
+  } finally {
+    state.ancestors.delete(value);
   }
-  throw new TypeError(`${path} contains unsupported value type: ${typeof value}`);
 }
 
 function normalizeSpaceDirectoryManifestPayload(input, context) {
@@ -20818,10 +20621,13 @@ function normalizeRegisterContractCodeRequest(input) {
     manifest,
   };
   if (codeBytes !== undefined) {
-    payload.code_bytes = normalizeOptionalBase64Payload(
-      codeBytes,
-      "registerContractCode.codeBytes",
-    );
+    payload.code_bytes =
+      codeBytes === null
+        ? null
+        : normalizeIvmArtifactBytecodeInput(
+            codeBytes,
+            "registerContractCode.codeBytes",
+          );
   }
   return payload;
 }
@@ -20895,7 +20701,7 @@ function normalizeDeployContractRequest(input) {
   const contractAlias = record.contract_alias ?? record.contractAlias;
   const payload = {
     ...credentials,
-    code_b64: normalizeRequiredBase64Payload(
+    code_b64: normalizeIvmArtifactBytecodeInput(
       codeB64,
       "deployContract.codeB64",
     ),
@@ -20941,6 +20747,9 @@ function normalizeDeployContractResponse(payload) {
   if (!Array.isArray(record.contracts)) {
     throw new TypeError("deployContract.response.contracts must be an array");
   }
+  if (!Array.isArray(record.hajimari_calls)) {
+    throw new TypeError("deployContract.response.hajimari_calls must be an array");
+  }
   if (!Array.isArray(record.completed_stages)) {
     throw new TypeError("deployContract.response.completed_stages must be an array");
   }
@@ -20970,7 +20779,7 @@ function normalizeDeployContractResponse(payload) {
         contract.previous_contract_address,
         `deployContract.response.contracts[${index}].previous_contract_address`,
       ),
-      upgraded: Boolean(contract.upgraded),
+      kaizen: Boolean(contract.kaizen),
       dataspace: requireNonEmptyString(
         contract.dataspace,
         `deployContract.response.contracts[${index}].dataspace`,
@@ -21008,24 +20817,24 @@ function normalizeDeployContractResponse(payload) {
     return contractResult;
   };
   const normalizeCall = (callPayload, index) => {
-    const call = ensureRecord(callPayload, `deployContract.response.init_calls[${index}]`);
+    const call = ensureRecord(callPayload, `deployContract.response.hajimari_calls[${index}]`);
     const callResult = {
-      id: requireNonEmptyString(call.id, `deployContract.response.init_calls[${index}].id`),
+      id: requireNonEmptyString(call.id, `deployContract.response.hajimari_calls[${index}].id`),
       contract_alias: requireNonEmptyString(
         call.contract_alias,
-        `deployContract.response.init_calls[${index}].contract_alias`,
+        `deployContract.response.hajimari_calls[${index}].contract_alias`,
       ),
       entrypoint: normalizeOptionalString(
         call.entrypoint,
-        `deployContract.response.init_calls[${index}].entrypoint`,
+        `deployContract.response.hajimari_calls[${index}].entrypoint`,
       ),
       tx_hash_hex: normalizeOptionalHash(
         call.tx_hash_hex,
-        `deployContract.response.init_calls[${index}].tx_hash_hex`,
+        `deployContract.response.hajimari_calls[${index}].tx_hash_hex`,
       ),
       status: requireNonEmptyString(
         call.status,
-        `deployContract.response.init_calls[${index}].status`,
+        `deployContract.response.hajimari_calls[${index}].status`,
       ),
     };
     if (call.pipeline_status !== undefined) {
@@ -21034,7 +20843,7 @@ function normalizeDeployContractResponse(payload) {
           ? null
           : normalizePipelineTransactionStatus(
               call.pipeline_status,
-              `deployContract.response.init_calls[${index}].pipeline_status`,
+              `deployContract.response.hajimari_calls[${index}].pipeline_status`,
             );
     }
     return callResult;
@@ -21179,9 +20988,7 @@ function normalizeDeployContractResponse(payload) {
       "deployContract.response.failure_point",
     ),
     contracts: record.contracts.map(normalizeContract),
-    init_calls: Array.isArray(record.init_calls)
-      ? record.init_calls.map(normalizeCall)
-      : [],
+    hajimari_calls: record.hajimari_calls.map(normalizeCall),
     assertions: Array.isArray(record.assertions)
       ? record.assertions.map(normalizeAssertion)
       : [],
@@ -21440,6 +21247,21 @@ function normalizeGovernanceWindow(value, name) {
   return { lower, upper };
 }
 
+function normalizeGovernanceVotingMode(value, name) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (normalized === "zk" || normalized === "zkballot" || normalized === "zk_vote") {
+    return "Zk";
+  }
+  if (normalized === "plain" || normalized === "plainballot") {
+    return "Plain";
+  }
+  throw createValidationError(
+    ValidationErrorCode.INVALID_STRING,
+    `${name} must be either 'Zk' or 'Plain'`,
+    normalizeErrorPath(name),
+  );
+}
+
 function normalizeGovernanceDraftResponse(
   payload,
   context = "governance draft response",
@@ -21611,57 +21433,6 @@ function normalizeGovernanceDeployContractProposalPayload(input) {
     );
   }
   return payload;
-}
-
-function normalizeGovernanceSccpRouteManifestProposalPayload(input) {
-  const record = ensureRecord(
-    input,
-    "governanceProposeSccpRouteManifest payload",
-  );
-  const manifestValue =
-    record.manifest ?? record.routeManifest ?? record.route_manifest;
-  const payload = {
-    manifest: cloneJsonValue(
-      ensureRecord(
-        manifestValue,
-        "governanceProposeSccpRouteManifest.manifest",
-      ),
-      "governanceProposeSccpRouteManifest.manifest",
-    ),
-  };
-  const windowValue = record.window;
-  if (windowValue !== undefined && windowValue !== null) {
-    payload.window = normalizeGovernanceWindow(
-      windowValue,
-      "governanceProposeSccpRouteManifest.window",
-    );
-  }
-  const modeValue = record.mode;
-  if (modeValue !== undefined && modeValue !== null) {
-    payload.mode = normalizeGovernanceVotingMode(
-      modeValue,
-      "governanceProposeSccpRouteManifest.mode",
-    );
-  }
-  if (record.authority !== undefined && record.authority !== null) {
-    payload.authority = ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceProposeSccpRouteManifest.authority",
-    );
-  }
-  return payload;
-}
-
-function normalizeGovernanceVotingMode(value, name) {
-  const normalized = requireNonEmptyString(value, name);
-  const lower = normalized.toLowerCase();
-  if (lower === "zk" || lower === "zkballot" || lower === "zk_vote") {
-    return "Zk";
-  }
-  if (lower === "plain" || lower === "plainballot") {
-    return "Plain";
-  }
-  throw new TypeError(`${name} must be either "Zk" or "Plain"`);
 }
 
 function normalizeGovernancePlainBallotPayload(input) {
@@ -22081,12 +21852,10 @@ function normalizeContractCallRequest(input) {
   if (hasPrivateKey) {
     normalized.private_key = resolveAuthorityPrivateKey(record, "contractCall");
   }
-  if (record.entrypoint !== undefined && record.entrypoint !== null) {
-    normalized.entrypoint = requireNonEmptyString(
-      record.entrypoint,
-      "contractCall.entrypoint",
-    );
-  }
+  normalized.entrypoint = requireNonEmptyString(
+    record.entrypoint,
+    "contractCall.entrypoint",
+  );
   if (record.payload !== undefined) {
     normalized.payload = cloneJsonValue(record.payload, "contractCall.payload");
   }
@@ -22108,9 +21877,48 @@ function normalizeContractCallRequest(input) {
   normalized.gas_limit = ToriiClient._normalizeUnsignedInteger(
     gasLimit,
     "contractCall.gasLimit",
-    { allowZero: true },
   );
   return normalized;
+}
+
+function normalizeContractOperationReceipt(payload, context) {
+  const receipt = ensureRecord(payload, context);
+  const optionalString = (value, field) =>
+    value === undefined || value === null ? null : requireNonEmptyString(value, field);
+  const optionalHash = (value, field) =>
+    value === undefined || value === null ? null : normalizeHex32String(value, field);
+  return {
+    operation_kind: requireNonEmptyString(receipt.operation_kind, `${context}.operation_kind`),
+    status: requireNonEmptyString(receipt.status, `${context}.status`),
+    transport: requireNonEmptyString(receipt.transport, `${context}.transport`),
+    dataspace: requireNonEmptyString(receipt.dataspace, `${context}.dataspace`),
+    contract_alias: optionalString(receipt.contract_alias, `${context}.contract_alias`),
+    contract_address: optionalString(receipt.contract_address, `${context}.contract_address`),
+    code_hash_hex: optionalHash(receipt.code_hash_hex, `${context}.code_hash_hex`),
+    abi_hash_hex: optionalHash(receipt.abi_hash_hex, `${context}.abi_hash_hex`),
+    tx_hash_hex: optionalHash(receipt.tx_hash_hex, `${context}.tx_hash_hex`),
+    entrypoint: optionalString(receipt.entrypoint, `${context}.entrypoint`),
+    entrypoint_hash_hex: optionalHash(
+      receipt.entrypoint_hash_hex,
+      `${context}.entrypoint_hash_hex`,
+    ),
+    gas_limit:
+      receipt.gas_limit === undefined || receipt.gas_limit === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(receipt.gas_limit, `${context}.gas_limit`),
+    gas_used:
+      receipt.gas_used === undefined || receipt.gas_used === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(receipt.gas_used, `${context}.gas_used`, {
+            allowZero: true,
+          }),
+    gas_asset_id: optionalString(receipt.gas_asset_id, `${context}.gas_asset_id`),
+    fee_sponsor: optionalString(receipt.fee_sponsor, `${context}.fee_sponsor`),
+    payload_digest_hex: normalizeHex32String(
+      receipt.payload_digest_hex,
+      `${context}.payload_digest_hex`,
+    ),
+  };
 }
 
 function normalizeContractCallResponse(payload) {
@@ -22135,6 +21943,13 @@ function normalizeContractCallResponse(payload) {
       "contractCall response.creation_time_ms",
       { allowZero: true },
     ),
+    transaction_ttl_ms:
+      record.transaction_ttl_ms === undefined || record.transaction_ttl_ms === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+            record.transaction_ttl_ms,
+            "contractCall response.transaction_ttl_ms",
+          ),
   };
   if (record.contract_address !== undefined && record.contract_address !== null) {
     normalized.contract_address = requireNonEmptyString(
@@ -22150,6 +21965,13 @@ function normalizeContractCallResponse(payload) {
   } else {
     normalized.tx_hash_hex = null;
   }
+  normalized.entrypoint_hash_hex =
+    record.entrypoint_hash_hex === undefined || record.entrypoint_hash_hex === null
+      ? null
+      : normalizeHex32String(
+          record.entrypoint_hash_hex,
+          "contractCall response.entrypoint_hash_hex",
+        );
   normalized.entrypoint =
     record.entrypoint === undefined || record.entrypoint === null
       ? null
@@ -22187,6 +22009,10 @@ function normalizeContractCallResponse(payload) {
             "contractCall response.pipeline_status",
           );
   }
+  normalized.operation_receipt = normalizeContractOperationReceipt(
+    record.operation_receipt,
+    "contractCall response.operation_receipt",
+  );
   return normalized;
 }
 
@@ -22235,8 +22061,30 @@ function normalizeContractCallSimulateRequest(input) {
 
 function normalizeContractCallSimulateResponse(payload) {
   const record = ensureRecord(payload, "contractCall simulation response");
+  if (typeof record.ok !== "boolean") {
+    throw new TypeError(
+      "contractCall simulation response.ok must be a boolean",
+    );
+  }
+  const error =
+    record.error === undefined || record.error === null
+      ? null
+      : requireNonEmptyString(
+          record.error,
+          "contractCall simulation response.error",
+        );
+  if (record.ok && error !== null) {
+    throw new TypeError(
+      "successful contractCall simulation response must not contain an error",
+    );
+  }
+  if (!record.ok && error === null) {
+    throw new TypeError(
+      "failed contractCall simulation response must contain a non-empty error",
+    );
+  }
   const normalized = {
-    ok: Boolean(record.ok),
+    ok: record.ok,
     dataspace: requireNonEmptyString(
       record.dataspace,
       "contractCall simulation response.dataspace",
@@ -22293,13 +22141,7 @@ function normalizeContractCallSimulateResponse(payload) {
       record.result === undefined || record.result === null
         ? null
         : cloneJsonValue(record.result, "contractCall simulation response.result"),
-    error:
-      record.error === undefined || record.error === null
-        ? null
-        : requireNonEmptyString(
-            record.error,
-            "contractCall simulation response.error",
-          ),
+    error,
     vm_diagnostic:
       record.vm_diagnostic === undefined || record.vm_diagnostic === null
         ? null
@@ -22315,6 +22157,10 @@ function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
   const record = ensureRecord(input, `${context} request`);
   const vkRef = record.vk_ref ?? record.vkRef;
   const metadata = record.metadata ?? {};
+  const bytecode = normalizeIvmArtifactBytecodeInput(
+    record.bytecode,
+    `${context}.bytecode`,
+  );
   const normalized = {
     vk_ref: normalizeVerifyingKeyId(vkRef, `${context}.vk_ref`),
     authority: ToriiClient._normalizeAccountId(
@@ -22325,31 +22171,299 @@ function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
       ensureRecord(metadata, `${context}.metadata`),
       `${context}.metadata`,
     ),
-    bytecode: normalizeRequiredBase64Payload(
-      record.bytecode,
-      `${context}.bytecode`,
-    ),
+    bytecode,
   };
   if (includeProved) {
     const proved = record.proved;
     if (proved !== undefined && proved !== null) {
-      normalized.proved = cloneJsonValue(
-        ensureRecord(proved, `${context}.proved`),
+      normalized.proved = normalizeZkIvmProvedPayload(
+        proved,
         `${context}.proved`,
       );
+      if (normalized.proved.bytecode !== bytecode) {
+        throw new TypeError(
+          `${context}.proved.bytecode must exactly match ${context}.bytecode`,
+        );
+      }
     }
   }
   return normalized;
 }
 
+function stringifyBoundedJsonRequest(payload, maxBytes, context) {
+  const body = JSON.stringify(payload);
+  if (Buffer.byteLength(body, "utf8") > maxBytes) {
+    throw new RangeError(`${context} exceeds the ${maxBytes}-byte request limit`);
+  }
+  return body;
+}
+
 function normalizeZkIvmDeriveResponse(payload) {
-  const record = ensureRecord(payload, "IVM derive response");
+  const record = exactEnumerableDataRecord(
+    payload,
+    ["proved"],
+    "IVM derive response",
+  );
   return {
-    proved: cloneJsonValue(
-      ensureRecord(record.proved, "IVM derive response.proved"),
+    proved: normalizeZkIvmProvedPayload(
+      record.proved,
       "IVM derive response.proved",
     ),
   };
+}
+
+function normalizeZkIvmProvedPayload(value, context) {
+  const record = exactEnumerableDataRecord(
+    value,
+    ["bytecode", "overlay", "events_commitment", "gas_policy_commitment"],
+    context,
+  );
+  const bytecode = normalizeIvmArtifactBase64String(
+    record.bytecode,
+    `${context}.bytecode`,
+  );
+  if (!Array.isArray(record.overlay)) {
+    throw new TypeError(`${context}.overlay must be an array`);
+  }
+  const overlay = cloneJsonValue(record.overlay, `${context}.overlay`, {
+    nullPrototype: true,
+  });
+  return {
+    bytecode,
+    overlay,
+    events_commitment: normalizeHex32String(
+      record.events_commitment,
+      `${context}.events_commitment`,
+    ),
+    gas_policy_commitment: normalizeHex32String(
+      record.gas_policy_commitment,
+      `${context}.gas_policy_commitment`,
+    ),
+  };
+}
+
+function exactEnumerableDataRecord(value, expectedKeys, context) {
+  const record = ensureRecord(value, context);
+  const expected = new Set(expectedKeys);
+  const ownKeys = Reflect.ownKeys(record);
+  if (
+    ownKeys.length !== expectedKeys.length ||
+    ownKeys.some((key) => typeof key !== "string" || !expected.has(key))
+  ) {
+    throw new TypeError(
+      `${context} must contain exactly: ${expectedKeys.join(", ")}`,
+    );
+  }
+  const snapshot = {};
+  for (const key of expectedKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(record, key);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError(`${context}.${key} must be an enumerable data property`);
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return snapshot;
+}
+
+function normalizePortableVerifyingKeyIdField(value, context) {
+  const field = requireExactNonEmptyString(value, context);
+  if (
+    Buffer.byteLength(field, "utf8") > 256 ||
+    !/^[a-z0-9](?:[a-z0-9._/:\-]*[a-z0-9])?$/u.test(field) ||
+    ["..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"].some(
+      (separator) => field.includes(separator),
+    )
+  ) {
+    throw new TypeError(`${context} must use portable registry syntax`);
+  }
+  return field;
+}
+
+function normalizeZkIvmProofAttachment(value, context) {
+  const candidate = ensureRecord(value, context);
+  const requiredKeys = ["backend", "proof", "vk_ref"];
+  const optionalKeys = ["vk_commitment", "envelope_hash", "lane_privacy"];
+  const allowed = new Set([...requiredKeys, ...optionalKeys]);
+  const ownKeys = Reflect.ownKeys(candidate);
+  if (
+    requiredKeys.some((key) => !ownKeys.includes(key)) ||
+    ownKeys.some((key) => typeof key !== "string" || !allowed.has(key))
+  ) {
+    throw new TypeError(
+      `${context} must contain backend, proof, vk_ref, and only supported optional fields`,
+    );
+  }
+  const presentOptionalKeys = optionalKeys.filter((key) => ownKeys.includes(key));
+  const record = exactEnumerableDataRecord(
+    candidate,
+    [...requiredKeys, ...presentOptionalKeys],
+    context,
+  );
+  const backend = assertProductionVerifyBackendLabel(
+    record.backend,
+    `${context}.backend`,
+  );
+  const proofCandidate = ensureRecord(record.proof, `${context}.proof`);
+  const proofKeys = Reflect.ownKeys(proofCandidate);
+  const hasCompactBytes = proofKeys.includes("bytes_b64");
+  const hasLegacyBytes = proofKeys.includes("bytes");
+  if (
+    proofKeys.length !== 2 ||
+    !proofKeys.includes("backend") ||
+    hasCompactBytes === hasLegacyBytes ||
+    proofKeys.some(
+      (key) =>
+        typeof key !== "string" ||
+        !new Set(["backend", "bytes_b64", "bytes"]).has(key),
+    )
+  ) {
+    throw new TypeError(
+      `${context}.proof must contain exactly backend and one of bytes_b64 or bytes`,
+    );
+  }
+  const proof = exactEnumerableDataRecord(
+    proofCandidate,
+    ["backend", hasCompactBytes ? "bytes_b64" : "bytes"],
+    `${context}.proof`,
+  );
+  const proofBackend = assertProductionVerifyBackendLabel(
+    proof.backend,
+    `${context}.proof.backend`,
+  );
+  if (proofBackend !== backend) {
+    throw new TypeError(`${context}.proof.backend must match ${context}.backend`);
+  }
+  const vkRefRecord = exactEnumerableDataRecord(
+    record.vk_ref,
+    ["backend", "name"],
+    `${context}.vk_ref`,
+  );
+  const vkBackend = assertProductionVerifyBackendLabel(
+    vkRefRecord.backend,
+    `${context}.vk_ref.backend`,
+  );
+  if (vkBackend !== backend) {
+    throw new TypeError(`${context}.vk_ref.backend must match ${context}.backend`);
+  }
+  const vkName = normalizePortableVerifyingKeyIdField(
+    vkRefRecord.name,
+    `${context}.vk_ref.name`,
+  );
+  const normalized = {
+    backend,
+    proof: {
+      backend: proofBackend,
+      bytes_b64: hasCompactBytes
+        ? normalizeBoundedCanonicalBase64String(
+            proof.bytes_b64,
+            `${context}.proof.bytes_b64`,
+            IVM_PROOF_MAX_BYTES,
+            "proof",
+          )
+        : Buffer.from(
+            normalizeExactJsonByteArray(
+              proof.bytes,
+              `${context}.proof.bytes`,
+              { maxLength: IVM_PROOF_MAX_BYTES },
+            ),
+          ).toString("base64"),
+    },
+    vk_ref: { backend: vkBackend, name: vkName },
+  };
+  for (const key of ["vk_commitment", "envelope_hash"]) {
+    if (!presentOptionalKeys.includes(key)) continue;
+    if (hasLegacyBytes && record[key] === null) continue;
+    const bytes = normalizeExactJsonByteArray(
+      record[key],
+      `${context}.${key}`,
+      { exactLength: 32 },
+    );
+    let nonZero = false;
+    for (let index = 0; index < 32; index += 1) {
+      if (bytes[index] !== 0) nonZero = true;
+    }
+    if (!nonZero) {
+      throw new TypeError(`${context}.${key} must be non-zero`);
+    }
+    normalized[key] = Array.from(bytes);
+  }
+  if (presentOptionalKeys.includes("lane_privacy")) {
+    if (hasLegacyBytes && record.lane_privacy === null) {
+      return validateNormalizedProofAttachmentEnvelope(normalized, context);
+    }
+    normalized.lane_privacy = cloneJsonValue(
+      ensureRecord(record.lane_privacy, `${context}.lane_privacy`),
+      `${context}.lane_privacy`,
+    );
+  }
+  return validateNormalizedProofAttachmentEnvelope(normalized, context);
+}
+
+function validateNormalizedProofAttachmentEnvelope(attachment, context) {
+  if (attachment.envelope_hash === undefined) return attachment;
+  const proofBytes = Buffer.from(attachment.proof.bytes_b64, "base64");
+  const expected = new Uint8ArrayIntrinsic(blake2b256(proofBytes));
+  expected[typedArrayByteLengthGetter.call(expected) - 1] |= 1;
+  for (let index = 0; index < 32; index += 1) {
+    if (attachment.envelope_hash[index] !== expected[index]) {
+      throw new TypeError(`${context}.envelope_hash must match proof bytes`);
+    }
+  }
+  return attachment;
+}
+
+function normalizeExactJsonByteArray(
+  value,
+  context,
+  { exactLength = null, maxLength = null } = {},
+) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an exact byte array`);
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (!lengthDescriptor || !("value" in lengthDescriptor)) {
+    throw new TypeError(`${context} must be an exact byte array`);
+  }
+  const length = lengthDescriptor.value;
+  if (exactLength !== null && length !== exactLength) {
+    throw new TypeError(`${context} must be an exact ${exactLength}-byte array`);
+  }
+  if (maxLength !== null && length > maxLength) {
+    throw new RangeError(`${context} exceeds the ${maxLength}-byte proof limit`);
+  }
+  if (length === 0) {
+    throw new TypeError(`${context} must not be empty`);
+  }
+  if (Object.getOwnPropertySymbols(value).length !== 0) {
+    throw new TypeError(`${context} must be an exact byte array`);
+  }
+  const bytes = new Uint8ArrayIntrinsic(length);
+  let enumerableKeys = 0;
+  for (const key in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      throw new TypeError(`${context} must not inherit enumerable fields`);
+    }
+    if (key !== String(enumerableKeys) || enumerableKeys >= length) {
+      throw new TypeError(`${context} must be a dense exact byte array`);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const byte = descriptor && "value" in descriptor ? descriptor.value : null;
+    if (
+      !descriptor?.enumerable ||
+      typeof byte !== "number" ||
+      !Number.isInteger(byte) ||
+      byte < 0 ||
+      byte > 0xff
+    ) {
+      throw new TypeError(`${context}[${key}] must be an unsigned byte`);
+    }
+    bytes[enumerableKeys] = byte;
+    enumerableKeys += 1;
+  }
+  if (enumerableKeys !== length) {
+    throw new TypeError(`${context} must be a dense exact byte array`);
+  }
+  return bytes;
 }
 
 function normalizeIvmProveJobId(value, context) {
@@ -22360,10 +22474,24 @@ function normalizeIvmProveJobId(value, context) {
   return normalized.toLowerCase();
 }
 
+function normalizeIvmProveResponseJobId(value, context) {
+  const normalized = requireExactNonEmptyString(value, context);
+  if (!/^[0-9a-f]{32}$/u.test(normalized)) {
+    throw new TypeError(
+      `${context} must be an exact lowercase 16-byte hexadecimal IVM prove job id`,
+    );
+  }
+  return normalized;
+}
+
 function normalizeZkIvmProveJobCreatedResponse(payload) {
-  const record = ensureRecord(payload, "IVM prove job response");
+  const record = exactEnumerableDataRecord(
+    payload,
+    ["job_id"],
+    "IVM prove job response",
+  );
   return {
-    job_id: normalizeIvmProveJobId(
+    job_id: normalizeIvmProveResponseJobId(
       record.job_id,
       "IVM prove job response.job_id",
     ),
@@ -22371,47 +22499,66 @@ function normalizeZkIvmProveJobCreatedResponse(payload) {
 }
 
 function normalizeZkIvmProveJobResponse(payload) {
-  const record = ensureRecord(payload, "IVM prove job status response");
-  const status = requireNonEmptyString(
-    record.status,
+  const candidate = ensureRecord(payload, "IVM prove job status response");
+  const statusDescriptor = Object.getOwnPropertyDescriptor(candidate, "status");
+  if (
+    !statusDescriptor ||
+    !("value" in statusDescriptor) ||
+    !statusDescriptor.enumerable
+  ) {
+    throw new TypeError(
+      "IVM prove job status response.status must be an enumerable data property",
+    );
+  }
+  const status = requireExactNonEmptyString(
+    statusDescriptor.value,
     "IVM prove job status response.status",
-  ).toLowerCase();
+  );
   if (!new Set(["pending", "running", "done", "error"]).has(status)) {
     throw new TypeError(
       "IVM prove job status response.status must be pending, running, done, or error",
     );
   }
-  return {
-    job_id: normalizeIvmProveJobId(
+  const expectedKeys =
+    status === "done"
+      ? ["job_id", "status", "proved", "attachment"]
+      : status === "error"
+        ? ["job_id", "status", "error"]
+        : ["job_id", "status"];
+  const record = exactEnumerableDataRecord(
+    candidate,
+    expectedKeys,
+    "IVM prove job status response",
+  );
+  const normalized = {
+    job_id: normalizeIvmProveResponseJobId(
       record.job_id,
       "IVM prove job status response.job_id",
     ),
     status,
     error:
-      record.error === undefined || record.error === null
+      status !== "error"
         ? null
         : requireNonEmptyString(
             record.error,
             "IVM prove job status response.error",
           ),
     proved:
-      record.proved === undefined || record.proved === null
+      status !== "done"
         ? null
-        : cloneJsonValue(
-            ensureRecord(record.proved, "IVM prove job status response.proved"),
+        : normalizeZkIvmProvedPayload(
+            record.proved,
             "IVM prove job status response.proved",
           ),
     attachment:
-      record.attachment === undefined || record.attachment === null
+      status !== "done"
         ? null
-        : cloneJsonValue(
-            ensureRecord(
-              record.attachment,
-              "IVM prove job status response.attachment",
-            ),
+        : normalizeZkIvmProofAttachment(
+            record.attachment,
             "IVM prove job status response.attachment",
           ),
   };
+  return normalized;
 }
 
 function normalizeMultisigAccountSelector(input, context) {
@@ -22942,60 +23089,206 @@ function normalizeContractManifestResponse(payload) {
     record.manifest ?? {},
     "contract manifest response.manifest",
   );
-  const accessHints =
-    manifestRecord.access_set_hints ?? null;
-  const entrypointsValue =
-    manifestRecord.entrypoints ?? null;
-  const kotobaValue = manifestRecord.kotoba ?? null;
-  const provenanceValue = manifestRecord.provenance ?? null;
-  return {
-    manifest: {
-      code_hash: normalizeOptionalHex32(
+  const manifest = normalizeManifestPayload(
+    {
+      ...manifestRecord,
+      code_hash: normalizeCanonicalManifestHash(
         manifestRecord.code_hash,
         "manifest.code_hash",
       ),
-      abi_hash: normalizeOptionalHex32(
+      abi_hash: normalizeCanonicalManifestHash(
         manifestRecord.abi_hash,
         "manifest.abi_hash",
       ),
-      compiler_fingerprint:
-        manifestRecord.compiler_fingerprint ?? null,
-      features_bitmap: manifestRecord.features_bitmap ?? null,
-      access_set_hints:
-        accessHints === null
-          ? null
-          : normalizeAccessSetHintsPayload(
-              accessHints,
-              "manifest.access_set_hints",
-            ),
-      entrypoints: normalizeManifestEntrypointsPayload(
-        entrypointsValue,
-        "manifest.entrypoints",
-      ),
-      kotoba:
-        kotobaValue === null
-          ? null
-          : cloneJsonValue(kotobaValue, "manifest.kotoba"),
-      provenance:
-        provenanceValue === null
-          ? null
-          : cloneJsonValue(provenanceValue, "manifest.provenance"),
     },
-    code_bytes:
-      record.code_bytes === undefined || record.code_bytes === null
-        ? null
-        : normalizeOptionalBase64Payload(record.code_bytes, "contractManifest.code_bytes"),
+    "manifest",
+  );
+  const codeHash = normalizeOptionalHex32(record.code_hash, "contractManifest.code_hash") ?? null;
+  const abiHash = normalizeOptionalHex32(record.abi_hash, "contractManifest.abi_hash") ?? null;
+  if (codeHash !== manifest.code_hash) {
+    throw new TypeError(
+      "contractManifest.code_hash does not match manifest.code_hash",
+    );
+  }
+  if (abiHash !== manifest.abi_hash) {
+    throw new TypeError(
+      "contractManifest.abi_hash does not match manifest.abi_hash",
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(record, "code_bytes")) {
+    throw new TypeError("contract manifest response must not include code_bytes");
+  }
+  return {
+    manifest,
+    code_hash: codeHash,
+    abi_hash: abiHash,
   };
+}
+
+function normalizeCanonicalManifestHash(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const literal = requireExactNonEmptyString(value, name);
+  if (!/^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u.test(literal)) {
+    throw new TypeError(`${name} must be a canonical uppercase Norito Hash literal`);
+  }
+  return parseHashLiteralToHex(literal, name);
 }
 
 function normalizeContractCodeBytesResponse(payload) {
   const record = ensureRecord(payload, "contract code bytes response");
+  const ownKeys = Reflect.ownKeys(record);
+  if (ownKeys.length !== 1 || ownKeys[0] !== "code_b64") {
+    throw new TypeError(
+      "contract code bytes response must contain exactly the code_b64 field",
+    );
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(record, "code_b64");
+  if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+    throw new TypeError(
+      "contract code bytes response code_b64 must be an enumerable data property",
+    );
+  }
   return {
-    code_b64: normalizeRequiredBase64Payload(
-      record.code_b64,
+    code_b64: normalizeIvmArtifactBase64String(
+      descriptor.value,
       "contractCodeBytes.code_b64",
     ),
   };
+}
+
+function normalizeIvmArtifactBase64String(value, name) {
+  return normalizeBoundedCanonicalBase64String(
+    value,
+    name,
+    IVM_ARTIFACT_MAX_BYTES,
+    "artifact",
+  );
+}
+
+function normalizeBoundedCanonicalBase64String(
+  value,
+  name,
+  maxBytes,
+  limitLabel = "payload",
+) {
+  if (typeof value !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be a base64 string`,
+      name,
+    );
+  }
+  const maxEncodedLength = Math.ceil(maxBytes / 3) * 4;
+  if (value.length > maxEncodedLength) {
+    throw new RangeError(
+      `${name} exceeds the ${maxBytes}-byte ${limitLabel} limit`,
+    );
+  }
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  if (
+    value.length % 4 === 0 &&
+    (value.length / 4) * 3 - padding > maxBytes
+  ) {
+    throw new RangeError(
+      `${name} exceeds the ${maxBytes}-byte ${limitLabel} limit`,
+    );
+  }
+  if (!hasExactStandardBase64Shape(value)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be canonical standard base64`,
+      name,
+    );
+  }
+  return value;
+}
+
+function isGenuineSharedArrayBuffer(value) {
+  if (sharedArrayBufferByteLengthGetter === null) return false;
+  try {
+    sharedArrayBufferByteLengthGetter.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeIvmArtifactBytecodeInput(value, name) {
+  if (typeof value === "string") {
+    return normalizeIvmArtifactBase64String(value, name);
+  }
+  if (isGenuineSharedArrayBuffer(value)) {
+    throw new TypeError(`${name} must not use SharedArrayBuffer`);
+  }
+
+  let buffer;
+  let byteOffset;
+  let byteLength;
+  try {
+    byteLength = arrayBufferByteLengthGetter.call(value);
+    buffer = value;
+    byteOffset = 0;
+  } catch {
+    try {
+      typedArrayTagGetter.call(value);
+      buffer = typedArrayBufferGetter.call(value);
+      byteOffset = typedArrayByteOffsetGetter.call(value);
+      byteLength = typedArrayByteLengthGetter.call(value);
+    } catch {
+      try {
+        buffer = dataViewBufferGetter.call(value);
+        byteOffset = dataViewByteOffsetGetter.call(value);
+        byteLength = dataViewByteLengthGetter.call(value);
+      } catch {
+        throw new TypeError(
+          `${name} must be canonical base64 or an ArrayBuffer view`,
+        );
+      }
+    }
+  }
+  if (isGenuineSharedArrayBuffer(buffer)) {
+    throw new TypeError(`${name} must not use SharedArrayBuffer`);
+  }
+  if (byteLength > IVM_ARTIFACT_MAX_BYTES) {
+    throw new RangeError(
+      `${name} exceeds the ${IVM_ARTIFACT_MAX_BYTES}-byte artifact limit`,
+    );
+  }
+  if (byteLength === 0) {
+    throw new TypeError(`${name} must not be empty`);
+  }
+  return Buffer.from(
+    copyArrayBufferBytes(buffer, byteOffset, byteLength),
+  ).toString("base64");
+}
+
+function hasExactStandardBase64Shape(value) {
+  if (value.length === 0 || value.length % 4 !== 0) return false;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const dataLength = value.length - padding;
+  for (let index = 0; index < dataLength; index += 1) {
+    const code = value.charCodeAt(index);
+    if (standardBase64Sextet(code) < 0) {
+      return false;
+    }
+  }
+  const trailingSextet = standardBase64Sextet(
+    value.charCodeAt(dataLength - 1),
+  );
+  if (padding === 2 && (trailingSextet & 0x0f) !== 0) return false;
+  if (padding === 1 && (trailingSextet & 0x03) !== 0) return false;
+  return true;
+}
+
+function standardBase64Sextet(code) {
+  if (code >= 0x41 && code <= 0x5a) return code - 0x41;
+  if (code >= 0x61 && code <= 0x7a) return code - 0x61 + 26;
+  if (code >= 0x30 && code <= 0x39) return code - 0x30 + 52;
+  if (code === 0x2b) return 62;
+  if (code === 0x2f) return 63;
+  return -1;
 }
 
 function normalizeManifestEntrypointsPayload(value, name) {
@@ -23008,45 +23301,45 @@ function normalizeManifestEntrypointsPayload(value, name) {
   if (value.length === 0) {
     return [];
   }
-  return value.map((entry, index) => {
-    const record = ensureRecord(entry, `${name}[${index}]`);
-    const entryName = requireNonEmptyString(
-      record.name,
-      `${name}[${index}].name`,
-    );
-    const permission =
-      record.permission === undefined || record.permission === null
-        ? null
-        : requireNonEmptyString(
-            record.permission,
-            `${name}[${index}].permission`,
-          );
-    const kind = normalizeManifestEntrypointKind(
-      record.kind,
-      `${name}[${index}].kind`,
-    );
-    return {
-      name: entryName,
-      kind,
-      permission,
-    };
-  });
+  return value.map((entry, index) =>
+    normalizeManifestEntrypointPayload(entry, `${name}[${index}]`),
+  );
 }
 
 function normalizeManifestEntrypointKind(value, name) {
   if (value === undefined || value === null) {
-    return { kind: "Public" };
+    throw new TypeError(`${name} is required`);
   }
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      throw new TypeError(`${name} must be a non-empty string`);
-    }
-    return { kind: trimmed };
+    const canonical = requireExactNonEmptyString(value, name);
+    return { kind: canonicalManifestEntrypointKind(canonical, name), value: null };
   }
   const record = ensureRecord(value, name);
-  const kind = requireNonEmptyString(record.kind, `${name}.kind`);
-  return "value" in record ? { kind, value: record.value } : { kind };
+  const kind = canonicalManifestEntrypointKind(
+    requireExactNonEmptyString(record.kind, `${name}.kind`),
+    `${name}.kind`,
+  );
+  if (record.value !== undefined && record.value !== null) {
+    throw new TypeError(`${name}.value must be null`);
+  }
+  return { kind, value: null };
+}
+
+function canonicalManifestEntrypointKind(value, name) {
+  switch (value) {
+    case "Kotoage":
+      return "Kotoage";
+    case "View":
+      return "View";
+    case "Hajimari":
+      return "Hajimari";
+    case "Kaizen":
+      return "Kaizen";
+    default:
+      throw new TypeError(
+        `${name} must be Kotoage, View, Hajimari, or Kaizen`,
+      );
+  }
 }
 
 function normalizeGovernanceContractResponse(payload) {
@@ -24712,7 +25005,7 @@ function normalizeReputationSnapshotIdHex(value, context) {
 }
 
 function buildSorafsReputationHeaders(options = {}, context) {
-  const headers = { Accept: "application/json" };
+  const headers = { Accept: APPLICATION_JSON };
   if (options.headers !== undefined && options.headers !== null) {
     if (!isPlainObject(options.headers)) {
       throw createValidationError(
@@ -24769,7 +25062,7 @@ function buildSorafsReputationEventsParams(options = {}, context) {
 }
 
 function buildSorafsOrderbookHeaders(options = {}, context, { cache = false } = {}) {
-  const headers = { Accept: "application/json" };
+  const headers = { Accept: APPLICATION_JSON };
   if (options.headers !== undefined && options.headers !== null) {
     if (!isPlainObject(options.headers)) {
       throw createValidationError(
@@ -28505,397 +28798,207 @@ function normalizeSignalOnlyOption(options, context) {
   return { signal };
 }
 
-function normalizeSccpEvmDestinationQueryOptions(options, context, expectedMessageIdHex) {
-  const { signal } = normalizeSignalOption(options, context);
-  const allowed = new Set([
-    "signal",
-    "networkIdHex",
-    "verifierAddressHex",
-    "bridgeAddressHex",
-    "verifierCodeHashHex",
-    "verifierKeyHashHex",
-    "expectedDestinationBindingHashHex",
-    "tronVerifierAddress",
-    "proofBytesHex",
-  ]);
-  const extras = Object.keys(options ?? {}).filter((key) => !allowed.has(key));
-  if (extras.length > 0) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} options contains unsupported fields: ${extras.join(", ")}`,
-      `${context}.options`,
+async function readSccpBridgeSubmitResponse(response, request) {
+  const contentType = response.headers?.get?.("content-type") ?? "";
+  if (!/^application\/json(?:\s*;|$)/iu.test(contentType)) {
+    const error = new TypeError(
+      "SCCP bridge submit response must use application/json content type",
     );
+    await cancelSccpResponseBody(response, error);
+    throw error;
   }
-  const params = {};
-  if (options?.networkIdHex !== undefined) {
-    params.network_id_hex = normalizeExactNonZeroHex32String(
-      options.networkIdHex,
-      `${context}.networkIdHex`,
-    );
+  const text = decodeSccpUtf8(
+    await readBoundedSccpResponseBytes(
+      response,
+      SCCP_SUBMIT_RESPONSE_MAX_BYTES,
+      "SCCP bridge submit",
+    ),
+    "SCCP bridge submit",
+  );
+  const expectations = { submitted: request.signature_b64 !== undefined };
+  if (request.creation_time_ms !== undefined) {
+    expectations.creation_time_ms = request.creation_time_ms;
   }
-  if (options?.verifierAddressHex !== undefined) {
-    params.verifier_address_hex = normalizeExactNonZeroHex20String(
-      options.verifierAddressHex,
-      `${context}.verifierAddressHex`,
-    );
-  }
-  if (options?.bridgeAddressHex !== undefined) {
-    params.bridge_address_hex = normalizeExactNonZeroHex20String(
-      options.bridgeAddressHex,
-      `${context}.bridgeAddressHex`,
-    );
-  }
-  if (options?.verifierCodeHashHex !== undefined) {
-    params.verifier_code_hash_hex = normalizeExactNonZeroHex32String(
-      options.verifierCodeHashHex,
-      `${context}.verifierCodeHashHex`,
-    );
-  }
-  if (options?.verifierKeyHashHex !== undefined) {
-    params.verifier_key_hash_hex = normalizeExactNonZeroHex32String(
-      options.verifierKeyHashHex,
-      `${context}.verifierKeyHashHex`,
-    );
-  }
-  if (options?.expectedDestinationBindingHashHex !== undefined) {
-    params.expected_destination_binding_hash_hex = normalizeExactNonZeroHex32String(
-      options.expectedDestinationBindingHashHex,
-      `${context}.expectedDestinationBindingHashHex`,
-    );
-  }
-  if (options?.tronVerifierAddress !== undefined) {
-    params.tron_verifier_address = normalizeTronBase58CheckAddress(
-      options.tronVerifierAddress,
-      `${context}.tronVerifierAddress`,
-    );
-  }
-  if (options?.proofBytesHex !== undefined) {
-    params.proof_bytes_hex = normalizeExactNonZeroHexBytesString(
-      options.proofBytesHex,
-      `${context}.proofBytesHex`,
-      SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
-    );
-    validateSccpGroth16ProofHex(params.proof_bytes_hex, context);
-    if (
-      expectedMessageIdHex !== undefined &&
-      sccpGroth16ProofHexWord(params.proof_bytes_hex, 1) !== expectedMessageIdHex
-    ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_HEX,
-        `${context}.proofBytesHex.messageId must match messageIdHex`,
-        `${context}.proofBytesHex`,
-      );
-    }
-  }
-  validateSccpDestinationProofMaterialRelationship(params, context);
-  return {
-    signal,
-    params: Object.keys(params).length > 0 ? params : undefined,
-  };
+  return parseSccpBridgeSubmitResponseJson(text, expectations);
 }
 
-function normalizeBridgeProofSubmitPayload(payload, context) {
-  const record = requirePlainObjectOption(payload, context);
-  const allowed = new Set([
-    "authority",
-    "privateKey",
-    "private_key",
-    "publicKeyHex",
-    "public_key_hex",
-    "signatureB64",
-    "signature_b64",
-    "burnBundle",
-    "burn_bundle",
-    "messageBundle",
-    "message_bundle",
-    "networkIdHex",
-    "network_id_hex",
-    "verifierAddressHex",
-    "verifier_address_hex",
-    "bridgeAddressHex",
-    "bridge_address_hex",
-    "verifierCodeHashHex",
-    "verifier_code_hash_hex",
-    "verifierKeyHashHex",
-    "verifier_key_hash_hex",
-    "expectedDestinationBindingHashHex",
-    "expected_destination_binding_hash_hex",
-    "tronVerifierAddress",
-    "tron_verifier_address",
-    "proofBytesHex",
-    "proof_bytes_hex",
-    "creationTimeMs",
-    "creation_time_ms",
-  ]);
-  assertSupportedOptionKeys(record, allowed, context);
-  const pick = (camel, snake = camel) =>
-    record[camel] !== undefined ? record[camel] : record[snake];
-  const normalized = {
-    authority: requireNonEmptyString(record.authority, `${context}.authority`),
-  };
-  const privateKey = pick("privateKey", "private_key");
-  if (privateKey !== undefined) {
-    normalized.private_key = privateKey;
+function normalizeSccpMessageIdPath(value, context) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value) || /^0+$/u.test(value)) {
+    throw new TypeError(`${context} must be canonical lowercase nonzero 32-byte hex`);
   }
-  const publicKeyHex = pick("publicKeyHex", "public_key_hex");
-  if (publicKeyHex !== undefined) {
-    normalized.public_key_hex = requireNonEmptyString(publicKeyHex, `${context}.publicKeyHex`);
-  }
-  const signatureB64 = pick("signatureB64", "signature_b64");
-  if (signatureB64 !== undefined) {
-    normalized.signature_b64 = normalizeRequiredExactBase64Payload(
-      signatureB64,
-      `${context}.signatureB64`,
-    );
-  }
-  const burnBundle = pick("burnBundle", "burn_bundle");
-  if (burnBundle !== undefined) {
-    normalized.burn_bundle = burnBundle;
-  }
-  const messageBundle = pick("messageBundle", "message_bundle");
-  if (messageBundle !== undefined) {
-    normalized.message_bundle = messageBundle;
-  }
-  const bundleCount = Number(burnBundle !== undefined) + Number(messageBundle !== undefined);
-  if (bundleCount !== 1) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must provide exactly one of burnBundle or messageBundle`,
-      context,
-    );
-  }
-  const networkIdHex = pick("networkIdHex", "network_id_hex");
-  if (networkIdHex !== undefined) {
-    normalized.network_id_hex = normalizeExactNonZeroHex32String(networkIdHex, `${context}.networkIdHex`);
-  }
-  const verifierAddressHex = pick("verifierAddressHex", "verifier_address_hex");
-  if (verifierAddressHex !== undefined) {
-    normalized.verifier_address_hex = normalizeExactNonZeroHex20String(
-      verifierAddressHex,
-      `${context}.verifierAddressHex`,
-    );
-  }
-  const bridgeAddressHex = pick("bridgeAddressHex", "bridge_address_hex");
-  if (bridgeAddressHex !== undefined) {
-    normalized.bridge_address_hex = normalizeExactNonZeroHex20String(
-      bridgeAddressHex,
-      `${context}.bridgeAddressHex`,
-    );
-  }
-  const verifierCodeHashHex = pick("verifierCodeHashHex", "verifier_code_hash_hex");
-  if (verifierCodeHashHex !== undefined) {
-    normalized.verifier_code_hash_hex = normalizeExactNonZeroHex32String(
-      verifierCodeHashHex,
-      `${context}.verifierCodeHashHex`,
-    );
-  }
-  const verifierKeyHashHex = pick("verifierKeyHashHex", "verifier_key_hash_hex");
-  if (verifierKeyHashHex !== undefined) {
-    normalized.verifier_key_hash_hex = normalizeExactNonZeroHex32String(
-      verifierKeyHashHex,
-      `${context}.verifierKeyHashHex`,
-    );
-  }
-  const expectedDestinationBindingHashHex = pick(
-    "expectedDestinationBindingHashHex",
-    "expected_destination_binding_hash_hex",
-  );
-  if (expectedDestinationBindingHashHex !== undefined) {
-    normalized.expected_destination_binding_hash_hex = normalizeExactNonZeroHex32String(
-      expectedDestinationBindingHashHex,
-      `${context}.expectedDestinationBindingHashHex`,
-    );
-  }
-  const tronVerifierAddress = pick("tronVerifierAddress", "tron_verifier_address");
-  if (tronVerifierAddress !== undefined) {
-    normalized.tron_verifier_address = normalizeTronBase58CheckAddress(
-      tronVerifierAddress,
-      `${context}.tronVerifierAddress`,
-    );
-  }
-  const proofBytesHex = pick("proofBytesHex", "proof_bytes_hex");
-  if (proofBytesHex !== undefined) {
-    normalized.proof_bytes_hex = normalizeExactNonZeroHexBytesString(
-      proofBytesHex,
-      `${context}.proofBytesHex`,
-      SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
-    );
-    validateSccpGroth16ProofHexForMessageBundle(
-      normalized.proof_bytes_hex,
-      normalized.message_bundle,
-      context,
-    );
-  }
-  validateSccpDestinationProofMaterialRelationship(normalized, context);
-  if (
-    normalized.burn_bundle !== undefined &&
-    (hasSccpDestinationProofMaterial(normalized) || hasOwnRecordField(normalized, "proof_bytes_hex"))
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} SCCP destination fields and proofBytesHex are only valid for messageBundle submissions`,
-      `${context}.proofBytesHex`,
-    );
-  }
-  const creationTimeMs = pick("creationTimeMs", "creation_time_ms");
-  if (creationTimeMs !== undefined) {
-    normalized.creation_time_ms = creationTimeMs;
-  }
-  return normalized;
+  return value;
 }
 
-function normalizeBridgeMessageSubmitPayload(payload, context) {
-  const record = requirePlainObjectOption(payload, context);
-  const allowed = new Set([
-    "authority",
-    "privateKey",
-    "private_key",
-    "publicKeyHex",
-    "public_key_hex",
-    "signatureB64",
-    "signature_b64",
-    "messageBundle",
-    "message_bundle",
-    "networkIdHex",
-    "network_id_hex",
-    "verifierAddressHex",
-    "verifier_address_hex",
-    "bridgeAddressHex",
-    "bridge_address_hex",
-    "verifierCodeHashHex",
-    "verifier_code_hash_hex",
-    "verifierKeyHashHex",
-    "verifier_key_hash_hex",
-    "expectedDestinationBindingHashHex",
-    "expected_destination_binding_hash_hex",
-    "tronVerifierAddress",
-    "tron_verifier_address",
-    "proofBytesHex",
-    "proof_bytes_hex",
-    "receiptLane",
-    "receipt_lane",
-    "settlement",
-    "creationTimeMs",
-    "creation_time_ms",
-  ]);
-  assertSupportedOptionKeys(record, allowed, context);
-  const pick = (camel, snake = camel) =>
-    record[camel] !== undefined ? record[camel] : record[snake];
-  const messageBundle = pick("messageBundle", "message_bundle");
-  if (messageBundle === undefined) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.messageBundle is required`,
-      `${context}.messageBundle`,
+function normalizeSccpTypedReadOptions(options, context) {
+  const record = requirePlainObjectOption(options, `${context}.options`, {
+    message: "must be a plain object",
+  });
+  const unknown = Object.keys(record).find((key) => key !== "format" && key !== "signal");
+  if (unknown !== undefined) {
+    throw new TypeError(`${context}.options contains unknown field \`${unknown}\``);
+  }
+  const format = record.format ?? "json";
+  if (format !== "json" && format !== "norito") {
+    throw new TypeError(`${context}.options.format must be exactly \`json\` or \`norito\``);
+  }
+  return { format, signal: record.signal };
+}
+
+function sccpAcceptHeader(format) {
+  return format === "norito" ? "application/x-norito" : "application/json";
+}
+
+async function readSccpJsonResponse(response, normalize, label, maximumBodyBytes) {
+  const contentType = response.headers?.get?.("content-type") ?? "";
+  if (!/^application\/json(?:\s*;|$)/iu.test(contentType)) {
+    const error = new TypeError(`${label} response must use application/json content type`);
+    await cancelSccpResponseBody(response, error);
+    throw error;
+  }
+  const bytes = await readBoundedSccpResponseBytes(response, maximumBodyBytes, label);
+  const payload = parseSccpJsonObject(decodeSccpUtf8(bytes, label), label);
+  return normalize(payload);
+}
+
+async function readSccpNoritoResponse(
+  response,
+  label,
+  maximumBodyBytes,
+  expectedTypeName,
+) {
+  const contentType = response.headers?.get?.("content-type") ?? "";
+  if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
+    const error = new TypeError(
+      `${label} response must use application/x-norito content type`,
     );
+    await cancelSccpResponseBody(response, error);
+    throw error;
   }
-  const normalized = {
-    authority: requireNonEmptyString(record.authority, `${context}.authority`),
-    message_bundle: requirePlainObjectOption(messageBundle, `${context}.messageBundle`),
-  };
-  const privateKey = pick("privateKey", "private_key");
-  if (privateKey !== undefined) {
-    normalized.private_key = privateKey;
+  const body = await readBoundedSccpResponseBytes(response, maximumBodyBytes, label);
+  validateNoritoFrame(body, {
+    context: `${label} response`,
+    expectedTypeName,
+    expectedPaddingLength: 0,
+    requireNonEmptyPayload: true,
+  });
+  return body;
+}
+
+async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
+  if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
+    throw new TypeError(`${label} response byte-size bound is invalid`);
   }
-  const publicKeyHex = pick("publicKeyHex", "public_key_hex");
-  if (publicKeyHex !== undefined) {
-    normalized.public_key_hex = requireNonEmptyString(publicKeyHex, `${context}.publicKeyHex`);
-  }
-  const signatureB64 = pick("signatureB64", "signature_b64");
-  if (signatureB64 !== undefined) {
-    normalized.signature_b64 = normalizeRequiredExactBase64Payload(
-      signatureB64,
-      `${context}.signatureB64`,
-    );
-  }
-  const networkIdHex = pick("networkIdHex", "network_id_hex");
-  if (networkIdHex !== undefined) {
-    normalized.network_id_hex = normalizeExactNonZeroHex32String(networkIdHex, `${context}.networkIdHex`);
-  }
-  const verifierAddressHex = pick("verifierAddressHex", "verifier_address_hex");
-  if (verifierAddressHex !== undefined) {
-    normalized.verifier_address_hex = normalizeExactNonZeroHex20String(
-      verifierAddressHex,
-      `${context}.verifierAddressHex`,
-    );
-  }
-  const bridgeAddressHex = pick("bridgeAddressHex", "bridge_address_hex");
-  if (bridgeAddressHex !== undefined) {
-    normalized.bridge_address_hex = normalizeExactNonZeroHex20String(
-      bridgeAddressHex,
-      `${context}.bridgeAddressHex`,
-    );
-  }
-  const verifierCodeHashHex = pick("verifierCodeHashHex", "verifier_code_hash_hex");
-  if (verifierCodeHashHex !== undefined) {
-    normalized.verifier_code_hash_hex = normalizeExactNonZeroHex32String(
-      verifierCodeHashHex,
-      `${context}.verifierCodeHashHex`,
-    );
-  }
-  const verifierKeyHashHex = pick("verifierKeyHashHex", "verifier_key_hash_hex");
-  if (verifierKeyHashHex !== undefined) {
-    normalized.verifier_key_hash_hex = normalizeExactNonZeroHex32String(
-      verifierKeyHashHex,
-      `${context}.verifierKeyHashHex`,
-    );
-  }
-  const expectedDestinationBindingHashHex = pick(
-    "expectedDestinationBindingHashHex",
-    "expected_destination_binding_hash_hex",
-  );
-  if (expectedDestinationBindingHashHex !== undefined) {
-    normalized.expected_destination_binding_hash_hex = normalizeExactNonZeroHex32String(
-      expectedDestinationBindingHashHex,
-      `${context}.expectedDestinationBindingHashHex`,
-    );
-  }
-  const tronVerifierAddress = pick("tronVerifierAddress", "tron_verifier_address");
-  if (tronVerifierAddress !== undefined) {
-    normalized.tron_verifier_address = normalizeTronBase58CheckAddress(
-      tronVerifierAddress,
-      `${context}.tronVerifierAddress`,
-    );
-  }
-  const proofBytesHex = pick("proofBytesHex", "proof_bytes_hex");
-  if (proofBytesHex !== undefined) {
-    normalized.proof_bytes_hex = normalizeExactNonZeroHexBytesString(
-      proofBytesHex,
-      `${context}.proofBytesHex`,
-      SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
-    );
-    validateSccpGroth16ProofHexForMessageBundle(
-      normalized.proof_bytes_hex,
-      normalized.message_bundle,
-      context,
-    );
-  }
-  validateSccpDestinationProofMaterialRelationship(normalized, context);
-  const receiptLane = pick("receiptLane", "receipt_lane");
-  if (receiptLane !== undefined) {
+
+  const rawContentLength = response.headers?.get?.("content-length");
+  if (rawContentLength !== null && rawContentLength !== undefined) {
     if (
-      typeof receiptLane !== "number" ||
-      !Number.isSafeInteger(receiptLane) ||
-      receiptLane < 0 ||
-      receiptLane > 0xffffffff
+      typeof rawContentLength !== "string" ||
+      !/^(?:0|[1-9][0-9]*)$/u.test(rawContentLength)
     ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        `${context}.receiptLane must be a non-negative u32 integer`,
-        `${context}.receiptLane`,
+      const error = new TypeError(
+        `${label} response Content-Length must be a canonical unsigned decimal integer`,
       );
+      await cancelSccpResponseBody(response, error);
+      throw error;
     }
-    normalized.receipt_lane = receiptLane;
+    const declaredLength = Number(rawContentLength);
+    if (!Number.isSafeInteger(declaredLength) || declaredLength > maximumBodyBytes) {
+      const error = new TypeError(
+        `${label} response exceeds its ${maximumBodyBytes}-byte size bound`,
+      );
+      await cancelSccpResponseBody(response, error);
+      throw error;
+    }
   }
-  const settlement = record.settlement;
-  if (settlement !== undefined) {
-    normalized.settlement = requirePlainObjectOption(settlement, `${context}.settlement`);
+
+  if (response.body === null || response.body === undefined) {
+    return new Uint8Array(0);
   }
-  const creationTimeMs = pick("creationTimeMs", "creation_time_ms");
-  if (creationTimeMs !== undefined) {
-    normalized.creation_time_ms = creationTimeMs;
+  if (typeof response.body.getReader !== "function") {
+    const error = new TypeError(
+      `${label} response body is not readable as a byte stream`,
+    );
+    await cancelSccpResponseBody(response, error);
+    throw error;
   }
-  return normalized;
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  let cancelled = false;
+  try {
+    // A stream can omit Content-Length or advertise the encoded length while
+    // yielding more decoded bytes. The running total is therefore authoritative.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const result = await reader.read();
+      if (!result || typeof result.done !== "boolean") {
+        throw new TypeError(`${label} response body returned an invalid stream result`);
+      }
+      if (result.done) {
+        break;
+      }
+      if (!(result.value instanceof Uint8Array)) {
+        throw new TypeError(`${label} response body returned a non-byte chunk`);
+      }
+      if (result.value.byteLength > maximumBodyBytes - totalBytes) {
+        const error = new TypeError(
+          `${label} response exceeds its ${maximumBodyBytes}-byte size bound`,
+        );
+        cancelled = true;
+        try {
+          await reader.cancel(error);
+        } catch {
+          // Preserve the deterministic size-bound failure if transport cleanup fails.
+        }
+        throw error;
+      }
+      totalBytes += result.value.byteLength;
+      chunks.push(result.value);
+    }
+  } catch (error) {
+    if (!cancelled && typeof reader.cancel === "function") {
+      cancelled = true;
+      try {
+        await reader.cancel(error);
+      } catch {
+        // Preserve the original stream or validation error.
+      }
+    }
+    throw error;
+  } finally {
+    if (typeof reader.releaseLock === "function") {
+      reader.releaseLock();
+    }
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
+async function cancelSccpResponseBody(response, reason) {
+  const body = response?.body;
+  if (!body || body.locked || typeof body.cancel !== "function") {
+    return;
+  }
+  try {
+    await body.cancel(reason);
+  } catch {
+    // A rejected cancellation must not mask the fail-closed validation error.
+  }
+}
+
+function decodeSccpUtf8(bytes, label) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new TypeError(`${label} response body must be strict UTF-8`, { cause: error });
+  }
 }
 
 function requirePlainObjectOption(value, context, { message } = {}) {
@@ -29180,13 +29283,17 @@ function normalizeVerifyingKeyEventMatcherName(value, context) {
 }
 
 function isAbortSignalLike(value) {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof value.aborted === "boolean" &&
-    typeof value.addEventListener === "function" &&
-    typeof value.removeEventListener === "function"
-  );
+  if (typeof value !== "object" || value === null) return false;
+  if (hasAbortSignalBrand(value)) return true;
+  try {
+    return (
+      typeof signalIsAborted(value) === "boolean" &&
+      ownDataMethod(value, "addEventListener") !== null &&
+      ownDataMethod(value, "removeEventListener") !== null
+    );
+  } catch {
+    return false;
+  }
 }
 
 function normalizeAccountAssetListResponse(payload) {
@@ -31891,10 +31998,11 @@ async function* streamWebSocketJsonEvents(socket, options = {}) {
   ];
   const { signal } = options;
   if (signal) {
-    if (signal.aborted) {
+    if (signalIsAborted(signal)) {
       onAbort();
-    } else if (typeof signal.addEventListener === "function") {
-      signal.addEventListener("abort", onAbort, { once: true });
+    } else {
+      addSignalAbortListener(signal, onAbort);
+      if (signalIsAborted(signal)) onAbort();
     }
   }
 
@@ -31920,8 +32028,8 @@ async function* streamWebSocketJsonEvents(socket, options = {}) {
     for (const remove of removers) {
       remove();
     }
-    if (signal && typeof signal.removeEventListener === "function") {
-      signal.removeEventListener("abort", onAbort);
+    if (signal) {
+      removeSignalAbortListener(signal, onAbort);
     }
     if (closeOnReturn && !closed) {
       closeWebSocketQuietly(socket);

@@ -92,6 +92,17 @@ def test_manifest_tables_are_inlined(tmp_path: Path) -> None:
     assert "| `Hot` | Low-latency replicas for developer workflows." in content
 
 
+def test_contract_feature_bitmap_is_not_documented_as_host_hardware() -> None:
+    fields = docs_mod.MANIFEST_TYPE_TABLES["ContractManifest"]["fields"]
+    feature = next(field for field in fields if field["name"] == "features_bitmap")
+    description = feature["description"]
+
+    assert "Compiler-derived" in description
+    assert "hash-covered" in description
+    assert "ZK and VECTOR" in description
+    assert "never host SIMD, Metal, or CUDA" in description
+
+
 def test_manifest_catalog_captures_builders(tmp_path: Path) -> None:
     out_path = tmp_path / "manifest_catalog.md"
     instructions = [

@@ -102,15 +102,19 @@ export PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito
   tests/test_address_format.py \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_canonical_request_auth_rejects_padded_fields_before_send" \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_call_contract_rejects_padded_selectors_before_dispatch" \
-  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_proof_rejects_padded_signing_fields_before_request" \
-  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_message_rejects_padded_signing_fields_before_request" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/sccp_test.py" \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_identifier_resolution_receipt_matches_shared_vectors" \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_propose_multisig_rejects_malformed_response_fields" \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch" \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch" \
-  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_parses_payload" \
-  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_noncanonical_abi_versions" \
-  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_removed_abi7_fields" \
-  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_missing_recursive_compact_family"
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_invalid_selector_before_network" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_adversarial_snapshots" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_offline_readiness_uses_finite_codes_and_strips_unknown_members" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_offline_top_up_sends_direct_json_and_derived_idempotency_key" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_offline_redeem_uses_only_the_final_route" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_offline_command_validation_rejects_malformed_ids_and_payloads_before_network" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_offline_acceptance_cross_checks_reference_and_location" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_operation_status_parses_all_tagged_states"
 "${VENV_DIR}/bin/python" -m pytest -q tests/client_ledger_helpers_test.py \
   -k "zk_event_filters_reject_unsupported_backends_before_request or zk_verifying_key_event_filters_reject_malformed_names_before_request or zk_proof_event_filters_reject_malformed_hashes_before_request or zk_raw_event_filters_reject_malformed_privacy_matchers_before_request or zk_raw_event_filters_canonicalize_privacy_matchers_before_request"

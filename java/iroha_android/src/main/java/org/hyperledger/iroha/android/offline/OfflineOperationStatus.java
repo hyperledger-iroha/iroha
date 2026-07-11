@@ -138,8 +138,9 @@ public abstract class OfflineOperationStatus {
         final TopUpAnchor anchor) {
       this.transactionHash =
           OfflineOperationCodec.requireTransactionHash(transactionHash, "transactionHash");
-      this.finalizedBlockHeight = requireU64(finalizedBlockHeight, "finalizedBlockHeight");
-      this.serverTimeMs = requireU64(serverTimeMs, "serverTimeMs");
+      this.finalizedBlockHeight =
+          requirePositiveU64(finalizedBlockHeight, "finalizedBlockHeight");
+      this.serverTimeMs = requirePositiveU64(serverTimeMs, "serverTimeMs");
       this.anchor = Objects.requireNonNull(anchor, "anchor");
     }
 
@@ -172,8 +173,9 @@ public abstract class OfflineOperationStatus {
         final BigInteger serverTimeMs) {
       this.transactionHash =
           OfflineOperationCodec.requireTransactionHash(transactionHash, "transactionHash");
-      this.finalizedBlockHeight = requireU64(finalizedBlockHeight, "finalizedBlockHeight");
-      this.serverTimeMs = requireU64(serverTimeMs, "serverTimeMs");
+      this.finalizedBlockHeight =
+          requirePositiveU64(finalizedBlockHeight, "finalizedBlockHeight");
+      this.serverTimeMs = requirePositiveU64(serverTimeMs, "serverTimeMs");
     }
 
     public String transactionHash() {
@@ -355,5 +357,13 @@ public abstract class OfflineOperationStatus {
       throw new IllegalArgumentException(field + " must fit in an unsigned 64-bit integer");
     }
     return value;
+  }
+
+  private static BigInteger requirePositiveU64(final BigInteger value, final String field) {
+    final BigInteger checked = requireU64(value, field);
+    if (checked.signum() == 0) {
+      throw new IllegalArgumentException(field + " must be at least 1");
+    }
+    return checked;
   }
 }

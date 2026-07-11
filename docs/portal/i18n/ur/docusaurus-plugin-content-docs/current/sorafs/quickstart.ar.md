@@ -122,3 +122,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   (`namespace.name@semver`) ڈیجیٹل IDs پر۔
 - ** سی آئی آٹومیشن ** - دستاویزات اور فکسچر شائع کرنے کے لئے تعیناتی کی رہائی پائپ لائنوں میں مذکورہ بالا احکامات شامل کریں
   دستخط شدہ میٹا ڈیٹا کے ساتھ نمونے کا مظہر لازمی ہے۔
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

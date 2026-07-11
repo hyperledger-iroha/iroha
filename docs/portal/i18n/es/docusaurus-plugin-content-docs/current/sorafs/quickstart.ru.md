@@ -125,3 +125,23 @@ Proverkis:- `payload_digest_hex` debe conectarse al manifiesto.
 - **Automatización CI** – agregue comandos a la versión de lanzamiento, toda la documentación,
   Figuras y artefactos públicos que se manifiestan de forma predeterminada.
   метаданными.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

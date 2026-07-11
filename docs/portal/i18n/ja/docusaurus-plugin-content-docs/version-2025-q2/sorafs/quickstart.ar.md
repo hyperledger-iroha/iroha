@@ -139,3 +139,23 @@ fast when the reconstructed payload deviates from the manifest.
 - **CI automation** – add the commands above to release pipelines so docs,
   fixtures, and artifacts publish deterministic manifests alongside signed
   metadata.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

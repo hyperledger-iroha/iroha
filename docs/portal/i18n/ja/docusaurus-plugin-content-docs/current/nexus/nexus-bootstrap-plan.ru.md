@@ -33,7 +33,7 @@ title: Bootstrap и наблюдаемость Sora Nexus
 ## Сетевые окружения
 - Эксплуатируйте два окружения Nexus с разными сетевыми префиксами:
 - **Sora Nexus (メインネット)** - テスト `nexus`、ピギーバック テストSoraFS/SoraNet (チェーン ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`)。
-- **Sora Testus (テストネット)** - ステージング テスト `testus`、メインネット テスト、プレリリース版валидации (チェーン UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`)。
+- **Sora Testus (テストネット)** - ステージング テスト `testus`、メインネット テスト、プレリリース版валидации (チェーン UUID `fc56984b-2be7-431d-840e-21514d1883f0`)。
 - ジェネシスとガバナンス キー、および足跡を追跡します。 Testus は、SoraFS/SoraNet と Nexus のロールアウトを確認します。
 - CI/CD パイプラインは、Testus、スモーク テスト、Nexus のテストを実行します。 прохождения проверок。
 - `configs/soranexus/nexus/` (メインネット) および `configs/soranexus/testus/` (テストネット) のバンドルを確認し、それらをバンドルします。 `config.toml`、`genesis.json` および каталоги 入場 Torii。

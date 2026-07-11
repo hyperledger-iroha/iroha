@@ -225,13 +225,8 @@ impl From<crate::isi::bridge::RecordSccpMessage> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::bridge::UpsertSccpRouteManifest> for InstructionBox {
-    fn from(i: crate::isi::bridge::UpsertSccpRouteManifest) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::bridge::RemoveSccpRouteManifest> for InstructionBox {
-    fn from(i: crate::isi::bridge::RemoveSccpRouteManifest) -> Self {
+impl From<crate::isi::bridge::ApplySccpRouteGovernance> for InstructionBox {
+    fn from(i: crate::isi::bridge::ApplySccpRouteGovernance) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1388,8 +1383,8 @@ impl From<crate::isi::governance::ProposeRuntimeUpgradeProposal> for Instruction
     }
 }
 #[cfg(feature = "governance")]
-impl From<crate::isi::governance::ProposeSccpRouteManifest> for InstructionBox {
-    fn from(i: crate::isi::governance::ProposeSccpRouteManifest) -> Self {
+impl From<crate::isi::governance::ProposeSccpRouteGovernance> for InstructionBox {
+    fn from(i: crate::isi::governance::ProposeSccpRouteGovernance) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -3849,8 +3844,7 @@ pub mod prelude {
             SetAssetTransferBlacklist, SetAssetTransferControl, SetAssetTransferFreeze,
         },
         bridge::{
-            RecordBridgeReceipt, RecordSccpMessage, RemoveSccpRouteManifest, SubmitBridgeProof,
-            UpsertSccpRouteManifest,
+            ApplySccpRouteGovernance, RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof,
         },
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
@@ -3957,6 +3951,18 @@ mod tests {
         }
     }
 
+    fn outbound_sccp_context() -> crate::bridge::SccpOutboundMessageContextV1 {
+        crate::bridge::SccpOutboundMessageContextV1::new(
+            crate::bridge::SccpLaneIdV1 {
+                source: crate::bridge::SccpNetworkV1::SoraTaira,
+                target: crate::bridge::SccpNetworkV1::BscTestnet,
+            },
+            [0x44; 32],
+            [0x45; 32],
+        )
+        .expect("valid outbound SCCP context")
+    }
+
     fn test_domain_id() -> DomainId {
         DomainId::try_new("wonderland", "universal").expect("domain id")
     }
@@ -4023,7 +4029,7 @@ mod tests {
     fn record_sccp_message_registry_roundtrip_preserves_payload_bytes() {
         let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
         let _guard = RegistryGuard::set(registry);
-        let instruction = RecordSccpMessage::new(vec![0xAA, 0xBB, 0xCC]);
+        let instruction = RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC]);
         let (bytes, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
         let framed = frame_instruction_payload(std::any::type_name::<RecordSccpMessage>(), &bytes)
             .expect("record sccp message must frame");
@@ -4036,6 +4042,7 @@ mod tests {
             .as_any()
             .downcast_ref::<RecordSccpMessage>()
             .expect("decoded instruction type");
+        assert_eq!(decoded.context, outbound_sccp_context());
         assert_eq!(decoded.payload_bytes, vec![0xAA, 0xBB, 0xCC]);
     }
 
@@ -4062,7 +4069,8 @@ mod tests {
     fn record_sccp_registry_decode_accepts_misaligned_framed_payload() {
         let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
         let name = std::any::type_name::<RecordSccpMessage>();
-        let instruction = RecordSccpMessage::new(vec![0xAA, 0xBB, 0xCC, 0xDD]);
+        let instruction =
+            RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC, 0xDD]);
         let payload = instruction.encode();
         let framed = frame_instruction_payload(name, &payload).expect("frame instruction payload");
         let mut misaligned = Vec::with_capacity(framed.len() + 1);
@@ -4081,7 +4089,7 @@ mod tests {
     fn instruction_box_embeds_instruction_payload_with_recorded_flags() {
         let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
         let _guard = RegistryGuard::set(registry);
-        let instruction = RecordSccpMessage::new(vec![0xAA, 0xBB, 0xCC]);
+        let instruction = RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC]);
         let (_, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
         let boxed = InstructionBox::from(instruction);
 

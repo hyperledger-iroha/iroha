@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "A(z) `{func}` függvény `{name}` paramétere nincs használva",
     lint_unreachable_after_return: "Nem elérhető utasítást találtunk itt: {context}; a return utáni kód nem fog lefutni",
     lint_ok: "rendben",
-    lint_usage: "Használat: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Használat: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Futtassa a Kotodama lint ellenőrzéseket a megadott forrásokon.",
     ..english::MESSAGES
 };

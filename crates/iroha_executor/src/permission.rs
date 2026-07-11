@@ -153,6 +153,8 @@ declare_permissions! {
     iroha_executor_data_model::permission::nft::{CanModifyNftMetadata},
 
     iroha_executor_data_model::permission::parameter::{CanSetParameters},
+    iroha_executor_data_model::permission::sccp::{CanManageSccpGovernance},
+    iroha_executor_data_model::permission::sccp::{CanProposeSccpRouteGovernance},
     iroha_executor_data_model::permission::role::{CanManageRoles},
 
     iroha_executor_data_model::permission::trigger::{CanRegisterTrigger},
@@ -625,6 +627,65 @@ mod parameter {
             Err(ValidationFail::NotPermitted(
                 "Current authority doesn't have the permission to set parameters, therefore it can't revoke it from another account"
                     .to_owned()
+            ))
+        }
+    }
+}
+
+mod sccp {
+    //! Pass conditions for governed SCCP state management.
+    use iroha_executor_data_model::permission::sccp::{
+        CanManageSccpGovernance, CanProposeSccpRouteGovernance,
+    };
+
+    use super::*;
+
+    impl ValidateGrantRevoke for CanManageSccpGovernance {
+        fn validate_grant(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            ensure_permission_owned(self, authority, host, "CanManageSccpGovernance")
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            ensure_permission_owned(self, authority, host, "CanManageSccpGovernance")
+        }
+    }
+
+    impl ValidateGrantRevoke for CanProposeSccpRouteGovernance {
+        fn validate_grant(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if CanManageSccpGovernance.is_owned_by(authority, host) {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(
+                "Only SCCP governance managers may grant CanProposeSccpRouteGovernance".to_owned(),
+            ))
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            _context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if CanManageSccpGovernance.is_owned_by(authority, host) {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(
+                "Only SCCP governance managers may revoke CanProposeSccpRouteGovernance".to_owned(),
             ))
         }
     }

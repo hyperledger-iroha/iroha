@@ -2,61 +2,93 @@
 lang: he
 direction: rtl
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: f3f6049cbf3aa135e35e4cf06967993c11c1c571ca97dd11c469142dd620be77
-source_last_modified: "2025-12-11T23:36:13.998930+00:00"
-translation_last_reviewed: 2026-01-01
+source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
+source_last_modified: "2026-07-11"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
 <div dir="rtl">
 
-<!-- התרגום העברי ל- docs/source/bridge_proofs.md -->
+> דף זה הוא תקציר מתורגם ומקוצר, ולא תרגום מלא. עבור כללי הממשל, ממשקי ה־API,
+> משמעות ההוכחות ודרישות ההפצה, [הדף הקנוני באנגלית](bridge_proofs.md) הוא
+> המקור הנורמטיבי המדויק.
 
-# הוכחות Bridge
+# הוכחות גשר SCCP V1 — תקציר מקוצר
 
-הגשת הוכחות Bridge עוברת בנתיב ההוראות הסטנדרטי (`SubmitBridgeProof`) ומגיעה לרישום ההוכחות עם סטטוס מאומת. המשטח הנוכחי מכסה הוכחות Merkle בסגנון ICS ו-payloads של transparent-ZK עם שמירה מוצמדת וקישור ל-manifest.
+## תחום הגרסה הראשונה
 
-## כללי קבלה
+SCCP V1 הוא פרוטוקול סגור לגרסה הראשונה. המקורות החיצוניים הנתמכים היחידים הם
+`ethereum-mainnet`,‏ `bsc-mainnet` ו־`tron-mainnet`, ויעד SORA היחיד הוא
+`sora-taira`. ‏Solana,‏ TON, רשתות מותאמות אישית וכל יעד SORA אחר אינם נתמכים
+ונדחים באופן בטוח.
 
-- טווחים חייבים להיות מסודרים/לא ריקים ולעמוד ב-`zk.bridge_proof_max_range_len` (0 מבטל את המגבלה).
-- חלונות גובה אופציונליים דוחים הוכחות ישנות/עתידיות: `zk.bridge_proof_max_past_age_blocks` ו-`zk.bridge_proof_max_future_drift_blocks` נמדדים מול גובה הבלוק שקולט את ההוכחה (0 מבטל את הסייגים).
-- הוכחות Bridge אינן יכולות לחפוף הוכחה קיימת עבור אותו backend (הוכחות pinned נשמרות וחוסמות חפיפות).
-- Hashes של manifest חייבים להיות לא-אפס; ה-payloads מוגבלים בגודל לפי `zk.max_proof_size_bytes`.
-- payloads של ICS מכבדים את מגבלת עומק ה-Merkle המוגדרת ומאמתים את הנתיב באמצעות פונקציית ה-hash המוצהרת; payloads שקופים חייבים להצהיר על תווית backend לא ריקה.
-- הוכחות pinned פטורות מניקוי שמירה; הוכחות לא pinned עדיין מכבדות את `zk.proof_history_cap`/grace/batch הגלובליים.
+בגרסה זו `SubmitBridgeProof` מקבל רק הוכחות מטיפוס `NativeProtocol` ו־
+`SccpDestination`. שליחת `Ics` כללי או `TransparentZk` אינה זמינה ונדחית עד
+שיהיה עבורם מאמת מוסמך על השרשרת.
 
-## משטח ה-API של Torii
+## מרשם מטופס והגנה מפני replay
 
-- `GET /v1/zk/proofs` ו-`GET /v1/zk/proofs/count` מקבלים מסננים מודעי-bridge:
-  - `bridge_only=true` מחזיר רק הוכחות Bridge.
-  - `bridge_pinned_only=true` מצמצם להוכחות Bridge pinned.
-  - `bridge_start_from_height` / `bridge_end_until_height` מגבילים את חלון הטווח של bridge.
-- `GET /v1/zk/proof/{backend}/{hash}` מחזיר מטא-דאטה של bridge (טווח, hash של manifest, תקציר payload) לצד מזהה/סטטוס הוכחה וקשרי VK.
-- רשומת ההוכחה המלאה של Norito (כולל bytes של payload) זמינה עדיין דרך `GET /v1/proofs/{proof_id}` עבור מאמתים מחוץ לצומת.
+`SccpRegistryV1` הוא מרשם מטופס, קשור ל־lane ומאפשר הוספה בלבד (append-only).
+כל lane שומר לכל היותר 64 גרסאות route ו־4,096 native trust anchors. רשומות
+היסטוריות אינן מפונות במשתמע; עם ההגעה למגבלה, ההוספה הבאה נדחית אטומית ללא
+שינוי מצב.
 
-## אירועי קבלה של Bridge
+מרווחי anchor נמדדים בקואורדינטת התקדמות consensus מאומתת: Ethereum משתמשת
+ב־finalized beacon slot, ואילו BSC ו־TRON משתמשות בגובה native block סופי.
+anchor ישן נשאר תקף עד checkpoint היורש, כולל נקודת הגבול; ה־anchor הנוכחי
+האחרון פתוח בקצהו. ה־finality cutoff של route סופי חייב להיות שווה בדיוק
+ל־checkpoint היורש של ה־anchor ההיסטורי.
 
-נתיבי Bridge פולטים קבלות טיפוסיות דרך ההוראה `RecordBridgeReceipt`. ביצוע ההוראה רושם payload מסוג `BridgeReceipt` ופולט `DataEvent::Bridge(BridgeEvent::Emitted)` בזרם האירועים, במקום ה-stub הישן שהיה רק לוג. העזר CLI `iroha bridge emit-receipt` שולח את ההוראה הטיפוסית כדי שמאנדקסים יצרכו קבלות באופן דטרמיניסטי.
+רשומת inbound עמידה שומרת בנפרד את גובה הסופיות של האירוע/המקור ואת
+`anchor_interval_height` המאומת. אינדקס high-water עמיד, שמפתחו lane ו־hash של
+anchor, מונע מהממשל לבחור checkpoint יורש הנמוך מקואורדינטה שכבר התקבלה.
+טעינת snapshot מחשבת את האינדקס מחדש מתוך הרשומות העמידות ודורשת שוויון מדויק;
+אינדקס חסר, מיושן, פגום או חסר גיבוי נדחה. גם מזהי הודעות שכבר נוצלו נשמרים
+כדי למנוע replay.
 
-## סקיצת אימות חיצונית (ICS)
+## אימות במעבר יחיד ומגבלות עבודה
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
+הוכחות destination ו־native נבנות פעם אחת, נקשרות פעם אחת ושומרות מראש תקציב
+עבודה דטרמיניסטי לפני הפעלת קריפטוגרפיה יקרה. מסלול destination מאמת פעם אחת
+את ה־BN254 pairing-product ופעם אחת את סופיות ה־BLS המקומית. מסלולי native
+דורשים את ה־canonical shortest-prefix: לכל היותר 1,004 headers ב־BSC ו־54
+ב־TRON.
 
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+`[zk.sccp]` אוכף מגבלות חיוביות לכל transaction ולכל block על מספר ההוכחות
+וגודלן, native headers/bytes, עדכוני light client של Ethereum, שחזורי
+secp256k1, בדיקות BLS aggregate ותרומות מפתחות, ובדיקות BN254 pairing. מגבלות
+קבלה אלה קשורות ל־consensus: כל המאמתים חייבים להשתמש באותם ערכים מקובץ
+התצורה, ואין להן overrides באמצעות משתני סביבה.
+
+מגבלות ברירת המחדל של הגרסה הראשונה הן:
+
+| ממד עבודה | Transaction | Block |
+|---|---:|---:|
+| proofs | 1 | 4 |
+| canonical proof bytes | 8 MiB | 32 MiB |
+| BSC/TRON continuation headers | 1,004 | 4,016 |
+| Ethereum light-client updates | 128 | 512 |
+| framed native-finality bytes | 8 MiB | 32 MiB |
+| secp256k1 recoveries | 1,005 | 4,020 |
+| BLS aggregate checks | 1,004 | 4,016 |
+| BLS key/contribution work items | 131,713 | 526,852 |
+| BN254 pairing-product checks | 1 | 4 |
+
+proof יחיד יכול להכיל לכל היותר 8 MiB של canonical bytes. עבודה שנשמרה עבור
+transaction שננטשה או נדחתה אינה זולגת אל ה־block.
+
+## מגבלות Torii ו־HTTP
+
+Torii אוכף מגבלת גוף JSON נפרדת לכל SCCP endpoint לפני קריאת הגוף, הקצאת זיכרון
+או אימות קריפטוגרפי. `Content-Length` או גוף chunked שחורגים מן המגבלה נדחים
+עם HTTP `413`. הלקוח גם קורא את תגובת ה־HTTP המפוענחת תחת מגבלה קבועה, ולכן
+`Content-Length` חסר או כוזב אינו יכול לעקוף אותה.
+
+כל קלטי JSON,‏ base64 ו־Norito חייבים להיות canonical. שדות לא מוכרים, מפתחות
+כפולים, network/route/anchor שגויים, replay, חריגה ממכסת עבודה או כשל אימות
+נדחים ללא שינוי חלקי של המצב.
 
 </div>

@@ -334,19 +334,10 @@ class OfflineNoteTest {
     @Test
     fun kagemushaRecursiveSpendNativeProverValidatesInput() {
         assertEquals(
-            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
-            KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable = false,
-                recursiveSpendAvailable = true,
-            ),
+            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2,
+            KagemushaRecursiveSpendProver.preferredMode(true),
         )
-        assertEquals(
-            null,
-            KagemushaRecursiveSpendProver.preferredMode(
-                recursiveCompactAvailable = false,
-                recursiveSpendAvailable = false,
-            ),
-        )
+        assertEquals(null, KagemushaRecursiveSpendProver.preferredMode(false))
         assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
             "kagemusha-recursive-aggregation-v1",

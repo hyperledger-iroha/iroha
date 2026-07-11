@@ -9,7 +9,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_crypto::KeyPair;
-use iroha_data_model::{nexus::DataSpaceId, smart_contract::manifest::ContractManifest};
+use iroha_data_model::nexus::DataSpaceId;
 use iroha_primitives::json::Json;
 
 const TEST_GAS_LIMIT: u64 = 1_000_000;
@@ -115,26 +115,21 @@ fn protected_namespace_requires_enacted_proposal() {
     stx1.apply();
     block1.commit().unwrap();
 
-    // Prepare minimal IVM program
-    let prog = {
-        let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let meta = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 0,
-            mode: 0,
-            vector_length: 0,
-            max_cycles: 1,
-            abi_version: 1,
-        };
-        let mut out = meta.encode();
-        out.extend_from_slice(&code);
-        out
-    };
-    let parsed = ivm::ProgramMetadata::parse(&prog).unwrap();
-    let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
-    let abi_hash =
-        iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
+    // Prepare one exact self-describing artifact. It omits hajimari so the protected
+    // view can run immediately after the governance binding is enacted.
+    let (prog, _) = ivm::KotodamaCompiler::new()
+        .compile_source_with_manifest(
+            r#"
+seiyaku ProtectedGate {
+    view fn ready() {}
+}
+"#,
+        )
+        .expect("compile protected-gate artifact");
+    let verified = ivm::verify_contract_artifact(&prog).expect("verify protected-gate artifact");
+    let code_hash = verified.code_hash;
+    let abi_hash = verified.abi_hash;
+    let exact_manifest = verified.manifest;
 
     let contract_address = sample_contract_address(&authority);
 
@@ -143,6 +138,10 @@ fn protected_namespace_requires_enacted_proposal() {
     md.insert(
         "gov_contract_address".parse().unwrap(),
         iroha_primitives::json::Json::new(contract_address.to_string()),
+    );
+    md.insert(
+        "contract_entrypoint".parse().unwrap(),
+        iroha_primitives::json::Json::new("ready"),
     );
     insert_gas_limit(&mut md);
     let chain: ChainId = "chain".parse().unwrap();
@@ -176,31 +175,24 @@ fn protected_namespace_requires_enacted_proposal() {
     Grant::account_permission(ge, authority.clone())
         .execute(&authority, &mut stx3)
         .expect("grant enact");
+    let lifecycle_permission: Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    Grant::account_permission(lifecycle_permission, authority.clone())
+        .execute(&authority, &mut stx3)
+        .expect("grant contract lifecycle authority");
+    iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
+        code_hash,
+        code: prog.clone(),
+    }
+    .execute(&authority, &mut stx3)
+    .expect("register exact protected-gate artifact before governance enactment");
     let want_code_hex = hex::encode(<[u8; 32]>::from(code_hash));
     let want_abi_hex = hex::encode(<[u8; 32]>::from(abi_hash));
-    let mut code_arr = [0u8; 32];
-    code_arr.copy_from_slice(
-        &hex::decode(&want_code_hex).expect("code hash hex should decode to 32 bytes"),
-    );
-    let mut abi_arr = [0u8; 32];
-    abi_arr.copy_from_slice(
-        &hex::decode(&want_abi_hex).expect("abi hash hex should decode to 32 bytes"),
-    );
     let manifest_signer = checked_random_protected_gate_keypair();
-    let manifest_provenance = ContractManifest {
-        code_hash: Some(iroha_crypto::Hash::prehashed(code_arr)),
-        abi_hash: Some(iroha_crypto::Hash::prehashed(abi_arr)),
-        compiler_fingerprint: None,
-        features_bitmap: None,
-        access_set_hints: None,
-        entrypoints: None,
-        states: None,
-        kotoba: None,
-        provenance: None,
-    }
-    .signed(&manifest_signer)
-    .provenance
-    .expect("manifest should be signed");
+    let manifest_provenance = exact_manifest
+        .signed(&manifest_signer)
+        .provenance
+        .expect("exact manifest should be signed");
     ProposeDeployContract {
         contract_address: contract_address.clone(),
         code_hash_hex: want_code_hex.clone(),
@@ -239,6 +231,10 @@ fn protected_namespace_requires_enacted_proposal() {
             md.insert(
                 "gov_contract_address".parse().unwrap(),
                 iroha_primitives::json::Json::new(contract_address.to_string()),
+            );
+            md.insert(
+                "contract_entrypoint".parse().unwrap(),
+                iroha_primitives::json::Json::new("ready"),
             );
             insert_gas_limit(&mut md);
             md

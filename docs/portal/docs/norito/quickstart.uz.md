@@ -27,11 +27,11 @@ yon ta'sirini darhol `iroha` bilan tekshiring.
   `defaults/docker-compose.single.yml` da belgilangan namunaviy tengdoshni ishga tushirish uchun).
 - Yuklab olmasangiz yordamchi ikkilik fayllarni yaratish uchun Rust asboblar zanjiri (1.76+).
   nashr etilganlar.
-- `koto_compile`, `ivm_run` va `iroha` ikkilik. Siz ularni dan qurishingiz mumkin
+- `koto build`, `ivm_run` va `iroha` ikkilik. Siz ularni dan qurishingiz mumkin
   quyida ko'rsatilgandek ish joyini tekshirish yoki mos keladigan reliz artefaktlarini yuklab oling:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -58,28 +58,22 @@ Ishchi katalog yarating va minimal Kotodama misolini saqlang:
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
-  kotoage fn main() permission(Admin) {
-    info("Hello from Kotodama");
-    write_detail();
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() permission(Admin) {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -94,15 +88,14 @@ Shartnomani IVM/Norito bayt kodiga (`.to`) tuzing va uni mahalliy sifatida bajar
 tarmoqqa tegmasdan oldin xost tizimi qo'ng'iroqlari muvaffaqiyatli ekanligini tasdiqlang:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-Yuguruvchi `info("Hello from Kotodama")` jurnalini chop etadi va bajaradi
+Yuguruvchi `debug::info("Hello from Kotodama")` jurnalini chop etadi va bajaradi
 Masxara qilingan xostga qarshi `SET_ACCOUNT_DETAIL` tizimi. Agar ixtiyoriy `ivm_tool`
 ikkilik mavjud, `ivm_tool inspect target/quickstart/hello.to` ni ko'rsatadi
 ABI sarlavhasi, xususiyat bitlari va eksport qilingan kirish nuqtalari.

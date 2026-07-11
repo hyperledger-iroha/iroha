@@ -5,11 +5,10 @@ import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 
-/** Native recursive Kagemusha spend ABI-6 bridge. */
+/** Exact ABI-18 Kagemusha recursive-spend bridge. */
 class KagemushaRecursiveSpendProver private constructor() {
     enum class Mode(val wireName: String) {
-        RECURSIVE_COMPACT_V1("recursive_compact_v1"),
-        RECURSIVE_SPEND_V1("recursive_spend_v1"),
+        RECURSIVE_SPEND_V2("recursive_spend_v2"),
     }
 
     companion object {
@@ -19,7 +18,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18
         const val PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA: String =
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
-        const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v1"
+        const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v2"
         const val PASTA_CYCLE_V3_PROOF_BACKEND: String = "halo2/ipa-pasta-cycle-v1"
         const val PASTA_CYCLE_V3_TRANSCRIPT_PROFILE: String =
             "kagemusha-pasta-cycle-poseidon-v1"
@@ -93,6 +92,8 @@ class KagemushaRecursiveSpendProver private constructor() {
                     },
                     requiredNativeBridgeAbiVersion = TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
                 )
+        private val pastaCycleV3ArtifactIngestAvailable: Boolean =
+            loadPastaCycleV3ArtifactIngestBridge()
         private val pastaCycleV3BackendAvailable: Boolean =
             nativeAvailable &&
                 detectNativeAvailability(
@@ -130,26 +131,44 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun isPastaCycleV3BackendAvailable(): Boolean = pastaCycleV3BackendAvailable
 
+        /** Exact ABI-18 streaming artifact-ingest surface; independent of backend readiness. */
         @JvmStatic
-        fun preferredMode(): Mode? =
-            preferredMode(
-                recursiveCompactAvailable = KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable(),
-                recursiveSpendAvailable = nativeAvailable,
-            )
+        fun isPastaCycleV3ArtifactIngestAvailable(): Boolean =
+            pastaCycleV3ArtifactIngestAvailable
 
         @JvmStatic
-        fun preferredMode(
-            recursiveCompactAvailable: Boolean,
-            recursiveSpendAvailable: Boolean,
-        ): Mode? {
-            if (recursiveCompactAvailable) {
-                return Mode.RECURSIVE_COMPACT_V1
+        fun preferredMode(): Mode? = preferredMode(pastaCycleV3BackendAvailable)
+
+        @JvmStatic
+        fun preferredMode(pastaCycleV3BackendAvailable: Boolean): Mode? =
+            if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND_V2 else null
+
+        /** Begin one manifest-bound, bounded streaming ingest of a complete KRV3 package. */
+        @JvmStatic
+        fun beginPastaCycleV3ArtifactIngest(
+            manifestNorito: ByteArray?,
+            manifestSha256: ByteArray?,
+            artifactSha256: ByteArray?,
+        ): PastaCycleV3ArtifactIngest {
+            check(pastaCycleV3ArtifactIngestAvailable) {
+                "$LIBRARY_NAME ABI-18 artifact ingest is not available in this runtime"
             }
-            return if (recursiveSpendAvailable) {
-                Mode.RECURSIVE_SPEND_V1
-            } else {
-                null
-            }
+            val manifest = requireArtifactInput(manifestNorito, "manifestNorito", false)
+            val manifestDigest = requireArtifactInput(manifestSha256, "manifestSha256", true)
+            val artifactDigest = requireArtifactInput(artifactSha256, "artifactSha256", true)
+            val handle = nativeArtifactBeginV3(manifest, manifestDigest, artifactDigest)
+            check(handle > 0) { "native Kagemusha V3 artifact ingest returned no handle" }
+            return PastaCycleV3ArtifactIngest(handle)
+        }
+
+        private fun requireArtifactInput(
+            bytes: ByteArray?,
+            name: String,
+            digest: Boolean,
+        ): ByteArray {
+            require(bytes != null && bytes.isNotEmpty()) { "$name must not be empty" }
+            require(!digest || bytes.size == 32) { "$name must be exactly 32 bytes" }
+            return bytes
         }
 
         @JvmStatic
@@ -909,6 +928,24 @@ class KagemushaRecursiveSpendProver private constructor() {
                 probeSymbol = { probeRequiredNativeSymbols() },
             )
 
+        private fun loadPastaCycleV3ArtifactIngestBridge(): Boolean {
+            if (!nativeAvailable) return false
+            return try {
+                if (nativeBridgeAbiVersion() != PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
+                    false
+                } else {
+                    nativeArtifactBeginV3(byteArrayOf(0), ByteArray(32), ByteArray(32))
+                    false
+                }
+            } catch (_: IllegalArgumentException) {
+                true
+            } catch (_: UnsatisfiedLinkError) {
+                false
+            } catch (_: RuntimeException) {
+                false
+            }
+        }
+
         private fun probeRequiredNativeSymbols(): Boolean {
             val probe = MALFORMED_NATIVE_PROBE_ARCHIVE
             var available = true
@@ -988,6 +1025,22 @@ class KagemushaRecursiveSpendProver private constructor() {
         private external fun nativePastaCycleV3BackendAvailable(): Boolean
 
         @JvmStatic
+        private external fun nativeArtifactBeginV3(
+            manifestNorito: ByteArray,
+            manifestSha256: ByteArray,
+            artifactSha256: ByteArray,
+        ): Long
+
+        @JvmStatic
+        private external fun nativeArtifactWriteV3(handle: Long, chunk: ByteArray)
+
+        @JvmStatic
+        private external fun nativeArtifactFinalizeV3(handle: Long)
+
+        @JvmStatic
+        private external fun nativeArtifactCancelV3(handle: Long)
+
+        @JvmStatic
         private external fun nativeInitSpend(requestArchive: ByteArray): ByteArray?
 
         @JvmStatic
@@ -1033,6 +1086,41 @@ class KagemushaRecursiveSpendProver private constructor() {
         private external fun nativeBuildPreviousProofOpenEnvelopesArchive(
             previousBundleArchive: ByteArray,
         ): ByteArray?
+    }
+
+    /** Owns a native KRV3 spool until the caller closes it. */
+    class PastaCycleV3ArtifactIngest internal constructor(initialHandle: Long) : AutoCloseable {
+        private var handle: Long = initialHandle
+        private var finalized: Boolean = false
+
+        @Synchronized
+        fun write(chunk: ByteArray?) {
+            requireOpen()
+            val bytes = requireArtifactInput(chunk, "chunk", false)
+            nativeArtifactWriteV3(handle, bytes)
+        }
+
+        @Synchronized
+        fun finish() {
+            requireOpen()
+            nativeArtifactFinalizeV3(handle)
+            finalized = true
+        }
+
+        @Synchronized
+        fun isFinalized(): Boolean = finalized
+
+        @Synchronized
+        override fun close() {
+            if (handle == 0L) return
+            nativeArtifactCancelV3(handle)
+            handle = 0L
+        }
+
+        private fun requireOpen() {
+            check(handle != 0L) { "Kagemusha V3 artifact ingest is closed" }
+            check(!finalized) { "Kagemusha V3 artifact ingest is already finalized" }
+        }
     }
 
     /** Portable Reserved-lineage verifier/proving key artifact package. */

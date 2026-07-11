@@ -131,6 +131,43 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
         norito::json::from_slice(&missing_query_body).expect("decode missing-query error");
     assert_eq!(missing_query_error.code(), "request_query_invalid");
 
+    for query in [
+        "asset_definition_id=first&asset_definition_id=second",
+        "asset_definition_id=first&asset_definition_id=first",
+        "asset_definition_id=first&asset%5fdefinition%5fid=second",
+    ] {
+        let duplicate = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/offline/readiness?{query}"))
+                    .header(ACCEPT, "application/json")
+                    .extension(connect_info())
+                    .body(Body::empty())
+                    .expect("duplicate readiness query request"),
+            )
+            .await
+            .expect("duplicate readiness query response");
+        assert_eq!(
+            duplicate.status(),
+            StatusCode::BAD_REQUEST,
+            "a repeated asset_definition_id must be rejected before the readiness handler: {query}"
+        );
+        let duplicate_body = duplicate
+            .into_body()
+            .collect()
+            .await
+            .expect("collect duplicate-query error")
+            .to_bytes();
+        let duplicate_error: iroha_torii_shared::ErrorEnvelope =
+            norito::json::from_slice(&duplicate_body).expect("decode duplicate-query error");
+        assert_eq!(duplicate_error.code(), "request_query_invalid", "query={query}");
+        assert!(
+            duplicate_error.message().contains("duplicate field"),
+            "query={query}, error={duplicate_error:?}"
+        );
+    }
+
     let readiness = app
         .clone()
         .oneshot(
@@ -239,6 +276,47 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     }
 
     for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
+        let oversized_len = usize::try_from(OFFLINE_COMMAND_BODY_LIMIT)
+            .expect("test limit fits usize")
+            .checked_add(1)
+            .expect("test limit can be incremented");
+        for (content_type, expected_code) in [
+            (None, "request_content_type_missing"),
+            (Some("text/plain"), "request_content_type_unsupported"),
+        ] {
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(ACCEPT, "application/json")
+                .extension(connect_info());
+            if let Some(content_type) = content_type {
+                request = request.header(CONTENT_TYPE, content_type);
+            }
+            let response = app
+                .clone()
+                .oneshot(
+                    request
+                        .body(Body::from(vec![b' '; oversized_len]))
+                        .expect("oversized request with rejected content type"),
+                )
+                .await
+                .expect("content-type rejection response");
+            assert_eq!(
+                response.status(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "content-type validation must precede body collection for path={path}"
+            );
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect content-type rejection")
+                .to_bytes();
+            let error: iroha_torii_shared::ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode typed content-type rejection");
+            assert_eq!(error.code(), expected_code, "path={path}");
+        }
+
         let above_axum_default = app
             .clone()
             .oneshot(

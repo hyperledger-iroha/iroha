@@ -105,32 +105,25 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 
 ### ISO нэрийн туслах
 
-`recipes/iso_alias.mjs` нь ISO нэрийн төгсгөлийн цэгүүдийг чиглүүлдэг тул сургуулилтууд хамрагдах боломжтой
-Захиалгат хэрэгслийг бичихгүйгээр сохор элементийн хэш болон бусад нэр хайх. Энэ
-дууддаг `ToriiClient.evaluateAliasVoprf` plus `resolveAlias` / `resolveAliasByIndex`
-мөн backend, digest, account binding, source, deterministic индексийг хэвлэдэг
-Torii буцаасан.
+`recipes/iso_alias.mjs` тусгай хэрэгсэл шаардахгүйгээр ISO нэрийн хайлтыг шалгана.
+Энэ нь `resolveAlias` болон `resolveAliasByIndex`-г дуудаж, дараа нь Torii-оос буцаасан бүртгэлийн холболт, эх сурвалж, детерминистик индексийг хэвлэнэ.
 
 Хүрээлэн буй орчны хувьсагчид:
 
 - `TORII_URL` — Torii төгсгөлийн цэг нь бусад нэрийн туслахуудыг илчлэх.
-- `ISO_VOPRF_INPUT` — зургаан өнцөгт кодлогдсон сохор элемент (анхдагчаар `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — зөвхөн хайлт хийх үед VOPRF дуудлагыг алгасах.
 - `ISO_ALIAS_LABEL` — шийдвэрлэх энгийн нэр (жишээ нь, IBAN маягийн мөрүүд).
 - `ISO_ALIAS_INDEX` — аравтын бутархай буюу `0x` угтвартай индексийг `resolveAliasByIndex` руу шилжүүлсэн.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — хамгаалалттай Torii байршуулалтад зориулсан нэмэлт толгой.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "ប៉ារ៉ាម៉ែត្រ `{name}` ក្នុងអនុគមន៍ `{func}` មិនដែលត្រូវបានប្រើ",
     lint_unreachable_after_return: "រកឃើញសេចក្តីថ្លែងការណ៍ដែលមិនអាចទៅដល់នៅក្នុង {context}: កូដបន្ទាប់ពី return មិនត្រូវបានដំណើរការឡើយ",
     lint_ok: "រួចរាល់",
-    lint_usage: "របៀបប្រើ: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "របៀបប្រើ: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "ដំណើរការការត្រួតពិនិត្យ lint របស់ Kotodama លើប្រភពដែលបានផ្តល់ជូន។",
     ..english::MESSAGES
 };

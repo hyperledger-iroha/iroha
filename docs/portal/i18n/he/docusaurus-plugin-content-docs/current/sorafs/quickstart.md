@@ -121,3 +121,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   (`namespace.name@semver`) על פני מזהים מספריים.
 - **אוטומציית CI** – הוסיפו את הפקודות לעיל לפייפלייני release כדי שהמסמכים,
   ה‑fixtures וה‑artifacts יפרסמו מניפסטים דטרמיניסטיים לצד מטאדטה חתומה.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

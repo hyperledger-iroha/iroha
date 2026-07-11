@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-12-29T18:16:35.135788+00:00"
 translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan
@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 ## 網絡環境
 - 運行兩個具有不同網絡前綴的 Nexus 環境：
 - **Sora Nexus（主網）** – 生產網絡前綴 `nexus`，託管規範治理和 SoraFS/SoraNet 搭載服務（鏈 ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`）。
-- **Sora Taira（測試網）** – 暫存網絡前綴 `taira`，鏡像主網配置以進行集成測試和預發布驗證（鏈 UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`）。
+- **Sora Taira（測試網）** – 暫存網絡前綴 `taira`，鏡像主網配置以進行集成測試和預發布驗證（鏈 UUID `fc56984b-2be7-431d-840e-21514d1883f0`）。
 - 為每個環境維護單獨的創世文件、治理密鑰和基礎設施足跡。 Taira 充當升級到 Nexus 之前所有 SoraFS/SoraNet 部署的試驗場。
 - CI/CD 管道應首先部署到 Taira，執行自動冒煙測試，並在檢查通過後需要手動升級到 Nexus。
 - 參考配置包位於 `configs/soranexus/nexus/`（主網）和 `configs/soranexus/taira/`（測試網）下，每個包含示例 `config.toml`、`genesis.json` 和 Torii 准入目錄。

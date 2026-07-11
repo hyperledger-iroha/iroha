@@ -301,6 +301,7 @@ mod tests {
             height: 1,
             epoch: 0,
             epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),

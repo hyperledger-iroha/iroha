@@ -1063,25 +1063,14 @@ public final class OfflineNoteTest {
 
   private static void kagemushaRecursiveSpendNativeProverValidatesInput() {
     assertTrue(
-        KagemushaRecursiveSpendProver.preferredMode(true, true)
-            == KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1,
-        "recursive compact should be preferred when compact ABI is present");
+        KagemushaRecursiveSpendProver.preferredMode(true)
+            == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2,
+        "ABI-18 Pasta-cycle recursive spend should be the only production mode");
     assertTrue(
-        KagemushaRecursiveSpendProver.preferredMode(false, true)
-            == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
-        "recursive Kagemusha spend should be preferred when available");
-    assertTrue(
-        KagemushaRecursiveSpendProver.preferredMode(false, false) == null,
-        "no recursive Kagemusha bridge should expose no preferred production mode");
-    for (final KagemushaRecursiveSpendProver.Mode mode : KagemushaRecursiveSpendProver.Mode.values()) {
-      assertTrue(
-          !"checked_prefold_v1".equals(mode.wireName()),
-          "checked-prefold is not a first-release spend mode");
-    }
-    assertEquals(
-        "recursive_compact_v1",
-        KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1.wireName(),
-        "recursive compact Kagemusha wire mode");
+        KagemushaRecursiveSpendProver.preferredMode(false) == null,
+        "an unavailable ABI-18 backend must expose no preferred production mode");
+    assertTrue(KagemushaRecursiveSpendProver.Mode.values().length == 1,
+        "the first release must expose exactly one production mode");
     assertTrue(
         VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", new byte[] {1, 2, 3}).length > 0,
         "verifying key box codec should encode non-empty records");
@@ -1095,8 +1084,8 @@ public final class OfflineNoteTest {
         () -> VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", new byte[0]),
         "empty verifying key bytes should fail");
     assertEquals(
-        "recursive_spend_v1",
-        KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName(),
+        "recursive_spend_v2",
+        KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2.wireName(),
         "recursive Kagemusha spend wire mode");
     assertEquals(
         6,

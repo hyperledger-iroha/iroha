@@ -2260,23 +2260,15 @@ pub mod sumeragi {
     /// List persisted consensus evidence records.
     pub const EVIDENCE_LIST: RouteDescriptor =
         public_get("sumeragi.evidence.list", "/v1/sumeragi/evidence");
-    /// Read one SCCP burn proof bundle.
-    pub const SCCP_BURN_PROOF: RouteDescriptor =
-        public_sccp_get("sccp.burn_proof.read", "/v1/sccp/proofs/burn/{message_id}");
     /// Read one generic SCCP message proof bundle.
     pub const SCCP_MESSAGE_PROOF: RouteDescriptor = public_sccp_get(
         "sccp.message_proof.read",
         "/v1/sccp/proofs/message/{message_id}",
     );
-    /// Read one normalized SCCP proof artifact.
-    pub const SCCP_MESSAGE_ARTIFACT: RouteDescriptor = public_sccp_get(
-        "sccp.message_artifact.read",
-        "/v1/sccp/artifacts/message/{message_id}",
-    );
-    /// Read one normalized SCCP proof job.
-    pub const SCCP_MESSAGE_JOB: RouteDescriptor = public_sccp_get(
-        "sccp.message_job.read",
-        "/v1/sccp/jobs/message/{message_id}",
+    /// Read one exact state-derived SCCP proof request.
+    pub const SCCP_PROOF_REQUEST: RouteDescriptor = public_sccp_get(
+        "sccp.proof_request.read",
+        "/v1/sccp/proof-requests/{message_id}",
     );
     /// List recently committed SCCP messages.
     pub const SCCP_MESSAGES_RECENT: RouteDescriptor =
@@ -2284,9 +2276,9 @@ pub mod sumeragi {
     /// Discover supported SCCP proof capabilities.
     pub const SCCP_CAPABILITIES: RouteDescriptor =
         public_sccp_get("sccp.capability.list", "/v1/sccp/capabilities");
-    /// Discover SCCP proof manifests.
-    pub const SCCP_MANIFESTS: RouteDescriptor =
-        public_sccp_get("sccp.manifest.list", "/v1/sccp/manifests");
+    /// Read the authoritative SCCP route registry.
+    pub const SCCP_REGISTRY: RouteDescriptor =
+        public_sccp_get("sccp.registry.read", "/v1/sccp/registry");
     /// Read one epoch's VRF penalty state.
     pub const VRF_PENALTIES: RouteDescriptor = public_get(
         "sumeragi.vrf.penalty.read",
@@ -2381,13 +2373,11 @@ pub mod sumeragi {
     pub const ROUTES: &[RouteDescriptor] = &[
         EVIDENCE_COUNT,
         EVIDENCE_LIST,
-        SCCP_BURN_PROOF,
         SCCP_MESSAGE_PROOF,
-        SCCP_MESSAGE_ARTIFACT,
-        SCCP_MESSAGE_JOB,
+        SCCP_PROOF_REQUEST,
         SCCP_MESSAGES_RECENT,
         SCCP_CAPABILITIES,
-        SCCP_MANIFESTS,
+        SCCP_REGISTRY,
         VRF_PENALTIES,
         VRF_EPOCH,
         NEW_VIEW_SSE,
@@ -3612,6 +3602,12 @@ pub mod contracts_and_verification_keys {
         .with_cors_options(true)
     }
 
+    const fn app_compat_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_post(id, path).with_path_policy(PathPolicy::ProtocolException {
+            reason: "retained browser compatibility spelling",
+        })
+    }
+
     const fn app_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path).with_projections(RouteProjections::SDK)
     }
@@ -3690,6 +3686,8 @@ pub mod contracts_and_verification_keys {
         MULTISIG_SPEC_POST => app_post("contracts.multisig_spec_post", "/v1/multisig/spec");
         MULTISIG_PROPOSALS_QUERY_POST => app_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
         MULTISIG_PROPOSALS_LOOKUP_POST => app_post("contracts.multisig_proposals_lookup_post", "/v1/multisig/proposals/lookup");
+        MULTISIG_PROPOSALS_LIST_POST => app_compat_post("contracts.multisig_proposals_list_post", "/v1/multisig/proposals/list");
+        MULTISIG_PROPOSALS_GET_POST => app_compat_post("contracts.multisig_proposals_get_post", "/v1/multisig/proposals/get");
         MULTISIG_APPROVALS_QUERY_POST => app_post("contracts.multisig_approvals_query_post", "/v1/multisig/approvals/query");
         MULTISIG_APPROVALS_LOOKUP_POST => app_post("contracts.multisig_approvals_lookup_post", "/v1/multisig/approvals/lookup");
         MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_query_for_authority_post", "/v1/multisig/approvals/query-for-authority");
@@ -4027,13 +4025,11 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     telemetry::ASSET_HOLDERS_QUERY,
     sumeragi::EVIDENCE_COUNT,
     sumeragi::EVIDENCE_LIST,
-    sumeragi::SCCP_BURN_PROOF,
     sumeragi::SCCP_MESSAGE_PROOF,
-    sumeragi::SCCP_MESSAGE_ARTIFACT,
-    sumeragi::SCCP_MESSAGE_JOB,
+    sumeragi::SCCP_PROOF_REQUEST,
     sumeragi::SCCP_MESSAGES_RECENT,
     sumeragi::SCCP_CAPABILITIES,
-    sumeragi::SCCP_MANIFESTS,
+    sumeragi::SCCP_REGISTRY,
     sumeragi::VRF_PENALTIES,
     sumeragi::VRF_EPOCH,
     sumeragi::NEW_VIEW_SSE,
@@ -4405,6 +4401,8 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::MULTISIG_SPEC_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
+    contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
+    contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
     contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
     contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
     contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
@@ -4757,8 +4755,6 @@ mod tests {
         }
 
         for unsupported_path in [
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
             "/v1/multisig/approvals/list",
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
@@ -4789,6 +4785,48 @@ mod tests {
                 routes.iter().any(|route| route.path() == canonical_path),
                 "missing canonical first-release route: {canonical_path}"
             );
+        }
+
+        for (compatibility_route, canonical_route) in [
+            (
+                contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
+                contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
+            ),
+            (
+                contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
+                contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
+            ),
+        ] {
+            assert!(routes.contains(&compatibility_route));
+            assert_eq!(compatibility_route.method(), canonical_route.method());
+            assert_eq!(compatibility_route.surface(), canonical_route.surface());
+            assert_eq!(compatibility_route.listener(), canonical_route.listener());
+            assert_eq!(
+                compatibility_route.authentication(),
+                canonical_route.authentication()
+            );
+            assert_eq!(
+                compatibility_route.feature_gate(),
+                canonical_route.feature_gate()
+            );
+            assert_eq!(
+                compatibility_route.projections(),
+                canonical_route.projections()
+            );
+            assert_eq!(
+                compatibility_route.cors_options(),
+                canonical_route.cors_options()
+            );
+            assert_eq!(
+                compatibility_route.path_normalization(),
+                canonical_route.path_normalization()
+            );
+            assert!(matches!(
+                compatibility_route.path_policy(),
+                PathPolicy::ProtocolException { reason }
+                    if reason == "retained browser compatibility spelling"
+            ));
+            assert_eq!(canonical_route.path_policy(), PathPolicy::CanonicalV1);
         }
 
         for route in [

@@ -320,7 +320,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v3";
 /// Exact offline mode selected by the V3 recursive-spend release contract.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V1: &str = "recursive_spend_v1";
+pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";
 /// Proof-system profile selected by the V3 recursive-spend release contract.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1: &str = "halo2/ipa-pasta-cycle-v1";
 /// Poseidon transcript profile shared by both Pasta-cycle proof parities.
@@ -372,8 +372,7 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2: &str = "topup_fin
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2: &str =
     "iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2";
 /// Canonical release file name for the top-up finality roster.
-pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str =
-    "topup-finality-roster.norito";
+pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito";
 /// Maximum canonical roster artifact size; 256 BLS validators fit well below this bound.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 1024 * 1024;
 /// Whether the branch-safe fractional recursive-spend V2 circuit is linked.
@@ -390,51 +389,13 @@ pub const fn is_supported_kagemusha_aggregation_mode(mode: u16) -> bool {
     mode == KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1
 }
 
-/// Return the default SDK Kagemusha spend mode for the available native surface.
-///
-/// Recursive spend bundles are the default product path when ABI 6 recursive
-/// spend init/append/verify/redeem is available. If no recursive-capable
-/// surface is linked, this first release exposes no preferred production mode.
+/// Return the only first-release Kagemusha mode when the ABI-18 backend is ready.
 #[must_use]
 pub const fn preferred_kagemusha_offline_spend_mode(
-    recursive_spend_available: bool,
+    pasta_cycle_v3_backend_available: bool,
 ) -> Option<&'static str> {
-    preferred_kagemusha_offline_spend_mode_for_capabilities(false, recursive_spend_available)
-}
-
-/// Return the default SDK Kagemusha spend mode for advertised native capabilities.
-///
-/// Prefer ABI-7 recursive compact when both the compact prover and verifier are
-/// linked, then fall back to ABI-6 recursive spend. This selector describes a
-/// proof surface; product wallets should use
-/// [`preferred_kagemusha_spendable_cash_mode_for_capabilities`] instead.
-#[must_use]
-pub const fn preferred_kagemusha_offline_spend_mode_for_capabilities(
-    recursive_compact_available: bool,
-    recursive_spend_available: bool,
-) -> Option<&'static str> {
-    if recursive_compact_available {
-        Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1)
-    } else if recursive_spend_available {
-        Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
-    } else {
-        None
-    }
-}
-
-/// Return the preferred mode that can be spent again offline.
-///
-/// Recursive compact is intentionally ignored because it is an
-/// admission-neutral projection rather than an independently spendable cash
-/// state.
-#[must_use]
-pub const fn preferred_kagemusha_spendable_cash_mode_for_capabilities(
-    recursive_compact_available: bool,
-    recursive_spend_available: bool,
-) -> Option<&'static str> {
-    let _ = recursive_compact_available;
-    if recursive_spend_available {
-        Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
+    if pasta_cycle_v3_backend_available {
+        Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
     } else {
         None
     }
@@ -2952,7 +2913,11 @@ mod model {
         pub authority: AccountId,
         /// Registered device identifier used for policy/App-Attest lookup.
         pub device_id: String,
-        /// Stable idempotency/replay identifier.
+        /// Globally unique chain idempotency/replay identifier.
+        ///
+        /// Unlike nonces and payload digests, this identifier is not scoped by
+        /// `authority`; every Kagemusha V2 chain operation shares one replay
+        /// namespace.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
@@ -3016,7 +2981,7 @@ mod model {
         pub pallas_open_envelopes_archive: Vec<u8>,
         /// Content-addressed recursive artifact generation selected for later init.
         pub artifact_generation: String,
-        /// Replay-stable operation identifier copied into the finalized anchor.
+        /// Globally unique replay-stable operation identifier copied into the finalized anchor.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
@@ -4381,7 +4346,7 @@ mod model {
         pub offline_change: Option<KagemushaRecursiveSpendRedeemChangeBranchV2>,
         /// Height used for verifier activation-window checks.
         pub block_height: u64,
-        /// Stable idempotency identifier for finality-safe retries.
+        /// Globally unique idempotency identifier for finality-safe retries.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Self-contained recipient/device authorization.
@@ -10644,7 +10609,7 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3
             || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
-            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V1
+            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V2
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || !is_kagemusha_v3_portable_identifier(&self.generation)
@@ -10716,7 +10681,7 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV1 {
         if self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
             || self.artifact_manifest_schema
                 != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
-            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V1
+            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V2
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || self.proof_envelope_version
@@ -10744,7 +10709,7 @@ pub fn kagemusha_recursive_spend_native_capabilities_v1()
     KagemushaRecursiveSpendNativeCapabilitiesV1 {
         bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
         artifact_manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
-        mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V1.to_owned(),
+        mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
         proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
         transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
         proof_envelope_version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
@@ -10766,6 +10731,7 @@ fn kagemusha_v3_missing_gates() -> Vec<String> {
         "opposite_field_pasta_loader",
         "cross_field_poseidon_transcript",
         "two_layer_recursive_accumulator",
+        "authenticated_release_envelope",
         "independent_cryptographic_review",
         "physical_device_performance_evidence",
     ]
@@ -18309,7 +18275,7 @@ mod offline_note_tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V1.to_owned(),
+            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
             generation: "release-generation-1".to_owned(),
@@ -18475,6 +18441,7 @@ mod offline_note_tests {
                 "opposite_field_pasta_loader",
                 "cross_field_poseidon_transcript",
                 "two_layer_recursive_accumulator",
+                "authenticated_release_envelope",
                 "independent_cryptographic_review",
                 "physical_device_performance_evidence",
             ]
@@ -21304,32 +21271,8 @@ mod offline_note_tests {
                 .contains("unsupported or unknown")
         );
         assert_eq!(
-            preferred_kagemusha_offline_spend_mode_for_capabilities(true, true),
-            Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1)
-        );
-        assert_eq!(
-            preferred_kagemusha_offline_spend_mode_for_capabilities(true, false),
-            Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1)
-        );
-        assert_eq!(
-            preferred_kagemusha_offline_spend_mode_for_capabilities(false, true),
-            Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
-        );
-        assert_eq!(
-            preferred_kagemusha_offline_spend_mode_for_capabilities(false, false),
-            None
-        );
-        assert_eq!(
-            preferred_kagemusha_spendable_cash_mode_for_capabilities(true, true),
-            Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
-        );
-        assert_eq!(
-            preferred_kagemusha_spendable_cash_mode_for_capabilities(true, false),
-            None
-        );
-        assert_eq!(
             preferred_kagemusha_offline_spend_mode(true),
-            Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
+            Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
         );
         assert_eq!(preferred_kagemusha_offline_spend_mode(false), None);
         assert_eq!(

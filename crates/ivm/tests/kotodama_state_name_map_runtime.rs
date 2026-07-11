@@ -1,4 +1,4 @@
-//! Regressions for durable `Map<Name, int>` runtime behavior.
+//! Regressions for durable `StateMap<Name, int>` runtime behavior.
 
 use std::{collections::HashMap, str::FromStr};
 
@@ -6,6 +6,7 @@ use iroha_crypto::PublicKey;
 use iroha_data_model::prelude::AccountId;
 use ivm::mock_wsv::{MockWorldStateView, WsvHost};
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+mod common;
 
 fn run_program(src: &str) -> IVM {
     let code = KotodamaCompiler::new()
@@ -14,6 +15,7 @@ fn run_program(src: &str) -> IVM {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run program");
     vm
 }
@@ -36,6 +38,7 @@ fn run_program_with_wsv(src: &str, wsv: MockWorldStateView) -> (IVM, MockWorldSt
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&code).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run program");
 
     let wsv = {
@@ -51,46 +54,46 @@ fn run_program_with_wsv(src: &str, wsv: MockWorldStateView) -> (IVM, MockWorldSt
 fn durable_name_map_roundtrip_read_after_write() {
     let src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
-            fn main() -> int {
-                Foo[name("alice")] = 1;
-                return Foo[name("alice")];
+            state StateMap<Name, int> Foo;
+            kotoage fn main() -> int authorize("WriteState") {
+                Foo[Name::parse("alice")] = 1;
+                return Foo.get(Name::parse("alice")).unwrap_or(0);
             }
         }
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_read_modify_write_roundtrip() {
     let src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
-            fn main() -> int {
-                Foo[name("alice")] = 1;
-                let prior = Foo[name("alice")];
-                Foo[name("alice")] = prior + 1;
-                return Foo[name("alice")];
+            state StateMap<Name, int> Foo;
+            kotoage fn main() -> int authorize("WriteState") {
+                Foo[Name::parse("alice")] = 1;
+                let prior = Foo.get(Name::parse("alice")).unwrap_or(0);
+                Foo[Name::parse("alice")] = prior + 1;
+                return Foo.get(Name::parse("alice")).unwrap_or(0);
             }
         }
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 2);
+    assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }
 
 #[test]
 fn durable_name_map_if_branch_reassignment_roundtrip() {
     let src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
-            fn main() -> int {
-                Foo[name("alice")] = 1;
-                let value = 0;
-                if (Foo.contains(name("alice"))) {
-                    value = Foo[name("alice")];
+            state StateMap<Name, int> Foo;
+            kotoage fn main() -> int authorize("WriteState") {
+                Foo[Name::parse("alice")] = 1;
+                var value = 0;
+                if (Foo.contains(Name::parse("alice"))) {
+                    value = Foo.get(Name::parse("alice")).unwrap_or(0);
                 }
                 return value;
             }
@@ -98,143 +101,144 @@ fn durable_name_map_if_branch_reassignment_roundtrip() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_roundtrip_through_name_parameter() {
     let src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
+            state StateMap<Name, int> Foo;
 
-            fn read_value(key: Name) -> int {
-                return Foo[key];
+            fn read_value(Name key) -> int {
+                return Foo.get(key).unwrap_or(0);
             }
 
-            fn main() -> int {
-                Foo[name("alice")] = 1;
-                return read_value(name("alice"));
-            }
-        }
-    "#;
-
-    let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
-}
-
-#[test]
-fn durable_name_map_roundtrip_through_state_parameter() {
-    let src = r#"
-        seiyaku C {
-            state Foo: Map<Name, int>;
-
-            fn read_value(state Map<Name, int> entries, key: Name) -> int {
-                return entries.ensure(key, 0);
-            }
-
-            fn main() -> int {
-                Foo[name("alice")] = 1;
-                return read_value(Foo, name("alice"));
+            kotoage fn main() -> int authorize("WriteState") {
+                Foo[Name::parse("alice")] = 1;
+                return read_value(Name::parse("alice"));
             }
         }
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
-fn durable_name_map_struct_value_roundtrip_through_state_parameter() {
+fn durable_name_map_roundtrip_through_helper() {
     let src = r#"
         seiyaku C {
-            struct Entry { amount: int; active: bool; }
-            state Entries: Map<Name, Entry>;
+            state StateMap<Name, int> Foo;
 
-            fn read_score(state Map<Name, Entry> entries, key: Name) -> int {
-                let value = entries[key].amount;
-                if (entries[key].active) {
+            fn read_value(Name key) -> int {
+                return Foo.ensure(key, 0);
+            }
+
+            kotoage fn main() -> int authorize("WriteState") {
+                Foo[Name::parse("alice")] = 1;
+                return read_value(Name::parse("alice"));
+            }
+        }
+    "#;
+
+    let vm = run_program(src);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+}
+
+#[test]
+fn durable_name_map_struct_value_roundtrip_through_helper() {
+    let src = r#"
+        seiyaku C {
+            struct Entry { int amount, bool active }
+            state StateMap<Name, Entry> Entries;
+
+            fn read_score(Name key) -> int {
+                let entry = Entries.get(key).unwrap_or(Entry { amount: 0, active: false });
+                var value = entry.amount;
+                if (entry.active) {
                     value = value + 1;
                 }
                 return value;
             }
 
-            fn main() -> int {
-                Entries[name("alice")] = Entry(41, true);
-                return read_score(Entries, name("alice"));
+            kotoage fn main() -> int authorize("WriteState") {
+                Entries[Name::parse("alice")] = Entry { amount: 41, active: true };
+                return read_score(Name::parse("alice"));
             }
         }
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 42);
+    assert_eq!(common::decode_i64_register(&vm, 10), 42);
 }
 
 #[test]
 fn durable_name_map_if_branch_roundtrip_through_name_parameter() {
     let src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
+            state StateMap<Name, int> Foo;
 
-            fn read_value(key: Name) -> int {
-                let value = 0;
+            fn read_value(Name key) -> int {
+                var value = 0;
                 if (Foo.contains(key)) {
-                    value = Foo[key];
+                    value = Foo.get(key).unwrap_or(0);
                 }
                 return value;
             }
 
-            fn main() -> int {
-                Foo[name("alice")] = 1;
-                return read_value(name("alice"));
+            kotoage fn main() -> int authorize("WriteState") {
+                Foo[Name::parse("alice")] = 1;
+                return read_value(Name::parse("alice"));
             }
         }
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_roundtrip_across_wsv_invocations() {
     let write_src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
-            fn main() {
-                Foo[name("alice")] = 1;
+            state StateMap<Name, int> Foo;
+            kotoage fn main() authorize("WriteState") {
+                Foo[Name::parse("alice")] = 1;
             }
         }
     "#;
     let read_src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
-            fn main() -> int {
-                return Foo[name("alice")];
+            state StateMap<Name, int> Foo;
+            view fn main() -> int {
+                return Foo.get(Name::parse("alice")).unwrap_or(0);
             }
         }
     "#;
 
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_if_branch_roundtrip_across_wsv_invocations() {
     let write_src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
-            fn main() {
-                Foo[name("alice")] = 1;
+            state StateMap<Name, int> Foo;
+            kotoage fn main() authorize("WriteState") {
+                Foo[Name::parse("alice")] = 1;
             }
         }
     "#;
     let read_src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
-            fn main() -> int {
-                let value = 0;
-                if (Foo.contains(name("alice"))) {
-                    value = Foo[name("alice")];
+            state StateMap<Name, int> Foo;
+            view fn main() -> int {
+                var value = 0;
+                if (Foo.contains(Name::parse("alice"))) {
+                    value = Foo.get(Name::parse("alice")).unwrap_or(0);
                 }
                 return value;
             }
@@ -243,135 +247,141 @@ fn durable_name_map_if_branch_roundtrip_across_wsv_invocations() {
 
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_to_account_id_map_roundtrip() {
     let src = r#"
         seiyaku C {
-            state Foo: Map<Name, AccountId>;
+            state StateMap<Name, AccountId> Foo;
 
-            fn main() {
-                let key = name("alice");
-                Foo[key] = authority();
-                assert(Foo.contains(key));
-                assert(Foo[key] == authority());
+            kotoage fn main() -> bool authorize("WriteState") {
+                let key = Name::parse("alice");
+                Foo[key] = context::authority();
+                return Foo.contains(key)
+                    && Foo.get(key).unwrap_or(context::authority()) == context::authority();
             }
         }
     "#;
 
-    run_program(src);
+    let vm = run_program(src);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
     let write_src = r#"
         seiyaku C {
-            state Foo: Map<Name, AccountId>;
+            state StateMap<Name, AccountId> Foo;
 
-            fn main() {
-                Foo[name("alice")] = authority();
+            kotoage fn main() authorize("WriteState") {
+                Foo[Name::parse("alice")] = context::authority();
             }
         }
     "#;
     let read_src = r#"
         seiyaku C {
-            state Foo: Map<Name, AccountId>;
+            state StateMap<Name, AccountId> Foo;
 
-            fn main() {
-                let key = name("alice");
-                assert(Foo.contains(key));
-                assert(Foo[key] == authority());
+            view fn main() -> bool {
+                let key = Name::parse("alice");
+                return Foo.contains(key)
+                    && Foo.get(key).unwrap_or(context::authority()) == context::authority();
             }
         }
     "#;
 
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
-    let _ = run_program_with_wsv(read_src, wsv);
+    let (vm, _) = run_program_with_wsv(read_src, wsv);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_to_blob_map_write_from_json_hex_roundtrip() {
     let src = r#"
         seiyaku C {
-            state Foo: Map<Name, Blob>;
+            state StateMap<Name, bytes> Foo;
 
-            fn main() {
-                let ev = json("{\"value_hex\":\"68656c6c6f\"}");
-                let key = name("alice");
-                Foo[key] = ev.get_blob_hex(name("value_hex"));
-                assert(Foo.contains(key));
-                assert(Foo[key] == blob("hello"));
+            kotoage fn main() -> bool authorize("WriteState") {
+                let ev = Json::parse("{\"value_hex\":\"0x68656c6c6f\"}");
+                let key = Name::parse("alice");
+                if let Option::some(value) = ev.get_blob_hex(Name::parse("value_hex")) {
+                    Foo[key] = value;
+                } else {
+                    return false;
+                }
+                return Foo.contains(key) && Foo.get(key).unwrap_or(b"") == b"hello";
             }
         }
     "#;
 
-    run_program(src);
+    let vm = run_program(src);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_key_survives_function_call() {
     let src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
+            state StateMap<Name, int> Foo;
 
             fn touch() -> int {
                 return 7;
             }
 
-            fn main() -> int {
-                let key = name("alice");
+            kotoage fn main() -> int authorize("WriteState") {
+                let key = Name::parse("alice");
                 Foo[key] = 1;
                 let ignored = touch();
-                return Foo[key];
+                return Foo.get(key).unwrap_or(0);
             }
         }
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_branch_value_drives_following_state_set() {
     let src = r#"
         seiyaku C {
-            state Counter: Map<int, int>;
-            state Foo: Map<Name, int>;
+            state StateMap<int, int> Counter;
+            state StateMap<Name, int> Foo;
 
-            fn main() -> int {
-                let key = name("alice");
+            kotoage fn main() -> int authorize("WriteState") {
+                let key = Name::parse("alice");
                 Foo[key] = 1;
 
-                let value = 0;
+                var value = 0;
                 if (Foo.contains(key)) {
-                    value = Foo[key];
+                    value = Foo.get(key).unwrap_or(0);
                 }
 
                 Counter[1] = value + 1;
-                return Counter[1];
+                return Counter.get(1).unwrap_or(0);
             }
         }
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 2);
+    assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }
 
 #[test]
 fn durable_name_map_branch_value_survives_following_addition() {
     let src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
+            state StateMap<Name, int> Foo;
 
-            fn main() -> int {
-                let key = name("alice");
+            kotoage fn main() -> int authorize("WriteState") {
+                let key = Name::parse("alice");
                 Foo[key] = 1;
 
-                let value = 0;
+                var value = 0;
                 if (Foo.contains(key)) {
-                    value = Foo[key];
+                    value = Foo.get(key).unwrap_or(0);
                 }
 
                 return value + 1;
@@ -380,43 +390,43 @@ fn durable_name_map_branch_value_survives_following_addition() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 2);
+    assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }
 
 #[test]
 fn durable_name_map_branch_value_survives_path_work() {
     let src = r#"
         seiyaku C {
-            state Foo: Map<Name, int>;
-            state EntryByKey: Map<Name, int>;
+            state StateMap<Name, int> Foo;
+            state StateMap<int, int> EntryByPosition;
 
-            fn main() -> int {
-                let key = name("alice");
+            kotoage fn main() -> int authorize("WriteState") {
+                let key = Name::parse("alice");
                 Foo[key] = 1;
 
-                let value = 0;
+                var value = 0;
                 if (Foo.contains(key)) {
-                    value = Foo[key];
+                    value = Foo.get(key).unwrap_or(0);
                 }
 
-                EntryByKey[key.path(value)] = 7;
+                EntryByPosition[value] = 7;
                 return value;
             }
         }
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_branch_value_survives_following_state_work() {
     let src = r#"
         seiyaku C {
-            state Counter: Map<int, int>;
-            state CountByKey: Map<Name, int>;
-            state IndexById: Map<Name, int>;
-            state EntryByKey: Map<Name, int>;
+            state StateMap<int, int> Counter;
+            state StateMap<Name, int> CountByKey;
+            state StateMap<Name, int> IndexById;
+            state StateMap<int, int> EntryByPosition;
 
             fn next_index() -> int {
                 let value = Counter.ensure(1, 0);
@@ -424,25 +434,25 @@ fn durable_name_map_branch_value_survives_following_state_work() {
                 return value;
             }
 
-            fn main() -> int {
-                let tranche_id = name("t2");
-                let beneficiary_lookup_key = name("alice");
+            kotoage fn main() -> int authorize("WriteState") {
+                let tranche_id = Name::parse("t2");
+                let beneficiary_lookup_key = Name::parse("alice");
                 CountByKey[beneficiary_lookup_key] = 1;
 
                 let index = next_index();
-                let beneficiary_lookup_position = 0;
+                var beneficiary_lookup_position = 0;
                 if (CountByKey.contains(beneficiary_lookup_key)) {
-                    beneficiary_lookup_position = CountByKey[beneficiary_lookup_key];
+                    beneficiary_lookup_position = CountByKey.get(beneficiary_lookup_key).unwrap_or(0);
                 }
 
                 IndexById[tranche_id] = index;
                 CountByKey[beneficiary_lookup_key] = beneficiary_lookup_position + 1;
-                EntryByKey[beneficiary_lookup_key.path(beneficiary_lookup_position)] = index;
-                return CountByKey[beneficiary_lookup_key];
+                EntryByPosition[beneficiary_lookup_position] = index;
+                return CountByKey.get(beneficiary_lookup_key).unwrap_or(0);
             }
         }
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 2);
+    assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }

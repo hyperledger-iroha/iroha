@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
 ## بيئة ريدي
 - قم بتشغيل البيئات Nexus مع بادئات الشبكة المميزة:
 - ** Sora Nexus (mainnet)** - prefixo de rede de producao `nexus`, hospedando Governorca canonica e servicos piggyback SoraFS/SoraNet (معرف السلسلة `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - بادئة إعادة التدريج `testus`، تم إعدادها لتكوين الشبكة الرئيسية لاختبارات التكامل والتحقق من الإصدار المسبق (سلسلة UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - بادئة إعادة التدريج `testus`، تم إعدادها لتكوين الشبكة الرئيسية لاختبارات التكامل والتحقق من الإصدار المسبق (سلسلة UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - إدارة أرشيفات التكوين المنفصلة، ​​وأعمدة الإدارة، وآثار البنية التحتية لكل محيط. اختبرنا كمجال تجريبي للطرح SoraFS/SoraNet قبل الترويج لـ Nexus.
 - يتم نشر خطوط أنابيب CI/CD لأول مرة في الاختبار وتنفيذ اختبارات الدخان تلقائيًا وإصدار دليل ترويجي لـ Nexus عند مرور عمليات التحقق.
 - حزم التكوين المرجعي المباشر على `configs/soranexus/nexus/` (mainnet) و`configs/soranexus/testus/` (testnet)، كل منافس `config.toml`، `genesis.json` وأدلة القبول Torii على سبيل المثال.

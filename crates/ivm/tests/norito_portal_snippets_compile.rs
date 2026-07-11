@@ -19,6 +19,7 @@ use ivm::{
     },
     syscalls,
 };
+mod common;
 
 fn repository_root() -> PathBuf {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -59,10 +60,7 @@ fn snippet_paths() -> Vec<PathBuf> {
 }
 
 fn kotodama_compiler() -> KotodamaCompiler {
-    KotodamaCompiler::new_with_options(CompilerOptions {
-        enforce_on_chain_profile: false,
-        ..CompilerOptions::default()
-    })
+    KotodamaCompiler::new_with_options(CompilerOptions::default())
 }
 
 #[test]
@@ -108,7 +106,7 @@ fn compile_snippet(compiler: &KotodamaCompiler, path: &Path) -> Vec<u8> {
         .unwrap_or_else(|err| panic!("failed to compile {}: {err}", path.display()))
 }
 
-fn run_program_with_host<F>(label: &str, bytecode: &[u8], host: WsvHost, check: F)
+fn run_program_with_host<F>(label: &str, entrypoint: &str, bytecode: &[u8], host: WsvHost, check: F)
 where
     F: FnOnce(&mut WsvHost),
 {
@@ -116,6 +114,7 @@ where
     vm.set_host(host);
     vm.load_program(bytecode)
         .unwrap_or_else(|err| panic!("load developer portal snippet {label}: {err:?}"));
+    common::select_kotodama_entrypoint(&mut vm, bytecode, entrypoint);
     if let Err(err) = vm.run() {
         panic!("run developer portal snippet {label}: {err:?}");
     }
@@ -163,6 +162,13 @@ impl LoggingCoreHost {
 }
 
 impl IVMHost for LoggingCoreHost {
+    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        match number {
+            syscalls::SYSCALL_DEBUG_PRINT | syscalls::SYSCALL_DEBUG_LOG => Ok(0),
+            _ => self.inner.prepare_syscall(number, vm),
+        }
+    }
+
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_DEBUG_PRINT | syscalls::SYSCALL_DEBUG_LOG => Ok(0),
@@ -199,6 +205,7 @@ fn run_hajimari_snippet(compiler: &KotodamaCompiler, path: &Path) {
     vm.set_host(LoggingCoreHost::new());
     vm.load_program(&program)
         .expect("load hajimari snippet into IVM");
+    common::select_kotodama_entrypoint(&mut vm, &program, "hajimari");
     vm.run().expect("run hajimari snippet");
 }
 
@@ -208,6 +215,7 @@ fn run_threshold_escrow_snippet(compiler: &KotodamaCompiler, path: &Path) {
     vm.set_host(LoggingCoreHost::new());
     vm.load_program(&program)
         .expect("load threshold escrow snippet into IVM");
+    common::select_kotodama_entrypoint(&mut vm, &program, "hajimari");
     vm.run().expect("run threshold escrow snippet");
 }
 
@@ -231,13 +239,19 @@ fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let asset_id_clone = asset_id.clone();
-    run_program_with_host("register-and-mint", &program, host, move |host| {
-        let balance = host.wsv.balance(recipient.clone(), asset_id_clone.clone());
-        assert!(
-            balance >= Numeric::from(250_u64),
-            "register-and-mint should mint at least 250 units (observed {balance})"
-        );
-    });
+    run_program_with_host(
+        "register-and-mint",
+        "register_and_mint",
+        &program,
+        host,
+        move |host| {
+            let balance = host.wsv.balance(recipient.clone(), asset_id_clone.clone());
+            assert!(
+                balance >= Numeric::from(250_u64),
+                "register-and-mint should mint at least 250 units (observed {balance})"
+            );
+        },
+    );
 }
 
 fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
@@ -270,22 +284,28 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let asset_id_clone = asset_id.clone();
-    run_program_with_host("transfer-asset", &program, host, move |host| {
-        let caller_balance = host.wsv.balance(caller.clone(), asset_id_clone.clone());
-        let recipient_balance = host.wsv.balance(recipient.clone(), asset_id_clone.clone());
-        assert!(
-            recipient_balance >= Numeric::from(10_u64),
-            "recipient balance should increase (observed {recipient_balance})"
-        );
-        let total = caller_balance
-            .checked_add(recipient_balance)
-            .expect("sum caller + recipient");
-        assert_eq!(
-            total,
-            Numeric::from(20_u64),
-            "transfer preserves total balance"
-        );
-    });
+    run_program_with_host(
+        "transfer-asset",
+        "do_transfer",
+        &program,
+        host,
+        move |host| {
+            let caller_balance = host.wsv.balance(caller.clone(), asset_id_clone.clone());
+            let recipient_balance = host.wsv.balance(recipient.clone(), asset_id_clone.clone());
+            assert!(
+                recipient_balance >= Numeric::from(10_u64),
+                "recipient balance should increase (observed {recipient_balance})"
+            );
+            let total = caller_balance
+                .checked_add(recipient_balance)
+                .expect("sum caller + recipient");
+            assert_eq!(
+                total,
+                Numeric::from(20_u64),
+                "transfer preserves total balance"
+            );
+        },
+    );
 }
 
 fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
@@ -325,6 +345,7 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let asset_id_clone = asset_id.clone();
     run_program_with_host(
         "call-transfer-asset",
+        "pay",
         &program,
         WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new()),
         move |host| {
@@ -366,6 +387,7 @@ fn run_nft_flow_snippet(compiler: &KotodamaCompiler, path: &Path) {
     ));
     vm.load_program(&program)
         .expect("load developer portal snippet nft-flow");
+    common::select_kotodama_entrypoint(&mut vm, &program, "nft_issue_and_transfer");
     if let Err(err) = vm.run() {
         let host_any = vm
             .host_mut_any()

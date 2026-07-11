@@ -10,17 +10,10 @@ translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
 ---
 
-# رموز خطأ المترجم Kotodama
+# Kotodama Compiler Error Codes
 
-يصدر المترجم Kotodama رموز خطأ ثابتة بحيث يمكن لمستخدمي الأدوات وCLI
-فهم بسرعة سبب الفشل. استخدم `koto_compile --explain <code>`
-لطباعة التلميح المقابل.
+The canonical V1 diagnostic registry and reference are maintained in
+[`kotodama_error_codes.md`](./kotodama_error_codes.md).
 
-| الكود | الوصف | الإصلاح النموذجي |
-|-------|------------|-------------|
-| `E0001` | هدف الفرع خارج نطاق تشفير الانتقال IVM. | قم بتقسيم الوظائف الكبيرة جدًا أو تقليل التضمين بحيث تظل مسافات الكتل الأساسية ضمن ±1ميجابايت. |
-| `E0002` | تشير مواقع الاتصال إلى وظيفة لم يتم تعريفها مطلقًا. | تحقق من الأخطاء المطبعية أو معدّلات الرؤية أو علامات الميزات التي أدت إلى إزالة المستدعى. |
-| `E0003` | تم إصدار مكالمات النظام الدائمة بدون تمكين ABI v1. | قم بتعيين `CompilerOptions::abi_version = 1` أو قم بإضافة `meta { abi_version: 1 }` داخل العقد `seiyaku`. |
-| `E0004` | تلقت مكالمات النظام المتعلقة بالأصول مؤشرات غير حرفية. | استخدم `account_id(...)`، و`asset_definition(...)`، وما إلى ذلك، أو قم بتمرير 0 حراس للإعدادات الافتراضية للمضيف. |
-| `E0005` | يعد مُهيئ `for`-loop أكثر تعقيدًا مما هو مدعوم اليوم. | نقل الإعداد المعقد قبل الحلقة؛ يتم حاليًا قبول أدوات تهيئة `let`/expression البسيطة فقط. |
-| `E0006` | تعد جملة الخطوة `for`-loop أكثر تعقيدًا مما هو مدعوم اليوم. | قم بتحديث عداد الحلقة بتعبير بسيط (مثل `i = i + 1`). |
+This former translation is retained as a stable link only. `koto explain
+<code>` reads the same registry used by the compiler.

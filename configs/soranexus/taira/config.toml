@@ -169,6 +169,7 @@ max_bytes_per_minute = 104857600
 
 [sumeragi.block]
 max_transactions = 96
+max_ivm_transactions = 32
 max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 
@@ -181,8 +182,29 @@ max_proof_size_bytes = 8388608
 max_proof_bytes_block = 16777216
 
 [zk]
-sccp_launch_mode = "solana_testnet_lane"
-sccp_source_verifier_materials = []
+
+[zk.sccp]
+# One bridge proof plus its receipt fits below the governed 10 MiB transaction ceiling. Four
+# independent proofs may share a block; CPU-heavy work is reserved before cryptographic dispatch.
+max_proofs_per_transaction = 1
+max_proofs_per_block = 4
+max_proof_bytes_per_proof = 8388608
+max_proof_bytes_per_transaction = 8388608
+max_proof_bytes_per_block = 33554432
+max_native_headers_per_transaction = 1004
+max_native_headers_per_block = 4016
+max_ethereum_light_client_updates_per_transaction = 128
+max_ethereum_light_client_updates_per_block = 512
+max_native_header_bytes_per_transaction = 8388608
+max_native_header_bytes_per_block = 33554432
+max_secp256k1_recoveries_per_transaction = 1005
+max_secp256k1_recoveries_per_block = 4020
+max_bls_aggregate_checks_per_transaction = 1004
+max_bls_aggregate_checks_per_block = 4016
+max_bls_signer_contributions_per_transaction = 131713
+max_bls_signer_contributions_per_block = 526852
+max_bn254_pairing_checks_per_transaction = 1
+max_bn254_pairing_checks_per_block = 4
 
 [zk.halo2]
 enabled = true

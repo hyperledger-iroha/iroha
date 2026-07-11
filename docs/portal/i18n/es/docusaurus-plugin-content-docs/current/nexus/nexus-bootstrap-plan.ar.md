@@ -31,7 +31,7 @@ Utilice el código `docs/source/soranexus_bootstrap_plan.md`. ابق النسخ�
 - تكوين bootstrap محدث (`configs/nexus/bootstrap/*.toml`) يعكس احدث معلمات الاجماع.## بيئات الشبكة
 - Haga clic en el botón Nexus para obtener el resultado deseado:
 - **Sora Nexus (mainnet)** - بادئة شبكة انتاج `nexus` تستضيف الحوكمة القانونية y خدمات SoraFS/SoraNet المتراكبة (ID de cadena `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - بادئة شبكة staging `testus` تعكس تكوين mainnet لاختبارات التكامل والتحقق قبل الاصدار (UUID cadena `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - بادئة شبكة staging `testus` تعكس تكوين mainnet لاختبارات التكامل والتحقق قبل الاصدار (UUID cadena `fc56984b-2be7-431d-840e-21514d1883f0`).
 - الحفاظ على ملفات genesis ومفاتيح حوكمة وبصمات بنية تحتية منفصلة لكل بيئة. Utilice Testus para conectar archivos SoraFS/SoraNet a Nexus.
 - Utilice CI/CD Testus y pruebas de humo para probar Nexus.
 - حزم التكوين المرجعية موجودة تحت `configs/soranexus/nexus/` (mainnet) y `configs/soranexus/testus/` (testnet) y `config.toml`. و`genesis.json` y قبول Torii نموذجية.

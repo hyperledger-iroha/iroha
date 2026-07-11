@@ -106,32 +106,27 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 Ambos os scripts saem com o código de status `1` se Torii nunca reportar um terminal
 transição, tornando-os adequados para trabalhos de portão CI.
 
-### Auxiliar de alias ISO`recipes/iso_alias.mjs` tem como alvo os endpoints de alias ISO para que os ensaios possam cobrir
-hashing de elemento cego e pesquisas de alias sem escrever ferramentas personalizadas. Isso
-chama `ToriiClient.evaluateAliasVoprf` mais `resolveAlias` / `resolveAliasByIndex`
-e imprime o back-end, resumo, vinculação de conta, origem e índice determinístico
-retornado por Torii.
+### Auxiliar de alias ISO
+
+`recipes/iso_alias.mjs` testa as consultas de aliases ISO sem exigir ferramentas personalizadas.
+Ele chama `resolveAlias` e `resolveAliasByIndex` e, em seguida, imprime a vinculação da conta, a origem e o índice determinístico retornados pelo Torii.
 
 Variáveis de ambiente:
 
 - `TORII_URL` — Endpoint Torii expondo os auxiliares de alias.
-- `ISO_VOPRF_INPUT` — elemento cego com codificação hexadecimal (o padrão é `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — ignore a chamada VOPRF ao testar apenas pesquisas.
 - `ISO_ALIAS_LABEL` — alias literal a ser resolvido (por exemplo, strings no estilo IBAN).
 - `ISO_ALIAS_INDEX` — índice decimal ou com prefixo `0x` passado para `resolveAliasByIndex`.
 - `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` — cabeçalhos opcionais para implantações seguras de Torii.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

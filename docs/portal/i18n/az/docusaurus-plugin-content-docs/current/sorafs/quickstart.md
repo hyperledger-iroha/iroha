@@ -127,3 +127,23 @@ yenidən qurulan faydalı yük manifestdən kənara çıxdıqda sürətli.
 - **CI avtomatlaşdırılması** – boru kəmərlərini buraxmaq üçün yuxarıdakı əmrləri əlavə edin ki, sənədlər,
   qurğular və artefaktlar deterministik manifestləri imzalayırlar
   metadata.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

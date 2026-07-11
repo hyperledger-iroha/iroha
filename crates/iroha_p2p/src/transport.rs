@@ -643,32 +643,6 @@ pub mod ws {
     }
 }
 
-#[cfg(feature = "p2p_turn")]
-pub mod turn {
-    //! Minimal TURN relay scaffold. This is a placeholder to exercise the
-    //! feature flag and document env-based configuration; it does not implement
-    //! the TURN protocol. When `P2P_TURN` is set to `host:port`, the function
-    //! attempts to open a TCP connection as a smoke test.
-    use tokio::net::TcpStream;
-
-    /// Attempt to connect to a TURN relay specified via the `P2P_TURN` env var.
-    pub async fn connect_via_env() -> std::io::Result<TcpStream> {
-        let endpoint = std::env::var("P2P_TURN")
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "P2P_TURN not set"))?;
-        TcpStream::connect(endpoint).await
-    }
-
-    #[cfg(test)]
-    mod tests {
-        #[tokio::test(flavor = "current_thread")]
-        async fn turn_env_absent_errors() {
-            std::env::remove_var("P2P_TURN");
-            let err = super::connect_via_env().await.unwrap_err();
-            assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
-        }
-    }
-}
-
 #[cfg(feature = "noise_handshake")]
 pub mod noise {
     //! Noise-based handshake integration (feature-gated, optional).

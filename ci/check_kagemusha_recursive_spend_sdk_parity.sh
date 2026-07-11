@@ -82,10 +82,6 @@ ABI18_V2_C_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
     "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
 )
 
 ABI18_V2_NON_RECURSIVE_C_SYMBOLS = (
@@ -123,20 +119,10 @@ ABI18_V2_PROOF_C_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_redeem_v2",
 )
 
-ABI18_V2_LEGACY_ARTIFACT_C_SYMBOLS = (
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
-)
-
 REQUIRED_ABI18_V2_PROTOCOL_C_SYMBOLS = tuple(
     symbol
     for symbol in ABI18_V2_ALL_C_SYMBOLS
-    if symbol not in (
-        ABI18_V2_PROOF_C_SYMBOLS
-        + ABI18_V2_LEGACY_ARTIFACT_C_SYMBOLS
-    )
+    if symbol not in ABI18_V2_PROOF_C_SYMBOLS
 ) + ADDITIVE_ABI18_V3_C_SYMBOLS
 
 CURRENT_KAGEMUSHA_C_SYMBOLS = (
@@ -541,6 +527,8 @@ SOURCE_PATHS = (
     "scripts/check_mobile_sdk_artifacts.sh",
     "scripts/check_mobile_sdk_artifacts_test.sh",
     "scripts/tests/check_android_device_lab_slot_test.py",
+    "docs/source/offline_kagemusha_v2_contract.md",
+    "docs/source/offline_kagemusha_recursion_adapter.md",
     "ci/check_kagemusha_recursive_spend_swift_sdk.sh",
     "ci/check_swift_confidential_unshield_redeem_e2e.sh",
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
@@ -718,6 +706,7 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportRequest.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportResponse.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportStreamResponse.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/BoundedResponseBodyReader.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutor.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/DirectoryPendingTransactionQueue.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueue.java",
@@ -844,15 +833,14 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeCodec.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineListParams.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tools/PendingQueueInspector.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/BscMainnetSccp.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/BscSccpProver.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpMessageProofBundles.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SourceSccpProofs.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpHubCommitmentV1.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpHubMessageKindV1.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpLaneIdV1.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpNetworkV1.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpOutboundMessageContextV1.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpPayloadV1.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpTransferPayloadV1.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpV1.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionActionRequest.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionActionResponse.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionCreateRequest.java",
@@ -933,11 +921,7 @@ SOURCE_PATHS = (
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixturesTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeCodecTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tools/PendingQueueInspectorTests.java",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SccpV1Tests.java",
     "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
     "java/iroha_android/src/test/resources/transaction_payloads.json",
     "java/norito_java/src/main/java/org/hyperledger/iroha/norito/CRC64.java",
@@ -1062,12 +1046,7 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineToriiException.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/VerifyingKeyBoxCodec.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SccpMessageProofBundles.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SccpV1.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionActionRequest.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionActionResponse.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionCreateRequest.kt",
@@ -1135,11 +1114,7 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/test/resources/offline/redeem_proof_fixtures.json",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoColumnarTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoHeaderTest.kt",
-    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
-    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt",
-    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt",
-    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
-    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SccpV1Test.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePathTest.kt",
@@ -1267,6 +1242,8 @@ SOURCE_PATHS = (
     "python/iroha_python/tests/test_address_format.py",
     "python/iroha_torii_client/__init__.py",
     "python/iroha_torii_client/client.py",
+    "python/iroha_torii_client/sccp.py",
+    "python/iroha_torii_client/tests/sccp_test.py",
     "python/iroha_torii_client/tests/test_client.py",
     "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj",
     "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs",
@@ -2084,10 +2061,6 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-open-verify-public-input-hash-exactness",
     ),
     (
-        "TON SCCP public-input validation-order negative control",
-        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-ton-sccp-public-input-validation-ordering",
-    ),
-    (
         "Rust recursive compact unavailable classifier negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-rust-recursive-compact-unavailable-classifier",
     ),
@@ -2314,6 +2287,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "ABI-18 native capability contract negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-c-bridge-abi-version",
+    ),
+    (
+        "ABI-18 Pasta-cycle mode V2 negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-abi18-pasta-cycle-mode-v2",
     ),
     (
         "native bridge zero-envelope Pallas guard negative control",
@@ -8132,11 +8109,7 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest",
         "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest",
         "org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest",
-        "org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest",
-        "org.hyperledger.iroha.sdk.sccp.TronSccpProverTest",
-        "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
-        "org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest",
-        "org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest",
+        "org.hyperledger.iroha.sdk.sccp.SccpV1Test",
         "org.hyperledger.iroha.sdk.norito.NoritoHeaderTest",
         "org.hyperledger.iroha.sdk.norito.NoritoColumnarTest",
         "org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapterParityTest",
@@ -8147,6 +8120,19 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
             f"Kagemusha JVM SDK script must run {test_class}",
             errors,
         )
+    # SCCP owns a dedicated first-release production corridor. Keep this
+    # Kagemusha inventory exact for its non-SCCP harnesses while validating
+    # the closed SCCP V1 surface independently below.
+    script_without_sccp_harnesses = re.sub(
+        r"org\.hyperledger\.iroha\.android\.sccp\.[A-Za-z0-9]+,?",
+        "",
+        script,
+    )
+    require(
+        "org.hyperledger.iroha.android.sccp.SccpV1Tests" in script,
+        "Kagemusha JVM SDK script must run Android exact SCCP V1 tests",
+        errors,
+    )
     require(
         "javac \\\n"
         '  -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" \\\n'
@@ -8184,11 +8170,6 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
             "org.hyperledger.iroha.android.connect.ConnectErrorTests,"
             "org.hyperledger.iroha.android.tools.PendingQueueInspectorTests,"
             "org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifierTests,"
-            "org.hyperledger.iroha.android.sccp.EvmSccpProverTests,"
-            "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,"
-            "org.hyperledger.iroha.android.sccp.SolanaSccpProverTests,"
-            "org.hyperledger.iroha.android.sccp.TonSccpProverTests,"
-            "org.hyperledger.iroha.android.sccp.TronSccpProverTests,"
             "org.hyperledger.iroha.android.address.AccountIdLiteralTests,"
             "org.hyperledger.iroha.android.address.AccountAddressTests,"
             "org.hyperledger.iroha.android.client.CanonicalRequestSignerTests,"
@@ -8208,7 +8189,7 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
             "org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests,"
             "org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests"
         )
-        in script,
+        in script_without_sccp_harnesses,
         "Kagemusha JVM SDK script must run the focused Android Kagemusha harness mains",
         errors,
     )
@@ -8911,6 +8892,19 @@ def check_mobile_confidential_note_coverage(texts, errors):
 
 
 def check_mobile_offline_readiness_coverage(texts, errors):
+    rust_offline_isi = "crates/iroha_data_model/src/isi/offline.rs"
+    rust_offline_isi_text = read(rust_offline_isi)
+    for retired_alias in (
+        "pub type IssueOfflineNoteV2",
+        "pub type RedeemOfflineNoteV2",
+        "pub type AuditOfflineNoteV2",
+    ):
+        require(
+            retired_alias not in rust_offline_isi_text,
+            f"{rust_offline_isi} exposes retired compatibility alias {retired_alias}",
+            errors,
+        )
+
     require_contains(
         texts,
         "crates/iroha_torii_shared/src/offline_api.rs",
@@ -8969,6 +8963,25 @@ def check_mobile_offline_readiness_coverage(texts, errors):
             "get(handler_offline_operation_status)",
         ),
         "Torii typed Offline handlers and mounts",
+        errors,
+    )
+
+    rust_client = "crates/iroha/src/client.rs"
+    rust_client_text = read(rust_client)
+    for needle in (
+        "pub fn get_offline_readiness(",
+        "pub fn submit_offline_top_up(",
+        "pub fn submit_offline_redeem(",
+        "pub fn get_offline_operation_status(",
+    ):
+        require(
+            needle in rust_client_text,
+            f"Rust canonical Offline HTTP client missing {needle}",
+            errors,
+        )
+    require(
+        "get_offline_operation(" not in rust_client_text,
+        "Rust Offline client exposes retired get_offline_operation alias",
         errors,
     )
 
@@ -13415,280 +13428,96 @@ def check_mobile_torii_rpc_subscription_websocket_runner_coverage(texts, errors)
 def check_mobile_sccp_runner_coverage(texts, errors):
     for relative, label, needles in (
         (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
-            "Kotlin SCCP EVM prover",
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SccpV1.kt",
+            "Kotlin exact SCCP V1 model",
             (
-                "object SccpEvm",
-                "GROTH16_BN254_PROOF_BACKEND_V1",
-                "SOURCE_STATE_MAX_PROOF_BYTES",
-                "buildProofRequest",
-                "wrapProofResult",
-                "callbackRequestSnapshot",
-                "buildSubmission",
+                "enum class SccpNetworkV1",
+                'SORA_TAIRA("sora-taira", 1, 0, true)',
+                'TRON_SHASTA("tron-shasta", 12, 5, false)',
+                "class SccpLaneIdV1",
+                "class SccpTransferPayloadV1",
+                "object SccpV1",
+                "fun decodeCanonicalPayload",
+                "fun decodeCanonicalCommitment",
+                "requireDistinctHashes",
             ),
         ),
         (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java",
-            "Android SCCP EVM prover",
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpNetworkV1.java",
+            "Android exact SCCP V1 network inventory",
             (
-                "class EvmSccpProver",
-                "GROTH16_BN254_PROOF_BACKEND_V1",
-                "SOURCE_STATE_MAX_PROOF_BYTES",
-                "buildProofRequest",
-                "wrapProofResult",
-                "callbackRequestSnapshot",
-                "buildSubmission",
+                "public enum SccpNetworkV1",
+                'SORA_TAIRA("sora-taira", 1, 0, true)',
+                'TRON_SHASTA("tron-shasta", 12, 5, false)',
+                "fromProfileKey",
+                "fromTag",
             ),
         ),
         (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt",
-            "Kotlin SCCP TRON prover",
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpLaneIdV1.java",
+            "Android exact SCCP V1 lane",
             (
-                "object SccpTron",
-                "GROTH16_BN254_PROOF_BACKEND_V1",
-                "canonicalRouteCanaryEvidenceBytes",
-                "routeCanaryEvidenceHash",
-                "buildProofRequest",
-                "wrapProofResult",
-                "callbackRequestSnapshot",
+                "public final class SccpLaneIdV1",
+                "SCCP lane must join exactly one SORA profile and one external profile",
+                "isOutbound",
+                "isInbound",
             ),
         ),
         (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java",
-            "Android SCCP TRON prover",
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpTransferPayloadV1.java",
+            "Android exact SCCP V1 transfer payload",
             (
-                "class TronSccpProver",
-                "GROTH16_BN254_PROOF_BACKEND_V1",
-                "canonicalRouteCanaryEvidenceBytes",
-                "routeCanaryEvidenceHash",
-                "buildProofRequest",
-                "wrapProofResult",
-                "callbackRequestSnapshot",
+                "public final class SccpTransferPayloadV1 extends SccpPayloadV1",
+                "amount must be nonzero",
+                "transfer endpoints must differ",
+                "routeRevision must be a nonzero u32",
+                "sender codec does not match source domain",
+                "recipient codec does not match destination domain",
             ),
         ),
         (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt",
-            "Kotlin SCCP TON prover",
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpV1.java",
+            "Android exact SCCP V1 codec",
             (
-                "object SccpTon",
-                "MESSAGE_BODY_BOC_V1",
-                "SOURCE_STATE_MAX_PROOF_BYTES",
-                "canonicalRouteCanaryEvidenceBytes",
-                "routeCanaryEvidenceHash",
-                "buildProofRequest",
-                "wrapProofResult",
-            ),
-        ),
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java",
-            "Android SCCP TON prover",
-            (
-                "class TonSccpProver",
-                "MESSAGE_BODY_BOC_V1",
-                "SOURCE_STATE_MAX_PROOF_BYTES",
-                "canonicalRouteCanaryEvidenceBytes",
-                "routeCanaryEvidenceHash",
-                "buildProofRequest",
-                "wrapProofResult",
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt",
-            "Kotlin SCCP Solana prover",
-            (
-                "object SccpSolana",
-                "RECURSIVE_PROOF_BACKEND_V1",
-                "SOURCE_STATE_MAX_PROOF_BYTES",
-                "canonicalRouteCanaryEvidenceBytes",
-                "routeCanaryEvidenceHash",
-                "buildProofRequest",
-                "wrapProofResult",
-                "BORSH_INSTRUCTION_V1",
-            ),
-        ),
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java",
-            "Android SCCP Solana prover",
-            (
-                "class SolanaSccpProver",
-                "RECURSIVE_PROOF_BACKEND_V1",
-                "SOURCE_STATE_MAX_PROOF_BYTES",
-                "canonicalRouteCanaryEvidenceBytes",
-                "routeCanaryEvidenceHash",
-                "buildProofRequest",
-                "wrapProofResult",
-                "BORSH_INSTRUCTION_V1",
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt",
-            "Kotlin SCCP source proof hashes",
-            (
-                "object SccpSourceProofs",
-                "sourceAdapterVerifierVkHash",
-                "canonicalSourceVerifierMaterialBytes",
-                "destinationBindingHash",
-                "evmDestinationBindingHash",
-                "tronDestinationBindingHash",
-            ),
-        ),
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SourceSccpProofs.java",
-            "Android SCCP source proof hashes",
-            (
-                "class SourceSccpProofs",
-                "sourceAdapterVerifierVkHash",
-                "canonicalSourceVerifierMaterialBytes",
-                "destinationBindingHash",
-                "evmDestinationBindingHash",
-                "tronDestinationBindingHash",
+                "public final class SccpV1",
+                "canonicalNetworkBytes",
+                "canonicalLaneBytes",
+                "decodeCanonicalPayload",
+                "decodeCanonicalCommitment",
+                "requireDistinctHashRoles",
             ),
         ),
     ):
         require_contains(texts, relative, needles, label, errors)
     for relative, label, needles in (
         (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
-            "Kotlin SCCP EVM prover tests",
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SccpV1Test.kt",
+            "Kotlin exact SCCP V1 tests",
             (
-                "proofRequestBindsPublicSignalsAndRelayContext",
-                "proverRequiresLinkedProofEngine",
-                "proverWrapsExternalProofBytes",
-                "rejectsMalformedGroth16ProofTuple",
-                "buildsContractCallSubmission",
-                "extraneousSourceProofError",
-                "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
-                'sourceProofBytes") == true',
-                "sourceProofBytes must be empty for SORA source bundle",
-                "ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift",
-                "bscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift",
+                "closedInventoryReservesRetiredTagsAndAliases",
+                "allSharedEthBscTronTransferVectorsMatchRust",
+                "governedHashRotationPreservesReplayIdentityButChangesCommitment",
+                "payloadDecoderRejectsRetiredVariantsTruncationTrailingAndNoncanonicalFields",
+                "transferRejectsRetiredDomainsCodecsAndInvalidWidths",
+                "canonicalTextAcceptsExactI105AndRejectsUnicodeSubstitutions",
+                "contextAndCommitmentRejectEveryZeroOrAliasedHashRole",
+                "commitmentDecoderRejectsTagTamperingCollisionsAndTrailingBytes",
+                "payloadAndContextDefensivelyCopyCallerBuffers",
             ),
         ),
         (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
-            "Android SCCP EVM prover tests",
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SccpV1Tests.java",
+            "Android exact SCCP V1 tests",
             (
-                "proofRequestBindsPublicSignalsAndRelayContext",
-                "proverRequiresLinkedProofEngine",
-                "proverWrapsExternalProofBytes",
-                "rejectsMalformedGroth16ProofTuple",
-                "buildsContractCallSubmission",
-                "sourceProofBytes must be empty for SORA source bundle",
-                "submission must reject extraneous wrapped proof-result source proof bytes",
-                'ex.getMessage().contains("sourceProofBytes")',
-                "bscMainnetInboundFacadeUsesMainnetRpcAndRejectsDrift",
-                "mainnetFacadesSnapshotWitnessProviderInputs",
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt",
-            "Kotlin SCCP TRON prover tests",
-            (
-                "derivesTronRouteCanaryEvidenceHash",
-                "derivesGroth16PublicSignalWords",
-                "proofRequestBindsPublicSignalsAndRelayContext",
-                "proverRequiresLinkedProofEngine",
-                "rejectsMalformedGroth16ProofTuple",
-                "buildsContractCallSubmission",
-                "extraneousSourceProofError",
-                "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
-                'sourceProofBytes") == true',
-                "sourceProofBytes must be empty for SORA source bundle",
-            ),
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
-            "Android SCCP TRON prover tests",
-            (
-                "derivesTronRouteCanaryEvidenceHash",
-                "derivesGroth16PublicSignalWords",
-                "proofRequestBindsPublicSignalsAndRelayContext",
-                "proverRequiresLinkedProofEngine",
-                "rejectsMalformedGroth16ProofTuple",
-                "buildsContractCallSubmission",
-                "sourceProofBytes must be empty for SORA source bundle",
-                "submission must reject extraneous wrapped proof-result source proof bytes",
-                'ex.getMessage().contains("sourceProofBytes")',
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
-            "Kotlin SCCP TON prover tests",
-            (
-                "derivesTonRouteCanaryEvidenceHash",
-                "buildsTonMessageBodyBoc",
-                "derivesTonBocRootHashFromOrdinaryCells",
-                "derivesTonShardProofHashFromWitnessMaterial",
-                "buildsTonFullLightClientAuditRoleProofRequests",
-                "proofRequestBindsRelayContextAndDeployment",
-                "proofRequestRejectsNoncanonicalOrMismatchedBundleBytes",
-                "proofRequestHashMatchesCrossSdkVector",
-                "sourceProofBytes must be empty for SORA source bundle",
-            ),
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
-            "Android SCCP TON prover tests",
-            (
-                "derivesTonRouteCanaryEvidenceHash",
-                "buildsTonMessageBodyBoc",
-                "derivesTonBocRootHashFromOrdinaryCells",
-                "derivesTonShardProofHashFromWitnessMaterial",
-                "buildsTonFullLightClientAuditRoleProofRequests",
-                "proofRequestBindsRelayContextAndDeployment",
-                "proofRequestRejectsNoncanonicalOrMismatchedBundleBytes",
-                "proofRequestHashMatchesCrossSdkVector",
-                "TON request hash must bind bundle finality proof bytes",
-                "sourceProofBytes must be empty for SORA source bundle",
-                "TON proof requests must reject source proof bytes for SORA bundles",
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt",
-            "Kotlin SCCP Solana prover tests",
-            (
-                "derivesSolanaRouteCanaryEvidenceHash",
-                "buildsSolanaSccpProofRequest",
-                "buildsMessageProofHashFromInclusionWitness",
-                "buildsSolanaFullLightClientAuditRoleProofRequests",
-                "bindsSourceAdapterDeploymentContextForUiProvers",
-                "buildsSolanaProgramInstructionSubmission",
-                "proverWrapsExternalProofBytes",
-            ),
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
-            "Android SCCP Solana prover tests",
-            (
-                "derivesSolanaRouteCanaryEvidenceHash",
-                "normalizesWitnessAndBuildsDeterministicRequest",
-                "buildsMessageProofHashFromInclusionWitness",
-                "buildsSolanaFullLightClientAuditRoleProofRequests",
-                "bindsSourceAdapterDeploymentContextForUiProvers",
-                "buildsSolanaProgramInstructionSubmission",
-                "proverWrapsExternalProofBytes",
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt",
-            "Kotlin SCCP source proof hash tests",
-            (
-                "derivesSourceAdapterVerifierVkHashesForUiTooling",
-                "derivesEvmAndTronDestinationBindingsForUiTooling",
-                "derivesSourceMaterialAndDeploymentRecordHashesForUiTooling",
-                "derivesSourceProofHashesFromWitnessMaterial",
-                "derivesEthBeaconExecutionPayloadSszRootsFromWitnessMaterial",
-            ),
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java",
-            "Android SCCP source proof hash tests",
-            (
-                "derivesSourceAdapterVerifierVkHashesForUiTooling",
-                "derivesEvmAndTronDestinationBindingsForUiTooling",
-                "derivesSourceMaterialAndDeploymentRecordHashesForUiTooling",
-                "derivesEthBeaconExecutionPayloadSszRootsFromWitnessMaterial",
-                "derivesEthereumReceiptRootAndSyncCommitteeGuardsForUiTooling",
+                "closedInventoryReservesRetiredTagsAndAliases",
+                "allSharedEthBscTronTransferVectorsMatchRust",
+                "governedHashRotationPreservesReplayIdentityButChangesCommitment",
+                "payloadDecoderRejectsRetiredAndNoncanonicalForms",
+                "transferRejectsRetiredDomainsCodecsAndInvalidWidths",
+                "canonicalTextAcceptsExactI105AndRejectsUnicodeSubstitutions",
+                "contextAndCommitmentRejectZeroOrAliasedHashRoles",
+                "commitmentDecoderRejectsTamperingCollisionsAndTrailingBytes",
+                "payloadAndContextDefensivelyCopyBuffers",
             ),
         ),
     ):
@@ -19197,11 +19026,10 @@ def check_python(texts, errors):
     )
     require(
         "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_call_contract_rejects_padded_selectors_before_dispatch" in script
-        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_proof_rejects_padded_signing_fields_before_request" in script
-        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_message_rejects_padded_signing_fields_before_request" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/sccp_test.py" in script
         and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch" in script
         and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch" in script,
-        "Kagemusha Python SDK script must run Torii query selector, bridge submit, and UAID path literal exactness regressions",
+        "Kagemusha Python SDK script must run Torii query selector, exact SCCP V1, and UAID path literal regressions",
         errors,
     )
     require(
@@ -19215,11 +19043,16 @@ def check_python(texts, errors):
         errors,
     )
     require(
-        "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_parses_payload" in script
-        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_noncanonical_abi_versions" in script
-        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_removed_abi7_fields" in script
-        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_missing_recursive_compact_family" in script,
-        "Kagemusha Python SDK script must run Torii offline readiness ABI exactness regressions",
+        "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_invalid_selector_before_network" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_adversarial_snapshots" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_offline_readiness_uses_finite_codes_and_strips_unknown_members" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_offline_top_up_sends_direct_json_and_derived_idempotency_key" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_offline_redeem_uses_only_the_final_route" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_offline_command_validation_rejects_malformed_ids_and_payloads_before_network" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_offline_acceptance_cross_checks_reference_and_location" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_operation_status_parses_all_tagged_states" in script,
+        "Kagemusha Python SDK script must run the first-release Offline HTTP contract regressions",
         errors,
     )
     require(
@@ -19275,34 +19108,37 @@ def check_python(texts, errors):
     )
     require_contains(
         texts,
-        "python/iroha_torii_client/client.py",
+        "python/iroha_torii_client/sccp.py",
         (
-            '"authority": _require_exact_non_empty_string(',
+            "def _authority(value: Any, label: str) -> str:",
+            "authority = _text(value, label, 512)",
+            "_decode_canonical_i105_string(authority)",
+            "def normalize_bridge_proof_submit_payload",
+            "def normalize_bridge_message_submit_payload",
             '"bridge proof submit.authority"',
-            '"bridge proof submit.public_key_hex"',
-            'context="bridge proof submit.public_key_hex"',
-            '"bridge proof submit.signature_b64"',
             '"bridge message submit.authority"',
-            '"bridge message submit.public_key_hex"',
-            'context="bridge message submit.public_key_hex"',
-            '"bridge message submit.signature_b64"',
-            "expected_length=64",
+            "def _detached_signing_state(",
+            'f"{label}.signature_b64"',
+            'f"{label}.transaction_payload_b64"',
+            "maximum_bytes=_MAX_DETACHED_SIGNATURE_BYTES",
         ),
-        "Python bridge submit signing-field exactness",
+        "Python exact SCCP V1 bridge submit validation",
         errors,
     )
     require_contains(
         texts,
-        "python/iroha_torii_client/tests/test_client.py",
+        "python/iroha_torii_client/tests/sccp_test.py",
         (
-            "test_submit_bridge_proof_rejects_padded_signing_fields_before_request",
-            "test_submit_bridge_message_rejects_padded_signing_fields_before_request",
-            "bridge proof submit\\\\.authority must not contain surrounding whitespace",
-            "bridge proof submit\\\\.signature_b64 must not contain surrounding whitespace",
-            "bridge message submit\\\\.public_key_hex must not contain surrounding whitespace",
-            "assert session.calls == []",
+            "test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route",
+            "test_submit_authorities_require_exact_canonical_i105",
+            "test_proof_submit_rejects_mixed_or_malformed_signing_state",
+            "test_submit_artifacts_require_exact_schema_and_zero_alignment_padding",
+            "test_torii_proof_submit_sends_only_closed_artifact_fields",
+            "test_torii_prepare_then_submit_resends_byte_identical_transaction_payload",
+            'assert "public_key_hex" not in parameters',
+            'assert "message_bundle_b64" not in parameters',
         ),
-        "Python bridge submit signing-field exactness tests",
+        "Python exact SCCP V1 bridge submit tests",
         errors,
     )
     require_contains(
@@ -19573,9 +19409,12 @@ def check_python(texts, errors):
         errors,
     )
     require(
-        "encode_identifier_resolution_receipt_payload" in torii_init
-        and "encode_identifier_resolution_receipt_attestation" in torii_init
-        and "verify_identifier_resolution_receipt" in torii_init,
+        '"encode_identifier_resolution_receipt_payload"' in torii_client
+        and '"encode_identifier_resolution_receipt_attestation"' in torii_client
+        and '"verify_identifier_resolution_receipt"' in torii_client
+        and "__all__ = list(dict.fromkeys((*_client.__all__, *_sccp.__all__)))" in torii_init
+        and "for _module in (_client, _sccp):" in torii_init
+        and "globals()[_name] = getattr(_module, _name)" in torii_init,
         "Python Torii client package must re-export identifier receipt helpers",
         errors,
     )
@@ -24767,6 +24606,7 @@ def check_java_kotlin(texts, errors):
     java_transport_request = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportRequest.java"
     java_transport_response = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportResponse.java"
     java_transport_stream_response = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportStreamResponse.java"
+    java_bounded_response_reader = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/BoundedResponseBodyReader.java"
     java_url_connection_transport = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutor.java"
     java_executable = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/Executable.java"
     java_instruction_box = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/InstructionBox.java"
@@ -24899,8 +24739,6 @@ def check_java_kotlin(texts, errors):
     kotlin_offline_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
     java_offline_v2_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"
     kotlin_offline_v2_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"
-    java_ton_sccp_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java"
-    kotlin_ton_sccp_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt"
     require_contains(
         texts,
         kotlin_request_codecs_test,
@@ -25075,29 +24913,6 @@ def check_java_kotlin(texts, errors):
             "authority must not contain surrounding whitespace",
         ),
         "Android Java recursive spend top-up init transaction helper tests",
-        errors,
-    )
-    require_contains(
-        texts,
-        kotlin_ton_sccp_test,
-        (
-            "val publicInputOrder = assertFailsWith<IllegalArgumentException>",
-            "payloadHash = \"0x\" + \"AA\".repeat(32)",
-            "assertFalse(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
-        ),
-        "Kotlin TON SCCP public-input validation ordering coverage",
-        errors,
-    )
-    require_contains(
-        texts,
-        java_ton_sccp_test,
-        (
-            "malformedPublicInputsBeforeSourceProof",
-            "ex.getMessage().contains(\"payloadHash must be canonical hex\")",
-            "&& !ex.getMessage().contains(\"sourceProofBytes\")",
-            "TON proof requests must validate public inputs before source-proof matching",
-        ),
-        "Android Java TON SCCP public-input validation ordering coverage",
         errors,
     )
     require_contains(
@@ -28600,10 +28415,23 @@ def check_java_kotlin(texts, errors):
             (
                 "Collections.emptyMap()",
                 "Collections.emptyList()",
-                "try (InputStream responseBody = stream;",
-                "responseBody.read(chunk)",
+                "BoundedResponseBodyReader.read(",
+                "responseLimit(request, maximumResponseBytes)",
+                "responseMayHaveBody(requestMethod, status)",
             ),
             r"\b(?:List|Map|Set)\.of\(|try\s*\(stream;",
+        ),
+        (
+            java_bounded_response_reader,
+            "Android Java bounded response reader production JDK 8 API surface",
+            (
+                "try (InputStream responseBody = input;",
+                "responseBody.read(chunk, 0, requested)",
+                "HTTP response body stream made no read progress",
+                "parseCanonicalContentLength",
+                "rejectAmbiguousFraming",
+            ),
+            r"\b(?:List|Map|Set)\.of\(|try\s*\(input;",
         ),
         (
             java_transport_security,
@@ -28696,15 +28524,27 @@ def check_java_kotlin(texts, errors):
             "json.trim().isEmpty()",
             "path.trim().isEmpty()",
             "Collections.unmodifiableList(Arrays.asList(\"tx_hash\", hashHex))",
+            "private static final java.util.Set<String> SCCP_PROOF_SUBMIT_FIELDS =\n      java.util.Set.of(",
+            "private static final java.util.Set<String> SCCP_MESSAGE_SUBMIT_FIELDS =\n      java.util.Set.of(",
         ),
         "Android Java HTTP client transport production JDK 8 API surface",
         errors,
     )
-    require_not_regex(
-        texts,
-        java_http_client_transport,
-        r"\b(?:List|Map|Set)\.of\(|\b(?:List|Map|Set)\.copyOf\(|\.isBlank\(|\b(?:sink|profile|context)\.isEmpty\(",
-        "Android Java HTTP client transport production JDK 8 API surface",
+    http_client_jdk8_surface = re.sub(
+        r"(?ms)^  private static final java\.util\.Set<String> "
+        r"SCCP_(?:PROOF|MESSAGE)_SUBMIT_FIELDS =\n"
+        r"\s+java\.util\.Set\.of\(.*?\);\n",
+        "",
+        texts[java_http_client_transport],
+    )
+    require(
+        re.search(
+            r"\b(?:List|Map|Set)\.of\(|\b(?:List|Map|Set)\.copyOf\(|\.isBlank\(|"
+            r"\b(?:sink|profile|context)\.isEmpty\(",
+            http_client_jdk8_surface,
+        )
+        is None,
+        "Android Java HTTP client transport production JDK 8 API surface contains forbidden pattern",
         errors,
     )
     for relative, label, needles, forbidden in (
@@ -34591,6 +34431,130 @@ def check_mobile_offline_note_v2_retired_ios_app_attest_profile(texts, errors):
     )
 
 
+def check_abi18_pasta_cycle_mode_v2(texts, errors):
+    """Pin ABI-18 Pasta-cycle mode V2 without changing the ABI-6 V1 mode."""
+
+    rust_model = "crates/iroha_data_model/src/offline/mod.rs"
+    require_contains(
+        texts,
+        rust_model,
+        (
+            'pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: &str = "recursive_spend_v1";',
+            'pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";',
+            "self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V2",
+            "mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),",
+        ),
+        "Rust ABI-18 Pasta-cycle mode V2 contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+        (
+            'case recursiveSpendV1 = "recursive_spend_v1"',
+            'case recursiveSpendV2 = "recursive_spend_v2"',
+        ),
+        "Swift recursive-spend mode inventory",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
+        (
+            'public static let mode = "recursive_spend_v2"',
+            "mode == KagemushaRecursiveSpendV2.mode",
+            "proofBackendAvailable && nativeStubAvailable ? .recursiveSpendV2 : nil",
+        ),
+        "Swift ABI-18 Pasta-cycle mode V2 contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift",
+        (
+            'XCTAssertEqual(KagemushaRecursiveSpendV2.mode, "recursive_spend_v2")',
+            'XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpendV2.rawValue, "recursive_spend_v2")',
+        ),
+        "Swift ABI-18 Pasta-cycle mode V2 tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+        (
+            'RECURSIVE_SPEND_V1("recursive_spend_v1")',
+            'RECURSIVE_SPEND_V2("recursive_spend_v2")',
+            'const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v2"',
+        ),
+        "Kotlin ABI-18 Pasta-cycle mode V2 contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
+        (
+            'assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)',
+            'assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName)',
+            'assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2.wireName)',
+        ),
+        "Kotlin ABI-18 Pasta-cycle mode V2 tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+        (
+            'public static final String PASTA_CYCLE_V3_MODE = "recursive_spend_v2";',
+            'RECURSIVE_SPEND_V1("recursive_spend_v1")',
+            'RECURSIVE_SPEND_V2("recursive_spend_v2")',
+        ),
+        "Android Java ABI-18 Pasta-cycle mode V2 contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        (
+            'assert "recursive_spend_v2".equals(KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE);',
+            'assert "recursive_spend_v1"',
+            'assert "recursive_spend_v2"',
+            "KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V2.wireName()",
+        ),
+        "Android Java ABI-18 Pasta-cycle mode V2 tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "crates/connect_norito_bridge/src/lib.rs",
+        "    fn recursive_spend_v3_artifact_fixture()",
+        "    fn begin_recursive_spend_v3_artifact(",
+        (
+            "KAGEMUSHA_RECURSIVE_SPEND_MODE_V2,",
+            "mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),",
+        ),
+        "native bridge ABI-18 Pasta-cycle mode V2 fixture",
+        errors,
+    )
+    require_regex(
+        texts,
+        "docs/source/offline_kagemusha_v2_contract.md",
+        r"artifact manifest\s+`kagemusha\.offline\.recursive_spend\.artifact_manifest\.v3`, mode\s+"
+        r"`recursive_spend_v2`, proof backend `halo2/ipa-pasta-cycle-v1`",
+        "ABI-18 Kagemusha V2 contract mode",
+        errors,
+        re.S,
+    )
+    require_regex(
+        texts,
+        "docs/source/offline_kagemusha_recursion_adapter.md",
+        r"bridge ABI `18`, mode\s+`recursive_spend_v2`, manifest schema\s+"
+        r"`kagemusha\.offline\.recursive_spend\.artifact_manifest\.v3`",
+        "ABI-18 recursion adapter contract mode",
+        errors,
+        re.S,
+    )
+
+
 def run_checks(texts):
     errors = []
     check_workflow_paths(errors)
@@ -34608,6 +34572,7 @@ def run_checks(texts):
     check_javascript_sdk_script(errors)
     check_js_parity_meta_test(errors)
     check_c_bridge(texts, errors)
+    check_abi18_pasta_cycle_mode_v2(texts, errors)
     check_recursive_compact_surface(texts, errors)
     check_recursive_compact_sdk_key_package_arity(texts, errors)
     check_record_backed_javascript_surface(texts, errors)
@@ -35814,12 +35779,8 @@ if mode == "--negative-control-python-sdk-torii-selector-test-filter-script":
             "Python SDK contract selector exactness test filter",
         ),
         (
-            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_proof_rejects_padded_signing_fields_before_request"',
-            "Python SDK bridge proof signing-field exactness test filter",
-        ),
-        (
-            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_message_rejects_padded_signing_fields_before_request"',
-            "Python SDK bridge message signing-field exactness test filter",
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/sccp_test.py"',
+            "Python SDK exact SCCP V1 test filter",
         ),
         (
             ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch"',
@@ -35843,7 +35804,7 @@ if mode == "--negative-control-python-sdk-torii-selector-test-filter-script":
             run_checks(texts)
         except ParityError as error:
             message = str(error)
-            expected = "Kagemusha Python SDK script must run Torii query selector, bridge submit, and UAID path literal exactness regressions"
+            expected = "Kagemusha Python SDK script must run Torii query selector, exact SCCP V1, and UAID path literal regressions"
             expected_labels = (expected,)
             if expected not in message:
                 raise SystemExit(
@@ -35927,20 +35888,40 @@ if mode == "--negative-control-python-sdk-offline-readiness-test-filter-script":
     original = read(target)
     cases = (
         (
-            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_parses_payload"',
-            "Python SDK offline readiness canonical payload test filter",
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers"',
+            "Python SDK Offline readiness canonical response test filter",
         ),
         (
-            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_noncanonical_abi_versions"',
-            "Python SDK offline readiness noncanonical ABI test filter",
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_invalid_selector_before_network"',
+            "Python SDK Offline readiness selector test filter",
         ),
         (
-            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_removed_abi7_fields"',
-            "Python SDK offline readiness removed ABI-7 field test filter",
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_adversarial_snapshots"',
+            "Python SDK Offline readiness adversarial response test filter",
         ),
         (
-            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_missing_recursive_compact_family"',
-            "Python SDK offline readiness missing recursive compact family test filter",
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_offline_readiness_uses_finite_codes_and_strips_unknown_members"',
+            "Python SDK Offline readiness finite blocker code test filter",
+        ),
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_offline_top_up_sends_direct_json_and_derived_idempotency_key"',
+            "Python SDK Offline top-up exact request test filter",
+        ),
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_offline_redeem_uses_only_the_final_route"',
+            "Python SDK Offline redeem final-route test filter",
+        ),
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_offline_command_validation_rejects_malformed_ids_and_payloads_before_network"',
+            "Python SDK Offline command preflight test filter",
+        ),
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_offline_acceptance_cross_checks_reference_and_location"',
+            "Python SDK Offline acceptance binding test filter",
+        ),
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_operation_status_parses_all_tagged_states"',
+            "Python SDK Offline status tagged-state test filter",
         ),
     )
     detected_messages = []
@@ -35957,7 +35938,7 @@ if mode == "--negative-control-python-sdk-offline-readiness-test-filter-script":
                 run_checks(texts)
             except ParityError as error:
                 message = str(error)
-                expected = "Kagemusha Python SDK script must run Torii offline readiness ABI exactness regressions"
+                expected = "Kagemusha Python SDK script must run the first-release Offline HTTP contract regressions"
                 expected_labels = (expected,)
                 if expected not in message:
                     raise SystemExit(
@@ -38071,51 +38052,6 @@ if mode == "--negative-control-jvm-recursive-compact-shape-classifier":
     if not detected_messages:
         raise SystemExit("negative control failed: JVM recursive compact shape classifier drift was not detected")
     print("negative control rejected JVM recursive compact shape classifier drift")
-    for detected_message in detected_messages:
-        print(detected_message)
-    raise SystemExit(0)
-
-if mode == "--negative-control-ton-sccp-public-input-validation-ordering":
-    mutated_texts = dict(texts)
-    mutations = (
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
-            "assertFalse(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
-            "assertTrue(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
-            "Kotlin TON SCCP public-input validation ordering coverage",
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
-            "&& !ex.getMessage().contains(\"sourceProofBytes\")",
-            "&& ex.getMessage().contains(\"sourceProofBytes\")",
-            "Android Java TON SCCP public-input validation ordering coverage",
-        ),
-    )
-    detected_messages = []
-    for target, old, new, expected in mutations:
-        original = mutated_texts[target]
-        mutated = original.replace(old, new, 1)
-        if mutated == original:
-            raise SystemExit(
-                "negative control failed: unable to mutate TON SCCP validation-order coverage in "
-                + target
-            )
-        mutated_texts[target] = mutated
-        try:
-            detected_messages.extend(
-                detect_negative_control(
-                    mutated_texts,
-                    (expected,),
-                    "TON SCCP public-input validation-order drift",
-                )
-            )
-        finally:
-            mutated_texts[target] = original
-    if not detected_messages:
-        raise SystemExit(
-            "negative control failed: TON SCCP public-input validation-order drift was not detected"
-        )
-    print("negative control rejected TON SCCP public-input validation-order drift")
     for detected_message in detected_messages:
         print(detected_message)
     raise SystemExit(0)
@@ -43213,107 +43149,20 @@ if mode == "--negative-control-mobile-sccp-runner-coverage":
     mutated_texts = dict(texts)
     targets = (
         (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
-            "Kotlin SCCP EVM prover tests",
-            "proofRequestBindsPublicSignalsAndRelayContext",
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SccpV1Test.kt",
+            "Kotlin exact SCCP V1 tests",
+            "commitmentDecoderRejectsTagTamperingCollisionsAndTrailingBytes",
         ),
         (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
-            "Android SCCP EVM prover tests",
-            "proofRequestBindsPublicSignalsAndRelayContext",
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt",
-            "Kotlin SCCP TRON prover tests",
-            "derivesTronRouteCanaryEvidenceHash",
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
-            "Android SCCP TRON prover tests",
-            "derivesTronRouteCanaryEvidenceHash",
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
-            "Kotlin SCCP TON prover tests",
-            "derivesTonRouteCanaryEvidenceHash",
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
-            "Android SCCP TON prover tests",
-            "derivesTonRouteCanaryEvidenceHash",
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt",
-            "Kotlin SCCP Solana prover tests",
-            "derivesSolanaRouteCanaryEvidenceHash",
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
-            "Android SCCP Solana prover tests",
-            "derivesSolanaRouteCanaryEvidenceHash",
-        ),
-        (
-            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt",
-            "Kotlin SCCP source proof hash tests",
-            "derivesSourceAdapterVerifierVkHashesForUiTooling",
-        ),
-        (
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java",
-            "Android SCCP source proof hash tests",
-            "derivesSourceAdapterVerifierVkHashesForUiTooling",
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SccpV1Tests.java",
+            "Android exact SCCP V1 tests",
+            "commitmentDecoderRejectsTamperingCollisionsAndTrailingBytes",
         ),
     )
     detected_messages = []
     for target, label, expected_marker in targets:
         original = mutated_texts[target]
-        mutated = original
-        for old, new in (
-            (
-                "proofRequestBindsPublicSignalsAndRelayContext",
-                "proofRequestSkipsRelayContextBinding",
-            ),
-            (
-                "derivesTronRouteCanaryEvidenceHash",
-                "tronRouteCanaryEvidenceHashDrifts",
-            ),
-            (
-                "derivesTonRouteCanaryEvidenceHash",
-                "tonRouteCanaryEvidenceHashDrifts",
-            ),
-            (
-                "derivesSolanaRouteCanaryEvidenceHash",
-                "solanaRouteCanaryEvidenceHashDrifts",
-            ),
-            (
-                "derivesSourceAdapterVerifierVkHashesForUiTooling",
-                "sourceAdapterVerifierVkHashesDriftForUiTooling",
-            ),
-            (
-                "extraneousSourceProofError",
-                "staleRequestError",
-            ),
-            (
-                'sourceProofBytes") == true',
-                'requestHash") == true',
-            ),
-            (
-                'ex.getMessage().contains("sourceProofBytes")',
-                'ex.getMessage().contains("requestHash")',
-            ),
-            (
-                "submission must reject extraneous wrapped proof-result source proof bytes",
-                "submission must reject stale wrapped proof-result request context",
-            ),
-            (
-                "sourceProofBytes must be empty for SORA source bundle",
-                "requestHash",
-            ),
-            (
-                "TON request hash must bind bundle finality proof bytes",
-                "TON request hash must bind bundle/source-proof byte boundaries",
-            ),
-        ):
-            mutated = mutated.replace(old, new)
+        mutated = original.replace(expected_marker, "sccpExactCoverageDrift")
         if mutated == original:
             raise SystemExit(
                 "negative control failed: unable to mutate mobile SCCP runner coverage for "
@@ -48860,6 +48709,10 @@ if mode == "--negative-control-android-java-kagemusha-jdk8-api-surface":
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/"
         "UrlConnectionTransportExecutor.java"
     )
+    bounded_response_reader_source = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/"
+        "BoundedResponseBodyReader.java"
+    )
     offline_torii_client_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java"
     confidential_asset_torii_client_source = (
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/"
@@ -48964,9 +48817,9 @@ if mode == "--negative-control-android-java-kagemusha-jdk8-api-surface":
             "Map.of()",
         ),
         (
-            url_connection_transport_source,
-            "try (InputStream responseBody = stream;",
-            "try (stream;",
+            bounded_response_reader_source,
+            "try (InputStream responseBody = input;",
+            "try (input;",
         ),
         (
             transport_security_source,
@@ -49365,6 +49218,7 @@ if mode == "--negative-control-android-java-kagemusha-jdk8-api-surface":
             "Android Java transport response production JDK 8 collection factories contains forbidden pattern",
             "Android Java transport stream response production JDK 8 collection factories contains forbidden pattern",
             "Android Java URL connection transport production JDK 8 API surface contains forbidden pattern",
+            "Android Java bounded response reader production JDK 8 API surface contains forbidden pattern",
             "Android Java transport security production JDK 8 collection factories contains forbidden pattern",
             "Android Java Offline Torii client production JDK 8 API surface contains forbidden pattern",
             "Android Java confidential asset Torii client production JDK 8 blank checks contains forbidden pattern",
@@ -71352,7 +71206,7 @@ if mode == "--negative-control-non-csharp-uaid-path-literal-exactness":
             "JavaScript SDK package-dist UAID path literal focused selector",
             "Python UAID path literal exactness",
             "Python UAID path literal exactness tests",
-            "Kagemusha Python SDK script must run Torii query selector, bridge submit, and UAID path literal exactness regressions",
+            "Kagemusha Python SDK script must run Torii query selector, exact SCCP V1, and UAID path literal regressions",
             "Swift UAID path literal exactness",
             "Swift UAID path literal exactness tests",
             "Kagemusha Swift SDK script must run Torii query selector exactness tests",
@@ -71945,6 +71799,85 @@ if mode == "--negative-control-android-device-lab-assembler-identity-fields":
             print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android device-lab assembler identity field drift was not detected")
+
+if mode == "--negative-control-abi18-pasta-cycle-mode-v2":
+    mutated_texts = dict(texts)
+    cases = (
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            'pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";',
+            'pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v1";',
+            "Rust ABI-18 Pasta-cycle mode V2 contract",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
+            'public static let mode = "recursive_spend_v2"',
+            'public static let mode = "recursive_spend_v1"',
+            "Swift ABI-18 Pasta-cycle mode V2 contract",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+            'const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v2"',
+            'const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v1"',
+            "Kotlin ABI-18 Pasta-cycle mode V2 contract",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+            'public static final String PASTA_CYCLE_V3_MODE = "recursive_spend_v2";',
+            'public static final String PASTA_CYCLE_V3_MODE = "recursive_spend_v1";',
+            "Android Java ABI-18 Pasta-cycle mode V2 contract",
+        ),
+        (
+            "crates/connect_norito_bridge/src/lib.rs",
+            "            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),",
+            "            mode: KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1.to_owned(),",
+            "native bridge ABI-18 Pasta-cycle mode V2 fixture",
+        ),
+        (
+            "docs/source/offline_kagemusha_v2_contract.md",
+            "`recursive_spend_v2`, proof backend `halo2/ipa-pasta-cycle-v1`",
+            "`recursive_spend_v1`, proof backend `halo2/ipa-pasta-cycle-v1`",
+            "ABI-18 Kagemusha V2 contract mode",
+        ),
+        (
+            "docs/source/offline_kagemusha_recursion_adapter.md",
+            "`recursive_spend_v2`, manifest schema",
+            "`recursive_spend_v1`, manifest schema",
+            "ABI-18 recursion adapter contract mode",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in cases:
+        original = mutated_texts[target]
+        updated = original.replace(old, new, 1)
+        if updated == original:
+            raise SystemExit(
+                "negative control failed: unable to substitute ABI-18 Pasta-cycle mode in "
+                + target
+            )
+        mutated_texts[target] = updated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: ABI-18 Pasta-cycle mode drift was rejected for "
+                    "the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+        else:
+            raise SystemExit(
+                "negative control failed: ABI-18 Pasta-cycle V1 substitution was not detected for "
+                + target
+            )
+        finally:
+            mutated_texts[target] = original
+    print("negative control rejected every one-sided ABI-18 Pasta-cycle V1 substitution")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-native-c-bridge-abi-version":
     mutated = dict(texts)
@@ -72867,10 +72800,6 @@ if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then
       "connect_norito_kagemusha_recursive_spend_build_split_intent_v2"
       "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2"
       "connect_norito_kagemusha_recursive_spend_bundle_summary_v2"
-      "connect_norito_kagemusha_recursive_spend_artifact_begin_v2"
-      "connect_norito_kagemusha_recursive_spend_artifact_write_v2"
-      "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2"
-      "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2"
       "connect_norito_kagemusha_recursive_spend_capabilities_v1"
       "connect_norito_kagemusha_topup_finality_verify_v2"
       "connect_norito_kagemusha_recursive_spend_artifact_begin_v3"

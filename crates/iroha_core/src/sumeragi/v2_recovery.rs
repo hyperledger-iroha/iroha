@@ -20,7 +20,9 @@ use thiserror::Error;
 use super::{
     v2::{AdapterError, VerifiedHeightContext},
     v2_body_store::BlockSignaturePolicy,
-    v2_context::{GenesisV2Bootstrap, V2ContextBuildError, build_successor_height_context},
+    v2_context::{
+        GenesisV2Bootstrap, V2ContextBuildError, build_successor_height_context_from_state,
+    },
     v2_context_store::{PersistedHeightContext, V2ContextStore, V2ContextStoreError},
 };
 use crate::{
@@ -240,8 +242,10 @@ pub(crate) fn build_verified_successor(
     let target_height = parent_height
         .checked_add(1)
         .ok_or(V2RecoveryError::HeightOverflow)?;
-    let expected = build_successor_height_context(
+    let state_view = state.view();
+    let expected = build_successor_height_context_from_state(
         parent_artifact,
+        &state_view,
         committed_nexus_amx_context_hash(state),
         next_epoch_end_height(state, parent_artifact)?,
     )?;
@@ -311,8 +315,10 @@ fn verify_persisted_height(
     // and canonical Kura block complete the crash-recovery binding.
     let state_height = u64::try_from(state.committed_height())?;
     if state_height.saturating_add(1) == height {
-        let expected = build_successor_height_context(
+        let state_view = state.view();
+        let expected = build_successor_height_context_from_state(
             &parent_artifact,
+            &state_view,
             committed_nexus_amx_context_hash(state),
             next_epoch_end_height(state, &parent_artifact)?,
         )?;
@@ -386,7 +392,7 @@ fn next_epoch_end_height(
     state: &State,
     parent: &wire::finality::V2FinalityArtifact,
 ) -> Result<Option<wire::Height>, V2RecoveryError> {
-    if parent.next_epoch_snapshot.is_none() {
+    if parent.height_context.next_epoch_snapshot.is_none() {
         return checked_next_epoch_end(parent.height, false, None);
     }
     let view = state.view();
@@ -548,6 +554,7 @@ mod tests {
             height: 1,
             epoch: 0,
             epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
@@ -665,7 +672,8 @@ mod tests {
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xB4; 48],
         };
-        wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, None)
+        let validator_set_pops = vec![vec![0xB5]; context.roster.len()];
+        wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
     }
 
     fn authenticated_artifact_for(
@@ -708,7 +716,14 @@ mod tests {
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate CommitQC"),
         };
-        wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, None)
+        let validator_set_pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture validator PoP")
+            })
+            .collect();
+        wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
     }
 
     #[test]

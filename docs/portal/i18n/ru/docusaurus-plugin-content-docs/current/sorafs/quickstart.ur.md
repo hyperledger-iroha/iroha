@@ -122,3 +122,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   ترجیح دینی چاہیے۔
 - **Автоматизация CI** – Узнайте больше о конвейерах выпуска и документации по ним.
   светильники, артефакты, подписанные метаданные, детерминированные манифесты, детерминированные манифесты.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```
