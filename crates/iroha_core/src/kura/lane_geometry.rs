@@ -414,7 +414,11 @@ impl Kura {
         )?;
         if previous_catalog == updated_catalog {
             *self.lane_storage_entries.lock() = Self::lane_storage_entries_from_config(updated);
-            return self.write_lane_geometry_journal(&journal);
+            // `finish_pending_lane_geometry_gc_locked` persists any journal state it changes.
+            // With no physical transition there is otherwise no recovery intent to rewrite;
+            // exact configured-baseline publication remains idempotent whether a startup journal
+            // was already established or this path is operating without one.
+            return Ok(());
         }
 
         let transition_id = geometry_transition_id(previous_catalog, updated_catalog);
@@ -535,8 +539,16 @@ impl Kura {
                 }
             }
         }
+        self.validate_lane_geometry_journal(&journal)?;
         let published_journal_bytes = journal.encode();
-        let publication_result = self.write_lane_geometry_journal(&journal);
+        // Use the same encoded bytes for the target replacement and rollback comparison. This
+        // makes the exact value whose publication was attempted explicit even if the encoder is
+        // changed in the future.
+        let publication_result = self.atomic_write_geometry_file(
+            &journal_path,
+            &publication_temp,
+            &published_journal_bytes,
+        );
         #[cfg(test)]
         let publication_result = publication_result.and_then(|()| {
             if self
@@ -3755,6 +3767,10 @@ impl Kura {
             }
         }
 
+        // A preexisting temp is never ours to remove. `atomic_write_geometry_file` consumes it
+        // only when its bytes exactly equal this publication; otherwise it is left untouched and
+        // the publication fails. A temp absent at entry can be cleaned only when its full value
+        // proves that it belongs to this attempt.
         if !publication_temp_preexisted {
             let publication_temp = self.store_root.join(JOURNAL_TEMP_FILE_NAME);
             if let Some(temp_bytes) = self.read_geometry_file_bytes(&publication_temp)? {
@@ -3771,6 +3787,23 @@ impl Kura {
                     .map_err(|error| Error::IO(error, publication_temp.clone()))?;
                 self.sync_geometry_parent(publication_temp.parent())?;
             }
+            if self.validate_path_kind(&publication_temp, false)? {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane geometry publication temp remained after rollback cleanup",
+                    ),
+                    publication_temp,
+                ));
+            }
+        }
+
+        let restored_bytes = self.read_geometry_file_bytes(&path)?;
+        if restored_bytes.as_deref() != prior_bytes {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "lane geometry publication rollback did not restore the exact prior journal value",
+            ));
         }
         Ok(())
     }
@@ -4549,7 +4582,6 @@ mod tests {
     use super::*;
     use crate::{
         block::BlockBuilder,
-        kura::BlockCount,
         lane_consensus::{
             CommittedLaneBlockSession, LaneBlockVoteV1, aggregate_lane_block_votes_to_qc,
         },
@@ -4604,6 +4636,251 @@ mod tests {
             ]),
             BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 9)]),
         )
+    }
+
+    #[test]
+    fn post_write_publication_failure_restores_absent_description_only_journal() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let mut lanes = LaneCatalog::default().lanes().to_vec();
+        lanes[0].description = Some("operator-only catalog description".to_owned());
+        let catalog = LaneCatalog::new(nonzero!(1_u32), lanes)
+            .expect("description-only lane catalog");
+        let config = RuntimeLaneConfig::from_catalog(&catalog);
+        let baseline = iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog);
+        let (incarnations, activation_heights) = initial_geometry();
+        let kura = open_kura(&root, &config);
+        let journal_path = kura.lane_geometry_journal_path();
+        assert!(
+            !journal_path.exists(),
+            "opening static geometry must not invent a recovery journal"
+        );
+        kura.fail_next_lane_geometry_publication_after_write_for_test();
+
+        let error = kura
+            .mark_lane_geometry_catalog_published(
+                &config,
+                &incarnations,
+                &activation_heights,
+                Some(baseline),
+            )
+            .expect_err("failure after target replacement must restore prior absence");
+        assert!(
+            !matches!(error, Error::LaneGeometryPublicationRestoreFailed { .. }),
+            "exact restoration should preserve the original injected publication error: {error}"
+        );
+        assert!(
+            !journal_path.exists(),
+            "rollback must remove the newly published target when no prior journal existed"
+        );
+        let (restored_baseline, phases, has_temp) = kura
+            .lane_geometry_journal_state_for_test()
+            .expect("read restored absent journal state");
+        assert_eq!(restored_baseline, None);
+        assert!(phases.is_empty());
+        assert!(!has_temp, "rollback must not leave owned temp files");
+
+        kura.mark_lane_geometry_catalog_published(
+            &config,
+            &incarnations,
+            &activation_heights,
+            Some(baseline),
+        )
+        .expect("one-shot failure permits an exact corrected retry");
+        let (retried_baseline, phases, has_temp) = kura
+            .lane_geometry_journal_state_for_test()
+            .expect("read corrected publication");
+        assert_eq!(retried_baseline, Some(baseline));
+        assert!(phases.is_empty());
+        assert!(!has_temp);
+    }
+
+    #[test]
+    fn publication_temp_recovery_consumes_only_an_exact_preexisting_value() {
+        let catalog = LaneCatalog::default();
+        let config = RuntimeLaneConfig::from_catalog(&catalog);
+        let baseline = iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog);
+        let (incarnations, activation_heights) = initial_geometry();
+
+        let unrelated_temp = TempDir::new().expect("temporary directory");
+        let unrelated_root = unrelated_temp.path().join("kura");
+        let unrelated_kura = open_kura(&unrelated_root, &config);
+        let publication_temp = unrelated_root.join(JOURNAL_TEMP_FILE_NAME);
+        fs::write(&publication_temp, b"operator-owned-temp").expect("seed unrelated temp");
+        unrelated_kura
+            .mark_lane_geometry_catalog_published(
+                &config,
+                &incarnations,
+                &activation_heights,
+                Some(baseline),
+            )
+            .expect_err("an unrelated preexisting temp must fail closed");
+        assert_eq!(
+            fs::read(&publication_temp).expect("unrelated temp retained"),
+            b"operator-owned-temp"
+        );
+        assert!(
+            !unrelated_kura.lane_geometry_journal_path().exists(),
+            "a temp collision must not publish a target"
+        );
+
+        let resumable_temp = TempDir::new().expect("temporary directory");
+        let resumable_root = resumable_temp.path().join("kura");
+        let resumable_kura = open_kura(&resumable_root, &config);
+        let mut expected_journal = LaneGeometryJournal::default();
+        expected_journal.configured_catalog_hash = Some(baseline);
+        let publication_temp = resumable_root.join(JOURNAL_TEMP_FILE_NAME);
+        fs::write(&publication_temp, expected_journal.encode()).expect("seed exact resume temp");
+        resumable_kura.fail_next_lane_geometry_publication_after_write_for_test();
+
+        let error = resumable_kura
+            .mark_lane_geometry_catalog_published(
+                &config,
+                &incarnations,
+                &activation_heights,
+                Some(baseline),
+            )
+            .expect_err("inject failure after consuming exact resume temp");
+        assert!(!matches!(
+            error,
+            Error::LaneGeometryPublicationRestoreFailed { .. }
+        ));
+        assert!(
+            !publication_temp.exists(),
+            "an exact resumable temp is consumed by target replacement"
+        );
+        assert!(
+            !resumable_kura.lane_geometry_journal_path().exists(),
+            "post-write rollback restores the prior absent target"
+        );
+    }
+
+    #[test]
+    fn post_write_publication_failure_restores_exact_files_applied_journal() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (initial, extended) = initial_and_extended_configs();
+        let (initial_incarnations, initial_activations) = initial_geometry();
+        let (extended_incarnations, extended_activations) = extended_geometry();
+        let kura = open_kura(&root, &initial);
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+            &BTreeSet::new(),
+        )
+        .expect("prepare files-applied geometry intent");
+        let journal_path = kura.lane_geometry_journal_path();
+        let prior_bytes = fs::read(&journal_path).expect("capture exact files-applied journal");
+        let prior_journal = decode_exact::<LaneGeometryJournal>(&prior_bytes)
+            .expect("decode files-applied journal");
+        assert_eq!(prior_journal.configured_catalog_hash, None);
+        assert_eq!(
+            prior_journal.records.last().map(|record| record.phase),
+            Some(LaneGeometryPhase::FilesApplied)
+        );
+        let baseline = Hash::new(b"configured-catalog-baseline");
+        kura.fail_next_lane_geometry_publication_after_write_for_test();
+
+        let error = kura
+            .mark_lane_geometry_catalog_published(
+                &extended,
+                &extended_incarnations,
+                &extended_activations,
+                Some(baseline),
+            )
+            .expect_err("inject failure after replacing an existing journal");
+        assert!(!matches!(
+            error,
+            Error::LaneGeometryPublicationRestoreFailed { .. }
+        ));
+        assert_eq!(
+            fs::read(&journal_path).expect("read restored journal"),
+            prior_bytes,
+            "rollback must restore the exact prior encoding, including FilesApplied phase"
+        );
+        let (restored_baseline, phases, has_temp) = kura
+            .lane_geometry_journal_state_for_test()
+            .expect("read exact restored journal state");
+        assert_eq!(restored_baseline, None);
+        assert_eq!(phases, vec!["files_applied"]);
+        assert!(!has_temp);
+
+        kura.recover_lane_geometry_journal(
+            &initial,
+            &initial_incarnations,
+            &initial_activations,
+        )
+        .expect("restored FilesApplied intent remains available for State geometry rollback");
+        assert_eq!(
+            kura.read_lane_geometry_journal()
+                .expect("journal after State-equivalent rollback")
+                .records
+                .last()
+                .map(|record| record.phase),
+            Some(LaneGeometryPhase::RolledBack)
+        );
+    }
+
+    #[test]
+    fn publication_restore_failure_is_distinct_and_leaves_published_journal_fail_closed() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (initial, extended) = initial_and_extended_configs();
+        let (initial_incarnations, initial_activations) = initial_geometry();
+        let (extended_incarnations, extended_activations) = extended_geometry();
+        let kura = open_kura(&root, &initial);
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+            &BTreeSet::new(),
+        )
+        .expect("prepare files-applied geometry intent");
+        let prior_bytes = fs::read(kura.lane_geometry_journal_path())
+            .expect("capture exact files-applied journal");
+        let restore_temp = root.join(JOURNAL_RESTORE_TEMP_FILE_NAME);
+        fs::write(&restore_temp, b"operator-owned-restore-temp")
+            .expect("seed restore-temp collision");
+        let baseline = Hash::new(b"configured-catalog-baseline");
+        kura.fail_next_lane_geometry_publication_after_write_for_test();
+
+        let error = kura
+            .mark_lane_geometry_catalog_published(
+                &extended,
+                &extended_incarnations,
+                &extended_activations,
+                Some(baseline),
+            )
+            .expect_err("restore-temp collision must prevent claiming exact restoration");
+        assert!(matches!(
+            error,
+            Error::LaneGeometryPublicationRestoreFailed { .. }
+        ));
+        assert_eq!(
+            fs::read(&restore_temp).expect("restore collision retained"),
+            b"operator-owned-restore-temp"
+        );
+        assert_ne!(
+            fs::read(kura.lane_geometry_journal_path()).expect("published journal remains"),
+            prior_bytes,
+            "restore failure must not be reported as if the prior journal were restored"
+        );
+        let journal = kura
+            .read_lane_geometry_journal()
+            .expect("published journal remains internally valid");
+        assert_eq!(journal.configured_catalog_hash, Some(baseline));
+        assert_eq!(
+            journal.records.last().map(|record| record.phase),
+            Some(LaneGeometryPhase::CatalogPublished),
+            "State must stop instead of rolling geometry back under a published journal"
+        );
     }
 
     fn retirement_test_configs() -> (RuntimeLaneConfig, RuntimeLaneConfig) {

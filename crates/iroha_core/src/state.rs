@@ -9318,6 +9318,8 @@ pub struct StateBlock<'state> {
     direct_committed_transactions: HashSet<HashOf<SignedTransaction>>,
     /// Resolved certified merge entry staged before ordinary carrier-block effects.
     staged_merge_entry: Option<MergeLedgerEntry>,
+    /// Nexus fee receipt ids whose marker writes become committed with this block.
+    pending_nexus_fee_receipt_source_ids: BTreeSet<[u8; 32]>,
     /// Whether deterministic start-of-block effects have already been applied.
     start_of_block_effects_applied: bool,
 
@@ -24718,6 +24720,7 @@ impl State {
             pending_autoscale_lifecycle: None,
             direct_committed_transactions: HashSet::new(),
             staged_merge_entry: None,
+            pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
             start_of_block_effects_applied: false,
             exec_witness: None,
             gas_used_in_block: 0,
@@ -25233,6 +25236,7 @@ impl State {
             pending_autoscale_lifecycle: None,
             direct_committed_transactions: HashSet::new(),
             staged_merge_entry: None,
+            pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
             start_of_block_effects_applied: false,
             exec_witness: None,
             gas_used_in_block: 0,
@@ -25327,6 +25331,7 @@ impl State {
             pending_autoscale_lifecycle: None,
             direct_committed_transactions: HashSet::new(),
             staged_merge_entry: None,
+            pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
             start_of_block_effects_applied: false,
             exec_witness: None,
             gas_used_in_block: 0,
@@ -39442,6 +39447,8 @@ impl<'state> StateBlock<'state> {
             tx.world.smart_contract_state.insert(key, vec![1]);
         }
         tx.apply();
+        self.pending_nexus_fee_receipt_source_ids
+            .extend(seen_sources);
         Ok(())
     }
 
@@ -39458,6 +39465,10 @@ impl<'state> StateBlock<'state> {
         if receipts.is_empty() {
             return Ok(());
         }
+        let receipt_source_ids = receipt_markers
+            .iter()
+            .map(|(source_id, _)| *source_id)
+            .collect::<Vec<_>>();
         let mut tx = self.transaction();
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate_burns {
@@ -39483,6 +39494,8 @@ impl<'state> StateBlock<'state> {
             tx.world.smart_contract_state.insert(key, vec![1]);
         }
         tx.apply();
+        self.pending_nexus_fee_receipt_source_ids
+            .extend(receipt_source_ids);
         Ok(())
     }
 
@@ -39535,6 +39548,7 @@ impl<'state> StateBlock<'state> {
             pending_da_pin_intents,
             pending_autoscale_lifecycle,
             staged_merge_entry,
+            pending_nexus_fee_receipt_source_ids,
             direct_committed_transactions,
             _curr_block,
             #[cfg(feature = "zk-preverify")]
@@ -39612,6 +39626,7 @@ impl<'state> StateBlock<'state> {
             || pending_da_commitments.is_some()
             || pending_da_pin_intents.is_some()
             || staged_merge_entry.is_some()
+            || !pending_nexus_fee_receipt_source_ids.is_empty()
             || !verified_lane_relay_records.is_empty();
         let tx_validate_accepted = tx_validate_result.is_ok();
         let mut preflight_error = None;
@@ -39812,6 +39827,12 @@ impl<'state> StateBlock<'state> {
             } else {
                 Duration::ZERO
             };
+            if publish_block_runtime_effects && !pending_nexus_fee_receipt_source_ids.is_empty() {
+                state_ref
+                    .settled_nexus_fee_receipts
+                    .write()
+                    .extend(pending_nexus_fee_receipt_source_ids.iter().copied());
+            }
             let state_write_lock_hold =
                 preflight_state_write_lock_hold + state_write_lock_hold_start.elapsed();
             #[cfg(feature = "telemetry")]
@@ -71893,6 +71914,11 @@ mod tests {
             .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
             .expect_err("post-replacement publication failure must restore the prior journal");
         assert!(matches!(err, LaneLifecycleError::Storage(_)));
+        assert!(
+            err.to_string()
+                .contains("failed after journal replacement for test injection"),
+            "State must receive the original rollback-safe publication error: {err}"
+        );
         let rolled_back_nexus = state.nexus_snapshot();
         assert_eq!(rolled_back_nexus.lane_catalog, before_nexus.lane_catalog);
         assert_eq!(
@@ -71926,9 +71952,9 @@ mod tests {
         );
 
         state
-            .set_nexus_from_config(startup_nexus_for_catalog(configured))
+            .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
             .expect("the one-shot failure must allow a corrected exact retry");
-        assert_eq!(state.nexus_snapshot().lane_catalog.lanes().len(), 2);
+        assert_eq!(state.nexus_snapshot().lane_catalog, configured);
         assert!(configured_blocks_dir.exists());
         let (baseline, phases, has_temp) = kura
             .lane_geometry_journal_state_for_test()
@@ -99674,6 +99700,56 @@ mod tests {
     }
 
     #[test]
+    fn staged_fee_merge_missing_transaction_membership_publishes_no_burn_or_receipt_cache() {
+        let source_id = [0x46; 32];
+        let (state, sponsor_id, asset_def_id, commit_keypairs) =
+            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+        let candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("fee merge candidate");
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate, qc);
+        let parent = state
+            .kura
+            .get_block(NonZeroUsize::new(1).expect("non-zero parent height"))
+            .expect("fee merge carrier parent");
+        let carrier = certified_merge_carrier_after(&parent, &entry);
+        state
+            .kura
+            .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
+            .expect("persist exact fee merge carrier");
+
+        let receipt_marker =
+            State::nexus_fee_receipt_marker_key(&source_id).expect("fee receipt marker key");
+        let mut state_block = state
+            .block_with_certified_merge_entry(carrier.header().clone(), &entry)
+            .expect("stage exact fee merge carrier");
+        state_block.block_hashes.push(carrier.hash());
+        let error = state_block
+            .commit()
+            .expect_err("missing transaction membership must abort fee merge publication");
+        assert!(matches!(error, TransactionsBlockError::MissingInsertBlock));
+        assert_eq!(state.committed_height(), 1);
+        assert_eq!(
+            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Numeric::from(10_u32)
+        );
+        assert!(state.settled_nexus_fee_receipts.read().is_empty());
+        assert!(
+            state
+                .world
+                .view()
+                .smart_contract_state()
+                .get(&receipt_marker)
+                .is_none(),
+            "aborted fee merge must publish no durable receipt marker"
+        );
+        assert!(state.merge_ledger().is_empty());
+    }
+
+    #[test]
     fn restart_replays_durable_merge_settlement_exactly_once() {
         let source_id = [0x45; 32];
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
@@ -100626,7 +100702,7 @@ mod tests {
         drop(original);
 
         let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
         assert!(
             state.merge_ledger().is_empty(),

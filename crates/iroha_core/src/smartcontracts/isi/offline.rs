@@ -6086,6 +6086,7 @@ pub mod isi {
         }
     }
 
+    // TODO: Replace this fail-closed stub when the V2 redeem proof backend is enabled.
     impl Execute for RedeemKagemushaRecursiveV2 {
         fn execute(
             self,
@@ -6104,7 +6105,9 @@ pub mod isi {
             // branch-independent proof backend is deliberately unavailable. Keep
             // dispatch fail-closed before authorization markers, nullifiers,
             // commitments, balances, or any other ledger state can be mutated.
-            ensure_kagemusha_v2_chain_backend_available("invalid_recursive_redeem", "redemption")?;
+            self.request
+                .ensure_proof_backend_available()
+                .map_err(|err| labeled_invariant("proof_backend_unavailable", err.to_string()))?;
             Err(labeled_invariant(
                 "invalid_recursive_redeem",
                 "Kagemusha V2 proof backend unexpectedly reported availability without a chain executor",
@@ -6426,6 +6429,13 @@ pub mod isi {
                 KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
                 "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
             );
+        }
+
+        #[test]
+        fn kagemusha_v2_redeem_implements_execute() {
+            fn assert_execute<T: Execute>() {}
+
+            assert_execute::<RedeemKagemushaRecursiveV2>();
         }
 
         #[test]

@@ -15953,6 +15953,7 @@ pub mod tests {
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.lane_catalog = (*lane_catalog).clone();
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = (*dataspace_catalog).clone();
         nexus.fees.base_fee = Numeric::zero();
