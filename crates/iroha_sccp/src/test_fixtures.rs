@@ -276,6 +276,7 @@ pub(crate) fn signed_finality_proof(commitment_root: H256) -> Vec<u8> {
         height,
         epoch: 0,
         epoch_end_height: 10,
+        next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
         parent_commit_qc: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid powered SCCP fixture roster"),
