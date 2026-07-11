@@ -2806,6 +2806,8 @@ pub mod accel {
 
 /// Zero-knowledge subsystem defaults used by Torii and the host runtime.
 pub mod zk {
+    /// SCCP launch policy. Generic deployments preserve the Ethereum mainnet lane default.
+    pub const SCCP_LAUNCH_MODE: &str = "ethereum_mainnet_lane";
 
     /// FASTPQ prover defaults.
     pub mod fastpq {

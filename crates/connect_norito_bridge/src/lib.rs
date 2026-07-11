@@ -9264,6 +9264,7 @@ mod offline_note_prover_tests {
             KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1,
             KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, KagemushaCompactPaymentToken,
             KagemushaFoldedProof, KagemushaRecursiveAggregationProof,
             KagemushaRecursiveAggregationProofBundle, KagemushaRecursiveCompactKeyArtifactEntryV1,
@@ -27252,6 +27253,7 @@ fn map_local_fetch_error(err: LocalFetchError) -> c_int {
         LocalFetchError::ScoreboardBuild(_) => ERR_FETCH_SCOREBOARD_BUILD,
         LocalFetchError::Fetch(_) => ERR_FETCH_EXECUTION,
         LocalFetchError::UnknownChunkerHandle(_) => ERR_FETCH_UNKNOWN_CHUNKER,
+        LocalFetchError::IntegrityVerificationDisabled(_) => ERR_FETCH_OPTIONS_JSON,
     }
 }
 
@@ -34997,6 +34999,16 @@ mod sorafs_tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn disabled_local_fetch_integrity_checks_are_invalid_options() {
+        for field in ["verify_digests", "verify_lengths"] {
+            assert_eq!(
+                map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled(field)),
+                ERR_FETCH_OPTIONS_JSON,
+            );
+        }
+    }
 
     #[test]
     fn sorafs_local_fetch_via_ffi() {

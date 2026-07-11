@@ -86,14 +86,20 @@ pub const SCCP_BSC_MAINNET_EVM_CHAIN_ID: u64 = 56;
 /// BNB Smart Chain testnet EVM chain id.
 pub const SCCP_BSC_TESTNET_EVM_CHAIN_ID: u64 = 97;
 pub const SCCP_STARK_FRI_PROOF_FAMILY_V1: &str = "stark-fri-v1";
-/// Production-planned Solana source recursive verifier backend for SCCP proofs.
+/// Solana mainnet-beta source recursive verifier backend for SCCP proofs.
 pub const SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1: &str = "sccp-solana-recursive-mainnet-v1";
+/// Solana testnet source recursive verifier backend for SCCP proofs.
+pub const SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1: &str = "sccp-solana-recursive-testnet-v1";
 /// Production-planned TON verifier-contract backend for SCCP proofs.
 pub const SCCP_TON_CONTRACT_PROOF_BACKEND_V1: &str = "ton-contract-v1";
 /// Solana mainnet-beta genesis hash bound into SCCP source verifier material.
 pub const SCCP_SOLANA_MAINNET_GENESIS_HASH: &str = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+/// Solana testnet genesis hash bound into SCCP source verifier material.
+pub const SCCP_SOLANA_TESTNET_GENESIS_HASH: &str = "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY";
 /// Solana mainnet-beta epoch length used by the SCCP finalized-slot policy.
 pub const SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH: u64 = 432_000;
+/// Solana testnet epoch length used by the SCCP finalized-slot policy.
+pub const SCCP_SOLANA_TESTNET_SLOTS_PER_EPOCH: u64 = 432_000;
 /// Minimum rooted-slot distance bound into Solana SCCP Tower lockout evidence.
 pub const SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH: u64 = 32;
 /// Number of active post-root votes Solana stores for a rooted 32-confirmation Tower.
@@ -156,6 +162,9 @@ const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_DEPLOYMENT_PREFIX_V1: &[u8] =
 /// Solana mainnet-beta destination anchor id required for SCCP verifier rollout.
 pub const SCCP_SOLANA_MAINNET_DESTINATION_ANCHOR_ID_V1: &str =
     "sccp:sol:destination-anchor:solana-mainnet-beta:v1";
+/// Solana testnet destination anchor id required for SCCP verifier rollout.
+pub const SCCP_SOLANA_TESTNET_DESTINATION_ANCHOR_ID_V1: &str =
+    "sccp:sol:destination-anchor:solana-testnet:v1";
 /// Ethereum mainnet destination anchor id required for SCCP verifier rollout.
 pub const SCCP_ETH_MAINNET_DESTINATION_ANCHOR_ID_V1: &str =
     "sccp:eth:destination-anchor:ethereum-mainnet:v1";
@@ -254,6 +263,116 @@ pub const SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1: &str =
 /// Solana mainnet-beta bank/fork-choice verifier profile id for full light-client rollout audits.
 pub const SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1: &str =
     "sccp:sol:light-client:bank-fork-choice-mainnet-beta:v1";
+/// Solana testnet source trust anchor profile id for SCCP source proofs.
+pub const SCCP_SOLANA_TESTNET_SOURCE_TRUST_ANCHOR_ID_V1: &str =
+    "sccp:sol:source-trust-anchor:solana-testnet-genesis:v1";
+/// Solana testnet route allowlist profile id required for SCCP activation.
+pub const SCCP_SOLANA_TESTNET_ROUTE_ALLOWLIST_ID_V1: &str =
+    "sccp:sol:route-allowlist:solana-testnet:v1";
+/// Solana testnet finalized-slot verifier profile id for SCCP source proofs.
+pub const SCCP_SOLANA_TESTNET_CONSENSUS_VERIFIER_ID_V1: &str =
+    "sccp:sol:consensus-verifier:finalized-slot-bankhash-testnet:v1";
+/// Solana testnet transaction-status verifier profile id for SCCP source proofs.
+pub const SCCP_SOLANA_TESTNET_MESSAGE_INCLUSION_VERIFIER_ID_V1: &str =
+    "sccp:sol:message-inclusion-verifier:transaction-status-root-branch-testnet:v1";
+/// Solana testnet AccountsDB recursive verifier profile id for SCCP source proofs.
+pub const SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1: &str =
+    "sccp:sol:accounts-db-verifier:accounts-lt-hash-testnet:v1";
+/// Solana testnet finalized-slot policy profile id for SCCP source proofs.
+pub const SCCP_SOLANA_TESTNET_FINALITY_POLICY_ID_V1: &str =
+    "sccp:sol:finality-policy:finalized-slot-testnet:v1";
+/// Solana testnet Tower replay verifier profile id for full light-client rollout audits.
+pub const SCCP_SOLANA_TESTNET_TOWER_REPLAY_VERIFIER_ID_V1: &str =
+    "sccp:sol:light-client:tower-replay-testnet:v1";
+/// Solana testnet full AccountsDB lattice verifier profile id for rollout audits.
+pub const SCCP_SOLANA_TESTNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1: &str =
+    "sccp:sol:light-client:full-accountsdb-lattice-testnet:v1";
+/// Solana testnet bank/fork-choice verifier profile id for full light-client rollout audits.
+pub const SCCP_SOLANA_TESTNET_BANK_FORK_CHOICE_VERIFIER_ID_V1: &str =
+    "sccp:sol:light-client:bank-fork-choice-testnet:v1";
+
+/// Solana source network selected for an SCCP proof profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SccpSolanaSourceNetworkV1 {
+    MainnetBeta,
+    Testnet,
+}
+
+/// Exact network-bound tuple used by Solana source proof transcripts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SccpSolanaSourceProfileV1 {
+    pub network: SccpSolanaSourceNetworkV1,
+    pub network_id: &'static str,
+    pub proof_backend: &'static str,
+    pub genesis_hash: &'static str,
+    pub slots_per_epoch: u64,
+    pub destination_anchor_id: &'static str,
+    pub route_allowlist_id: &'static str,
+    pub source_trust_anchor_id: &'static str,
+    pub consensus_verifier_id: &'static str,
+    pub message_inclusion_verifier_id: &'static str,
+    pub source_state_verifier_id: &'static str,
+    pub finality_policy_id: &'static str,
+    pub tower_replay_verifier_id: &'static str,
+    pub full_accountsdb_lattice_verifier_id: &'static str,
+    pub bank_fork_choice_verifier_id: &'static str,
+    pub transcript_domain: &'static [u8],
+    pub genesis_public_input_domain: &'static [u8],
+}
+
+const SCCP_SOLANA_MAINNET_SOURCE_PROFILE_V1: SccpSolanaSourceProfileV1 =
+    SccpSolanaSourceProfileV1 {
+        network: SccpSolanaSourceNetworkV1::MainnetBeta,
+        network_id: "solana-mainnet-beta",
+        proof_backend: SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1,
+        genesis_hash: SCCP_SOLANA_MAINNET_GENESIS_HASH,
+        slots_per_epoch: SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH,
+        destination_anchor_id: SCCP_SOLANA_MAINNET_DESTINATION_ANCHOR_ID_V1,
+        route_allowlist_id: SCCP_SOLANA_MAINNET_ROUTE_ALLOWLIST_ID_V1,
+        source_trust_anchor_id: SCCP_SOLANA_MAINNET_SOURCE_TRUST_ANCHOR_ID_V1,
+        consensus_verifier_id: SCCP_SOLANA_MAINNET_CONSENSUS_VERIFIER_ID_V1,
+        message_inclusion_verifier_id: SCCP_SOLANA_MAINNET_MESSAGE_INCLUSION_VERIFIER_ID_V1,
+        source_state_verifier_id: SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+        finality_policy_id: SCCP_SOLANA_MAINNET_FINALITY_POLICY_ID_V1,
+        tower_replay_verifier_id: SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
+        full_accountsdb_lattice_verifier_id:
+            SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+        bank_fork_choice_verifier_id: SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
+        transcript_domain: b"sccp:solana:source-profile:mainnet-beta:v1",
+        genesis_public_input_domain: b"sccp:solana:mainnet-genesis:v1",
+    };
+
+const SCCP_SOLANA_TESTNET_SOURCE_PROFILE_V1: SccpSolanaSourceProfileV1 =
+    SccpSolanaSourceProfileV1 {
+        network: SccpSolanaSourceNetworkV1::Testnet,
+        network_id: "solana-testnet",
+        proof_backend: SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1,
+        genesis_hash: SCCP_SOLANA_TESTNET_GENESIS_HASH,
+        slots_per_epoch: SCCP_SOLANA_TESTNET_SLOTS_PER_EPOCH,
+        destination_anchor_id: SCCP_SOLANA_TESTNET_DESTINATION_ANCHOR_ID_V1,
+        route_allowlist_id: SCCP_SOLANA_TESTNET_ROUTE_ALLOWLIST_ID_V1,
+        source_trust_anchor_id: SCCP_SOLANA_TESTNET_SOURCE_TRUST_ANCHOR_ID_V1,
+        consensus_verifier_id: SCCP_SOLANA_TESTNET_CONSENSUS_VERIFIER_ID_V1,
+        message_inclusion_verifier_id: SCCP_SOLANA_TESTNET_MESSAGE_INCLUSION_VERIFIER_ID_V1,
+        source_state_verifier_id: SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+        finality_policy_id: SCCP_SOLANA_TESTNET_FINALITY_POLICY_ID_V1,
+        tower_replay_verifier_id: SCCP_SOLANA_TESTNET_TOWER_REPLAY_VERIFIER_ID_V1,
+        full_accountsdb_lattice_verifier_id:
+            SCCP_SOLANA_TESTNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+        bank_fork_choice_verifier_id: SCCP_SOLANA_TESTNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
+        transcript_domain: b"sccp:solana:source-profile:testnet:v1",
+        genesis_public_input_domain: b"sccp:solana:testnet-genesis:v1",
+    };
+
+/// Return the exact network-bound Solana SCCP source profile.
+pub const fn sccp_solana_source_profile_v1(
+    network: SccpSolanaSourceNetworkV1,
+) -> &'static SccpSolanaSourceProfileV1 {
+    match network {
+        SccpSolanaSourceNetworkV1::MainnetBeta => &SCCP_SOLANA_MAINNET_SOURCE_PROFILE_V1,
+        SccpSolanaSourceNetworkV1::Testnet => &SCCP_SOLANA_TESTNET_SOURCE_PROFILE_V1,
+    }
+}
 /// TON mainnet shard-state/light-client recursive verifier profile id for SCCP source proofs.
 pub const SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1: &str =
     "sccp:ton:source-state-verifier:shard-state-light-client-mainnet:v1";
@@ -386,7 +505,6 @@ const SCCP_SOLANA_ACCOUNTS_LT_HASH_PROOF_PUBLIC_INPUTS_PREFIX_V1: &[u8] =
     b"sccp:solana:accounts-lt-proof-public-inputs:v1";
 const SCCP_SOLANA_ACCOUNTS_LT_HASH_OPENED_CONTRIBUTIONS_PREFIX_V1: &[u8] =
     b"sccp:solana:accounts-lt-opened-contributions:v1";
-const SCCP_SOLANA_MAINNET_GENESIS_HASH_PREFIX_V1: &[u8] = b"sccp:solana:mainnet-genesis:v1";
 const SCCP_SOLANA_BANK_HASH_HARD_FORK_DATA_PREFIX_V1: &[u8] =
     b"sccp:solana:bank-hash-hard-fork-data:v1";
 const SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_DSID_PREFIX_V1: &[u8] =
@@ -3457,6 +3575,7 @@ pub enum SccpLaunchModeV1 {
     #[default]
     EthereumMainnetLane,
     BscMainnetLane,
+    SolanaTestnetLane,
     TonMainnetLane,
 }
 
@@ -3833,6 +3952,7 @@ impl_str_json_enum!(SccpLaunchModeV1, "unsupported SCCP launch mode", {
     SccpLaunchModeV1::AllLanesAtOnce => "AllLanesAtOnce",
     SccpLaunchModeV1::EthereumMainnetLane => "EthereumMainnetLane",
     SccpLaunchModeV1::BscMainnetLane => "BscMainnetLane",
+    SccpLaunchModeV1::SolanaTestnetLane => "SolanaTestnetLane",
     SccpLaunchModeV1::TonMainnetLane => "TonMainnetLane",
 });
 
@@ -5311,8 +5431,8 @@ pub fn sccp_evm_mainnet_destination_rollout_with_binding_v1(
     sccp_destination_rollout_is_production_ready(domain, &rollout).then_some(rollout)
 }
 
-/// Build a production-ready Solana destination rollout with immutable ProgramData evidence.
-pub fn sccp_solana_mainnet_destination_rollout_with_live_evidence_v1(
+fn sccp_solana_destination_rollout_with_live_evidence_for_profile_v1(
+    profile: &SccpSolanaSourceProfileV1,
     verifier_identity: String,
     verifier_code_hash: String,
     programdata_address: String,
@@ -5327,6 +5447,7 @@ pub fn sccp_solana_mainnet_destination_rollout_with_live_evidence_v1(
         verifier_code_hash,
         None,
     )?;
+    rollout.anchor_id = Some(profile.destination_anchor_id.to_owned());
     sccp_apply_static_destination_binding(&mut rollout)?;
 
     let programdata_raw = decode_sol_base58_address(programdata_address.as_bytes())?;
@@ -5369,6 +5490,50 @@ pub fn sccp_solana_mainnet_destination_rollout_with_live_evidence_v1(
     rollout.solana_programdata_executable_blake2b256 = Some(encode_0x_lower_hex(&executable_hash));
     rollout.solana_programdata_executable_base64 = Some(programdata_executable_base64);
     sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_SOL, &rollout).then_some(rollout)
+}
+
+/// Build a production-ready Solana mainnet destination rollout with immutable ProgramData evidence.
+pub fn sccp_solana_mainnet_destination_rollout_with_live_evidence_v1(
+    verifier_identity: String,
+    verifier_code_hash: String,
+    programdata_address: String,
+    programdata_slot: String,
+    program_account_context_slot: String,
+    programdata_account_context_slot: String,
+    programdata_executable_base64: String,
+) -> Option<SccpDestinationRolloutV1> {
+    sccp_solana_destination_rollout_with_live_evidence_for_profile_v1(
+        sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::MainnetBeta),
+        verifier_identity,
+        verifier_code_hash,
+        programdata_address,
+        programdata_slot,
+        program_account_context_slot,
+        programdata_account_context_slot,
+        programdata_executable_base64,
+    )
+}
+
+/// Build a production-ready Solana testnet destination rollout with immutable ProgramData evidence.
+pub fn sccp_solana_testnet_destination_rollout_with_live_evidence_v1(
+    verifier_identity: String,
+    verifier_code_hash: String,
+    programdata_address: String,
+    programdata_slot: String,
+    program_account_context_slot: String,
+    programdata_account_context_slot: String,
+    programdata_executable_base64: String,
+) -> Option<SccpDestinationRolloutV1> {
+    sccp_solana_destination_rollout_with_live_evidence_for_profile_v1(
+        sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::Testnet),
+        verifier_identity,
+        verifier_code_hash,
+        programdata_address,
+        programdata_slot,
+        program_account_context_slot,
+        programdata_account_context_slot,
+        programdata_executable_base64,
+    )
 }
 
 /// Build a production-ready TON mainnet destination rollout with live account evidence.
@@ -5487,7 +5652,16 @@ fn sccp_destination_rollout_matches_domain_profile(
     domain: u32,
     rollout: &SccpDestinationRolloutV1,
 ) -> bool {
-    if rollout.anchor_id.as_deref() != sccp_destination_anchor_id_for_domain(domain) {
+    let anchor_matches = if domain == SCCP_DOMAIN_SOL {
+        [
+            SCCP_SOLANA_MAINNET_DESTINATION_ANCHOR_ID_V1,
+            SCCP_SOLANA_TESTNET_DESTINATION_ANCHOR_ID_V1,
+        ]
+        .contains(&rollout.anchor_id.as_deref().unwrap_or_default())
+    } else {
+        rollout.anchor_id.as_deref() == sccp_destination_anchor_id_for_domain(domain)
+    };
+    if !anchor_matches {
         return false;
     }
 
@@ -6195,6 +6369,20 @@ pub fn sccp_profiled_route_allowlist_v1(
     sccp_route_allowlist_is_production_ready(domain, &allowlist).then_some(allowlist)
 }
 
+/// Build a production-ready network-bound Solana route allowlist.
+pub fn sccp_solana_profiled_route_allowlist_v1(
+    network: SccpSolanaSourceNetworkV1,
+    route_allowlist_hash: String,
+) -> Option<SccpRouteAllowlistReadinessV1> {
+    let profile = sccp_solana_source_profile_v1(network);
+    let mut allowlist = sccp_route_allowlist_for_domain(SCCP_DOMAIN_SOL)?;
+    allowlist.route_allowlist_id = Some(profile.route_allowlist_id.to_owned());
+    allowlist.route_allowlist_hash = Some(route_allowlist_hash);
+    allowlist.routes_allowlisted = true;
+    allowlist.blockers.clear();
+    sccp_route_allowlist_is_production_ready(SCCP_DOMAIN_SOL, &allowlist).then_some(allowlist)
+}
+
 /// Return canonical route-allowlist evidence bytes for a fully bound SCCP lane.
 pub fn canonical_sccp_route_allowlist_evidence_bytes_v1(
     domain: u32,
@@ -6861,6 +7049,28 @@ pub fn sccp_profiled_route_allowlist_for_lane_evidence_v1(
     sccp_profiled_route_allowlist_v1(domain, encode_0x_lower_hex(&route_allowlist_hash))
 }
 
+/// Build a network-bound Solana route allowlist from exact governed lane records.
+pub fn sccp_solana_profiled_route_allowlist_for_lane_evidence_v1(
+    network: SccpSolanaSourceNetworkV1,
+    source_verifier_material: &SccpSourceVerifierMaterialV1,
+    source_adapter_deployment: &SccpSourceAdapterEngineDeploymentV1,
+    destination_rollout: &SccpDestinationRolloutV1,
+) -> Option<SccpRouteAllowlistReadinessV1> {
+    let profile = sccp_solana_source_profile_v1(network);
+    if !sccp_solana_source_verifier_material_matches_network_v1(source_verifier_material, network)
+        || destination_rollout.anchor_id.as_deref() != Some(profile.destination_anchor_id)
+    {
+        return None;
+    }
+    let route_allowlist_hash = sccp_route_allowlist_hash_from_deployment_materials_v1(
+        SCCP_DOMAIN_SOL,
+        source_verifier_material,
+        source_adapter_deployment,
+        destination_rollout,
+    )?;
+    sccp_solana_profiled_route_allowlist_v1(network, encode_0x_lower_hex(&route_allowlist_hash))
+}
+
 pub fn sccp_route_allowlist_with_canary_evidence_v1(
     mut allowlist: SccpRouteAllowlistReadinessV1,
     route_canary_evidence_hash: H256,
@@ -7229,7 +7439,16 @@ fn sccp_route_allowlist_matches_domain_profile(
     domain: u32,
     allowlist: &SccpRouteAllowlistReadinessV1,
 ) -> bool {
-    if allowlist.route_allowlist_id.as_deref() != sccp_route_allowlist_id_for_domain(domain) {
+    let allowlist_id_matches = if domain == SCCP_DOMAIN_SOL {
+        [
+            SCCP_SOLANA_MAINNET_ROUTE_ALLOWLIST_ID_V1,
+            SCCP_SOLANA_TESTNET_ROUTE_ALLOWLIST_ID_V1,
+        ]
+        .contains(&allowlist.route_allowlist_id.as_deref().unwrap_or_default())
+    } else {
+        allowlist.route_allowlist_id.as_deref() == sccp_route_allowlist_id_for_domain(domain)
+    };
+    if !allowlist_id_matches {
         return false;
     }
     if !sccp_route_allowlist_canary_summary_fields_match_profile(allowlist) {
@@ -8010,7 +8229,7 @@ fn sccp_source_adapter_deployment_unblocks_production_for_domain(
 ) -> bool {
     match domain {
         SCCP_DOMAIN_SOL => {
-            material.source_state_verifier_id == SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1
+            sccp_solana_source_profile_for_material_v1(material).is_some()
                 && sccp_source_state_verifier_is_production_ready(material)
                 && deployment.source_state_verifier_id == material.source_state_verifier_id
                 && deployment.source_state_verifier_hash == material.source_state_verifier_hash
@@ -8182,19 +8401,36 @@ fn sccp_destination_rollout_matches_source_adapter_engine(
     rollout: &SccpDestinationRolloutV1,
     source_adapter_engine: &SccpSourceAdapterEngineReadinessV1,
 ) -> bool {
-    if domain != SCCP_DOMAIN_TRON {
+    match domain {
+        SCCP_DOMAIN_SOL => sccp_solana_source_profile_for_material_v1(
+            &source_adapter_engine.source_verifier_material,
+        )
+        .is_some_and(|profile| rollout.anchor_id.as_deref() == Some(profile.destination_anchor_id)),
+        SCCP_DOMAIN_TRON => required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+            rollout.destination_network_id.as_deref(),
+        )
+        .is_some_and(|destination_network_id| {
+            destination_network_id
+                == source_adapter_engine
+                    .source_verifier_material
+                    .source_bridge_network_id
+        }),
+        _ => true,
+    }
+}
+
+fn sccp_route_allowlist_matches_source_adapter_engine(
+    domain: u32,
+    allowlist: &SccpRouteAllowlistReadinessV1,
+    source_adapter_engine: &SccpSourceAdapterEngineReadinessV1,
+) -> bool {
+    if domain != SCCP_DOMAIN_SOL {
         return true;
     }
-
-    required_canonical_0x_lower_hex_string_is_nonzero::<32>(
-        rollout.destination_network_id.as_deref(),
-    )
-    .is_some_and(|destination_network_id| {
-        destination_network_id
-            == source_adapter_engine
-                .source_verifier_material
-                .source_bridge_network_id
-    })
+    sccp_solana_source_profile_for_material_v1(&source_adapter_engine.source_verifier_material)
+        .is_some_and(|profile| {
+            allowlist.route_allowlist_id.as_deref() == Some(profile.route_allowlist_id)
+        })
 }
 
 fn sccp_lane_production_readiness_from_components(
@@ -8223,7 +8459,12 @@ fn sccp_lane_production_readiness_from_components(
             &source_adapter_engine,
         );
     let route_allowlist_profile_ready =
-        sccp_route_allowlist_is_production_ready(domain, &route_allowlist);
+        sccp_route_allowlist_is_production_ready(domain, &route_allowlist)
+            && sccp_route_allowlist_matches_source_adapter_engine(
+                domain,
+                &route_allowlist,
+                &source_adapter_engine,
+            );
     let route_allowlist_evidence_bound = if route_allowlist_evidence_required {
         expected_route_allowlist_hash
             .as_ref()
@@ -8478,6 +8719,7 @@ fn sccp_lane_production_ready_under_launch_policy_v1(
         SccpLaunchModeV1::AllLanesAtOnce => all_lanes_ready,
         SccpLaunchModeV1::EthereumMainnetLane => domain == SCCP_DOMAIN_ETH,
         SccpLaunchModeV1::BscMainnetLane => domain == SCCP_DOMAIN_BSC,
+        SccpLaunchModeV1::SolanaTestnetLane => domain == SCCP_DOMAIN_SOL,
         SccpLaunchModeV1::TonMainnetLane => domain == SCCP_DOMAIN_TON,
     }
 }
@@ -9908,19 +10150,22 @@ fn push_sccp_source_adapter_deployment_solana_full_light_client_audit_bytes(
     {
         return;
     }
+    let Some(profile) = sccp_solana_source_profile_for_deployment_v1(deployment) else {
+        return;
+    };
 
     push_u8(out, 1);
     let verifier_hashes = [
         (
-            SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
+            profile.tower_replay_verifier_id,
             deployment.solana_tower_replay_verifier_hash,
         ),
         (
-            SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+            profile.full_accountsdb_lattice_verifier_id,
             deployment.solana_full_accountsdb_lattice_verifier_hash,
         ),
         (
-            SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
+            profile.bank_fork_choice_verifier_id,
             deployment.solana_bank_fork_choice_verifier_hash,
         ),
     ];
@@ -10189,11 +10434,12 @@ pub fn sccp_solana_full_light_client_gate_hash_v1(
     full_accountsdb_lattice_verifier_hash: H256,
     bank_fork_choice_verifier_hash: H256,
 ) -> Option<H256> {
+    let profile = sccp_solana_source_profile_for_material_v1(material)?;
     if material.source_domain != SCCP_DOMAIN_SOL
         || deployment.source_domain != SCCP_DOMAIN_SOL
         || deployment.target_domain != SCCP_DOMAIN_SORA
         || !sccp_source_adapter_engine_deployment_matches_material(material, deployment)
-        || material.source_state_verifier_id != SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1
+        || material.source_state_verifier_id != profile.source_state_verifier_id
         || !sccp_source_state_verifier_is_production_ready(material)
         || !h256_is_nonzero(&tower_replay_verifier_hash)
         || !h256_is_nonzero(&full_accountsdb_lattice_verifier_hash)
@@ -10233,24 +10479,19 @@ pub fn sccp_solana_full_light_client_gate_hash_v1(
         &mut out,
         sccp_proof_finality_model_code(material.finality_model),
     );
-    push_vec(&mut out, SCCP_SOLANA_MAINNET_GENESIS_HASH.as_bytes());
+    if profile.network == SccpSolanaSourceNetworkV1::Testnet {
+        push_vec(&mut out, profile.transcript_domain);
+        push_vec(&mut out, profile.proof_backend.as_bytes());
+    }
+    push_vec(&mut out, profile.genesis_hash.as_bytes());
     out.extend_from_slice(&sccp_source_verifier_material_hash(material));
     out.extend_from_slice(&sccp_source_adapter_engine_deployment_hash(deployment));
     out.extend_from_slice(&deployment.adapter_verifier_vk_hash);
     out.extend_from_slice(&deployment.deployment_receipt_hash);
     let verifier_hashes = [
-        (
-            SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
-            audit_hashes[0],
-        ),
-        (
-            SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
-            audit_hashes[1],
-        ),
-        (
-            SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
-            audit_hashes[2],
-        ),
+        (profile.tower_replay_verifier_id, audit_hashes[0]),
+        (profile.full_accountsdb_lattice_verifier_id, audit_hashes[1]),
+        (profile.bank_fork_choice_verifier_id, audit_hashes[2]),
     ];
     for (verifier_id, verifier_hash) in verifier_hashes {
         push_vec(&mut out, verifier_id.as_bytes());
@@ -12442,7 +12683,8 @@ pub fn sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(
     Some(material)
 }
 
-fn sccp_solana_mainnet_source_verifier_component_hash(
+fn sccp_solana_source_verifier_component_hash(
+    profile: &SccpSolanaSourceProfileV1,
     component_id: &str,
     component_kind: &str,
 ) -> H256 {
@@ -12462,9 +12704,13 @@ fn sccp_solana_mainnet_source_verifier_component_hash(
         &mut out,
         SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.as_bytes(),
     );
-    push_vec(&mut out, SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1.as_bytes());
-    push_vec(&mut out, SCCP_SOLANA_MAINNET_GENESIS_HASH.as_bytes());
-    push_u64(&mut out, SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH);
+    if profile.network == SccpSolanaSourceNetworkV1::Testnet {
+        push_vec(&mut out, profile.transcript_domain);
+        push_vec(&mut out, profile.network_id.as_bytes());
+    }
+    push_vec(&mut out, profile.proof_backend.as_bytes());
+    push_vec(&mut out, profile.genesis_hash.as_bytes());
+    push_u64(&mut out, profile.slots_per_epoch);
     push_u64(&mut out, SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH);
     push_u64(&mut out, SCCP_SOLANA_TOWER_WARMUP_COOLDOWN_RATE_BPS);
     push_u64(&mut out, SCCP_SOLANA_BASIS_POINTS_PER_UNIT);
@@ -12541,45 +12787,65 @@ fn sccp_solana_mainnet_source_verifier_component_hash(
     prefixed_blake2b(b"sccp:solana:source-verifier-material:v1", &out)
 }
 
-pub fn sccp_solana_mainnet_source_verifier_material_v1() -> Option<SccpSourceVerifierMaterialV1> {
+fn sccp_solana_source_verifier_material_for_profile_v1(
+    profile: &SccpSolanaSourceProfileV1,
+) -> Option<SccpSourceVerifierMaterialV1> {
     let mut material = sccp_source_verifier_material_for_domain(SCCP_DOMAIN_SOL)?;
     material.placeholder_material = false;
-    material.source_trust_anchor_id = SCCP_SOLANA_MAINNET_SOURCE_TRUST_ANCHOR_ID_V1.to_owned();
-    material.source_trust_anchor_hash = sccp_solana_mainnet_source_verifier_component_hash(
+    material.source_trust_anchor_id = profile.source_trust_anchor_id.to_owned();
+    material.source_trust_anchor_hash = sccp_solana_source_verifier_component_hash(
+        profile,
         &material.source_trust_anchor_id,
         "source-trust-anchor",
     );
-    material.consensus_verifier_id = SCCP_SOLANA_MAINNET_CONSENSUS_VERIFIER_ID_V1.to_owned();
-    material.consensus_verifier_hash = sccp_solana_mainnet_source_verifier_component_hash(
+    material.consensus_verifier_id = profile.consensus_verifier_id.to_owned();
+    material.consensus_verifier_hash = sccp_solana_source_verifier_component_hash(
+        profile,
         &material.consensus_verifier_id,
         "consensus-verifier",
     );
-    material.message_inclusion_verifier_id =
-        SCCP_SOLANA_MAINNET_MESSAGE_INCLUSION_VERIFIER_ID_V1.to_owned();
-    material.message_inclusion_verifier_hash = sccp_solana_mainnet_source_verifier_component_hash(
+    material.message_inclusion_verifier_id = profile.message_inclusion_verifier_id.to_owned();
+    material.message_inclusion_verifier_hash = sccp_solana_source_verifier_component_hash(
+        profile,
         &material.message_inclusion_verifier_id,
         "message-inclusion-verifier",
     );
-    material.source_state_verifier_id = SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1.to_owned();
-    material.source_state_verifier_hash = sccp_solana_mainnet_source_verifier_component_hash(
+    material.source_state_verifier_id = profile.source_state_verifier_id.to_owned();
+    material.source_state_verifier_hash = sccp_solana_source_verifier_component_hash(
+        profile,
         &material.source_state_verifier_id,
         "source-state-verifier",
     );
-    material.finality_policy_id = SCCP_SOLANA_MAINNET_FINALITY_POLICY_ID_V1.to_owned();
-    material.finality_policy_hash = sccp_solana_mainnet_source_verifier_component_hash(
+    material.finality_policy_id = profile.finality_policy_id.to_owned();
+    material.finality_policy_hash = sccp_solana_source_verifier_component_hash(
+        profile,
         &material.finality_policy_id,
         "finality-policy",
     );
     Some(material)
 }
 
-pub fn sccp_solana_mainnet_source_verifier_material_with_hashes_v1(
+pub fn sccp_solana_mainnet_source_verifier_material_v1() -> Option<SccpSourceVerifierMaterialV1> {
+    sccp_solana_source_verifier_material_for_profile_v1(sccp_solana_source_profile_v1(
+        SccpSolanaSourceNetworkV1::MainnetBeta,
+    ))
+}
+
+/// Build the Solana testnet source verifier profile template.
+pub fn sccp_solana_testnet_source_verifier_material_v1() -> Option<SccpSourceVerifierMaterialV1> {
+    sccp_solana_source_verifier_material_for_profile_v1(sccp_solana_source_profile_v1(
+        SccpSolanaSourceNetworkV1::Testnet,
+    ))
+}
+
+fn sccp_solana_source_verifier_material_with_hashes_for_profile_v1(
+    profile: &SccpSolanaSourceProfileV1,
     source_trust_anchor_hash: H256,
     consensus_verifier_hash: H256,
     message_inclusion_verifier_hash: H256,
     finality_policy_hash: H256,
 ) -> Option<SccpSourceVerifierMaterialV1> {
-    let mut material = sccp_solana_mainnet_source_verifier_material_v1()?;
+    let mut material = sccp_solana_source_verifier_material_for_profile_v1(profile)?;
     if !sccp_source_verifier_deployed_role_hashes_are_valid(
         &material,
         source_trust_anchor_hash,
@@ -12596,6 +12862,37 @@ pub fn sccp_solana_mainnet_source_verifier_material_with_hashes_v1(
     Some(material)
 }
 
+pub fn sccp_solana_mainnet_source_verifier_material_with_hashes_v1(
+    source_trust_anchor_hash: H256,
+    consensus_verifier_hash: H256,
+    message_inclusion_verifier_hash: H256,
+    finality_policy_hash: H256,
+) -> Option<SccpSourceVerifierMaterialV1> {
+    sccp_solana_source_verifier_material_with_hashes_for_profile_v1(
+        sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::MainnetBeta),
+        source_trust_anchor_hash,
+        consensus_verifier_hash,
+        message_inclusion_verifier_hash,
+        finality_policy_hash,
+    )
+}
+
+/// Build governed Solana testnet source verifier material from role-separated hashes.
+pub fn sccp_solana_testnet_source_verifier_material_with_hashes_v1(
+    source_trust_anchor_hash: H256,
+    consensus_verifier_hash: H256,
+    message_inclusion_verifier_hash: H256,
+    finality_policy_hash: H256,
+) -> Option<SccpSourceVerifierMaterialV1> {
+    sccp_solana_source_verifier_material_with_hashes_for_profile_v1(
+        sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::Testnet),
+        source_trust_anchor_hash,
+        consensus_verifier_hash,
+        message_inclusion_verifier_hash,
+        finality_policy_hash,
+    )
+}
+
 pub fn sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
     source_trust_anchor_hash: H256,
     consensus_verifier_hash: H256,
@@ -12604,6 +12901,27 @@ pub fn sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_
     finality_policy_hash: H256,
 ) -> Option<SccpSourceVerifierMaterialV1> {
     let mut material = sccp_solana_mainnet_source_verifier_material_with_hashes_v1(
+        source_trust_anchor_hash,
+        consensus_verifier_hash,
+        message_inclusion_verifier_hash,
+        finality_policy_hash,
+    )?;
+    if !sccp_deployed_hash_is_distinct_from_material_roles(&source_state_verifier_hash, &material) {
+        return None;
+    }
+    material.source_state_verifier_hash = source_state_verifier_hash;
+    Some(material)
+}
+
+/// Build governed Solana testnet source verifier material including AccountsDB verifier hash.
+pub fn sccp_solana_testnet_source_verifier_material_with_hashes_and_accounts_db_v1(
+    source_trust_anchor_hash: H256,
+    consensus_verifier_hash: H256,
+    message_inclusion_verifier_hash: H256,
+    source_state_verifier_hash: H256,
+    finality_policy_hash: H256,
+) -> Option<SccpSourceVerifierMaterialV1> {
+    let mut material = sccp_solana_testnet_source_verifier_material_with_hashes_v1(
         source_trust_anchor_hash,
         consensus_verifier_hash,
         message_inclusion_verifier_hash,
@@ -12895,6 +13213,93 @@ fn sccp_source_state_verifier_required(source_domain: u32) -> bool {
     matches!(source_domain, SCCP_DOMAIN_SOL | SCCP_DOMAIN_TON)
 }
 
+fn sccp_solana_source_profile_ids_match(
+    profile: &SccpSolanaSourceProfileV1,
+    source_trust_anchor_id: &str,
+    consensus_verifier_id: &str,
+    message_inclusion_verifier_id: &str,
+    source_state_verifier_id: &str,
+    finality_policy_id: &str,
+) -> bool {
+    source_trust_anchor_id == profile.source_trust_anchor_id
+        && consensus_verifier_id == profile.consensus_verifier_id
+        && message_inclusion_verifier_id == profile.message_inclusion_verifier_id
+        && source_state_verifier_id == profile.source_state_verifier_id
+        && finality_policy_id == profile.finality_policy_id
+}
+
+fn sccp_solana_source_profile_for_ids(
+    source_trust_anchor_id: &str,
+    consensus_verifier_id: &str,
+    message_inclusion_verifier_id: &str,
+    source_state_verifier_id: &str,
+    finality_policy_id: &str,
+) -> Option<&'static SccpSolanaSourceProfileV1> {
+    [
+        sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::MainnetBeta),
+        sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::Testnet),
+    ]
+    .into_iter()
+    .find(|profile| {
+        sccp_solana_source_profile_ids_match(
+            profile,
+            source_trust_anchor_id,
+            consensus_verifier_id,
+            message_inclusion_verifier_id,
+            source_state_verifier_id,
+            finality_policy_id,
+        )
+    })
+}
+
+/// Resolve a Solana source profile only when every governed role id belongs to one network.
+pub fn sccp_solana_source_profile_for_material_v1(
+    material: &SccpSourceVerifierMaterialV1,
+) -> Option<&'static SccpSolanaSourceProfileV1> {
+    (material.source_domain == SCCP_DOMAIN_SOL
+        && material.source_chain == "sol"
+        && material.source_proof_plan == SccpSourceProofPlanV1::SolanaFinalizedTransactionProof
+        && material.finality_model == SccpProofFinalityModelV1::SolanaFinalizedSlot)
+        .then(|| {
+            sccp_solana_source_profile_for_ids(
+                &material.source_trust_anchor_id,
+                &material.consensus_verifier_id,
+                &material.message_inclusion_verifier_id,
+                &material.source_state_verifier_id,
+                &material.finality_policy_id,
+            )
+        })
+        .flatten()
+}
+
+fn sccp_solana_source_profile_for_deployment_v1(
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<&'static SccpSolanaSourceProfileV1> {
+    (deployment.source_domain == SCCP_DOMAIN_SOL
+        && deployment.source_chain == "sol"
+        && deployment.source_proof_plan == SccpSourceProofPlanV1::SolanaFinalizedTransactionProof
+        && deployment.finality_model == SccpProofFinalityModelV1::SolanaFinalizedSlot)
+        .then(|| {
+            sccp_solana_source_profile_for_ids(
+                &deployment.source_trust_anchor_id,
+                &deployment.consensus_verifier_id,
+                &deployment.message_inclusion_verifier_id,
+                &deployment.source_state_verifier_id,
+                &deployment.finality_policy_id,
+            )
+        })
+        .flatten()
+}
+
+/// Return whether governed material is bound to the requested Solana source network.
+pub fn sccp_solana_source_verifier_material_matches_network_v1(
+    material: &SccpSourceVerifierMaterialV1,
+    network: SccpSolanaSourceNetworkV1,
+) -> bool {
+    sccp_solana_source_profile_for_material_v1(material)
+        .is_some_and(|profile| profile.network == network)
+}
+
 fn sccp_source_state_verifier_id_for_domain(source_domain: u32) -> Option<&'static str> {
     match source_domain {
         SCCP_DOMAIN_SOL => Some(SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1),
@@ -12930,6 +13335,16 @@ fn sccp_source_verifier_profile_template_for_domain(
     }
 }
 
+fn sccp_source_verifier_profile_template_for_material(
+    material: &SccpSourceVerifierMaterialV1,
+) -> Option<SccpSourceVerifierMaterialV1> {
+    if material.source_domain == SCCP_DOMAIN_SOL {
+        let profile = sccp_solana_source_profile_for_material_v1(material)?;
+        return sccp_solana_source_verifier_material_for_profile_v1(profile);
+    }
+    sccp_source_verifier_profile_template_for_domain(material.source_domain)
+}
+
 fn sccp_source_verifier_template_component_hashes(
     template: &SccpSourceVerifierMaterialV1,
 ) -> [H256; 8] {
@@ -12957,13 +13372,16 @@ fn sccp_hash_reuses_template_source_verifier_component(
 
 fn sccp_hash_reuses_any_profile_template_component(hash: &H256) -> bool {
     h256_is_nonzero(hash)
-        && SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1
+        && (SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1
             .iter()
             .any(|domain| {
                 sccp_source_verifier_profile_template_for_domain(*domain).is_some_and(|template| {
                     sccp_hash_reuses_template_source_verifier_component(hash, &template)
                 })
             })
+            || sccp_solana_testnet_source_verifier_material_v1().is_some_and(|template| {
+                sccp_hash_reuses_template_source_verifier_component(hash, &template)
+            }))
 }
 
 fn sccp_hash_reuses_any_builtin_placeholder_component(hash: &H256) -> bool {
@@ -13037,19 +13455,15 @@ fn sccp_deployed_hash_is_distinct_from_material_roles(
 
 fn sccp_source_state_verifier_is_production_ready(material: &SccpSourceVerifierMaterialV1) -> bool {
     if sccp_source_state_verifier_required(material.source_domain) {
-        let Some(expected_id) = sccp_source_state_verifier_id_for_domain(material.source_domain)
-        else {
-            return false;
-        };
         let template = match material.source_domain {
-            SCCP_DOMAIN_SOL => sccp_solana_mainnet_source_verifier_material_v1(),
+            SCCP_DOMAIN_SOL => sccp_source_verifier_profile_template_for_material(material),
             SCCP_DOMAIN_TON => sccp_ton_mainnet_source_verifier_material_v1(),
             _ => None,
         };
         let Some(template) = template else {
             return false;
         };
-        material.source_state_verifier_id == expected_id
+        material.source_state_verifier_id == template.source_state_verifier_id
             && h256_is_nonzero(&material.source_state_verifier_hash)
             && material.source_state_verifier_hash != template.source_state_verifier_hash
     } else {
@@ -13330,7 +13744,7 @@ pub fn sccp_source_verifier_material_uses_builtin_placeholder_components(
 fn sccp_source_verifier_material_reuses_profile_template_component_hashes(
     material: &SccpSourceVerifierMaterialV1,
 ) -> bool {
-    sccp_source_verifier_profile_template_for_domain(material.source_domain).is_none()
+    sccp_source_verifier_profile_template_for_material(material).is_none()
         || sccp_source_verifier_hashes_reuse_any_profile_template_components(&[
             material.source_trust_anchor_hash,
             material.consensus_verifier_hash,
@@ -13367,7 +13781,7 @@ fn sccp_source_verifier_material_matches_profile_template_with_deployed_hashes(
 fn sccp_source_verifier_material_matches_domain_profile(
     material: &SccpSourceVerifierMaterialV1,
 ) -> bool {
-    let template = sccp_source_verifier_profile_template_for_domain(material.source_domain);
+    let template = sccp_source_verifier_profile_template_for_material(material);
     let Some(template) = template else {
         return false;
     };
@@ -13978,8 +14392,23 @@ fn source_verifier_evidence_source_state_shape_is_valid(
         return fields_are_empty;
     }
 
-    let Some(expected_id) = sccp_source_state_verifier_id_for_domain(evidence.source_domain) else {
-        return false;
+    let expected_id = if evidence.source_domain == SCCP_DOMAIN_SOL {
+        let Some(profile) = sccp_solana_source_profile_for_ids(
+            &evidence.source_trust_anchor_id,
+            &evidence.consensus_verifier_id,
+            &evidence.message_inclusion_verifier_id,
+            &evidence.source_state_verifier_id,
+            &evidence.finality_policy_id,
+        ) else {
+            return false;
+        };
+        profile.source_state_verifier_id
+    } else {
+        let Some(expected_id) = sccp_source_state_verifier_id_for_domain(evidence.source_domain)
+        else {
+            return false;
+        };
+        expected_id
     };
     let fields_have_expected_shape = evidence.source_state_verifier_id == expected_id
         && h256_is_nonzero(&evidence.source_state_verifier_hash);
@@ -14625,7 +15054,13 @@ fn source_adapter_deployment_has_standalone_valid_shape(
 
     let source_state_verifier_is_valid =
         if sccp_source_state_verifier_required(deployment.source_domain) {
-            sccp_source_state_verifier_id_for_domain(deployment.source_domain)
+            let expected_id = if deployment.source_domain == SCCP_DOMAIN_SOL {
+                sccp_solana_source_profile_for_deployment_v1(deployment)
+                    .map(|profile| profile.source_state_verifier_id)
+            } else {
+                sccp_source_state_verifier_id_for_domain(deployment.source_domain)
+            };
+            expected_id
                 .is_some_and(|expected_id| deployment.source_state_verifier_id == expected_id)
                 && h256_is_nonzero(&deployment.source_state_verifier_hash)
         } else {
@@ -28496,6 +28931,7 @@ pub fn sccp_solana_agave_bank_hash(
 }
 
 fn canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_checked(
+    profile: &SccpSolanaSourceProfileV1,
     source_domain: u32,
     finalized_slot: u64,
     parent_slot: u64,
@@ -28525,7 +28961,7 @@ fn canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_checked(
             return None;
         }
     }
-    let epoch = sccp_solana_mainnet_epoch_for_slot(finalized_slot);
+    let epoch = finalized_slot / profile.slots_per_epoch;
     let bank_fork_hash = sccp_solana_bank_fork_hash(
         epoch,
         finalized_slot,
@@ -28543,8 +28979,11 @@ fn canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_checked(
     let mut out = Vec::new();
     push_u8(&mut out, 1);
     push_u32(&mut out, source_domain);
-    push_vec(&mut out, SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1.as_bytes());
-    push_vec(&mut out, SCCP_SOLANA_MAINNET_GENESIS_HASH.as_bytes());
+    if profile.network == SccpSolanaSourceNetworkV1::Testnet {
+        push_vec(&mut out, profile.transcript_domain);
+    }
+    push_vec(&mut out, profile.proof_backend.as_bytes());
+    push_vec(&mut out, profile.genesis_hash.as_bytes());
     push_u64(&mut out, epoch);
     push_u64(&mut out, finalized_slot);
     push_u64(&mut out, parent_slot);
@@ -28575,6 +29014,39 @@ pub fn canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes(
     bank_hash_hard_fork_data: &[u8],
 ) -> Option<Vec<u8>> {
     canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_checked(
+        sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::MainnetBeta),
+        source_domain,
+        finalized_slot,
+        parent_slot,
+        bank_signature_count,
+        parent_bank_hash,
+        bank_hash,
+        blockhash,
+        transaction_status_root,
+        account_inclusion_root,
+        accounts_lt_hash_checksum,
+        bank_hash_hard_fork_data,
+        None,
+    )
+}
+
+/// Canonical network-bound public inputs for a recursive Solana AccountsDB proof.
+pub fn canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_for_network_v1(
+    network: SccpSolanaSourceNetworkV1,
+    source_domain: u32,
+    finalized_slot: u64,
+    parent_slot: u64,
+    bank_signature_count: u64,
+    parent_bank_hash: H256,
+    bank_hash: H256,
+    blockhash: H256,
+    transaction_status_root: H256,
+    account_inclusion_root: H256,
+    accounts_lt_hash_checksum: H256,
+    bank_hash_hard_fork_data: &[u8],
+) -> Option<Vec<u8>> {
+    canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_checked(
+        sccp_solana_source_profile_v1(network),
         source_domain,
         finalized_slot,
         parent_slot,
@@ -28607,6 +29079,40 @@ pub fn sccp_solana_accounts_lt_hash_proof_public_inputs_hash(
     Some(prefixed_blake2b(
         SCCP_SOLANA_ACCOUNTS_LT_HASH_PROOF_PUBLIC_INPUTS_PREFIX_V1,
         &canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes(
+            source_domain,
+            finalized_slot,
+            parent_slot,
+            bank_signature_count,
+            parent_bank_hash,
+            bank_hash,
+            blockhash,
+            transaction_status_root,
+            account_inclusion_root,
+            accounts_lt_hash_checksum,
+            bank_hash_hard_fork_data,
+        )?,
+    ))
+}
+
+/// Hash the network-bound recursive Solana AccountsDB proof public-input transcript.
+pub fn sccp_solana_accounts_lt_hash_proof_public_inputs_hash_for_network_v1(
+    network: SccpSolanaSourceNetworkV1,
+    source_domain: u32,
+    finalized_slot: u64,
+    parent_slot: u64,
+    bank_signature_count: u64,
+    parent_bank_hash: H256,
+    bank_hash: H256,
+    blockhash: H256,
+    transaction_status_root: H256,
+    account_inclusion_root: H256,
+    accounts_lt_hash_checksum: H256,
+    bank_hash_hard_fork_data: &[u8],
+) -> Option<H256> {
+    Some(prefixed_blake2b(
+        SCCP_SOLANA_ACCOUNTS_LT_HASH_PROOF_PUBLIC_INPUTS_PREFIX_V1,
+        &canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_for_network_v1(
+            network,
             source_domain,
             finalized_slot,
             parent_slot,
@@ -30094,8 +30600,19 @@ pub fn sccp_solana_tower_replay_hash(
 pub fn canonical_sccp_solana_accounts_lt_hash_verification_statement_bytes(
     adapter: &SccpSolanaFinalizedSourceProofV1,
 ) -> Option<Vec<u8>> {
+    canonical_sccp_solana_accounts_lt_hash_verification_statement_bytes_for_profile(
+        adapter,
+        sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::MainnetBeta),
+    )
+}
+
+fn canonical_sccp_solana_accounts_lt_hash_verification_statement_bytes_for_profile(
+    adapter: &SccpSolanaFinalizedSourceProofV1,
+    profile: &SccpSolanaSourceProfileV1,
+) -> Option<Vec<u8>> {
     let context = &adapter.finality_context;
     canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_checked(
+        profile,
         adapter.source_domain,
         adapter.finalized_slot,
         context.parent_slot,
@@ -30401,19 +30918,28 @@ fn sccp_word_i32_le(value: i32) -> H256 {
     out
 }
 
+#[cfg(test)]
 fn sccp_solana_mainnet_genesis_hash_public_input() -> H256 {
+    sccp_solana_genesis_hash_public_input(sccp_solana_source_profile_v1(
+        SccpSolanaSourceNetworkV1::MainnetBeta,
+    ))
+}
+
+fn sccp_solana_genesis_hash_public_input(profile: &SccpSolanaSourceProfileV1) -> H256 {
     prefixed_blake2b(
-        SCCP_SOLANA_MAINNET_GENESIS_HASH_PREFIX_V1,
-        SCCP_SOLANA_MAINNET_GENESIS_HASH.as_bytes(),
+        profile.genesis_public_input_domain,
+        profile.genesis_hash.as_bytes(),
     )
 }
 
 fn sccp_solana_accounts_lt_hash_public_input_columns(
     adapter: &SccpSolanaFinalizedSourceProofV1,
+    material: &SccpSourceVerifierMaterialV1,
 ) -> Option<Vec<Vec<[u8; 32]>>> {
+    let profile = sccp_solana_source_profile_for_material_v1(material)?;
     Some(vec![
         vec![sccp_word_u32_le(adapter.source_domain)],
-        vec![sccp_solana_mainnet_genesis_hash_public_input()],
+        vec![sccp_solana_genesis_hash_public_input(profile)],
         vec![sccp_word_u64_le(adapter.finalized_slot)],
         vec![sccp_word_u64_le(adapter.finality_context.parent_slot)],
         vec![sccp_word_u64_le(
@@ -30443,6 +30969,8 @@ fn sccp_solana_accounts_lt_hash_open_verify_schema_descriptor(
     adapter: &SccpSolanaFinalizedSourceProofV1,
     material: &SccpSourceVerifierMaterialV1,
 ) -> Vec<u8> {
+    let profile = sccp_solana_source_profile_for_material_v1(material)
+        .expect("Solana source material profile is validated before schema construction");
     let mut descriptor = Vec::new();
     push_u8(&mut descriptor, 1);
     push_vec(
@@ -30453,7 +30981,11 @@ fn sccp_solana_accounts_lt_hash_open_verify_schema_descriptor(
         &mut descriptor,
         SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1.as_bytes(),
     );
-    push_vec(&mut descriptor, SCCP_SOLANA_MAINNET_GENESIS_HASH.as_bytes());
+    if profile.network == SccpSolanaSourceNetworkV1::Testnet {
+        push_vec(&mut descriptor, profile.transcript_domain);
+        push_vec(&mut descriptor, profile.proof_backend.as_bytes());
+    }
+    push_vec(&mut descriptor, profile.genesis_hash.as_bytes());
     push_u32(&mut descriptor, adapter.source_domain);
     push_vec(&mut descriptor, b"source_state_verifier_id");
     push_vec(
@@ -30462,9 +30994,13 @@ fn sccp_solana_accounts_lt_hash_open_verify_schema_descriptor(
     );
     push_vec(&mut descriptor, b"source_state_verifier_hash");
     descriptor.extend_from_slice(&material.source_state_verifier_hash);
+    let genesis_input_name = match profile.network {
+        SccpSolanaSourceNetworkV1::MainnetBeta => "mainnet_genesis_hash",
+        SccpSolanaSourceNetworkV1::Testnet => "testnet_genesis_hash",
+    };
     for required_input in [
         "source_domain",
-        "mainnet_genesis_hash",
+        genesis_input_name,
         "finalized_slot",
         "parent_slot",
         "bank_signature_count",
@@ -30509,16 +31045,20 @@ fn build_sccp_solana_accounts_lt_hash_fastpq_batch(
     adapter: &SccpSolanaFinalizedSourceProofV1,
     material: &SccpSourceVerifierMaterialV1,
 ) -> Option<FastpqTransitionBatch> {
+    let profile = sccp_solana_source_profile_for_material_v1(material)?;
     if adapter.source_domain != SCCP_DOMAIN_SOL
         || material.source_domain != SCCP_DOMAIN_SOL
-        || material.source_state_verifier_id != SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1
+        || material.source_state_verifier_id != profile.source_state_verifier_id
         || !h256_is_nonzero(&material.source_state_verifier_hash)
         || !sccp_source_state_verifier_is_production_ready(material)
         || !verify_sccp_solana_finality_context_shape(adapter)
     {
         return None;
     }
-    let statement = canonical_sccp_solana_accounts_lt_hash_verification_statement_bytes(adapter)?;
+    let statement =
+        canonical_sccp_solana_accounts_lt_hash_verification_statement_bytes_for_profile(
+            adapter, profile,
+        )?;
     let expected_public_inputs_hash = prefixed_blake2b(
         SCCP_SOLANA_ACCOUNTS_LT_HASH_PROOF_PUBLIC_INPUTS_PREFIX_V1,
         &statement,
@@ -30582,7 +31122,8 @@ pub fn build_sccp_solana_accounts_lt_hash_verification_proof(
             .prove(&batch)
             .ok()
             .and_then(|proof| to_bytes(&proof).ok())?;
-    let Some(public_inputs) = sccp_solana_accounts_lt_hash_public_input_columns(adapter) else {
+    let Some(public_inputs) = sccp_solana_accounts_lt_hash_public_input_columns(adapter, material)
+    else {
         return None;
     };
     let open = StarkFriOpenProofV1 {
@@ -30634,7 +31175,8 @@ fn verify_sccp_solana_accounts_lt_hash_verification_proof(
     else {
         return false;
     };
-    let Some(expected_public_inputs) = sccp_solana_accounts_lt_hash_public_input_columns(adapter)
+    let Some(expected_public_inputs) =
+        sccp_solana_accounts_lt_hash_public_input_columns(adapter, material)
     else {
         return false;
     };
@@ -30676,13 +31218,11 @@ impl SccpSolanaFullLightClientAuditRoleV1 {
         }
     }
 
-    fn verifier_id(self) -> &'static str {
+    fn verifier_id(self, profile: &SccpSolanaSourceProfileV1) -> &'static str {
         match self {
-            Self::TowerReplay => SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
-            Self::FullAccountsDbLattice => {
-                SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1
-            }
-            Self::BankForkChoice => SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
+            Self::TowerReplay => profile.tower_replay_verifier_id,
+            Self::FullAccountsDbLattice => profile.full_accountsdb_lattice_verifier_id,
+            Self::BankForkChoice => profile.bank_fork_choice_verifier_id,
         }
     }
 
@@ -30785,8 +31325,10 @@ fn sccp_solana_accounts_lt_hash_proof_hash(
 
 fn canonical_sccp_solana_full_light_client_audit_statement_bytes(
     adapter: &SccpSolanaFinalizedSourceProofV1,
+    material: &SccpSourceVerifierMaterialV1,
     role: SccpSolanaFullLightClientAuditRoleV1,
 ) -> Option<Vec<u8>> {
+    let profile = sccp_solana_source_profile_for_material_v1(material)?;
     if adapter.source_domain != SCCP_DOMAIN_SOL
         || !verify_sccp_solana_finality_context_shape(adapter)
     {
@@ -30800,8 +31342,11 @@ fn canonical_sccp_solana_full_light_client_audit_statement_bytes(
     push_u8(&mut out, 1);
     push_u8(&mut out, role.code());
     push_vec(&mut out, role.circuit_id().as_bytes());
-    push_vec(&mut out, SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1.as_bytes());
-    push_vec(&mut out, SCCP_SOLANA_MAINNET_GENESIS_HASH.as_bytes());
+    if profile.network == SccpSolanaSourceNetworkV1::Testnet {
+        push_vec(&mut out, profile.transcript_domain);
+    }
+    push_vec(&mut out, profile.proof_backend.as_bytes());
+    push_vec(&mut out, profile.genesis_hash.as_bytes());
     push_u32(&mut out, adapter.source_domain);
     push_u64(&mut out, context.epoch);
     push_u64(&mut out, adapter.finalized_slot);
@@ -30861,11 +31406,12 @@ fn canonical_sccp_solana_full_light_client_audit_statement_bytes(
 
 fn sccp_solana_full_light_client_audit_statement_hash(
     adapter: &SccpSolanaFinalizedSourceProofV1,
+    material: &SccpSourceVerifierMaterialV1,
     role: SccpSolanaFullLightClientAuditRoleV1,
 ) -> Option<H256> {
     Some(prefixed_blake2b(
         SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_STATEMENT_PREFIX_V1,
-        &canonical_sccp_solana_full_light_client_audit_statement_bytes(adapter, role)?,
+        &canonical_sccp_solana_full_light_client_audit_statement_bytes(adapter, material, role)?,
     ))
 }
 
@@ -30889,7 +31435,8 @@ fn sccp_solana_full_light_client_audit_role_request_hashes_are_separated(
     else {
         return false;
     };
-    let Some(statement_hash) = sccp_solana_full_light_client_audit_statement_hash(adapter, role)
+    let Some(statement_hash) =
+        sccp_solana_full_light_client_audit_statement_hash(adapter, material, role)
     else {
         return false;
     };
@@ -30962,11 +31509,13 @@ fn sccp_solana_full_light_client_audit_public_input_columns(
     let deployment_hash = sccp_source_adapter_engine_deployment_hash(deployment);
     let material_hash = sccp_source_verifier_material_hash(material);
     let verifier_hash = role.verifier_hash(deployment);
-    let statement_hash = sccp_solana_full_light_client_audit_statement_hash(adapter, role)?;
+    let profile = sccp_solana_source_profile_for_material_v1(material)?;
+    let statement_hash =
+        sccp_solana_full_light_client_audit_statement_hash(adapter, material, role)?;
     let mut columns = vec![
         vec![sccp_word_u8(role.code())],
         vec![sccp_word_u32_le(adapter.source_domain)],
-        vec![sccp_solana_mainnet_genesis_hash_public_input()],
+        vec![sccp_solana_genesis_hash_public_input(profile)],
         vec![sccp_word_u64_le(adapter.finalized_slot)],
         vec![sccp_solana_finality_context_hash(&adapter.finality_context)],
         vec![statement_hash],
@@ -30992,9 +31541,11 @@ fn sccp_solana_full_light_client_audit_public_input_columns(
 
 fn sccp_solana_full_light_client_audit_fastpq_public_inputs(
     adapter: &SccpSolanaFinalizedSourceProofV1,
+    material: &SccpSourceVerifierMaterialV1,
     role: SccpSolanaFullLightClientAuditRoleV1,
 ) -> Option<FastpqPublicInputs> {
-    let statement_hash = sccp_solana_full_light_client_audit_statement_hash(adapter, role)?;
+    let statement_hash =
+        sccp_solana_full_light_client_audit_statement_hash(adapter, material, role)?;
     let mut dsid_preimage = Vec::new();
     push_u8(&mut dsid_preimage, role.code());
     dsid_preimage.extend_from_slice(&statement_hash);
@@ -31038,6 +31589,7 @@ fn canonical_sccp_solana_full_light_client_audit_context_bytes(
     deployment: &SccpSourceAdapterEngineDeploymentV1,
     role: SccpSolanaFullLightClientAuditRoleV1,
 ) -> Option<Vec<u8>> {
+    let profile = sccp_solana_source_profile_for_material_v1(material)?;
     let gate_hash =
         sccp_solana_full_light_client_gate_hash_from_deployment_v1(material, deployment)?;
     let verifier_hash = role.verifier_hash(deployment);
@@ -31052,7 +31604,7 @@ fn canonical_sccp_solana_full_light_client_audit_context_bytes(
         &mut out,
         SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1.as_bytes(),
     );
-    push_vec(&mut out, role.verifier_id().as_bytes());
+    push_vec(&mut out, role.verifier_id(profile).as_bytes());
     out.extend_from_slice(&verifier_hash);
     out.extend_from_slice(&sccp_source_verifier_material_hash(material));
     out.extend_from_slice(&sccp_source_adapter_engine_deployment_hash(deployment));
@@ -31061,7 +31613,7 @@ fn canonical_sccp_solana_full_light_client_audit_context_bytes(
         &adapter.finality_context,
     ));
     out.extend_from_slice(&sccp_solana_full_light_client_audit_statement_hash(
-        adapter, role,
+        adapter, material, role,
     )?);
     Some(out)
 }
@@ -31072,6 +31624,7 @@ fn sccp_solana_full_light_client_audit_open_verify_schema_descriptor(
     deployment: &SccpSourceAdapterEngineDeploymentV1,
     role: SccpSolanaFullLightClientAuditRoleV1,
 ) -> Option<Vec<u8>> {
+    let profile = sccp_solana_source_profile_for_material_v1(material)?;
     let gate_hash =
         sccp_solana_full_light_client_gate_hash_from_deployment_v1(material, deployment)?;
     let verifier_hash = role.verifier_hash(deployment);
@@ -31086,10 +31639,14 @@ fn sccp_solana_full_light_client_audit_open_verify_schema_descriptor(
         &mut descriptor,
         SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1.as_bytes(),
     );
-    push_vec(&mut descriptor, SCCP_SOLANA_MAINNET_GENESIS_HASH.as_bytes());
+    if profile.network == SccpSolanaSourceNetworkV1::Testnet {
+        push_vec(&mut descriptor, profile.transcript_domain);
+        push_vec(&mut descriptor, profile.proof_backend.as_bytes());
+    }
+    push_vec(&mut descriptor, profile.genesis_hash.as_bytes());
     push_u32(&mut descriptor, adapter.source_domain);
     push_vec(&mut descriptor, b"verifier_id");
-    push_vec(&mut descriptor, role.verifier_id().as_bytes());
+    push_vec(&mut descriptor, role.verifier_id(profile).as_bytes());
     push_vec(&mut descriptor, b"verifier_hash");
     descriptor.extend_from_slice(&verifier_hash);
     push_vec(&mut descriptor, b"source_verifier_material_hash");
@@ -31098,10 +31655,14 @@ fn sccp_solana_full_light_client_audit_open_verify_schema_descriptor(
     descriptor.extend_from_slice(&sccp_source_adapter_engine_deployment_hash(deployment));
     push_vec(&mut descriptor, b"full_light_client_gate_hash");
     descriptor.extend_from_slice(&gate_hash);
+    let genesis_input_name = match profile.network {
+        SccpSolanaSourceNetworkV1::MainnetBeta => "mainnet_genesis_hash",
+        SccpSolanaSourceNetworkV1::Testnet => "testnet_genesis_hash",
+    };
     for required_input in [
         "role",
         "source_domain",
-        "mainnet_genesis_hash",
+        genesis_input_name,
         "finalized_slot",
         "finality_context_hash",
         "audit_statement_hash",
@@ -31129,6 +31690,7 @@ fn build_sccp_solana_full_light_client_audit_fastpq_batch(
     deployment: &SccpSourceAdapterEngineDeploymentV1,
     role: SccpSolanaFullLightClientAuditRoleV1,
 ) -> Option<FastpqTransitionBatch> {
+    sccp_solana_source_profile_for_material_v1(material)?;
     if adapter.source_domain != SCCP_DOMAIN_SOL
         || material.source_domain != SCCP_DOMAIN_SOL
         || deployment.source_domain != SCCP_DOMAIN_SOL
@@ -31145,7 +31707,8 @@ fn build_sccp_solana_full_light_client_audit_fastpq_batch(
     {
         return None;
     }
-    let statement = canonical_sccp_solana_full_light_client_audit_statement_bytes(adapter, role)?;
+    let statement =
+        canonical_sccp_solana_full_light_client_audit_statement_bytes(adapter, material, role)?;
     let context = canonical_sccp_solana_full_light_client_audit_context_bytes(
         adapter, material, deployment, role,
     )?;
@@ -31153,7 +31716,7 @@ fn build_sccp_solana_full_light_client_audit_fastpq_batch(
         sccp_solana_full_light_client_gate_hash_from_deployment_v1(material, deployment)?;
     let mut batch = FastpqTransitionBatch::new(
         SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1,
-        sccp_solana_full_light_client_audit_fastpq_public_inputs(adapter, role)?,
+        sccp_solana_full_light_client_audit_fastpq_public_inputs(adapter, material, role)?,
     );
     batch.push(FastpqStateTransition::new(
         sccp_solana_full_light_client_audit_fastpq_key(
@@ -33858,8 +34421,39 @@ pub fn recover_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
     deployment: &SccpSourceAdapterEngineDeploymentV1,
 ) -> Option<SccpSourceChainProofEnvelopeV1> {
     if material.source_domain != SCCP_DOMAIN_SOL
+        || !sccp_solana_source_verifier_material_matches_network_v1(
+            material,
+            SccpSolanaSourceNetworkV1::MainnetBeta,
+        )
         || deployment.source_domain != SCCP_DOMAIN_SOL
         || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        SCCP_DOMAIN_SOL,
+        SCCP_DOMAIN_SORA,
+        proof_bytes,
+        material,
+        deployment,
+    )
+}
+
+/// Recover a Solana testnet -> SORA source proof envelope from governed testnet material.
+pub fn recover_sccp_solana_testnet_source_chain_proof_envelope_for_production(
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if material.source_domain != SCCP_DOMAIN_SOL
+        || !sccp_solana_source_verifier_material_matches_network_v1(
+            material,
+            SccpSolanaSourceNetworkV1::Testnet,
+        )
+        || deployment.source_domain != SCCP_DOMAIN_SOL
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+        || sccp_solana_source_profile_for_deployment_v1(deployment)
+            .is_none_or(|profile| profile.network != SccpSolanaSourceNetworkV1::Testnet)
     {
         return None;
     }
@@ -36172,8 +36766,13 @@ fn verify_sccp_solana_finality_context_shape(adapter: &SccpSolanaFinalizedSource
     ) else {
         return false;
     };
-    let Some(accounts_lt_hash_proof_public_inputs_hash) =
-        sccp_solana_accounts_lt_hash_proof_public_inputs_hash(
+    let accounts_lt_hash_proof_public_inputs_hashes = [
+        SccpSolanaSourceNetworkV1::MainnetBeta,
+        SccpSolanaSourceNetworkV1::Testnet,
+    ]
+    .map(|network| {
+        sccp_solana_accounts_lt_hash_proof_public_inputs_hash_for_network_v1(
+            network,
             adapter.source_domain,
             adapter.finalized_slot,
             context.parent_slot,
@@ -36186,9 +36785,13 @@ fn verify_sccp_solana_finality_context_shape(adapter: &SccpSolanaFinalizedSource
             context.accounts_lt_hash_checksum,
             &context.bank_hash_hard_fork_data,
         )
-    else {
+    });
+    if accounts_lt_hash_proof_public_inputs_hashes
+        .iter()
+        .any(Option::is_none)
+    {
         return false;
-    };
+    }
     context.version == 1
         && context.epoch == sccp_solana_mainnet_epoch_for_slot(adapter.finalized_slot)
         && context.rooted_slot <= context.parent_slot
@@ -36212,8 +36815,10 @@ fn verify_sccp_solana_finality_context_shape(adapter: &SccpSolanaFinalizedSource
         && context.stake_account_state_hash == stake_account_state_hash
         && context.stake_history_hash == stake_history_hash
         && context.accounts_lt_hash_checksum == accounts_lt_hash_checksum
-        && context.accounts_lt_hash_proof_public_inputs_hash
-            == accounts_lt_hash_proof_public_inputs_hash
+        && accounts_lt_hash_proof_public_inputs_hashes
+            .into_iter()
+            .flatten()
+            .any(|hash| context.accounts_lt_hash_proof_public_inputs_hash == hash)
         && context.tower_lockout_hash == tower_lockout_hash
         && context.tower_replay_hash == tower_replay_hash
         && context.bank_fork_hash == bank_fork_hash
@@ -37387,6 +37992,10 @@ pub fn verified_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
     if sccp_message_source_domain(&bundle.payload) != SCCP_DOMAIN_SOL
         || sccp_message_target_domain(&bundle.payload) != SCCP_DOMAIN_SORA
         || material.source_domain != SCCP_DOMAIN_SOL
+        || !sccp_solana_source_verifier_material_matches_network_v1(
+            material,
+            SccpSolanaSourceNetworkV1::MainnetBeta,
+        )
         || deployment.source_domain != SCCP_DOMAIN_SOL
         || deployment.target_domain != SCCP_DOMAIN_SORA
     {
@@ -37406,8 +38015,53 @@ pub fn verify_sccp_solana_mainnet_source_chain_proof_envelope_production(
     proof.source_domain == SCCP_DOMAIN_SOL
         && proof.target_domain == SCCP_DOMAIN_SORA
         && material.source_domain == SCCP_DOMAIN_SOL
+        && sccp_solana_source_verifier_material_matches_network_v1(
+            material,
+            SccpSolanaSourceNetworkV1::MainnetBeta,
+        )
         && deployment.source_domain == SCCP_DOMAIN_SOL
         && deployment.target_domain == SCCP_DOMAIN_SORA
+        && verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+            proof, material, deployment,
+        )
+}
+
+/// Decode and verify a Solana testnet -> SORA source proof against governed testnet material.
+pub fn verified_sccp_solana_testnet_source_chain_proof_envelope_for_production(
+    bundle: &NexusSccpMessageProofV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if sccp_message_source_domain(&bundle.payload) != SCCP_DOMAIN_SOL
+        || sccp_message_target_domain(&bundle.payload) != SCCP_DOMAIN_SORA
+        || !sccp_solana_source_verifier_material_matches_network_v1(
+            material,
+            SccpSolanaSourceNetworkV1::Testnet,
+        )
+        || sccp_solana_source_profile_for_deployment_v1(deployment)
+            .is_none_or(|profile| profile.network != SccpSolanaSourceNetworkV1::Testnet)
+    {
+        return None;
+    }
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        bundle, material, deployment,
+    )
+}
+
+/// Verify a decoded Solana testnet -> SORA source proof against governed testnet material.
+pub fn verify_sccp_solana_testnet_source_chain_proof_envelope_production(
+    proof: &SccpSourceChainProofEnvelopeV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    proof.source_domain == SCCP_DOMAIN_SOL
+        && proof.target_domain == SCCP_DOMAIN_SORA
+        && sccp_solana_source_verifier_material_matches_network_v1(
+            material,
+            SccpSolanaSourceNetworkV1::Testnet,
+        )
+        && sccp_solana_source_profile_for_deployment_v1(deployment)
+            .is_some_and(|profile| profile.network == SccpSolanaSourceNetworkV1::Testnet)
         && verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
             proof, material, deployment,
         )
@@ -47897,6 +48551,7 @@ pub mod tests {
         assert!(canonical.len() > 250);
         assert_eq!(
             canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_checked(
+                sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::MainnetBeta),
                 SCCP_DOMAIN_SOL,
                 finalized_slot,
                 parent_slot,
@@ -47915,6 +48570,7 @@ pub mod tests {
         );
         assert!(
             canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_checked(
+                sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::MainnetBeta),
                 SCCP_DOMAIN_SOL,
                 finalized_slot,
                 parent_slot,
@@ -47935,6 +48591,7 @@ pub mod tests {
         wrong_accounts_lt_hash[0] ^= 0x01;
         assert!(
             canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_checked(
+                sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::MainnetBeta),
                 SCCP_DOMAIN_SOL,
                 finalized_slot,
                 parent_slot,
@@ -48101,7 +48758,7 @@ pub mod tests {
                 .any(|window| window == residual_checksum.as_slice())
         );
 
-        let public_inputs = sccp_solana_accounts_lt_hash_public_input_columns(adapter)
+        let public_inputs = sccp_solana_accounts_lt_hash_public_input_columns(adapter, &material)
             .expect("AccountsLtHash proof public inputs");
         assert_eq!(
             public_inputs
@@ -48279,7 +48936,7 @@ pub mod tests {
             Some(commitment),
         );
         assert_ne!(
-            sccp_solana_accounts_lt_hash_public_input_columns(&changed_opening),
+            sccp_solana_accounts_lt_hash_public_input_columns(&changed_opening, &material),
             Some(public_inputs),
         );
 
@@ -61983,6 +62640,33 @@ pub mod tests {
             "BscMainnetLane must not open ETH"
         );
 
+        let solana_testnet_policy = SccpProductionPolicyV1 {
+            launch_mode: SccpLaunchModeV1::SolanaTestnetLane,
+            ..SccpProductionPolicyV1::default()
+        };
+        assert!(sccp_lane_production_ready_under_launch_policy_v1(
+            &solana_testnet_policy,
+            SCCP_DOMAIN_SOL,
+            true,
+            false,
+        ));
+        for foreign_domain in [
+            SCCP_DOMAIN_ETH,
+            SCCP_DOMAIN_BSC,
+            SCCP_DOMAIN_TON,
+            SCCP_DOMAIN_TRON,
+        ] {
+            assert!(
+                !sccp_lane_production_ready_under_launch_policy_v1(
+                    &solana_testnet_policy,
+                    foreign_domain,
+                    true,
+                    false,
+                ),
+                "SolanaTestnetLane must not open foreign domain {foreign_domain}"
+            );
+        }
+
         let ton_policy = SccpProductionPolicyV1 {
             launch_mode: SccpLaunchModeV1::TonMainnetLane,
             ..SccpProductionPolicyV1::default()
@@ -62005,6 +62689,104 @@ pub mod tests {
             ),
             "TonMainnetLane must not open BSC"
         );
+    }
+
+    #[test]
+    fn solana_testnet_source_profile_is_exact_and_cross_profile_replay_fails() {
+        let mainnet_profile = sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::MainnetBeta);
+        let testnet_profile = sccp_solana_source_profile_v1(SccpSolanaSourceNetworkV1::Testnet);
+        assert_ne!(mainnet_profile.proof_backend, testnet_profile.proof_backend);
+        assert_ne!(mainnet_profile.genesis_hash, testnet_profile.genesis_hash);
+        assert_ne!(
+            mainnet_profile.source_state_verifier_id,
+            testnet_profile.source_state_verifier_id
+        );
+        assert_ne!(
+            mainnet_profile.transcript_domain,
+            testnet_profile.transcript_domain
+        );
+        assert_eq!(
+            encode_0x_lower_hex(&sccp_solana_source_verifier_component_hash(
+                testnet_profile,
+                testnet_profile.source_state_verifier_id,
+                "source-state-verifier",
+            )),
+            "0xdeff79aa347b438c97693d361a5518a1d67291d2a61bd6f8231f6eaf35cfd641",
+            "the Solana testnet AccountsDB material transcript must stay aligned with operator tooling",
+        );
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(
+                &sccp_solana_testnet_source_verifier_material_v1()
+                    .expect("Solana testnet material template"),
+            ),
+            "the built-in testnet template must remain unusable as deployed verifier material",
+        );
+
+        let material = sccp_solana_testnet_source_verifier_material_with_hashes_and_accounts_db_v1(
+            [0xa1; 32], [0xa2; 32], [0xa3; 32], [0xa4; 32], [0xa5; 32],
+        )
+        .expect("role-separated Solana testnet material");
+        assert!(sccp_solana_source_verifier_material_matches_network_v1(
+            &material,
+            SccpSolanaSourceNetworkV1::Testnet,
+        ));
+        assert!(!sccp_solana_source_verifier_material_matches_network_v1(
+            &material,
+            SccpSolanaSourceNetworkV1::MainnetBeta,
+        ));
+        assert!(sccp_source_verifier_material_is_production_ready(&material));
+
+        let mut mixed = material.clone();
+        mixed.consensus_verifier_id = SCCP_SOLANA_MAINNET_CONSENSUS_VERIFIER_ID_V1.to_owned();
+        assert!(sccp_solana_source_profile_for_material_v1(&mixed).is_none());
+        assert!(!sccp_source_verifier_material_is_production_ready(&mixed));
+
+        let transcript_args = (
+            SCCP_DOMAIN_SOL,
+            432_001,
+            432_000,
+            7,
+            [0x11; 32],
+            [0x12; 32],
+            [0x13; 32],
+            [0x14; 32],
+            [0x15; 32],
+            [0x16; 32],
+            &[][..],
+        );
+        let mainnet_transcript =
+            canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_for_network_v1(
+                SccpSolanaSourceNetworkV1::MainnetBeta,
+                transcript_args.0,
+                transcript_args.1,
+                transcript_args.2,
+                transcript_args.3,
+                transcript_args.4,
+                transcript_args.5,
+                transcript_args.6,
+                transcript_args.7,
+                transcript_args.8,
+                transcript_args.9,
+                transcript_args.10,
+            )
+            .expect("mainnet transcript");
+        let testnet_transcript =
+            canonical_sccp_solana_accounts_lt_hash_proof_public_inputs_bytes_for_network_v1(
+                SccpSolanaSourceNetworkV1::Testnet,
+                transcript_args.0,
+                transcript_args.1,
+                transcript_args.2,
+                transcript_args.3,
+                transcript_args.4,
+                transcript_args.5,
+                transcript_args.6,
+                transcript_args.7,
+                transcript_args.8,
+                transcript_args.9,
+                transcript_args.10,
+            )
+            .expect("testnet transcript");
+        assert_ne!(mainnet_transcript, testnet_transcript);
     }
 
     #[test]
@@ -72919,6 +73701,7 @@ pub mod tests {
         let full_accountsdb_statement =
             canonical_sccp_solana_full_light_client_audit_statement_bytes(
                 solana_adapter,
+                &material,
                 SccpSolanaFullLightClientAuditRoleV1::FullAccountsDbLattice,
             )
             .expect("Solana full AccountsDB audit statement");
@@ -72997,6 +73780,7 @@ pub mod tests {
         request_hash_reused_audit_deployment.solana_tower_replay_verifier_hash =
             sccp_solana_full_light_client_audit_statement_hash(
                 solana_adapter,
+                &material,
                 SccpSolanaFullLightClientAuditRoleV1::TowerReplay,
             )
             .expect("Solana Tower replay audit statement hash");
@@ -75989,19 +76773,19 @@ pub mod tests {
         );
         assert!(
             !sccp_source_verifier_material_is_production_ready(&material),
-            "generic SOL source material must stay fail-closed until it matches the deployed mainnet profile"
+            "generic SOL source material must stay fail-closed until every role id matches one exact network profile"
         );
         assert!(
-            verify_message_bundle_structure_with_source_verifier_material(&bundle, &material),
-            "diagnostic SOL material must still bind the fixture source proof structurally"
+            !verify_message_bundle_structure_with_source_verifier_material(&bundle, &material),
+            "generic SOL role ids must not bind a network-specific source proof structurally"
         );
         assert!(!manifest.production_ready);
         assert!(
             build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready(
                 &bundle, &material, true,
             )
-            .is_some(),
-            "diagnostic builders may still render explicit-material fixtures when allow_unready is set"
+            .is_none(),
+            "allow_unready must not bypass exact Solana source-profile binding"
         );
 
         assert!(

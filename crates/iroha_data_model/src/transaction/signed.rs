@@ -1380,6 +1380,30 @@ impl TransactionBuilder {
         norito::codec::encode_adaptive(&self.payload)
     }
 
+    /// Reconstruct a transaction builder from an exact canonical payload archive.
+    ///
+    /// This is the inverse of [`Self::encode_payload`] for external-signature
+    /// workflows. Trailing bytes are rejected so callers cannot sign one payload
+    /// while later submitting a different envelope suffix.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error when `bytes` is malformed, non-canonical for the
+    /// default v1 layout, or contains trailing bytes.
+    pub fn decode_payload(bytes: &[u8]) -> Result<Self, norito::core::Error> {
+        let _guard =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let (payload, used) = TransactionPayload::decode_from_slice(bytes)?;
+        if used != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        Ok(Self {
+            payload,
+            attachments: None,
+            multisig_signatures: None,
+        })
+    }
+
     /// Return the canonical prehash signed by transaction signatures.
     #[must_use]
     pub fn payload_hash(&self) -> Hash {
@@ -1678,6 +1702,27 @@ mod tests {
             .expect("checked external transaction fixture signature verifies prehash");
         let signed = builder.build_with_signature(signature);
         assert!(signed.verify_signature().is_ok());
+    }
+
+    #[test]
+    fn transaction_builder_decodes_exact_external_signing_payload() {
+        let chain: ChainId = "external-payload-roundtrip".parse().unwrap();
+        let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut builder = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "decode payload".into())]);
+        builder.set_creation_time(Duration::from_millis(42));
+        builder.set_nonce(NonZeroU32::new(7).unwrap());
+
+        let encoded = builder.encode_payload();
+        let decoded = TransactionBuilder::decode_payload(&encoded).unwrap();
+        assert_eq!(decoded.encode_payload(), encoded);
+        assert_eq!(decoded.payload_hash_bytes(), builder.payload_hash_bytes());
+
+        let mut with_trailing = encoded;
+        with_trailing.push(0);
+        assert!(TransactionBuilder::decode_payload(&with_trailing).is_err());
+        assert!(TransactionBuilder::decode_payload(&[]).is_err());
     }
 
     #[test]
