@@ -222,7 +222,7 @@ export class SorafsGatewayFetchError extends Error {
  * @returns {{
  *   schemaVersion: number,
  *   orderIdHex: string,
- *   manifestCidUtf8: string | null,
+ *   manifestCidHex: string,
  *   manifestCidBase64: string,
  *   manifestDigestHex: string,
  *   chunkingProfile: string,
@@ -252,17 +252,20 @@ export function decodeReplicationOrder(bytes) {
   );
   const orderIdValue = readPayloadField(payload, "order_id_hex", "orderIdHex");
   const orderIdHex = typeof orderIdValue === "string" ? orderIdValue : "";
-  const manifestCidUtf8Value = readPayloadField(
+  const manifestCidHexValue = readPayloadField(
     payload,
-    "manifest_cid_utf8",
-    "manifestCidUtf8",
+    "manifest_cid_hex",
+    "manifestCidHex",
   );
-  const manifestCidUtf8 =
-    manifestCidUtf8Value === null
-      ? null
-      : typeof manifestCidUtf8Value === "string"
-      ? manifestCidUtf8Value
-      : null;
+  if (
+    typeof manifestCidHexValue !== "string" ||
+    !/^[0-9a-f]{72}$/.test(manifestCidHexValue)
+  ) {
+    throw new Error(
+      "Native replication order must expose a canonical 36-byte manifestCidHex",
+    );
+  }
+  const manifestCidHex = manifestCidHexValue;
   const manifestCidBase64Value = readPayloadField(
     payload,
     "manifest_cid_base64",
@@ -303,7 +306,7 @@ export function decodeReplicationOrder(bytes) {
   return {
     schemaVersion,
     orderIdHex,
-    manifestCidUtf8,
+    manifestCidHex,
     manifestCidBase64,
     manifestDigestHex,
     chunkingProfile,

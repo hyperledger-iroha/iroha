@@ -37,6 +37,13 @@ use crate::{
 
 use crate::sumeragi::evidence::evidence_key;
 
+fn evidence_cancellation_has_consensus_provenance(
+    is_v2_equivocation: bool,
+    consensus_admitted_at_height: Option<u64>,
+) -> bool {
+    !is_v2_equivocation || consensus_admitted_at_height.is_some()
+}
+
 fn current_epoch(block_height: u64, epoch_length_blocks: u64) -> Result<u64, Error> {
     if epoch_length_blocks == 0 {
         return Err(Error::InvariantViolation(
@@ -912,6 +919,19 @@ impl Execute for CancelConsensusEvidencePenalty {
             .get(&key)
             .cloned()
             .ok_or_else(|| Error::InvariantViolation("consensus evidence not found".into()))?;
+        let is_v2_equivocation = matches!(
+            &record.evidence.payload,
+            iroha_data_model::block::consensus::EvidencePayload::SumeragiV2Equivocation(_)
+        );
+        if !evidence_cancellation_has_consensus_provenance(
+            is_v2_equivocation,
+            record.consensus_admitted_at_height,
+        ) {
+            return Err(Error::InvariantViolation(
+                "Sumeragi v2 evidence must be admitted by a committed block before cancellation"
+                    .into(),
+            ));
+        }
         if record.penalty_applied {
             return Err(Error::InvariantViolation(
                 "consensus evidence penalty already applied".into(),
@@ -6497,6 +6517,7 @@ mod tests {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
+            consensus_admitted_at_height: None,
         };
         let key = evidence_key(&record.evidence);
         {
@@ -6519,5 +6540,15 @@ mod tests {
         assert!(updated.penalty_cancelled);
         assert!(!updated.penalty_applied);
         assert_eq!(updated.penalty_cancelled_at_height, Some(2));
+    }
+
+    #[test]
+    fn v2_evidence_cancellation_requires_consensus_admission() {
+        assert!(evidence_cancellation_has_consensus_provenance(false, None));
+        assert!(!evidence_cancellation_has_consensus_provenance(true, None));
+        assert!(evidence_cancellation_has_consensus_provenance(
+            true,
+            Some(7)
+        ));
     }
 }

@@ -1012,6 +1012,11 @@ impl From<crate::prelude::CompleteReplicationOrder> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::prelude::ExpireReplicationOrder> for InstructionBox {
+    fn from(i: crate::prelude::ExpireReplicationOrder) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::prelude::SetPricingSchedule> for InstructionBox {
     fn from(i: crate::prelude::SetPricingSchedule) -> Self {
         InstructionBox(Box::new(i))
@@ -3896,9 +3901,10 @@ pub mod prelude {
             SetDirectoryRotationPolicy, SubmitDirectoryDraft, UnrevokeResolver,
         },
         sorafs::{
-            ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-            RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
-            RegisterPinManifest, RetirePinManifest, SetPricingSchedule, UpsertProviderCredit,
+            ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder,
+            ExpireReplicationOrder, IssueReplicationOrder, RecordCapacityTelemetry,
+            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
+            RetirePinManifest, SetPricingSchedule, UpsertProviderCredit,
         },
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,

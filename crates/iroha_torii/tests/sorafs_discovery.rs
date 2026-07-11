@@ -50,8 +50,8 @@ use iroha_data_model::{
     prelude as dm,
     sorafs::pin_registry::{
         ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
-        ManifestDigest as RegistryManifestDigest, PinFeePayment, PinManifestRecord,
-        PinPolicy as RegistryPinPolicy, StorageClass as RegistryStorageClass,
+        ManifestDigest as RegistryManifestDigest, ManifestRootCid, PinFeePayment,
+        PinManifestRecord, PinPolicy as RegistryPinPolicy, StorageClass as RegistryStorageClass,
     },
     transaction::{SignedTransaction, TransactionBuilder},
 };
@@ -72,7 +72,7 @@ use iroha_torii::{
     test_utils::{AuthorityCreds, drain_queue_and_apply_all, random_authority},
 };
 use mv::storage::StorageReadOnly;
-use norito::{decode_from_bytes, json, to_bytes};
+use norito::{codec::Encode as _, decode_from_bytes, json, to_bytes};
 use sorafs_car::{
     CarBuildPlan, ChunkStore, compute_chunk_plan_digest_sha3, por_json::proof_from_value,
 };
@@ -1777,7 +1777,7 @@ where
         retention_epoch: 48,
     };
     let manifest = ManifestBuilder::new()
-        .root_cid(vec![0x10, 0x20, 0x30])
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid([0x10; 32]))
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_registry(ProfileId(descriptor.id.0))
         .content_length(1_024)
@@ -1815,7 +1815,9 @@ where
         chunker_multihash_code: descriptor.multihash_code,
         pin_policy: pin_policy_dto,
         manifest_digest_hex: manifest_digest_hex.clone(),
-        manifest_b64: None,
+        manifest_b64: Some(
+            BASE64_STANDARD.encode(manifest.encode().expect("encode canonical manifest")),
+        ),
         chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
         content_length: manifest.content_length,
         submitted_epoch,
@@ -1853,7 +1855,7 @@ fn create_manifest_setup_with_seed(
         storage_class: ManifestStorageClass::Hot,
         retention_epoch: manifest_policy_registry.retention_epoch,
     };
-    let manifest_cid = vec![seed, seed ^ 0x5A, seed ^ 0xA5, seed.wrapping_add(1)];
+    let manifest_cid = sorafs_manifest::canonical_manifest_root_cid([seed.wrapping_add(0x5A); 32]);
     let manifest = ManifestBuilder::new()
         .root_cid(manifest_cid.clone())
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
@@ -1874,29 +1876,19 @@ fn create_manifest_setup_with_seed(
     let manifest_digest_bytes = *manifest_digest_value.as_bytes();
     let manifest_digest_hex = hex::encode(manifest_digest_bytes);
     let manifest_digest = RegistryManifestDigest::new(manifest_digest_bytes);
-    let chunker_handle = ChunkerProfileHandle {
-        profile_id: descriptor.id.0,
-        namespace: descriptor.namespace.to_string(),
-        name: descriptor.name.to_string(),
-        semver: descriptor.semver.to_string(),
-        multihash_code: descriptor.multihash_code,
-    };
     let authority = random_authority();
     ensure_authority_registered(harness, &authority, next_height);
     let submitted_epoch = 12;
     // RegisterPinManifest auto-approves the manifest at the submitted epoch.
     let approved_epoch = submitted_epoch;
 
-    let register = RegisterPinManifest {
-        digest: manifest_digest,
-        chunker: chunker_handle,
-        chunk_digest_sha3_256: [seed.wrapping_add(0x33); 32],
-        content_length: manifest.content_length,
-        policy: manifest_policy_registry,
+    let register = RegisterPinManifest::new(
+        manifest.encode().expect("encode canonical manifest"),
+        [seed.wrapping_add(0x33); 32],
         submitted_epoch,
-        alias: None,
+        None,
         successor_of,
-    };
+    );
     let chain_id = harness.chain_id.as_ref().clone();
     let register_tx = TransactionBuilder::new(chain_id.clone(), authority.account.clone())
         .with_instructions([dm::InstructionBox::from(register)])
@@ -2021,9 +2013,11 @@ fn seed_paid_pin_record_for_storage_manifest(
             policy.min_replicas,
             5,
             policy.retention_epoch,
-        );
+        )
+        .expect("discovery fixture pin fee");
     let mut record = PinManifestRecord::new(
         manifest_digest,
+        ManifestRootCid::try_from_slice(&manifest.root_cid).expect("canonical manifest root CID"),
         chunker_handle_for_manifest(manifest),
         compute_chunk_plan_digest_sha3(&plan.chunks),
         policy,
@@ -2722,7 +2716,7 @@ async fn sorafs_storage_endpoints_round_trip() {
     let por_sample_count = por_samples.len() as u64;
 
     let mut chunk_store = ChunkStore::new();
-    chunk_store.ingest_bytes(payload);
+    chunk_store.ingest_bytes(payload).expect("ingest payload");
     let expected_root = *chunk_store.por_tree().root();
 
     let proof_body = {

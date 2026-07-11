@@ -64,18 +64,13 @@ fn evidence_hex(evidence: &Evidence) -> Result<String> {
 }
 
 fn sumeragi_mode_tag_and_prf_seed(client: &Client) -> Result<(String, [u8; 32])> {
-    for _ in 0..20 {
-        let status = client.get_sumeragi_status()?;
-        if status.mode_tag.is_empty() {
-            thread::sleep(Duration::from_millis(100));
-            continue;
-        }
-        if let Some(seed) = status.prf_epoch_seed {
-            return Ok((status.mode_tag, seed));
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    bail!("sumeragi status did not report prf_epoch_seed")
+    let status = client.get_sumeragi_v2_status()?;
+    let context = status.authoritative.height_context;
+    let mode_tag = match context.mode {
+        iroha::data_model::block::consensus_v2::ConsensusMode::Permissioned => PERMISSIONED_TAG,
+        iroha::data_model::block::consensus_v2::ConsensusMode::Npos => NPOS_TAG,
+    };
+    Ok((mode_tag.to_owned(), context.epoch_seed))
 }
 
 fn rotated_topology_for_view(

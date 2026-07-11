@@ -24,8 +24,8 @@ use iroha_data_model::{
         capacity::ProviderId,
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
-            ManifestDigest, PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
-            ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+            ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy, PinStatus,
+            ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
     },
 };
@@ -38,8 +38,9 @@ use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, json::Value, to_bytes};
 use sorafs_manifest::{
-    AliasBindingV1, CouncilSignature, REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1,
-    ReplicationOrderSlaV1, ReplicationOrderV1, chunker_registry,
+    AliasBindingV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
+    REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+    ReplicationOrderV1, chunker_registry,
     pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
 };
 
@@ -251,8 +252,8 @@ fn duplicate_alias_binding_is_rejected() {
         block.commit().expect("commit block");
     }
 
-    let digest_b = ManifestDigest::new([0xAB; 32]);
-    let chunk_digest_b = [0xBC; 32];
+    let digest_b = manifest_digest_for_seed(0xBB);
+    let chunk_digest_b = chunk_digest_for_seed(0xBB);
 
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
@@ -451,16 +452,12 @@ fn register_manifest_rejects_unknown_chunker_profile() {
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
 
-    let mut chunker = default_chunker();
-    chunker.namespace = "unknown".into();
-    chunker.name = "mystery".into();
+    let mut manifest = manifest_fixture(0xCC);
+    manifest.chunking.namespace = "unknown".into();
+    manifest.chunking.name = "mystery".into();
 
     let err = RegisterPinManifest {
-        digest: ManifestDigest::new([0xCC; 32]),
-        chunker,
-        chunk_digest_sha3_256: [0xEF; 32],
-        content_length: default_content_length(),
-        policy: default_policy(),
+        manifest_payload: manifest.encode().expect("encode invalid manifest"),
         submitted_epoch: 5,
         alias: None,
         successor_of: None,
@@ -521,15 +518,10 @@ fn register_manifest_rejects_unknown_successor() {
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
 
-    let digest = ManifestDigest::new([0xE1; 32]);
-    let unknown_parent = ManifestDigest::new([0xF1; 32]);
+    let unknown_parent = manifest_digest_for_seed(0xF1);
 
     let err = RegisterPinManifest {
-        digest,
-        chunker: default_chunker(),
-        chunk_digest_sha3_256: default_chunk_digest(),
-        content_length: default_content_length(),
-        policy: default_policy(),
+        manifest_payload: manifest_payload_for_seed(0xE1),
         submitted_epoch: 5,
         alias: None,
         successor_of: Some(unknown_parent),
@@ -555,14 +547,10 @@ fn register_manifest_rejects_self_successor() {
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
 
-    let digest = ManifestDigest::new([0xE2; 32]);
+    let digest = manifest_digest_for_seed(0xE2);
 
     let err = RegisterPinManifest {
-        digest,
-        chunker: default_chunker(),
-        chunk_digest_sha3_256: default_chunk_digest(),
-        content_length: default_content_length(),
-        policy: default_policy(),
+        manifest_payload: manifest_payload_for_seed(0xE2),
         submitted_epoch: 5,
         alias: None,
         successor_of: Some(digest),
@@ -588,13 +576,9 @@ fn register_manifest_accepts_active_successor() {
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
 
-    let parent = ManifestDigest::new([0xE3; 32]);
+    let parent = manifest_digest_for_seed(0xE3);
     RegisterPinManifest {
-        digest: parent,
-        chunker: default_chunker(),
-        chunk_digest_sha3_256: default_chunk_digest(),
-        content_length: default_content_length(),
-        policy: default_policy(),
+        manifest_payload: manifest_payload_for_seed(0xE3),
         submitted_epoch: 5,
         alias: None,
         successor_of: None,
@@ -608,11 +592,7 @@ fn register_manifest_accepts_active_successor() {
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
     RegisterPinManifest {
-        digest: ManifestDigest::new([0xE4; 32]),
-        chunker: default_chunker(),
-        chunk_digest_sha3_256: default_chunk_digest(),
-        content_length: default_content_length(),
-        policy: default_policy(),
+        manifest_payload: manifest_payload_for_seed(0xE4),
         submitted_epoch: 6,
         alias: None,
         successor_of: Some(parent),
@@ -623,7 +603,7 @@ fn register_manifest_accepts_active_successor() {
     let stored = tx
         .world()
         .pin_manifests()
-        .get(&ManifestDigest::new([0xE4; 32]))
+        .get(&manifest_digest_for_seed(0xE4))
         .expect("successor stored");
     assert_eq!(stored.successor_of, Some(parent));
 }
@@ -632,7 +612,7 @@ fn register_manifest_accepts_active_successor() {
 fn register_manifest_rejects_retired_successor() {
     let state = make_state();
     let council_keys = council_keypair();
-    let parent = ManifestDigest::new([0xE5; 32]);
+    let parent = manifest_digest_for_seed(0xE5);
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
@@ -658,11 +638,7 @@ fn register_manifest_rejects_retired_successor() {
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
     let err = RegisterPinManifest {
-        digest: ManifestDigest::new([0xE6; 32]),
-        chunker: default_chunker(),
-        chunk_digest_sha3_256: default_chunk_digest(),
-        content_length: default_content_length(),
-        policy: default_policy(),
+        manifest_payload: manifest_payload_for_seed(0xE6),
         submitted_epoch: 30,
         alias: None,
         successor_of: Some(parent),
@@ -685,7 +661,7 @@ fn register_manifest_rejects_retired_successor() {
 fn register_manifest_with_successor_persists_pointer() {
     let state = make_state();
     let council_keys = council_keypair();
-    let parent = ManifestDigest::new([0xE7; 32]);
+    let parent = manifest_digest_for_seed(0xE7);
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
@@ -698,13 +674,9 @@ fn register_manifest_with_successor_persists_pointer() {
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
 
-    let child = ManifestDigest::new([0xE8; 32]);
+    let child = manifest_digest_for_seed(0xE8);
     RegisterPinManifest {
-        digest: child,
-        chunker: default_chunker(),
-        chunk_digest_sha3_256: default_chunk_digest(),
-        content_length: default_content_length(),
-        policy: default_policy(),
+        manifest_payload: manifest_payload_for_seed(0xE8),
         submitted_epoch: 40,
         alias: None,
         successor_of: Some(parent),
@@ -725,8 +697,8 @@ fn register_manifest_with_successor_persists_pointer() {
 fn bind_alias_rejects_expiry_before_bound_epoch() {
     let state = make_state();
     let council_keys = council_keypair();
-    let digest = ManifestDigest::new([0xDD; 32]);
-    let chunk_digest = default_chunk_digest();
+    let digest = manifest_digest_for_seed(0xD1);
+    let chunk_digest = chunk_digest_for_seed(0xD1);
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
@@ -759,8 +731,8 @@ fn bind_alias_rejects_expiry_before_bound_epoch() {
 fn bind_alias_rejects_bound_epoch_before_approval() {
     let state = make_state();
     let council_keys = council_keypair();
-    let digest = ManifestDigest::new([0xDE; 32]);
-    let chunk_digest = default_chunk_digest();
+    let digest = manifest_digest_for_seed(0xD2);
+    let chunk_digest = chunk_digest_for_seed(0xD2);
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
@@ -793,8 +765,8 @@ fn bind_alias_rejects_bound_epoch_before_approval() {
 fn bind_alias_rejects_expiry_after_retention_epoch() {
     let state = make_state();
     let council_keys = council_keypair();
-    let digest = ManifestDigest::new([0xDF; 32]);
-    let chunk_digest = default_chunk_digest();
+    let digest = manifest_digest_for_seed(0xD3);
+    let chunk_digest = chunk_digest_for_seed(0xD3);
 
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
@@ -911,12 +883,18 @@ fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_me
     let treasury_account = tx.gov.sorafs_pin_fee_treasury_account.clone();
     let treasury_balance_before = pin_fee_balance(&tx, &treasury_account);
 
+    let mut manifest = manifest_fixture(0xAA);
+    manifest.pin_policy = sorafs_manifest::PinPolicy {
+        min_replicas: policy.min_replicas,
+        storage_class: match policy.storage_class {
+            StorageClass::Hot => sorafs_manifest::StorageClass::Hot,
+            StorageClass::Warm => sorafs_manifest::StorageClass::Warm,
+            StorageClass::Cold => sorafs_manifest::StorageClass::Cold,
+        },
+        retention_epoch: policy.retention_epoch,
+    };
     let err = RegisterPinManifest {
-        digest: default_digest(),
-        chunker: default_chunker(),
-        chunk_digest_sha3_256: default_chunk_digest(),
-        content_length: default_content_length(),
-        policy,
+        manifest_payload: manifest.encode().expect("encode governed policy fixture"),
         submitted_epoch: 5,
         alias: None,
         successor_of: None,
@@ -959,11 +937,62 @@ fn block_header(height: u64) -> iroha_data_model::block::BlockHeader {
 }
 
 fn default_digest() -> ManifestDigest {
-    ManifestDigest::new([0xAA; 32])
+    manifest_digest_for_seed(0xAA)
+}
+
+fn manifest_fixture_with_chunk_digest(seed: u8, chunk_digest_sha3_256: [u8; 32]) -> ManifestV1 {
+    let commitment = seed.max(1);
+    ManifestBuilder::new()
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+            [commitment; 32],
+        ))
+        .dag_codec(DagCodecId(chunker_registry::MANIFEST_DAG_CODEC))
+        .chunking_from_registry(chunker_registry::default_descriptor().id)
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .content_length(default_content_length())
+        .car_digest([commitment.wrapping_add(1).max(1); 32])
+        .car_size(default_content_length() + 4096)
+        .pin_policy(sorafs_manifest::PinPolicy {
+            min_replicas: default_policy().min_replicas,
+            storage_class: sorafs_manifest::StorageClass::Hot,
+            retention_epoch: default_policy().retention_epoch,
+        })
+        .governance(GovernanceProofs::default())
+        .build()
+        .expect("fixture manifest")
+}
+
+fn chunk_digest_for_seed(seed: u8) -> [u8; 32] {
+    [seed.wrapping_add(0x23).max(1); 32]
+}
+
+fn manifest_fixture(seed: u8) -> ManifestV1 {
+    manifest_fixture_with_chunk_digest(seed, chunk_digest_for_seed(seed))
+}
+
+fn manifest_payload_for_seed(seed: u8) -> Vec<u8> {
+    manifest_fixture(seed)
+        .encode()
+        .expect("encode fixture manifest")
+}
+
+fn manifest_digest_for_seed(seed: u8) -> ManifestDigest {
+    ManifestDigest::from_manifest(&manifest_fixture(seed)).expect("digest fixture manifest")
+}
+
+fn fixture_seed_for_digest(digest: ManifestDigest) -> u8 {
+    (1..=u8::MAX)
+        .find(|seed| manifest_digest_for_seed(*seed) == digest)
+        .expect("manifest digest must belong to a fixture seed")
+}
+
+fn root_cid_for_manifest(digest: ManifestDigest) -> ManifestRootCid {
+    ManifestRootCid::try_from_slice(&manifest_fixture(fixture_seed_for_digest(digest)).root_cid)
+        .expect("canonical root CID")
 }
 
 fn default_chunk_digest() -> [u8; 32] {
-    [0xCD; 32]
+    chunk_digest_for_seed(0xAA)
 }
 
 fn default_content_length() -> u64 {
@@ -1053,12 +1082,15 @@ fn register_and_approve(
     chunk_digest: [u8; 32],
     council_keys: &KeyPair,
 ) {
-    RegisterPinManifest {
+    let seed = fixture_seed_for_digest(digest);
+    let manifest = manifest_fixture_with_chunk_digest(seed, chunk_digest);
+    assert_eq!(
+        ManifestDigest::from_manifest(&manifest).expect("digest registration fixture"),
         digest,
-        chunker: default_chunker(),
-        chunk_digest_sha3_256: chunk_digest,
-        content_length: default_content_length(),
-        policy: default_policy(),
+        "registration helper chunk digest must match the fixture digest"
+    );
+    RegisterPinManifest {
+        manifest_payload: manifest.encode().expect("encode registration fixture"),
         submitted_epoch: 5,
         alias: None,
         successor_of: None,
@@ -1101,7 +1133,7 @@ fn replication_order(
     ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
         order_id: *order_id.as_bytes(),
-        manifest_cid: b"bafyreplicaexamplecidroot".to_vec(),
+        manifest_cid: root_cid_for_manifest(manifest).as_bytes().to_vec(),
         manifest_digest: *manifest.as_bytes(),
         chunking_profile: format!(
             "{}.{}@{}",
@@ -1132,7 +1164,7 @@ fn alias_binding_for(
 ) -> ManifestAliasBinding {
     let binding_payload = AliasBindingV1 {
         alias: format!("{namespace}/{name}"),
-        manifest_cid: digest.as_bytes().to_vec(),
+        manifest_cid: root_cid_for_manifest(digest).as_bytes().to_vec(),
         bound_at,
         expiry_epoch,
     };
@@ -1280,6 +1312,10 @@ fn manifest_snapshot(manifest: &PinManifestRecord) -> json::Map {
         "digest_hex".into(),
         Value::String(hex::encode(manifest.digest.as_bytes())),
     );
+    manifest_obj.insert(
+        "root_cid_hex".into(),
+        Value::String(hex::encode(manifest.root_cid.as_bytes())),
+    );
     let (status_label, status_epoch) = match manifest.status {
         PinStatus::Pending => ("pending", None),
         PinStatus::Approved(epoch) => ("approved", Some(epoch)),
@@ -1378,6 +1414,10 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
     order_obj.insert(
         "manifest_digest_hex".into(),
         Value::String(hex::encode(order.manifest_digest.as_bytes())),
+    );
+    order_obj.insert(
+        "manifest_root_cid_hex".into(),
+        Value::String(hex::encode(order.manifest_root_cid.as_bytes())),
     );
     order_obj.insert(
         "issued_by".into(),

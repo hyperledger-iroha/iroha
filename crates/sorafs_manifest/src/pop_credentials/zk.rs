@@ -373,9 +373,11 @@ fn revocation_leaf(
     ))
 }
 
+type SparseRevocationLevels = (Vec<BTreeMap<u128, Fp>>, Vec<Fp>);
+
 fn sparse_revocation_levels(
     entries: &[PopRevocationEntryV1],
-) -> Result<(Vec<BTreeMap<u128, Fp>>, Vec<Fp>), PopCredentialValidationError> {
+) -> Result<SparseRevocationLevels, PopCredentialValidationError> {
     let depth = usize::from(POP_REVOCATION_TREE_DEPTH_V1);
     let mut levels = Vec::with_capacity(depth + 1);
     let mut leaves = BTreeMap::new();
@@ -569,8 +571,8 @@ fn optional_value(value: Option<Fp>) -> Value<Fp> {
 }
 
 fn value_pow5(value: Value<Fp>) -> Value<Fp> {
-    let square = value.clone() * value.clone();
-    square.clone() * square * value
+    let square = value * value;
+    square * square * value
 }
 
 impl PopMembershipCircuit {
@@ -663,7 +665,7 @@ impl PopMembershipCircuit {
         layouter.assign_region(
             || "PoP scalar",
             |mut region| {
-                let assigned = region.assign_advice(config.input, row, value.clone());
+                let assigned = region.assign_advice(config.input, row, value);
                 Ok(ScalarCell {
                     cell: assigned.cell(),
                     value,
@@ -690,13 +692,9 @@ impl PopMembershipCircuit {
                 config.q_hash_init.enable(&mut region, base_row)?;
                 region.assign_fixed(config.hash_domain, base_row, Fp::from(domain));
 
-                let mut values = [
-                    left.value.clone(),
-                    right.value.clone(),
-                    Value::known(Fp::from(domain)),
-                ];
+                let mut values = [left.value, right.value, Value::known(Fp::from(domain))];
                 let mut cells: [_; WIDTH] = std::array::from_fn(|column| {
-                    region.assign_advice(config.state[column], base_row, values[column].clone())
+                    region.assign_advice(config.state[column], base_row, values[column])
                 });
                 region.constrain_equal(cells[0].cell(), left.cell);
                 region.constrain_equal(cells[1].cell(), right.cell);
@@ -719,34 +717,32 @@ impl PopMembershipCircuit {
                     }
 
                     let mut sboxed: [Value<Fp>; WIDTH] = std::array::from_fn(|column| {
-                        values[column].clone()
-                            + Value::known(constants.round_constants[round][column])
+                        values[column] + Value::known(constants.round_constants[round][column])
                     });
                     if round < half || round >= half + PARTIAL_ROUNDS {
                         for word in &mut sboxed {
-                            *word = value_pow5(word.clone());
+                            *word = value_pow5(*word);
                         }
                     } else {
-                        sboxed[0] = value_pow5(sboxed[0].clone());
+                        sboxed[0] = value_pow5(sboxed[0]);
                     }
                     values = std::array::from_fn(|row| {
                         (0..WIDTH).fold(Value::known(Fp::ZERO), |accumulator, column| {
-                            accumulator
-                                + sboxed[column].clone() * Value::known(constants.mds[row][column])
+                            accumulator + sboxed[column] * Value::known(constants.mds[row][column])
                         })
                     });
                     cells = std::array::from_fn(|column| {
                         region.assign_advice(
                             config.state[column],
                             base_row + round + 1,
-                            values[column].clone(),
+                            values[column],
                         )
                     });
                 }
 
                 Ok(ScalarCell {
                     cell: cells[0].cell(),
-                    value: values[0].clone(),
+                    value: values[0],
                 })
             },
         )
@@ -763,25 +759,21 @@ impl PopMembershipCircuit {
     ) -> Result<(ScalarCell, ScalarCell), PlonkError> {
         let row = *row_cursor;
         *row_cursor += 1;
-        let left_value = current.value.clone()
-            + direction.value.clone() * (sibling.value.clone() - current.value.clone());
-        let right_value = sibling.value.clone()
-            + direction.value.clone() * (current.value.clone() - sibling.value.clone());
+        let left_value = current.value + direction.value * (sibling.value - current.value);
+        let right_value = sibling.value + direction.value * (current.value - sibling.value);
         layouter.assign_region(
             || "PoP Merkle child selection",
             |mut region| {
                 config.q_select.enable(&mut region, row)?;
-                let current_cell =
-                    region.assign_advice(config.select_current, row, current.value.clone());
-                let sibling_cell =
-                    region.assign_advice(config.select_sibling, row, sibling.value.clone());
+                let current_cell = region.assign_advice(config.select_current, row, current.value);
+                let sibling_cell = region.assign_advice(config.select_sibling, row, sibling.value);
                 let direction_cell =
-                    region.assign_advice(config.select_direction, row, direction.value.clone());
+                    region.assign_advice(config.select_direction, row, direction.value);
                 region.constrain_equal(current_cell.cell(), current.cell);
                 region.constrain_equal(sibling_cell.cell(), sibling.cell);
                 region.constrain_equal(direction_cell.cell(), direction.cell);
-                let left = region.assign_advice(config.select_left, row, left_value.clone());
-                let right = region.assign_advice(config.select_right, row, right_value.clone());
+                let left = region.assign_advice(config.select_left, row, left_value);
+                let right = region.assign_advice(config.select_right, row, right_value);
                 Ok((
                     ScalarCell {
                         cell: left.cell(),
@@ -815,7 +807,7 @@ impl PopMembershipCircuit {
             |mut region| {
                 let mut accumulator_value = Value::known(Fp::ZERO);
                 let first_accumulator =
-                    region.assign_advice(config.accumulator, base_row, accumulator_value.clone());
+                    region.assign_advice(config.accumulator, base_row, accumulator_value);
                 let _ = first_accumulator;
                 let mut bit_cells: Vec<Option<ScalarCell>> =
                     vec![None; usize::from(POP_REVOCATION_TREE_DEPTH_V1)];
@@ -823,17 +815,17 @@ impl PopMembershipCircuit {
                 for row in 0..usize::from(POP_REVOCATION_TREE_DEPTH_V1) {
                     let bit_index = usize::from(POP_REVOCATION_TREE_DEPTH_V1) - 1 - row;
                     let bit_value = optional_value(bit_values[bit_index]);
-                    let bit = region.assign_advice(config.bit, base_row + row, bit_value.clone());
+                    let bit = region.assign_advice(config.bit, base_row + row, bit_value);
                     bit_cells[bit_index] = Some(ScalarCell {
                         cell: bit.cell(),
-                        value: bit_value.clone(),
+                        value: bit_value,
                     });
                     config.q_bit.enable(&mut region, base_row + row)?;
                     accumulator_value = accumulator_value * Value::known(Fp::from(2)) + bit_value;
                     let accumulator = region.assign_advice(
                         config.accumulator,
                         base_row + row + 1,
-                        accumulator_value.clone(),
+                        accumulator_value,
                     );
                     final_accumulator = Some(accumulator.cell());
                 }
@@ -860,14 +852,12 @@ impl PopMembershipCircuit {
         *row_cursor += 1;
         let inverse_value = value
             .value
-            .clone()
             .map(|scalar| Option::<Fp>::from(scalar.invert()).unwrap_or(Fp::ZERO));
         layouter.assign_region(
             || "PoP non-zero private scalar",
             |mut region| {
                 config.q_nonzero.enable(&mut region, row)?;
-                let assigned_value =
-                    region.assign_advice(config.nonzero_value, row, value.value.clone());
+                let assigned_value = region.assign_advice(config.nonzero_value, row, value.value);
                 region.constrain_equal(assigned_value.cell(), value.cell);
                 region.assign_advice(config.nonzero_inverse, row, inverse_value);
                 Ok(())
@@ -1234,7 +1224,7 @@ impl Circuit<Fp> for PopMembershipCircuit {
             &mut row_cursor,
             Value::known(Fp::ZERO),
         )?;
-        for level in 0..usize::from(POP_REVOCATION_TREE_DEPTH_V1) {
+        for (level, direction) in nonce_bits.iter().enumerate() {
             let sibling = self.assign_scalar(
                 &config,
                 &mut layouter,
@@ -1247,7 +1237,7 @@ impl Circuit<Fp> for PopMembershipCircuit {
                 &mut row_cursor,
                 &revocation_node,
                 &sibling,
-                &nonce_bits[level],
+                direction,
             )?;
             revocation_node = self.hash_pair(
                 &config,

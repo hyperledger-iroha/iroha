@@ -78,8 +78,22 @@ impl FastJsonWrite for FilterExpr {
 }
 
 /// Selector (projection) definition as a flat list of field paths.
-#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Selector(pub Vec<FieldPath>);
+
+impl JsonSerialize for Selector {
+    fn json_serialize(&self, out: &mut String) {
+        self.0.json_serialize(out);
+    }
+}
+
+impl JsonDeserialize for Selector {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        Vec::<FieldPath>::json_deserialize(parser).map(Self)
+    }
+}
 
 /// Sorting key descriptor.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -662,6 +676,26 @@ mod tests {
         assert_eq!(envelope.sort.len(), 1);
         assert_eq!(envelope.sort[0].key.0, "alias_binding.bound_at_ms");
         assert_eq!(envelope.sort[0].order, Order::Desc);
+    }
+
+    #[test]
+    fn query_envelope_parses_and_serializes_selector_array() {
+        let raw = r#"{"select":["authority","metadata.amount"]}"#;
+        let envelope: QueryEnvelope = json::from_str(raw).expect("parse selector array");
+        assert_eq!(
+            envelope.select,
+            Some(Selector(vec![
+                FieldPath("authority".into()),
+                FieldPath("metadata.amount".into()),
+            ]))
+        );
+
+        let encoded = json::to_json(&envelope).expect("serialize query envelope");
+        let value: Value = json::from_str(&encoded).expect("parse serialized query envelope");
+        assert_eq!(
+            value.as_object().and_then(|object| object.get("select")),
+            Some(&arr(vec![val("authority"), val("metadata.amount")]))
+        );
     }
 
     #[test]

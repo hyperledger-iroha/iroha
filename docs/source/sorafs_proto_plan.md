@@ -119,7 +119,7 @@ Committed fixtures live under:
 Use the active generators and stubs:
 
 ```sh
-cargo run --locked -p sorafs_car --features cli --bin provider_admission_fixtures
+cargo run --locked -p sorafs_car --features manifest --bin provider_admission_fixtures
 cargo run --locked -p sorafs_car --bin sorafs_manifest_stub -- \
   capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json
 cargo run --locked -p sorafs_manifest --bin generate_orderbook_fixtures

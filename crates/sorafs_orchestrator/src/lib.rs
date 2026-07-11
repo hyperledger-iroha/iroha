@@ -63,6 +63,9 @@ use url::Host;
 pub mod appeals;
 pub mod compliance;
 pub mod incentives;
+#[cfg(feature = "cli-orchestrator")]
+pub mod moderation_provenance;
+pub mod moderation_runner;
 pub mod proxy;
 pub mod soranet;
 pub mod taikai_cache;
@@ -4826,9 +4829,7 @@ impl FetchMetricsCtx {
         let metrics = global_or_default();
         let otel = global_sorafs_fetch_otel();
         let manifest_id = manifest_id_hex(plan);
-        metrics.sorafs_orchestrator_fetch_started(&manifest_id, region);
         let job_id = generate_job_id().map_err(OrchestratorError::JobIdRandomness)?;
-        otel.fetch_started(&manifest_id, region, &job_id);
         let provider_count = providers.len();
         let telemetry = FetchTelemetryCtx::new(job_id.clone(), write_mode);
         telemetry.emit_start(
@@ -4838,7 +4839,9 @@ impl FetchMetricsCtx {
             provider_count,
             fetch_options,
             policy_summary,
-        );
+        )?;
+        metrics.sorafs_orchestrator_fetch_started(&manifest_id, region);
+        otel.fetch_started(&manifest_id, region, &job_id);
         metrics.record_sorafs_orchestrator_policy_event(
             policy_summary.policy.label(),
             region,
@@ -5182,13 +5185,21 @@ impl FetchTelemetryCtx {
         provider_count: usize,
         fetch_options: &FetchOptions,
         policy_summary: &PolicySummary,
-    ) {
-        let chunk_specs = plan.chunk_fetch_specs();
-        let chunk_count = chunk_specs.len() as u64;
-        let total_bytes = chunk_specs
+    ) -> Result<(), OrchestratorError> {
+        let chunk_count = u64::try_from(plan.chunks.len()).map_err(|_| {
+            OrchestratorError::UnsafeResourceConfig(
+                "CAR plan chunk count exceeds the telemetry u64 range",
+            )
+        })?;
+        let total_bytes = plan
+            .chunks
             .iter()
-            .map(|spec| u64::from(spec.length))
-            .sum::<u64>();
+            .try_fold(0_u64, |total, chunk| {
+                total.checked_add(u64::from(chunk.length))
+            })
+            .ok_or(OrchestratorError::UnsafeResourceConfig(
+                "CAR plan total byte length exceeds the telemetry u64 range",
+            ))?;
         let (retry_budget, retry_unbounded) = fetch_options
             .per_chunk_retry_limit
             .map_or((0u64, true), |value| (value as u64, false));
@@ -5230,6 +5241,7 @@ impl FetchTelemetryCtx {
             anonymity_classical = policy_summary.uses_classical(),
             anonymity_brownout = policy_summary.is_brownout(),
         );
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)] // telemetry emission uses explicit context values
@@ -6034,6 +6046,7 @@ fn generate_job_id_with_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<Str
 fn error_reason(error: &multi_fetch::MultiSourceError) -> &'static str {
     match error {
         multi_fetch::MultiSourceError::NoProviders => "no_providers",
+        multi_fetch::MultiSourceError::InvalidPlan(_) => "invalid_plan",
         multi_fetch::MultiSourceError::NoHealthyProviders { .. } => "no_healthy_providers",
         multi_fetch::MultiSourceError::NoCompatibleProviders { .. } => "no_compatible_providers",
         multi_fetch::MultiSourceError::ExhaustedRetries { .. } => "exhausted_retries",
@@ -9121,7 +9134,9 @@ mod tests {
         );
 
         let mut reference_store = ChunkStore::new();
-        reference_store.ingest_bytes(&payload);
+        reference_store
+            .ingest_bytes(&payload)
+            .expect("reference payload must satisfy chunk-store bounds");
         assert_eq!(
             reference_store.payload_digest().as_bytes(),
             plan.payload_digest.as_bytes(),
@@ -9220,7 +9235,9 @@ mod tests {
         );
 
         let mut assembled_store = ChunkStore::new();
-        assembled_store.ingest_plan(&assembled, &plan);
+        assembled_store
+            .ingest_plan(&assembled, &plan)
+            .expect("assembled payload must satisfy its verified CAR plan");
         assert_eq!(
             assembled_store.payload_digest().as_bytes(),
             reference_store.payload_digest().as_bytes(),

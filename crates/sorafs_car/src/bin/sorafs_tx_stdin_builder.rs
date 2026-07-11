@@ -2,7 +2,10 @@ use std::{env, fs, process, str::FromStr};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_data_model::{
-    isi::sorafs::{CompleteReplicationOrder, IssueReplicationOrder, RegisterCapacityDeclaration},
+    isi::sorafs::{
+        CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder,
+        RegisterCapacityDeclaration,
+    },
     metadata::Metadata,
     prelude::{InstructionBox, Name},
     sorafs::{
@@ -35,6 +38,7 @@ fn run() -> Result<(), String> {
         "capacity-declaration-request" => run_capacity_declaration_request(args),
         "replication-order-request" => run_replication_order_request(args),
         "complete-order" => run_complete_order(args),
+        "expire-order" => run_expire_order(args),
         "help" | "--help" | "-h" => {
             println!("{}", usage());
             Ok(())
@@ -50,11 +54,13 @@ Subcommands:
   capacity-declaration-request  Convert a declaration request JSON into `iroha ledger transaction stdin` JSON.
   replication-order-request     Convert a replication-order request JSON into `iroha ledger transaction stdin` JSON.
   complete-order                Emit a completion instruction for an existing replication order.
+  expire-order                  Emit a deadline-bound expiration instruction for a pending replication order.
 
 Options:
   capacity-declaration-request --request=<path>
   replication-order-request --request=<path> --issued-epoch=<u64> --deadline-epoch=<u64>
   complete-order --order-id-hex=<64-hex> --completion-epoch=<u64>
+  expire-order --order-id-hex=<64-hex> --expiration-epoch=<positive-u64>
 "#
     .to_owned()
 }
@@ -160,6 +166,40 @@ fn run_complete_order(args: impl Iterator<Item = String>) -> Result<(), String> 
         CompleteReplicationOrder::new(ReplicationOrderId::new(order_id), completion_epoch);
 
     print_instruction_json(InstructionBox::from(instruction))
+}
+
+fn run_expire_order(args: impl Iterator<Item = String>) -> Result<(), String> {
+    print_instruction_json(expire_order_instruction(args)?)
+}
+
+fn expire_order_instruction(args: impl Iterator<Item = String>) -> Result<InstructionBox, String> {
+    let mut order_id_hex = None;
+    let mut expiration_epoch = None;
+
+    for arg in args {
+        let (key, value) = split_option(&arg)?;
+        match key {
+            "--order-id-hex" => set_once(&mut order_id_hex, value.to_owned(), key)?,
+            "--expiration-epoch" => {
+                let epoch = parse_u64(value, key)?;
+                if epoch == 0 {
+                    return Err("`--expiration-epoch` must be greater than zero".to_owned());
+                }
+                set_once(&mut expiration_epoch, epoch, key)?;
+            }
+            _ => return Err(format!("unknown option `{key}`")),
+        }
+    }
+
+    let order_id_hex = order_id_hex.ok_or_else(|| "missing `--order-id-hex=<hex>`".to_owned())?;
+    let order_id = parse_hex_32(&order_id_hex, "order_id_hex")?;
+    let expiration_epoch =
+        expiration_epoch.ok_or_else(|| "missing `--expiration-epoch=<positive-u64>`".to_owned())?;
+
+    Ok(InstructionBox::from(ExpireReplicationOrder::new(
+        ReplicationOrderId::new(order_id),
+        expiration_epoch,
+    )))
 }
 
 fn split_option(arg: &str) -> Result<(&str, &str), String> {
@@ -357,5 +397,44 @@ mod tests {
             set_once(&mut slot, 581_u64, "--issued-epoch").expect_err("duplicate option must fail");
         assert!(err.contains("duplicate `--issued-epoch` option"));
         assert_eq!(slot, Some(580));
+    }
+
+    #[test]
+    fn expire_order_builds_canonical_instruction_and_rejects_bad_epochs() {
+        let order_id = "5555555555555555555555555555555555555555555555555555555555555555";
+        let actual = expire_order_instruction(
+            [
+                format!("--order-id-hex={order_id}"),
+                "--expiration-epoch=91".to_owned(),
+            ]
+            .into_iter(),
+        )
+        .expect("build expiration instruction");
+        let expected = InstructionBox::from(ExpireReplicationOrder::new(
+            ReplicationOrderId::new([0x55; 32]),
+            91,
+        ));
+        assert_eq!(
+            to_bytes(&actual).expect("encode actual instruction"),
+            to_bytes(&expected).expect("encode expected instruction")
+        );
+
+        for args in [
+            vec![format!("--order-id-hex={order_id}")],
+            vec![
+                format!("--order-id-hex={order_id}"),
+                "--expiration-epoch=0".to_owned(),
+            ],
+            vec![
+                format!("--order-id-hex={order_id}"),
+                "--expiration-epoch=1".to_owned(),
+                "--expiration-epoch=2".to_owned(),
+            ],
+        ] {
+            assert!(
+                expire_order_instruction(args.into_iter()).is_err(),
+                "invalid expiration arguments must fail"
+            );
+        }
     }
 }

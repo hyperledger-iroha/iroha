@@ -470,10 +470,13 @@ def test_build_fixture_example_uses_reviewed_metadata_timestamp() -> None:
         chunker_fixture,
         manifest_report,
         MODULE.REPO_ROOT / "target-codex" / "android_codegen" / "report.json",
+        "AQID",
     )
 
     assert example["generated_at"] == "2024-08-30T06:40:00Z"
-    assert example["instruction"]["submitted_epoch"] == fixture_meta["now_unix_secs"]
+    assert example["instruction"]["submitted_epoch"] == 0
+    assert example["instruction"]["manifest_payload_base64"] == "AQID"
+    assert "digest_hex" not in example["instruction"]
 
 
 def test_main_rejects_absolute_payload_metadata_path_before_subprocess_without_leaking(

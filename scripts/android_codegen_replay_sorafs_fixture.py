@@ -15,6 +15,7 @@ This script:
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
 import json
 import os
@@ -283,6 +284,7 @@ def run_manifest_stub(
     storage_class: str,
     retention_epoch: int,
     json_out: Path,
+    manifest_out: Path,
 ) -> None:
     cmd = [
         cargo_bin,
@@ -306,6 +308,7 @@ def run_manifest_stub(
         "2222222222222222222222222222222222222222222222222222222222222222"
         "2222222222222222222222222222222222222222222222222222222222222222",
         f"--json-out={json_out}",
+        f"--manifest-out={manifest_out}",
     ]
     subprocess.run(cmd, check=True, cwd=REPO_ROOT)
 
@@ -315,24 +318,13 @@ def build_fixture_example(
     chunker_fixture: dict,
     manifest_report: dict,
     manifest_report_path: Path,
+    manifest_payload_base64: str,
 ) -> dict:
-    chunking = manifest_report["chunking"]
-    manifest = manifest_report["manifest"]
     timestamp = iso_utc_from_unix_timestamp(fixture_meta["now_unix_secs"])
     instruction = {
-        "digest_hex": manifest["digest_hex"],
-        "chunker": {
-            "profile_id": chunking["profile_id"],
-            "namespace": chunking["namespace"],
-            "name": chunking["name"],
-            "semver": chunking["semver"],
-            "handle": chunking["handle"],
-            "aliases": chunking["profile_aliases"],
-            "multihash_code": chunking["multihash_code"],
-        },
+        "manifest_payload_base64": manifest_payload_base64,
         "chunk_digest_sha3_256_hex": chunker_fixture["chunk_digest_sha3_256"],
-        "policy": manifest["pin_policy"],
-        "submitted_epoch": fixture_meta["now_unix_secs"],
+        "submitted_epoch": 0,
         "alias": None,
         "successor_of": None,
     }
@@ -448,6 +440,7 @@ def main(argv: list[str] | None = None) -> int:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_report = Path(tmpdir) / "manifest_report.json"
+        tmp_manifest = Path(tmpdir) / "manifest.to"
         run_manifest_stub(
             args.cargo_bin,
             payload_path,
@@ -457,8 +450,10 @@ def main(argv: list[str] | None = None) -> int:
             storage_class=storage_class,
             retention_epoch=retention_epoch,
             json_out=tmp_report,
+            manifest_out=tmp_manifest,
         )
         manifest_report = load_json(tmp_report, label="generated manifest report")
+        manifest_payload_base64 = base64.b64encode(tmp_manifest.read_bytes()).decode("ascii")
         write_json(report_path, manifest_report, label="manifest report")
 
     fixture_example = build_fixture_example(
@@ -466,6 +461,7 @@ def main(argv: list[str] | None = None) -> int:
         chunker_fixture,
         manifest_report,
         report_path,
+        manifest_payload_base64,
     )
     update_register_pin_example(args.register_pin_example, fixture_example)
     write_json(args.tracked_fixture_out, fixture_example, label="tracked fixture")

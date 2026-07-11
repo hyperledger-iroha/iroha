@@ -805,6 +805,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         },
         sumeragi: A::Sumeragi {
+            protocol_version: defaults::sumeragi::PROTOCOL_VERSION,
+            round_timeout: std::time::Duration::from_millis(
+                defaults::sumeragi::ROUND_TIMEOUT_MS,
+            ),
             role: A::NodeRole::Validator,
             consensus_mode: A::ConsensusMode::Permissioned,
             mode_flip: A::SumeragiModeFlip {

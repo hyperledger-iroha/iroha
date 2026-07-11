@@ -38,7 +38,7 @@ fn build_manifest(plan: &CarBuildPlan, stats: &sorafs_car::CarWriteStats) -> Man
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 1,
         })
         .governance(GovernanceProofs::default())
         .build()

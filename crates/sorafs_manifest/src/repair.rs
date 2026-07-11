@@ -877,22 +877,19 @@ impl GcAuditPayloadV1 {
         if provider_missing != self.provider_id.iter().all(|byte| *byte == 0) {
             return Err(RepairValidationError::InvalidGcAuditProviderBinding);
         }
-        match self.blocked_reason.as_deref() {
-            Some(reason) => {
-                validate_optional_string(reason, "blocked_reason")?;
-                if !matches!(
-                    reason,
-                    GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1
-                        | GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1
-                        | GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1
-                ) {
-                    return Err(RepairValidationError::InvalidGcAuditBlockedReason);
-                }
-                if self.freed_bytes != 0 {
-                    return Err(RepairValidationError::InvalidGcAuditFreedBytes);
-                }
+        if let Some(reason) = self.blocked_reason.as_deref() {
+            validate_optional_string(reason, "blocked_reason")?;
+            if !matches!(
+                reason,
+                GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1
+                    | GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1
+                    | GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1
+            ) {
+                return Err(RepairValidationError::InvalidGcAuditBlockedReason);
             }
-            None => {}
+            if self.freed_bytes != 0 {
+                return Err(RepairValidationError::InvalidGcAuditFreedBytes);
+            }
         }
         Ok(())
     }

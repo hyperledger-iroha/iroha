@@ -462,7 +462,7 @@ emit_metrics = true
 
     #[test]
     fn pin_record_validation_reports_mismatch() {
-        let manifest_cid = vec![0xAA, 0xBB];
+        let manifest_cid = sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]);
         let outcome = TrustlessVerificationOutcome {
             manifest_digest: [0x11; 32],
             manifest_cid: manifest_cid.clone(),
@@ -498,7 +498,7 @@ emit_metrics = true
         };
 
         // Manifest CID mismatch should be surfaced first.
-        pin.manifest_cid = vec![0xCC];
+        pin.manifest_cid = sorafs_manifest::canonical_manifest_root_cid([0xCC; 32]);
         let err = outcome.validate_pin_record(&pin).expect_err("cid mismatch");
         assert!(matches!(
             err,

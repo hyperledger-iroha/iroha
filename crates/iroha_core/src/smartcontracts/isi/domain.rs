@@ -7568,12 +7568,16 @@ mod tests {
             digest,
             iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
                 digest,
+                iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from(
+                    sorafs_manifest::canonical_manifest_root_cid([0xBA; 32]),
+                )
+                .expect("canonical root CID"),
                 iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
                     profile_id: 1,
                     namespace: "sorafs".to_string(),
                     name: "sf1".to_string(),
                     semver: "1.0.0".to_string(),
-                    multihash_code: 0x1E,
+                    multihash_code: 0x1F,
                 },
                 [0xCD; 32],
                 iroha_data_model::sorafs::pin_registry::PinPolicy::default(),

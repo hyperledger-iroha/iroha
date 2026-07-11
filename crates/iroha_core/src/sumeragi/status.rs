@@ -34,6 +34,10 @@ use iroha_data_model::{
             LaneBlockProposalV1, LaneBlockQcV1, SumeragiLaneBlockSessionStatus,
             SumeragiLanePayloadOwnership, SumeragiMembershipStatus, ValidatorIndex,
         },
+        consensus_v2::{
+            SumeragiV2AdapterQueueStatus, SumeragiV2OperatorStatus, SumeragiV2Status,
+            SumeragiV2TxQueueStatus,
+        },
     },
     consensus::{ConsensusKeyRecord, Qc, ValidatorElectionOutcome, ValidatorSetCheckpoint},
     da::commitment::DaCommitmentBundle,
@@ -301,6 +305,104 @@ static LOCKED_QC_VIEW: AtomicU64 = AtomicU64::new(0);
 static HIGHEST_QC_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 static LOCKED_QC_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 static CANONICAL_PENDING_FINALITY_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
+static SUMERAGI_V2_STATUS: OnceLock<Mutex<Option<SumeragiV2Status>>> = OnceLock::new();
+static SUMERAGI_V2_OPERATOR_STATUS: OnceLock<Mutex<SumeragiV2OperatorStatus>> = OnceLock::new();
+#[cfg(test)]
+static SUMERAGI_V2_OPERATOR_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+
+fn v2_operator_status_slot() -> &'static Mutex<SumeragiV2OperatorStatus> {
+    SUMERAGI_V2_OPERATOR_STATUS.get_or_init(|| Mutex::new(SumeragiV2OperatorStatus::default()))
+}
+
+/// Publish the exact protocol-v2 reducer snapshot served by Torii.
+///
+/// The production adapter calls this only after serializing a reducer
+/// transition. Keeping the value separate from the legacy diagnostic atomics
+/// prevents removed RBC/recovery fields from leaking into the v2 status API.
+pub fn set_v2_status(status: SumeragiV2Status) {
+    let slot = SUMERAGI_V2_STATUS.get_or_init(|| Mutex::new(None));
+    *slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(status);
+}
+
+/// Return the latest protocol-v2 reducer snapshot, if v2 has started.
+#[must_use]
+pub fn v2_status() -> Option<SumeragiV2Status> {
+    SUMERAGI_V2_STATUS.get().and_then(|slot| {
+        slot.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    })
+}
+
+/// Clear protocol-v2 status during shutdown and isolated tests.
+pub fn clear_v2_status() {
+    if let Some(slot) = SUMERAGI_V2_STATUS.get() {
+        *slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+}
+
+/// Publish current bounded reducer-adapter queue occupancy.
+pub fn set_v2_adapter_queue_status(status: SumeragiV2AdapterQueueStatus) {
+    v2_operator_status_slot()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .adapter_queues = status;
+}
+
+/// Publish current transaction-queue pressure sampled by the live v2 runner.
+pub fn set_v2_tx_queue_status(status: SumeragiV2TxQueueStatus) {
+    v2_operator_status_slot()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .tx_queue = status;
+}
+
+/// Record durable v2 view installations without reusing legacy pacemaker counters.
+pub fn note_v2_view_changes(delta: u64) {
+    let mut status = v2_operator_status_slot()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    status.view_change_install_total = status.view_change_install_total.saturating_add(delta);
+}
+
+/// Record one reducer input deferred under exact v2 busy backpressure.
+pub fn note_v2_busy_deferral() {
+    let mut status = v2_operator_status_slot()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    status.busy_deferral_total = status.busy_deferral_total.saturating_add(1);
+}
+
+/// Return the dedicated v2 operator snapshot accompanying authoritative status.
+#[must_use]
+pub fn v2_operator_status() -> SumeragiV2OperatorStatus {
+    *v2_operator_status_slot()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Clear volatile v2 queue occupancy while retaining process-monotonic counters.
+pub fn clear_v2_operator_queue_status() {
+    let mut status = v2_operator_status_slot()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    status.adapter_queues = SumeragiV2AdapterQueueStatus::default();
+    status.tx_queue = SumeragiV2TxQueueStatus::default();
+}
+
+/// Reset all dedicated v2 diagnostics for isolated tests.
+///
+/// Production lifecycle code must use [`clear_v2_operator_queue_status`] so
+/// process-monotonic counters never move backwards during a runner restart.
+pub fn clear_v2_operator_status() {
+    *v2_operator_status_slot()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = SumeragiV2OperatorStatus::default();
+}
 
 static RBC_ABORT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_ABORT_LAST_HEIGHT: AtomicU64 = AtomicU64::new(0);
@@ -2923,6 +3025,8 @@ pub enum ConsensusMessageKind {
     RbcDeliver,
     /// Fetch-pending-block requests (`FetchPendingBlock`).
     FetchPendingBlock,
+    /// Explicitly versioned global Sumeragi v2 messages.
+    V2,
     /// Consensus control-flow evidence.
     Evidence,
 }
@@ -2955,6 +3059,7 @@ impl ConsensusMessageKind {
             ConsensusMessageKind::RbcReady => "rbc_ready",
             ConsensusMessageKind::RbcDeliver => "rbc_deliver",
             ConsensusMessageKind::FetchPendingBlock => "fetch_pending_block",
+            ConsensusMessageKind::V2 => "sumeragi_v2",
             ConsensusMessageKind::Evidence => "evidence",
         }
     }
@@ -8990,6 +9095,11 @@ pub(crate) fn worker_queue_test_guard() -> TestLockGuard {
 }
 
 #[cfg(test)]
+fn v2_operator_status_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&SUMERAGI_V2_OPERATOR_STATUS_TEST_LOCK)
+}
+
+#[cfg(test)]
 pub(crate) fn reset_rbc_store_evictions_for_tests() {
     RBC_STORE_SESSIONS.store(0, Ordering::Relaxed);
     RBC_STORE_BYTES.store(0, Ordering::Relaxed);
@@ -9575,6 +9685,7 @@ mod tests {
         let prf_seed = [0x55; 32];
         let caps = iroha_p2p::ConsensusConfigCaps {
             nexus_policy_digest: [0xA5; 32],
+            v2_config_fingerprint: [0xA5; 32],
             collectors_k: 3,
             redundant_send_r: 2,
             da_enabled: true,
@@ -14176,6 +14287,59 @@ mod tests {
         assert_eq!(super::commit_pipeline_tick_total(), 0);
         super::note_commit_pipeline_tick(ConsensusMode::Permissioned, true);
         assert_eq!(super::commit_pipeline_tick_total(), 1);
+    }
+
+    #[test]
+    fn v2_operator_counters_are_monotonic_across_queue_lifecycle() {
+        let _guard = super::v2_operator_status_test_guard();
+        super::clear_v2_operator_status();
+        super::note_v2_view_changes(2);
+        super::note_v2_busy_deferral();
+        super::set_v2_adapter_queue_status(
+            iroha_data_model::block::consensus_v2::SumeragiV2AdapterQueueStatus {
+                ingress_keys: 4,
+                ingress_capacity: 16,
+                deferred_completion: 1,
+                deferred_progress: 2,
+                deferred_progress_capacity: 8,
+                deferred_normal: 3,
+                deferred_normal_capacity: 8,
+            },
+        );
+        super::set_v2_tx_queue_status(
+            iroha_data_model::block::consensus_v2::SumeragiV2TxQueueStatus {
+                tracked_transactions: 5,
+                queued_transactions: 4,
+                capacity: 64,
+                retained_bytes: 1_024,
+                max_retained_bytes: 8_192,
+                oldest_queued_age_ms: 25,
+                saturated_by_count: false,
+                saturated_by_bytes: false,
+                saturated_by_age: false,
+            },
+        );
+
+        let populated = super::v2_operator_status();
+        assert_eq!(populated.view_change_install_total, 2);
+        assert_eq!(populated.busy_deferral_total, 1);
+        assert_eq!(populated.adapter_queues.ingress_keys, 4);
+        assert_eq!(populated.tx_queue.tracked_transactions, 5);
+
+        super::clear_v2_operator_queue_status();
+        let restarted = super::v2_operator_status();
+        assert_eq!(restarted.view_change_install_total, 2);
+        assert_eq!(restarted.busy_deferral_total, 1);
+        assert_eq!(restarted.adapter_queues, Default::default());
+        assert_eq!(restarted.tx_queue, Default::default());
+
+        super::note_v2_view_changes(u64::MAX);
+        super::note_v2_busy_deferral();
+        let saturated = super::v2_operator_status();
+        assert_eq!(saturated.view_change_install_total, u64::MAX);
+        assert_eq!(saturated.busy_deferral_total, 2);
+
+        super::clear_v2_operator_status();
     }
 
     #[test]

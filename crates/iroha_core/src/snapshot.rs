@@ -2717,7 +2717,6 @@ mod tests {
             penalties_applied_at_height: None,
             validator_election: None,
         };
-
         {
             let mut world = state.world.block();
             world

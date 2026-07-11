@@ -1,0 +1,275 @@
+# Sumeragi v2 reducer verification
+
+## Pinned environment
+
+- Verus `0.2026.05.31.5dd6d83`
+- Rust `1.95.0-aarch64-apple-darwin` (or the matching host triple)
+- `vstd = 0.0.0-2026-05-31-0205`
+
+Run `scripts/verify_sumeragi_v2.sh` from the workspace root after placing the
+official pinned Verus release binaries in `PATH`. The script rejects a different
+Verus or vstd version, verifies the official macOS arm64 binary checksums
+(other platforms must supply the two pinned checksum variables), and rejects
+the wrong bundled Rust toolchain or proof escape hatches in the production
+reducer and formal proof module. It also rejects any external `#[path]` from
+the production module, then runs exactly six deterministic adversarial network
+simulations before invoking Verus.
+The script enables the crate's `verus` feature explicitly; normal production
+builds do not compile or link `vstd`.
+
+The dependency-free reducer sources are authoritative under
+`crates/iroha_core/src/sumeragi/v2_core/`; this excluded crate is a formal
+harness over those same package-local files. The script copies both into a
+disposable workspace, generates that workspace's lockfile, and runs the six
+loss/duplication/reordering, partition, crash, corrupt-body, withheld-evidence,
+and divergent-view simulations with `--locked --offline` and one test thread.
+The repository `Cargo.lock` is never read for resolution or modified.
+
+The script uses a clean Cargo target by default. After the simulations, it
+forwards `--no-cheating` only to the selected root crate with Cargo Verus's
+`--fwd-verus-args-to roots`; dependencies are still verified, but pinned
+`vstd` is allowed to use its reviewed trusted specifications. Verus, vstd, and
+the solver are therefore part of the proof TCB. The scanned production reducer
+and proof module contain no `assume`, `admit`, external body, or external
+specification escape hatch.
+
+The current module was checked with the official pinned macOS arm64 release:
+
+```text
+$ scripts/verify_sumeragi_v2.sh  # official pinned release already in PATH
+verification results:: 1690 verified, 0 errors  # pinned vstd dependency
+verification results:: 46 verified, 0 errors    # iroha_sumeragi_core root obligations
+```
+
+`rustfmt --edition 2024 --check` and an isolated
+`RUSTFLAGS='--cfg verus_only' cargo check -p iroha_sumeragi_core` also passed.
+The successful Verus run discharges the abstract obligations and the exact
+production commit-gate obligations described below. It does not turn
+unverified `std` collection code, cryptography, or adapter contracts into
+verified code; the remaining boundary is listed explicitly below.
+
+## Current refinement model
+
+`crates/iroha_sumeragi_core/src/verus_proofs.rs` contains one safety projection
+for the production WAL and reducer rather than independent protocol examples.
+
+The WAL projection enumerates all seven production `WalRecord` variants:
+
+| Production record | Projected guards and post-state |
+| --- | --- |
+| `ProposalIntent` | contiguous frame, frozen context, current view, expected local leader, safe parent/TC justification, open view, and one immutable proposal subject |
+| `PrepareIntent` | valid local Prepare, current/open view, and one immutable Prepare subject |
+| `ObservePrepare` | valid PrepareQC no later than the current view, compatible equal-view subject, and strictly-higher-only highest-QC replacement |
+| `LockAndCommit` | valid matching PrepareQC and local Commit, current/open view, non-regressing lock, immutable Commit subject, and atomic lock-plus-intent installation |
+| `TimeoutIntent` | valid local timeout for the current view, exact durable high-QC reference, and one immutable timeout intent |
+| `InstallTimeout` | valid TC, non-regressing certified view, no counter overflow, compatible selected PrepareQC, monotone lock, and entry into exactly `tc_view + 1` |
+| `Decision` | valid CommitQC and an absent or identical durable decision |
+
+The public `DurableState::apply` clone-and-swap behavior is represented by an
+accepted path and a rejected path. The rejected path preserves every projected
+field. Sequence exhaustion and TC-view overflow are explicit rejected cases.
+
+The reducer input projection enumerates all fifteen production `Event` variants
+and includes the `(height, view, generation)` tag. Its path relation represents:
+
+- tag rejection and pending-WAL backpressure as state-preserving paths;
+- accepted body availability, storage, and validation progress;
+- every source event that can reach each `start_persistence` call site;
+- acknowledgement of the sole matching frame through the exact WAL relation;
+- successful application acknowledgement for the exact durable decision; and
+- generation overflow as a state-preserving failure instead of a partial TC
+  installation in the reducer projection.
+
+The possible persistence records are phase constrained. A Prepare vote or QC
+can lead only to `ObservePrepare` or `LockAndCommit`; a Commit vote or QC can
+lead only to `Decision`; a timeout vote or TC can lead only to
+`InstallTimeout`; and a successful validation can lead only to Prepare or
+Commit intent for the same view and subject.
+
+The reducer projection keeps two different body facts deliberately:
+
+- monotone historical durable/validated tokens record the adapter ordering
+  contract needed to authorize proposal and Prepare signatures, including
+  replay of an already-authorized intent; and
+- an application-ready set mirrors the current `BodyState::Validated` boundary
+  and is cleared on TC generation change and crash recovery.
+
+This distinction prevents a replayed WAL record from manufacturing a body
+durability fact that is not present in the record itself.
+
+The executable commit gate additionally projects an explicit reducer action
+class (`Stutter`, `BeginWal`, `AcknowledgeWal`, `BodyProgress`,
+`VolatileProtocol`, or `CompleteApplication`) and the exact participating WAL
+record class. Successful signature completions distinguish proposal, Prepare,
+Commit, and timeout messages. This removes the previous ambiguity where the
+same collection of booleans could describe several unrelated source branches.
+The action classifier is decomposed into the same small executable predicates
+in production and Verus, including a separately checked validation-completion
+effect predicate. This keeps the solver query modular without changing the
+runtime decision or raising its resource limit.
+
+Each side of the transition also carries fixed-width cardinalities for the
+candidate/body work, pending and known PrepareQCs, current-view vote and
+timeout pools, locally formed certificates, retained outbound controls,
+signature FIFO/in-flight slot, and replay-resume flag. The gate enforces:
+
+- at most two current-view vote pools and `2 * validator_count` entries;
+- at most one timeout pool and `validator_count` timeout entries;
+- at most two locally formed QCs, one locally formed TC, and seven retained
+  outbound control classes;
+- every pending PrepareQC is known, with at most the durable highest/lock pair
+  additionally known;
+- body work is bounded by pending certified bodies plus candidate/decision
+  identities; and
+- the signature FIFO plus its sole in-flight item cannot exceed the durable
+  signable-intent bound.
+
+Acknowledging `InstallTimeout` additionally requires the exact production
+reset: candidate/body/pending/vote/timeout/formed pools are empty, at most two
+durable PrepareQCs remain known, and at most the three permitted post-TC
+control classes remain retained.
+
+## Encoded proof obligations
+
+The module contains transition-by-transition proof functions for:
+
+- strict count and voting-power quorum arithmetic;
+- accepted-WAL invariant preservation;
+- transactional rejection of malformed, non-contiguous, overflowed, or
+  otherwise inadmissible WAL frames;
+- immutable proposal, Prepare, Commit, and timeout intents;
+- the postcondition of every individual WAL record variant;
+- atomic `LockAndCommit` installation;
+- lock, view, highest-PrepareQC, and decision monotonicity;
+- body storage before validation and application readiness;
+- reducer invariant preservation for every reducer path;
+- persistence-before-signing, Decision-before-Apply, and TC-before-EnterView
+  effect fences;
+- reducer-level vote uniqueness, lock monotonicity, and decision uniqueness;
+- bounded volatile-evidence summaries on both sides of every committed step
+  and the exact persisted-TC reset;
+- consistency of reducer action/WAL/signature discriminants; and
+- an explicit production macro-step map to named `SumeragiV2Core.tla`
+  ingress, formation, begin/persist, body, signature, and apply actions, with
+  a checked safety-state delta for the durable boundary; and
+- crash/replay preservation of the complete WAL safety projection while
+  discarding volatile application readiness.
+
+## Exact production commit gate
+
+`crates/iroha_core/src/sumeragi/v2_core/refinement.rs` defines a small
+executable transition gate. Its decision expressions are shared textually with
+the Verus module by macros; the verifier does not check a separately copied
+reference implementation. The normal Rust build instantiates those expressions
+in `refinement::accepts`, while
+`crates/iroha_sumeragi_core/src/verus_proofs.rs` instantiates the same
+expressions in the verified functions.
+
+`Reducer::step` now performs the real transition on a private clone and invokes
+the gate before replacing caller-visible state. Successful, ignored, and error
+paths all pass the gate. A rejected candidate returns
+`ReducerError::RefinementViolation` and leaves the original reducer unchanged.
+
+The gate receives the complete effect vector as a fixed eight-slot trace. The
+bound is structural: seven retained control-message classes plus at most one
+fetch/apply effect fill eight slots; a ninth fails closed. Every
+active slot contains its exact vector position, effect discriminant, and a
+concrete authorization result; every inactive slot is a canonical zero. The
+verified relation proves:
+
+- every active effect slot's production-extracted authorization result is
+  true (the extraction caveat below remains);
+- Persist, Sign, Apply, EnterView, StoreBody, and ValidateBody occur at most
+  once per transition;
+- a Persist effect cannot share a transition with Sign, Apply, EnterView, or a
+  body-pipeline advance;
+- Sign is the last effect, so decision/view/body effects precede the next
+  asynchronous signing completion;
+- StoreBody and ValidateBody are single-effect transitions caused by their
+  exact predecessor completion;
+- an EnterView effect is possible only on acknowledgement of an
+  InstallTimeout continuation; and
+- the ignored/busy, begin-persist, acknowledge-persist, and non-durable action
+  families preserve their required state fields and effect fences.
+
+The same gate rejects an action/WAL mismatch (for example, an InstallTC
+continuation attached to a Decision record), an invented successful-signature
+class, an over-capacity volatile summary, or any stale/busy transition that
+changes a projected volatile cardinality. These are production checks, not
+debug assertions.
+
+The concrete authorization projection checks exact pending WAL entries and
+continuations, re-applies an acknowledged frame to a cloned `DurableState`,
+checks durable proposal/vote/timeout intents before Sign or signed Broadcast,
+checks a durable matching CommitQC and validated body before Apply, checks a
+persisted matching TC before EnterView, and checks body Store/Validate tags and
+states. These checks execute unconditionally in production; they are not debug
+assertions. Their Rust implementations are not themselves verified, so a bug
+that falsely returns `true` remains gap 1 below.
+
+The pinned verifier discharged all 46 reported root obligations with zero
+errors on a clean target. The verification script rejects `assume`,
+`admit`, unreviewed trusted bodies, and external function specifications in
+the package-local reducer and proof module. It also checks that every mapped
+TLA+ action name still exists in both `SumeragiV2Core.tla` and the Verus
+mapping; this prevents name drift but does not prove the independently parsed
+operator bodies equivalent.
+
+## Remaining work before a production correctness claim
+
+The following gaps are exact and intentional; each must be closed before the
+production reducer can be described as deductively verified:
+
+1. **Projection extraction and the inner reducer body.** The caller-visible
+   production commit decision is now the exact Verus-checked gate, and every
+   `Reducer::step` exit invokes it. The functions that extract authorization
+   facts from `Reducer`, `BTreeMap`, `VecDeque`, and concrete protocol objects
+   are ordinary production Rust because this pinned Verus toolchain cannot
+   verify the crate's current `std` collection-heavy reducer body directly.
+   They are executable, fail-closed, unit-tested checks, but a defect that
+   falsely computes an authorization fact is not excluded deductively. Closing
+   this final source-level gap requires either Verus-compatible collection
+   representations for the reducer or verified projection functions over
+   external type specifications; neither is claimed here.
+2. **Continuous pinned verification.** The exact pinned clean local run passes,
+   but repository CI must run `scripts/verify_sumeragi_v2.sh` and retain its
+   successful output. Non-macOS CI must pin and provide the official `verus`
+   and `cargo-verus` checksums. Any future syntax or solver failure must be
+   fixed without weakening a guard or invariant.
+3. **Volatile reducer contents.** Cardinalities, fixed protocol bounds, stale
+   stuttering, durable-signature capacity, and the persisted-TC reset are now
+   in the executable/verified gate. Exact key/value correspondence for
+   candidate selection, body-work states, vote signatures, known/pending QCs,
+   retained retransmission payloads, signature FIFO order, and replay-resume
+   transitions is still ordinary Rust and is not deductively verified. In
+   particular, the one-shot `resume_after_replay` lifecycle method is not a
+   `Reducer::step` event and therefore does not traverse this commit gate; its
+   durable-authorization behavior is covered by reducer and crash-boundary
+   tests, not by the exact executable-gate proof. Their liveness behavior is
+   also outside this safety proof.
+4. **Adapter token construction.** Authenticated-event, validated-certificate,
+   durable-body, deterministic-validation, and Kura-receipt constructors need
+   executable contracts proving that only the corresponding checked adapter
+   path can create each token. Cryptographic soundness, hash collision
+   resistance, executor determinism, and fsync truth remain documented proof
+   assumptions.
+5. **WAL byte implementation.** The relation covers accepted decoded frames and
+   fail-closed rejection. Norito framing, checksum/hash-chain validation,
+   incomplete-tail recovery, key binding, file synchronization, and pruning
+   still require executable refinement to those abstract outcomes.
+6. **TLA+ action-body equivalence.** Verus now has an explicit named macro-step
+   map (source, optional certificate formation, durable boundary), and the
+   verification script prevents action-name drift. The boundary delta is
+   proved against the production gate. No shared generated semantics or
+   cross-tool theorem yet proves those Verus definitions equivalent to the
+   independently parsed TLA+ operator bodies. Crash, restart, and epoch-boundary
+   actions also remain outside the executable `Reducer::step` map.
+7. **Temporal liveness.** This module proves safety-style transition
+   preservation only. Fair delivery, timeout-certificate progress, rotating
+   honest leaders, and the post-GST commit bound remain TLAPS liveness
+   obligations plus executable simulation/integration evidence.
+
+Until all seven items are discharged, the successful current run proves the
+listed abstract obligations and the exact production commit-gate relation. It
+does not prove every line of the inner reducer, the fact-extraction functions,
+WAL bytes, or the protocol liveness theorem.

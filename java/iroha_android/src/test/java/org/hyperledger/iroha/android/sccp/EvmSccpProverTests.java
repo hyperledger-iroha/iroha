@@ -78,7 +78,7 @@ public final class EvmSccpProverTests {
         : "statement hash must be normalized";
     assert ("0x" + repeat("78", 32)).equals(request.destinationBindingHash())
         : "destination binding hash must be normalized";
-    assert "0x60cb739b78c37151c150d3e911f2d61e7a68b09a8353409608d2a918ef299ad6"
+    assert "0x7c28c709bf9bd94151ab6212b8cb6bd20ee2c4f5a07247497f2a7350ff4aa3cf"
         .equals(request.requestHash()) : "request hash must bind EVM proof material";
     final EvmSccpProver.ProofRequest callbackSnapshot =
         EvmSccpProver.callbackRequestSnapshot(request);
@@ -8613,7 +8613,7 @@ public final class EvmSccpProverTests {
     writeTestNoritoField(encoder, child -> child.writeUInt(0, 64));
     writeTestNoritoField(
         encoder,
-        child -> writeTestNoritoString(child, "iroha2-consensus::permissioned-sumeragi@v1"));
+        child -> writeTestNoritoString(child, "iroha2-consensus::permissioned-sumeragi@v2"));
     writeTestNoritoField(
         encoder, child -> child.writeBytes(hexBytes(stripHex(value.finalityBlockHash))));
     writeTestNoritoField(encoder, child -> child.writeBytes(new byte[32]));

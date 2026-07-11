@@ -8483,6 +8483,8 @@ mod tests {
             "recursive-compact-key-artifacts.norito",
             "--verifier-keys-out",
             "recursive-compact-verifier-keys.norito",
+            "--confidential-transfer-v2-verifier-record-out",
+            "confidential-transfer-v2-verifier-record.norito",
             "--record-out",
             "recursive-compact-len4.record.norito",
         ])
@@ -8503,6 +8505,20 @@ mod tests {
         ])
         .expect("parse runtime tx status");
         assert!(!args.command.allows_fallback_config());
+    }
+
+    #[test]
+    fn vk_register_and_update_help_documents_namespace() {
+        for action in ["register", "update"] {
+            let err = Args::try_parse_from(["iroha", "app", "zk", "vk", action, "--help"])
+                .expect_err("--help must return rendered command help");
+            assert_eq!(err.kind(), ErrorKind::DisplayHelp);
+            let help = err.to_string();
+            assert!(
+                help.contains("namespace") && help.contains("core") && help.contains("non-empty"),
+                "{action} help must document namespace default and validation:\n{help}"
+            );
+        }
     }
 
     #[test]

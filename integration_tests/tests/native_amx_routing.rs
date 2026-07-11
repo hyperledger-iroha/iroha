@@ -20,6 +20,7 @@ use iroha::{
         block::{
             ExternalExecutionRouteLeg, ExternalExecutionRouteRole, Header, SignedBlock,
             consensus::{LaneBlockCommitment, NativeAmxPhase, NativeAmxReceipt},
+            consensus_v2::SumeragiV2StatusResponse,
         },
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
@@ -51,7 +52,6 @@ use iroha_test_network::{
     genesis_factory_with_post_topology, init_instruction_registry,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-use norito::json::{self, Value as JsonValue};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
@@ -797,7 +797,7 @@ async fn wait_for_status_native_amx_evidence(
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let client = client.clone();
-        match spawn_blocking(move || client.get_sumeragi_status_wire()).await {
+        match spawn_blocking(move || client.get_sumeragi_v2_status()).await {
             Ok(Ok(status)) => {
                 let commitment = status
                     .lane_settlement_commitments
@@ -882,169 +882,61 @@ async fn wait_for_all_peers_to_observe_native_amx_evidence(
         .ok_or_else(|| eyre!("{context}: four-peer network returned no native AMX relay"))
 }
 
-async fn fetch_sumeragi_status_json(client: &Client) -> Result<JsonValue> {
-    let status_url = client.torii_url.join("v1/sumeragi/status")?;
-    let response = reqwest::Client::new()
-        .get(status_url)
-        .send()
+async fn fetch_sumeragi_v2_status(client: &Client) -> Result<SumeragiV2StatusResponse> {
+    let client = client.clone();
+    spawn_blocking(move || client.get_sumeragi_v2_status())
         .await
-        .wrap_err("fetch Sumeragi status")?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .wrap_err("read Sumeragi status body")?;
-    ensure!(
-        status.is_success(),
-        "Sumeragi status request failed with status {status}: {body}"
-    );
-    json::from_str(&body).wrap_err("parse Sumeragi status JSON")
+        .wrap_err("join authoritative Sumeragi v2 status request")?
 }
 
-fn status_contains_native_amx_receipt(status: &JsonValue, receipt: &NativeAmxReceipt) -> bool {
-    let Some(commitments) = status
-        .get("lane_settlement_commitments")
-        .and_then(JsonValue::as_array)
-    else {
-        return false;
-    };
-    commitments.iter().any(|commitment| {
-        let Some(commitment) = commitment.as_object() else {
-            return false;
-        };
-        if commitment.get("block_height").and_then(JsonValue::as_u64)
-            != Some(receipt.authority_context_height)
-            || commitment.get("lane_id").and_then(JsonValue::as_u64)
-                != Some(u64::from(receipt.lane_id))
-            || commitment.get("dataspace_id").and_then(JsonValue::as_u64)
-                != Some(u64::from(receipt.dataspace_id))
-        {
-            return false;
-        }
-        let Some(native_receipts) = commitment
-            .get("native_amx_receipts")
-            .and_then(JsonValue::as_array)
-        else {
-            return false;
-        };
-        native_receipts.iter().any(|native| {
-            let Some(native) = native.as_object() else {
-                return false;
-            };
-            let source_id_is_hex = native
-                .get("source_id")
-                .and_then(JsonValue::as_str)
-                .is_some_and(|value| {
-                    value.len() == Hash::LENGTH * 2
-                        && value.chars().all(|char| char.is_ascii_hexdigit())
-                });
-            let plan_digest_is_present = native
-                .get("plan_digest")
-                .and_then(JsonValue::as_str)
-                .is_some_and(|value| !value.is_empty());
-            if !source_id_is_hex
-                || !plan_digest_is_present
-                || native
-                    .get("authority_context_height")
-                    .and_then(JsonValue::as_u64)
-                    != Some(receipt.authority_context_height)
-                || native.get("lane_block_height").and_then(JsonValue::as_u64)
-                    != Some(receipt.lane_block_height)
-                || native.get("lane_id").and_then(JsonValue::as_u64)
-                    != Some(u64::from(receipt.lane_id))
-                || native.get("dataspace_id").and_then(JsonValue::as_u64)
-                    != Some(u64::from(receipt.dataspace_id))
-            {
-                return false;
-            }
-            let Some(legs) = native.get("legs").and_then(JsonValue::as_array) else {
-                return false;
-            };
-            receipt.legs.iter().all(|expected_leg| {
-                legs.iter().any(|leg| {
-                    let Some(leg) = leg.as_object() else {
-                        return false;
-                    };
-                    leg.get("lane_id").and_then(JsonValue::as_u64)
-                        == Some(u64::from(expected_leg.lane_id))
-                        && leg.get("dataspace_id").and_then(JsonValue::as_u64)
-                            == Some(u64::from(expected_leg.dataspace_id))
-                        && leg
-                            .get("prepare_qc")
-                            .and_then(JsonValue::as_object)
-                            .and_then(|qc| qc.get("body"))
-                            .and_then(JsonValue::as_object)
-                            .and_then(|body| body.get("phase"))
-                            .and_then(JsonValue::as_str)
-                            == Some("prepare")
-                        && leg
-                            .get("commit_qc")
-                            .and_then(JsonValue::as_object)
-                            .and_then(|qc| qc.get("body"))
-                            .and_then(JsonValue::as_object)
-                            .and_then(|body| body.get("phase"))
-                            .and_then(JsonValue::as_str)
-                            == Some("commit")
-                })
-            })
-        })
+fn status_contains_native_amx_receipt(
+    status: &SumeragiV2StatusResponse,
+    receipt: &NativeAmxReceipt,
+) -> bool {
+    status.lane_settlement_commitments.iter().any(|commitment| {
+        commitment.block_height == receipt.authority_context_height
+            && commitment.lane_id == receipt.lane_id
+            && commitment.dataspace_id == receipt.dataspace_id
+            && commitment
+                .native_amx_receipts
+                .iter()
+                .any(|candidate| candidate == receipt)
     })
 }
 
-fn native_amx_status_summary(status: &JsonValue) -> String {
-    let Some(commitments) = status
-        .get("lane_settlement_commitments")
-        .and_then(JsonValue::as_array)
-    else {
-        return "lane_settlement_commitments missing".to_owned();
-    };
-    let native_total = commitments
+fn native_amx_status_summary(status: &SumeragiV2StatusResponse) -> String {
+    let native_total = status
+        .lane_settlement_commitments
         .iter()
-        .filter_map(|commitment| {
-            commitment
-                .get("native_amx_receipts")
-                .and_then(JsonValue::as_array)
-        })
-        .map(|receipts| receipts.len())
+        .map(|commitment| commitment.native_amx_receipts.len())
         .sum::<usize>();
-    let first = commitments
+    let first = status
+        .lane_settlement_commitments
         .first()
         .map(|commitment| {
-            let native = commitment
-                .get("native_amx_receipts")
-                .and_then(JsonValue::as_array)
-                .and_then(|receipts| receipts.first());
-            let native_summary = native
+            let native_summary = commitment
+                .native_amx_receipts
+                .first()
                 .map(|receipt| {
                     format!(
                         " native_source={:?} native_plan={:?} authority_height={:?} lane_height={:?} legs={}",
-                        receipt.get("source_id").and_then(JsonValue::as_str),
-                        receipt.get("plan_digest").and_then(JsonValue::as_str),
-                        receipt
-                            .get("authority_context_height")
-                            .and_then(JsonValue::as_u64),
-                        receipt
-                            .get("lane_block_height")
-                            .and_then(JsonValue::as_u64),
-                        receipt
-                            .get("legs")
-                            .and_then(JsonValue::as_array)
-                            .map(|legs| legs.len())
-                            .unwrap_or(0)
+                        receipt.source_id,
+                        receipt.plan_digest,
+                        receipt.authority_context_height,
+                        receipt.lane_block_height,
+                        receipt.legs.len(),
                     )
                 })
                 .unwrap_or_else(|| " native_receipts_empty".to_owned());
             format!(
                 " first_block={:?} first_lane={:?} first_dataspace={:?}{native_summary}",
-                commitment.get("block_height").and_then(JsonValue::as_u64),
-                commitment.get("lane_id").and_then(JsonValue::as_u64),
-                commitment.get("dataspace_id").and_then(JsonValue::as_u64)
+                commitment.block_height, commitment.lane_id, commitment.dataspace_id,
             )
         })
         .unwrap_or_else(|| " no_first_commitment".to_owned());
     format!(
         "commitments={} native_receipts_total={}{}",
-        commitments.len(),
+        status.lane_settlement_commitments.len(),
         native_total,
         first
     )
@@ -1058,7 +950,7 @@ async fn wait_for_status_native_amx_receipt(
     let started = Instant::now();
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match fetch_sumeragi_status_json(client).await {
+        match fetch_sumeragi_v2_status(client).await {
             Ok(status) if status_contains_native_amx_receipt(&status, receipt) => return Ok(()),
             Ok(status) => {
                 last_error = Some(format!(

@@ -313,7 +313,10 @@ fn match_ordered_chunk_range(
         });
     }
 
-    Ok((start..end).collect())
+    let mut indices = Vec::new();
+    try_reserve_verifier(&mut indices, section_count, "matched chunk indices")?;
+    indices.extend(start..end);
+    Ok(indices)
 }
 
 fn block_range_for_indices(
@@ -337,7 +340,8 @@ fn canonical_block_plan(
     payload_len: u64,
 ) -> Result<CarBuildPlan, CarVerifyError> {
     let mut relative_offset = 0u64;
-    let mut chunks = Vec::with_capacity(indices.len());
+    let mut chunks = Vec::new();
+    try_reserve_verifier(&mut chunks, indices.len(), "canonical block chunks")?;
     for &index in indices {
         let chunk = plan
             .chunks
@@ -347,7 +351,12 @@ fn canonical_block_plan(
             offset: relative_offset,
             length: chunk.length,
             digest: chunk.digest,
-            taikai_segment_hint: chunk.taikai_segment_hint.clone(),
+            taikai_segment_hint: chunk
+                .taikai_segment_hint
+                .as_ref()
+                .map(crate::try_clone_taikai_hint)
+                .transpose()
+                .map_err(CarVerifyError::Plan)?,
         });
         relative_offset = relative_offset.checked_add(u64::from(chunk.length)).ok_or(
             CarVerifyError::InternalInvariant("canonical block plan length overflowed u64"),
@@ -383,22 +392,44 @@ fn plan_from_parsed_payload(
 
     let mut chunker = sorafs_chunker::Chunker::try_with_profile(profile)
         .map_err(|_| CarVerifyError::ChunkProfileMismatch)?;
+    let expected_chunk_count = parsed.chunk_sections().len();
     let mut derived_chunks = Vec::new();
+    try_reserve_verifier(
+        &mut derived_chunks,
+        expected_chunk_count,
+        "derived verifier chunks",
+    )?;
+    let mut emitted_too_many = false;
     for section in parsed.chunk_sections() {
         chunker.feed(parsed.chunk_payload(section), |chunk| {
+            if derived_chunks.len() < expected_chunk_count {
+                derived_chunks.push(chunk);
+            } else {
+                emitted_too_many = true;
+            }
+        });
+    }
+    chunker.finish(|chunk| {
+        if derived_chunks.len() < expected_chunk_count {
             derived_chunks.push(chunk);
-        });
-    }
-    chunker.finish(|chunk| derived_chunks.push(chunk));
+        } else {
+            emitted_too_many = true;
+        }
+    });
 
-    if derived_chunks.len() != parsed.chunk_sections().len() {
+    if emitted_too_many || derived_chunks.len() != expected_chunk_count {
         return Err(CarVerifyError::PlanChunkCountMismatch {
-            expected: derived_chunks.len(),
-            actual: parsed.chunk_sections().len(),
+            expected: if emitted_too_many {
+                expected_chunk_count.saturating_add(1)
+            } else {
+                derived_chunks.len()
+            },
+            actual: expected_chunk_count,
         });
     }
 
-    let mut chunks = Vec::with_capacity(derived_chunks.len());
+    let mut chunks = Vec::new();
+    try_reserve_verifier(&mut chunks, derived_chunks.len(), "verified CAR chunks")?;
     for (index, (derived, parsed_chunk)) in derived_chunks
         .iter()
         .zip(parsed.chunk_sections())
@@ -665,6 +696,11 @@ pub enum CarVerifyError {
     InvalidIndexOffset,
     #[error("internal verifier invariant violated: {0}")]
     InternalInvariant(&'static str),
+    #[error("failed to reserve {requested} entries/bytes for {context}")]
+    AllocationFailed {
+        context: &'static str,
+        requested: usize,
+    },
     #[error("failed to reconstruct plan: {0}")]
     Plan(#[from] CarPlanError),
 }
@@ -686,6 +722,19 @@ pub(crate) struct ParsedChunkSection {
     data_range: Range<usize>,
 }
 
+fn try_reserve_verifier<T>(
+    values: &mut Vec<T>,
+    additional: usize,
+    context: &'static str,
+) -> Result<(), CarVerifyError> {
+    values
+        .try_reserve_exact(additional)
+        .map_err(|_| CarVerifyError::AllocationFailed {
+            context,
+            requested: additional,
+        })
+}
+
 impl<'a> ParsedCar<'a> {
     pub(crate) fn parse(bytes: &'a [u8]) -> Result<Self, CarVerifyError> {
         let total_len = u64::try_from(bytes.len()).map_err(|_| CarVerifyError::InvalidHeader)?;
@@ -698,19 +747,25 @@ impl<'a> ParsedCar<'a> {
 
         let characteristics = &bytes[PRAGMA.len()..PRAGMA.len() + HEADER_LEN];
         let data_offset = u64::from_le_bytes(
-            characteristics[16..24]
+            characteristics
+                .get(16..24)
+                .ok_or(CarVerifyError::InvalidHeader)?
                 .try_into()
-                .expect("slice with fixed length"),
+                .map_err(|_| CarVerifyError::InvalidHeader)?,
         );
         let data_size = u64::from_le_bytes(
-            characteristics[24..32]
+            characteristics
+                .get(24..32)
+                .ok_or(CarVerifyError::InvalidHeader)?
                 .try_into()
-                .expect("slice with fixed length"),
+                .map_err(|_| CarVerifyError::InvalidHeader)?,
         );
         let index_offset = u64::from_le_bytes(
-            characteristics[32..40]
+            characteristics
+                .get(32..40)
+                .ok_or(CarVerifyError::InvalidHeader)?
                 .try_into()
-                .expect("slice with fixed length"),
+                .map_err(|_| CarVerifyError::InvalidHeader)?,
         );
 
         let header_start = PRAGMA.len() + HEADER_LEN;
@@ -813,6 +868,7 @@ impl<'a> ParsedCar<'a> {
                         CarVerifyError::InternalInvariant("parsed payload length overflowed u64"),
                     )?;
                     payload_hasher.update(data_slice);
+                    try_reserve_verifier(&mut chunk_sections, 1, "parsed CAR chunk sections")?;
                     chunk_sections.push(ParsedChunkSection {
                         digest: cid.digest,
                         length,
@@ -828,7 +884,12 @@ impl<'a> ParsedCar<'a> {
                 }
             }
 
-            section_index += 1;
+            section_index =
+                section_index
+                    .checked_add(1)
+                    .ok_or(CarVerifyError::InternalInvariant(
+                        "CAR section count overflowed usize",
+                    ))?;
         }
 
         Ok(Self {
@@ -862,14 +923,25 @@ impl<'a> ParsedCar<'a> {
     }
 
     #[cfg(feature = "cli")]
-    pub(crate) fn payload_bytes(&self) -> Vec<u8> {
+    pub(crate) fn payload_bytes(&self) -> Result<Vec<u8>, CarVerifyError> {
         let capacity = usize::try_from(self.payload_len)
-            .expect("parsed payload length originated from in-memory slices");
-        let mut payload = Vec::with_capacity(capacity);
+            .map_err(|_| CarVerifyError::InternalInvariant("payload length exceeds host width"))?;
+        let mut payload = Vec::new();
+        payload
+            .try_reserve_exact(capacity)
+            .map_err(|_| CarVerifyError::AllocationFailed {
+                context: "parsed CAR payload",
+                requested: capacity,
+            })?;
         for section in &self.chunk_sections {
             payload.extend_from_slice(self.chunk_payload(section));
         }
-        payload
+        if payload.len() != capacity {
+            return Err(CarVerifyError::InternalInvariant(
+                "parsed payload sections do not match payload length",
+            ));
+        }
+        Ok(payload)
     }
 
     fn chunk_payload(&self, section: &ParsedChunkSection) -> &[u8] {
@@ -880,8 +952,8 @@ impl<'a> ParsedCar<'a> {
         &self.chunk_sections
     }
 
-    pub(crate) fn roots(&self) -> Vec<Vec<u8>> {
-        self.roots.clone()
+    pub(crate) fn roots(&self) -> &[Vec<u8>] {
+        &self.roots
     }
 
     pub(crate) fn car_archive_digest(&self) -> Hash {
@@ -978,10 +1050,37 @@ pub(crate) struct CidInfo {
 }
 
 fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, CarVerifyError> {
-    if let Some(descriptor) =
-        chunker_registry::lookup(crate::ProfileId(manifest.chunking.profile_id.0))
+    if manifest.chunking.profile_id.0 != 0 {
+        let descriptor = chunker_registry::lookup(crate::ProfileId(manifest.chunking.profile_id.0))
+            .ok_or(CarVerifyError::ChunkProfileMismatch)?;
+        let profile = descriptor.profile;
+        let geometry_matches = u32::try_from(profile.min_size).ok()
+            == Some(manifest.chunking.min_size)
+            && u32::try_from(profile.target_size).ok() == Some(manifest.chunking.target_size)
+            && u32::try_from(profile.max_size).ok() == Some(manifest.chunking.max_size)
+            && u32::try_from(profile.break_mask).ok() == Some(manifest.chunking.break_mask);
+        let identity_matches = manifest.chunking.namespace == descriptor.namespace
+            && manifest.chunking.name == descriptor.name
+            && manifest.chunking.semver == descriptor.semver
+            && manifest.chunking.multihash_code == descriptor.multihash_code;
+        let aliases_match = manifest.chunking.aliases.len() == descriptor.aliases.len()
+            && manifest
+                .chunking
+                .aliases
+                .iter()
+                .zip(descriptor.aliases.iter())
+                .all(|(provided, expected)| provided == *expected);
+        if !geometry_matches || !identity_matches || !aliases_match {
+            return Err(CarVerifyError::ChunkProfileMismatch);
+        }
+        return Ok(profile);
+    }
+    if manifest.chunking.namespace != "inline"
+        || manifest.chunking.name != "inline"
+        || manifest.chunking.semver != "0.0.0"
+        || manifest.chunking.aliases.as_slice() != ["inline.inline@0.0.0"]
     {
-        return Ok(descriptor.profile);
+        return Err(CarVerifyError::ChunkProfileMismatch);
     }
     let profile = ChunkProfile {
         min_size: manifest.chunking.min_size as usize,
@@ -989,10 +1088,7 @@ fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, Ca
         max_size: manifest.chunking.max_size as usize,
         break_mask: manifest.chunking.break_mask as u64,
     };
-    if profile.min_size == 0
-        || profile.min_size > profile.target_size
-        || profile.target_size > profile.max_size
-        || profile.break_mask == 0
+    if profile.validate().is_err() || profile.max_size > crate::CHUNK_STORE_MAX_CHUNK_BYTES as usize
     {
         return Err(CarVerifyError::ChunkProfileMismatch);
     }
@@ -1012,7 +1108,7 @@ pub(crate) fn parse_carv1_header(bytes: &[u8]) -> Result<Vec<Vec<u8>>, CarVerify
     for _ in 0..map_len {
         let (key, consumed_key) = decode_cbor_text(&bytes[idx..])?;
         idx += consumed_key;
-        match key.as_str() {
+        match key {
             "roots" => {
                 if roots.is_some() {
                     return Err(CarVerifyError::InvalidCarv1Header("duplicate roots entry"));
@@ -1026,7 +1122,8 @@ pub(crate) fn parse_carv1_header(bytes: &[u8]) -> Result<Vec<Vec<u8>>, CarVerify
                         "roots count exceeds header bytes",
                     ));
                 }
-                let mut entries = Vec::with_capacity(count);
+                let mut entries = Vec::new();
+                try_reserve_verifier(&mut entries, count, "CARv1 header roots")?;
                 for _ in 0..count {
                     let (value, consumed) = decode_cbor_bytes(&bytes[idx..])?;
                     idx += consumed;
@@ -1110,7 +1207,7 @@ fn decode_cbor_uint(data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
     decode_cbor_len(0, data)
 }
 
-fn decode_cbor_text(data: &[u8]) -> Result<(String, usize), CarVerifyError> {
+fn decode_cbor_text(data: &[u8]) -> Result<(&str, usize), CarVerifyError> {
     let (len, consumed) = decode_cbor_len(3, data)?;
     let start = consumed;
     let len = usize::try_from(len)
@@ -1121,7 +1218,7 @@ fn decode_cbor_text(data: &[u8]) -> Result<(String, usize), CarVerifyError> {
     if end > data.len() {
         return Err(CarVerifyError::InvalidCarv1Header("text truncated"));
     }
-    let text = String::from_utf8(data[start..end].to_vec())
+    let text = std::str::from_utf8(&data[start..end])
         .map_err(|_| CarVerifyError::InvalidCarv1Header("text invalid utf8"))?;
     Ok((text, end))
 }
@@ -1137,7 +1234,10 @@ fn decode_cbor_bytes(data: &[u8]) -> Result<(Vec<u8>, usize), CarVerifyError> {
     if end > data.len() {
         return Err(CarVerifyError::InvalidCarv1Header("bytes truncated"));
     }
-    Ok((data[start..end].to_vec(), end))
+    let mut value = Vec::new();
+    try_reserve_verifier(&mut value, len, "CARv1 header byte string")?;
+    value.extend_from_slice(&data[start..end]);
+    Ok((value, end))
 }
 
 fn decode_cbor_len(expected_major: u8, data: &[u8]) -> Result<(u64, usize), CarVerifyError> {
@@ -1245,7 +1345,7 @@ mod tests {
             .pin_policy(PinPolicy {
                 min_replicas: 1,
                 storage_class: StorageClass::Hot,
-                retention_epoch: 0,
+                retention_epoch: 1,
             })
             .governance(GovernanceProofs::default())
             .build()
@@ -1390,6 +1490,61 @@ mod tests {
         let report = CarVerifier::verify_full_car(&manifest, &car).expect("verify full CAR");
         assert_eq!(report.stats, stats);
         assert_eq!(report.chunk_store.payload_len(), plan.content_length);
+    }
+
+    #[test]
+    fn full_car_rejects_tampered_registered_profile_geometry() {
+        let payload = sample_payload();
+        let plan =
+            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
+        let mut car = Vec::new();
+        let stats = CarWriter::new(&plan, &payload)
+            .expect("writer")
+            .write_to(&mut car)
+            .expect("write CAR");
+        let mut manifest = build_manifest(&plan, &stats);
+        manifest.chunking.max_size = manifest.chunking.max_size.saturating_sub(1);
+
+        let error = CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car)
+            .expect_err("registered profile geometry mismatch must fail");
+        assert!(matches!(error, CarVerifyError::ChunkProfileMismatch));
+    }
+
+    #[test]
+    fn full_car_rejects_unknown_non_inline_profile_id() {
+        let payload = sample_payload();
+        let plan =
+            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
+        let mut car = Vec::new();
+        let stats = CarWriter::new(&plan, &payload)
+            .expect("writer")
+            .write_to(&mut car)
+            .expect("write CAR");
+        let mut manifest = build_manifest(&plan, &stats);
+        manifest.chunking.profile_id = sorafs_manifest::ProfileId(u32::MAX);
+
+        let error = CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car)
+            .expect_err("unknown registered profile must fail");
+        assert!(matches!(error, CarVerifyError::ChunkProfileMismatch));
+    }
+
+    #[test]
+    fn full_car_rejects_noncanonical_inline_profile_identity() {
+        let payload = sample_payload();
+        let plan =
+            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
+        let mut car = Vec::new();
+        let stats = CarWriter::new(&plan, &payload)
+            .expect("writer")
+            .write_to(&mut car)
+            .expect("write CAR");
+        let mut manifest = build_manifest(&plan, &stats);
+        manifest.chunking.profile_id = sorafs_manifest::ProfileId(0);
+        manifest.chunking.namespace = "untrusted".to_owned();
+
+        let error = CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car)
+            .expect_err("noncanonical inline identity must fail");
+        assert!(matches!(error, CarVerifyError::ChunkProfileMismatch));
     }
 
     #[test]

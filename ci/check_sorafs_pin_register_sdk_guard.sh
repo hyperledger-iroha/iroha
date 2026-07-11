@@ -459,15 +459,15 @@ def check_csharp_contract():
 
 def check_jvm_contract():
     require_contains("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt", "RegisterPinManifestInstruction", "Kotlin paid-pin instruction")
-    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "builder requires content length", "Kotlin content-length fail-closed test")
-    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "from arguments rejects unsupported storage class", "Kotlin storage-class adversarial test")
-    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "chunker profile rejects nonpositive profile id", "Kotlin chunker profile-id adversarial test")
-    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "from arguments rejects negative chunker multihash code", "Kotlin chunker multihash adversarial test")
+    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "builder rejects empty invalid noncanonical and oversized manifest payloads", "Kotlin manifest-payload fail-closed test")
+    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "digests require nonzero canonical lowercase 32 byte hex", "Kotlin commitment adversarial test")
+    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "alias fields are all or nothing and bounded canonical hex", "Kotlin alias adversarial test")
+    require_contains("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt", "from arguments rejects legacy unknown and missing fields", "Kotlin first-release schema adversarial test")
     require_contains("java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java", "RegisterPinManifest", "Java paid-pin instruction")
-    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsMissingContentLength", "Java content-length fail-closed test")
-    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsFromArgumentsUnsupportedStorageClass();", "Java storage-class adversarial test invocation")
-    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsChunkerProfileNonpositiveProfileId();", "Java chunker profile-id adversarial test invocation")
-    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsFromArgumentsNegativeChunkerMultihashCode();", "Java chunker multihash adversarial test invocation")
+    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsOversizedManifestPayload();", "Java manifest size adversarial test invocation")
+    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsLegacyAndUnknownArguments();", "Java first-release schema adversarial test invocation")
+    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsMalformedChunkDigest();", "Java commitment adversarial test invocation")
+    require_contains("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java", "rejectsPartialAliasBinding();", "Java alias adversarial test invocation")
 
 
 def run_checks():
@@ -811,27 +811,27 @@ source_modes = {
     ),
     "--negative-control-kotlin-builder-test": (
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt",
-        "builder requires content length",
-        "builder content length test disabled",
+        "builder rejects empty invalid noncanonical and oversized manifest payloads",
+        "builder manifest payload test disabled",
         "Kotlin builder test drift",
     ),
     "--negative-control-kotlin-chunker-unsigned-test": (
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt",
-        "chunker profile rejects nonpositive profile id",
-        "chunker profile unsigned test disabled",
-        "Kotlin chunker unsigned test drift",
+        "digests require nonzero canonical lowercase 32 byte hex",
+        "digest canonicality test disabled",
+        "Kotlin digest canonicality test drift",
     ),
     "--negative-control-java-builder-test": (
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java",
-        "rejectsFromArgumentsUnsupportedStorageClass();",
-        "rejectsFromArgumentsUnsupportedStorageClassDisabled();",
+        "rejectsLegacyAndUnknownArguments();",
+        "rejectsLegacyAndUnknownArgumentsDisabled();",
         "Java builder test drift",
     ),
     "--negative-control-java-chunker-unsigned-test": (
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java",
-        "rejectsChunkerProfileNonpositiveProfileId();",
-        "rejectsChunkerProfileNonpositiveProfileIdDisabled();",
-        "Java chunker unsigned test drift",
+        "rejectsMalformedChunkDigest();",
+        "rejectsMalformedChunkDigestDisabled();",
+        "Java digest canonicality test drift",
     ),
 }
 

@@ -1,9 +1,10 @@
 {
-  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
+  "bls_domain": "bls-iroha2:npos-sumeragi:v2",
   "chain": "iroha3-taira",
   "chain_discriminant": 369,
   "consensus_fingerprint": "0x653bb383f0d53faa4fd9e9995d75f44dd91928ff3f6efc346fa8bbe8eb139ae8",
   "consensus_mode": "Npos",
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"4098404A6DF5C3CB8A4343EE32BBE5CE1B8DAAF6662C2905465A920A6E815859"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -28,7 +29,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "wonderland",
+              "id": "wonderland.universal",
               "logo": null,
               "metadata": {
                 "key": "value"
@@ -73,7 +74,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "garden_of_live_flowers",
+              "id": "garden_of_live_flowers.universal",
               "logo": null,
               "metadata": {}
             }
@@ -240,10 +241,10 @@
           "memory": 55000000
         },
         "sumeragi": {
-          "block_time_ms": 100,
+          "block_time_ms": 1000,
           "collectors_k": 3,
           "collectors_redundant_send_r": 3,
-          "commit_time_ms": 100,
+          "commit_time_ms": 1000,
           "da_enabled": true,
           "key_activation_lead_blocks": 1,
           "key_allowed_algorithms": [
@@ -374,6 +375,6 @@
     }
   ],
   "wire_proto_versions": [
-    1
+    2
   ]
 }

@@ -3884,11 +3884,16 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   deterministic X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Swift
   now also exposes the typed confidential transfer witness/request builders
   and verified-fold top-up bundle builders, including the
-  confidential-transfer-v2 verifier-record archive with its 32-bit `status`
-  field. Default decryption binds the plaintext owner tag to the supplied spend
-  key, while diversified notes must use the explicit expected-owner-tag
-  overload. Keep the higher-level wallet flows pinned to this contract when
-  wiring shield-note recovery into production clients. The focused JVM and
+  confidential-transfer-v2 verifier-record archive with packed direct fixed32
+  fields, length-delimited generic fixed32 `Vec`/`Option` payloads, marked Iroha
+  schema/envelope hashes, framed delegated `AssetDefinitionId` bytes, omitted
+  absent trailing attachment defaults, and a four-byte `u32` `status`
+  discriminant despite Rust's `ConfidentialStatus` `repr(u8)`. Default
+  decryption binds the plaintext
+  owner tag to the supplied spend key, while diversified notes must use the
+  explicit expected-owner-tag overload. Keep the higher-level wallet flows
+  pinned to this contract when wiring shield-note recovery into production
+  clients. The focused JVM and
   Swift SDK runners plus SDK parity guard now execute and pin the
   encrypted-payload model tests, confidential-note contract tests, Merkle-path
   parser tests, witness/request builder tests, and verified-fold top-up tests.
@@ -25497,6 +25502,21 @@ digest-bound pending-XSD source probe summaries for reviewed
   hop evidence plus caller-supplied Pallas open-envelopes archives before
   serializing recursive-spend request archives instead of constructing
   preverified folded public inputs themselves. The same
+  Swift path now assembles checked redeem attachments from the exact Torii
+  `VerifyingKeyRecord` archive: verifier-key detail responses include canonical
+  `record_norito_base64`, namespace, owner, key, and lifecycle metadata; the
+  public Swift builder performs native confidential-unshield-v3 verification;
+  and the async SDK helper owns the Torii fetch, proof build, verification, and
+  attachment sequence. Swift, Kotlin/JVM, and Java Android all enforce exact
+  unshield verifier references, marked Iroha schema/envelope hashes, inclusive
+  activation, and exclusive withdrawal before an attachment is emitted.
+  Production Apple bridge packaging keeps privacy dispatch opt-in through
+  `--privacy-production-enabled`, records that mode in the artifact manifest
+  and XCFramework marker, and uses disjoint Cargo targets for gated builds.
+  The focused macOS native lane runtime-generates the governed Rust verifier
+  record, builds and verifies a real Swift unshield proof, and has Rust decode
+  and cryptographically verify the emitted attachment without changing the
+  bridge ABI or tracking generated artifacts. The same
   SDK surfaces now expose the ABI-6 recursive aggregation proof-bundle prover,
   which accepts record-backed bundle bytes plus proof-derived Pallas
   open-envelope archive bytes and returns an admission-neutral

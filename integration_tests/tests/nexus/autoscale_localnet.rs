@@ -24,7 +24,7 @@ use iroha::{
     data_model::{
         ChainId, HasMetadata, Level,
         block::{
-            CertifiedMergeLedgerReference, SignedBlock,
+            CertifiedMergeLedgerReference, Header, SignedBlock,
             consensus::{
                 COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
                 committed_lane_block_status_counts_as_progress,
@@ -1813,11 +1813,11 @@ struct LaneStatusSnapshot {
 }
 
 #[derive(Clone, Debug)]
-struct LaneCommitmentSnapshot {
+struct LaneSettlementSnapshot {
     lane_id: u32,
     block_height: u64,
     tx_count: u64,
-    teu_total: u64,
+    receipt_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -1861,99 +1861,19 @@ struct LaneValidatorSnapshot {
     max_activation_height: u64,
 }
 
-#[derive(Clone, Copy, Default)]
-struct ProposalGateSnapshot {
-    height: u64,
-    view: u64,
-    queue_len: u64,
-    pending_blocks_total: u64,
-    pending_blocks_blocking: u64,
-    active_pending_for_tip: u64,
-    queue_saturated: bool,
-    active_pending: bool,
-    rbc_backlog: bool,
-    relay_backpressure: bool,
-    consensus_queue_backpressure: bool,
-    should_defer: bool,
-    only_pacing_backpressure: bool,
-    commit_inflight_active: bool,
-    cached_proposal_present: bool,
-    cached_proposal_hint_present: bool,
-    round_liveness_present: bool,
-    frontier_owner_present: bool,
-    missing_qc_liveness_active: bool,
-    last_pacemaker_attempt_age_ms: u64,
-    last_successful_proposal_age_ms: u64,
-}
-
-impl std::fmt::Debug for ProposalGateSnapshot {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt.debug_struct("ProposalGateSnapshot")
-            .field("height", &self.height)
-            .field("view", &self.view)
-            .field("queue_len", &self.queue_len)
-            .field("pending_blocks_total", &self.pending_blocks_total)
-            .field("pending_blocks_blocking", &self.pending_blocks_blocking)
-            .field("active_pending_for_tip", &self.active_pending_for_tip)
-            .field("queue_saturated", &self.queue_saturated)
-            .field("active_pending", &self.active_pending)
-            .field("rbc_backlog", &self.rbc_backlog)
-            .field("relay_backpressure", &self.relay_backpressure)
-            .field(
-                "consensus_queue_backpressure",
-                &self.consensus_queue_backpressure,
-            )
-            .field("should_defer", &self.should_defer)
-            .field("only_pacing_backpressure", &self.only_pacing_backpressure)
-            .field("commit_inflight_active", &self.commit_inflight_active)
-            .field("cached_proposal_present", &self.cached_proposal_present)
-            .field(
-                "cached_proposal_hint_present",
-                &self.cached_proposal_hint_present,
-            )
-            .field("round_liveness_present", &self.round_liveness_present)
-            .field("frontier_owner_present", &self.frontier_owner_present)
-            .field(
-                "missing_qc_liveness_active",
-                &self.missing_qc_liveness_active,
-            )
-            .field(
-                "last_pacemaker_attempt_age_ms",
-                &self.last_pacemaker_attempt_age_ms,
-            )
-            .field(
-                "last_successful_proposal_age_ms",
-                &self.last_successful_proposal_age_ms,
-            )
-            .finish()
-    }
-}
-
 #[derive(Clone, Default)]
 struct PeerStatusSnapshot {
     lanes: Vec<LaneStatusSnapshot>,
-    lane_commitments: Vec<LaneCommitmentSnapshot>,
-    lane_governance_ids: Vec<u32>,
+    lane_settlements: Vec<LaneSettlementSnapshot>,
+    lane_evidence_ids: Vec<u32>,
     lane_relay: Vec<LaneRelaySnapshot>,
     committed_lane_blocks: Vec<CommittedLaneBlockSnapshot>,
     lane_validators: Vec<LaneValidatorSnapshot>,
+    last_committed_height: u64,
+    last_committed_block_hash: Option<HashOf<Header>>,
+    local_peer_removed: bool,
     commit_signatures_required: u64,
     commit_qc_validator_set_len: u64,
-    tx_queue_depth: u64,
-    tx_queue_capacity: u64,
-    tx_queue_saturated: bool,
-    tx_queue_saturated_by_count: bool,
-    tx_queue_saturated_by_bytes: bool,
-    tx_queue_saturated_by_age: bool,
-    tx_queue_oldest_queued_age_ms: u64,
-    commit_inflight_active: bool,
-    commit_inflight_height: u64,
-    commit_inflight_view: u64,
-    commit_inflight_elapsed_ms: u64,
-    commit_inflight_timeout_total: u64,
-    pending_rbc_entries: u64,
-    pacemaker_backpressure_deferrals_total: u64,
-    proposal_gate: ProposalGateSnapshot,
     txs_approved: u64,
     txs_rejected: u64,
     blocks_non_empty: u64,
@@ -1963,11 +1883,14 @@ impl std::fmt::Debug for PeerStatusSnapshot {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         fmt.debug_struct("PeerStatusSnapshot")
             .field("lanes", &self.lanes)
-            .field("lane_commitments", &self.lane_commitments)
-            .field("lane_governance_ids", &self.lane_governance_ids)
+            .field("lane_settlements", &self.lane_settlements)
+            .field("lane_evidence_ids", &self.lane_evidence_ids)
             .field("lane_relay", &self.lane_relay)
             .field("committed_lane_blocks", &self.committed_lane_blocks)
             .field("lane_validators", &self.lane_validators)
+            .field("last_committed_height", &self.last_committed_height)
+            .field("last_committed_block_hash", &self.last_committed_block_hash)
+            .field("local_peer_removed", &self.local_peer_removed)
             .field(
                 "commit_signatures_required",
                 &self.commit_signatures_required,
@@ -1976,39 +1899,6 @@ impl std::fmt::Debug for PeerStatusSnapshot {
                 "commit_qc_validator_set_len",
                 &self.commit_qc_validator_set_len,
             )
-            .field("tx_queue_depth", &self.tx_queue_depth)
-            .field("tx_queue_capacity", &self.tx_queue_capacity)
-            .field("tx_queue_saturated", &self.tx_queue_saturated)
-            .field(
-                "tx_queue_saturated_by_count",
-                &self.tx_queue_saturated_by_count,
-            )
-            .field(
-                "tx_queue_saturated_by_bytes",
-                &self.tx_queue_saturated_by_bytes,
-            )
-            .field("tx_queue_saturated_by_age", &self.tx_queue_saturated_by_age)
-            .field(
-                "tx_queue_oldest_queued_age_ms",
-                &self.tx_queue_oldest_queued_age_ms,
-            )
-            .field("commit_inflight_active", &self.commit_inflight_active)
-            .field("commit_inflight_height", &self.commit_inflight_height)
-            .field("commit_inflight_view", &self.commit_inflight_view)
-            .field(
-                "commit_inflight_elapsed_ms",
-                &self.commit_inflight_elapsed_ms,
-            )
-            .field(
-                "commit_inflight_timeout_total",
-                &self.commit_inflight_timeout_total,
-            )
-            .field("pending_rbc_entries", &self.pending_rbc_entries)
-            .field(
-                "pacemaker_backpressure_deferrals_total",
-                &self.pacemaker_backpressure_deferrals_total,
-            )
-            .field("proposal_gate", &self.proposal_gate)
             .field("txs_approved", &self.txs_approved)
             .field("txs_rejected", &self.txs_rejected)
             .field("blocks_non_empty", &self.blocks_non_empty)
@@ -2107,7 +1997,7 @@ fn fetch_lane_validator_snapshot(client: &Client, lane_id: u32) -> Option<LaneVa
 }
 
 fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatusSnapshot>> {
-    network
+    let snapshot = network
         .peers()
         .iter()
         .enumerate()
@@ -2125,153 +2015,95 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                     committed: lane.committed,
                 })
                 .collect::<Vec<_>>();
-            let sumeragi_status = client.get_sumeragi_status().ok();
-            let lane_commitments = sumeragi_status
-                .as_ref()
-                .map(|sumeragi_status| {
-                    sumeragi_status
-                        .lane_commitments
-                        .iter()
-                        .map(|lane| LaneCommitmentSnapshot {
-                            lane_id: lane.lane_id.as_u32(),
-                            block_height: lane.block_height,
-                            tx_count: lane.tx_count,
-                            teu_total: lane.teu_total,
-                        })
-                        .collect::<Vec<_>>()
+            let sumeragi_status = client.get_sumeragi_v2_status().map_err(|err| {
+                eyre!("fetch authoritative peer {index} Sumeragi v2 status failed: {err}")
+            })?;
+            let lifecycle_status = client.get_lane_lifecycle_status().map_err(|err| {
+                eyre!("fetch canonical peer {index} lane lifecycle status failed: {err}")
+            })?;
+            let lane_settlements = sumeragi_status
+                .lane_settlement_commitments
+                .iter()
+                .map(|lane| LaneSettlementSnapshot {
+                    lane_id: lane.lane_id.as_u32(),
+                    block_height: lane.block_height,
+                    tx_count: lane.tx_count,
+                    receipt_count: lane
+                        .receipts
+                        .len()
+                        .saturating_add(lane.nexus_fee_receipts.len())
+                        .saturating_add(lane.native_amx_receipts.len()),
                 })
-                .unwrap_or_default();
-            let lane_governance_ids = sumeragi_status
-                .as_ref()
-                .map(|sumeragi_status| {
-                    sumeragi_status
-                        .lane_governance
-                        .iter()
-                        .map(|lane| lane.lane_id.as_u32())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+                .collect::<Vec<_>>();
+            let mut lane_evidence_ids = lifecycle_status
+                .lanes
+                .iter()
+                .map(|lane| lane.id.as_u32())
+                .collect::<BTreeSet<_>>();
+            lane_evidence_ids.extend(
+                sumeragi_status
+                    .lane_settlement_commitments
+                    .iter()
+                    .map(|entry| entry.lane_id.as_u32()),
+            );
+            lane_evidence_ids.extend(
+                sumeragi_status
+                    .lane_relay_envelopes
+                    .iter()
+                    .map(|entry| entry.lane_id.as_u32()),
+            );
+            lane_evidence_ids.extend(
+                sumeragi_status
+                    .lane_payload_ownerships
+                    .iter()
+                    .map(|entry| entry.lane_id.as_u32()),
+            );
+            lane_evidence_ids.extend(
+                sumeragi_status
+                    .committed_lane_blocks
+                    .iter()
+                    .map(|entry| entry.lane_id.as_u32()),
+            );
+            lane_evidence_ids.extend(
+                sumeragi_status
+                    .lane_block_sessions
+                    .iter()
+                    .map(|entry| entry.lane_id.as_u32()),
+            );
+            let lane_evidence_ids = lane_evidence_ids.into_iter().collect::<Vec<_>>();
             let lane_relay = sumeragi_status
-                .as_ref()
-                .map(|sumeragi_status| {
-                    sumeragi_status
-                        .lane_relay_envelopes
-                        .iter()
-                        .map(|lane| LaneRelaySnapshot {
-                            lane_id: lane.lane_id.as_u32(),
-                            dataspace_id: lane.dataspace_id.as_u64(),
-                            block_height: lane.block_height,
-                            descriptor_hash: lane.lane_block_descriptor_hash,
-                            merge_admissible: lane.is_merge_admissible(),
-                        })
-                        .collect::<Vec<_>>()
+                .lane_relay_envelopes
+                .iter()
+                .map(|lane| LaneRelaySnapshot {
+                    lane_id: lane.lane_id.as_u32(),
+                    dataspace_id: lane.dataspace_id.as_u64(),
+                    block_height: lane.block_height,
+                    descriptor_hash: lane.lane_block_descriptor_hash,
+                    merge_admissible: lane.is_merge_admissible(),
                 })
-                .unwrap_or_default();
+                .collect::<Vec<_>>();
             let committed_lane_blocks = sumeragi_status
-                .as_ref()
-                .map(|sumeragi_status| {
-                    sumeragi_status
-                        .committed_lane_blocks
-                        .iter()
-                        .map(|entry| CommittedLaneBlockSnapshot {
-                            lane_id: entry.lane_id.as_u32(),
-                            dataspace_id: entry.dataspace_id.as_u64(),
-                            lane_block_height: entry.lane_block_height,
-                            lane_block_view: entry.lane_block_view,
-                            descriptor_hash: entry.descriptor_hash,
-                            proposal_hash: entry.proposal_hash,
-                            subject_hash: entry.subject_hash,
-                            payload_ownership_hash: entry.payload_ownership_hash,
-                            rbc_instance_hash: entry.rbc_instance_hash,
-                            qc_mode_tag: entry.qc_mode_tag.clone(),
-                            execution_status: entry.execution_status.clone(),
-                            executable_payload_available: entry.executable_payload_available,
-                            validator_count: entry.validator_count,
-                            min_quorum: entry.min_quorum,
-                            prepare_qc_signer_count: entry.prepare_qc_signer_count,
-                            commit_qc_signer_count: entry.commit_qc_signer_count,
-                        })
-                        .collect::<Vec<_>>()
+                .committed_lane_blocks
+                .iter()
+                .map(|entry| CommittedLaneBlockSnapshot {
+                    lane_id: entry.lane_id.as_u32(),
+                    dataspace_id: entry.dataspace_id.as_u64(),
+                    lane_block_height: entry.lane_block_height,
+                    lane_block_view: entry.lane_block_view,
+                    descriptor_hash: entry.descriptor_hash,
+                    proposal_hash: entry.proposal_hash,
+                    subject_hash: entry.subject_hash,
+                    payload_ownership_hash: entry.payload_ownership_hash,
+                    rbc_instance_hash: entry.rbc_instance_hash,
+                    qc_mode_tag: entry.qc_mode_tag.clone(),
+                    execution_status: entry.execution_status.clone(),
+                    executable_payload_available: entry.executable_payload_available,
+                    validator_count: entry.validator_count,
+                    min_quorum: entry.min_quorum,
+                    prepare_qc_signer_count: entry.prepare_qc_signer_count,
+                    commit_qc_signer_count: entry.commit_qc_signer_count,
                 })
-                .unwrap_or_default();
-            let (
-                tx_queue_depth,
-                tx_queue_capacity,
-                tx_queue_saturated,
-                tx_queue_saturated_by_count,
-                tx_queue_saturated_by_bytes,
-                tx_queue_saturated_by_age,
-                tx_queue_oldest_queued_age_ms,
-                commit_inflight_active,
-                commit_inflight_height,
-                commit_inflight_view,
-                commit_inflight_elapsed_ms,
-                commit_inflight_timeout_total,
-                pending_rbc_entries,
-                pacemaker_backpressure_deferrals_total,
-                proposal_gate,
-            ) = sumeragi_status
-                .as_ref()
-                .map(|sumeragi_status| {
-                    let gate = sumeragi_status.proposal_gate;
-                    (
-                        sumeragi_status.tx_queue_depth,
-                        sumeragi_status.tx_queue_capacity,
-                        sumeragi_status.tx_queue_saturated,
-                        sumeragi_status.tx_queue_saturated_by_count,
-                        sumeragi_status.tx_queue_saturated_by_bytes,
-                        sumeragi_status.tx_queue_saturated_by_age,
-                        sumeragi_status.tx_queue_oldest_queued_age_ms,
-                        sumeragi_status.commit_inflight.active,
-                        sumeragi_status.commit_inflight.height,
-                        sumeragi_status.commit_inflight.view,
-                        sumeragi_status.commit_inflight.elapsed_ms,
-                        sumeragi_status.commit_inflight.timeout_total,
-                        u64::try_from(sumeragi_status.pending_rbc.entries.len())
-                            .unwrap_or(u64::MAX),
-                        sumeragi_status.pacemaker_backpressure_deferrals_total,
-                        ProposalGateSnapshot {
-                            height: gate.height,
-                            view: gate.view,
-                            queue_len: gate.queue_len,
-                            pending_blocks_total: gate.pending_blocks_total,
-                            pending_blocks_blocking: gate.pending_blocks_blocking,
-                            active_pending_for_tip: gate.active_pending_for_tip,
-                            queue_saturated: gate.queue_saturated,
-                            active_pending: gate.active_pending,
-                            rbc_backlog: gate.rbc_backlog,
-                            relay_backpressure: gate.relay_backpressure,
-                            consensus_queue_backpressure: gate.consensus_queue_backpressure,
-                            should_defer: gate.should_defer,
-                            only_pacing_backpressure: gate.only_pacing_backpressure,
-                            commit_inflight_active: gate.commit_inflight_active,
-                            cached_proposal_present: gate.cached_proposal_present,
-                            cached_proposal_hint_present: gate.cached_proposal_hint_present,
-                            round_liveness_present: gate.round_liveness_present,
-                            frontier_owner_present: gate.frontier_owner_present,
-                            missing_qc_liveness_active: gate.missing_qc_liveness_active,
-                            last_pacemaker_attempt_age_ms: gate.last_pacemaker_attempt_age_ms,
-                            last_successful_proposal_age_ms: gate.last_successful_proposal_age_ms,
-                        },
-                    )
-                })
-                .unwrap_or((
-                    0,
-                    0,
-                    false,
-                    false,
-                    false,
-                    false,
-                    0,
-                    false,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    ProposalGateSnapshot::default(),
-                ));
+                .collect::<Vec<_>>();
             let lane_validators = OBSERVED_AUTOSCALE_LANE_IDS
                 .iter()
                 .filter_map(|lane_id| fetch_lane_validator_snapshot(&client, *lane_id))
@@ -2289,34 +2121,50 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                 .unwrap_or_default();
             Ok(PeerStatusSnapshot {
                 lanes,
-                lane_commitments,
-                lane_governance_ids,
+                lane_settlements,
+                lane_evidence_ids,
                 lane_relay,
                 committed_lane_blocks,
                 lane_validators,
+                last_committed_height: sumeragi_status.authoritative.last_committed_height,
+                last_committed_block_hash: sumeragi_status
+                    .authoritative
+                    .last_committed_subject
+                    .map(|subject| subject.block_hash),
+                local_peer_removed: sumeragi_status.local_peer_removed,
                 commit_signatures_required,
                 commit_qc_validator_set_len,
-                tx_queue_depth,
-                tx_queue_capacity,
-                tx_queue_saturated,
-                tx_queue_saturated_by_count,
-                tx_queue_saturated_by_bytes,
-                tx_queue_saturated_by_age,
-                tx_queue_oldest_queued_age_ms,
-                commit_inflight_active,
-                commit_inflight_height,
-                commit_inflight_view,
-                commit_inflight_elapsed_ms,
-                commit_inflight_timeout_total,
-                pending_rbc_entries,
-                pacemaker_backpressure_deferrals_total,
-                proposal_gate,
                 txs_approved: status.txs_approved,
                 txs_rejected: status.txs_rejected,
                 blocks_non_empty: status.blocks_non_empty,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+
+    validate_authoritative_status_tips(&snapshot)?;
+    Ok(snapshot)
+}
+
+fn validate_authoritative_status_tips(snapshot: &[PeerStatusSnapshot]) -> Result<()> {
+    let mut subjects_by_height = BTreeMap::<u64, HashOf<Header>>::new();
+    for (index, peer) in snapshot.iter().enumerate() {
+        ensure!(
+            peer.last_committed_height == 0 || peer.last_committed_block_hash.is_some(),
+            "authoritative peer {index} Sumeragi v2 status omitted the committed subject at height {}",
+            peer.last_committed_height,
+        );
+        let Some(block_hash) = peer.last_committed_block_hash else {
+            continue;
+        };
+        if let Some(expected) = subjects_by_height.insert(peer.last_committed_height, block_hash) {
+            ensure!(
+                expected == block_hash,
+                "authoritative Sumeragi v2 status safety conflict at committed height {}: peer {index} reported {block_hash}, expected {expected}",
+                peer.last_committed_height,
+            );
+        }
+    }
+    Ok(())
 }
 
 fn all_peers_have_storage_lane_count(
@@ -2397,10 +2245,10 @@ fn peer_has_active_lane_capacity(peer: &PeerStatusSnapshot, lane_id: u32) -> boo
     peer_lane_status(peer, lane_id).is_some_and(|lane| lane.capacity > 0 || lane.committed > 0)
 }
 
-fn peer_has_lane_commitment_activity(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
-    peer_lane_commitment_evidence(peer, lane_id)
+fn peer_has_lane_settlement_activity(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
+    peer_lane_settlement_evidence(peer, lane_id)
         .unambiguous()
-        .is_some_and(|lane| lane.tx_count > 0 || lane.teu_total > 0)
+        .is_some_and(|lane| lane.tx_count > 0 || lane.receipt_count > 0)
 }
 
 enum LaneStatusEvidence<'a> {
@@ -2427,14 +2275,14 @@ fn peer_lane_status(peer: &PeerStatusSnapshot, lane_id: u32) -> Option<&LaneStat
     }
 }
 
-enum LaneCommitmentEvidence<'a> {
+enum LaneSettlementEvidence<'a> {
     Missing,
-    Unambiguous(&'a LaneCommitmentSnapshot),
+    Unambiguous(&'a LaneSettlementSnapshot),
     Ambiguous,
 }
 
-impl<'a> LaneCommitmentEvidence<'a> {
-    fn unambiguous(self) -> Option<&'a LaneCommitmentSnapshot> {
+impl<'a> LaneSettlementEvidence<'a> {
+    fn unambiguous(self) -> Option<&'a LaneSettlementSnapshot> {
         match self {
             Self::Unambiguous(snapshot) => Some(snapshot),
             Self::Missing | Self::Ambiguous => None,
@@ -2442,22 +2290,22 @@ impl<'a> LaneCommitmentEvidence<'a> {
     }
 }
 
-fn peer_lane_commitment_snapshot(
+fn peer_lane_settlement_snapshot(
     peer: &PeerStatusSnapshot,
     lane_id: u32,
-) -> Option<&LaneCommitmentSnapshot> {
-    peer_lane_commitment_evidence(peer, lane_id).unambiguous()
+) -> Option<&LaneSettlementSnapshot> {
+    peer_lane_settlement_evidence(peer, lane_id).unambiguous()
 }
 
-fn peer_lane_commitment_evidence(
+fn peer_lane_settlement_evidence(
     peer: &PeerStatusSnapshot,
     lane_id: u32,
-) -> LaneCommitmentEvidence<'_> {
-    let mut latest = None::<&LaneCommitmentSnapshot>;
+) -> LaneSettlementEvidence<'_> {
+    let mut latest = None::<&LaneSettlementSnapshot>;
     let mut latest_is_ambiguous = false;
 
     for lane in peer
-        .lane_commitments
+        .lane_settlements
         .iter()
         .filter(|lane| lane.lane_id == lane_id)
     {
@@ -2472,7 +2320,8 @@ fn peer_lane_commitment_evidence(
                 latest_is_ambiguous = false;
             }
             std::cmp::Ordering::Equal => {
-                if lane.tx_count != current.tx_count || lane.teu_total != current.teu_total {
+                if lane.tx_count != current.tx_count || lane.receipt_count != current.receipt_count
+                {
                     latest_is_ambiguous = true;
                 }
             }
@@ -2481,11 +2330,11 @@ fn peer_lane_commitment_evidence(
     }
 
     if latest_is_ambiguous {
-        LaneCommitmentEvidence::Ambiguous
+        LaneSettlementEvidence::Ambiguous
     } else {
         match latest {
-            Some(snapshot) => LaneCommitmentEvidence::Unambiguous(snapshot),
-            None => LaneCommitmentEvidence::Missing,
+            Some(snapshot) => LaneSettlementEvidence::Unambiguous(snapshot),
+            None => LaneSettlementEvidence::Missing,
         }
     }
 }
@@ -2776,9 +2625,9 @@ fn lane_validator_has_live_activity(lane: &LaneValidatorSnapshot) -> bool {
 
 fn peer_has_lane_declaration(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
     peer_has_active_lane_capacity(peer, lane_id)
-        || peer_lane_commitment_snapshot(peer, lane_id).is_some()
+        || peer_lane_settlement_snapshot(peer, lane_id).is_some()
         || peer
-            .lane_governance_ids
+            .lane_evidence_ids
             .iter()
             .any(|declared_lane| *declared_lane == lane_id)
         || peer_committed_lane_block_snapshot(peer, lane_id).is_some()
@@ -2790,8 +2639,8 @@ fn peer_has_ambiguous_lane_evidence(peer: &PeerStatusSnapshot, lane_id: u32) -> 
         peer_lane_status_evidence(peer, lane_id),
         LaneStatusEvidence::Ambiguous
     ) || matches!(
-        peer_lane_commitment_evidence(peer, lane_id),
-        LaneCommitmentEvidence::Ambiguous
+        peer_lane_settlement_evidence(peer, lane_id),
+        LaneSettlementEvidence::Ambiguous
     ) || matches!(
         latest_committed_lane_block_evidence(peer, lane_id, committed_lane_block_is_certified),
         CommittedLaneBlockEvidence::Ambiguous
@@ -2846,16 +2695,16 @@ fn peer_has_lane_progress_transition(
     };
 
     let commitment_progressed = match (
-        peer_lane_commitment_snapshot(peer, lane_id),
-        peer_lane_commitment_snapshot(baseline_peer, lane_id),
+        peer_lane_settlement_snapshot(peer, lane_id),
+        peer_lane_settlement_snapshot(baseline_peer, lane_id),
     ) {
         (Some(current), Some(baseline)) => {
             current.block_height > baseline.block_height
                 || current.tx_count > baseline.tx_count
-                || current.teu_total > baseline.teu_total
+                || current.receipt_count > baseline.receipt_count
         }
         (Some(current), None) => {
-            current.block_height > 0 || current.tx_count > 0 || current.teu_total > 0
+            current.block_height > 0 || current.tx_count > 0 || current.receipt_count > 0
         }
         _ => false,
     };
@@ -2916,7 +2765,7 @@ fn peers_with_expanded_lane_signal(
         let baseline_peer = baseline_snapshot.and_then(|baseline| baseline.get(index));
         let current_state_counts_without_baseline = baseline_snapshot.is_none()
             && (peer_has_active_lane_capacity(peer, lane_id)
-                || peer_has_lane_commitment_activity(peer, lane_id)
+                || peer_has_lane_settlement_activity(peer, lane_id)
                 || peer_committed_lane_block_snapshot(peer, lane_id).is_some());
         if current_state_counts_without_baseline
             || peer_has_lane_declaration_transition(peer, baseline_peer, lane_id)
@@ -2951,7 +2800,7 @@ fn expansion_signal_breakdown(
         if peer_has_active_lane_capacity(peer, lane_id) {
             breakdown.peers_with_active_capacity += 1;
         }
-        if peer_has_lane_commitment_activity(peer, lane_id) {
+        if peer_has_lane_settlement_activity(peer, lane_id) {
             breakdown.peers_with_commitment_activity += 1;
         }
         if peer_committed_lane_block_snapshot(peer, lane_id).is_some() {
@@ -3089,13 +2938,13 @@ fn peer_has_contracted_profile(
         }
         LaneStatusEvidence::Ambiguous => false,
     };
-    let elastic_lane_commitments_idle = match peer_lane_commitment_evidence(status, elastic_lane_id)
+    let elastic_lane_settlements_idle = match peer_lane_settlement_evidence(status, elastic_lane_id)
     {
-        LaneCommitmentEvidence::Missing => true,
-        LaneCommitmentEvidence::Unambiguous(snapshot) => {
-            snapshot.tx_count == 0 && snapshot.teu_total == 0
+        LaneSettlementEvidence::Missing => true,
+        LaneSettlementEvidence::Unambiguous(snapshot) => {
+            snapshot.tx_count == 0 && snapshot.receipt_count == 0
         }
-        LaneCommitmentEvidence::Ambiguous => false,
+        LaneSettlementEvidence::Ambiguous => false,
     };
     let elastic_lane_relay_idle = matches!(
         latest_lane_relay_evidence(status, elastic_lane_id),
@@ -3118,7 +2967,7 @@ fn peer_has_contracted_profile(
     base_lanes_active
         && elastic_lane_undeclared
         && elastic_lane_status_idle
-        && elastic_lane_commitments_idle
+        && elastic_lane_settlements_idle
         && elastic_lane_relay_idle
         && elastic_committed_lane_blocks_idle
         && elastic_lane_validator_idle
@@ -3196,6 +3045,14 @@ fn max_non_empty_height(snapshot: &[PeerStatusSnapshot]) -> u64 {
         .unwrap_or_default()
 }
 
+fn max_last_committed_height(snapshot: &[PeerStatusSnapshot]) -> u64 {
+    snapshot
+        .iter()
+        .map(|status| status.last_committed_height)
+        .max()
+        .unwrap_or_default()
+}
+
 fn max_txs_approved(snapshot: &[PeerStatusSnapshot]) -> u64 {
     snapshot
         .iter()
@@ -3214,11 +3071,13 @@ fn max_txs_rejected(snapshot: &[PeerStatusSnapshot]) -> u64 {
 
 fn chain_progress_advanced(
     snapshot: &[PeerStatusSnapshot],
+    baseline_last_committed_height: u64,
     baseline_non_empty: u64,
     baseline_txs_approved: u64,
     baseline_txs_rejected: u64,
 ) -> bool {
-    max_non_empty_height(snapshot) > baseline_non_empty
+    max_last_committed_height(snapshot) > baseline_last_committed_height
+        || max_non_empty_height(snapshot) > baseline_non_empty
         || max_txs_approved(snapshot) > baseline_txs_approved
         || max_txs_rejected(snapshot) > baseline_txs_rejected
 }
@@ -4003,7 +3862,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for expanded lane profile (lane {elastic_lane_id} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, public-lane validator lifecycle activity (`active || pending_activation || jailed || exiting`), baseline transition via lane declaration/progress, or deterministic autoscale scale-out transitions on >= {quorum_required}/{TOTAL_PEERS} peers{}; storage lane count={expanded_provisioned_lanes} accepted only as fallback after grace {:?} + post-storage status window {:?} when elastic lane storage progresses on >= {quorum_required}/{TOTAL_PEERS} peers and scale-out transition quorum is not required); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last elastic storage snapshot: {last_elastic_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-out transition peers: {last_scale_out_transition_peers}/{TOTAL_PEERS}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
+        "{context}: timed out waiting for expanded lane profile (lane {elastic_lane_id} active via status `capacity>0 || committed>0`, sumeragi lane settlement `tx_count>0 || receipt_count>0`, public-lane validator lifecycle activity (`active || pending_activation || jailed || exiting`), baseline transition via lane declaration/progress, or deterministic autoscale scale-out transitions on >= {quorum_required}/{TOTAL_PEERS} peers{}; storage lane count={expanded_provisioned_lanes} accepted only as fallback after grace {:?} + post-storage status window {:?} when elastic lane storage progresses on >= {quorum_required}/{TOTAL_PEERS} peers and scale-out transition quorum is not required); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last elastic storage snapshot: {last_elastic_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-out transition peers: {last_scale_out_transition_peers}/{TOTAL_PEERS}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
         if require_scale_out_transition {
             if require_expansion_status {
                 "; strict mode requires fresh deterministic scale-out transition quorum after the cycle baseline and expanded-lane status evidence"
@@ -4022,6 +3881,7 @@ fn wait_for_chain_progress_with_heartbeat(
     network: &sandbox::SerializedNetwork,
     heartbeat_client: &Client,
     load_activity_probe: Option<(&[Client], &LoadSubmissionReport)>,
+    baseline_last_committed_height: u64,
     baseline_non_empty: u64,
     baseline_txs_approved: u64,
     baseline_txs_rejected: u64,
@@ -4047,6 +3907,7 @@ fn wait_for_chain_progress_with_heartbeat(
             Ok(snapshot) => {
                 if chain_progress_advanced(
                     &snapshot,
+                    baseline_last_committed_height,
                     baseline_non_empty,
                     baseline_txs_approved,
                     baseline_txs_rejected,
@@ -4273,6 +4134,8 @@ fn run_expand_contract_cycle(
     if should_run_cooldown_clearance(cycle_index, attempt) {
         let cooldown_probe_client = peer_client_with_timeout(network.peer());
         let cooldown_baseline_status = status_snapshot(network)?;
+        let cooldown_baseline_committed_height =
+            max_last_committed_height(&cooldown_baseline_status);
         let cooldown_baseline_height = max_non_empty_height(&cooldown_baseline_status);
         let cooldown_context = format!("autoscale cooldown clearance cycle {cycle_index}");
         let cooldown_prefix = format!("autoscale-cooldown-heartbeat-cycle-{cycle_index}");
@@ -4280,6 +4143,8 @@ fn run_expand_contract_cycle(
             network,
             &cooldown_probe_client,
             None,
+            cooldown_baseline_committed_height
+                .saturating_add(AUTOSCALE_COOLDOWN_CLEARANCE_BLOCK_DELTA.saturating_sub(1)),
             cooldown_baseline_height
                 .saturating_add(AUTOSCALE_COOLDOWN_CLEARANCE_BLOCK_DELTA.saturating_sub(1)),
             u64::MAX,
@@ -4314,6 +4179,7 @@ fn run_expand_contract_cycle(
     let pre_cycle_autoscale_transitions =
         autoscale_transition_snapshot_for_lane(network, elastic_lane_id)?;
     let pre_cycle_max_non_empty_height = max_non_empty_height(&pre_cycle_status);
+    let pre_cycle_max_committed_height = max_last_committed_height(&pre_cycle_status);
     let pre_cycle_max_txs_approved = max_txs_approved(&pre_cycle_status);
     let pre_cycle_max_txs_rejected = max_txs_rejected(&pre_cycle_status);
 
@@ -4331,6 +4197,7 @@ fn run_expand_contract_cycle(
         network,
         &activity_probe_client,
         Some((submitters, &load_report)),
+        pre_cycle_max_committed_height,
         pre_cycle_max_non_empty_height,
         pre_cycle_max_txs_approved,
         pre_cycle_max_txs_rejected,
@@ -4475,6 +4342,7 @@ fn run_expand_contract_cycle(
     let mut post_cycle_progress_confirmed = false;
     if !chain_progress_advanced(
         &post_cycle_status,
+        pre_cycle_max_committed_height,
         pre_cycle_max_non_empty_height,
         pre_cycle_max_txs_approved,
         pre_cycle_max_txs_rejected,
@@ -4486,6 +4354,7 @@ fn run_expand_contract_cycle(
             network,
             &post_cycle_probe_client,
             Some((submitters, &load_report)),
+            pre_cycle_max_committed_height,
             pre_cycle_max_non_empty_height,
             pre_cycle_max_txs_approved,
             pre_cycle_max_txs_rejected,
@@ -4505,6 +4374,7 @@ fn run_expand_contract_cycle(
     ensure!(
         chain_progress_advanced(
             &post_cycle_status,
+            pre_cycle_max_committed_height,
             pre_cycle_max_non_empty_height,
             pre_cycle_max_txs_approved,
             pre_cycle_max_txs_rejected
@@ -5104,7 +4974,7 @@ fn wait_for_certified_elastic_lane(
         last_observed = 0;
         last_errors.clear();
         for (index, client) in clients.iter().enumerate() {
-            match client.get_sumeragi_status() {
+            match client.get_sumeragi_v2_status() {
                 Ok(status)
                     if status.committed_lane_blocks.iter().any(|block| {
                         block.lane_id == lane_id
@@ -5843,7 +5713,8 @@ where
 }
 
 #[allow(clippy::too_many_lines)]
-fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_impl() -> Result<()> {
+fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_impl() -> Result<()>
+{
     const TARGET_LANE: LaneId = LaneId::new(ELASTIC_LANE_ID);
     const BASE_LANE: LaneId = LaneId::new(0);
 
@@ -6768,8 +6639,8 @@ mod tests {
         AutoscaleSoakCycleEvent, AutoscaleSoakReporter, AutoscaleSoakRunSummary,
         AutoscaleTransitionStats, CommitQuorumObservation, CommitQuorumSource,
         CommittedLaneBlockSnapshot, ElasticLaneStorageStats, ExpandContractCycleOutcome,
-        LaneCommitmentSnapshot, LaneDrainCommitmentLogEvidence, LaneDrainIntentLogEvidence,
-        LaneRelaySnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
+        LaneDrainCommitmentLogEvidence, LaneDrainIntentLogEvidence, LaneRelaySnapshot,
+        LaneSettlementSnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
         PUBLIC_PROFILE_ELASTIC_LANE_ID, PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
         PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES, PeerStatusSnapshot, SoakTimingSummary,
         autoscale_soak_duration_from_env_value, commit_quorum_observation,
@@ -6784,7 +6655,7 @@ mod tests {
         expansion_top_up_tx_count, is_autoscale_elastic_storage_segment,
         parse_autoscale_transition_stats, parse_autoscale_transition_stats_for_lane,
         parse_lane_drain_lifecycle_log_evidence, peer_committed_lane_block_snapshot,
-        peer_direct_applied_committed_lane_block_snapshot, peer_lane_commitment_snapshot,
+        peer_direct_applied_committed_lane_block_snapshot, peer_lane_settlement_snapshot,
         peer_lane_status, peer_lane_validator_snapshot,
         peers_with_direct_applied_committed_lane_block_for_lane,
         peers_with_elastic_storage_progress, peers_with_expanded_lane_signal,
@@ -6794,8 +6665,8 @@ mod tests {
         should_require_scale_in_transition_for_lane, should_run_cooldown_clearance,
         single_cycle_load_tx_count, soak_cycle_load_tx_count, storage_lane_id,
         tx_confirmation_status_counts_as_load_activity,
-        tx_confirmation_status_counts_as_post_cycle_progress, validate_lane_drain_lifecycle_order,
-        validate_load_submission_outcome,
+        tx_confirmation_status_counts_as_post_cycle_progress, validate_authoritative_status_tips,
+        validate_lane_drain_lifecycle_order, validate_load_submission_outcome,
     };
 
     fn status_with_declared_lanes(lane_ids: &[u32]) -> PeerStatusSnapshot {
@@ -6808,8 +6679,8 @@ mod tests {
                     committed: 1,
                 })
                 .collect(),
-            lane_commitments: Vec::new(),
-            lane_governance_ids: lane_ids.to_vec(),
+            lane_settlements: Vec::new(),
+            lane_evidence_ids: lane_ids.to_vec(),
             lane_relay: Vec::new(),
             lane_validators: Vec::new(),
             commit_signatures_required: 3,
@@ -6835,6 +6706,47 @@ mod tests {
             descriptor_hash,
             merge_admissible,
         }
+    }
+
+    #[test]
+    fn authoritative_status_tips_require_subjects_and_reject_same_height_forks() {
+        let first_hash = HashOf::<iroha::data_model::block::Header>::from_untyped_unchecked(
+            Hash::new(b"autoscale-authoritative-tip-first"),
+        );
+        let second_hash = HashOf::<iroha::data_model::block::Header>::from_untyped_unchecked(
+            Hash::new(b"autoscale-authoritative-tip-second"),
+        );
+        let valid = vec![
+            PeerStatusSnapshot {
+                last_committed_height: 7,
+                last_committed_block_hash: Some(first_hash),
+                ..PeerStatusSnapshot::default()
+            },
+            PeerStatusSnapshot {
+                last_committed_height: 7,
+                last_committed_block_hash: Some(first_hash),
+                ..PeerStatusSnapshot::default()
+            },
+        ];
+        validate_authoritative_status_tips(&valid).expect("matching committed tips");
+
+        let mut missing_subject = valid.clone();
+        missing_subject[1].last_committed_block_hash = None;
+        assert!(
+            validate_authoritative_status_tips(&missing_subject)
+                .expect_err("non-genesis committed height must carry a subject")
+                .to_string()
+                .contains("omitted the committed subject")
+        );
+
+        let mut conflicting = valid;
+        conflicting[1].last_committed_block_hash = Some(second_hash);
+        assert!(
+            validate_authoritative_status_tips(&conflicting)
+                .expect_err("same committed height must have one subject")
+                .to_string()
+                .contains("safety conflict")
+        );
     }
 
     fn descriptor_backed_relay_snapshot(
@@ -9034,8 +8946,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -9054,7 +8966,7 @@ mod tests {
                 capacity: 3000,
                 committed: 3,
             });
-            peer.lane_governance_ids.push(1);
+            peer.lane_evidence_ids.push(1);
         }
 
         assert!(!should_require_scale_in_transition(
@@ -9080,8 +8992,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -9148,8 +9060,7 @@ mod tests {
                 capacity: 1_000,
                 committed: 1,
             });
-            peer.lane_governance_ids
-                .push(PUBLIC_PROFILE_ELASTIC_LANE_ID);
+            peer.lane_evidence_ids.push(PUBLIC_PROFILE_ELASTIC_LANE_ID);
         }
 
         assert!(!expansion_observed_on_quorum_peers_for_lane(
@@ -9160,12 +9071,12 @@ mod tests {
         ));
 
         partial_lane_three_snapshot[2]
-            .lane_commitments
-            .push(LaneCommitmentSnapshot {
+            .lane_settlements
+            .push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 1,
-                teu_total: 1,
+                receipt_count: 1,
             });
         assert!(expansion_observed_on_quorum_peers_for_lane(
             &partial_lane_three_snapshot,
@@ -9186,8 +9097,7 @@ mod tests {
                 capacity: 1_000,
                 committed: 1,
             });
-            peer.lane_governance_ids
-                .push(PUBLIC_PROFILE_ELASTIC_LANE_ID);
+            peer.lane_evidence_ids.push(PUBLIC_PROFILE_ELASTIC_LANE_ID);
         }
 
         assert!(expansion_observed_on_quorum_peers_for_lane(
@@ -9331,16 +9241,16 @@ mod tests {
     fn public_profile_expansion_requires_progress_after_stale_commitments() {
         let mut stale_commitments = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         for peer in stale_commitments.iter_mut().take(3) {
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 1,
-                teu_total: 1,
+                receipt_count: 1,
             });
         }
         let mut progressed_commitments = stale_commitments.clone();
         for peer in progressed_commitments.iter_mut().take(3) {
-            peer.lane_commitments[0].block_height = 43;
+            peer.lane_settlements[0].block_height = 43;
         }
 
         assert!(expansion_observed_on_quorum_peers_for_lane(
@@ -9368,21 +9278,21 @@ mod tests {
         let baseline_without_elastic_commitments = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         let mut conflicting_commitments = baseline_without_elastic_commitments.clone();
         for peer in conflicting_commitments.iter_mut().take(3) {
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 1,
-                teu_total: 1,
+                receipt_count: 1,
             });
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 2,
-                teu_total: 1,
+                receipt_count: 1,
             });
         }
         assert!(
-            peer_lane_commitment_snapshot(
+            peer_lane_settlement_snapshot(
                 &conflicting_commitments[0],
                 PUBLIC_PROFILE_ELASTIC_LANE_ID,
             )
@@ -9410,17 +9320,17 @@ mod tests {
 
         let mut exact_duplicates = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         for peer in exact_duplicates.iter_mut().take(3) {
-            let commitment = LaneCommitmentSnapshot {
+            let commitment = LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 1,
-                teu_total: 1,
+                receipt_count: 1,
             };
-            peer.lane_commitments.push(commitment.clone());
-            peer.lane_commitments.push(commitment);
+            peer.lane_settlements.push(commitment.clone());
+            peer.lane_settlements.push(commitment);
         }
         assert!(
-            peer_lane_commitment_snapshot(&exact_duplicates[0], PUBLIC_PROFILE_ELASTIC_LANE_ID)
+            peer_lane_settlement_snapshot(&exact_duplicates[0], PUBLIC_PROFILE_ELASTIC_LANE_ID)
                 .is_some(),
             "exact duplicate latest commitment rows should remain idempotent"
         );
@@ -9436,17 +9346,17 @@ mod tests {
 
         let mut stale_positive_latest_zero = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         for peer in stale_positive_latest_zero.iter_mut().take(3) {
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 41,
                 tx_count: 1,
-                teu_total: 1,
+                receipt_count: 1,
             });
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 0,
-                teu_total: 0,
+                receipt_count: 0,
             });
         }
         assert!(
@@ -9461,26 +9371,26 @@ mod tests {
 
         let mut baseline_commitments = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         for peer in baseline_commitments.iter_mut().take(3) {
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 1,
-                teu_total: 1,
+                receipt_count: 1,
             });
         }
         let mut ambiguous_progress = baseline_commitments.clone();
         for peer in ambiguous_progress.iter_mut().take(3) {
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 43,
                 tx_count: 2,
-                teu_total: 2,
+                receipt_count: 2,
             });
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 43,
                 tx_count: 3,
-                teu_total: 2,
+                receipt_count: 2,
             });
         }
         assert!(
@@ -9538,23 +9448,23 @@ mod tests {
             .zip(repaired_commitments.iter_mut())
             .take(3)
         {
-            baseline_peer.lane_commitments.push(LaneCommitmentSnapshot {
+            baseline_peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 1,
-                teu_total: 1,
+                receipt_count: 1,
             });
-            baseline_peer.lane_commitments.push(LaneCommitmentSnapshot {
+            baseline_peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 2,
-                teu_total: 1,
+                receipt_count: 1,
             });
-            repaired_peer.lane_commitments.push(LaneCommitmentSnapshot {
+            repaired_peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 43,
                 tx_count: 3,
-                teu_total: 2,
+                receipt_count: 2,
             });
         }
         assert_eq!(
@@ -9892,8 +9802,7 @@ mod tests {
 
         let mut elastic_governance = contracted_public_profile.clone();
         for peer in elastic_governance.iter_mut().take(3) {
-            peer.lane_governance_ids
-                .push(PUBLIC_PROFILE_ELASTIC_LANE_ID);
+            peer.lane_evidence_ids.push(PUBLIC_PROFILE_ELASTIC_LANE_ID);
         }
         assert!(!contraction_observed_on_quorum_peers_for_profile(
             &elastic_governance,
@@ -9904,11 +9813,11 @@ mod tests {
 
         let mut elastic_commitment = contracted_public_profile.clone();
         for peer in elastic_commitment.iter_mut().take(3) {
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 1,
-                teu_total: 1,
+                receipt_count: 1,
             });
         }
         assert!(!contraction_observed_on_quorum_peers_for_profile(
@@ -10358,21 +10267,21 @@ mod tests {
         let contracted_public_profile = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         let mut ambiguous_commitments = contracted_public_profile.clone();
         for peer in ambiguous_commitments.iter_mut().take(3) {
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 0,
-                teu_total: 0,
+                receipt_count: 0,
             });
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 1,
-                teu_total: 0,
+                receipt_count: 0,
             });
         }
         assert!(
-            peer_lane_commitment_snapshot(
+            peer_lane_settlement_snapshot(
                 &ambiguous_commitments[0],
                 PUBLIC_PROFILE_ELASTIC_LANE_ID
             )
@@ -10400,17 +10309,17 @@ mod tests {
 
         let mut exact_terminal_duplicates = contracted_public_profile.clone();
         for peer in exact_terminal_duplicates.iter_mut().take(3) {
-            let terminal = LaneCommitmentSnapshot {
+            let terminal = LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 0,
-                teu_total: 0,
+                receipt_count: 0,
             };
-            peer.lane_commitments.push(terminal.clone());
-            peer.lane_commitments.push(terminal);
+            peer.lane_settlements.push(terminal.clone());
+            peer.lane_settlements.push(terminal);
         }
         assert!(
-            peer_lane_commitment_snapshot(
+            peer_lane_settlement_snapshot(
                 &exact_terminal_duplicates[0],
                 PUBLIC_PROFILE_ELASTIC_LANE_ID,
             )
@@ -10636,13 +10545,12 @@ mod tests {
     fn public_profile_contraction_requires_clean_quorum() {
         let mut mixed_snapshot = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         for peer in mixed_snapshot.iter_mut().skip(2) {
-            peer.lane_governance_ids
-                .push(PUBLIC_PROFILE_ELASTIC_LANE_ID);
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_evidence_ids.push(PUBLIC_PROFILE_ELASTIC_LANE_ID);
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
                 block_height: 42,
                 tx_count: 1,
-                teu_total: 1,
+                receipt_count: 1,
             });
         }
 
@@ -10797,12 +10705,12 @@ mod tests {
         let mut stale_base_lane = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         for peer in stale_base_lane.iter_mut().take(3) {
             peer.lanes.retain(|lane| lane.lane_id != 2);
-            peer.lane_governance_ids.push(2);
-            peer.lane_commitments.push(LaneCommitmentSnapshot {
+            peer.lane_evidence_ids.push(2);
+            peer.lane_settlements.push(LaneSettlementSnapshot {
                 lane_id: 2,
                 block_height: 42,
                 tx_count: 1,
-                teu_total: 1,
+                receipt_count: 1,
             });
         }
 
@@ -11038,8 +10946,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11055,8 +10963,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11072,8 +10980,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11089,8 +10997,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11163,8 +11071,8 @@ mod tests {
                         committed: 4,
                     },
                 ],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11187,8 +11095,8 @@ mod tests {
                         committed: 3,
                     },
                 ],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11211,8 +11119,8 @@ mod tests {
                         committed: 2,
                     },
                 ],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11228,8 +11136,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11292,7 +11200,7 @@ mod tests {
     }
 
     #[test]
-    fn expansion_accepts_sumeragi_lane_commitment_activity_on_quorum_peers() {
+    fn expansion_accepts_sumeragi_lane_settlement_activity_on_quorum_peers() {
         let commitment_only_snapshot = vec![
             PeerStatusSnapshot {
                 lanes: vec![
@@ -11307,13 +11215,13 @@ mod tests {
                         committed: 0,
                     },
                 ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
+                lane_settlements: vec![LaneSettlementSnapshot {
                     lane_id: 1,
                     block_height: 10,
                     tx_count: 4,
-                    teu_total: 128,
+                    receipt_count: 128,
                 }],
-                lane_governance_ids: vec![],
+                lane_evidence_ids: vec![],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11336,13 +11244,13 @@ mod tests {
                         committed: 0,
                     },
                 ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
+                lane_settlements: vec![LaneSettlementSnapshot {
                     lane_id: 1,
                     block_height: 10,
                     tx_count: 2,
-                    teu_total: 64,
+                    receipt_count: 64,
                 }],
-                lane_governance_ids: vec![],
+                lane_evidence_ids: vec![],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11365,13 +11273,13 @@ mod tests {
                         committed: 0,
                     },
                 ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
+                lane_settlements: vec![LaneSettlementSnapshot {
                     lane_id: 1,
                     block_height: 10,
                     tx_count: 1,
-                    teu_total: 32,
+                    receipt_count: 32,
                 }],
-                lane_governance_ids: vec![],
+                lane_evidence_ids: vec![],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11387,8 +11295,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11415,9 +11323,9 @@ mod tests {
             .iter()
             .cloned()
             .map(|mut peer| {
-                for commitment in &mut peer.lane_commitments {
+                for commitment in &mut peer.lane_settlements {
                     commitment.tx_count = 0;
-                    commitment.teu_total = 0;
+                    commitment.receipt_count = 0;
                 }
                 peer
             })
@@ -11438,8 +11346,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11455,8 +11363,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11472,8 +11380,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11489,8 +11397,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11509,8 +11417,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0, 1],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11526,8 +11434,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0, 1],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11543,8 +11451,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0, 1],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11560,8 +11468,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11601,13 +11509,13 @@ mod tests {
                         committed: 0,
                     },
                 ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
+                lane_settlements: vec![LaneSettlementSnapshot {
                     lane_id: 1,
                     block_height: 10,
                     tx_count: 0,
-                    teu_total: 0,
+                    receipt_count: 0,
                 }],
-                lane_governance_ids: vec![0, 1],
+                lane_evidence_ids: vec![0, 1],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11630,13 +11538,13 @@ mod tests {
                         committed: 0,
                     },
                 ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
+                lane_settlements: vec![LaneSettlementSnapshot {
                     lane_id: 1,
                     block_height: 10,
                     tx_count: 0,
-                    teu_total: 0,
+                    receipt_count: 0,
                 }],
-                lane_governance_ids: vec![0, 1],
+                lane_evidence_ids: vec![0, 1],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11659,13 +11567,13 @@ mod tests {
                         committed: 0,
                     },
                 ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
+                lane_settlements: vec![LaneSettlementSnapshot {
                     lane_id: 1,
                     block_height: 10,
                     tx_count: 0,
-                    teu_total: 0,
+                    receipt_count: 0,
                 }],
-                lane_governance_ids: vec![0, 1],
+                lane_evidence_ids: vec![0, 1],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11688,13 +11596,13 @@ mod tests {
                         committed: 0,
                     },
                 ],
-                lane_commitments: vec![LaneCommitmentSnapshot {
+                lane_settlements: vec![LaneSettlementSnapshot {
                     lane_id: 1,
                     block_height: 10,
                     tx_count: 0,
-                    teu_total: 0,
+                    receipt_count: 0,
                 }],
-                lane_governance_ids: vec![0, 1],
+                lane_evidence_ids: vec![0, 1],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11709,13 +11617,13 @@ mod tests {
         let progress_transition_snapshot = vec![
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[0].lanes.clone(),
-                lane_commitments: vec![LaneCommitmentSnapshot {
+                lane_settlements: vec![LaneSettlementSnapshot {
                     lane_id: 1,
                     block_height: 11,
                     tx_count: 0,
-                    teu_total: 0,
+                    receipt_count: 0,
                 }],
-                lane_governance_ids: baseline_snapshot[0].lane_governance_ids.clone(),
+                lane_evidence_ids: baseline_snapshot[0].lane_evidence_ids.clone(),
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11727,13 +11635,13 @@ mod tests {
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[1].lanes.clone(),
-                lane_commitments: vec![LaneCommitmentSnapshot {
+                lane_settlements: vec![LaneSettlementSnapshot {
                     lane_id: 1,
                     block_height: 11,
                     tx_count: 0,
-                    teu_total: 0,
+                    receipt_count: 0,
                 }],
-                lane_governance_ids: baseline_snapshot[1].lane_governance_ids.clone(),
+                lane_evidence_ids: baseline_snapshot[1].lane_evidence_ids.clone(),
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11745,13 +11653,13 @@ mod tests {
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[2].lanes.clone(),
-                lane_commitments: vec![LaneCommitmentSnapshot {
+                lane_settlements: vec![LaneSettlementSnapshot {
                     lane_id: 1,
                     block_height: 11,
                     tx_count: 0,
-                    teu_total: 0,
+                    receipt_count: 0,
                 }],
-                lane_governance_ids: baseline_snapshot[2].lane_governance_ids.clone(),
+                lane_evidence_ids: baseline_snapshot[2].lane_evidence_ids.clone(),
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11763,8 +11671,8 @@ mod tests {
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[3].lanes.clone(),
-                lane_commitments: baseline_snapshot[3].lane_commitments.clone(),
-                lane_governance_ids: baseline_snapshot[3].lane_governance_ids.clone(),
+                lane_settlements: baseline_snapshot[3].lane_settlements.clone(),
+                lane_evidence_ids: baseline_snapshot[3].lane_evidence_ids.clone(),
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -11797,8 +11705,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0, 1],
                 lane_relay: vec![],
                 lane_validators: vec![LaneValidatorSnapshot {
                     lane_id: 1,
@@ -11823,8 +11731,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0, 1],
                 lane_relay: vec![],
                 lane_validators: vec![LaneValidatorSnapshot {
                     lane_id: 1,
@@ -11849,8 +11757,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0, 1],
                 lane_relay: vec![],
                 lane_validators: vec![LaneValidatorSnapshot {
                     lane_id: 1,
@@ -11875,8 +11783,8 @@ mod tests {
                     capacity: 6000,
                     committed: 12,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![0, 1],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![0, 1],
                 lane_relay: vec![],
                 lane_validators: vec![LaneValidatorSnapshot {
                     lane_id: 1,
@@ -11900,8 +11808,8 @@ mod tests {
         let validator_transition_snapshot = vec![
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[0].lanes.clone(),
-                lane_commitments: baseline_snapshot[0].lane_commitments.clone(),
-                lane_governance_ids: baseline_snapshot[0].lane_governance_ids.clone(),
+                lane_settlements: baseline_snapshot[0].lane_settlements.clone(),
+                lane_evidence_ids: baseline_snapshot[0].lane_evidence_ids.clone(),
                 lane_relay: vec![],
                 lane_validators: vec![LaneValidatorSnapshot {
                     lane_id: 1,
@@ -11922,8 +11830,8 @@ mod tests {
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[1].lanes.clone(),
-                lane_commitments: baseline_snapshot[1].lane_commitments.clone(),
-                lane_governance_ids: baseline_snapshot[1].lane_governance_ids.clone(),
+                lane_settlements: baseline_snapshot[1].lane_settlements.clone(),
+                lane_evidence_ids: baseline_snapshot[1].lane_evidence_ids.clone(),
                 lane_relay: vec![],
                 lane_validators: vec![LaneValidatorSnapshot {
                     lane_id: 1,
@@ -11944,8 +11852,8 @@ mod tests {
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[2].lanes.clone(),
-                lane_commitments: baseline_snapshot[2].lane_commitments.clone(),
-                lane_governance_ids: baseline_snapshot[2].lane_governance_ids.clone(),
+                lane_settlements: baseline_snapshot[2].lane_settlements.clone(),
+                lane_evidence_ids: baseline_snapshot[2].lane_evidence_ids.clone(),
                 lane_relay: vec![],
                 lane_validators: vec![LaneValidatorSnapshot {
                     lane_id: 1,
@@ -11966,8 +11874,8 @@ mod tests {
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[3].lanes.clone(),
-                lane_commitments: baseline_snapshot[3].lane_commitments.clone(),
-                lane_governance_ids: baseline_snapshot[3].lane_governance_ids.clone(),
+                lane_settlements: baseline_snapshot[3].lane_settlements.clone(),
+                lane_evidence_ids: baseline_snapshot[3].lane_evidence_ids.clone(),
                 lane_relay: vec![],
                 lane_validators: baseline_snapshot[3].lane_validators.clone(),
                 commit_signatures_required: 3,
@@ -12178,8 +12086,8 @@ mod tests {
                     capacity: 9000,
                     committed: 10,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -12195,8 +12103,8 @@ mod tests {
                     capacity: 8000,
                     committed: 10,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -12212,8 +12120,8 @@ mod tests {
                     capacity: 7000,
                     committed: 9,
                 }],
-                lane_commitments: vec![],
-                lane_governance_ids: vec![],
+                lane_settlements: vec![],
+                lane_evidence_ids: vec![],
                 lane_relay: vec![],
                 lane_validators: vec![],
                 commit_signatures_required: 3,
@@ -12240,8 +12148,8 @@ mod tests {
                     committed: 0,
                 },
             ],
-            lane_commitments: vec![],
-            lane_governance_ids: vec![],
+            lane_settlements: vec![],
+            lane_evidence_ids: vec![],
             lane_relay: vec![],
             lane_validators: vec![],
             commit_signatures_required: 3,
@@ -12269,8 +12177,8 @@ mod tests {
                     committed: 0,
                 },
             ],
-            lane_commitments: vec![],
-            lane_governance_ids: vec![0, 1],
+            lane_settlements: vec![],
+            lane_evidence_ids: vec![0, 1],
             lane_relay: vec![],
             lane_validators: vec![],
             commit_signatures_required: 3,
@@ -12298,8 +12206,8 @@ mod tests {
                     committed: 1,
                 },
             ],
-            lane_commitments: vec![],
-            lane_governance_ids: vec![],
+            lane_settlements: vec![],
+            lane_evidence_ids: vec![],
             lane_relay: vec![],
             lane_validators: vec![],
             commit_signatures_required: 3,

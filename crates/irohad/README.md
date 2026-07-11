@@ -98,7 +98,11 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
     ```
 
     Adjust the file layout if you prefer another location. `irohad` resolves
-    relative paths from the directory that contains `config.toml`.
+    relative paths from the directory that contains `config.toml`. The checked-in
+    Nexus genesis is a schema-valid template, not a deployable public-chain
+    identity: regenerate it with the operator-approved canonical Nexus XOR asset
+    definition via `--xor-asset-definition-id` before signing. Do not substitute
+    Taira's XOR asset ID.
 
 3. **Provision keys and network settings.**
 

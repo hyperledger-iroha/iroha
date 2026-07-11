@@ -105,6 +105,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
+            consensus_admitted_at_height: None,
         },
         EvidenceRecord {
             evidence: make_double_prevote_evidence(20, 0xB2),
@@ -115,6 +116,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
+            consensus_admitted_at_height: None,
         },
         EvidenceRecord {
             evidence: make_invalid_commit_qc_evidence(30, 0xC3),
@@ -125,6 +127,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
+            consensus_admitted_at_height: None,
         },
     ];
     for record in records {
@@ -167,6 +170,10 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         items[1].get("kind").and_then(norito::json::Value::as_str),
         Some("DoublePrepare")
     );
+    assert!(matches!(
+        items[0].get("consensus_admitted_height"),
+        Some(norito::json::Value::Null)
+    ));
 
     let query_filtered = EvidenceListQuery {
         limit: Some(1),

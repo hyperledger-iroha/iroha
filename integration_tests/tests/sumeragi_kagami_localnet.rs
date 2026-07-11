@@ -328,10 +328,10 @@ async fn wait_for_validator_and_commit_qc_counts(
             last_status_peers = Some(status.peers);
             // Status.peers excludes the reporting peer, so add 1 for the validator count.
             if status.peers.saturating_add(1) == expected_peers
-                && let Ok(sumeragi) = client.get_sumeragi_status()
+                && let Some(sumeragi) = status.sumeragi.as_ref()
             {
-                last_commit_qc_validator_set_len = Some(sumeragi.commit_qc.validator_set_len);
-                if sumeragi.commit_qc.validator_set_len == expected_peers {
+                last_commit_qc_validator_set_len = Some(sumeragi.commit_qc_validator_set_len);
+                if sumeragi.commit_qc_validator_set_len == expected_peers {
                     return Ok(());
                 }
             }

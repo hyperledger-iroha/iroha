@@ -27,7 +27,7 @@ use iroha::{
         Level,
         account::{Account, AccountId, OpaqueAccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::consensus::SumeragiStatusWire,
+        block::consensus_v2::SumeragiV2StatusResponse,
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
         identifier::{
@@ -4206,15 +4206,25 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                 let statuses = collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
                 observed_cross_lane_routing = statuses.iter().any(|status| {
                     status
-                        .lane_commitments
+                        .lane_payload_ownerships
                         .iter()
-                        .any(|commitment| commitment.lane_id.as_u32() != 0)
+                        .any(|ownership| {
+                            ownership.lane_id.as_u32() != 0
+                                || ownership.dataspace_id.as_u64() != 0
+                        })
                         || status
-                            .dataspace_commitments
+                            .committed_lane_blocks
                             .iter()
-                            .any(|commitment| commitment.dataspace_id.as_u64() != 0)
+                            .any(|block| {
+                                block.lane_id.as_u32() != 0
+                                    || block.dataspace_id.as_u64() != 0
+                            })
                         || status.lane_relay_envelopes.iter().any(|relay| {
                             relay.lane_id.as_u32() != 0 || relay.dataspace_id.as_u64() != 0
+                        })
+                        || status.lane_settlement_commitments.iter().any(|settlement| {
+                            settlement.lane_id.as_u32() != 0
+                                || settlement.dataspace_id.as_u64() != 0
                         })
                 });
                 if observed_cross_lane_routing {
@@ -4224,7 +4234,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             }
             if !observed_cross_lane_routing {
                 eprintln!(
-                    "cross-lane probes were accepted but no lane commitments or relay envelopes appeared within {:?}; continuing with status-endpoint decode coverage only",
+                    "cross-lane probes were accepted but no canonical ownership, certified lane block, settlement, or relay evidence appeared within {:?}; continuing with status-endpoint decode coverage only",
                     Duration::from_secs(45)
                 );
             }
@@ -6317,10 +6327,10 @@ async fn collect_statuses_allowing_missing(
 async fn collect_sumeragi_statuses(
     network: &Network,
     status_timeout: Duration,
-) -> Result<Vec<SumeragiStatusWire>> {
+) -> Result<Vec<SumeragiV2StatusResponse>> {
     try_join_all(network.peers().iter().map(|peer| async move {
         let client = peer.client();
-        let handle = task::spawn_blocking(move || client.get_sumeragi_status_wire());
+        let handle = task::spawn_blocking(move || client.get_sumeragi_v2_status());
         if let Ok(joined) = tokio::time::timeout(status_timeout, handle).await {
             joined
                 .map_err(|err| {
@@ -8957,20 +8967,27 @@ struct SumeragiStatusSnapshot {
 }
 
 impl SumeragiStatusSnapshot {
-    fn from_status(status: &SumeragiStatusWire) -> Self {
+    fn from_status(status: &SumeragiV2StatusResponse) -> Self {
+        let operator = status.operator;
+        let queue = operator.tx_queue;
         Self {
-            view_change_install_total: status.view_change_install_total,
-            pacemaker_backpressure_deferrals_total: status.pacemaker_backpressure_deferrals_total,
-            tx_queue_depth: status.tx_queue_depth,
-            tx_queue_capacity: status.tx_queue_capacity,
-            tx_queue_retained_bytes: status.tx_queue_retained_bytes,
-            tx_queue_max_retained_bytes: status.tx_queue_max_retained_bytes,
-            tx_queue_saturated: status.tx_queue_saturated,
-            tx_queue_saturated_by_count: status.tx_queue_saturated_by_count,
-            tx_queue_saturated_by_bytes: status.tx_queue_saturated_by_bytes,
-            tx_queue_saturated_by_age: status.tx_queue_saturated_by_age,
-            tx_queue_oldest_queued_age_ms: status.tx_queue_oldest_queued_age_ms,
-            commit_qc_height: status.commit_qc.height,
+            view_change_install_total: operator.view_change_install_total,
+            pacemaker_backpressure_deferrals_total: operator.busy_deferral_total,
+            tx_queue_depth: queue.queued_transactions,
+            tx_queue_capacity: queue.capacity,
+            tx_queue_retained_bytes: queue.retained_bytes,
+            tx_queue_max_retained_bytes: queue.max_retained_bytes,
+            tx_queue_saturated: queue.is_saturated(),
+            tx_queue_saturated_by_count: queue.saturated_by_count,
+            tx_queue_saturated_by_bytes: queue.saturated_by_bytes,
+            tx_queue_saturated_by_age: queue.saturated_by_age,
+            tx_queue_oldest_queued_age_ms: queue.oldest_queued_age_ms,
+            commit_qc_height: status
+                .authoritative
+                .last_commit_qc
+                .map_or(status.authoritative.last_committed_height, |commit| {
+                    commit.certificate.round.height
+                }),
         }
     }
 }

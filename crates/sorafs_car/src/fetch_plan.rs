@@ -3,7 +3,7 @@
 
 use norito::json::{Map, Value, to_string_pretty};
 
-use crate::{CarBuildPlan, ChunkFetchSpec, TaikaiSegmentHint};
+use crate::{CarBuildPlan, CarPlanError, ChunkFetchSpec, TaikaiSegmentHint};
 
 /// Errors that can occur while parsing chunk fetch specifications from JSON.
 #[derive(Debug, thiserror::Error)]
@@ -83,6 +83,13 @@ pub fn parse_digest_hex(hex: &str) -> Result<[u8; 32], FetchPlanError> {
 pub fn chunk_fetch_specs_to_json(plan: &CarBuildPlan) -> Value {
     let specs = plan.chunk_fetch_specs();
     Value::Array(chunk_fetch_specs_to_array(&specs))
+}
+
+/// Fallible counterpart to [`chunk_fetch_specs_to_json`] for production paths handling
+/// untrusted plans.
+pub fn try_chunk_fetch_specs_to_json(plan: &CarBuildPlan) -> Result<Value, CarPlanError> {
+    let specs = plan.try_chunk_fetch_specs()?;
+    Ok(Value::Array(chunk_fetch_specs_to_array(&specs)))
 }
 
 /// Serialises chunk fetch specifications into a pretty-printed JSON string,

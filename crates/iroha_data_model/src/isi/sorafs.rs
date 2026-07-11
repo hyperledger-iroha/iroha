@@ -3,30 +3,20 @@ use crate::sorafs::{
     capacity::{
         CapacityDeclarationRecord, CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
     },
-    pin_registry::{
-        ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, PinPolicy, ReplicationOrderId,
-    },
+    pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
     pricing::{PricingScheduleRecord, ProviderCreditRecord},
 };
 
 isi! {
-    /// Register a `SoraFS` manifest digest with the paid pin registry.
+    /// Register a canonical `SoraFS` manifest with the paid pin registry.
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct RegisterPinManifest {
-        /// Canonical manifest digest (BLAKE3-256 of the Norito payload).
-        pub digest: ManifestDigest,
-        /// Chunker profile handle used to generate the CAR commitments.
-        pub chunker: ChunkerProfileHandle,
-        /// SHA3-256 digest emitted alongside the chunk metadata report.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub chunk_digest_sha3_256: [u8; 32],
-        /// Total content length covered by the manifest.
-        pub content_length: u64,
-        /// Requested replication policy.
-        pub policy: PinPolicy,
+        /// Canonical Norito-encoded `sorafs_manifest::ManifestV1` payload.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        pub manifest_payload: Vec<u8>,
         /// Epoch (inclusive) recorded for the submission event.
         pub submitted_epoch: u64,
         /// Optional alias binding approved with the manifest.
@@ -152,6 +142,18 @@ pub struct CompleteReplicationOrder {
 impl crate::seal::Instruction for CompleteReplicationOrder {}
 
 isi! {
+    /// Mark a pending replication order as expired after its deadline.
+pub struct ExpireReplicationOrder {
+    /// Identifier of the replication order.
+    pub order_id: ReplicationOrderId,
+        /// Epoch at which the order is expired; must be later than its deadline.
+        pub expiration_epoch: u64,
+    }
+}
+
+impl crate::seal::Instruction for ExpireReplicationOrder {}
+
+isi! {
     /// Register or update the owner binding for a `SoraFS` provider.
 pub struct RegisterProviderOwner {
     /// Provider identifier that will be bound.
@@ -195,24 +197,15 @@ impl crate::seal::Instruction for UpsertProviderCredit {}
 
 impl RegisterPinManifest {
     /// Create a new `RegisterPinManifest` instruction.
-    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
-        digest: ManifestDigest,
-        chunker: ChunkerProfileHandle,
-        chunk_digest_sha3_256: [u8; 32],
-        content_length: u64,
-        policy: PinPolicy,
+        manifest_payload: Vec<u8>,
         submitted_epoch: u64,
         alias: Option<ManifestAliasBinding>,
         successor_of: Option<ManifestDigest>,
     ) -> Self {
         Self {
-            digest,
-            chunker,
-            chunk_digest_sha3_256,
-            content_length,
-            policy,
+            manifest_payload,
             submitted_epoch,
             alias,
             successor_of,
@@ -322,6 +315,17 @@ impl CompleteReplicationOrder {
     }
 }
 
+impl ExpireReplicationOrder {
+    /// Create a new `ExpireReplicationOrder` instruction.
+    #[must_use]
+    pub fn new(order_id: ReplicationOrderId, expiration_epoch: u64) -> Self {
+        Self {
+            order_id,
+            expiration_epoch,
+        }
+    }
+}
+
 impl SetPricingSchedule {
     /// Create a new `SetPricingSchedule` instruction.
     #[must_use]
@@ -385,11 +389,7 @@ macro_rules! impl_sorafs_decode_from_slice {
 }
 
 impl_sorafs_decode_from_slice!(RegisterPinManifest {
-    digest: ManifestDigest,
-    chunker: ChunkerProfileHandle,
-    chunk_digest_sha3_256: [u8; 32],
-    content_length: u64,
-    policy: PinPolicy,
+    manifest_payload: Vec<u8>,
     submitted_epoch: u64,
     alias: Option<ManifestAliasBinding>,
     successor_of: Option<ManifestDigest>,
@@ -439,6 +439,11 @@ impl_sorafs_decode_from_slice!(CompleteReplicationOrder {
     completion_epoch: u64,
 });
 
+impl_sorafs_decode_from_slice!(ExpireReplicationOrder {
+    order_id: ReplicationOrderId,
+    expiration_epoch: u64,
+});
+
 impl_sorafs_decode_from_slice!(RegisterProviderOwner {
     provider_id: ProviderId,
     owner: AccountId,
@@ -461,10 +466,7 @@ mod tests {
     use norito::core::DecodeFromSlice;
 
     use super::*;
-    use crate::sorafs::{
-        capacity::{CapacityDisputeEvidence, CapacityDisputeId},
-        pin_registry::StorageClass,
-    };
+    use crate::sorafs::capacity::{CapacityDisputeEvidence, CapacityDisputeId};
 
     fn owner() -> AccountId {
         AccountId::new(
@@ -486,29 +488,11 @@ mod tests {
         ReplicationOrderId::new([0x44; 32])
     }
 
-    fn chunker() -> ChunkerProfileHandle {
-        ChunkerProfileHandle {
-            profile_id: 1,
-            namespace: "sorafs".to_owned(),
-            name: "sf1".to_owned(),
-            semver: "1.0.0".to_owned(),
-            multihash_code: 0x1f,
-        }
-    }
-
     fn alias() -> ManifestAliasBinding {
         ManifestAliasBinding {
             namespace: "sora".to_owned(),
             name: "docs".to_owned(),
             proof: vec![0xAA, 0xBB],
-        }
-    }
-
-    fn pin_policy() -> PinPolicy {
-        PinPolicy {
-            min_replicas: 3,
-            storage_class: StorageClass::Warm,
-            retention_epoch: 900,
         }
     }
 
@@ -610,26 +594,7 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn register_pin_manifest_json_roundtrip() {
-        let manifest = RegisterPinManifest::new(
-            ManifestDigest::new([9_u8; 32]),
-            ChunkerProfileHandle {
-                profile_id: 1,
-                namespace: "sorafs".to_owned(),
-                name: "sf1".to_owned(),
-                semver: "1.0.0".to_owned(),
-                multihash_code: 31,
-            },
-            [7_u8; 32],
-            1_048_576,
-            PinPolicy {
-                min_replicas: 2,
-                storage_class: StorageClass::Hot,
-                retention_epoch: 900,
-            },
-            42,
-            None,
-            None,
-        );
+        let manifest = RegisterPinManifest::new(vec![1, 2, 3], 42, None, None);
 
         let value = norito::json::to_value(&manifest).expect("register pin manifest json");
         let decoded: RegisterPinManifest =
@@ -642,11 +607,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn sorafs_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterPinManifest::new(
-            digest(0x11),
-            chunker(),
-            [0x22; 32],
-            1_048_576,
-            pin_policy(),
+            vec![0x01, 0x02, 0x03],
             42,
             Some(alias()),
             Some(digest(0x10)),
@@ -673,6 +634,7 @@ mod tests {
             90,
         ));
         assert_slice_roundtrip(CompleteReplicationOrder::new(order_id(), 88));
+        assert_slice_roundtrip(ExpireReplicationOrder::new(order_id(), 91));
         assert_slice_roundtrip(RegisterProviderOwner::new(provider(0x35), owner()));
         assert_slice_roundtrip(UnregisterProviderOwner::new(provider(0x35)));
         assert_slice_roundtrip(SetPricingSchedule::new(
@@ -687,11 +649,7 @@ mod tests {
         assert_registry_decodes(
             &registry,
             RegisterPinManifest::new(
-                digest(0x11),
-                chunker(),
-                [0x22; 32],
-                1_048_576,
-                pin_policy(),
+                vec![0x01, 0x02, 0x03],
                 42,
                 Some(alias()),
                 Some(digest(0x10)),
@@ -723,6 +681,7 @@ mod tests {
             IssueReplicationOrder::new(order_id(), vec![0x01, 0x02, 0x03], 70, 90),
         );
         assert_registry_decodes(&registry, CompleteReplicationOrder::new(order_id(), 88));
+        assert_registry_decodes(&registry, ExpireReplicationOrder::new(order_id(), 91));
         assert_registry_decodes(
             &registry,
             RegisterProviderOwner::new(provider(0x35), owner()),

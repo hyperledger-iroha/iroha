@@ -613,7 +613,7 @@ fn run() -> Result<(), String> {
             spec.metadata = Some(metadata.provider_metadata);
         }
         if spec.weight.is_none() {
-            spec.weight = Some(NonZeroU32::new(1).expect("constant non-zero"));
+            spec.weight = Some(NonZeroU32::MIN);
         }
     }
 
@@ -647,8 +647,10 @@ fn run() -> Result<(), String> {
             metadata.range_capability = Some(default_range_capability(&plan));
         }
         if metadata.stream_budget.is_none() {
-            let concurrency = NonZeroUsize::new(provider.max_concurrent_chunks())
-                .expect("provider concurrency must be non-zero");
+            let concurrency =
+                NonZeroUsize::new(provider.max_concurrent_chunks()).ok_or_else(|| {
+                    format!("gateway provider `{alias}` advertised zero maximum concurrent chunks")
+                })?;
             metadata.stream_budget = Some(stream_budget_from_plan(&plan, concurrency));
         }
         metadata.provider_id = Some(alias.clone());
@@ -1299,11 +1301,10 @@ fn parse_provider_spec(value: &str) -> Result<ProviderSpec, String> {
     }
 
     let concurrency_explicit = concurrency.is_some();
-    let max_concurrent =
-        concurrency.unwrap_or_else(|| NonZeroUsize::new(2).expect("constant non-zero"));
+    let max_concurrent = concurrency.unwrap_or_else(|| NonZeroUsize::MIN.saturating_add(1));
 
     let weight_explicit = weight.is_some();
-    let weight = weight.unwrap_or_else(|| NonZeroU32::new(1).expect("constant non-zero"));
+    let weight = weight.unwrap_or(NonZeroU32::MIN);
 
     Ok(ProviderSpec {
         name: name.to_string(),
@@ -1747,9 +1748,9 @@ const fn availability_label(tier: AvailabilityTier) -> &'static str {
 
 const fn availability_weight_hint(tier: AvailabilityTier) -> NonZeroU32 {
     match tier {
-        AvailabilityTier::Hot => NonZeroU32::new(3).expect("non-zero"),
-        AvailabilityTier::Warm => NonZeroU32::new(2).expect("non-zero"),
-        AvailabilityTier::Cold => NonZeroU32::new(1).expect("non-zero"),
+        AvailabilityTier::Hot => NonZeroU32::MIN.saturating_add(2),
+        AvailabilityTier::Warm => NonZeroU32::MIN.saturating_add(1),
+        AvailabilityTier::Cold => NonZeroU32::MIN,
     }
 }
 
@@ -2654,6 +2655,7 @@ fn to_hex(bytes: &[u8]) -> String {
 fn format_multi_source_error(error: MultiSourceError) -> Result<String, String> {
     use MultiSourceError::*;
     match error {
+        InvalidPlan(error) => Ok(format!("invalid chunk fetch plan: {error}")),
         NoProviders => Ok("no providers were supplied".to_string()),
         NoHealthyProviders {
             chunk_index,
@@ -4681,7 +4683,7 @@ mod tests {
             .pin_policy(PinPolicy {
                 min_replicas: 1,
                 storage_class: StorageClass::Hot,
-                retention_epoch: 0,
+                retention_epoch: 1,
             })
             .governance(GovernanceProofs::default())
             .build()
@@ -4782,7 +4784,7 @@ mod tests {
             .pin_policy(PinPolicy {
                 min_replicas: 1,
                 storage_class: StorageClass::Hot,
-                retention_epoch: 0,
+                retention_epoch: 1,
             })
             .governance(GovernanceProofs::default())
             .build()

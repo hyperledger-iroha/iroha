@@ -1032,7 +1032,7 @@ class TronSccpProverTest {
         writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
         writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
         writeTestNoritoField(encoder) {
-            writeTestNoritoString(it, "iroha2-consensus::permissioned-sumeragi@v1")
+            writeTestNoritoString(it, "iroha2-consensus::permissioned-sumeragi@v2")
         }
         writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.finalityBlockHash.removePrefix("0x"))) }
         writeTestNoritoField(encoder) { it.writeBytes(ByteArray(32)) }

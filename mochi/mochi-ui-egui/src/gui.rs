@@ -14351,7 +14351,7 @@ mod tests {
 
     fn sample_sumeragi_status_wire() -> SumeragiStatusWire {
         SumeragiStatusWire {
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
             mode_activation_lag_blocks: None,

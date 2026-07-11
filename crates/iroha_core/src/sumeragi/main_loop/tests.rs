@@ -98,63 +98,6 @@ use nonzero_ext::nonzero;
 use norito::to_bytes;
 use sha2::{Digest as _, Sha256};
 
-fn native_amx_request_for_test(
-    mut body: iroha_data_model::block::consensus::NativeAmxAttestationBodyV1,
-) -> crate::native_amx::NativeAmxAttestationRequestV1 {
-    let validator_set = vec![PeerId::from(checked_keypair().public_key().clone())];
-    let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
-        lane_id: body.coordinator_lane_id,
-        dataspace_id: body.coordinator_dataspace_id,
-        lane_incarnation: body.coordinator_lane_incarnation,
-        proposal_height: body.authority_context_height,
-        previous_lane_block_height: body.coordinator_lane_block_height.saturating_sub(1),
-        previous_lane_block_descriptor_hash: Some(Hash::new(b"native-amx-test-previous")),
-        lane_block_height: body.coordinator_lane_block_height,
-        lane_block_view: body.coordinator_lane_block_view,
-        subject_hash: Hash::new(b"native-amx-test-subject"),
-        payload_ownership_hash: Hash::new(b"native-amx-test-ownership"),
-        rbc_instance_hash: Hash::new(b"native-amx-test-rbc"),
-        accepted_candidate_indices: vec![0],
-        accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
-        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set,
-        validator_count: 1,
-        min_quorum: 1,
-        qc_mode_tag: "native-amx:test".to_owned(),
-        descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
-    };
-    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
-    let mut coordinator_proposal = iroha_data_model::block::consensus::LaneBlockProposalV1 {
-        descriptor,
-        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-        payload_block_hint: None,
-    };
-    coordinator_proposal.proposal_hash = coordinator_proposal.computed_proposal_hash();
-    body.coordinator_proposal_hash = coordinator_proposal.proposal_hash;
-    crate::native_amx::NativeAmxAttestationRequestV1 {
-        plan_legs: vec![
-            crate::queue::RouteLeg::new(
-                crate::queue::RoutingDecision::new(
-                    body.coordinator_lane_id,
-                    body.coordinator_dataspace_id,
-                ),
-                crate::queue::RouteLegRole::Coordinator,
-            ),
-            crate::queue::RouteLeg::new(
-                crate::queue::RoutingDecision::new(
-                    body.participant_lane_id,
-                    body.participant_dataspace_id,
-                ),
-                crate::queue::RouteLegRole::Participant,
-            ),
-        ],
-        body,
-        coordinator_proposal,
-        prepare_qc: None,
-    }
-}
-
 use super::propose::ProposalBackpressure;
 use super::{
     super::rbc_store::{SessionKey, SoftwareManifest},
@@ -818,6 +761,134 @@ fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
 
 fn checked_bls_keypair() -> KeyPair {
     checked_keypair_with_algorithm(Algorithm::BlsNormal)
+}
+
+struct NativeAmxV2Fixture {
+    request: crate::native_amx::NativeAmxAttestationRequestV2,
+    validator_keypair: KeyPair,
+    validator_pop: Vec<u8>,
+}
+
+fn native_amx_v2_fixture(
+    seed: u8,
+    phase: iroha_data_model::block::consensus::NativeAmxPhase,
+) -> NativeAmxV2Fixture {
+    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
+
+    let validator_keypair =
+        deterministic_keypair([seed.wrapping_add(1); Hash::LENGTH], Algorithm::BlsNormal);
+    let validator = PeerId::new(validator_keypair.public_key().clone());
+    let validator_set = vec![validator];
+    let validator_pop = iroha_crypto::bls_normal_pop_prove(validator_keypair.private_key())
+        .expect("native AMX fixture PoP proves");
+    let coordinator_lane_id = LaneId::new(1);
+    let coordinator_dataspace_id = DataSpaceId::new(7);
+    let participant_lane_id = LaneId::new(2);
+    let participant_dataspace_id = DataSpaceId::new(8);
+    let coordinator = RoutingDecision::new(coordinator_lane_id, coordinator_dataspace_id);
+    let participant = RoutingDecision::new(participant_lane_id, participant_dataspace_id);
+    let plan = RoutingPlan::native_amx(
+        coordinator,
+        vec![RouteLeg::new(participant, RouteLegRole::Participant)],
+    );
+    let source_id = [seed; Hash::LENGTH];
+    let coordinator_lane_incarnation = Hash::prehashed([seed.wrapping_add(2); Hash::LENGTH]);
+    let mut body = iroha_data_model::block::consensus::NativeAmxAttestationBodyV2 {
+        round: iroha_data_model::block::consensus_v2::ConsensusRound {
+            context_id:
+                iroha_data_model::block::consensus_v2::HeightContextId(HashOf::<
+                    iroha_data_model::block::consensus_v2::HeightContext,
+                >::from_untyped_unchecked(
+                    Hash::prehashed([seed.wrapping_add(3); Hash::LENGTH]),
+                )),
+            height: 42,
+            view: 3,
+        },
+        epoch: 7,
+        chain_id_hash: Hash::prehashed([seed.wrapping_add(4); Hash::LENGTH]),
+        source_id,
+        tx_entrypoint_hash:
+            HashOf::<iroha_data_model::transaction::TransactionEntrypoint>::from_untyped_unchecked(
+                Hash::prehashed(source_id),
+            ),
+        plan_digest: plan.digest(),
+        phase,
+        coordinator_lane_id,
+        coordinator_dataspace_id,
+        coordinator_lane_incarnation,
+        participant_lane_id,
+        participant_dataspace_id,
+        participant_lane_incarnation: Hash::prehashed([seed.wrapping_add(5); Hash::LENGTH]),
+        participant_validator_set_hash: HashOf::new(&validator_set),
+        participant_validator_count: 1,
+        participant_min_quorum: 1,
+        authority_context_height: 42,
+        planned_coordinator_block_height: 42,
+        coordinator_lane_block_view: 3,
+        coordinator_proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
+        lane_id: coordinator_lane_id,
+        dataspace_id: coordinator_dataspace_id,
+        lane_incarnation: coordinator_lane_incarnation,
+        proposal_height: body.authority_context_height,
+        previous_lane_block_height: body.planned_coordinator_block_height - 1,
+        previous_lane_block_descriptor_hash: Some(Hash::prehashed(
+            [seed.wrapping_add(6); Hash::LENGTH],
+        )),
+        lane_block_height: body.planned_coordinator_block_height,
+        lane_block_view: body.coordinator_lane_block_view,
+        subject_hash: Hash::prehashed([seed.wrapping_add(7); Hash::LENGTH]),
+        payload_ownership_hash: Hash::prehashed([seed.wrapping_add(8); Hash::LENGTH]),
+        rbc_instance_hash: Hash::prehashed([seed.wrapping_add(9); Hash::LENGTH]),
+        accepted_candidate_indices: vec![0],
+        accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set: validator_set.clone(),
+        validator_count: 1,
+        min_quorum: 1,
+        qc_mode_tag: format!("permissioned:native-amx-v2-fixture:{seed}"),
+        descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+    let mut coordinator_proposal = iroha_data_model::block::consensus::LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        payload_block_hint: None,
+    };
+    coordinator_proposal.proposal_hash = coordinator_proposal.computed_proposal_hash();
+    body.coordinator_proposal_hash = coordinator_proposal.proposal_hash;
+    let request = crate::native_amx::NativeAmxAttestationRequestV2 {
+        body,
+        plan_legs: plan.legs(),
+        coordinator_proposal,
+    };
+    request
+        .validate_plan_binding()
+        .expect("native AMX fixture has an exact full-plan proposal binding");
+
+    NativeAmxV2Fixture {
+        request,
+        validator_keypair,
+        validator_pop,
+    }
+}
+
+fn signed_native_amx_v2_vote(
+    body: iroha_data_model::block::consensus::NativeAmxAttestationBodyV2,
+    keypair: &KeyPair,
+) -> crate::native_amx::NativeAmxVoteV2 {
+    let signature = Signature::try_new(keypair.private_key(), &body.signature_preimage())
+        .expect("native AMX fixture vote signs");
+    let vote = crate::native_amx::NativeAmxVoteV2 {
+        body,
+        signer: PeerId::new(keypair.public_key().clone()),
+        bls_signature: signature.payload().to_vec(),
+    };
+    vote.validate_ingress(body.phase, Some(&vote.signer))
+        .expect("native AMX fixture vote has an exact signer and phase binding");
+    vote
 }
 
 fn lane_payload_artifact_validator_keypair() -> KeyPair {
@@ -3774,18 +3845,23 @@ async fn apply_mode_flip_to_npos_restores_unfinalized_target_epoch_record() {
                         signer: 0,
                         commitment: Some(commitment),
                         reveal: Some(reveal),
+                        commit_proof: None,
+                        reveal_proof: None,
                         last_updated_height: 6,
                     },
                     VrfParticipantRecord {
                         signer: 1,
                         commitment: Some([0x38; 32]),
                         reveal: None,
+                        commit_proof: None,
+                        reveal_proof: None,
                         last_updated_height: 7,
                     },
                 ],
                 late_reveals: vec![VrfLateRevealRecord {
                     signer: 2,
                     reveal: [0x39; 32],
+                    reveal_proof: None,
                     noted_at_height: 7,
                 }],
                 committed_no_reveal: Vec::new(),
@@ -3870,6 +3946,8 @@ async fn apply_mode_flip_to_permissioned_restores_epoch_record_but_clears_collec
                     signer: 0,
                     commitment: Some(commitment),
                     reveal: Some(reveal),
+                    commit_proof: None,
+                    reveal_proof: None,
                     last_updated_height: height,
                 }],
                 late_reveals: Vec::new(),
@@ -4450,6 +4528,7 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
     let view = state.view();
     let config_caps = ConsensusConfigCaps {
         nexus_policy_digest: [0u8; 32],
+        v2_config_fingerprint: [0xA1; 32],
         collectors_k: 0,
         redundant_send_r: 0,
         da_enabled: false,
@@ -4470,7 +4549,8 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
             &common_config,
             &consensus_cfg,
             &config_caps,
-        );
+        )
+        .expect("valid v2 handshake configuration");
     let (mode_tag_from_world, bls_domain_from_world, caps_from_world) = {
         let world = state.world_view();
         let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
@@ -4481,12 +4561,13 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
             &consensus_cfg,
             &config_caps,
         )
+        .expect("valid v2 handshake configuration")
     };
     assert_eq!(mode_tag_from_world, mode_tag);
     assert_eq!(bls_domain_from_world, bls_domain);
     assert_eq!(caps_from_world, caps);
     assert_eq!(mode_tag, NPOS_TAG.to_string());
-    assert_eq!(bls_domain, "bls-iroha2:npos-sumeragi:v1");
+    assert_eq!(bls_domain, "bls-iroha2:npos-sumeragi:v2");
 
     let duration_ms = |value: Duration| -> u64 {
         let ms = value.as_millis();
@@ -4535,6 +4616,9 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
                 activation_lag_blocks: 7,
                 slashing_delay_blocks: 9,
             }),
+            protocol_version: consensus_cfg.protocol_version,
+            round_timeout_ms: duration_ms(consensus_cfg.round_timeout),
+            v2_context: None,
         },
         &mode_tag,
     );
@@ -4610,6 +4694,7 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
     let view = state.view();
     let config_caps = ConsensusConfigCaps {
         nexus_policy_digest: [0u8; 32],
+        v2_config_fingerprint: [0xB2; 32],
         collectors_k: 0,
         redundant_send_r: 0,
         da_enabled: false,
@@ -4630,9 +4715,10 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
             &common_config,
             &consensus_cfg,
             &config_caps,
-        );
+        )
+        .expect("valid v2 handshake configuration");
     assert_eq!(mode_tag, NPOS_TAG.to_string());
-    assert_eq!(bls_domain, "bls-iroha2:npos-sumeragi:v1");
+    assert_eq!(bls_domain, "bls-iroha2:npos-sumeragi:v2");
 
     let chain_bytes = common_config.chain.clone().into_inner();
     let chain_hash = iroha_crypto::Hash::new(chain_bytes.as_bytes());
@@ -4689,6 +4775,9 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
                 activation_lag_blocks: consensus_cfg.npos.reconfig.activation_lag_blocks,
                 slashing_delay_blocks: consensus_cfg.npos.reconfig.slashing_delay_blocks,
             }),
+            protocol_version: consensus_cfg.protocol_version,
+            round_timeout_ms: duration_ms(consensus_cfg.round_timeout),
+            v2_context: None,
         },
         &mode_tag,
     );
@@ -5915,6 +6004,7 @@ where
     let genesis_network = crate::sumeragi::GenesisWithPubKey {
         genesis: None,
         public_key: key_pair.public_key().clone(),
+        v2_bootstrap: None,
     };
     let rbc_status_handle = rbc_status::register_handle();
     let (background_tx, background_rx) = std::sync::mpsc::sync_channel(1024);
@@ -8089,6 +8179,7 @@ fn effective_commit_topology_falls_back_to_genesis_roster_when_empty() {
     let genesis_network = crate::sumeragi::GenesisWithPubKey {
         genesis: Some(genesis.clone()),
         public_key: key_pair.public_key().clone(),
+        v2_bootstrap: None,
     };
     let rbc_status_handle = rbc_status::register_handle();
     let block_sync_gossip_limit =
@@ -76522,6 +76613,7 @@ async fn stale_pending_block_requeues_transactions() {
     let genesis_network = crate::sumeragi::GenesisWithPubKey {
         genesis: None,
         public_key: key_pair.public_key().clone(),
+        v2_bootstrap: None,
     };
     let rbc_status_handle = rbc_status::register_handle();
     let (background_tx, _background_rx) = mpsc::sync_channel(1024);
@@ -110986,59 +111078,46 @@ fn message_projection_helpers_match_formal_gate() {
         "Evidence"
     );
 
-    let native_amx_body = |phase: NativeAmxPhase| {
-        iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
-            chain_id_hash: Hash::new(b"native-amx-message-test-chain"),
-            source_id: [0x77; iroha_crypto::Hash::LENGTH],
-            tx_entrypoint_hash:
-                HashOf::<iroha_data_model::transaction::TransactionEntrypoint>::from_untyped_unchecked(
-                    Hash::prehashed([0x78; Hash::LENGTH]),
-                ),
-            plan_digest: Hash::new(b"message-projection-native-amx-plan"),
-            phase,
-            coordinator_lane_id: LaneId::new(1),
-            coordinator_dataspace_id: DataSpaceId::new(7),
-            coordinator_lane_incarnation: Hash::new(b"native-amx-message-coordinator"),
-            participant_lane_id: LaneId::new(2),
-            participant_dataspace_id: DataSpaceId::new(8),
-            participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
-            participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
-            participant_validator_count: 1,
-            participant_min_quorum: 1,
-            authority_context_height: 42,
-            coordinator_lane_block_height: 9,
-            coordinator_lane_block_view: 3,
-            coordinator_proposal_hash: Hash::new(b"native-amx-message-proposal"),
-        }
+    let NativeAmxV2Fixture {
+        request: prepare_request,
+        validator_keypair,
+        validator_pop,
+    } = native_amx_v2_fixture(0x77, NativeAmxPhase::Prepare);
+    let prepare_vote = signed_native_amx_v2_vote(prepare_request.body, &validator_keypair);
+    let validator_set = vec![prepare_vote.signer.clone()];
+    let prepare_qc = crate::native_amx::aggregate_votes_to_qc(
+        prepare_request.body,
+        validator_set,
+        vec![validator_pop],
+        std::slice::from_ref(&prepare_vote),
+        1,
+    )
+    .expect("message projection fixture builds a valid PrepareQC");
+    let mut commit_full_plan_request = prepare_request.clone();
+    commit_full_plan_request.body.phase = NativeAmxPhase::Commit;
+    let commit_vote = signed_native_amx_v2_vote(commit_full_plan_request.body, &validator_keypair);
+    let native_amx_commit_request = crate::native_amx::NativeAmxCommitRequestV2 {
+        request: commit_full_plan_request,
+        prepare_qc,
     };
-    let native_amx_vote = |phase: NativeAmxPhase| crate::native_amx::NativeAmxVoteV1 {
-        body: native_amx_body(phase),
-        signer: PeerId::from(checked_keypair().public_key().clone()),
-        bls_signature: vec![0x79; 96],
-    };
+    native_amx_commit_request
+        .validate_shape()
+        .expect("message projection fixture advances the exact prepared leg");
     let native_amx_cases = [
         (
-            crate::native_amx::NativeAmxMessage::PrepareRequest(native_amx_request_for_test(
-                native_amx_body(NativeAmxPhase::Prepare),
-            )),
+            crate::native_amx::NativeAmxMessage::PrepareRequest(prepare_request),
             "NativeAmxPrepareRequest",
         ),
         (
-            crate::native_amx::NativeAmxMessage::PrepareVote(native_amx_vote(
-                NativeAmxPhase::Prepare,
-            )),
+            crate::native_amx::NativeAmxMessage::PrepareVote(prepare_vote),
             "NativeAmxPrepareVote",
         ),
         (
-            crate::native_amx::NativeAmxMessage::CommitRequest(native_amx_request_for_test(
-                native_amx_body(NativeAmxPhase::Commit),
-            )),
+            crate::native_amx::NativeAmxMessage::CommitRequest(native_amx_commit_request),
             "NativeAmxCommitRequest",
         ),
         (
-            crate::native_amx::NativeAmxMessage::CommitVote(native_amx_vote(
-                NativeAmxPhase::Commit,
-            )),
+            crate::native_amx::NativeAmxMessage::CommitVote(commit_vote),
             "NativeAmxCommitVote",
         ),
     ];
@@ -194335,32 +194414,11 @@ fn background_dispatch_formal_gate_matrix() {
 
     fn native_amx_message() -> crate::native_amx::NativeAmxMessage {
         crate::native_amx::NativeAmxMessage::PrepareRequest(
-            native_amx_request_for_test(
-                iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
-                    chain_id_hash: Hash::new(b"native-amx-message-test-chain"),
-                    source_id: [0x63; iroha_crypto::Hash::LENGTH],
-                    tx_entrypoint_hash: HashOf::<
-                        iroha_data_model::transaction::TransactionEntrypoint,
-                    >::from_untyped_unchecked(
-                        Hash::prehashed([0x64; Hash::LENGTH])
-                    ),
-                    plan_digest: Hash::new(b"background-dispatch-formal-gate"),
-                    phase: iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
-                    coordinator_lane_id: LaneId::new(1),
-                    coordinator_dataspace_id: DataSpaceId::new(7),
-                    coordinator_lane_incarnation: Hash::new(b"native-amx-message-coordinator"),
-                    participant_lane_id: LaneId::new(2),
-                    participant_dataspace_id: DataSpaceId::new(8),
-                    participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
-                    participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
-                    participant_validator_count: 1,
-                    participant_min_quorum: 1,
-                    authority_context_height: 42,
-                    coordinator_lane_block_height: 9,
-                    coordinator_lane_block_view: 3,
-                    coordinator_proposal_hash: Hash::new(b"native-amx-message-proposal"),
-                },
-            ),
+            native_amx_v2_fixture(
+                0x63,
+                iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
+            )
+            .request,
         )
     }
 
@@ -194624,32 +194682,11 @@ fn background_bypass_formal_gate_matrix() {
 
     fn native_amx_message() -> crate::native_amx::NativeAmxMessage {
         crate::native_amx::NativeAmxMessage::PrepareRequest(
-            native_amx_request_for_test(
-                iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
-                    chain_id_hash: Hash::new(b"native-amx-message-test-chain"),
-                    source_id: [0x73; iroha_crypto::Hash::LENGTH],
-                    tx_entrypoint_hash: HashOf::<
-                        iroha_data_model::transaction::TransactionEntrypoint,
-                    >::from_untyped_unchecked(
-                        Hash::prehashed([0x74; Hash::LENGTH])
-                    ),
-                    plan_digest: Hash::new(b"background-bypass-formal-gate"),
-                    phase: iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
-                    coordinator_lane_id: LaneId::new(1),
-                    coordinator_dataspace_id: DataSpaceId::new(7),
-                    coordinator_lane_incarnation: Hash::new(b"native-amx-message-coordinator"),
-                    participant_lane_id: LaneId::new(2),
-                    participant_dataspace_id: DataSpaceId::new(8),
-                    participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
-                    participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
-                    participant_validator_count: 1,
-                    participant_min_quorum: 1,
-                    authority_context_height: 42,
-                    coordinator_lane_block_height: 9,
-                    coordinator_lane_block_view: 3,
-                    coordinator_proposal_hash: Hash::new(b"native-amx-message-proposal"),
-                },
-            ),
+            native_amx_v2_fixture(
+                0x73,
+                iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
+            )
+            .request,
         )
     }
 
@@ -195073,32 +195110,11 @@ fn background_fallback_formal_gate_matrix() {
 
     fn native_amx_message() -> crate::native_amx::NativeAmxMessage {
         crate::native_amx::NativeAmxMessage::PrepareRequest(
-            native_amx_request_for_test(
-                iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
-                    chain_id_hash: Hash::new(b"native-amx-message-test-chain"),
-                    source_id: [0x83; iroha_crypto::Hash::LENGTH],
-                    tx_entrypoint_hash: HashOf::<
-                        iroha_data_model::transaction::TransactionEntrypoint,
-                    >::from_untyped_unchecked(
-                        Hash::prehashed([0x84; Hash::LENGTH])
-                    ),
-                    plan_digest: Hash::new(b"background-fallback-formal-gate"),
-                    phase: iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
-                    coordinator_lane_id: LaneId::new(1),
-                    coordinator_dataspace_id: DataSpaceId::new(7),
-                    coordinator_lane_incarnation: Hash::new(b"native-amx-message-coordinator"),
-                    participant_lane_id: LaneId::new(2),
-                    participant_dataspace_id: DataSpaceId::new(8),
-                    participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
-                    participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
-                    participant_validator_count: 1,
-                    participant_min_quorum: 1,
-                    authority_context_height: 42,
-                    coordinator_lane_block_height: 9,
-                    coordinator_lane_block_view: 3,
-                    coordinator_proposal_hash: Hash::new(b"native-amx-message-proposal"),
-                },
-            ),
+            native_amx_v2_fixture(
+                0x83,
+                iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
+            )
+            .request,
         )
     }
 
@@ -199907,6 +199923,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
     let genesis_network = crate::sumeragi::GenesisWithPubKey {
         genesis: None,
         public_key: key_pair.public_key().clone(),
+        v2_bootstrap: None,
     };
     let events_sender: crate::EventsSender = tokio::sync::broadcast::Sender::new(1);
     let block_sync_gossip_limit =
@@ -208496,6 +208513,29 @@ fn merge_maintenance_fairness_survives_exhausted_tick_budget() {
 }
 
 #[test]
+fn proposal_fairness_survives_perpetually_exhausted_tick_budget() {
+    assert!(Actor::proposal_maintenance_due(false, true, 1));
+    assert!(
+        !Actor::proposal_maintenance_due(false, false, 1),
+        "scheduler fairness must never manufacture a proposal attempt that is not due"
+    );
+    for tick in 1..Actor::TICK_PROPOSAL_FAIRNESS_STRIDE {
+        assert!(
+            !Actor::proposal_maintenance_due(true, true, tick),
+            "ordinary exhausted ticks remain bounded"
+        );
+    }
+    assert!(
+        Actor::proposal_maintenance_due(true, true, Actor::TICK_PROPOSAL_FAIRNESS_STRIDE,),
+        "the fairness stride must eventually bypass a perpetually exhausted budget"
+    );
+    assert!(
+        !Actor::proposal_maintenance_due(true, false, Actor::TICK_PROPOSAL_FAIRNESS_STRIDE,),
+        "even a fairness tick must preserve the due-work gate"
+    );
+}
+
+#[test]
 fn missing_quorum_stale_respects_timeout_and_vote_count() {
     let timeout = Duration::from_millis(500);
     assert!(!missing_quorum_stale(
@@ -210960,6 +211000,7 @@ fn payload_canonical_previous_roster_evidence(seed: u8) -> PreviousRosterEvidenc
 fn payload_canonical_npos_effects(seed: u8) -> NposConsensusEffects {
     NposConsensusEffects {
         vrf_epoch_seals: Vec::new(),
+        v2_evidence_admissions: Vec::new(),
         penalty_actions: vec![NposPenaltyAction::MarkVrfPenaltiesApplied(
             NposMarkVrfPenaltiesAppliedAction {
                 epoch: u64::from(seed).saturating_add(1),
@@ -233407,6 +233448,8 @@ fn committed_vrf_record_does_not_cover_newer_pending_late_reveal() {
         signer: 0,
         commitment: Some([0x11; 32]),
         reveal: None,
+        commit_proof: None,
+        reveal_proof: None,
         last_updated_height: 2,
     };
     let committed = VrfEpochRecord {
@@ -233429,6 +233472,7 @@ fn committed_vrf_record_does_not_cover_newer_pending_late_reveal() {
     let late_reveal = VrfLateRevealRecord {
         signer: 0,
         reveal: [0x33; 32],
+        reveal_proof: None,
         noted_at_height: 5,
     };
     let mut pending = committed.clone();
@@ -233852,6 +233896,8 @@ fn merge_vrf_epoch_records_rejects_conflicting_participant_commitment() {
         signer: 1,
         commitment: Some([0xA1; 32]),
         reveal: None,
+        commit_proof: None,
+        reveal_proof: None,
         last_updated_height: 60,
     });
     let mut incoming = base.clone();
@@ -233870,6 +233916,7 @@ fn merge_vrf_epoch_records_rejects_conflicting_late_reveal() {
     base.late_reveals.push(VrfLateRevealRecord {
         signer: 2,
         reveal: [0xB1; 32],
+        reveal_proof: None,
         noted_at_height: 70,
     });
     let mut incoming = base.clone();
@@ -233923,6 +233970,7 @@ fn merge_vrf_epoch_records_preserves_finalized_committed_state_for_late_snapshot
     late_snapshot.late_reveals.push(VrfLateRevealRecord {
         signer: 1,
         reveal: [0xC1; 32],
+        reveal_proof: None,
         noted_at_height: 104,
     });
 
@@ -233957,6 +234005,8 @@ async fn stage_vrf_snapshot_preserves_committed_vrf_observations() {
         signer: 0,
         commitment: Some([0x10; 32]),
         reveal: Some([0x20; 32]),
+        commit_proof: None,
+        reveal_proof: None,
         last_updated_height: 40,
     };
     {
@@ -234050,6 +234100,8 @@ async fn stage_vrf_snapshot_keeps_committed_compatible_pending_over_bad_snapshot
         signer: 0,
         commitment: Some([0xD0; 32]),
         reveal: None,
+        commit_proof: None,
+        reveal_proof: None,
         last_updated_height: 111,
     });
     harness

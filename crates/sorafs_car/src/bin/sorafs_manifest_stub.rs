@@ -19,7 +19,7 @@ use sha3::{Digest, Sha3_256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, DirectoryPayload, FilePayload,
     FilePlan, InMemoryPayload, PorMerkleTree,
-    fetch_plan::{chunk_fetch_specs_from_json, chunk_fetch_specs_to_json},
+    fetch_plan::{chunk_fetch_specs_from_json, try_chunk_fetch_specs_to_json},
     por_json::{parse_proof_spec, proof_from_value, proof_to_value, sample_to_map, tree_to_value},
 };
 use sorafs_manifest::{
@@ -116,7 +116,15 @@ fn run() -> Result<(), String> {
             }
             "--min-replicas" => opts.min_replicas = Some(parse_u16(value)?),
             "--storage-class" => opts.storage_class = Some(parse_storage_class(value)?),
-            "--retention-epoch" => opts.retention_epoch = Some(parse_u64(value)?),
+            "--retention-epoch" => {
+                let retention_epoch = parse_u64(value)?;
+                if retention_epoch == 0 {
+                    return Err("--retention-epoch must be greater than zero".to_owned());
+                }
+                if opts.retention_epoch.replace(retention_epoch).is_some() {
+                    return Err("--retention-epoch may only be specified once".to_owned());
+                }
+            }
             "--alias" => opts.alias_claims.push(parse_alias_hex(value)?),
             "--alias-file" => opts.alias_claims.push(parse_alias_file(value)?),
             "--metadata" => opts.metadata.push(parse_metadata(value)?),
@@ -188,6 +196,10 @@ fn run() -> Result<(), String> {
             _ => return Err(format!("unknown option: {key}")),
         }
     }
+
+    let retention_epoch = opts
+        .retention_epoch
+        .ok_or_else(|| "missing required option --retention-epoch=<positive epoch>".to_owned())?;
 
     let descriptor = if let Some(id) = opts.chunker_profile_id {
         chunker_registry::lookup(ProfileId(id)).ok_or_else(|| {
@@ -330,7 +342,9 @@ fn run() -> Result<(), String> {
             }
         }
         InputKind::Stdin => {
-            chunk_store.ingest_plan(&payload, &car_plan);
+            chunk_store
+                .ingest_plan(&payload, &car_plan)
+                .map_err(|err| format!("failed to ingest stdin payload: {err}"))?;
         }
     }
     if chunk_store.por_tree().chunks().len() != car_plan.chunks.len() {
@@ -574,7 +588,7 @@ fn run() -> Result<(), String> {
         .pin_policy(PinPolicy {
             min_replicas: opts.min_replicas.unwrap_or(3),
             storage_class: opts.storage_class.unwrap_or_default(),
-            retention_epoch: opts.retention_epoch.unwrap_or(0),
+            retention_epoch,
         })
         .governance(GovernanceProofs {
             council_signatures: opts.council_signatures.clone(),
@@ -594,15 +608,19 @@ fn run() -> Result<(), String> {
     let mut hybrid_output: Option<HybridEnvelopeArtefact> = None;
 
     if produce_hybrid_envelope {
-        let recipient = HybridPublicKey::from_bytes(
-            opts.hybrid_public_x25519
-                .as_ref()
-                .expect("recipient x25519 key checked above"),
-            opts.hybrid_public_kyber
-                .as_ref()
-                .expect("recipient kyber key checked above"),
-        )
-        .map_err(|err| format!("invalid hybrid recipient key material: {err}"))?;
+        let (x25519, kyber) = match (
+            opts.hybrid_public_x25519.as_ref(),
+            opts.hybrid_public_kyber.as_ref(),
+        ) {
+            (Some(x25519), Some(kyber)) => (x25519, kyber),
+            _ => {
+                return Err(
+                    "hybrid envelope requested without both validated recipient keys".into(),
+                );
+            }
+        };
+        let recipient = HybridPublicKey::from_bytes(x25519, kyber)
+            .map_err(|err| format!("invalid hybrid recipient key material: {err}"))?;
         let aad = build_hybrid_manifest_aad(
             &manifest_digest,
             chunk_digest_sha3,
@@ -692,7 +710,7 @@ fn run() -> Result<(), String> {
         manifest_bytes: &manifest_bytes,
         manifest_digest: &manifest_digest,
         por_tree: chunk_store.por_tree(),
-    });
+    })?;
     let report_object = report
         .as_object_mut()
         .ok_or_else(|| "internal error: report root is not a JSON object".to_string())?;
@@ -709,7 +727,8 @@ fn run() -> Result<(), String> {
         report_object.insert("por_samples_truncated".into(), Value::from(true));
     }
     if let Some(path) = &opts.chunk_fetch_plan_out {
-        let specs_value = chunk_fetch_specs_to_json(&car_plan);
+        let specs_value =
+            try_chunk_fetch_specs_to_json(&car_plan).map_err(|err| err.to_string())?;
         let mut specs_text = to_string_pretty(&specs_value)
             .map_err(|err| format!("failed to serialise chunk fetch specs: {err}"))?;
         specs_text.push('\n');
@@ -812,7 +831,7 @@ fn usage() -> &'static str {
     [--chunker-profile-id=1 | --chunker-profile=sorafs.sf1@1.0.0] (choose registered chunker profile) \
      [--min-replicas=3] \
      [--storage-class=hot|warm|cold] \
-     [--retention-epoch=0] \
+     --retention-epoch=<positive epoch> (required) \
      [--alias=name:namespace:proofhex] \
      [--alias-file=name:namespace:path] \
      [--council-signature=signerhex:signaturehex|signaturehex (after --council-signature-public-key)] \
@@ -855,7 +874,7 @@ struct ReportContext<'a> {
     por_tree: &'a PorMerkleTree,
 }
 
-fn build_report(ctx: ReportContext<'_>) -> Value {
+fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
     let chunk_digests: Vec<Value> = ctx
         .plan
         .chunks
@@ -869,7 +888,8 @@ fn build_report(ctx: ReportContext<'_>) -> Value {
         })
         .collect();
 
-    let chunk_fetch_specs = chunk_fetch_specs_to_json(ctx.plan);
+    let chunk_fetch_specs =
+        try_chunk_fetch_specs_to_json(ctx.plan).map_err(|err| err.to_string())?;
 
     let mut chunking_obj = Map::new();
     chunking_obj.insert(
@@ -1050,7 +1070,7 @@ fn build_report(ctx: ReportContext<'_>) -> Value {
         Value::from(ctx.por_tree.chunks().len() as u64),
     );
 
-    Value::Object(report_obj)
+    Ok(Value::Object(report_obj))
 }
 
 fn descriptor_to_json(descriptor: &chunker_registry::ChunkerProfileDescriptor) -> Value {
@@ -1565,11 +1585,13 @@ impl Read for DirectoryPlanReader<'_> {
                 continue;
             }
 
-            let to_read = (self.remaining_in_file as usize).min(buf.len());
-            let reader = self
-                .current
-                .as_mut()
-                .expect("current reader must be available");
+            let buffer_len = u64::try_from(buf.len())
+                .map_err(|_| io::Error::other("read buffer length exceeds u64"))?;
+            let to_read = usize::try_from(self.remaining_in_file.min(buffer_len))
+                .map_err(|_| io::Error::other("directory read length exceeds host width"))?;
+            let reader = self.current.as_mut().ok_or_else(|| {
+                io::Error::other("directory plan reader lost its current file handle")
+            })?;
             let read = reader.read(&mut buf[..to_read])?;
             if read == 0 {
                 let entry = &self.files[self.file_index];
@@ -1582,11 +1604,16 @@ impl Read for DirectoryPlanReader<'_> {
                     ),
                 ));
             }
-            self.remaining_in_file -= read as u64;
+            let read = u64::try_from(read)
+                .map_err(|_| io::Error::other("directory read count exceeds u64"))?;
+            self.remaining_in_file = self.remaining_in_file.checked_sub(read).ok_or_else(|| {
+                io::Error::other("directory reader consumed beyond the planned file size")
+            })?;
             if self.remaining_in_file == 0 {
                 self.finish_current_file();
             }
-            return Ok(read);
+            return usize::try_from(read)
+                .map_err(|_| io::Error::other("directory read count exceeds host width"));
         }
     }
 }
@@ -1964,7 +1991,7 @@ mod tests {
     ) -> sorafs_manifest::ManifestV1 {
         let descriptor = chunker_registry::default_descriptor();
         ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x55, 0xaa])
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(DagCodecId(0x71))
             .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
             .content_length(17)
@@ -1973,7 +2000,7 @@ mod tests {
             .pin_policy(PinPolicy {
                 min_replicas: 3,
                 storage_class: StorageClass::Hot,
-                retention_epoch: 0,
+                retention_epoch: 1,
             })
             .governance(GovernanceProofs {
                 council_signatures: vec![sorafs_manifest::CouncilSignature { signer, signature }],

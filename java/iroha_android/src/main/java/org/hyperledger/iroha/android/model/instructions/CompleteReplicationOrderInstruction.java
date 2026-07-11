@@ -47,6 +47,8 @@ public final class CompleteReplicationOrderInstruction implements InstructionTem
 
   public static CompleteReplicationOrderInstruction fromArguments(
       final Map<String, String> arguments) {
+    ReplicationOrderInstructionValidation.requireArguments(
+        arguments, ACTION, "order_id_hex", "completion_epoch");
     final Builder builder =
         builder()
             .setOrderIdHex(require(arguments, "order_id_hex"))
@@ -99,20 +101,18 @@ public final class CompleteReplicationOrderInstruction implements InstructionTem
     private Builder() {}
 
     public Builder setOrderIdHex(final String orderIdHex) {
-      this.orderIdHex = Objects.requireNonNull(orderIdHex, "orderIdHex");
+      this.orderIdHex = ReplicationOrderInstructionValidation.requireOrderId(orderIdHex);
       return this;
     }
 
     public Builder setCompletionEpoch(final long completionEpoch) {
-      if (completionEpoch < 0) {
-        throw new IllegalArgumentException("completionEpoch must be non-negative");
-      }
-      this.completionEpoch = completionEpoch;
+      this.completionEpoch =
+          ReplicationOrderInstructionValidation.requireEpoch(completionEpoch, "completionEpoch");
       return this;
     }
 
     public CompleteReplicationOrderInstruction build() {
-      if (orderIdHex == null || orderIdHex.isBlank()) {
+      if (orderIdHex == null || orderIdHex.isEmpty()) {
         throw new IllegalStateException("orderIdHex must be provided");
       }
       if (completionEpoch == null) {

@@ -9264,8 +9264,8 @@ mod offline_note_prover_tests {
             KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1,
             KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, KagemushaCompactPaymentToken,
-            KagemushaFoldedProof, KagemushaRecursiveAggregationProof,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            KagemushaCompactPaymentToken, KagemushaFoldedProof, KagemushaRecursiveAggregationProof,
             KagemushaRecursiveAggregationProofBundle, KagemushaRecursiveCompactKeyArtifactEntryV1,
             KagemushaRecursiveCompactKeyArtifactsV1, KagemushaRecursiveCompactVerifierKeyEntryV1,
             KagemushaRecursiveCompactVerifierKeysV1, KagemushaRecursiveSpendAccumulatorV1,
@@ -28465,6 +28465,14 @@ mod tests {
         PRIVACY_FFI_ERROR_PRODUCTION_DISABLED;
     #[cfg(feature = "privacy-production-enabled")]
     const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PROVING_FAILED;
+
+    #[test]
+    fn disabled_local_fetch_integrity_maps_to_options_error() {
+        assert_eq!(
+            map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled("test check")),
+            ERR_FETCH_OPTIONS_JSON
+        );
+    }
 
     struct ResetConfig(AccelerationConfig);
 

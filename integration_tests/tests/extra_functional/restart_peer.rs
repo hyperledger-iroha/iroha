@@ -45,7 +45,7 @@ use iroha::{
             encode_uploaded_model_bundle_register_provenance_payload,
             encode_uploaded_model_finalize_provenance_payload,
         },
-        sorafs::pin_registry::{ChunkerProfileHandle, ManifestDigest, PinPolicy, StorageClass},
+        sorafs::pin_registry::ManifestDigest,
     },
 };
 use iroha_config_base::toml::WriteExt as _;
@@ -55,7 +55,9 @@ use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
     canonical_request_signature_message, signature_header_value,
 };
+use norito::codec::Encode as _;
 use norito::json::{self, Value};
+use sorafs_manifest::{DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
@@ -254,39 +256,29 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
     ]
 }
 
-fn test_sorafs_chunker_handle() -> ChunkerProfileHandle {
-    ChunkerProfileHandle {
-        profile_id: 1,
-        namespace: "sorafs".to_owned(),
-        name: "sf1".to_owned(),
-        semver: "1.0.0".to_owned(),
-        multihash_code: 0x1f,
-    }
-}
-
-fn test_sorafs_pin_policy() -> PinPolicy {
-    PinPolicy {
-        min_replicas: 1,
-        storage_class: StorageClass::Warm,
-        retention_epoch: u64::MAX,
-    }
-}
-
 fn register_private_model_pin(
-    digest: ManifestDigest,
     content_length: u64,
     chunk_seed: u8,
-) -> RegisterPinManifest {
-    RegisterPinManifest::new(
-        digest,
-        test_sorafs_chunker_handle(),
-        [chunk_seed; 32],
-        content_length,
-        test_sorafs_pin_policy(),
-        1,
-        None,
-        None,
-    )
+) -> Result<(ManifestDigest, RegisterPinManifest)> {
+    let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+    let manifest = ManifestBuilder::new()
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+            [chunk_seed.wrapping_add(0x11); 32],
+        ))
+        .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
+        .chunking_from_registry(descriptor.id)
+        .content_length(content_length)
+        .car_digest([chunk_seed.wrapping_add(0x22); 32])
+        .car_size(content_length.saturating_add(256))
+        .pin_policy(sorafs_manifest::PinPolicy {
+            min_replicas: 1,
+            storage_class: sorafs_manifest::StorageClass::Warm,
+            retention_epoch: u64::MAX,
+        })
+        .build()?;
+    let digest = ManifestDigest::from_manifest(&manifest)?;
+    let instruction = RegisterPinManifest::new(manifest.encode()?, [chunk_seed; 32], 1, None, None);
+    Ok((digest, instruction))
 }
 
 fn soracloud_private_model_service_bundle() -> SoraDeploymentBundleV1 {
@@ -493,13 +485,13 @@ fn uploaded_model_finalize_provenance(
 
 fn private_model_artifact_ref(
     role: &str,
-    digest_seed: u8,
+    manifest_digest: ManifestDigest,
     hash_seed: &[u8],
     ciphertext_bytes: u64,
 ) -> SoraPrivateModelArtifactRefV1 {
     SoraPrivateModelArtifactRefV1 {
         schema_version: SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
-        sorafs_manifest_digest: ManifestDigest::new([digest_seed; 32]),
+        sorafs_manifest_digest: manifest_digest,
         artifact_hash: Hash::new(hash_seed),
         ciphertext_bytes,
         artifact_role: role.to_owned(),
@@ -1101,10 +1093,13 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
         return Ok(());
     };
 
-    let model_digest = ManifestDigest::new([0xA5; 32]);
-    let input_artifact = private_model_artifact_ref("input", 0xB1, b"private-input-artifact", 64);
+    let (model_digest, model_pin) = register_private_model_pin(4_352, 0xC1)?;
+    let (input_digest, input_pin) = register_private_model_pin(64, 0xC2)?;
+    let (output_digest, output_pin) = register_private_model_pin(96, 0xC3)?;
+    let input_artifact =
+        private_model_artifact_ref("input", input_digest, b"private-input-artifact", 64);
     let output_artifact =
-        private_model_artifact_ref("output", 0xB2, b"private-output-artifact", 96);
+        private_model_artifact_ref("output", output_digest, b"private-output-artifact", 96);
     let service_bundle = soracloud_private_model_service_bundle();
     let uploaded_bundle = private_uploaded_model_bundle(model_digest);
     let weight_artifact_hash = Hash::new(b"private-weight-artifact");
@@ -1113,24 +1108,9 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     let provenance_attestation_hash = Hash::new(b"private-provenance-attestation");
 
     let setup_instructions = vec![
-        register_private_model_pin(
-            uploaded_bundle.sorafs_manifest_digest,
-            uploaded_bundle.ciphertext_bytes,
-            0xC1,
-        )
-        .into(),
-        register_private_model_pin(
-            input_artifact.sorafs_manifest_digest,
-            input_artifact.ciphertext_bytes,
-            0xC2,
-        )
-        .into(),
-        register_private_model_pin(
-            output_artifact.sorafs_manifest_digest,
-            output_artifact.ciphertext_bytes,
-            0xC3,
-        )
-        .into(),
+        model_pin.into(),
+        input_pin.into(),
+        output_pin.into(),
         DeploySoracloudService {
             bundle: service_bundle.clone(),
             initial_service_configs: BTreeMap::new(),

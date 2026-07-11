@@ -4272,7 +4272,9 @@ fn build_chunk_commitments_rejects_oversized_chunk_length() {
     let canonical = normalize_payload(&request).expect("normalize payload");
     let oversized_profile = chunk_profile_for_request(1024);
     let mut chunk_store = ChunkStore::with_profile(oversized_profile);
-    chunk_store.ingest_bytes(canonical.as_slice());
+    chunk_store
+        .ingest_bytes(canonical.as_slice())
+        .expect("ingest canonical payload");
 
     let err = build_chunk_commitments(&request, &chunk_store, canonical.as_slice())
         .expect_err("oversized chunk length should be rejected");

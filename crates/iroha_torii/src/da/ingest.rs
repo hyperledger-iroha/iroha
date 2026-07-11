@@ -54,7 +54,9 @@ use norito::{
     json::{self, JsonSerialize, Map, Value},
     to_bytes,
 };
-use sorafs_car::{ChunkStore, build_plan_from_da_manifest, fetch_plan::chunk_fetch_specs_to_json};
+use sorafs_car::{
+    ChunkStore, build_plan_from_da_manifest, fetch_plan::try_chunk_fetch_specs_to_json,
+};
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1,
@@ -198,7 +200,10 @@ pub async fn handler_post_da_ingest(
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO);
     let queued_at_secs = now.as_secs();
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let chunk_store =
+        try_build_chunk_store(&request, canonical.as_slice()).map_err(|(status, message)| {
+            ResponseError::from(build_error_response(status, &message, format))
+        })?;
     let chunking_observer = |elapsed: Duration| {
         record_da_chunking_metrics(&telemetry, elapsed);
     };
@@ -928,7 +933,16 @@ pub async fn handler_get_da_manifest(
         }
     };
 
-    let chunk_plan = chunk_fetch_specs_to_json(&plan);
+    let chunk_plan = match try_chunk_fetch_specs_to_json(&plan) {
+        Ok(plan) => plan,
+        Err(err) => {
+            return Err(ResponseError::from(build_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to derive chunk fetch specifications: {err}"),
+                format,
+            )));
+        }
+    };
     let manifest_json = match json::to_value(&manifest) {
         Ok(value) => value,
         Err(err) => {
@@ -1372,10 +1386,23 @@ fn chunk_profile_for_request(chunk_size: u32) -> ChunkProfile {
     }
 }
 
-fn build_chunk_store(request: &DaIngestRequest, canonical_payload: &[u8]) -> ChunkStore {
+fn try_build_chunk_store(
+    request: &DaIngestRequest,
+    canonical_payload: &[u8],
+) -> Result<ChunkStore, (StatusCode, String)> {
     let mut store = ChunkStore::with_profile(chunk_profile_for_request(request.chunk_size));
-    store.ingest_bytes(canonical_payload);
-    store
+    store.ingest_bytes(canonical_payload).map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("failed to chunk canonical DA payload: {error}"),
+        )
+    })?;
+    Ok(store)
+}
+
+#[cfg(test)]
+fn build_chunk_store(request: &DaIngestRequest, canonical_payload: &[u8]) -> ChunkStore {
+    try_build_chunk_store(request, canonical_payload).expect("test DA payload must be ingestible")
 }
 
 fn encrypt_governance_metadata(

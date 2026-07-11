@@ -12,7 +12,7 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use norito::json::{self, Map, Value};
 use sorafs_car::{
-    CarBuildPlan, CarWriter, chunker_registry, fetch_plan::chunk_fetch_specs_to_json,
+    CarBuildPlan, CarWriter, chunker_registry, fetch_plan::try_chunk_fetch_specs_to_json,
     verifier::CarVerifier,
 };
 use sorafs_chunker::ChunkProfile;
@@ -148,7 +148,7 @@ fn ingest(
         .map_err(|err| format!("failed to ingest manifest: {err}"))?;
 
     if let Some(path) = plan_json_out {
-        let json_value = chunk_fetch_specs_to_json(&plan);
+        let json_value = try_chunk_fetch_specs_to_json(&plan).map_err(|err| err.to_string())?;
         write_json_file(&path, json_value)?;
     }
 
@@ -519,7 +519,7 @@ fn export(
         let taikai_hint = sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_v1)
             .map_err(|err| format!("failed to derive Taikai metadata: {err}"))?;
         let plan = stored_manifest.to_car_plan_with_hint(chunk_profile, taikai_hint);
-        let json_value = chunk_fetch_specs_to_json(&plan);
+        let json_value = try_chunk_fetch_specs_to_json(&plan).map_err(|err| err.to_string())?;
         write_json_file(&path, json_value)?;
     }
 

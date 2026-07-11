@@ -102,7 +102,7 @@ so manifests, CAR tooling, and fixtures stay aligned.
 ## DAG & CID Layout
 
 - Each chunk becomes a `raw` block (multicodec `0x55`). The block CID uses
-  `multihash` code `0x13` (BLAKE3-256) for CPU efficiency and GPU acceleration
+  `multihash` code `0x1f` (BLAKE3-256) for CPU efficiency and GPU acceleration
   parity.
 - File DAGs follow UnixFS-like balanced trees: leaves reference chunk blocks,
   and intermediate `dag-cbor` nodes (`0x71`) encode balanced fan-out (default
@@ -124,6 +124,7 @@ struct SoraFsManifestV1 {
     root_cid: [u8; 36],            // Multibase-decoded CID bytes (CIDv1).
     dag_codec: DagCodecId,         // 0x71 for dag-cbor roots, 0x0129 for dag-json, etc.
     chunking: ChunkingProfileV1,   // Captures CDC parameters + multihash codes.
+    chunk_digest_sha3_256: [u8; 32], // SHA3-256 of ordered chunk offsets/lengths/BLAKE3 digests.
     content_length: u64,           // Total bytes represented by the DAG.
     car_digest: [u8; 32],          // BLAKE3-256 of the CAR payload section.
     car_size: u64,                 // Bytes of the CAR file (payload + index).
@@ -280,11 +281,13 @@ map to an active registry entry. Admission proceeds as follows:
    drain mode, stop accepting new pin allocations from that provider, and gossip
    a `provider_unregistered` event so operators can rotate capacity.
 
-`RegisterPinManifest` now invokes the shared validator from
-`sorafs_manifest`, rejecting submissions whose chunker descriptors or pin
-policies deviate from the governance constraints. This keeps direct ISI
-submissions aligned with the Torii manifest checks while the full registry
-policy API comes online.
+`RegisterPinManifest` carries the complete canonical Norito `ManifestV1`, not
+caller-provided summaries. Consensus decodes it under explicit resource limits,
+revalidates the root/chunk-plan/CAR commitments, immutable chunker geometry, pin policy,
+metadata, aliases, and any embedded signatures, then derives the manifest
+digest and distinct content root CID before fees or state mutation. Direct ISI
+submission therefore has the same authority checks as Torii ingress and cannot
+substitute a manifest digest, chunk-plan digest, root, profile, length, or policy summary.
 
 Admission and renewal events surface through the governance API, and CI ensures
 that admission envelopes ship alongside the public chunker fixtures so SDK

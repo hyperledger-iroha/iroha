@@ -8,6 +8,7 @@ public struct NoritoHeader {
     public static let versionMajor: UInt8 = 0
     public static let versionMinor: UInt8 = 0
     public static let encodedLength = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1
+    public static let maxHeaderPadding = 64
     public static let packedSeq: UInt8 = 0x01
     public static let compactLen: UInt8 = 0x02
     public static let packedStruct: UInt8 = 0x04
@@ -130,6 +131,7 @@ func noritoDecodeFrame(_ data: Data) -> NoritoFrame? {
     let payloadStart = data.count - payloadLen
     guard payloadStart >= headerLength else { return nil }
     let paddingLength = payloadStart - headerLength
+    guard paddingLength <= NoritoHeader.maxHeaderPadding else { return nil }
     if paddingLength > 0 {
         let padding = data[headerLength..<payloadStart]
         if padding.contains(where: { $0 != 0 }) {

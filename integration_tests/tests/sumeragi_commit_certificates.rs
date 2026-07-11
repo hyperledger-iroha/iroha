@@ -516,7 +516,8 @@ async fn wait_for_commit_quorum_status(
     required: usize,
 ) -> Result<()> {
     let deadline = Instant::now() + COMMIT_CERT_TIMEOUT;
-    let required_u64 = u64::try_from(required).unwrap_or(u64::MAX);
+    let required_u32 = u32::try_from(required)
+        .map_err(|_| eyre!("required commit quorum does not fit the v2 status wire type"))?;
     let mut last = Vec::new();
     loop {
         if Instant::now() >= deadline {
@@ -526,14 +527,15 @@ async fn wait_for_commit_quorum_status(
         }
         last.clear();
         for (idx, peer) in peers.iter().enumerate() {
-            match peer.client().get_sumeragi_status() {
+            match peer.client().get_sumeragi_v2_status() {
                 Ok(status) => {
-                    let quorum = status.commit_quorum;
+                    let quorum = status.authoritative.last_commit_qc;
                     last.push(format!("peer#{idx}({}): {quorum:?}", peer.mnemonic()));
-                    if quorum.height >= expected_height
-                        && quorum.signatures_required >= required_u64
-                        && quorum.signatures_present >= required_u64
-                        && quorum.signatures_counted >= required_u64
+                    if let Some(quorum) = quorum
+                        && quorum.certificate.round.height >= expected_height
+                        && quorum.min_signers >= required_u32
+                        && quorum.signer_count >= required_u32
+                        && quorum.has_quorum()
                     {
                         return Ok(());
                     }

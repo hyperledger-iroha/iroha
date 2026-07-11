@@ -183,11 +183,10 @@ const HOT_LEAVES_PER_SEGMENT_USIZE_V1: usize = PDP_HOT_LEAVES_PER_SEGMENT_V1 as 
 
 /// Estimate the retained heap capacity of a canonical PDP tree.
 ///
-/// The estimate covers both global Merkle layer vectors, including their
-/// nested `Vec` descriptors and the power-of-two leaf capacities used by the
-/// streaming builder. The builder's temporary 256 KiB segment buffer and the
-/// bounded temporary local tree used during proof extraction are not retained
-/// by the finished tree and are therefore excluded.
+/// The estimate covers the two exact boxed node slabs retained by the finished
+/// tree. The builder's temporary 256 KiB segment buffer and the bounded
+/// temporary local tree used during proof extraction are not retained by the
+/// finished tree and are therefore excluded.
 ///
 /// This function performs no allocation. An empty payload returns
 /// [`PdpMerkleTreeError::EmptyPayload`], geometry or `usize` arithmetic
@@ -203,30 +202,10 @@ pub fn estimated_heap_bytes(payload_len: u64) -> Result<usize, PdpMerkleTreeErro
         .map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
     let segment_count = usize::try_from(segment_count_for_payload(payload_len))
         .map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
-    let hot_leaf_capacity = geometric_capacity_for_len(hot_leaf_count)?;
-    let segment_leaf_capacity = geometric_capacity_for_len(segment_count)?;
-    let hot_parent_count = merkle_parent_node_count(hot_leaf_count)?;
-    let segment_parent_count = merkle_parent_node_count(segment_count)?;
-    let hot_node_capacity = hot_leaf_capacity
-        .checked_add(hot_parent_count)
-        .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
-    let segment_node_capacity = segment_leaf_capacity
-        .checked_add(segment_parent_count)
-        .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
-    let hash_bytes = checked_allocation_bytes::<[u8; 32]>(hot_node_capacity)?
-        .checked_add(checked_allocation_bytes::<[u8; 32]>(segment_node_capacity)?)
-        .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
-    let layer_descriptor_count = merkle_path_depth(
-        u64::try_from(hot_leaf_count).map_err(|_| PdpMerkleTreeError::GeometryOverflow)?,
-    )
-    .checked_add(1)
-    .and_then(|count| {
-        count.checked_add(merkle_path_depth(u64::try_from(segment_count).ok()?).checked_add(1)?)
-    })
-    .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
-    let descriptor_bytes = checked_allocation_bytes::<Vec<[u8; 32]>>(layer_descriptor_count)?;
-    hash_bytes
-        .checked_add(descriptor_bytes)
+    let hot_node_count = merkle_total_node_count(hot_leaf_count)?;
+    let segment_node_count = merkle_total_node_count(segment_count)?;
+    checked_allocation_bytes::<[u8; 32]>(hot_node_count)?
+        .checked_add(checked_allocation_bytes::<[u8; 32]>(segment_node_count)?)
         .ok_or(PdpMerkleTreeError::GeometryOverflow)
 }
 
@@ -250,8 +229,8 @@ struct HotLeafGeometryV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdpMerkleTreeV1 {
     payload_len: u64,
-    hot_layers: Vec<Vec<[u8; 32]>>,
-    segment_layers: Vec<Vec<[u8; 32]>>,
+    hot_nodes: Box<[[u8; 32]]>,
+    segment_nodes: Box<[[u8; 32]]>,
     hot_root: [u8; 32],
     segment_root: [u8; 32],
 }
@@ -259,7 +238,7 @@ pub struct PdpMerkleTreeV1 {
 /// Incremental constructor for a canonical Sora-PDP v1 Merkle tree.
 ///
 /// The builder retains at most one 256 KiB payload segment while ingesting
-/// bytes. Final trees retain only the two global Merkle layer sets; all byte
+/// bytes. Final trees retain only two exact global Merkle node slabs; all byte
 /// geometry is derived from `payload_len` and a sampled segment's bounded
 /// 64-leaf local tree is rebuilt when a proof is extracted. All allocations
 /// made while constructing the tree are fallible; callers must discard the
@@ -355,28 +334,28 @@ impl PdpMerkleTreeBuilderV1 {
             return Err(PdpMerkleTreeError::CorruptTree);
         }
 
-        let hot_layers = build_merkle_layers_owned(self.hot_leaf_digests, HOT_NODE_DOMAIN_V1)?;
-        let segment_layers =
-            build_merkle_layers_owned(self.segment_commitments, SEGMENT_NODE_DOMAIN_V1)?;
-        let hot_top = hot_layers
+        let hot_nodes = build_compact_merkle_nodes(self.hot_leaf_digests, HOT_NODE_DOMAIN_V1)?;
+        let segment_nodes =
+            build_compact_merkle_nodes(self.segment_commitments, SEGMENT_NODE_DOMAIN_V1)?;
+        let hot_top = hot_nodes
             .last()
-            .and_then(|level| level.first())
             .copied()
             .ok_or(PdpMerkleTreeError::CorruptTree)?;
-        let segment_top = segment_layers
+        let segment_top = segment_nodes
             .last()
-            .and_then(|level| level.first())
             .copied()
             .ok_or(PdpMerkleTreeError::CorruptTree)?;
-        u16::try_from(hot_layers.len()).map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
-        u16::try_from(segment_layers.len()).map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
+        u16::try_from(merkle_path_depth(hot_leaf_count) + 1)
+            .map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
+        u16::try_from(merkle_path_depth(segment_count) + 1)
+            .map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
         let hot_root = wrap_hot_root_v1(self.payload_len, hot_leaf_count, &hot_top);
         let segment_root = wrap_segment_root_v1(self.payload_len, segment_count, &segment_top);
 
         Ok(PdpMerkleTreeV1 {
             payload_len: self.payload_len,
-            hot_layers,
-            segment_layers,
+            hot_nodes,
+            segment_nodes,
             hot_root,
             segment_root,
         })
@@ -497,13 +476,13 @@ impl PdpMerkleTreeV1 {
     /// Levels in the global hot tree, including its root.
     #[must_use]
     pub fn hot_tree_height(&self) -> u16 {
-        u16::try_from(self.hot_layers.len()).unwrap_or(u16::MAX)
+        u16::try_from(merkle_path_depth(self.hot_leaf_count()) + 1).unwrap_or(u16::MAX)
     }
 
     /// Levels in the global segment tree, including its root.
     #[must_use]
     pub fn segment_tree_height(&self) -> u16 {
-        u16::try_from(self.segment_layers.len()).unwrap_or(u16::MAX)
+        u16::try_from(merkle_path_depth(self.segment_count()) + 1).unwrap_or(u16::MAX)
     }
 
     /// Canonical global hot-leaf commitment root.
@@ -628,9 +607,8 @@ impl PdpMerkleTreeV1 {
                     &bytes,
                 );
                 let expected_digest = self
-                    .hot_layers
-                    .first()
-                    .and_then(|layer| layer.get(global_position))
+                    .hot_nodes
+                    .get(global_position)
                     .ok_or(PdpMerkleTreeError::CorruptTree)?;
                 if &digest != expected_digest {
                     return Err(PdpMerkleReadError::Tree(
@@ -646,14 +624,24 @@ impl PdpMerkleTreeV1 {
                     leaf_length: leaf.length,
                     leaf_bytes: bytes,
                     segment_hot_merkle_path: merkle_path(&segment_hot_layers, local_index)?,
-                    global_hot_merkle_path: merkle_path(&self.hot_layers, global_position)?,
+                    global_hot_merkle_path: compact_merkle_path(
+                        &self.hot_nodes,
+                        usize::try_from(self.hot_leaf_count())
+                            .map_err(|_| PdpMerkleTreeError::GeometryOverflow)?,
+                        global_position,
+                    )?,
                 });
             }
             proof_leaves.push(PdpProofLeafV1 {
                 segment_index: segment.index,
                 segment_offset: segment.offset,
                 segment_length: segment.length,
-                segment_merkle_path: merkle_path(&self.segment_layers, segment_position)?,
+                segment_merkle_path: compact_merkle_path(
+                    &self.segment_nodes,
+                    usize::try_from(self.segment_count())
+                        .map_err(|_| PdpMerkleTreeError::GeometryOverflow)?,
+                    segment_position,
+                )?,
                 hot_leaves: hot_proofs,
             });
         }
@@ -738,21 +726,19 @@ impl PdpMerkleTreeV1 {
             usize::try_from(hot_leaf_count).map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
         let segment_count_usize =
             usize::try_from(segment_count).map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
-        validate_layer_geometry(&self.hot_layers, hot_leaf_count_usize)?;
-        validate_layer_geometry(&self.segment_layers, segment_count_usize)?;
-        let hot_height = u16::try_from(self.hot_layers.len())
+        validate_compact_tree_geometry(&self.hot_nodes, hot_leaf_count_usize)?;
+        validate_compact_tree_geometry(&self.segment_nodes, segment_count_usize)?;
+        let hot_height = u16::try_from(merkle_path_depth(hot_leaf_count) + 1)
             .map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
-        let segment_height = u16::try_from(self.segment_layers.len())
+        let segment_height = u16::try_from(merkle_path_depth(segment_count) + 1)
             .map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
         let hot_top = self
-            .hot_layers
+            .hot_nodes
             .last()
-            .and_then(|layer| layer.first())
             .ok_or(PdpMerkleTreeError::CorruptTree)?;
         let segment_top = self
-            .segment_layers
+            .segment_nodes
             .last()
-            .and_then(|layer| layer.first())
             .ok_or(PdpMerkleTreeError::CorruptTree)?;
         if self.hot_tree_height() != hot_height
             || self.segment_tree_height() != segment_height
@@ -791,7 +777,8 @@ impl PdpMerkleTreeV1 {
         let hot_leaf_end = hot_leaf_start
             .checked_add(hot_leaf_count)
             .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
-        let retained_hot_leaf_count = self.hot_layers.first().map_or(0, Vec::len);
+        let retained_hot_leaf_count = usize::try_from(self.hot_leaf_count())
+            .map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
         if length == 0
             || hot_leaf_count == 0
             || hot_leaf_count > HOT_LEAVES_PER_SEGMENT_USIZE_V1
@@ -817,9 +804,8 @@ impl PdpMerkleTreeV1 {
             .hot_leaf_start
             .checked_add(segment.hot_leaf_count)
             .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
-        self.hot_layers
-            .first()
-            .and_then(|layer| layer.get(segment.hot_leaf_start..end))
+        self.hot_nodes
+            .get(segment.hot_leaf_start..end)
             .ok_or(PdpMerkleTreeError::CorruptTree)
     }
 
@@ -846,9 +832,8 @@ impl PdpMerkleTreeV1 {
         let position =
             usize::try_from(segment.index).map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
         let retained_commitment = self
-            .segment_layers
-            .first()
-            .and_then(|layer| layer.get(position))
+            .segment_nodes
+            .get(position)
             .ok_or(PdpMerkleTreeError::CorruptTree)?;
         if retained_commitment != &self.expected_segment_commitment(segment)? {
             return Err(PdpMerkleTreeError::CorruptTree);
@@ -879,12 +864,7 @@ impl PdpMerkleTreeV1 {
         );
         let position =
             usize::try_from(segment.index).map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
-        if self
-            .segment_layers
-            .first()
-            .and_then(|layer| layer.get(position))
-            != Some(&commitment)
-        {
+        if self.segment_nodes.get(position) != Some(&commitment) {
             return Err(PdpMerkleTreeError::CorruptTree);
         }
         Ok(layers)
@@ -929,11 +909,7 @@ impl PdpMerkleTreeV1 {
             .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
         if length == 0
             || leaf_end > self.payload_len
-            || self
-                .hot_layers
-                .first()
-                .and_then(|layer| layer.get(global_position))
-                .is_none()
+            || self.hot_nodes.get(global_position).is_none()
         {
             return Err(PdpMerkleTreeError::CorruptTree);
         }
@@ -1057,6 +1033,71 @@ fn build_merkle_layers(
     build_merkle_layers_owned(leaf_layer, node_domain)
 }
 
+fn build_compact_merkle_nodes(
+    mut nodes: Vec<[u8; 32]>,
+    node_domain: &[u8],
+) -> Result<Box<[[u8; 32]]>, PdpMerkleTreeError> {
+    if nodes.is_empty() {
+        return Err(PdpMerkleTreeError::EmptyPayload);
+    }
+    let leaf_count = nodes.len();
+    let total_node_count = merkle_total_node_count(leaf_count)?;
+    let additional = total_node_count
+        .checked_sub(nodes.len())
+        .ok_or(PdpMerkleTreeError::CorruptTree)?;
+    try_reserve_exact(&mut nodes, additional)?;
+
+    let mut layer_start = 0usize;
+    let mut layer_count = leaf_count;
+    let mut level = 1u16;
+    while layer_count > 1 {
+        let next_count = layer_count.div_ceil(2);
+        let next_start = nodes.len();
+        for parent_index in 0..next_count {
+            let left_offset = parent_index
+                .checked_mul(2)
+                .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
+            let left_position = layer_start
+                .checked_add(left_offset)
+                .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
+            let left = nodes
+                .get(left_position)
+                .copied()
+                .ok_or(PdpMerkleTreeError::CorruptTree)?;
+            let right_offset = left_offset
+                .checked_add(1)
+                .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
+            let right = if right_offset < layer_count {
+                let right_position = layer_start
+                    .checked_add(right_offset)
+                    .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
+                nodes
+                    .get(right_position)
+                    .copied()
+                    .ok_or(PdpMerkleTreeError::CorruptTree)?
+            } else {
+                left
+            };
+            nodes.push(hash_merkle_node(
+                node_domain,
+                level,
+                u64::try_from(parent_index).map_err(|_| PdpMerkleTreeError::GeometryOverflow)?,
+                &left,
+                &right,
+            ));
+        }
+        layer_start = next_start;
+        layer_count = next_count;
+        level = level
+            .checked_add(1)
+            .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
+    }
+    if nodes.len() != total_node_count {
+        return Err(PdpMerkleTreeError::CorruptTree);
+    }
+    Ok(nodes.into_boxed_slice())
+}
+
 fn build_merkle_layers_owned(
     leaf_layer: Vec<[u8; 32]>,
     node_domain: &[u8],
@@ -1160,6 +1201,12 @@ fn merkle_parent_node_count(mut leaf_count: usize) -> Result<usize, PdpMerkleTre
     Ok(total)
 }
 
+fn merkle_total_node_count(leaf_count: usize) -> Result<usize, PdpMerkleTreeError> {
+    leaf_count
+        .checked_add(merkle_parent_node_count(leaf_count)?)
+        .ok_or(PdpMerkleTreeError::GeometryOverflow)
+}
+
 fn checked_allocation_bytes<T>(elements: usize) -> Result<usize, PdpMerkleTreeError> {
     let bytes = elements
         .checked_mul(std::mem::size_of::<T>())
@@ -1194,27 +1241,60 @@ fn try_reserve_geometric<T>(
     try_reserve_exact(values, reserve)
 }
 
-fn validate_layer_geometry(
-    layers: &[Vec<[u8; 32]>],
+fn validate_compact_tree_geometry(
+    nodes: &[[u8; 32]],
     leaf_count: usize,
 ) -> Result<(), PdpMerkleTreeError> {
-    if leaf_count == 0 || layers.first().map(Vec::len) != Some(leaf_count) {
-        return Err(PdpMerkleTreeError::CorruptTree);
-    }
-    let mut expected_count = leaf_count;
-    for (index, layer) in layers.iter().enumerate() {
-        if layer.len() != expected_count {
-            return Err(PdpMerkleTreeError::CorruptTree);
-        }
-        if expected_count == 1 && index + 1 != layers.len() {
-            return Err(PdpMerkleTreeError::CorruptTree);
-        }
-        expected_count = expected_count.div_ceil(2);
-    }
-    if expected_count != 1 || layers.last().map(Vec::len) != Some(1) {
+    if leaf_count == 0 || nodes.len() != merkle_total_node_count(leaf_count)? {
         return Err(PdpMerkleTreeError::CorruptTree);
     }
     Ok(())
+}
+
+fn compact_merkle_path(
+    nodes: &[[u8; 32]],
+    leaf_count: usize,
+    mut index: usize,
+) -> Result<Vec<[u8; 32]>, PdpMerkleTreeError> {
+    validate_compact_tree_geometry(nodes, leaf_count)?;
+    if index >= leaf_count {
+        return Err(PdpMerkleTreeError::CorruptTree);
+    }
+
+    let mut path = Vec::new();
+    let leaf_count_u64 =
+        u64::try_from(leaf_count).map_err(|_| PdpMerkleTreeError::GeometryOverflow)?;
+    try_reserve_exact(&mut path, merkle_path_depth(leaf_count_u64))?;
+    let mut layer_start = 0usize;
+    let mut layer_count = leaf_count;
+    while layer_count > 1 {
+        let current_position = layer_start
+            .checked_add(index)
+            .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
+        let current = nodes
+            .get(current_position)
+            .copied()
+            .ok_or(PdpMerkleTreeError::CorruptTree)?;
+        let sibling_index = index ^ 1;
+        let sibling = if sibling_index < layer_count {
+            let sibling_position = layer_start
+                .checked_add(sibling_index)
+                .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
+            nodes
+                .get(sibling_position)
+                .copied()
+                .ok_or(PdpMerkleTreeError::CorruptTree)?
+        } else {
+            current
+        };
+        path.push(sibling);
+        layer_start = layer_start
+            .checked_add(layer_count)
+            .ok_or(PdpMerkleTreeError::GeometryOverflow)?;
+        layer_count = layer_count.div_ceil(2);
+        index /= 2;
+    }
+    Ok(path)
 }
 
 fn merkle_path(
@@ -1308,7 +1388,11 @@ pub(super) fn merkle_path_depth(mut count: u64) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, io, mem::size_of};
+    use std::{
+        cell::Cell,
+        io,
+        mem::{size_of, size_of_val},
+    };
 
     use super::*;
 
@@ -1487,14 +1571,7 @@ mod tests {
     }
 
     fn retained_heap_capacity_bytes(tree: &PdpMerkleTreeV1) -> usize {
-        fn layer_capacity_bytes(layers: &Vec<Vec<[u8; 32]>>) -> usize {
-            layers.capacity() * size_of::<Vec<[u8; 32]>>()
-                + layers
-                    .iter()
-                    .map(|layer| layer.capacity() * size_of::<[u8; 32]>())
-                    .sum::<usize>()
-        }
-        layer_capacity_bytes(&tree.hot_layers) + layer_capacity_bytes(&tree.segment_layers)
+        size_of_val(tree.hot_nodes.as_ref()) + size_of_val(tree.segment_nodes.as_ref())
     }
 
     fn read_payload(payload: &[u8], offset: u64, buffer: &mut [u8]) -> io::Result<usize> {
@@ -1574,18 +1651,77 @@ mod tests {
     }
 
     #[test]
-    fn finish_moves_base_layers_without_peak_clones() {
+    fn compact_paths_match_layer_reference_for_every_odd_boundary() {
+        for leaf_count in 1usize..=129 {
+            let leaves = (0..leaf_count)
+                .map(|index| *blake3::hash(&index.to_le_bytes()).as_bytes())
+                .collect::<Vec<_>>();
+            let reference =
+                build_merkle_layers(&leaves, HOT_NODE_DOMAIN_V1).expect("reference Merkle layers");
+            let compact = build_compact_merkle_nodes(leaves, HOT_NODE_DOMAIN_V1)
+                .expect("compact Merkle nodes");
+            assert_eq!(
+                compact.last(),
+                reference.last().and_then(|layer| layer.first()),
+                "root differs for {leaf_count} leaves"
+            );
+            for index in 0..leaf_count {
+                assert_eq!(
+                    compact_merkle_path(&compact, leaf_count, index).expect("compact path"),
+                    merkle_path(&reference, index).expect("reference path"),
+                    "path differs for leaf {index} of {leaf_count}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compact_paths_reject_truncated_extended_and_out_of_range_state() {
+        let leaves = (0u64..5)
+            .map(|index| *blake3::hash(&index.to_le_bytes()).as_bytes())
+            .collect::<Vec<_>>();
+        let compact =
+            build_compact_merkle_nodes(leaves, HOT_NODE_DOMAIN_V1).expect("compact Merkle nodes");
+
+        assert_eq!(
+            compact_merkle_path(&compact[..compact.len() - 1], 5, 0),
+            Err(PdpMerkleTreeError::CorruptTree)
+        );
+        let mut extended = compact.to_vec();
+        extended.push([0x55; 32]);
+        assert_eq!(
+            compact_merkle_path(&extended, 5, 0),
+            Err(PdpMerkleTreeError::CorruptTree)
+        );
+        assert_eq!(
+            compact_merkle_path(&compact, 5, 5),
+            Err(PdpMerkleTreeError::CorruptTree)
+        );
+        assert_eq!(
+            compact_merkle_path(&compact, 0, 0),
+            Err(PdpMerkleTreeError::CorruptTree)
+        );
+    }
+
+    #[test]
+    fn finish_retains_exact_compact_node_slabs() {
         let payload = deterministic_payload(PDP_SEGMENT_SIZE_V1 as usize * 2);
         let mut builder = PdpMerkleTreeBuilderV1::new();
         builder.update(&payload).expect("complete segments");
         assert!(builder.pending_segment.is_empty());
-        let hot_ptr = builder.hot_leaf_digests.as_ptr();
-        let segment_ptr = builder.segment_commitments.as_ptr();
+        let expected_hot_nodes =
+            merkle_total_node_count(builder.hot_leaf_digests.len()).expect("hot geometry");
+        let expected_segment_nodes =
+            merkle_total_node_count(builder.segment_commitments.len()).expect("segment geometry");
 
         let tree = builder.finish().expect("compact tree");
 
-        assert_eq!(tree.hot_layers[0].as_ptr(), hot_ptr);
-        assert_eq!(tree.segment_layers[0].as_ptr(), segment_ptr);
+        assert_eq!(tree.hot_nodes.len(), expected_hot_nodes);
+        assert_eq!(tree.segment_nodes.len(), expected_segment_nodes);
+        assert_eq!(
+            retained_heap_capacity_bytes(&tree),
+            estimated_heap_bytes(tree.payload_len()).expect("heap estimate")
+        );
     }
 
     #[test]
@@ -1604,9 +1740,9 @@ mod tests {
             let tree = PdpMerkleTreeV1::from_bytes(&payload).expect("tree");
             let estimate = estimated_heap_bytes(length as u64).expect("heap estimate");
             let actual = retained_heap_capacity_bytes(&tree);
-            assert!(
-                actual <= estimate,
-                "retained capacity {actual} exceeds estimate {estimate} for {length} bytes"
+            assert_eq!(
+                actual, estimate,
+                "retained byte count differs from estimate for {length} bytes"
             );
         }
     }
@@ -1628,6 +1764,10 @@ mod tests {
         );
         assert_eq!(
             geometric_capacity_for_len(usize::MAX),
+            Err(PdpMerkleTreeError::GeometryOverflow)
+        );
+        assert_eq!(
+            merkle_total_node_count(usize::MAX),
             Err(PdpMerkleTreeError::GeometryOverflow)
         );
 
@@ -1933,7 +2073,7 @@ mod tests {
     fn proof_constructor_rejects_corrupt_retained_layers_before_reader_callback() {
         let payload = deterministic_payload(PDP_HOT_LEAF_SIZE_V1 as usize);
         let mut tree = PdpMerkleTreeV1::from_bytes(&payload).expect("tree");
-        tree.hot_layers[0].clear();
+        tree.hot_nodes = Vec::new().into_boxed_slice();
         let samples = [PdpSampleV1 {
             segment_index: 0,
             hot_leaf_indices: vec![0],

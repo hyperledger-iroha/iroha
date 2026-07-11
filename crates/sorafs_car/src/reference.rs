@@ -201,14 +201,45 @@ fn manifest_validation_code_category(
         ManifestValidationError::UnknownChunkerProfile { .. }
         | ManifestValidationError::ChunkerDescriptorMismatch { .. }
         | ManifestValidationError::UnknownChunkerAlias { .. }
-        | ManifestValidationError::MissingCanonicalAlias { .. } => {
+        | ManifestValidationError::MissingCanonicalAlias { .. }
+        | ManifestValidationError::TooManyChunkerAliases { .. }
+        | ManifestValidationError::ChunkerTextTooLong { .. } => {
             ("SFS-VAL-003", CATEGORY_VALIDATION)
         }
         ManifestValidationError::MinReplicasTooLow { .. }
         | ManifestValidationError::MaxReplicasExceeded { .. }
         | ManifestValidationError::RetentionEpochExceeded { .. }
+        | ManifestValidationError::InvalidRetentionEpoch
         | ManifestValidationError::StorageClassNotAllowed { .. }
         | ManifestValidationError::MissingCouncilSignature => ("SFS-POL-006", CATEGORY_POLICY),
+        ManifestValidationError::InvalidRootCidLength { .. }
+        | ManifestValidationError::InvalidRootCidVersion { .. }
+        | ManifestValidationError::RootCidCodecMismatch { .. }
+        | ManifestValidationError::RootCidMultihashMismatch { .. }
+        | ManifestValidationError::InvalidRootCidDigestLength { .. }
+        | ManifestValidationError::InertRootCidDigest
+        | ManifestValidationError::InertRootCid
+        | ManifestValidationError::InvalidDagCodec
+        | ManifestValidationError::UnsupportedDagCodec { .. }
+        | ManifestValidationError::InertCarDigest
+        | ManifestValidationError::InvalidCarSize
+        | ManifestValidationError::CarSmallerThanContent { .. }
+        | ManifestValidationError::TooManyAliasClaims { .. }
+        | ManifestValidationError::InvalidAliasClaim { .. }
+        | ManifestValidationError::DuplicateAliasClaim { .. }
+        | ManifestValidationError::AliasProofBytesExceeded { .. }
+        | ManifestValidationError::TooManyMetadataEntries { .. }
+        | ManifestValidationError::InvalidMetadataEntry { .. }
+        | ManifestValidationError::DuplicateMetadataKey { .. }
+        | ManifestValidationError::MetadataBytesExceeded { .. }
+        | ManifestValidationError::TooManyCouncilSignatures { .. }
+        | ManifestValidationError::InvalidCouncilSigner { .. }
+        | ManifestValidationError::NonCanonicalCouncilSignerOrder { .. }
+        | ManifestValidationError::InvalidCouncilSignatureLength { .. }
+        | ManifestValidationError::InvalidCouncilSignature { .. }
+        | ManifestValidationError::CouncilSignatureVerificationFailed { .. }
+        | ManifestValidationError::ManifestEncoding { .. }
+        | ManifestValidationError::ManifestTooLarge { .. } => ("SFS-VAL-002", CATEGORY_VALIDATION),
     }
 }
 

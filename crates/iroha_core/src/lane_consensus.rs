@@ -2513,9 +2513,10 @@ pub(crate) enum LaneBlockSessionError {
 /// Bounded in-memory cache for standalone lane-block consensus sessions.
 ///
 /// The capacity bounds ordinary uncommitted session state. Sessions that
-/// already carry a proposal plus prepare and commit QCs are protected from
-/// eviction until the executor boundary drains them, because dropping certified
-/// lane blocks under queue backpressure can strand lane-local progress.
+/// already carry a proposal plus Prepare and Commit QCs are protected from
+/// eviction until the durable consumer boundary drains them, because dropping
+/// certified lane blocks under queue backpressure can strand lane-local
+/// progress.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LaneBlockSessionCache {
     capacity: usize,
@@ -2526,7 +2527,7 @@ pub(crate) struct LaneBlockSessionCache {
 }
 
 impl LaneBlockSessionCache {
-    /// Build a cache that stores at most `capacity.max(1)` uncommitted sessions.
+    /// Build a cache that stores at most `capacity.max(1)` unprotected sessions.
     #[must_use]
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
@@ -3192,7 +3193,6 @@ impl LaneBlockSessionCache {
         }
         vote.verify_signatures()
             .map_err(LaneBlockSessionError::InvalidVote)?;
-
         self.touch(key);
         let session = self.sessions.entry(key).or_default();
         let votes = votes_for_phase_mut(session, phase).ok_or(
@@ -5466,7 +5466,7 @@ mod tests {
         let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
         let descriptor = &payload.origin_proposal.descriptor;
         let receipt = NativeAmxReceipt {
-            version: 1,
+            version: 2,
             source_id: [0xA5; Hash::LENGTH],
             chain_id_hash,
             plan_digest: Hash::new(b"payload-hash-bound-native-amx-plan"),
@@ -7828,10 +7828,13 @@ mod tests {
         let inactive_dataspace = DataSpaceId::new(12);
         let active_proposal = lane_block_proposal_at_height(&validator_set, 13);
         let active_key = LaneBlockSessionKey::from_proposal(&active_proposal);
-        let inactive_proposal = rebind_lane_block_proposal_route(
-            lane_block_proposal_at_height(&validator_set, 13),
-            inactive_lane,
-            inactive_dataspace,
+        let inactive_proposal = retag_lane_block_proposal_payload(
+            rebind_lane_block_proposal_route(
+                lane_block_proposal_at_height(&validator_set, 13),
+                inactive_lane,
+                inactive_dataspace,
+            ),
+            0xD0,
         );
         let inactive_key = LaneBlockSessionKey::from_proposal(&inactive_proposal);
         let conflicting_inactive_proposal =
@@ -7860,9 +7863,10 @@ mod tests {
 
         assert_eq!(
             cache.retain_sessions_for_admissible_lanes(
-                |lane_id, dataspace_id, _lane_incarnation, lane_block_height, _proposal_height| {
+                |lane_id, dataspace_id, lane_incarnation, lane_block_height, _proposal_height| {
                     lane_id == active_lane
                         && dataspace_id == active_dataspace
+                        && lane_incarnation == active_proposal.descriptor.lane_incarnation
                         && lane_block_height > 12
                 },
             ),

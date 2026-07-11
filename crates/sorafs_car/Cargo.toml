@@ -94,7 +94,7 @@ required-features = ["cli"]
 [[bin]]
 name = "provider_admission_fixtures"
 path = "src/bin/provider_admission_fixtures.rs"
-required-features = ["cli"]
+required-features = ["manifest"]
 
 [[bin]]
 name = "taikai_car"

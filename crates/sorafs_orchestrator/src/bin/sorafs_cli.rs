@@ -6,19 +6,22 @@ use std::{
     convert::TryInto,
     env,
     fmt::Write as FmtWrite,
-    fs::{self, File, OpenOptions},
+    fs::{self, File, Metadata, OpenOptions},
     io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process,
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 use base64::{
     Engine,
@@ -39,8 +42,9 @@ use iroha_data_model::{
     prelude::ExposedPrivateKey,
     sorafs::{
         moderation::{
-            AdversarialCorpusManifestV1, ModerationModelFingerprintV1, ModerationReproManifestV1,
-            ModerationThresholdsV1,
+            AdversarialCorpusManifestV1, MODERATION_MODEL_MAX_INPUT_BYTES_V1,
+            ModerationCommitteeAggregateV1, ModerationModelScoreV1, ModerationReproManifestV1,
+            ModerationSignedScreeningResultV1, ModerationThresholdsV1, ModerationTrustPolicyV1,
         },
         pin_registry::{
             ChunkerProfileHandle, PinPolicy as RegistryPinPolicy,
@@ -79,15 +83,18 @@ use sorafs_car::{
     taikai::{BundleRequest, BundleSummary, bundle_segment, load_extra_metadata},
 };
 use sorafs_chunker::ChunkProfile;
+use sorafs_manifest::reputation::signed::{
+    MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES, decode_signed_reputation_snapshot,
+};
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
     GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, MANIFEST_DAG_CODEC, ManifestBuildError,
     ManifestBuilder, ManifestV1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
     PorReportIsoWeek, PorWeeklyReportV1, ReputationMerkleProofV1, ReputationSnapshotV1,
-    StorageClass, ValidationOutcomeV1, chunker_registry as manifest_chunker_registry,
-    governance_dag_block_cid_v1, validate_governance_dag_head_against_chain_v1,
-    validate_governance_log_node_bytes,
+    SignedReputationSnapshotV1, StorageClass, ValidationOutcomeV1,
+    chunker_registry as manifest_chunker_registry, governance_dag_block_cid_v1,
+    validate_governance_dag_head_against_chain_v1, validate_governance_log_node_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, OrchestratorConfig, RolloutPhase, TransportPolicy,
@@ -103,6 +110,11 @@ use sorafs_orchestrator::{
         config_to_json as orchestrator_config_to_json,
     },
     fetch_via_gateway,
+    moderation_provenance::{ModerationProvenanceStoreError, ModerationProvenanceStoreV1},
+    moderation_runner::{
+        LoadedModerationRunnerV1, LoadedModerationSigningRunnerV1, ModerationInferenceV1,
+        ModerationRunnerError,
+    },
     proxy::{ProxyKaigiBridgeConfig, ProxyMode, ProxyNoritoBridgeConfig},
     taikai_cache::{TaikaiCacheConfig, TaikaiCacheStatsSnapshot, TaikaiPullQueueStats},
 };
@@ -118,8 +130,6 @@ const DEFAULT_MANIFEST_SUBMIT_CONFIRM_POLL_MS: u64 = 1_000;
 const CONTEXT_APPEAL_QUOTE: &str = "sorafs_cli appeal quote";
 const CONTEXT_APPEAL_SETTLE: &str = "sorafs_cli appeal settle";
 const CONTEXT_APPEAL_DISBURSE: &str = "sorafs_cli appeal disburse";
-const MODERATION_LOCAL_RUNNER_MODEL_SCORE_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.local-runner.model-score.v1";
 const MODERATION_LOCAL_RUNNER_POLICY_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.local-runner.policy-digest.v1";
 const MODERATION_LOCAL_RUNNER_EVIDENCE_DOMAIN_V1: &[u8] =
@@ -127,6 +137,23 @@ const MODERATION_LOCAL_RUNNER_EVIDENCE_DOMAIN_V1: &[u8] =
 const MODERATION_RUNNER_DEFAULT_LISTEN: &str = "127.0.0.1:9194";
 const MODERATION_RUNNER_GRPC_DEFAULT_LISTEN: &str = "127.0.0.1:9199";
 const MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+const MODERATION_RUNNER_HARD_MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+const MODERATION_TRUST_POLICY_MAX_BYTES: u64 = 1024 * 1024;
+const MODERATION_SIGNED_RESULT_MAX_BYTES: u64 = 512 * 1024;
+const MODERATION_AUTHENTICATED_AGGREGATE_MAX_BYTES: u64 = 1024 * 1024;
+const MODERATION_SIGNING_KEY_MAX_BYTES: u64 = 64 * 1024;
+const MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES: u32 = MODERATION_MODEL_MAX_INPUT_BYTES_V1;
+const MODERATION_RUNNER_MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+const MODERATION_RUNNER_MAX_SUBJECT_BYTES: usize = 1024;
+const MODERATION_RUNNER_MAX_NOTES_BYTES: usize = 4096;
+const MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS: usize = 64;
+const MODERATION_RUNNER_MAX_GRPC_IN_FLIGHT: usize = 32;
+const MODERATION_RUNNER_MAX_GRPC_RESPONSE_BYTES: usize = 1024 * 1024;
+const MODERATION_RUNNER_MAX_GRPC_ENVELOPE_BYTES: usize = 8 * 1024;
+const MODERATION_RUNNER_MAX_HEADER_BYTES: usize = 16 * 1024;
+const MODERATION_CANARY_MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
+const MODERATION_COMMITTEE_MAX_RESULTS: usize = 64;
+const MODERATION_COMMITTEE_MAX_RESULT_BYTES: u64 = 128 * 1024;
 const MODERATION_COMMITTEE_DEFAULT_LISTEN: &str = "127.0.0.1:9196";
 const MODERATION_REGISTRY_DEFAULT_LISTEN: &str = "127.0.0.1:9198";
 
@@ -625,12 +652,20 @@ fn run() -> Result<(), String> {
                 "validate-corpus" => moderation_validate_corpus(args.collect()),
                 "registry-serve" => moderation_registry_serve(args.collect()),
                 "run-local" => moderation_run_local(args.collect()),
+                "run-signed-local" => moderation_run_signed_local(args.collect()),
                 "runner-serve" => moderation_runner_serve(args.collect()),
+                "runner-signed-serve" => moderation_runner_signed_serve(args.collect()),
                 "runner-grpc-serve" => moderation_runner_grpc_serve(args.collect()),
                 "runner-bundle" => moderation_runner_bundle(args.collect()),
                 "runner-canary" => moderation_runner_canary(args.collect()),
                 "committee-run" => moderation_committee_run(args.collect()),
+                "committee-authenticated-run" => {
+                    moderation_committee_authenticated_run(args.collect())
+                }
                 "committee-serve" => moderation_committee_serve(args.collect()),
+                "committee-authenticated-serve" => {
+                    moderation_committee_authenticated_serve(args.collect())
+                }
                 "committee-bundle" => moderation_committee_bundle(args.collect()),
                 "committee-canary" => moderation_committee_canary(args.collect()),
                 "honey-audit" => moderation_honey_audit(args.collect()),
@@ -1343,7 +1378,9 @@ fn build_deploy_artifacts(
         .flush()
         .map_err(|err| format!("failed to flush `{}`: {err}", car_path.display()))?;
 
-    let plan_specs = plan.chunk_fetch_specs();
+    let plan_specs = plan
+        .try_chunk_fetch_specs()
+        .map_err(|err| format!("failed to derive chunk fetch plan: {err}"))?;
     let plan_json = chunk_fetch_specs_to_string(&plan_specs)
         .map_err(|err| format!("failed to render chunk plan JSON: {err}"))?;
     write_text(plan_path, plan_json.as_bytes())?;
@@ -3145,7 +3182,7 @@ fn usage() -> String {
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL | --endpoint=URL) (--provider-id-hex=HEX32 | --provider-id=ID) [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
-  sorafs_cli reputation publish --torii-url=URL --snapshot=PATH [--summary-out=PATH]
+  sorafs_cli reputation publish --torii-url=URL --snapshot=SIGNED_ENVELOPE.to [--summary-out=PATH]
   sorafs_cli reputation snapshot --torii-url=URL [--output=PATH] [--summary-out=PATH]
   sorafs_cli reputation fetch --torii-url=URL --provider-id=ID [--format=table|json] [--summary-out=PATH]
   sorafs_cli reputation watch --torii-url=URL [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
@@ -3158,15 +3195,19 @@ fn usage() -> String {
   sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]
   sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]
   sorafs_cli moderation registry-serve --state=PATH [--listen=HOST:PORT] [--max-body-bytes=N] [--snapshot-limit=N]
-  sorafs_cli moderation run-local --manifest=PATH [--format=json|norito] --payload=PATH --subject=ID --screened-at=UNIX_SECS [--notes=TEXT] [--json-out=PATH]
-  sorafs_cli moderation runner-serve --manifest=PATH [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N]
-  sorafs_cli moderation runner-grpc-serve --manifest=PATH [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N]
-  sorafs_cli moderation runner-bundle --manifest=PATH [--format=json|norito] --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
-  sorafs_cli moderation runner-canary --manifest=PATH [--format=json|norito] --runner-url=URL --payload=PATH --subject=ID --screened-at=UNIX_SECS [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
+  sorafs_cli moderation run-local --manifest=PATH --artifact-root=DIR [--format=json|norito] --payload=PATH --subject=ID --screened-at=UNIX_SECS [--max-payload-bytes=N] [--notes=TEXT] [--json-out=PATH]
+  sorafs_cli moderation run-signed-local --manifest=PATH --artifact-root=DIR [--format=json|norito] --trust-policy=PATH [--trust-policy-format=json|norito] --trust-anchor=PUBLIC_KEY [--trust-anchor=PUBLIC_KEY...] --minimum-governance-quorum=N --signing-key=PATH --payload=PATH --subject=ID --provenance=PATH --provenance-log-id=HEX16 [--max-payload-bytes=N] [--notes=TEXT] [--norito-out=PATH] [--json-out=PATH]
+  sorafs_cli moderation runner-serve --manifest=PATH --artifact-root=DIR [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N] [--max-payload-bytes=N]
+  sorafs_cli moderation runner-signed-serve --manifest=PATH --artifact-root=DIR [--format=json|norito] --trust-policy=PATH [--trust-policy-format=json|norito] --trust-anchor=PUBLIC_KEY [--trust-anchor=PUBLIC_KEY...] --minimum-governance-quorum=N --signing-key=PATH --provenance=PATH --provenance-log-id=HEX16 [--listen=HOST:PORT] [--max-body-bytes=N] [--max-payload-bytes=N]
+  sorafs_cli moderation runner-grpc-serve --manifest=PATH --artifact-root=DIR [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N] [--max-payload-bytes=N]
+  sorafs_cli moderation runner-bundle --manifest=PATH --artifact-root=DIR [--format=json|norito] --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--max-payload-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
+  sorafs_cli moderation runner-canary --manifest=PATH [--format=json|norito] --runner-url=URL --payload=PATH --subject=ID --screened-at=UNIX_SECS --generated-at-unix=UNIX_SECS --deployment-id=ID --environment=prod|production|release|staging --deployment-context-reviewed=true --process-isolation-enforcement=systemd_ip_filter|container_network_policy|host_firewall --process-isolation-attestation-digest=HEX32 --process-isolation-verified-at=UNIX_SECS --process-isolation-reviewed=true [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
   sorafs_cli moderation committee-run --manifest=PATH [--format=json|norito] --quorum=N --result=PATH [--result=PATH...] [--notes=TEXT] [--json-out=PATH]
+  sorafs_cli moderation committee-authenticated-run --manifest=PATH [--format=json|norito] --trust-policy=PATH [--trust-policy-format=json|norito] --trust-anchor=PUBLIC_KEY [--trust-anchor=PUBLIC_KEY...] --minimum-governance-quorum=N --result=SIGNED_RESULT.to [--result=SIGNED_RESULT.to...] --provenance=PATH --provenance-log-id=HEX16 [--norito-out=PATH] [--json-out=PATH]
   sorafs_cli moderation committee-serve --manifest=PATH [--format=json|norito] --quorum=N [--listen=HOST:PORT] [--max-body-bytes=N]
+  sorafs_cli moderation committee-authenticated-serve --manifest=PATH [--format=json|norito] --trust-policy=PATH [--trust-policy-format=json|norito] --trust-anchor=PUBLIC_KEY [--trust-anchor=PUBLIC_KEY...] --minimum-governance-quorum=N --provenance=PATH --provenance-log-id=HEX16 [--listen=HOST:PORT] [--max-body-bytes=N]
   sorafs_cli moderation committee-bundle --manifest=PATH [--format=json|norito] --quorum=N --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
-  sorafs_cli moderation committee-canary --manifest=PATH [--format=json|norito] --committee-url=URL --quorum=N --result=PATH [--result=PATH...] [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
+  sorafs_cli moderation committee-canary --manifest=PATH [--format=json|norito] --committee-url=URL --quorum=N --result=PATH [--result=PATH...] --generated-at-unix=UNIX_SECS --deployment-id=ID --environment=prod|production|release|staging --deployment-context-reviewed=true --process-isolation-enforcement=systemd_ip_filter|container_network_policy|host_firewall --process-isolation-attestation-digest=HEX32 --process-isolation-verified-at=UNIX_SECS --process-isolation-reviewed=true [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
   sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
   sorafs_cli appeal quote --class=content|access|fraud|other [--backlog=N] [--evidence-mb=N] [--urgency=normal|high] [--panel-size=N] [--format=table|json] [--config=PATH|-]
   sorafs_cli governance dag list --root=DIR [--format=table|json] [--summary-out=PATH]
@@ -3186,7 +3227,7 @@ fn usage() -> String {
 
 fn reputation_usage() -> String {
     "Usage:
-  sorafs_cli reputation publish --torii-url=URL --snapshot=PATH [--summary-out=PATH]
+  sorafs_cli reputation publish --torii-url=URL --snapshot=SIGNED_ENVELOPE.to [--summary-out=PATH]
   sorafs_cli reputation snapshot --torii-url=URL [--output=PATH] [--summary-out=PATH]
   sorafs_cli reputation fetch --torii-url=URL --provider-id=ID [--format=table|json] [--summary-out=PATH]
   sorafs_cli reputation watch --torii-url=URL [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
@@ -3457,18 +3498,22 @@ fn moderation_usage() -> String {
   sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]
   sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]
   sorafs_cli moderation registry-serve --state=PATH [--listen=HOST:PORT] [--max-body-bytes=N] [--snapshot-limit=N]
-  sorafs_cli moderation run-local --manifest=PATH [--format=json|norito] --payload=PATH --subject=ID --screened-at=UNIX_SECS [--notes=TEXT] [--json-out=PATH]
-  sorafs_cli moderation runner-serve --manifest=PATH [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N]
-  sorafs_cli moderation runner-grpc-serve --manifest=PATH [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N]
-  sorafs_cli moderation runner-bundle --manifest=PATH [--format=json|norito] --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
-  sorafs_cli moderation runner-canary --manifest=PATH [--format=json|norito] --runner-url=URL --payload=PATH --subject=ID --screened-at=UNIX_SECS [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
+  sorafs_cli moderation run-local --manifest=PATH --artifact-root=DIR [--format=json|norito] --payload=PATH --subject=ID --screened-at=UNIX_SECS [--max-payload-bytes=N] [--notes=TEXT] [--json-out=PATH]
+  sorafs_cli moderation run-signed-local --manifest=PATH --artifact-root=DIR [--format=json|norito] --trust-policy=PATH [--trust-policy-format=json|norito] --trust-anchor=PUBLIC_KEY [--trust-anchor=PUBLIC_KEY...] --minimum-governance-quorum=N --signing-key=PATH --payload=PATH --subject=ID --provenance=PATH --provenance-log-id=HEX16 [--max-payload-bytes=N] [--notes=TEXT] [--norito-out=PATH] [--json-out=PATH]
+  sorafs_cli moderation runner-serve --manifest=PATH --artifact-root=DIR [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N] [--max-payload-bytes=N]
+  sorafs_cli moderation runner-signed-serve --manifest=PATH --artifact-root=DIR [--format=json|norito] --trust-policy=PATH [--trust-policy-format=json|norito] --trust-anchor=PUBLIC_KEY [--trust-anchor=PUBLIC_KEY...] --minimum-governance-quorum=N --signing-key=PATH --provenance=PATH --provenance-log-id=HEX16 [--listen=HOST:PORT] [--max-body-bytes=N] [--max-payload-bytes=N]
+  sorafs_cli moderation runner-grpc-serve --manifest=PATH --artifact-root=DIR [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N] [--max-payload-bytes=N]
+  sorafs_cli moderation runner-bundle --manifest=PATH --artifact-root=DIR [--format=json|norito] --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--max-payload-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
+  sorafs_cli moderation runner-canary --manifest=PATH [--format=json|norito] --runner-url=URL --payload=PATH --subject=ID --screened-at=UNIX_SECS --generated-at-unix=UNIX_SECS --deployment-id=ID --environment=prod|production|release|staging --deployment-context-reviewed=true --process-isolation-enforcement=systemd_ip_filter|container_network_policy|host_firewall --process-isolation-attestation-digest=HEX32 --process-isolation-verified-at=UNIX_SECS --process-isolation-reviewed=true [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
   sorafs_cli moderation committee-run --manifest=PATH [--format=json|norito] --quorum=N --result=PATH [--result=PATH...] [--notes=TEXT] [--json-out=PATH]
+  sorafs_cli moderation committee-authenticated-run --manifest=PATH [--format=json|norito] --trust-policy=PATH [--trust-policy-format=json|norito] --trust-anchor=PUBLIC_KEY [--trust-anchor=PUBLIC_KEY...] --minimum-governance-quorum=N --result=SIGNED_RESULT.to [--result=SIGNED_RESULT.to...] --provenance=PATH --provenance-log-id=HEX16 [--norito-out=PATH] [--json-out=PATH]
   sorafs_cli moderation committee-serve --manifest=PATH [--format=json|norito] --quorum=N [--listen=HOST:PORT] [--max-body-bytes=N]
+  sorafs_cli moderation committee-authenticated-serve --manifest=PATH [--format=json|norito] --trust-policy=PATH [--trust-policy-format=json|norito] --trust-anchor=PUBLIC_KEY [--trust-anchor=PUBLIC_KEY...] --minimum-governance-quorum=N --provenance=PATH --provenance-log-id=HEX16 [--listen=HOST:PORT] [--max-body-bytes=N]
   sorafs_cli moderation committee-bundle --manifest=PATH [--format=json|norito] --quorum=N --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
-  sorafs_cli moderation committee-canary --manifest=PATH [--format=json|norito] --committee-url=URL --quorum=N --result=PATH [--result=PATH...] [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
+  sorafs_cli moderation committee-canary --manifest=PATH [--format=json|norito] --committee-url=URL --quorum=N --result=PATH [--result=PATH...] --generated-at-unix=UNIX_SECS --deployment-id=ID --environment=prod|production|release|staging --deployment-context-reviewed=true --process-isolation-enforcement=systemd_ip_filter|container_network_policy|host_firewall --process-isolation-attestation-digest=HEX32 --process-isolation-verified-at=UNIX_SECS --process-isolation-reviewed=true [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
   sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
 
-Validates governance-signed AI moderation reproducibility manifests and adversarial corpus registries before gateways adopt them. Use `registry-serve` to run a persistent standalone model-registry service, `run-local` to produce deterministic local screening-result JSON for Torii admission, `runner-serve` to expose the same locked-manifest deterministic runner over local HTTP, `runner-grpc-serve` to expose the production unary gRPC runner service, `runner-bundle` to generate supervised deployment artifacts for that runner, `runner-canary` to capture payload-free rollout evidence from a deployed runner, `committee-run` to aggregate payload-free runner results under a quorum, `committee-serve` to expose that aggregation as a locked-manifest service, `committee-bundle` and `committee-canary` to package and verify that committee service, and `honey-audit` to probe gateways with denylisted digests and emit JSON/Markdown evidence for policy enforcement."
+Validates internally signed AI moderation reproducibility manifests and adversarial corpus registries before a separate governance trust policy admits them. `run-signed-local` is the production trust-boundary path: it verifies external governance anchors, signs a fresh result with a policy-authorized runner key, and atomically appends the complete result to a tamper-evident provenance segment. `committee-authenticated-run` verifies distinct authorized runner signatures, freshness, revocation, and policy quorum before persisting the deterministic aggregate. `run-local`, `runner-serve`, `runner-grpc-serve`, `committee-run`, and `committee-serve` are unsigned diagnostic/foundation paths and must not be used as production trust boundaries."
         .to_string()
 }
 
@@ -4447,17 +4492,8 @@ fn moderation_registry_serve(raw_args: Vec<String>) -> Result<(), String> {
                 listen = trimmed.to_string();
             }
             "--max-body-bytes" => {
-                let parsed = parse_u64_arg(
-                    "--max-body-bytes",
-                    value,
-                    "sorafs_cli moderation registry-serve",
-                )?;
-                max_body_bytes = usize::try_from(parsed).map_err(|_| {
-                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
-                })?;
-                if max_body_bytes == 0 {
-                    return Err("`--max-body-bytes` must be greater than zero".to_string());
-                }
+                max_body_bytes =
+                    parse_moderation_max_body_bytes(value, "sorafs_cli moderation registry-serve")?;
             }
             "--snapshot-limit" => {
                 let parsed = parse_u64_arg(
@@ -4486,7 +4522,9 @@ fn moderation_registry_serve(raw_args: Vec<String>) -> Result<(), String> {
     let state = moderation_registry_load_state(&state_path)?;
     moderation_registry_save_state(&state_path, &state)?;
 
-    let listener = TcpListener::bind(&listen).map_err(|err| {
+    let listen_addr =
+        validate_moderation_loopback_listen(&listen, "sorafs_cli moderation registry-serve")?;
+    let listener = TcpListener::bind(listen_addr).map_err(|err| {
         format!("failed to bind moderation model registry service at `{listen}`: {err}")
     })?;
     let local_addr = listener
@@ -4504,11 +4542,26 @@ fn moderation_registry_serve(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render model registry service status JSON: {err}"))?;
     println!("{rendered}");
 
+    let active_connections = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
         match incoming {
-            Ok(stream) => {
+            Ok(mut stream) => {
+                let Some(active_permit) = moderation_try_acquire_permit(
+                    &active_connections,
+                    MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS,
+                ) else {
+                    let response = moderation_registry_error_response(
+                        503,
+                        "Service Unavailable",
+                        "moderation registry connection limit reached",
+                    );
+                    let _ = stream.write_all(&response);
+                    let _ = stream.flush();
+                    continue;
+                };
                 let service = Arc::clone(&service);
                 thread::spawn(move || {
+                    let _active_permit = active_permit;
                     if let Err(err) =
                         moderation_registry_handle_stream(stream, &service, max_body_bytes)
                     {
@@ -4641,26 +4694,52 @@ fn moderation_registry_normalize_snapshot(
     Ok(())
 }
 
+fn moderation_http_hard_limit(max_body_bytes: usize, service: &str) -> io::Result<usize> {
+    max_body_bytes
+        .checked_add(MODERATION_RUNNER_MAX_HEADER_BYTES)
+        .and_then(|limit| limit.checked_add(4))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{service} HTTP body and header limits overflow usize"),
+            )
+        })
+}
+
 fn moderation_registry_handle_stream(
     mut stream: TcpStream,
     service: &ModerationRegistryService,
     max_body_bytes: usize,
 ) -> io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let mut request = Vec::new();
     let mut buffer = [0_u8; 4096];
+    let hard_limit = moderation_http_hard_limit(max_body_bytes, "registry")?;
     loop {
         let count = stream.read(&mut buffer)?;
         if count == 0 {
             break;
         }
-        request.extend_from_slice(&buffer[..count]);
-        if request.len() > max_body_bytes.saturating_add(8192) {
+        let remaining = hard_limit.saturating_sub(request.len());
+        let accepted = count.min(remaining);
+        request.try_reserve(accepted).map_err(|_| {
+            io::Error::new(io::ErrorKind::OutOfMemory, "HTTP request allocation failed")
+        })?;
+        request.extend_from_slice(&buffer[..accepted]);
+        if accepted < count || request.len() >= hard_limit {
+            break;
+        }
+        if find_http_header_end(&request).is_none()
+            && request.len() > MODERATION_RUNNER_MAX_HEADER_BYTES
+        {
             break;
         }
         if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request)
-            && (content_len > max_body_bytes || request.len() >= header_len + content_len)
+            && (content_len > max_body_bytes
+                || header_len
+                    .checked_add(content_len)
+                    .is_some_and(|body_end| request.len() >= body_end))
         {
             break;
         }
@@ -5113,12 +5192,14 @@ fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
     }
 
     let mut manifest_path: Option<PathBuf> = None;
+    let mut artifact_root: Option<PathBuf> = None;
     let mut format = String::from("json");
     let mut payload_path: Option<PathBuf> = None;
     let mut subject: Option<String> = None;
     let mut screened_at_unix: Option<u64> = None;
     let mut notes: Option<String> = None;
     let mut json_out: Option<PathBuf> = None;
+    let mut max_payload_bytes = MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES;
 
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
@@ -5129,14 +5210,16 @@ fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
             "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--artifact-root" => artifact_root = Some(PathBuf::from(value)),
             "--format" => format = value.to_ascii_lowercase(),
             "--payload" => payload_path = Some(PathBuf::from(value)),
             "--subject" => {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    return Err("`--subject` must not be empty".to_string());
-                }
-                subject = Some(trimmed.to_string());
+                validate_moderation_request_text(
+                    value,
+                    MODERATION_RUNNER_MAX_SUBJECT_BYTES,
+                    "`--subject`",
+                )?;
+                subject = Some(value.to_string());
             }
             "--screened-at" => {
                 screened_at_unix = Some(parse_u64_arg(
@@ -5146,12 +5229,18 @@ fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
                 )?);
             }
             "--notes" => {
-                let trimmed = value.trim();
-                if !trimmed.is_empty() {
-                    notes = Some(trimmed.to_string());
-                }
+                validate_moderation_request_text(
+                    value,
+                    MODERATION_RUNNER_MAX_NOTES_BYTES,
+                    "`--notes`",
+                )?;
+                notes = Some(value.to_string());
             }
             "--json-out" => json_out = Some(PathBuf::from(value)),
+            "--max-payload-bytes" => {
+                max_payload_bytes =
+                    parse_moderation_max_payload_bytes(value, "sorafs_cli moderation run-local")?;
+            }
             _ => {
                 return Err(format!(
                     "unrecognised option `{key}` for `sorafs_cli moderation run-local`"
@@ -5166,6 +5255,9 @@ fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
     let payload_path = payload_path.ok_or_else(|| {
         "missing required `--payload=PATH` for `sorafs_cli moderation run-local`".to_string()
     })?;
+    let artifact_root = artifact_root.ok_or_else(|| {
+        "missing required `--artifact-root=DIR` for `sorafs_cli moderation run-local`".to_string()
+    })?;
     let subject = subject.ok_or_else(|| {
         "missing required `--subject=ID` for `sorafs_cli moderation run-local`".to_string()
     })?;
@@ -5173,26 +5265,30 @@ fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
         "missing required `--screened-at=UNIX_SECS` for `sorafs_cli moderation run-local`"
             .to_string()
     })?;
+    if screened_at_unix == 0 {
+        return Err("`--screened-at` must be greater than zero".to_string());
+    }
 
     let manifest =
         load_moderation_repro_manifest(&manifest_path, &format, "sorafs_cli moderation run-local")?;
-    manifest
-        .validate()
-        .map_err(|err| format!("manifest validation failed: {err}"))?;
-    validate_moderation_local_runner_manifest(&manifest)?;
+    let runner = load_moderation_runner_for_current_executable(manifest, &artifact_root)?;
 
-    let payload = fs::read(&payload_path)
-        .map_err(|err| format!("failed to read `{}`: {err}", payload_path.display()))?;
+    let payload = read_file_bounded(
+        &payload_path,
+        u64::from(max_payload_bytes),
+        "moderation payload",
+    )?;
     if payload.is_empty() {
         return Err("`--payload` file must not be empty".to_string());
     }
 
     let output = moderation_local_runner_screening_json(
-        &manifest,
+        &runner,
         &payload,
         &subject,
         screened_at_unix,
         notes.as_deref(),
+        max_payload_bytes,
     )?;
     let rendered = to_string_pretty(&output)
         .map_err(|err| format!("failed to render local runner JSON: {err}"))?;
@@ -5206,11 +5302,27 @@ fn moderation_run_local(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
-    let mut manifest_path: Option<PathBuf> = None;
+fn moderation_run_signed_local(raw_args: Vec<String>) -> Result<(), String> {
+    if raw_args.is_empty() {
+        return Err(moderation_usage());
+    }
+    let context = "sorafs_cli moderation run-signed-local";
+    let mut manifest_path = None;
+    let mut artifact_root = None;
     let mut format = String::from("json");
-    let mut listen = String::from(MODERATION_RUNNER_DEFAULT_LISTEN);
-    let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+    let mut trust_policy_path = None;
+    let mut trust_policy_format = String::from("norito");
+    let mut trust_anchors = BTreeSet::new();
+    let mut minimum_governance_quorum = None;
+    let mut signing_key_path = None;
+    let mut payload_path = None;
+    let mut subject = None;
+    let mut provenance_path = None;
+    let mut provenance_log_id = None;
+    let mut max_payload_bytes = MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES;
+    let mut notes = None;
+    let mut norito_out = None;
+    let mut json_out = None;
 
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
@@ -5221,6 +5333,179 @@ fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
             "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--artifact-root" => artifact_root = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--trust-policy" => trust_policy_path = Some(PathBuf::from(value)),
+            "--trust-policy-format" => trust_policy_format = value.to_ascii_lowercase(),
+            "--trust-anchor" => {
+                let anchor = parse_moderation_trust_anchor(value, context)?;
+                if !trust_anchors.insert(anchor) {
+                    return Err("duplicate `--trust-anchor` is forbidden".to_string());
+                }
+            }
+            "--minimum-governance-quorum" => {
+                let parsed = parse_u64_arg(key, value, context)?;
+                let parsed = u16::try_from(parsed)
+                    .map_err(|_| "`--minimum-governance-quorum` exceeds u16".to_string())?;
+                if parsed == 0 {
+                    return Err(
+                        "`--minimum-governance-quorum` must be greater than zero".to_string()
+                    );
+                }
+                minimum_governance_quorum = Some(parsed);
+            }
+            "--signing-key" => signing_key_path = Some(PathBuf::from(value)),
+            "--payload" => payload_path = Some(PathBuf::from(value)),
+            "--subject" => {
+                validate_moderation_request_text(
+                    value,
+                    MODERATION_RUNNER_MAX_SUBJECT_BYTES,
+                    "signed moderation `--subject`",
+                )?;
+                subject = Some(value.to_string());
+            }
+            "--provenance" => provenance_path = Some(PathBuf::from(value)),
+            "--provenance-log-id" => {
+                provenance_log_id = Some(parse_fixed_hex::<16>(
+                    value,
+                    "--provenance-log-id",
+                    context,
+                )?);
+            }
+            "--max-payload-bytes" => {
+                max_payload_bytes = parse_moderation_max_payload_bytes(value, context)?;
+            }
+            "--notes" => {
+                validate_moderation_request_text(
+                    value,
+                    MODERATION_RUNNER_MAX_NOTES_BYTES,
+                    "signed moderation `--notes`",
+                )?;
+                notes = Some(value.to_string());
+            }
+            "--norito-out" => norito_out = Some(PathBuf::from(value)),
+            "--json-out" => json_out = Some(PathBuf::from(value)),
+            _ => return Err(format!("unrecognised option `{key}` for `{context}`")),
+        }
+    }
+
+    let manifest_path = manifest_path
+        .ok_or_else(|| format!("missing required `--manifest=PATH` for `{context}`"))?;
+    let artifact_root = artifact_root
+        .ok_or_else(|| format!("missing required `--artifact-root=DIR` for `{context}`"))?;
+    let trust_policy_path = trust_policy_path
+        .ok_or_else(|| format!("missing required `--trust-policy=PATH` for `{context}`"))?;
+    if trust_anchors.is_empty() {
+        return Err(format!(
+            "provide at least one external `--trust-anchor=PUBLIC_KEY` for `{context}`"
+        ));
+    }
+    let minimum_governance_quorum = minimum_governance_quorum.ok_or_else(|| {
+        format!("missing required `--minimum-governance-quorum=N` for `{context}`")
+    })?;
+    let signing_key_path = signing_key_path
+        .ok_or_else(|| format!("missing required `--signing-key=PATH` for `{context}`"))?;
+    let payload_path =
+        payload_path.ok_or_else(|| format!("missing required `--payload=PATH` for `{context}`"))?;
+    let subject =
+        subject.ok_or_else(|| format!("missing required `--subject=ID` for `{context}`"))?;
+    let provenance_path = provenance_path
+        .ok_or_else(|| format!("missing required `--provenance=PATH` for `{context}`"))?;
+    let provenance_log_id = provenance_log_id
+        .ok_or_else(|| format!("missing required `--provenance-log-id=HEX16` for `{context}`"))?;
+    if provenance_log_id == [0; 16] {
+        return Err("`--provenance-log-id` must be non-zero".to_string());
+    }
+
+    let now_unix = moderation_trusted_now_unix()?;
+    let manifest = load_moderation_repro_manifest(&manifest_path, &format, context)?;
+    let policy = load_moderation_trust_policy(&trust_policy_path, &trust_policy_format, context)?;
+    let signing_key = load_moderation_signing_key(&signing_key_path, context)?;
+    let runner = load_moderation_runner_for_current_executable(manifest.clone(), &artifact_root)?;
+    let signing_runner = LoadedModerationSigningRunnerV1::from_verified(
+        runner,
+        policy.clone(),
+        trust_anchors.clone(),
+        minimum_governance_quorum,
+        signing_key,
+        now_unix,
+    )
+    .map_err(|error| format!("failed to initialize signed moderation runner: {error}"))?;
+    let payload = read_file_bounded(
+        &payload_path,
+        u64::from(max_payload_bytes),
+        "signed moderation payload",
+    )?;
+    if payload.is_empty() {
+        return Err("signed moderation payload must not be empty".to_string());
+    }
+    let result = signing_runner
+        .screen_signed(&payload, max_payload_bytes, &subject, notes, now_unix)
+        .map_err(|error| format!("signed moderation screening failed: {error}"))?;
+    ensure_parent_dir(&provenance_path)?;
+    let provenance = ModerationProvenanceStoreV1::open(&provenance_path, provenance_log_id)
+        .map_err(|error| format!("failed to open moderation provenance: {error}"))?;
+    let provenance_head = provenance
+        .append_signed_result(
+            &manifest,
+            &policy,
+            &trust_anchors,
+            minimum_governance_quorum,
+            result.clone(),
+            now_unix,
+        )
+        .map_err(|error| format!("failed to persist signed moderation result: {error}"))?;
+    let canonical = to_bytes(&result)
+        .map_err(|error| format!("failed to encode signed moderation result: {error}"))?;
+    if u64::try_from(canonical.len())
+        .ok()
+        .is_none_or(|length| length > MODERATION_SIGNED_RESULT_MAX_BYTES)
+    {
+        return Err("signed moderation result exceeds its hard encoded bound".to_string());
+    }
+    if let Some(path) = norito_out {
+        write_bytes(&path, &canonical)?;
+    }
+    let output = moderation_signed_result_summary_json(&result, &canonical, provenance_head)?;
+    let rendered = to_string_pretty(&output)
+        .map_err(|error| format!("failed to render signed moderation summary: {error}"))?;
+    if let Some(path) = json_out {
+        write_text(&path, format!("{rendered}\n").as_bytes())?;
+    } else {
+        println!("{rendered}");
+    }
+    Ok(())
+}
+
+fn moderation_trusted_now_unix() -> Result<u64, String> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("system clock is before Unix epoch: {error}"))?
+        .as_secs();
+    if now == 0 {
+        return Err("trusted system clock returned zero Unix time".to_string());
+    }
+    Ok(now)
+}
+
+fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut artifact_root: Option<PathBuf> = None;
+    let mut format = String::from("json");
+    let mut listen = String::from(MODERATION_RUNNER_DEFAULT_LISTEN);
+    let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+    let mut max_payload_bytes = MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--artifact-root" => artifact_root = Some(PathBuf::from(value)),
             "--format" => format = value.to_ascii_lowercase(),
             "--listen" => {
                 let trimmed = value.trim();
@@ -5230,17 +5515,14 @@ fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
                 listen = trimmed.to_string();
             }
             "--max-body-bytes" => {
-                let parsed = parse_u64_arg(
-                    "--max-body-bytes",
+                max_body_bytes =
+                    parse_moderation_max_body_bytes(value, "sorafs_cli moderation runner-serve")?;
+            }
+            "--max-payload-bytes" => {
+                max_payload_bytes = parse_moderation_max_payload_bytes(
                     value,
                     "sorafs_cli moderation runner-serve",
                 )?;
-                max_body_bytes = usize::try_from(parsed).map_err(|_| {
-                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
-                })?;
-                if max_body_bytes == 0 {
-                    return Err("`--max-body-bytes` must be greater than zero".to_string());
-                }
             }
             _ => {
                 return Err(format!(
@@ -5253,37 +5535,57 @@ fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation runner-serve`".to_string()
     })?;
+    let artifact_root = artifact_root.ok_or_else(|| {
+        "missing required `--artifact-root=DIR` for `sorafs_cli moderation runner-serve`"
+            .to_string()
+    })?;
     let manifest = load_moderation_repro_manifest(
         &manifest_path,
         &format,
         "sorafs_cli moderation runner-serve",
     )?;
-    manifest
-        .validate()
-        .map_err(|err| format!("manifest validation failed: {err}"))?;
-    validate_moderation_local_runner_manifest(&manifest)?;
+    let runner = load_moderation_runner_for_current_executable(manifest, &artifact_root)?;
 
-    let listener = TcpListener::bind(&listen)
+    let listen_addr =
+        validate_moderation_loopback_listen(&listen, "sorafs_cli moderation runner-serve")?;
+    let listener = TcpListener::bind(listen_addr)
         .map_err(|err| format!("failed to bind moderation runner service at `{listen}`: {err}"))?;
     let local_addr = listener
         .local_addr()
         .map(|addr| addr.to_string())
         .unwrap_or_else(|_| listen.clone());
     let service = Arc::new(ModerationRunnerService {
-        manifest,
+        runner,
+        signed: None,
         manifest_source: manifest_path.display().to_string(),
         max_body_bytes,
+        max_payload_bytes,
     });
     let status = moderation_runner_status_json(&service, "listening", Some(&local_addr));
     let rendered = to_string_pretty(&status)
         .map_err(|err| format!("failed to render runner service status JSON: {err}"))?;
     println!("{rendered}");
 
+    let active_connections = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
         match incoming {
-            Ok(stream) => {
+            Ok(mut stream) => {
+                let Some(active_permit) = moderation_try_acquire_permit(
+                    &active_connections,
+                    MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS,
+                ) else {
+                    let response = moderation_runner_error_response(
+                        503,
+                        "Service Unavailable",
+                        "moderation runner connection limit reached",
+                    );
+                    let _ = stream.write_all(&response);
+                    let _ = stream.flush();
+                    continue;
+                };
                 let service = Arc::clone(&service);
                 thread::spawn(move || {
+                    let _active_permit = active_permit;
                     if let Err(err) =
                         moderation_runner_handle_stream(stream, &service, max_body_bytes)
                     {
@@ -5298,11 +5600,24 @@ fn moderation_runner_serve(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
-    let mut manifest_path: Option<PathBuf> = None;
+fn moderation_runner_signed_serve(raw_args: Vec<String>) -> Result<(), String> {
+    if raw_args.is_empty() {
+        return Err(moderation_usage());
+    }
+    let context = "sorafs_cli moderation runner-signed-serve";
+    let mut manifest_path = None;
+    let mut artifact_root = None;
     let mut format = String::from("json");
-    let mut listen = String::from(MODERATION_RUNNER_GRPC_DEFAULT_LISTEN);
+    let mut trust_policy_path = None;
+    let mut trust_policy_format = String::from("norito");
+    let mut trust_anchors = BTreeSet::new();
+    let mut minimum_governance_quorum = None;
+    let mut signing_key_path = None;
+    let mut provenance_path = None;
+    let mut provenance_log_id = None;
+    let mut listen = String::from(MODERATION_RUNNER_DEFAULT_LISTEN);
     let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+    let mut max_payload_bytes = MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES;
 
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
@@ -5313,6 +5628,192 @@ fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
             "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--artifact-root" => artifact_root = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--trust-policy" => trust_policy_path = Some(PathBuf::from(value)),
+            "--trust-policy-format" => trust_policy_format = value.to_ascii_lowercase(),
+            "--trust-anchor" => {
+                let anchor = parse_moderation_trust_anchor(value, context)?;
+                if !trust_anchors.insert(anchor) {
+                    return Err("duplicate `--trust-anchor` is forbidden".to_string());
+                }
+            }
+            "--minimum-governance-quorum" => {
+                let parsed = parse_u64_arg(key, value, context)?;
+                let parsed = u16::try_from(parsed)
+                    .map_err(|_| "`--minimum-governance-quorum` exceeds u16".to_string())?;
+                if parsed == 0 {
+                    return Err(
+                        "`--minimum-governance-quorum` must be greater than zero".to_string()
+                    );
+                }
+                minimum_governance_quorum = Some(parsed);
+            }
+            "--signing-key" => signing_key_path = Some(PathBuf::from(value)),
+            "--provenance" => provenance_path = Some(PathBuf::from(value)),
+            "--provenance-log-id" => {
+                provenance_log_id = Some(parse_fixed_hex::<16>(
+                    value,
+                    "--provenance-log-id",
+                    context,
+                )?);
+            }
+            "--listen" => {
+                if value.trim().is_empty() {
+                    return Err("`--listen` must not be empty".to_string());
+                }
+                listen = value.to_string();
+            }
+            "--max-body-bytes" => max_body_bytes = parse_moderation_max_body_bytes(value, context)?,
+            "--max-payload-bytes" => {
+                max_payload_bytes = parse_moderation_max_payload_bytes(value, context)?;
+            }
+            _ => return Err(format!("unrecognised option `{key}` for `{context}`")),
+        }
+    }
+
+    let manifest_path = manifest_path
+        .ok_or_else(|| format!("missing required `--manifest=PATH` for `{context}`"))?;
+    let artifact_root = artifact_root
+        .ok_or_else(|| format!("missing required `--artifact-root=DIR` for `{context}`"))?;
+    let trust_policy_path = trust_policy_path
+        .ok_or_else(|| format!("missing required `--trust-policy=PATH` for `{context}`"))?;
+    if trust_anchors.is_empty() {
+        return Err(format!(
+            "provide at least one external `--trust-anchor=PUBLIC_KEY` for `{context}`"
+        ));
+    }
+    let minimum_governance_quorum = minimum_governance_quorum.ok_or_else(|| {
+        format!("missing required `--minimum-governance-quorum=N` for `{context}`")
+    })?;
+    let signing_key_path = signing_key_path
+        .ok_or_else(|| format!("missing required `--signing-key=PATH` for `{context}`"))?;
+    let provenance_path = provenance_path
+        .ok_or_else(|| format!("missing required `--provenance=PATH` for `{context}`"))?;
+    let provenance_log_id = provenance_log_id
+        .ok_or_else(|| format!("missing required `--provenance-log-id=HEX16` for `{context}`"))?;
+    if provenance_log_id == [0; 16] {
+        return Err("`--provenance-log-id` must be non-zero".to_string());
+    }
+
+    let listen_addr = validate_moderation_loopback_listen(&listen, context)?;
+    let now_unix = moderation_trusted_now_unix()?;
+    let manifest = load_moderation_repro_manifest(&manifest_path, &format, context)?;
+    let policy = load_moderation_trust_policy(&trust_policy_path, &trust_policy_format, context)?;
+    let signing_key = load_moderation_signing_key(&signing_key_path, context)?;
+    let runner = load_moderation_runner_for_current_executable(manifest, &artifact_root)?;
+    let signing_runner = LoadedModerationSigningRunnerV1::from_verified(
+        runner.clone(),
+        policy,
+        trust_anchors.clone(),
+        minimum_governance_quorum,
+        signing_key,
+        now_unix,
+    )
+    .map_err(|error| format!("failed to initialize signed moderation runner: {error}"))?;
+    ensure_parent_dir(&provenance_path)?;
+    let provenance = ModerationProvenanceStoreV1::open(&provenance_path, provenance_log_id)
+        .map_err(|error| format!("failed to open moderation provenance: {error}"))?;
+    let listener = TcpListener::bind(listen_addr).map_err(|error| {
+        format!("failed to bind signed moderation runner at `{listen}`: {error}")
+    })?;
+    let local_addr = listener
+        .local_addr()
+        .map(|address| address.to_string())
+        .unwrap_or_else(|_| listen.clone());
+    let service = Arc::new(ModerationRunnerService {
+        runner,
+        signed: Some(ModerationSignedRunnerState {
+            signing_runner,
+            provenance,
+            trust_anchors,
+            minimum_governance_quorum,
+            transaction_guard: Mutex::new(()),
+        }),
+        manifest_source: manifest_path.display().to_string(),
+        max_body_bytes,
+        max_payload_bytes,
+    });
+    let status = moderation_runner_status_json(&service, "listening", Some(&local_addr));
+    let rendered = to_string_pretty(&status)
+        .map_err(|error| format!("failed to render signed runner status: {error}"))?;
+    println!("{rendered}");
+
+    let active_connections = Arc::new(AtomicUsize::new(0));
+    for incoming in listener.incoming() {
+        match incoming {
+            Ok(mut stream) => {
+                let Some(active_permit) = moderation_try_acquire_permit(
+                    &active_connections,
+                    MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS,
+                ) else {
+                    let response = moderation_runner_error_response(
+                        503,
+                        "Service Unavailable",
+                        "signed moderation runner connection limit reached",
+                    );
+                    let _ = stream.write_all(&response);
+                    let _ = stream.flush();
+                    continue;
+                };
+                let service = Arc::clone(&service);
+                thread::spawn(move || {
+                    let _active_permit = active_permit;
+                    if let Err(error) =
+                        moderation_runner_handle_stream(stream, &service, max_body_bytes)
+                    {
+                        eprintln!("signed moderation runner connection failed: {error}");
+                    }
+                });
+            }
+            Err(error) => eprintln!("signed moderation runner accept failed: {error}"),
+        }
+    }
+    Ok(())
+}
+
+struct ModerationActivePermit {
+    active: Arc<AtomicUsize>,
+}
+
+impl Drop for ModerationActivePermit {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, AtomicOrdering::AcqRel);
+    }
+}
+
+fn moderation_try_acquire_permit(
+    active: &Arc<AtomicUsize>,
+    limit: usize,
+) -> Option<ModerationActivePermit> {
+    active
+        .fetch_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
+            (current < limit).then_some(current + 1)
+        })
+        .ok()?;
+    Some(ModerationActivePermit {
+        active: Arc::clone(active),
+    })
+}
+
+fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut artifact_root: Option<PathBuf> = None;
+    let mut format = String::from("json");
+    let mut listen = String::from(MODERATION_RUNNER_GRPC_DEFAULT_LISTEN);
+    let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+    let mut max_payload_bytes = MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--artifact-root" => artifact_root = Some(PathBuf::from(value)),
             "--format" => format = value.to_ascii_lowercase(),
             "--listen" => {
                 let trimmed = value.trim();
@@ -5322,17 +5823,16 @@ fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
                 listen = trimmed.to_string();
             }
             "--max-body-bytes" => {
-                let parsed = parse_u64_arg(
-                    "--max-body-bytes",
+                max_body_bytes = parse_moderation_max_body_bytes(
                     value,
                     "sorafs_cli moderation runner-grpc-serve",
                 )?;
-                max_body_bytes = usize::try_from(parsed).map_err(|_| {
-                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
-                })?;
-                if max_body_bytes == 0 {
-                    return Err("`--max-body-bytes` must be greater than zero".to_string());
-                }
+            }
+            "--max-payload-bytes" => {
+                max_payload_bytes = parse_moderation_max_payload_bytes(
+                    value,
+                    "sorafs_cli moderation runner-grpc-serve",
+                )?;
             }
             _ => {
                 return Err(format!(
@@ -5346,39 +5846,47 @@ fn moderation_runner_grpc_serve(raw_args: Vec<String>) -> Result<(), String> {
         "missing required `--manifest=PATH` for `sorafs_cli moderation runner-grpc-serve`"
             .to_string()
     })?;
+    let artifact_root = artifact_root.ok_or_else(|| {
+        "missing required `--artifact-root=DIR` for `sorafs_cli moderation runner-grpc-serve`"
+            .to_string()
+    })?;
     let manifest = load_moderation_repro_manifest(
         &manifest_path,
         &format,
         "sorafs_cli moderation runner-grpc-serve",
     )?;
-    manifest
-        .validate()
-        .map_err(|err| format!("manifest validation failed: {err}"))?;
-    validate_moderation_local_runner_manifest(&manifest)?;
-    let addr = listen.parse::<SocketAddr>().map_err(|err| {
-        format!("`--listen={listen}` is not a valid socket address for runner gRPC: {err}")
-    })?;
+    let runner = load_moderation_runner_for_current_executable(manifest, &artifact_root)?;
+    let addr =
+        validate_moderation_loopback_listen(&listen, "sorafs_cli moderation runner-grpc-serve")?;
 
     let service = Arc::new(ModerationRunnerService {
-        manifest,
+        runner,
+        signed: None,
         manifest_source: manifest_path.display().to_string(),
         max_body_bytes,
+        max_payload_bytes,
     });
     let status = moderation_runner_status_json(&service, "listening", Some(&listen));
     let rendered = to_string_pretty(&status)
         .map_err(|err| format!("failed to render runner gRPC service status JSON: {err}"))?;
     println!("{rendered}");
 
+    let max_decoding_message_size = max_body_bytes
+        .checked_add(MODERATION_RUNNER_MAX_GRPC_ENVELOPE_BYTES)
+        .ok_or_else(|| "runner gRPC decoding limit overflows usize".to_owned())?;
     let handler = ModerationRunnerGrpcHandler {
         service,
         listen: listen.clone(),
+        in_flight: Arc::new(AtomicUsize::new(0)),
     };
     let grpc_service = moderation_runner_grpc::runner_server::RunnerServer::new(handler)
-        .max_decoding_message_size(max_body_bytes.saturating_add(4096));
+        .max_decoding_message_size(max_decoding_message_size)
+        .max_encoding_message_size(MODERATION_RUNNER_MAX_GRPC_RESPONSE_BYTES);
     Runtime::new()
         .map_err(|err| format!("failed to start Tokio runtime for runner gRPC: {err}"))?
         .block_on(async move {
             tonic::transport::Server::builder()
+                .concurrency_limit_per_connection(MODERATION_RUNNER_MAX_GRPC_IN_FLIGHT)
                 .add_service(grpc_service)
                 .serve(addr)
                 .await
@@ -5392,10 +5900,12 @@ fn moderation_runner_bundle(raw_args: Vec<String>) -> Result<(), String> {
     }
 
     let mut manifest_path: Option<PathBuf> = None;
+    let mut artifact_root: Option<PathBuf> = None;
     let mut format = String::from("json");
     let mut bundle_out: Option<PathBuf> = None;
     let mut listen = String::from(MODERATION_RUNNER_DEFAULT_LISTEN);
     let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+    let mut max_payload_bytes = MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES;
     let mut binary = String::from("sorafs_cli");
     let mut service_name = String::from("sorafs-moderation-runner");
     let mut service_user = String::from("sorafs");
@@ -5410,6 +5920,7 @@ fn moderation_runner_bundle(raw_args: Vec<String>) -> Result<(), String> {
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
             "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--artifact-root" => artifact_root = Some(PathBuf::from(value)),
             "--format" => format = value.to_ascii_lowercase(),
             "--bundle-out" => {
                 let trimmed = value.trim();
@@ -5423,17 +5934,14 @@ fn moderation_runner_bundle(raw_args: Vec<String>) -> Result<(), String> {
                 listen = trimmed.to_string();
             }
             "--max-body-bytes" => {
-                let parsed = parse_u64_arg(
-                    "--max-body-bytes",
+                max_body_bytes =
+                    parse_moderation_max_body_bytes(value, "sorafs_cli moderation runner-bundle")?;
+            }
+            "--max-payload-bytes" => {
+                max_payload_bytes = parse_moderation_max_payload_bytes(
                     value,
                     "sorafs_cli moderation runner-bundle",
                 )?;
-                max_body_bytes = usize::try_from(parsed).map_err(|_| {
-                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
-                })?;
-                if max_body_bytes == 0 {
-                    return Err("`--max-body-bytes` must be greater than zero".to_string());
-                }
             }
             "--binary" => {
                 let trimmed = validate_runner_bundle_value("--binary", value)?;
@@ -5461,29 +5969,37 @@ fn moderation_runner_bundle(raw_args: Vec<String>) -> Result<(), String> {
     }
 
     validate_runner_bundle_service_name(&service_name)?;
+    validate_moderation_loopback_listen(&listen, "sorafs_cli moderation runner-bundle")?;
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation runner-bundle`".to_string()
     })?;
     let bundle_out = bundle_out.ok_or_else(|| {
         "missing required `--bundle-out=DIR` for `sorafs_cli moderation runner-bundle`".to_string()
     })?;
+    let artifact_root = artifact_root.ok_or_else(|| {
+        "missing required `--artifact-root=DIR` for `sorafs_cli moderation runner-bundle`"
+            .to_string()
+    })?;
     let manifest = load_moderation_repro_manifest(
         &manifest_path,
         &format,
         "sorafs_cli moderation runner-bundle",
     )?;
-    manifest
-        .validate()
-        .map_err(|err| format!("manifest validation failed: {err}"))?;
-    validate_moderation_local_runner_manifest(&manifest)?;
+    let verified_runner =
+        load_moderation_runner_for_current_executable(manifest.clone(), &artifact_root)?;
+    let verified_artifacts = verified_runner
+        .canonical_artifacts()
+        .map_err(|error| format!("failed to prepare verified bundle artefacts: {error}"))?;
 
     write_moderation_runner_bundle(ModerationRunnerBundleSpec {
         manifest,
         manifest_source: manifest_path,
+        verified_artifacts,
         manifest_format: format,
         bundle_out,
         listen,
         max_body_bytes,
+        max_payload_bytes,
         binary,
         service_name,
         service_user,
@@ -5494,14 +6010,33 @@ fn moderation_runner_bundle(raw_args: Vec<String>) -> Result<(), String> {
 struct ModerationRunnerBundleSpec {
     manifest: ModerationReproManifestV1,
     manifest_source: PathBuf,
+    verified_artifacts: Vec<(String, Vec<u8>)>,
     manifest_format: String,
     bundle_out: PathBuf,
     listen: String,
     max_body_bytes: usize,
+    max_payload_bytes: u32,
     binary: String,
     service_name: String,
     service_user: String,
     service_group: String,
+}
+
+fn encode_moderation_manifest_for_bundle(
+    manifest: &ModerationReproManifestV1,
+    format: &str,
+    context: &str,
+) -> Result<Vec<u8>, String> {
+    match format {
+        "json" => norito::json::to_json_pretty(manifest)
+            .map(String::into_bytes)
+            .map_err(|error| format!("failed to encode {context} JSON manifest: {error}")),
+        "norito" => norito::to_bytes(manifest)
+            .map_err(|error| format!("failed to encode {context} Norito manifest: {error}")),
+        other => Err(format!(
+            "unsupported manifest format `{other}` while encoding {context}"
+        )),
+    }
 }
 
 fn write_moderation_runner_bundle(spec: ModerationRunnerBundleSpec) -> Result<(), String> {
@@ -5525,13 +6060,38 @@ fn write_moderation_runner_bundle(spec: ModerationRunnerBundleSpec) -> Result<()
         }
     };
     let manifest_copy_path = bundle_dir.join(manifest_copy_name);
-    fs::copy(&spec.manifest_source, &manifest_copy_path).map_err(|err| {
+    let manifest_bytes = encode_moderation_manifest_for_bundle(
+        &spec.manifest,
+        &spec.manifest_format,
+        "runner bundle",
+    )?;
+    write_text(&manifest_copy_path, &manifest_bytes)?;
+    let artifact_copy_root = bundle_dir.join("artifacts");
+    fs::create_dir_all(&artifact_copy_root).map_err(|error| {
         format!(
-            "failed to copy runner manifest `{}` into `{}`: {err}",
-            spec.manifest_source.display(),
-            manifest_copy_path.display()
+            "failed to create runner artefact directory `{}`: {error}",
+            artifact_copy_root.display()
         )
     })?;
+    for (artifact_path, bytes) in &spec.verified_artifacts {
+        let destination = artifact_copy_root.join(artifact_path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "failed to create bundled model directory `{}`: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        write_text(&destination, bytes)?;
+    }
+    let observed_runner_hash = moderation_runner_current_executable_hash()?;
+    LoadedModerationRunnerV1::load_verified(
+        spec.manifest.clone(),
+        &artifact_copy_root,
+        observed_runner_hash,
+    )
+    .map_err(|error| format!("bundled moderation artefacts failed verification: {error}"))?;
 
     let env_path = bundle_dir.join("runner.env");
     let run_path = bundle_dir.join("run.sh");
@@ -5565,6 +6125,7 @@ fn write_moderation_runner_bundle(spec: ModerationRunnerBundleSpec) -> Result<()
         manifest_copy_name,
         &[
             manifest_copy_name,
+            "artifacts/",
             "runner.env",
             "run.sh",
             &systemd_unit_name,
@@ -5582,18 +6143,20 @@ fn write_moderation_runner_bundle(spec: ModerationRunnerBundleSpec) -> Result<()
 
 fn moderation_runner_bundle_env(spec: &ModerationRunnerBundleSpec) -> String {
     format!(
-        "SORAFS_CLI={}\nSORAFS_RUNNER_LISTEN={}\nSORAFS_RUNNER_MAX_BODY_BYTES={}\n",
+        "SORAFS_CLI={}\nSORAFS_RUNNER_LISTEN={}\nSORAFS_RUNNER_MAX_BODY_BYTES={}\nSORAFS_RUNNER_MAX_PAYLOAD_BYTES={}\n",
         shell_single_quote(&spec.binary),
         shell_single_quote(&spec.listen),
-        shell_single_quote(&spec.max_body_bytes.to_string())
+        shell_single_quote(&spec.max_body_bytes.to_string()),
+        shell_single_quote(&spec.max_payload_bytes.to_string())
     )
 }
 
 fn moderation_runner_bundle_run_script(manifest_copy_name: &str, format: &str) -> String {
     format!(
-        "#!/usr/bin/env sh\nset -eu\nSCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nif [ -f \"$SCRIPT_DIR/runner.env\" ]; then\n  . \"$SCRIPT_DIR/runner.env\"\nfi\n: \"${{SORAFS_CLI:=sorafs_cli}}\"\n: \"${{SORAFS_RUNNER_LISTEN:={}}}\"\n: \"${{SORAFS_RUNNER_MAX_BODY_BYTES:={}}}\"\nexec \"$SORAFS_CLI\" moderation runner-serve \\\n  --manifest=\"$SCRIPT_DIR/{}\" \\\n  --format={} \\\n  --listen=\"$SORAFS_RUNNER_LISTEN\" \\\n  --max-body-bytes=\"$SORAFS_RUNNER_MAX_BODY_BYTES\"\n",
+        "#!/usr/bin/env sh\nset -eu\nSCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nif [ -f \"$SCRIPT_DIR/runner.env\" ]; then\n  . \"$SCRIPT_DIR/runner.env\"\nfi\n: \"${{SORAFS_CLI:=sorafs_cli}}\"\n: \"${{SORAFS_RUNNER_LISTEN:={}}}\"\n: \"${{SORAFS_RUNNER_MAX_BODY_BYTES:={}}}\"\n: \"${{SORAFS_RUNNER_MAX_PAYLOAD_BYTES:={}}}\"\nexec \"$SORAFS_CLI\" moderation runner-serve \\\n  --manifest=\"$SCRIPT_DIR/{}\" \\\n  --artifact-root=\"$SCRIPT_DIR/artifacts\" \\\n  --format={} \\\n  --listen=\"$SORAFS_RUNNER_LISTEN\" \\\n  --max-body-bytes=\"$SORAFS_RUNNER_MAX_BODY_BYTES\" \\\n  --max-payload-bytes=\"$SORAFS_RUNNER_MAX_PAYLOAD_BYTES\"\n",
         MODERATION_RUNNER_DEFAULT_LISTEN,
         MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES,
+        MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES,
         manifest_copy_name,
         format
     )
@@ -5606,7 +6169,7 @@ fn moderation_runner_bundle_systemd_unit(
     env_path: &Path,
 ) -> String {
     format!(
-        "[Unit]\nDescription=SoraFS moderation runner ({})\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=simple\nUser={}\nGroup={}\nWorkingDirectory={}\nEnvironmentFile={}\nExecStart={}\nRestart=on-failure\nRestartSec=5s\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=true\nReadOnlyPaths={}\n\n[Install]\nWantedBy=multi-user.target\n",
+        "[Unit]\nDescription=SoraFS moderation runner ({})\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=simple\nUser={}\nGroup={}\nWorkingDirectory={}\nEnvironmentFile={}\nExecStart={}\nRestart=on-failure\nRestartSec=5s\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=true\nProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\nMemoryDenyWriteExecute=true\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nIPAddressDeny=any\nIPAddressAllow=localhost\nReadOnlyPaths={}\n\n[Install]\nWantedBy=multi-user.target\n",
         spec.service_name,
         spec.service_user,
         spec.service_group,
@@ -5639,12 +6202,13 @@ fn moderation_runner_bundle_readme(
     launchd_plist_name: &str,
 ) -> String {
     format!(
-        "# SoraFS Moderation Runner Bundle\n\nThis bundle starts a locked-manifest SoraFS moderation runner with outbound network disabled by the runner implementation.\n\n- Manifest copy: `{}`\n- Manifest id: `{}`\n- Runner hash: `{}`\n- Listen address: `{}`\n- Maximum body bytes: `{}`\n\nRun directly:\n\n```sh\n./run.sh\n```\n\nInstall with systemd:\n\n```sh\nsudo cp {} /etc/systemd/system/\nsudo systemctl daemon-reload\nsudo systemctl enable --now {}\n```\n\nInstall with launchd:\n\n```sh\ncp {} ~/Library/LaunchAgents/\nlaunchctl load ~/Library/LaunchAgents/{}\n```\n\nKeep `runner.env`, `run.sh`, and the manifest copy together. Replace the `SORAFS_CLI` value in `runner.env` with the absolute path to the audited `sorafs_cli` binary on the target host before installing.\n",
+        "# SoraFS Moderation Runner Bundle\n\nThis bundle starts a manifest- and artefact-locked SoraFS moderation runner. The integer model engine performs no outbound I/O and the CLI accepts loopback listen addresses only. The generated systemd unit additionally denies non-loopback IP traffic. Direct `run.sh` and launchd execution cannot impose a kernel network sandbox, so operators must supply an equivalent process policy.\n\n- Manifest copy: `{}`\n- Model artefacts: `artifacts/`\n- Manifest id: `{}`\n- Runner hash: `{}`\n- Listen address: `{}`\n- Maximum body bytes: `{}`\n- Maximum decoded payload bytes: `{}`\n\nRun directly:\n\n```sh\n./run.sh\n```\n\nInstall with systemd:\n\n```sh\nsudo cp {} /etc/systemd/system/\nsudo systemctl daemon-reload\nsudo systemctl enable --now {}\n```\n\nInstall with launchd:\n\n```sh\ncp {} ~/Library/LaunchAgents/\nlaunchctl load ~/Library/LaunchAgents/{}\n```\n\nKeep `runner.env`, `run.sh`, the manifest copy, and `artifacts/` together. The executable at `SORAFS_CLI` must hash to the signed `runner_hash`; otherwise startup fails before binding.\n",
         manifest_copy_name,
         hex_encode(spec.manifest.body.manifest_id),
         hex_encode(spec.manifest.body.runner_hash),
         spec.listen,
         spec.max_body_bytes,
+        spec.max_payload_bytes,
         systemd_unit_name,
         systemd_unit_name,
         launchd_plist_name,
@@ -5698,6 +6262,10 @@ fn moderation_runner_bundle_summary_json(
         "max_body_bytes".into(),
         Value::from(spec.max_body_bytes as u64),
     );
+    summary.insert(
+        "max_payload_bytes".into(),
+        Value::from(u64::from(spec.max_payload_bytes)),
+    );
     summary.insert("binary".into(), Value::from(spec.binary.clone()));
     summary.insert(
         "service_name".into(),
@@ -5711,7 +6279,10 @@ fn moderation_runner_bundle_summary_json(
         "service_group".into(),
         Value::from(spec.service_group.clone()),
     );
-    summary.insert("outbound_network".into(), Value::from("disabled"));
+    summary.insert(
+        "outbound_network".into(),
+        Value::from("process_policy_required"),
+    );
     summary.insert(
         "files".into(),
         Value::Array(files.iter().map(|file| Value::from(*file)).collect()),
@@ -5768,17 +6339,10 @@ fn moderation_committee_bundle(raw_args: Vec<String>) -> Result<(), String> {
                 listen = trimmed.to_string();
             }
             "--max-body-bytes" => {
-                let parsed = parse_u64_arg(
-                    "--max-body-bytes",
+                max_body_bytes = parse_moderation_max_body_bytes(
                     value,
                     "sorafs_cli moderation committee-bundle",
                 )?;
-                max_body_bytes = usize::try_from(parsed).map_err(|_| {
-                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
-                })?;
-                if max_body_bytes == 0 {
-                    return Err("`--max-body-bytes` must be greater than zero".to_string());
-                }
             }
             "--binary" => {
                 let trimmed = validate_runner_bundle_value("--binary", value)?;
@@ -5806,6 +6370,7 @@ fn moderation_committee_bundle(raw_args: Vec<String>) -> Result<(), String> {
     }
 
     validate_runner_bundle_service_name(&service_name)?;
+    validate_moderation_loopback_listen(&listen, "sorafs_cli moderation committee-bundle")?;
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli moderation committee-bundle`"
             .to_string()
@@ -5877,13 +6442,12 @@ fn write_moderation_committee_bundle(spec: ModerationCommitteeBundleSpec) -> Res
         }
     };
     let manifest_copy_path = bundle_dir.join(manifest_copy_name);
-    fs::copy(&spec.manifest_source, &manifest_copy_path).map_err(|err| {
-        format!(
-            "failed to copy committee manifest `{}` into `{}`: {err}",
-            spec.manifest_source.display(),
-            manifest_copy_path.display()
-        )
-    })?;
+    let manifest_bytes = encode_moderation_manifest_for_bundle(
+        &spec.manifest,
+        &spec.manifest_format,
+        "committee bundle",
+    )?;
+    write_text(&manifest_copy_path, &manifest_bytes)?;
 
     let env_path = bundle_dir.join("committee.env");
     let run_path = bundle_dir.join("run.sh");
@@ -5961,7 +6525,7 @@ fn moderation_committee_bundle_systemd_unit(
     env_path: &Path,
 ) -> String {
     format!(
-        "[Unit]\nDescription=SoraFS moderation committee ({})\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=simple\nUser={}\nGroup={}\nWorkingDirectory={}\nEnvironmentFile={}\nExecStart={}\nRestart=on-failure\nRestartSec=5s\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=true\nReadOnlyPaths={}\n\n[Install]\nWantedBy=multi-user.target\n",
+        "[Unit]\nDescription=SoraFS moderation committee ({})\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=simple\nUser={}\nGroup={}\nWorkingDirectory={}\nEnvironmentFile={}\nExecStart={}\nRestart=on-failure\nRestartSec=5s\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=true\nProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\nMemoryDenyWriteExecute=true\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nIPAddressDeny=any\nIPAddressAllow=localhost\nReadOnlyPaths={}\n\n[Install]\nWantedBy=multi-user.target\n",
         spec.service_name,
         spec.service_user,
         spec.service_group,
@@ -5994,7 +6558,7 @@ fn moderation_committee_bundle_readme(
     launchd_plist_name: &str,
 ) -> String {
     format!(
-        "# SoraFS Moderation Committee Bundle\n\nThis bundle starts a locked-manifest SoraFS moderation committee service with outbound network disabled by the service implementation. It accepts payload-free runner result JSON and returns deterministic median-score quorum aggregates.\n\n- Manifest copy: `{}`\n- Manifest id: `{}`\n- Runner hash: `{}`\n- Quorum: `{}`\n- Listen address: `{}`\n- Maximum body bytes: `{}`\n\nRun directly:\n\n```sh\n./run.sh\n```\n\nInstall with systemd:\n\n```sh\nsudo cp {} /etc/systemd/system/\nsudo systemctl daemon-reload\nsudo systemctl enable --now {}\n```\n\nInstall with launchd:\n\n```sh\ncp {} ~/Library/LaunchAgents/\nlaunchctl load ~/Library/LaunchAgents/{}\n```\n\nKeep `committee.env`, `run.sh`, and the manifest copy together. Replace the `SORAFS_CLI` value in `committee.env` with the absolute path to the audited `sorafs_cli` binary on the target host before installing.\n",
+        "# SoraFS Moderation Committee Bundle\n\nThis bundle starts a locked-manifest SoraFS moderation committee service. The CLI accepts loopback listen addresses only. The generated systemd unit denies non-loopback IP traffic; direct `run.sh` and launchd execution require an equivalent external runtime policy. The service accepts payload-free runner result JSON and returns deterministic median-score quorum aggregates.\n\n- Manifest copy: `{}`\n- Manifest id: `{}`\n- Runner hash: `{}`\n- Quorum: `{}`\n- Listen address: `{}`\n- Maximum body bytes: `{}`\n\nRun directly:\n\n```sh\n./run.sh\n```\n\nInstall with systemd:\n\n```sh\nsudo cp {} /etc/systemd/system/\nsudo systemctl daemon-reload\nsudo systemctl enable --now {}\n```\n\nInstall with launchd:\n\n```sh\ncp {} ~/Library/LaunchAgents/\nlaunchctl load ~/Library/LaunchAgents/{}\n```\n\nKeep `committee.env`, `run.sh`, and the manifest copy together. Replace the `SORAFS_CLI` value in `committee.env` with the absolute path to the audited `sorafs_cli` binary on the target host before installing.\n",
         manifest_copy_name,
         hex_encode(spec.manifest.body.manifest_id),
         hex_encode(spec.manifest.body.runner_hash),
@@ -6069,7 +6633,10 @@ fn moderation_committee_bundle_summary_json(
         "service_group".into(),
         Value::from(spec.service_group.clone()),
     );
-    summary.insert("outbound_network".into(), Value::from("disabled"));
+    summary.insert(
+        "outbound_network".into(),
+        Value::from("network_capable_process_policy_required"),
+    );
     summary.insert(
         "files".into(),
         Value::Array(files.iter().map(|file| Value::from(*file)).collect()),
@@ -6151,6 +6718,80 @@ fn set_executable_if_supported(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+struct ModerationCanaryDeploymentContext {
+    generated_at_unix: u64,
+    deployment_id: String,
+    environment: String,
+}
+
+fn moderation_canary_deployment_id(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    let bytes = trimmed.as_bytes();
+    if trimmed != value
+        || bytes.is_empty()
+        || bytes.len() > 128
+        || !bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        || !bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(
+            "`--deployment-id` must be 1-128 ASCII letters, digits, '.', '_' or '-' and start/end with a letter or digit"
+                .to_string(),
+        );
+    }
+    Ok(trimmed.to_string())
+}
+
+fn moderation_canary_environment(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed != value || !matches!(trimmed, "prod" | "production" | "release" | "staging") {
+        return Err(
+            "`--environment` must be one of prod, production, release, or staging".to_string(),
+        );
+    }
+    Ok(trimmed.to_string())
+}
+
+#[derive(Debug)]
+struct ModerationCanaryHttpProbe {
+    method: &'static str,
+    url: String,
+    status_code: u16,
+    request_bytes: u64,
+    request_body_blake3: [u8; 32],
+    response_bytes: u64,
+    response_body_blake3: [u8; 32],
+    response: Value,
+}
+
+fn moderation_canary_probe_json(name: &str, probe: &ModerationCanaryHttpProbe) -> Value {
+    let mut output = Map::new();
+    output.insert("name".into(), Value::from(name.to_string()));
+    output.insert("method".into(), Value::from(probe.method));
+    output.insert("url".into(), Value::from(probe.url.clone()));
+    output.insert(
+        "status_code".into(),
+        Value::from(u64::from(probe.status_code)),
+    );
+    output.insert("request_bytes".into(), Value::from(probe.request_bytes));
+    output.insert(
+        "request_body_blake3".into(),
+        Value::from(hex_encode(probe.request_body_blake3)),
+    );
+    output.insert("response_bytes".into(), Value::from(probe.response_bytes));
+    output.insert(
+        "response_body_blake3".into(),
+        Value::from(hex_encode(probe.response_body_blake3)),
+    );
+    output.insert("passed".into(), Value::from(true));
+    output.insert("payload_bytes_included".into(), Value::from(false));
+    output.insert("private_payloads_included".into(), Value::from(false));
+    Value::Object(output)
+}
+
 fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(moderation_usage());
@@ -6162,6 +6803,14 @@ fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
     let mut payload_path: Option<PathBuf> = None;
     let mut subject: Option<String> = None;
     let mut screened_at_unix: Option<u64> = None;
+    let mut generated_at_unix: Option<u64> = None;
+    let mut deployment_id: Option<String> = None;
+    let mut environment: Option<String> = None;
+    let mut deployment_context_reviewed = false;
+    let mut process_isolation_enforcement: Option<&'static str> = None;
+    let mut process_isolation_attestation_digest: Option<[u8; 32]> = None;
+    let mut process_isolation_verified_at: Option<u64> = None;
+    let mut process_isolation_reviewed = false;
     let mut checked_at_unix: Option<u64> = None;
     let mut notes: Option<String> = None;
     let mut timeout_ms = 30_000_u64;
@@ -6198,6 +6847,78 @@ fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
                     value,
                     "sorafs_cli moderation runner-canary",
                 )?);
+            }
+            "--generated-at-unix" => {
+                let generated = parse_u64_arg(
+                    "--generated-at-unix",
+                    value,
+                    "sorafs_cli moderation runner-canary",
+                )?;
+                if generated == 0 {
+                    return Err("`--generated-at-unix` must be greater than zero".to_string());
+                }
+                generated_at_unix = Some(generated);
+            }
+            "--deployment-id" => {
+                deployment_id = Some(moderation_canary_deployment_id(value)?);
+            }
+            "--environment" => {
+                environment = Some(moderation_canary_environment(value)?);
+            }
+            "--deployment-context-reviewed" => {
+                if value != "true" {
+                    return Err(
+                        "`--deployment-context-reviewed` must be exactly `true`".to_string()
+                    );
+                }
+                deployment_context_reviewed = true;
+            }
+            "--process-isolation-enforcement" => {
+                process_isolation_enforcement = Some(match value {
+                    "systemd_ip_filter" => "systemd_ip_filter",
+                    "container_network_policy" => "container_network_policy",
+                    "host_firewall" => "host_firewall",
+                    _ => {
+                        return Err("`--process-isolation-enforcement` must be one of `systemd_ip_filter`, `container_network_policy`, or `host_firewall`".to_string());
+                    }
+                });
+            }
+            "--process-isolation-attestation-digest" => {
+                if value.len() != 64
+                    || !value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err("`--process-isolation-attestation-digest` must be exactly 64 lowercase hexadecimal characters".to_string());
+                }
+                let digest = parse_fixed_hex::<32>(
+                    value,
+                    "--process-isolation-attestation-digest",
+                    "sorafs_cli moderation runner-canary",
+                )?;
+                if moderation_digest_is_placeholder(&digest) {
+                    return Err("`--process-isolation-attestation-digest` must not be a zero/repeated placeholder digest".to_string());
+                }
+                process_isolation_attestation_digest = Some(digest);
+            }
+            "--process-isolation-verified-at" => {
+                let verified_at = parse_u64_arg(
+                    "--process-isolation-verified-at",
+                    value,
+                    "sorafs_cli moderation runner-canary",
+                )?;
+                if verified_at == 0 {
+                    return Err(
+                        "`--process-isolation-verified-at` must be greater than zero".to_string(),
+                    );
+                }
+                process_isolation_verified_at = Some(verified_at);
+            }
+            "--process-isolation-reviewed" => {
+                if value != "true" {
+                    return Err("`--process-isolation-reviewed` must be exactly `true`".to_string());
+                }
+                process_isolation_reviewed = true;
             }
             "--checked-at" => {
                 checked_at_unix = Some(parse_u64_arg(
@@ -6244,7 +6965,63 @@ fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
         "missing required `--screened-at=UNIX_SECS` for `sorafs_cli moderation runner-canary`"
             .to_string()
     })?;
-    let checked_at_unix = checked_at_unix.unwrap_or_else(moderation_runner_canary_now_unix);
+    let generated_at_unix = generated_at_unix.ok_or_else(|| {
+        "missing required `--generated-at-unix=UNIX_SECS` for `sorafs_cli moderation runner-canary`"
+            .to_string()
+    })?;
+    let deployment_id = deployment_id.ok_or_else(|| {
+        "missing required `--deployment-id=ID` for `sorafs_cli moderation runner-canary`"
+            .to_string()
+    })?;
+    let environment = environment.ok_or_else(|| {
+        "missing required `--environment=ENV` for `sorafs_cli moderation runner-canary`".to_string()
+    })?;
+    if !deployment_context_reviewed {
+        return Err(
+            "missing required `--deployment-context-reviewed=true` for `sorafs_cli moderation runner-canary`"
+                .to_string(),
+        );
+    }
+    let process_isolation_enforcement = process_isolation_enforcement.ok_or_else(|| {
+        "missing required `--process-isolation-enforcement=KIND` for `sorafs_cli moderation runner-canary`"
+            .to_string()
+    })?;
+    let process_isolation_attestation_digest = process_isolation_attestation_digest.ok_or_else(|| {
+        "missing required `--process-isolation-attestation-digest=HEX` for `sorafs_cli moderation runner-canary`"
+            .to_string()
+    })?;
+    let process_isolation_verified_at = process_isolation_verified_at.ok_or_else(|| {
+        "missing required `--process-isolation-verified-at=UNIX_SECS` for `sorafs_cli moderation runner-canary`"
+            .to_string()
+    })?;
+    if !process_isolation_reviewed {
+        return Err(
+            "missing required `--process-isolation-reviewed=true` for `sorafs_cli moderation runner-canary`"
+                .to_string(),
+        );
+    }
+    let checked_at_unix = checked_at_unix.unwrap_or(generated_at_unix);
+    if checked_at_unix != generated_at_unix {
+        return Err("`--checked-at` must equal `--generated-at-unix`".to_string());
+    }
+    if screened_at_unix > checked_at_unix {
+        return Err("`--screened-at` must not be after `--checked-at`".to_string());
+    }
+    if process_isolation_verified_at > generated_at_unix {
+        return Err(
+            "`--process-isolation-verified-at` must not be after `--generated-at-unix`".to_string(),
+        );
+    }
+    let process_isolation = ModerationProcessIsolationEvidence {
+        enforcement: process_isolation_enforcement,
+        attestation_digest: process_isolation_attestation_digest,
+        verified_at_unix: process_isolation_verified_at,
+    };
+    let deployment_context = ModerationCanaryDeploymentContext {
+        generated_at_unix,
+        deployment_id,
+        environment,
+    };
     let manifest = load_moderation_repro_manifest(
         &manifest_path,
         &format,
@@ -6254,8 +7031,11 @@ fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
         .validate()
         .map_err(|err| format!("manifest validation failed: {err}"))?;
     validate_moderation_local_runner_manifest(&manifest)?;
-    let payload = fs::read(&payload_path)
-        .map_err(|err| format!("failed to read `{}`: {err}", payload_path.display()))?;
+    let payload = read_file_bounded(
+        &payload_path,
+        u64::from(MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES),
+        "runner canary payload",
+    )?;
     if payload.is_empty() {
         return Err("`--payload` file must not be empty".to_string());
     }
@@ -6270,27 +7050,30 @@ fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
         moderation_runner_canary_endpoint(&base_url, "/v1/sorafs/moderation/runner/status")?;
     let screen_url =
         moderation_runner_canary_endpoint(&base_url, "/v1/sorafs/moderation/runner/screen")?;
-    let status_response = moderation_runner_canary_get_json(&client, &status_url)?;
+    let runner_base_url = base_url.as_str().trim_end_matches('/');
+    let status_probe = moderation_runner_canary_get_json(&client, &status_url)?;
     let screen_request = moderation_runner_canary_screen_request_json(
         &payload,
         &subject,
         screened_at_unix,
         notes.as_deref(),
     );
-    let screening_response =
+    let screening_probe =
         moderation_runner_canary_post_json(&client, &screen_url, &screen_request)?;
     let evidence = moderation_runner_canary_evidence_json(ModerationRunnerCanaryEvidenceInput {
         manifest: &manifest,
-        runner_url: base_url.as_str(),
+        runner_url: runner_base_url,
         status_url: status_url.as_str(),
         screen_url: screen_url.as_str(),
         subject: &subject,
         payload: &payload,
         screened_at_unix,
         checked_at_unix,
+        deployment_context,
+        process_isolation,
         notes: notes.as_deref(),
-        status_response,
-        screening_response,
+        status_probe,
+        screening_probe,
     })?;
     let rendered = to_string_pretty(&evidence)
         .map_err(|err| format!("failed to render runner canary evidence JSON: {err}"))?;
@@ -6311,16 +7094,48 @@ struct ModerationRunnerCanaryEvidenceInput<'a> {
     payload: &'a [u8],
     screened_at_unix: u64,
     checked_at_unix: u64,
+    deployment_context: ModerationCanaryDeploymentContext,
+    process_isolation: ModerationProcessIsolationEvidence,
     notes: Option<&'a str>,
-    status_response: Value,
-    screening_response: Value,
+    status_probe: ModerationCanaryHttpProbe,
+    screening_probe: ModerationCanaryHttpProbe,
 }
 
-fn moderation_runner_canary_now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0))
-        .as_secs()
+#[derive(Clone, Copy)]
+struct ModerationProcessIsolationEvidence {
+    enforcement: &'static str,
+    attestation_digest: [u8; 32],
+    verified_at_unix: u64,
+}
+
+impl ModerationProcessIsolationEvidence {
+    fn validate(self, generated_at_unix: u64, context: &str) -> Result<(), String> {
+        if !matches!(
+            self.enforcement,
+            "systemd_ip_filter" | "container_network_policy" | "host_firewall"
+        ) {
+            return Err(format!(
+                "{context} process isolation enforcement `{}` is unsupported",
+                self.enforcement
+            ));
+        }
+        if moderation_digest_is_placeholder(&self.attestation_digest) {
+            return Err(format!(
+                "{context} process isolation attestation digest is a placeholder"
+            ));
+        }
+        if self.verified_at_unix == 0 || self.verified_at_unix > generated_at_unix {
+            return Err(format!(
+                "{context} process isolation verification timestamp {} is outside 1..={generated_at_unix}",
+                self.verified_at_unix
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn moderation_digest_is_placeholder(digest: &[u8; 32]) -> bool {
+    digest.iter().all(|byte| *byte == digest[0]) || digest[..16] == digest[16..]
 }
 
 fn moderation_runner_canary_endpoint(base_url: &Url, path: &str) -> Result<Url, String> {
@@ -6330,50 +7145,117 @@ fn moderation_runner_canary_endpoint(base_url: &Url, path: &str) -> Result<Url, 
         .map_err(|err| format!("failed to build runner endpoint `{endpoint}`: {err}"))
 }
 
-fn moderation_runner_canary_get_json(client: &HttpClient, url: &Url) -> Result<Value, String> {
+fn read_moderation_canary_response_bounded(
+    response: reqwest::blocking::Response,
+    context: &str,
+) -> Result<(StatusCode, Vec<u8>), String> {
+    let status = response.status();
+    if response
+        .content_length()
+        .is_some_and(|length| length > MODERATION_CANARY_MAX_RESPONSE_BYTES)
+    {
+        return Err(format!(
+            "{context} declared a response larger than {MODERATION_CANARY_MAX_RESPONSE_BYTES} bytes"
+        ));
+    }
+    let initial_capacity = response
+        .content_length()
+        .unwrap_or(0)
+        .min(MODERATION_CANARY_MAX_RESPONSE_BYTES);
+    let initial_capacity = usize::try_from(initial_capacity)
+        .map_err(|_| format!("{context} response length does not fit usize"))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(initial_capacity)
+        .map_err(|error| format!("failed to reserve bounded {context} response: {error}"))?;
+    let mut limited = response.take(MODERATION_CANARY_MAX_RESPONSE_BYTES + 1);
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("{context} failed to read body: {error}"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MODERATION_CANARY_MAX_RESPONSE_BYTES {
+        return Err(format!(
+            "{context} response exceeded {MODERATION_CANARY_MAX_RESPONSE_BYTES} bytes"
+        ));
+    }
+    Ok((status, bytes))
+}
+
+fn moderation_runner_canary_get_json(
+    client: &HttpClient,
+    url: &Url,
+) -> Result<ModerationCanaryHttpProbe, String> {
     let response = client
         .get(url.as_str())
         .send()
         .map_err(|err| format!("runner canary GET `{url}` failed: {err}"))?;
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .map_err(|err| format!("runner canary GET `{url}` failed to read body: {err}"))?;
+    let (status, bytes) =
+        read_moderation_canary_response_bounded(response, &format!("runner canary GET `{url}`"))?;
     if !status.is_success() {
         return Err(format!(
             "runner canary GET `{url}` returned HTTP {status}: {}",
-            body_snippet(bytes.as_ref())
+            body_snippet(&bytes)
         ));
     }
-    from_slice(bytes.as_ref())
-        .map_err(|err| format!("runner canary GET `{url}` returned invalid JSON: {err}"))
+    let response_bytes = u64::try_from(bytes.len())
+        .map_err(|_| "runner canary GET response length exceeds u64".to_string())?;
+    let response = from_slice(&bytes)
+        .map_err(|err| format!("runner canary GET `{url}` returned invalid JSON: {err}"))?;
+    Ok(ModerationCanaryHttpProbe {
+        method: "GET",
+        url: url.as_str().to_string(),
+        status_code: status.as_u16(),
+        request_bytes: 0,
+        request_body_blake3: *blake3_hash(&[]).as_bytes(),
+        response_bytes,
+        response_body_blake3: *blake3_hash(&bytes).as_bytes(),
+        response,
+    })
 }
 
 fn moderation_runner_canary_post_json(
     client: &HttpClient,
     url: &Url,
     value: &Value,
-) -> Result<Value, String> {
+) -> Result<ModerationCanaryHttpProbe, String> {
     let body = to_vec(value)
         .map_err(|err| format!("failed to encode runner canary request JSON: {err}"))?;
+    if body.len() > MODERATION_RUNNER_HARD_MAX_BODY_BYTES {
+        return Err(format!(
+            "runner canary request has {} bytes; maximum is {MODERATION_RUNNER_HARD_MAX_BODY_BYTES}",
+            body.len()
+        ));
+    }
+    let request_bytes = u64::try_from(body.len())
+        .map_err(|_| "runner canary POST request length exceeds u64".to_string())?;
+    let request_body_blake3 = *blake3_hash(&body).as_bytes();
     let response = client
         .post(url.as_str())
         .header(CONTENT_TYPE, "application/json")
         .body(body)
         .send()
         .map_err(|err| format!("runner canary POST `{url}` failed: {err}"))?;
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .map_err(|err| format!("runner canary POST `{url}` failed to read body: {err}"))?;
+    let (status, bytes) =
+        read_moderation_canary_response_bounded(response, &format!("runner canary POST `{url}`"))?;
     if !status.is_success() {
         return Err(format!(
             "runner canary POST `{url}` returned HTTP {status}: {}",
-            body_snippet(bytes.as_ref())
+            body_snippet(&bytes)
         ));
     }
-    from_slice(bytes.as_ref())
-        .map_err(|err| format!("runner canary POST `{url}` returned invalid JSON: {err}"))
+    let response_bytes = u64::try_from(bytes.len())
+        .map_err(|_| "runner canary POST response length exceeds u64".to_string())?;
+    let response = from_slice(&bytes)
+        .map_err(|err| format!("runner canary POST `{url}` returned invalid JSON: {err}"))?;
+    Ok(ModerationCanaryHttpProbe {
+        method: "POST",
+        url: url.as_str().to_string(),
+        status_code: status.as_u16(),
+        request_bytes,
+        request_body_blake3,
+        response_bytes,
+        response_body_blake3: *blake3_hash(&bytes).as_bytes(),
+        response,
+    })
 }
 
 fn moderation_runner_canary_screen_request_json(
@@ -6401,19 +7283,28 @@ fn moderation_runner_canary_screen_request_json(
 fn moderation_runner_canary_evidence_json(
     input: ModerationRunnerCanaryEvidenceInput<'_>,
 ) -> Result<Value, String> {
-    validate_moderation_runner_status_response(input.manifest, &input.status_response)?;
+    input.process_isolation.validate(
+        input.deployment_context.generated_at_unix,
+        "runner canary evidence",
+    )?;
+    validate_moderation_runner_status_response(input.manifest, &input.status_probe.response)?;
     let subject_digest = *blake3_hash(input.payload).as_bytes();
     let screening = validate_moderation_runner_screening_response(
         input.manifest,
         input.subject,
         &subject_digest,
-        &input.screening_response,
+        &input.screening_probe.response,
     )?;
-    if json_contains_key(&input.status_response, "payload_b64")
-        || json_contains_key(&input.screening_response, "payload_b64")
+    if json_contains_key(&input.status_probe.response, "payload_b64")
+        || json_contains_key(&input.screening_probe.response, "payload_b64")
     {
         return Err("runner canary evidence responses must not contain `payload_b64`".to_string());
     }
+
+    let probes = Value::Array(vec![
+        moderation_canary_probe_json("status", &input.status_probe),
+        moderation_canary_probe_json("screen", &input.screening_probe),
+    ]);
 
     let mut output = Map::new();
     output.insert(
@@ -6421,7 +7312,46 @@ fn moderation_runner_canary_evidence_json(
         Value::from("sorafs.moderation.runner.rollout_evidence.v1"),
     );
     output.insert("status".into(), Value::from("verified"));
+    output.insert("synthetic".into(), Value::from(false));
     output.insert("source".into(), Value::from("sorafs_cli"));
+    output.insert(
+        "generated_at_unix".into(),
+        Value::from(input.deployment_context.generated_at_unix),
+    );
+    output.insert(
+        "deployment_id".into(),
+        Value::from(input.deployment_context.deployment_id),
+    );
+    output.insert(
+        "environment".into(),
+        Value::from(input.deployment_context.environment),
+    );
+    output.insert("deployment_context_reviewed".into(), Value::from(true));
+    output.insert(
+        "outbound_network".into(),
+        Value::from("model_engine_none_process_policy_required"),
+    );
+    output.insert(
+        "process_isolation_evidence".into(),
+        Value::Object(Map::from_iter([
+            ("required".into(), Value::from(true)),
+            ("status".into(), Value::from("runtime_verified")),
+            (
+                "enforcement".into(),
+                Value::from(input.process_isolation.enforcement),
+            ),
+            (
+                "attestation_digest_hex".into(),
+                Value::from(hex_encode(input.process_isolation.attestation_digest)),
+            ),
+            (
+                "verified_at_unix".into(),
+                Value::from(input.process_isolation.verified_at_unix),
+            ),
+            ("reviewed".into(), Value::from(true)),
+            ("synthetic".into(), Value::from(false)),
+        ])),
+    );
     output.insert(
         "runner_url".into(),
         Value::from(input.runner_url.to_string()),
@@ -6459,20 +7389,15 @@ fn moderation_runner_canary_evidence_json(
     output.insert("verdict".into(), Value::from(screening.verdict));
     output.insert(
         "evidence_digest_hex".into(),
-        screening
-            .evidence_digest
-            .map(hex_encode)
-            .map(Value::from)
-            .unwrap_or(Value::Null),
+        Value::from(hex_encode(screening.evidence_digest)),
     );
     output.insert(
         "policy_digest_hex".into(),
-        screening
-            .policy_digest
-            .map(hex_encode)
-            .map(Value::from)
-            .unwrap_or(Value::Null),
+        Value::from(hex_encode(screening.policy_digest)),
     );
+    output.insert("probe_count".into(), Value::from(2_u64));
+    output.insert("passed_probe_count".into(), Value::from(2_u64));
+    output.insert("probes".into(), probes);
     output.insert(
         "notes".into(),
         input
@@ -6480,16 +7405,16 @@ fn moderation_runner_canary_evidence_json(
             .map(|value| Value::from(value.to_string()))
             .unwrap_or(Value::Null),
     );
-    output.insert("runner_status".into(), input.status_response);
-    output.insert("screening_result".into(), input.screening_response);
+    output.insert("runner_status".into(), input.status_probe.response);
+    output.insert("screening_result".into(), input.screening_probe.response);
     Ok(Value::Object(output))
 }
 
 struct ModerationRunnerCanaryScreening {
     combined_score_bps: u16,
     verdict: String,
-    evidence_digest: Option<[u8; 32]>,
-    policy_digest: Option<[u8; 32]>,
+    evidence_digest: [u8; 32],
+    policy_digest: [u8; 32],
 }
 
 fn validate_moderation_runner_status_response(
@@ -6503,6 +7428,10 @@ fn validate_moderation_runner_status_response(
     let schema = required_json_string(fields, "schema", context)?;
     if schema != "sorafs.moderation.runner.status.v1" {
         return Err(format!("{context} has unexpected schema `{schema}`"));
+    }
+    let status = required_json_string(fields, "status", context)?;
+    if status != "ready" {
+        return Err(format!("{context} status `{status}` is not `ready`"));
     }
     let manifest_id = parse_fixed_hex::<16>(
         required_json_string(fields, "manifest_id_hex", context)?,
@@ -6529,9 +7458,24 @@ fn validate_moderation_runner_status_response(
         ));
     }
     let outbound = required_json_string(fields, "outbound_network", context)?;
-    if outbound != "disabled" {
+    if outbound != "model_engine_none_process_policy_required" {
         return Err(format!(
-            "{context} outbound_network `{outbound}` is not `disabled`"
+            "{context} outbound_network `{outbound}` is not `model_engine_none_process_policy_required`"
+        ));
+    }
+    let isolation = required_json_string(fields, "process_isolation", context)?;
+    if isolation != "external_runtime_attestation_required" {
+        return Err(format!(
+            "{context} process_isolation `{isolation}` is not `external_runtime_attestation_required`"
+        ));
+    }
+    if fields
+        .get("process_isolation_verified")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err(format!(
+            "{context} must report process_isolation_verified=false; runtime isolation requires external evidence"
         ));
     }
     Ok(())
@@ -6605,11 +7549,15 @@ fn validate_moderation_runner_screening_response(
             "{context} verdict `{verdict}` does not match score-derived verdict `{expected_verdict}`"
         ));
     }
+    let evidence_digest = optional_json_fixed_hex::<32>(fields, "evidence_digest_hex", context)?
+        .ok_or_else(|| format!("{context} requires `evidence_digest_hex`"))?;
+    let policy_digest = optional_json_fixed_hex::<32>(fields, "policy_digest_hex", context)?
+        .ok_or_else(|| format!("{context} requires `policy_digest_hex`"))?;
     Ok(ModerationRunnerCanaryScreening {
         combined_score_bps,
         verdict,
-        evidence_digest: optional_json_fixed_hex::<32>(fields, "evidence_digest_hex", context)?,
-        policy_digest: optional_json_fixed_hex::<32>(fields, "policy_digest_hex", context)?,
+        evidence_digest,
+        policy_digest,
     })
 }
 
@@ -6702,6 +7650,11 @@ fn moderation_committee_run(raw_args: Vec<String>) -> Result<(), String> {
     if result_paths.is_empty() {
         return Err("provide at least one `--result=PATH` for committee aggregation".to_string());
     }
+    if result_paths.len() > MODERATION_COMMITTEE_MAX_RESULTS {
+        return Err(format!(
+            "committee aggregation accepts at most {MODERATION_COMMITTEE_MAX_RESULTS} result files"
+        ));
+    }
     if quorum > result_paths.len() {
         return Err(format!(
             "committee aggregation requires quorum {quorum} but only {} result file(s) were provided",
@@ -6719,7 +7672,10 @@ fn moderation_committee_run(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("manifest validation failed: {err}"))?;
     validate_moderation_local_runner_manifest(&manifest)?;
 
-    let mut inputs = Vec::with_capacity(result_paths.len());
+    let mut inputs = Vec::new();
+    inputs
+        .try_reserve_exact(result_paths.len())
+        .map_err(|error| format!("failed to reserve bounded committee inputs: {error}"))?;
     for path in &result_paths {
         inputs.push(load_moderation_committee_input(path, &manifest)?);
     }
@@ -6738,12 +7694,168 @@ fn moderation_committee_run(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+fn moderation_committee_authenticated_run(raw_args: Vec<String>) -> Result<(), String> {
+    if raw_args.is_empty() {
+        return Err(moderation_usage());
+    }
+    let context = "sorafs_cli moderation committee-authenticated-run";
+    let mut manifest_path = None;
+    let mut format = String::from("json");
+    let mut trust_policy_path = None;
+    let mut trust_policy_format = String::from("norito");
+    let mut trust_anchors = BTreeSet::new();
+    let mut minimum_governance_quorum = None;
+    let mut result_paths = Vec::new();
+    let mut provenance_path = None;
+    let mut provenance_log_id = None;
+    let mut norito_out = None;
+    let mut json_out = None;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--trust-policy" => trust_policy_path = Some(PathBuf::from(value)),
+            "--trust-policy-format" => trust_policy_format = value.to_ascii_lowercase(),
+            "--trust-anchor" => {
+                let anchor = parse_moderation_trust_anchor(value, context)?;
+                if !trust_anchors.insert(anchor) {
+                    return Err("duplicate `--trust-anchor` is forbidden".to_string());
+                }
+            }
+            "--minimum-governance-quorum" => {
+                let parsed = parse_u64_arg(key, value, context)?;
+                let parsed = u16::try_from(parsed)
+                    .map_err(|_| "`--minimum-governance-quorum` exceeds u16".to_string())?;
+                if parsed == 0 {
+                    return Err(
+                        "`--minimum-governance-quorum` must be greater than zero".to_string()
+                    );
+                }
+                minimum_governance_quorum = Some(parsed);
+            }
+            "--result" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err("`--result` path must not be empty".to_string());
+                }
+                if result_paths.len() >= MODERATION_COMMITTEE_MAX_RESULTS {
+                    return Err(format!(
+                        "authenticated committee accepts at most {MODERATION_COMMITTEE_MAX_RESULTS} results"
+                    ));
+                }
+                result_paths.push(PathBuf::from(trimmed));
+            }
+            "--provenance" => provenance_path = Some(PathBuf::from(value)),
+            "--provenance-log-id" => {
+                provenance_log_id = Some(parse_fixed_hex::<16>(
+                    value,
+                    "--provenance-log-id",
+                    context,
+                )?);
+            }
+            "--norito-out" => norito_out = Some(PathBuf::from(value)),
+            "--json-out" => json_out = Some(PathBuf::from(value)),
+            _ => return Err(format!("unrecognised option `{key}` for `{context}`")),
+        }
+    }
+
+    let manifest_path = manifest_path
+        .ok_or_else(|| format!("missing required `--manifest=PATH` for `{context}`"))?;
+    let trust_policy_path = trust_policy_path
+        .ok_or_else(|| format!("missing required `--trust-policy=PATH` for `{context}`"))?;
+    if trust_anchors.is_empty() {
+        return Err(format!(
+            "provide at least one external `--trust-anchor=PUBLIC_KEY` for `{context}`"
+        ));
+    }
+    let minimum_governance_quorum = minimum_governance_quorum.ok_or_else(|| {
+        format!("missing required `--minimum-governance-quorum=N` for `{context}`")
+    })?;
+    if result_paths.is_empty() {
+        return Err(format!(
+            "provide at least one canonical `--result=SIGNED_RESULT.to` for `{context}`"
+        ));
+    }
+    let provenance_path = provenance_path
+        .ok_or_else(|| format!("missing required `--provenance=PATH` for `{context}`"))?;
+    let provenance_log_id = provenance_log_id
+        .ok_or_else(|| format!("missing required `--provenance-log-id=HEX16` for `{context}`"))?;
+    if provenance_log_id == [0; 16] {
+        return Err("`--provenance-log-id` must be non-zero".to_string());
+    }
+
+    let now_unix = moderation_trusted_now_unix()?;
+    let manifest = load_moderation_repro_manifest(&manifest_path, &format, context)?;
+    let policy = load_moderation_trust_policy(&trust_policy_path, &trust_policy_format, context)?;
+    let mut results = Vec::new();
+    results
+        .try_reserve_exact(result_paths.len())
+        .map_err(|error| format!("failed to reserve bounded signed result set: {error}"))?;
+    for path in &result_paths {
+        results.push(load_moderation_signed_result(path, context)?);
+    }
+    let aggregate = ModerationCommitteeAggregateV1::aggregate_authenticated(
+        &manifest,
+        &policy,
+        &trust_anchors,
+        minimum_governance_quorum,
+        &results,
+        now_unix,
+    )
+    .map_err(|error| format!("authenticated moderation aggregation failed: {error}"))?;
+    ensure_parent_dir(&provenance_path)?;
+    let provenance = ModerationProvenanceStoreV1::open(&provenance_path, provenance_log_id)
+        .map_err(|error| format!("failed to open moderation provenance: {error}"))?;
+    let provenance_head = provenance
+        .append_authenticated_aggregate(
+            &manifest,
+            &policy,
+            &trust_anchors,
+            minimum_governance_quorum,
+            &results,
+            aggregate.clone(),
+            now_unix,
+        )
+        .map_err(|error| format!("failed to persist authenticated aggregate: {error}"))?;
+    let canonical = to_bytes(&aggregate)
+        .map_err(|error| format!("failed to encode authenticated aggregate: {error}"))?;
+    if u64::try_from(canonical.len())
+        .ok()
+        .is_none_or(|length| length > MODERATION_AUTHENTICATED_AGGREGATE_MAX_BYTES)
+    {
+        return Err("authenticated aggregate exceeds its hard encoded bound".to_string());
+    }
+    if let Some(path) = norito_out {
+        write_bytes(&path, &canonical)?;
+    }
+    let output =
+        moderation_authenticated_aggregate_summary_json(&aggregate, &canonical, provenance_head)?;
+    let rendered = to_string_pretty(&output)
+        .map_err(|error| format!("failed to render authenticated aggregate: {error}"))?;
+    if let Some(path) = json_out {
+        write_text(&path, format!("{rendered}\n").as_bytes())?;
+    } else {
+        println!("{rendered}");
+    }
+    Ok(())
+}
+
 fn load_moderation_committee_input(
     path: &Path,
     manifest: &ModerationReproManifestV1,
 ) -> Result<ModerationCommitteeInput, String> {
-    let bytes =
-        fs::read(path).map_err(|err| format!("failed to read `{}`: {err}", path.display()))?;
+    let bytes = read_file_bounded(
+        path,
+        MODERATION_COMMITTEE_MAX_RESULT_BYTES,
+        "moderation committee result",
+    )?;
     let value: Value = from_slice(&bytes).map_err(|err| {
         format!(
             "failed to parse committee result JSON `{}`: {err}",
@@ -6769,6 +7881,11 @@ fn parse_moderation_committee_input_value(
     }
 
     let subject = required_json_string(fields, "subject", &context)?.to_string();
+    validate_moderation_request_text(
+        &subject,
+        MODERATION_RUNNER_MAX_SUBJECT_BYTES,
+        "moderation committee result `subject`",
+    )?;
     let subject_digest_hex = required_json_string(fields, "subject_digest_hex", &context)?;
     let subject_digest = parse_fixed_hex::<32>(subject_digest_hex, "subject_digest_hex", &context)?;
     let manifest_id_hex = required_json_string(fields, "manifest_id_hex", &context)?;
@@ -6811,6 +7928,15 @@ fn parse_moderation_committee_input_value(
         ));
     }
 
+    let notes = optional_json_string(fields, "notes", &context)?.map(ToOwned::to_owned);
+    if let Some(notes) = notes.as_deref() {
+        validate_moderation_request_text(
+            notes,
+            MODERATION_RUNNER_MAX_NOTES_BYTES,
+            "moderation committee result `notes`",
+        )?;
+    }
+
     Ok(ModerationCommitteeInput {
         source_path: PathBuf::from(source_label),
         subject,
@@ -6822,7 +7948,7 @@ fn parse_moderation_committee_input_value(
         screened_at_unix: optional_json_u64(fields, "screened_at_unix", &context)?,
         evidence_digest: optional_json_fixed_hex::<32>(fields, "evidence_digest_hex", &context)?,
         policy_digest: optional_json_fixed_hex::<32>(fields, "policy_digest_hex", &context)?,
-        notes: optional_json_string(fields, "notes", &context)?.map(ToOwned::to_owned),
+        notes,
     })
 }
 
@@ -6835,6 +7961,11 @@ fn moderation_committee_aggregate_json(
     if inputs.is_empty() {
         return Err("committee aggregation requires at least one result".to_string());
     }
+    if inputs.len() > MODERATION_COMMITTEE_MAX_RESULTS {
+        return Err(format!(
+            "committee aggregation accepts at most {MODERATION_COMMITTEE_MAX_RESULTS} results"
+        ));
+    }
     if quorum == 0 {
         return Err("committee aggregation quorum must be greater than zero".to_string());
     }
@@ -6843,6 +7974,13 @@ fn moderation_committee_aggregate_json(
             "committee aggregation requires quorum {quorum} but only {} result file(s) were provided",
             inputs.len()
         ));
+    }
+    if let Some(notes) = notes {
+        validate_moderation_request_text(
+            notes,
+            MODERATION_RUNNER_MAX_NOTES_BYTES,
+            "moderation committee `notes`",
+        )?;
     }
 
     let first = &inputs[0];
@@ -7038,17 +8176,10 @@ fn moderation_committee_serve(raw_args: Vec<String>) -> Result<(), String> {
                 listen = trimmed.to_string();
             }
             "--max-body-bytes" => {
-                let parsed = parse_u64_arg(
-                    "--max-body-bytes",
+                max_body_bytes = parse_moderation_max_body_bytes(
                     value,
                     "sorafs_cli moderation committee-serve",
                 )?;
-                max_body_bytes = usize::try_from(parsed).map_err(|_| {
-                    "`--max-body-bytes` does not fit into this platform's usize".to_string()
-                })?;
-                if max_body_bytes == 0 {
-                    return Err("`--max-body-bytes` must be greater than zero".to_string());
-                }
             }
             _ => {
                 return Err(format!(
@@ -7074,7 +8205,9 @@ fn moderation_committee_serve(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("manifest validation failed: {err}"))?;
     validate_moderation_local_runner_manifest(&manifest)?;
 
-    let listener = TcpListener::bind(&listen).map_err(|err| {
+    let listen_addr =
+        validate_moderation_loopback_listen(&listen, "sorafs_cli moderation committee-serve")?;
+    let listener = TcpListener::bind(listen_addr).map_err(|err| {
         format!("failed to bind moderation committee service at `{listen}`: {err}")
     })?;
     let local_addr = listener
@@ -7083,6 +8216,7 @@ fn moderation_committee_serve(raw_args: Vec<String>) -> Result<(), String> {
         .unwrap_or_else(|_| listen.clone());
     let service = Arc::new(ModerationCommitteeService {
         manifest,
+        authenticated: None,
         manifest_source: manifest_path.display().to_string(),
         quorum,
         max_body_bytes,
@@ -7092,11 +8226,26 @@ fn moderation_committee_serve(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render committee service status JSON: {err}"))?;
     println!("{rendered}");
 
+    let active_connections = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
         match incoming {
-            Ok(stream) => {
+            Ok(mut stream) => {
+                let Some(active_permit) = moderation_try_acquire_permit(
+                    &active_connections,
+                    MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS,
+                ) else {
+                    let response = moderation_committee_error_response(
+                        503,
+                        "Service Unavailable",
+                        "moderation committee connection limit reached",
+                    );
+                    let _ = stream.write_all(&response);
+                    let _ = stream.flush();
+                    continue;
+                };
                 let service = Arc::clone(&service);
                 thread::spawn(move || {
+                    let _active_permit = active_permit;
                     if let Err(err) =
                         moderation_committee_handle_stream(stream, &service, max_body_bytes)
                     {
@@ -7111,11 +8260,178 @@ fn moderation_committee_serve(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+fn moderation_committee_authenticated_serve(raw_args: Vec<String>) -> Result<(), String> {
+    if raw_args.is_empty() {
+        return Err(moderation_usage());
+    }
+    let context = "sorafs_cli moderation committee-authenticated-serve";
+    let mut manifest_path = None;
+    let mut format = String::from("json");
+    let mut trust_policy_path = None;
+    let mut trust_policy_format = String::from("norito");
+    let mut trust_anchors = BTreeSet::new();
+    let mut minimum_governance_quorum = None;
+    let mut provenance_path = None;
+    let mut provenance_log_id = None;
+    let mut listen = String::from(MODERATION_COMMITTEE_DEFAULT_LISTEN);
+    let mut max_body_bytes = MODERATION_RUNNER_DEFAULT_MAX_BODY_BYTES;
+
+    for arg in raw_args {
+        if arg == "--help" || arg == "-h" {
+            return Err(moderation_usage());
+        }
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--format" => format = value.to_ascii_lowercase(),
+            "--trust-policy" => trust_policy_path = Some(PathBuf::from(value)),
+            "--trust-policy-format" => trust_policy_format = value.to_ascii_lowercase(),
+            "--trust-anchor" => {
+                let anchor = parse_moderation_trust_anchor(value, context)?;
+                if !trust_anchors.insert(anchor) {
+                    return Err("duplicate `--trust-anchor` is forbidden".to_string());
+                }
+            }
+            "--minimum-governance-quorum" => {
+                let parsed = parse_u64_arg(key, value, context)?;
+                let parsed = u16::try_from(parsed)
+                    .map_err(|_| "`--minimum-governance-quorum` exceeds u16".to_string())?;
+                if parsed == 0 {
+                    return Err(
+                        "`--minimum-governance-quorum` must be greater than zero".to_string()
+                    );
+                }
+                minimum_governance_quorum = Some(parsed);
+            }
+            "--provenance" => provenance_path = Some(PathBuf::from(value)),
+            "--provenance-log-id" => {
+                provenance_log_id = Some(parse_fixed_hex::<16>(
+                    value,
+                    "--provenance-log-id",
+                    context,
+                )?);
+            }
+            "--listen" => {
+                if value.trim().is_empty() {
+                    return Err("`--listen` must not be empty".to_string());
+                }
+                listen = value.to_string();
+            }
+            "--max-body-bytes" => max_body_bytes = parse_moderation_max_body_bytes(value, context)?,
+            _ => return Err(format!("unrecognised option `{key}` for `{context}`")),
+        }
+    }
+
+    let manifest_path = manifest_path
+        .ok_or_else(|| format!("missing required `--manifest=PATH` for `{context}`"))?;
+    let trust_policy_path = trust_policy_path
+        .ok_or_else(|| format!("missing required `--trust-policy=PATH` for `{context}`"))?;
+    if trust_anchors.is_empty() {
+        return Err(format!(
+            "provide at least one external `--trust-anchor=PUBLIC_KEY` for `{context}`"
+        ));
+    }
+    let minimum_governance_quorum = minimum_governance_quorum.ok_or_else(|| {
+        format!("missing required `--minimum-governance-quorum=N` for `{context}`")
+    })?;
+    let provenance_path = provenance_path
+        .ok_or_else(|| format!("missing required `--provenance=PATH` for `{context}`"))?;
+    let provenance_log_id = provenance_log_id
+        .ok_or_else(|| format!("missing required `--provenance-log-id=HEX16` for `{context}`"))?;
+    if provenance_log_id == [0; 16] {
+        return Err("`--provenance-log-id` must be non-zero".to_string());
+    }
+
+    let listen_addr = validate_moderation_loopback_listen(&listen, context)?;
+    let now_unix = moderation_trusted_now_unix()?;
+    let manifest = load_moderation_repro_manifest(&manifest_path, &format, context)?;
+    let policy = load_moderation_trust_policy(&trust_policy_path, &trust_policy_format, context)?;
+    policy
+        .validate_with_trust_anchors(
+            &manifest,
+            &trust_anchors,
+            minimum_governance_quorum,
+            now_unix,
+        )
+        .map_err(|error| format!("moderation trust policy validation failed: {error}"))?;
+    ensure_parent_dir(&provenance_path)?;
+    let provenance = ModerationProvenanceStoreV1::open(&provenance_path, provenance_log_id)
+        .map_err(|error| format!("failed to open moderation provenance: {error}"))?;
+    let quorum = usize::from(policy.body.result_quorum);
+    let listener = TcpListener::bind(listen_addr).map_err(|error| {
+        format!("failed to bind authenticated moderation committee at `{listen}`: {error}")
+    })?;
+    let local_addr = listener
+        .local_addr()
+        .map(|address| address.to_string())
+        .unwrap_or_else(|_| listen.clone());
+    let service = Arc::new(ModerationCommitteeService {
+        manifest,
+        authenticated: Some(ModerationAuthenticatedCommitteeState {
+            trust_policy: policy,
+            trust_anchors,
+            minimum_governance_quorum,
+            provenance,
+            transaction_guard: Mutex::new(()),
+        }),
+        manifest_source: manifest_path.display().to_string(),
+        quorum,
+        max_body_bytes,
+    });
+    let status = moderation_committee_status_json(&service, "listening", Some(&local_addr));
+    let rendered = to_string_pretty(&status)
+        .map_err(|error| format!("failed to render authenticated committee status: {error}"))?;
+    println!("{rendered}");
+
+    let active_connections = Arc::new(AtomicUsize::new(0));
+    for incoming in listener.incoming() {
+        match incoming {
+            Ok(mut stream) => {
+                let Some(active_permit) = moderation_try_acquire_permit(
+                    &active_connections,
+                    MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS,
+                ) else {
+                    let response = moderation_committee_error_response(
+                        503,
+                        "Service Unavailable",
+                        "authenticated moderation committee connection limit reached",
+                    );
+                    let _ = stream.write_all(&response);
+                    let _ = stream.flush();
+                    continue;
+                };
+                let service = Arc::clone(&service);
+                thread::spawn(move || {
+                    let _active_permit = active_permit;
+                    if let Err(error) =
+                        moderation_committee_handle_stream(stream, &service, max_body_bytes)
+                    {
+                        eprintln!("authenticated moderation committee connection failed: {error}");
+                    }
+                });
+            }
+            Err(error) => eprintln!("authenticated moderation committee accept failed: {error}"),
+        }
+    }
+    Ok(())
+}
+
 struct ModerationCommitteeService {
     manifest: ModerationReproManifestV1,
+    authenticated: Option<ModerationAuthenticatedCommitteeState>,
     manifest_source: String,
     quorum: usize,
     max_body_bytes: usize,
+}
+
+struct ModerationAuthenticatedCommitteeState {
+    trust_policy: ModerationTrustPolicyV1,
+    trust_anchors: BTreeSet<PublicKey>,
+    minimum_governance_quorum: u16,
+    provenance: ModerationProvenanceStoreV1,
+    transaction_guard: Mutex<()>,
 }
 
 fn moderation_committee_handle_stream(
@@ -7123,21 +8439,30 @@ fn moderation_committee_handle_stream(
     service: &ModerationCommitteeService,
     max_body_bytes: usize,
 ) -> io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let mut request = Vec::new();
     let mut buffer = [0_u8; 4096];
+    let hard_limit = moderation_http_hard_limit(max_body_bytes, "committee")?;
     loop {
         let count = stream.read(&mut buffer)?;
         if count == 0 {
             break;
         }
-        request.extend_from_slice(&buffer[..count]);
-        if request.len() > max_body_bytes.saturating_add(8192) {
+        let remaining = hard_limit.saturating_sub(request.len());
+        let accepted = count.min(remaining);
+        request.try_reserve(accepted).map_err(|_| {
+            io::Error::new(io::ErrorKind::OutOfMemory, "HTTP request allocation failed")
+        })?;
+        request.extend_from_slice(&buffer[..accepted]);
+        if accepted < count || request.len() >= hard_limit {
             break;
         }
         if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request)
-            && (content_len > max_body_bytes || request.len() >= header_len + content_len)
+            && (content_len > max_body_bytes
+                || header_len
+                    .checked_add(content_len)
+                    .is_some_and(|body_end| request.len() >= body_end))
         {
             break;
         }
@@ -7164,6 +8489,15 @@ fn moderation_committee_route_request(
 ) -> Vec<u8> {
     match (request.method, request.path) {
         ("GET", "/healthz") | ("GET", "/v1/sorafs/moderation/committee/status") => {
+            if let Some(state) = &service.authenticated
+                && let Err(error) = state.provenance.snapshot()
+            {
+                return moderation_committee_error_response(
+                    503,
+                    "Service Unavailable",
+                    &format!("authenticated committee provenance is unhealthy: {error}"),
+                );
+            }
             moderation_committee_json_response(
                 200,
                 "OK",
@@ -7171,9 +8505,37 @@ fn moderation_committee_route_request(
             )
         }
         ("POST", "/v1/sorafs/moderation/committee/aggregate") => {
+            if service.authenticated.is_some() {
+                return moderation_committee_error_response(
+                    409,
+                    "Conflict",
+                    "unsigned aggregation is disabled on the authenticated committee; use /v1/sorafs/moderation/committee/aggregate-authenticated",
+                );
+            }
             match moderation_committee_aggregate_request_json(service, request.body) {
                 Ok(value) => moderation_committee_json_response(200, "OK", &value),
                 Err(message) => moderation_committee_error_response(400, "Bad Request", &message),
+            }
+        }
+        ("POST", "/v1/sorafs/moderation/committee/aggregate-authenticated") => {
+            if service.authenticated.is_none() {
+                return moderation_committee_error_response(
+                    404,
+                    "Not Found",
+                    "authenticated aggregation is not configured on this diagnostic committee",
+                );
+            }
+            match moderation_committee_authenticated_request_json(service, request.body) {
+                Ok(value) => moderation_committee_json_response(200, "OK", &value),
+                Err(ModerationAuthenticatedCommitteeRequestError::BadRequest(message)) => {
+                    moderation_committee_error_response(400, "Bad Request", &message)
+                }
+                Err(ModerationAuthenticatedCommitteeRequestError::Unavailable(message)) => {
+                    moderation_committee_error_response(503, "Service Unavailable", &message)
+                }
+                Err(ModerationAuthenticatedCommitteeRequestError::Internal(message)) => {
+                    moderation_committee_error_response(500, "Internal Server Error", &message)
+                }
             }
         }
         ("GET", _) | ("POST", _) => moderation_committee_error_response(
@@ -7187,6 +8549,185 @@ fn moderation_committee_route_request(
             "SoraFS moderation committee supports GET and POST only",
         ),
     }
+}
+
+#[derive(Debug)]
+enum ModerationAuthenticatedCommitteeRequestError {
+    BadRequest(String),
+    Unavailable(String),
+    Internal(String),
+}
+
+fn moderation_committee_authenticated_request_json(
+    service: &ModerationCommitteeService,
+    body: &[u8],
+) -> Result<Value, ModerationAuthenticatedCommitteeRequestError> {
+    let bad_request = ModerationAuthenticatedCommitteeRequestError::BadRequest;
+    if body.is_empty() {
+        return Err(bad_request(
+            "authenticated committee request body must not be empty".to_string(),
+        ));
+    }
+    let value: Value = from_slice(body).map_err(|error| {
+        bad_request(format!(
+            "failed to parse authenticated committee request JSON: {error}"
+        ))
+    })?;
+    if json_contains_key(&value, "payload_b64") {
+        return Err(bad_request(
+            "authenticated committee requests must not contain payload bytes".to_string(),
+        ));
+    }
+    let fields = value.as_object().ok_or_else(|| {
+        bad_request("authenticated committee request must be a JSON object".to_string())
+    })?;
+    if let Some(field) = fields
+        .keys()
+        .find(|field| field.as_str() != "signed_results_norito_b64")
+    {
+        return Err(bad_request(format!(
+            "authenticated committee request contains unsupported field `{field}`"
+        )));
+    }
+    let encoded_results = fields
+        .get("signed_results_norito_b64")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            bad_request(
+                "authenticated committee request requires array `signed_results_norito_b64`"
+                    .to_string(),
+            )
+        })?;
+    if encoded_results.is_empty() || encoded_results.len() > MODERATION_COMMITTEE_MAX_RESULTS {
+        return Err(bad_request(format!(
+            "authenticated committee accepts 1..={MODERATION_COMMITTEE_MAX_RESULTS} signed results"
+        )));
+    }
+    let result_limit = usize::try_from(MODERATION_SIGNED_RESULT_MAX_BYTES).map_err(|_| {
+        ModerationAuthenticatedCommitteeRequestError::Internal(
+            "signed result bound does not fit usize".to_string(),
+        )
+    })?;
+    let padded_limit = result_limit.checked_add(2).ok_or_else(|| {
+        ModerationAuthenticatedCommitteeRequestError::Internal(
+            "signed result bound overflows usize".to_string(),
+        )
+    })?;
+    let mut results = Vec::new();
+    results
+        .try_reserve_exact(encoded_results.len())
+        .map_err(|error| {
+            ModerationAuthenticatedCommitteeRequestError::Unavailable(format!(
+                "failed to reserve bounded authenticated result set: {error}"
+            ))
+        })?;
+    for (index, encoded) in encoded_results.iter().enumerate() {
+        let encoded = encoded.as_str().ok_or_else(|| {
+            bad_request(format!(
+                "signed_results_norito_b64[{index}] must be a base64 string"
+            ))
+        })?;
+        let decoded_capacity = base64::decoded_len_estimate(encoded.len());
+        if decoded_capacity > padded_limit {
+            return Err(bad_request(format!(
+                "signed_results_norito_b64[{index}] can decode beyond the {result_limit}-byte bound"
+            )));
+        }
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(decoded_capacity).map_err(|error| {
+            ModerationAuthenticatedCommitteeRequestError::Unavailable(format!(
+                "failed to reserve signed result {index}: {error}"
+            ))
+        })?;
+        bytes.resize(decoded_capacity, 0);
+        let decoded = BASE64_STANDARD
+            .decode_slice(encoded, &mut bytes)
+            .map_err(|error| {
+                bad_request(format!(
+                    "signed_results_norito_b64[{index}] is invalid base64: {error}"
+                ))
+            })?;
+        bytes.truncate(decoded);
+        results.push(
+            decode_moderation_signed_result(&bytes, &format!("at request index {index}"))
+                .map_err(bad_request)?,
+        );
+    }
+
+    let state = service.authenticated.as_ref().ok_or_else(|| {
+        ModerationAuthenticatedCommitteeRequestError::Internal(
+            "authenticated committee state disappeared after route selection".to_string(),
+        )
+    })?;
+    let _transaction = state
+        .transaction_guard
+        .try_lock()
+        .map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => {
+                ModerationAuthenticatedCommitteeRequestError::Unavailable(
+                    "authenticated committee already has an in-flight transaction".to_string(),
+                )
+            }
+            std::sync::TryLockError::Poisoned(_) => {
+                ModerationAuthenticatedCommitteeRequestError::Internal(
+                    "authenticated committee transaction lock is poisoned".to_string(),
+                )
+            }
+        })?;
+    let now_unix = moderation_trusted_now_unix()
+        .map_err(ModerationAuthenticatedCommitteeRequestError::Internal)?;
+    state
+        .trust_policy
+        .validate_with_trust_anchors(
+            &service.manifest,
+            &state.trust_anchors,
+            state.minimum_governance_quorum,
+            now_unix,
+        )
+        .map_err(|error| {
+            ModerationAuthenticatedCommitteeRequestError::Unavailable(error.to_string())
+        })?;
+    let aggregate = ModerationCommitteeAggregateV1::aggregate_authenticated(
+        &service.manifest,
+        &state.trust_policy,
+        &state.trust_anchors,
+        state.minimum_governance_quorum,
+        &results,
+        now_unix,
+    )
+    .map_err(|error| ModerationAuthenticatedCommitteeRequestError::BadRequest(error.to_string()))?;
+    let provenance_head = state
+        .provenance
+        .append_authenticated_aggregate(
+            &service.manifest,
+            &state.trust_policy,
+            &state.trust_anchors,
+            state.minimum_governance_quorum,
+            &results,
+            aggregate.clone(),
+            now_unix,
+        )
+        .map_err(|error| match error {
+            ModerationProvenanceStoreError::Locked(_) => {
+                ModerationAuthenticatedCommitteeRequestError::Unavailable(error.to_string())
+            }
+            _ => ModerationAuthenticatedCommitteeRequestError::Internal(error.to_string()),
+        })?;
+    let canonical = to_bytes(&aggregate).map_err(|error| {
+        ModerationAuthenticatedCommitteeRequestError::Internal(format!(
+            "failed to encode authenticated aggregate: {error}"
+        ))
+    })?;
+    if u64::try_from(canonical.len())
+        .ok()
+        .is_none_or(|length| length > MODERATION_AUTHENTICATED_AGGREGATE_MAX_BYTES)
+    {
+        return Err(ModerationAuthenticatedCommitteeRequestError::Internal(
+            "authenticated aggregate exceeds its hard encoded bound".to_string(),
+        ));
+    }
+    moderation_authenticated_aggregate_summary_json(&aggregate, &canonical, provenance_head)
+        .map_err(ModerationAuthenticatedCommitteeRequestError::Internal)
 }
 
 fn moderation_committee_aggregate_request_json(
@@ -7219,8 +8760,16 @@ fn moderation_committee_aggregate_request_json(
             "moderation committee aggregate request `results` must not be empty".to_string(),
         );
     }
+    if results.len() > MODERATION_COMMITTEE_MAX_RESULTS {
+        return Err(format!(
+            "moderation committee aggregate request accepts at most {MODERATION_COMMITTEE_MAX_RESULTS} results"
+        ));
+    }
     let notes = optional_json_string(fields, "notes", "moderation committee aggregate request")?;
-    let mut inputs = Vec::with_capacity(results.len());
+    let mut inputs = Vec::new();
+    inputs
+        .try_reserve_exact(results.len())
+        .map_err(|error| format!("failed to reserve bounded committee inputs: {error}"))?;
     for (idx, result) in results.iter().enumerate() {
         inputs.push(parse_moderation_committee_input_value(
             &format!("request.results[{idx}]"),
@@ -7266,7 +8815,83 @@ fn moderation_committee_status_json(
         "max_body_bytes".into(),
         Value::from(service.max_body_bytes as u64),
     );
-    output.insert("outbound_network".into(), Value::from("disabled"));
+    output.insert(
+        "outbound_network".into(),
+        Value::from("network_capable_process_policy_required"),
+    );
+    output.insert(
+        "process_isolation".into(),
+        Value::from("external_runtime_attestation_required"),
+    );
+    output.insert("process_isolation_verified".into(), Value::from(false));
+    if let Some(state) = &service.authenticated {
+        let policy = &state.trust_policy;
+        let snapshot = state.provenance.snapshot().ok();
+        output.insert(
+            "trust_boundary".into(),
+            Value::from("externally_anchored_authenticated_committee"),
+        );
+        output.insert("authenticated_results".into(), Value::from(true));
+        output.insert("unsigned_aggregation_enabled".into(), Value::from(false));
+        output.insert(
+            "authenticated_aggregation_endpoint".into(),
+            Value::from("/v1/sorafs/moderation/committee/aggregate-authenticated"),
+        );
+        output.insert(
+            "trust_policy_id_hex".into(),
+            Value::from(hex_encode(policy.body.policy_id)),
+        );
+        output.insert(
+            "trust_policy_digest_hex".into(),
+            Value::from(hex_encode(policy.body.policy_digest)),
+        );
+        output.insert(
+            "minimum_governance_quorum".into(),
+            Value::from(u64::from(state.minimum_governance_quorum)),
+        );
+        output.insert(
+            "trusted_governance_anchor_count".into(),
+            Value::from(
+                u64::try_from(state.trust_anchors.len())
+                    .expect("bounded governance anchor count fits u64"),
+            ),
+        );
+        output.insert(
+            "provenance_path".into(),
+            Value::from(state.provenance.path().display().to_string()),
+        );
+        output.insert(
+            "provenance_verified".into(),
+            Value::from(snapshot.is_some()),
+        );
+        output.insert(
+            "provenance_entry_count".into(),
+            snapshot
+                .as_ref()
+                .map(|value| {
+                    Value::from(
+                        u64::try_from(value.entries.len())
+                            .expect("bounded provenance entry count fits u64"),
+                    )
+                })
+                .unwrap_or(Value::Null),
+        );
+        output.insert(
+            "provenance_head_digest_hex".into(),
+            snapshot
+                .map(|value| Value::from(hex_encode(value.head_digest)))
+                .unwrap_or(Value::Null),
+        );
+        output.insert("max_authenticated_in_flight".into(), Value::from(1_u64));
+    } else {
+        output.insert(
+            "trust_boundary".into(),
+            Value::from("unsigned_diagnostic_only"),
+        );
+        output.insert("authenticated_results".into(), Value::from(false));
+        output.insert("unsigned_aggregation_enabled".into(), Value::from(true));
+        output.insert("provenance_verified".into(), Value::from(false));
+    }
     output.insert(
         "listen".into(),
         listen
@@ -7302,6 +8927,14 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
     let mut committee_url: Option<String> = None;
     let mut quorum: Option<usize> = None;
     let mut result_paths: Vec<PathBuf> = Vec::new();
+    let mut generated_at_unix: Option<u64> = None;
+    let mut deployment_id: Option<String> = None;
+    let mut environment: Option<String> = None;
+    let mut deployment_context_reviewed = false;
+    let mut process_isolation_enforcement: Option<&'static str> = None;
+    let mut process_isolation_attestation_digest: Option<[u8; 32]> = None;
+    let mut process_isolation_verified_at: Option<u64> = None;
+    let mut process_isolation_reviewed = false;
     let mut checked_at_unix: Option<u64> = None;
     let mut notes: Option<String> = None;
     let mut timeout_ms = 30_000_u64;
@@ -7341,6 +8974,78 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
                     return Err("`--result` path must not be empty".to_string());
                 }
                 result_paths.push(PathBuf::from(trimmed));
+            }
+            "--generated-at-unix" => {
+                let generated = parse_u64_arg(
+                    "--generated-at-unix",
+                    value,
+                    "sorafs_cli moderation committee-canary",
+                )?;
+                if generated == 0 {
+                    return Err("`--generated-at-unix` must be greater than zero".to_string());
+                }
+                generated_at_unix = Some(generated);
+            }
+            "--deployment-id" => {
+                deployment_id = Some(moderation_canary_deployment_id(value)?);
+            }
+            "--environment" => {
+                environment = Some(moderation_canary_environment(value)?);
+            }
+            "--deployment-context-reviewed" => {
+                if value != "true" {
+                    return Err(
+                        "`--deployment-context-reviewed` must be exactly `true`".to_string()
+                    );
+                }
+                deployment_context_reviewed = true;
+            }
+            "--process-isolation-enforcement" => {
+                process_isolation_enforcement = Some(match value {
+                    "systemd_ip_filter" => "systemd_ip_filter",
+                    "container_network_policy" => "container_network_policy",
+                    "host_firewall" => "host_firewall",
+                    _ => {
+                        return Err("`--process-isolation-enforcement` must be one of `systemd_ip_filter`, `container_network_policy`, or `host_firewall`".to_string());
+                    }
+                });
+            }
+            "--process-isolation-attestation-digest" => {
+                if value.len() != 64
+                    || !value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err("`--process-isolation-attestation-digest` must be exactly 64 lowercase hexadecimal characters".to_string());
+                }
+                let digest = parse_fixed_hex::<32>(
+                    value,
+                    "--process-isolation-attestation-digest",
+                    "sorafs_cli moderation committee-canary",
+                )?;
+                if moderation_digest_is_placeholder(&digest) {
+                    return Err("`--process-isolation-attestation-digest` must not be a zero/repeated placeholder digest".to_string());
+                }
+                process_isolation_attestation_digest = Some(digest);
+            }
+            "--process-isolation-verified-at" => {
+                let verified_at = parse_u64_arg(
+                    "--process-isolation-verified-at",
+                    value,
+                    "sorafs_cli moderation committee-canary",
+                )?;
+                if verified_at == 0 {
+                    return Err(
+                        "`--process-isolation-verified-at` must be greater than zero".to_string(),
+                    );
+                }
+                process_isolation_verified_at = Some(verified_at);
+            }
+            "--process-isolation-reviewed" => {
+                if value != "true" {
+                    return Err("`--process-isolation-reviewed` must be exactly `true`".to_string());
+                }
+                process_isolation_reviewed = true;
             }
             "--checked-at" => {
                 checked_at_unix = Some(parse_u64_arg(
@@ -7388,13 +9093,72 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
     if result_paths.is_empty() {
         return Err("provide at least one `--result=PATH` for committee canary".to_string());
     }
+    if result_paths.len() > MODERATION_COMMITTEE_MAX_RESULTS {
+        return Err(format!(
+            "committee canary accepts at most {MODERATION_COMMITTEE_MAX_RESULTS} result files"
+        ));
+    }
     if quorum > result_paths.len() {
         return Err(format!(
             "committee canary requires quorum {quorum} but only {} result file(s) were provided",
             result_paths.len()
         ));
     }
-    let checked_at_unix = checked_at_unix.unwrap_or_else(moderation_runner_canary_now_unix);
+    let generated_at_unix = generated_at_unix.ok_or_else(|| {
+        "missing required `--generated-at-unix=UNIX_SECS` for `sorafs_cli moderation committee-canary`"
+            .to_string()
+    })?;
+    let deployment_id = deployment_id.ok_or_else(|| {
+        "missing required `--deployment-id=ID` for `sorafs_cli moderation committee-canary`"
+            .to_string()
+    })?;
+    let environment = environment.ok_or_else(|| {
+        "missing required `--environment=ENV` for `sorafs_cli moderation committee-canary`"
+            .to_string()
+    })?;
+    if !deployment_context_reviewed {
+        return Err(
+            "missing required `--deployment-context-reviewed=true` for `sorafs_cli moderation committee-canary`"
+                .to_string(),
+        );
+    }
+    let process_isolation_enforcement = process_isolation_enforcement.ok_or_else(|| {
+        "missing required `--process-isolation-enforcement=KIND` for `sorafs_cli moderation committee-canary`"
+            .to_string()
+    })?;
+    let process_isolation_attestation_digest = process_isolation_attestation_digest.ok_or_else(|| {
+        "missing required `--process-isolation-attestation-digest=HEX` for `sorafs_cli moderation committee-canary`"
+            .to_string()
+    })?;
+    let process_isolation_verified_at = process_isolation_verified_at.ok_or_else(|| {
+        "missing required `--process-isolation-verified-at=UNIX_SECS` for `sorafs_cli moderation committee-canary`"
+            .to_string()
+    })?;
+    if !process_isolation_reviewed {
+        return Err(
+            "missing required `--process-isolation-reviewed=true` for `sorafs_cli moderation committee-canary`"
+                .to_string(),
+        );
+    }
+    let checked_at_unix = checked_at_unix.unwrap_or(generated_at_unix);
+    if checked_at_unix != generated_at_unix {
+        return Err("`--checked-at` must equal `--generated-at-unix`".to_string());
+    }
+    if process_isolation_verified_at > generated_at_unix {
+        return Err(
+            "`--process-isolation-verified-at` must not be after `--generated-at-unix`".to_string(),
+        );
+    }
+    let process_isolation = ModerationProcessIsolationEvidence {
+        enforcement: process_isolation_enforcement,
+        attestation_digest: process_isolation_attestation_digest,
+        verified_at_unix: process_isolation_verified_at,
+    };
+    let deployment_context = ModerationCanaryDeploymentContext {
+        generated_at_unix,
+        deployment_id,
+        environment,
+    };
     let manifest = load_moderation_repro_manifest(
         &manifest_path,
         &format,
@@ -7405,12 +9169,24 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("manifest validation failed: {err}"))?;
     validate_moderation_local_runner_manifest(&manifest)?;
 
-    let mut result_values = Vec::with_capacity(result_paths.len());
-    let mut result_sources = Vec::with_capacity(result_paths.len());
+    let mut result_values = Vec::new();
+    result_values
+        .try_reserve_exact(result_paths.len())
+        .map_err(|error| format!("failed to reserve bounded canary result values: {error}"))?;
+    let mut result_fingerprints = Vec::new();
+    result_fingerprints
+        .try_reserve_exact(result_paths.len())
+        .map_err(|error| format!("failed to reserve bounded canary fingerprints: {error}"))?;
+    let mut seen_result_digests = BTreeSet::new();
     for path in &result_paths {
-        let value = load_moderation_committee_result_value(path, &manifest)?;
-        result_sources.push(path.display().to_string());
-        result_values.push(value);
+        let result = load_moderation_committee_result_value(path, &manifest)?;
+        if !seen_result_digests.insert(result.body_blake3) {
+            return Err(
+                "committee canary result files must have unique body fingerprints".to_string(),
+            );
+        }
+        result_values.push(result.value);
+        result_fingerprints.push(result.fingerprint);
     }
 
     let expected_aggregate = moderation_committee_expected_aggregate_from_values(
@@ -7432,22 +9208,24 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
         moderation_runner_canary_endpoint(&base_url, "/v1/sorafs/moderation/committee/status")?;
     let aggregate_url =
         moderation_runner_canary_endpoint(&base_url, "/v1/sorafs/moderation/committee/aggregate")?;
-    let status_response = moderation_committee_canary_get_json(&client, &status_url)?;
-    let aggregate_response =
-        moderation_committee_canary_post_json(&client, &aggregate_url, &request)?;
+    let committee_base_url = base_url.as_str().trim_end_matches('/');
+    let status_probe = moderation_committee_canary_get_json(&client, &status_url)?;
+    let aggregate_probe = moderation_committee_canary_post_json(&client, &aggregate_url, &request)?;
     let evidence =
         moderation_committee_canary_evidence_json(ModerationCommitteeCanaryEvidenceInput {
             manifest: &manifest,
-            committee_url: base_url.as_str(),
+            committee_url: committee_base_url,
             status_url: status_url.as_str(),
             aggregate_url: aggregate_url.as_str(),
             quorum,
             checked_at_unix,
+            deployment_context,
+            process_isolation,
             notes: notes.as_deref(),
-            result_sources,
+            result_fingerprints,
             expected_aggregate,
-            status_response,
-            aggregate_response,
+            status_probe,
+            aggregate_probe,
         })?;
     let rendered = to_string_pretty(&evidence)
         .map_err(|err| format!("failed to render committee canary evidence JSON: {err}"))?;
@@ -7466,19 +9244,30 @@ struct ModerationCommitteeCanaryEvidenceInput<'a> {
     aggregate_url: &'a str,
     quorum: usize,
     checked_at_unix: u64,
+    deployment_context: ModerationCanaryDeploymentContext,
+    process_isolation: ModerationProcessIsolationEvidence,
     notes: Option<&'a str>,
-    result_sources: Vec<String>,
+    result_fingerprints: Vec<Value>,
     expected_aggregate: Value,
-    status_response: Value,
-    aggregate_response: Value,
+    status_probe: ModerationCanaryHttpProbe,
+    aggregate_probe: ModerationCanaryHttpProbe,
+}
+
+struct ModerationCommitteeCanaryResult {
+    value: Value,
+    body_blake3: [u8; 32],
+    fingerprint: Value,
 }
 
 fn load_moderation_committee_result_value(
     path: &Path,
     manifest: &ModerationReproManifestV1,
-) -> Result<Value, String> {
-    let bytes =
-        fs::read(path).map_err(|err| format!("failed to read `{}`: {err}", path.display()))?;
+) -> Result<ModerationCommitteeCanaryResult, String> {
+    let bytes = read_file_bounded(
+        path,
+        MODERATION_COMMITTEE_MAX_RESULT_BYTES,
+        "moderation committee canary result",
+    )?;
     let value: Value = from_slice(&bytes).map_err(|err| {
         format!(
             "failed to parse committee result JSON `{}`: {err}",
@@ -7492,7 +9281,29 @@ fn load_moderation_committee_result_value(
         ));
     }
     parse_moderation_committee_input_value(&path.display().to_string(), &value, manifest)?;
-    Ok(value)
+    let body_blake3 = *blake3_hash(&bytes).as_bytes();
+    let bytes_len = u64::try_from(bytes.len())
+        .map_err(|_| "committee canary result length exceeds u64".to_string())?;
+    let mut fingerprint = Map::new();
+    fingerprint.insert(
+        "name".into(),
+        Value::from(format!(
+            "ai-prescreen-committee-result-{}",
+            hex_encode(body_blake3)
+        )),
+    );
+    fingerprint.insert("bytes".into(), Value::from(bytes_len));
+    fingerprint.insert(
+        "body_blake3_hex".into(),
+        Value::from(hex_encode(body_blake3)),
+    );
+    fingerprint.insert("payload_bytes_included".into(), Value::from(false));
+    fingerprint.insert("private_payloads_included".into(), Value::from(false));
+    Ok(ModerationCommitteeCanaryResult {
+        value,
+        body_blake3,
+        fingerprint: Value::Object(fingerprint),
+    })
 }
 
 fn moderation_committee_expected_aggregate_from_values(
@@ -7501,7 +9312,15 @@ fn moderation_committee_expected_aggregate_from_values(
     quorum: usize,
     notes: Option<&str>,
 ) -> Result<Value, String> {
-    let mut inputs = Vec::with_capacity(result_values.len());
+    if result_values.len() > MODERATION_COMMITTEE_MAX_RESULTS {
+        return Err(format!(
+            "committee canary accepts at most {MODERATION_COMMITTEE_MAX_RESULTS} results"
+        ));
+    }
+    let mut inputs = Vec::new();
+    inputs
+        .try_reserve_exact(result_values.len())
+        .map_err(|error| format!("failed to reserve bounded committee canary inputs: {error}"))?;
     for (idx, value) in result_values.iter().enumerate() {
         inputs.push(parse_moderation_committee_input_value(
             &format!("request.results[{idx}]"),
@@ -7528,68 +9347,108 @@ fn moderation_committee_canary_aggregate_request_json(
     Value::Object(request)
 }
 
-fn moderation_committee_canary_get_json(client: &HttpClient, url: &Url) -> Result<Value, String> {
+fn moderation_committee_canary_get_json(
+    client: &HttpClient,
+    url: &Url,
+) -> Result<ModerationCanaryHttpProbe, String> {
     let response = client
         .get(url.as_str())
         .send()
         .map_err(|err| format!("committee canary GET `{url}` failed: {err}"))?;
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .map_err(|err| format!("committee canary GET `{url}` failed to read body: {err}"))?;
+    let (status, bytes) = read_moderation_canary_response_bounded(
+        response,
+        &format!("committee canary GET `{url}`"),
+    )?;
     if !status.is_success() {
         return Err(format!(
             "committee canary GET `{url}` returned HTTP {status}: {}",
-            body_snippet(bytes.as_ref())
+            body_snippet(&bytes)
         ));
     }
-    from_slice(bytes.as_ref())
-        .map_err(|err| format!("committee canary GET `{url}` returned invalid JSON: {err}"))
+    let response_bytes = u64::try_from(bytes.len())
+        .map_err(|_| "committee canary GET response length exceeds u64".to_string())?;
+    let response = from_slice(&bytes)
+        .map_err(|err| format!("committee canary GET `{url}` returned invalid JSON: {err}"))?;
+    Ok(ModerationCanaryHttpProbe {
+        method: "GET",
+        url: url.as_str().to_string(),
+        status_code: status.as_u16(),
+        request_bytes: 0,
+        request_body_blake3: *blake3_hash(&[]).as_bytes(),
+        response_bytes,
+        response_body_blake3: *blake3_hash(&bytes).as_bytes(),
+        response,
+    })
 }
 
 fn moderation_committee_canary_post_json(
     client: &HttpClient,
     url: &Url,
     value: &Value,
-) -> Result<Value, String> {
+) -> Result<ModerationCanaryHttpProbe, String> {
     let body = to_vec(value)
         .map_err(|err| format!("failed to encode committee canary request JSON: {err}"))?;
+    if body.len() > MODERATION_RUNNER_HARD_MAX_BODY_BYTES {
+        return Err(format!(
+            "committee canary request has {} bytes; maximum is {MODERATION_RUNNER_HARD_MAX_BODY_BYTES}",
+            body.len()
+        ));
+    }
+    let request_bytes = u64::try_from(body.len())
+        .map_err(|_| "committee canary POST request length exceeds u64".to_string())?;
+    let request_body_blake3 = *blake3_hash(&body).as_bytes();
     let response = client
         .post(url.as_str())
         .header(CONTENT_TYPE, "application/json")
         .body(body)
         .send()
         .map_err(|err| format!("committee canary POST `{url}` failed: {err}"))?;
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .map_err(|err| format!("committee canary POST `{url}` failed to read body: {err}"))?;
+    let (status, bytes) = read_moderation_canary_response_bounded(
+        response,
+        &format!("committee canary POST `{url}`"),
+    )?;
     if !status.is_success() {
         return Err(format!(
             "committee canary POST `{url}` returned HTTP {status}: {}",
-            body_snippet(bytes.as_ref())
+            body_snippet(&bytes)
         ));
     }
-    from_slice(bytes.as_ref())
-        .map_err(|err| format!("committee canary POST `{url}` returned invalid JSON: {err}"))
+    let response_bytes = u64::try_from(bytes.len())
+        .map_err(|_| "committee canary POST response length exceeds u64".to_string())?;
+    let response = from_slice(&bytes)
+        .map_err(|err| format!("committee canary POST `{url}` returned invalid JSON: {err}"))?;
+    Ok(ModerationCanaryHttpProbe {
+        method: "POST",
+        url: url.as_str().to_string(),
+        status_code: status.as_u16(),
+        request_bytes,
+        request_body_blake3,
+        response_bytes,
+        response_body_blake3: *blake3_hash(&bytes).as_bytes(),
+        response,
+    })
 }
 
 fn moderation_committee_canary_evidence_json(
     input: ModerationCommitteeCanaryEvidenceInput<'_>,
 ) -> Result<Value, String> {
+    input.process_isolation.validate(
+        input.deployment_context.generated_at_unix,
+        "committee canary evidence",
+    )?;
     validate_moderation_committee_status_response(
         input.manifest,
         input.quorum,
-        &input.status_response,
+        &input.status_probe.response,
     )?;
     validate_moderation_committee_aggregate_response(
         input.manifest,
         input.quorum,
         &input.expected_aggregate,
-        &input.aggregate_response,
+        &input.aggregate_probe.response,
     )?;
-    if json_contains_key(&input.status_response, "payload_b64")
-        || json_contains_key(&input.aggregate_response, "payload_b64")
+    if json_contains_key(&input.status_probe.response, "payload_b64")
+        || json_contains_key(&input.aggregate_probe.response, "payload_b64")
     {
         return Err(
             "committee canary evidence responses must not contain `payload_b64`".to_string(),
@@ -7597,7 +9456,8 @@ fn moderation_committee_canary_evidence_json(
     }
 
     let aggregate = input
-        .aggregate_response
+        .aggregate_probe
+        .response
         .as_object()
         .ok_or_else(|| "committee aggregate response must be a JSON object".to_string())?;
     let subject = required_json_string(aggregate, "subject", "committee aggregate response")?;
@@ -7619,16 +9479,19 @@ fn moderation_committee_canary_evidence_json(
         .ok_or_else(|| {
             "committee aggregate response requires numeric `result_count`".to_string()
         })?;
+    if result_count
+        != u64::try_from(input.result_fingerprints.len())
+            .map_err(|_| "committee result fingerprint count exceeds u64".to_string())?
+    {
+        return Err(
+            "committee result fingerprint count does not match aggregate result_count".to_string(),
+        );
+    }
 
-    let result_sources = input.result_sources;
-    let result_rows: Vec<Value> = result_sources
-        .iter()
-        .map(|source| {
-            let mut row = Map::new();
-            row.insert("name".into(), Value::from(source.clone()));
-            Value::Object(row)
-        })
-        .collect();
+    let probes = Value::Array(vec![
+        moderation_canary_probe_json("status", &input.status_probe),
+        moderation_canary_probe_json("aggregate", &input.aggregate_probe),
+    ]);
 
     let mut output = Map::new();
     output.insert(
@@ -7636,7 +9499,46 @@ fn moderation_committee_canary_evidence_json(
         Value::from("sorafs.moderation.committee.rollout_evidence.v1"),
     );
     output.insert("status".into(), Value::from("verified"));
+    output.insert("synthetic".into(), Value::from(false));
     output.insert("source".into(), Value::from("sorafs_cli"));
+    output.insert(
+        "generated_at_unix".into(),
+        Value::from(input.deployment_context.generated_at_unix),
+    );
+    output.insert(
+        "deployment_id".into(),
+        Value::from(input.deployment_context.deployment_id),
+    );
+    output.insert(
+        "environment".into(),
+        Value::from(input.deployment_context.environment),
+    );
+    output.insert("deployment_context_reviewed".into(), Value::from(true));
+    output.insert(
+        "outbound_network".into(),
+        Value::from("network_capable_process_policy_required"),
+    );
+    output.insert(
+        "process_isolation_evidence".into(),
+        Value::Object(Map::from_iter([
+            ("required".into(), Value::from(true)),
+            ("status".into(), Value::from("runtime_verified")),
+            (
+                "enforcement".into(),
+                Value::from(input.process_isolation.enforcement),
+            ),
+            (
+                "attestation_digest_hex".into(),
+                Value::from(hex_encode(input.process_isolation.attestation_digest)),
+            ),
+            (
+                "verified_at_unix".into(),
+                Value::from(input.process_isolation.verified_at_unix),
+            ),
+            ("reviewed".into(), Value::from(true)),
+            ("synthetic".into(), Value::from(false)),
+        ])),
+    );
     output.insert(
         "committee_url".into(),
         Value::from(input.committee_url.to_string()),
@@ -7660,7 +9562,7 @@ fn moderation_committee_canary_evidence_json(
     output.insert("quorum".into(), Value::from(input.quorum as u64));
     output.insert("aggregation".into(), Value::from("median_score_bps"));
     output.insert("result_count".into(), Value::from(result_count));
-    output.insert("results".into(), Value::Array(result_rows));
+    output.insert("results".into(), Value::Array(input.result_fingerprints));
     output.insert("subject".into(), Value::from(subject.to_string()));
     output.insert(
         "subject_digest_hex".into(),
@@ -7669,6 +9571,9 @@ fn moderation_committee_canary_evidence_json(
     output.insert("aggregated_score_bps".into(), Value::from(score));
     output.insert("verdict".into(), Value::from(verdict.to_string()));
     output.insert("checked_at_unix".into(), Value::from(input.checked_at_unix));
+    output.insert("probe_count".into(), Value::from(2_u64));
+    output.insert("passed_probe_count".into(), Value::from(2_u64));
+    output.insert("probes".into(), probes);
     output.insert(
         "notes".into(),
         input
@@ -7676,12 +9581,8 @@ fn moderation_committee_canary_evidence_json(
             .map(|value| Value::from(value.to_string()))
             .unwrap_or(Value::Null),
     );
-    output.insert(
-        "result_sources".into(),
-        Value::Array(result_sources.into_iter().map(Value::from).collect()),
-    );
-    output.insert("committee_status".into(), input.status_response);
-    output.insert("committee_aggregate".into(), input.aggregate_response);
+    output.insert("committee_status".into(), input.status_probe.response);
+    output.insert("committee_aggregate".into(), input.aggregate_probe.response);
     Ok(Value::Object(output))
 }
 
@@ -7697,6 +9598,10 @@ fn validate_moderation_committee_status_response(
     let schema = required_json_string(fields, "schema", context)?;
     if schema != "sorafs.moderation.committee.status.v1" {
         return Err(format!("{context} has unexpected schema `{schema}`"));
+    }
+    let status = required_json_string(fields, "status", context)?;
+    if status != "ready" {
+        return Err(format!("{context} status `{status}` is not `ready`"));
     }
     let manifest_id = parse_fixed_hex::<16>(
         required_json_string(fields, "manifest_id_hex", context)?,
@@ -7738,9 +9643,24 @@ fn validate_moderation_committee_status_response(
         ));
     }
     let outbound = required_json_string(fields, "outbound_network", context)?;
-    if outbound != "disabled" {
+    if outbound != "network_capable_process_policy_required" {
         return Err(format!(
-            "{context} outbound_network `{outbound}` is not `disabled`"
+            "{context} outbound_network `{outbound}` is not `network_capable_process_policy_required`"
+        ));
+    }
+    let isolation = required_json_string(fields, "process_isolation", context)?;
+    if isolation != "external_runtime_attestation_required" {
+        return Err(format!(
+            "{context} process_isolation `{isolation}` is not `external_runtime_attestation_required`"
+        ));
+    }
+    if fields
+        .get("process_isolation_verified")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err(format!(
+            "{context} must report process_isolation_verified=false; runtime isolation requires external evidence"
         ));
     }
     Ok(())
@@ -7833,9 +9753,25 @@ fn validate_moderation_committee_aggregate_response(
 }
 
 struct ModerationRunnerService {
-    manifest: ModerationReproManifestV1,
+    runner: LoadedModerationRunnerV1,
+    signed: Option<ModerationSignedRunnerState>,
     manifest_source: String,
     max_body_bytes: usize,
+    max_payload_bytes: u32,
+}
+
+struct ModerationSignedRunnerState {
+    signing_runner: LoadedModerationSigningRunnerV1,
+    provenance: ModerationProvenanceStoreV1,
+    trust_anchors: BTreeSet<PublicKey>,
+    minimum_governance_quorum: u16,
+    transaction_guard: Mutex<()>,
+}
+
+impl ModerationRunnerService {
+    fn manifest(&self) -> &ModerationReproManifestV1 {
+        self.runner.manifest()
+    }
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -7867,6 +9803,18 @@ struct ModerationRunnerStatusResponse {
     outbound_network: String,
     #[prost(string, tag = "12")]
     listen: String,
+    #[prost(uint64, tag = "13")]
+    max_payload_bytes: u64,
+    #[prost(uint64, tag = "14")]
+    max_active_connections: u64,
+    #[prost(string, tag = "15")]
+    process_isolation: String,
+    #[prost(bool, tag = "16")]
+    process_isolation_verified: bool,
+    #[prost(uint64, tag = "17")]
+    max_grpc_in_flight: u64,
+    #[prost(uint64, tag = "18")]
+    max_grpc_response_bytes: u64,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -7903,12 +9851,25 @@ struct ModerationRunnerScreenResponse {
     policy_digest_hex: String,
     #[prost(string, optional, tag = "10")]
     notes: Option<String>,
+    #[prost(message, repeated, tag = "11")]
+    model_scores: Vec<ModerationRunnerModelScore>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct ModerationRunnerModelScore {
+    #[prost(string, tag = "1")]
+    model_id_hex: String,
+    #[prost(string, tag = "2")]
+    artifact_digest_hex: String,
+    #[prost(uint32, tag = "3")]
+    score_bps: u32,
 }
 
 #[derive(Clone)]
 struct ModerationRunnerGrpcHandler {
     service: Arc<ModerationRunnerService>,
     listen: String,
+    in_flight: Arc<AtomicUsize>,
 }
 
 #[tonic::async_trait]
@@ -7928,6 +9889,11 @@ impl moderation_runner_grpc::runner_server::Runner for ModerationRunnerGrpcHandl
         &self,
         request: tonic::Request<ModerationRunnerScreenRequest>,
     ) -> Result<tonic::Response<ModerationRunnerScreenResponse>, tonic::Status> {
+        let _permit =
+            moderation_try_acquire_permit(&self.in_flight, MODERATION_RUNNER_MAX_GRPC_IN_FLIGHT)
+                .ok_or_else(|| {
+                    tonic::Status::resource_exhausted("moderation runner is overloaded")
+                })?;
         moderation_runner_screen_request_proto(&self.service, request.into_inner())
             .map(tonic::Response::new)
             .map_err(tonic::Status::invalid_argument)
@@ -7978,6 +9944,11 @@ mod moderation_runner_grpc {
 
             pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
                 self.max_decoding_message_size = Some(limit);
+                self
+            }
+
+            pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+                self.max_encoding_message_size = Some(limit);
                 self
             }
         }
@@ -8106,21 +10077,30 @@ fn moderation_runner_handle_stream(
     service: &ModerationRunnerService,
     max_body_bytes: usize,
 ) -> io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let mut request = Vec::new();
     let mut buffer = [0_u8; 4096];
+    let hard_limit = moderation_http_hard_limit(max_body_bytes, "runner")?;
     loop {
         let count = stream.read(&mut buffer)?;
         if count == 0 {
             break;
         }
-        request.extend_from_slice(&buffer[..count]);
-        if request.len() > max_body_bytes.saturating_add(8192) {
+        let remaining = hard_limit.saturating_sub(request.len());
+        let accepted = count.min(remaining);
+        request.try_reserve(accepted).map_err(|_| {
+            io::Error::new(io::ErrorKind::OutOfMemory, "HTTP request allocation failed")
+        })?;
+        request.extend_from_slice(&buffer[..accepted]);
+        if accepted < count || request.len() >= hard_limit {
             break;
         }
         if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request)
-            && (content_len > max_body_bytes || request.len() >= header_len + content_len)
+            && (content_len > max_body_bytes
+                || header_len
+                    .checked_add(content_len)
+                    .is_some_and(|body_end| request.len() >= body_end))
         {
             break;
         }
@@ -8152,12 +10132,26 @@ fn moderation_runner_parse_http_request<'a>(
     max_body_bytes: usize,
 ) -> Result<ModerationRunnerHttpRequest<'a>, Vec<u8>> {
     let Some(header_end) = find_http_header_end(request) else {
+        if request.len() > MODERATION_RUNNER_MAX_HEADER_BYTES {
+            return Err(moderation_runner_error_response(
+                431,
+                "Request Header Fields Too Large",
+                "moderation runner HTTP headers exceed the configured maximum",
+            ));
+        }
         return Err(moderation_runner_error_response(
             400,
             "Bad Request",
             "missing HTTP header terminator",
         ));
     };
+    if header_end > MODERATION_RUNNER_MAX_HEADER_BYTES {
+        return Err(moderation_runner_error_response(
+            431,
+            "Request Header Fields Too Large",
+            "moderation runner HTTP headers exceed the configured maximum",
+        ));
+    }
     let header_text = match std::str::from_utf8(&request[..header_end]) {
         Ok(text) => text,
         Err(_) => {
@@ -8170,32 +10164,103 @@ fn moderation_runner_parse_http_request<'a>(
     };
     let mut lines = header_text.split("\r\n");
     let request_line = lines.next().unwrap_or_default();
-    let mut parts = request_line.split_whitespace();
+    let mut parts = request_line.split(' ');
     let method = parts.next().unwrap_or_default();
     let raw_path = parts.next().unwrap_or_default();
     let version = parts.next().unwrap_or_default();
-    if method.is_empty() || raw_path.is_empty() || !version.starts_with("HTTP/") {
+    if method.is_empty()
+        || raw_path.is_empty()
+        || version != "HTTP/1.1"
+        || parts.next().is_some()
+        || !is_valid_http_header_name(method)
+        || !raw_path.starts_with('/')
+        || !raw_path.is_ascii()
+        || raw_path
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        || raw_path.contains('?')
+        || raw_path.contains('#')
+    {
         return Err(moderation_runner_error_response(
             400,
             "Bad Request",
             "malformed HTTP request line",
         ));
     }
-    let mut content_length = 0_usize;
+    let mut content_length = None;
+    let mut host_seen = false;
     for line in lines {
         let Some((name, value)) = line.split_once(':') else {
-            continue;
+            return Err(moderation_runner_error_response(
+                400,
+                "Bad Request",
+                "malformed HTTP header line",
+            ));
         };
-        if name.trim().eq_ignore_ascii_case("content-length") {
-            content_length = value.trim().parse::<usize>().map_err(|err| {
+        if !is_valid_http_header_name(name)
+            || value
+                .chars()
+                .any(|character| character.is_control() && character != '\t')
+        {
+            return Err(moderation_runner_error_response(
+                400,
+                "Bad Request",
+                "malformed HTTP header name or value",
+            ));
+        }
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err(moderation_runner_error_response(
+                400,
+                "Bad Request",
+                "Transfer-Encoding is not supported",
+            ));
+        }
+        if name.eq_ignore_ascii_case("host") {
+            if host_seen || value.trim().is_empty() {
+                return Err(moderation_runner_error_response(
+                    400,
+                    "Bad Request",
+                    "HTTP/1.1 requires exactly one non-empty Host header",
+                ));
+            }
+            host_seen = true;
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            if content_length.is_some() {
+                return Err(moderation_runner_error_response(
+                    400,
+                    "Bad Request",
+                    "duplicate Content-Length headers are forbidden",
+                ));
+            }
+            let canonical = value.trim();
+            if canonical.is_empty()
+                || !canonical.bytes().all(|byte| byte.is_ascii_digit())
+                || canonical.len() > 1 && canonical.starts_with('0')
+            {
+                return Err(moderation_runner_error_response(
+                    400,
+                    "Bad Request",
+                    "Content-Length must be canonical unsigned decimal",
+                ));
+            }
+            content_length = Some(canonical.parse::<usize>().map_err(|err| {
                 moderation_runner_error_response(
                     400,
                     "Bad Request",
                     &format!("invalid Content-Length header: {err}"),
                 )
-            })?;
+            })?);
         }
     }
+    if !host_seen {
+        return Err(moderation_runner_error_response(
+            400,
+            "Bad Request",
+            "HTTP/1.1 requires exactly one non-empty Host header",
+        ));
+    }
+    let content_length = content_length.unwrap_or(0);
     if content_length > max_body_bytes {
         return Err(moderation_runner_error_response(
             413,
@@ -8204,34 +10269,80 @@ fn moderation_runner_parse_http_request<'a>(
         ));
     }
     let body_start = header_end + 4;
-    if request.len() < body_start + content_length {
+    let body_end = body_start.checked_add(content_length).ok_or_else(|| {
+        moderation_runner_error_response(413, "Payload Too Large", "HTTP body length overflow")
+    })?;
+    if request.len() < body_end {
         return Err(moderation_runner_error_response(
             400,
             "Bad Request",
             "incomplete HTTP request body",
         ));
     }
-    let path = raw_path.split('?').next().unwrap_or(raw_path);
+    if request.len() != body_end {
+        return Err(moderation_runner_error_response(
+            400,
+            "Bad Request",
+            "trailing bytes after the declared HTTP request body are forbidden",
+        ));
+    }
     Ok(ModerationRunnerHttpRequest {
         method,
-        path,
-        body: &request[body_start..body_start + content_length],
+        path: raw_path,
+        body: &request[body_start..body_end],
     })
+}
+
+fn is_valid_http_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.is_ascii()
+        && name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }
 
 fn moderation_runner_request_lengths(request: &[u8]) -> Option<(usize, usize)> {
     let header_end = find_http_header_end(request)?;
+    if header_end > MODERATION_RUNNER_MAX_HEADER_BYTES {
+        return Some((header_end + 4, 0));
+    }
     let header_text = std::str::from_utf8(&request[..header_end]).ok()?;
-    let mut content_length = 0_usize;
+    let mut content_length = None;
     for line in header_text.split("\r\n").skip(1) {
         let Some((name, value)) = line.split_once(':') else {
-            continue;
+            return Some((header_end + 4, 0));
         };
-        if name.trim().eq_ignore_ascii_case("content-length") {
-            content_length = value.trim().parse().ok()?;
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Some((header_end + 4, 0));
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            if content_length.is_some() {
+                return Some((header_end + 4, 0));
+            }
+            content_length = value.trim().parse().ok();
+            if content_length.is_none() {
+                return Some((header_end + 4, 0));
+            }
         }
     }
-    Some((header_end + 4, content_length))
+    Some((header_end + 4, content_length.unwrap_or(0)))
 }
 
 fn find_http_header_end(request: &[u8]) -> Option<usize> {
@@ -8244,6 +10355,15 @@ fn moderation_runner_route_request(
 ) -> Vec<u8> {
     match (request.method, request.path) {
         ("GET", "/healthz") | ("GET", "/v1/sorafs/moderation/runner/status") => {
+            if let Some(state) = &service.signed
+                && let Err(error) = state.provenance.snapshot()
+            {
+                return moderation_runner_error_response(
+                    503,
+                    "Service Unavailable",
+                    &format!("signed moderation provenance is unhealthy: {error}"),
+                );
+            }
             moderation_runner_json_response(
                 200,
                 "OK",
@@ -8251,9 +10371,37 @@ fn moderation_runner_route_request(
             )
         }
         ("POST", "/v1/sorafs/moderation/runner/screen") => {
+            if service.signed.is_some() {
+                return moderation_runner_error_response(
+                    409,
+                    "Conflict",
+                    "unsigned screening is disabled on the signed moderation runner; use /v1/sorafs/moderation/runner/screen-signed",
+                );
+            }
             match moderation_runner_screen_request_json(service, request.body) {
                 Ok(value) => moderation_runner_json_response(200, "OK", &value),
                 Err(message) => moderation_runner_error_response(400, "Bad Request", &message),
+            }
+        }
+        ("POST", "/v1/sorafs/moderation/runner/screen-signed") => {
+            if service.signed.is_none() {
+                return moderation_runner_error_response(
+                    404,
+                    "Not Found",
+                    "signed screening is not configured on this diagnostic runner",
+                );
+            }
+            match moderation_runner_signed_screen_request_json(service, request.body) {
+                Ok(value) => moderation_runner_json_response(200, "OK", &value),
+                Err(ModerationSignedRunnerRequestError::BadRequest(message)) => {
+                    moderation_runner_error_response(400, "Bad Request", &message)
+                }
+                Err(ModerationSignedRunnerRequestError::Unavailable(message)) => {
+                    moderation_runner_error_response(503, "Service Unavailable", &message)
+                }
+                Err(ModerationSignedRunnerRequestError::Internal(message)) => {
+                    moderation_runner_error_response(500, "Internal Server Error", &message)
+                }
             }
         }
         ("GET", _) | ("POST", _) => moderation_runner_error_response(
@@ -8269,6 +10417,175 @@ fn moderation_runner_route_request(
     }
 }
 
+#[derive(Debug)]
+enum ModerationSignedRunnerRequestError {
+    BadRequest(String),
+    Unavailable(String),
+    Internal(String),
+}
+
+fn moderation_runner_signed_screen_request_json(
+    service: &ModerationRunnerService,
+    body: &[u8],
+) -> Result<Value, ModerationSignedRunnerRequestError> {
+    let bad_request = ModerationSignedRunnerRequestError::BadRequest;
+    if body.is_empty() {
+        return Err(bad_request(
+            "signed moderation screen request body must not be empty".to_string(),
+        ));
+    }
+    let value: Value = from_slice(body).map_err(|error| {
+        bad_request(format!(
+            "failed to parse signed moderation screen request JSON: {error}"
+        ))
+    })?;
+    let fields = value.as_object().ok_or_else(|| {
+        bad_request("signed moderation screen request must be a JSON object".to_string())
+    })?;
+    if let Some(field) = fields
+        .keys()
+        .find(|field| !matches!(field.as_str(), "subject" | "payload_b64" | "notes"))
+    {
+        return Err(bad_request(format!(
+            "signed moderation screen request contains unsupported field `{field}`"
+        )));
+    }
+    let subject = required_json_string(fields, "subject", "signed moderation screen request")
+        .map_err(bad_request)?;
+    validate_moderation_request_text(
+        subject,
+        MODERATION_RUNNER_MAX_SUBJECT_BYTES,
+        "signed moderation runner `subject`",
+    )
+    .map_err(bad_request)?;
+    let payload_b64 =
+        required_json_string(fields, "payload_b64", "signed moderation screen request")
+            .map_err(bad_request)?;
+    let notes = match fields.get("notes") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => {
+            validate_moderation_request_text(
+                value,
+                MODERATION_RUNNER_MAX_NOTES_BYTES,
+                "signed moderation runner `notes`",
+            )
+            .map_err(bad_request)?;
+            Some(value.clone())
+        }
+        Some(_) => {
+            return Err(bad_request(
+                "signed moderation runner optional `notes` must be a string".to_string(),
+            ));
+        }
+    };
+    let decoded_capacity = base64::decoded_len_estimate(payload_b64.len());
+    let maximum_payload = usize::try_from(service.max_payload_bytes).map_err(|_| {
+        ModerationSignedRunnerRequestError::Internal(
+            "signed moderation payload bound does not fit usize".to_string(),
+        )
+    })?;
+    let padded_maximum = maximum_payload.checked_add(2).ok_or_else(|| {
+        ModerationSignedRunnerRequestError::Internal(
+            "signed moderation payload bound overflows usize".to_string(),
+        )
+    })?;
+    if decoded_capacity > padded_maximum {
+        return Err(bad_request(format!(
+            "signed moderation `payload_b64` can decode beyond the configured {maximum_payload}-byte maximum"
+        )));
+    }
+    let mut payload = Vec::new();
+    payload
+        .try_reserve_exact(decoded_capacity)
+        .map_err(|error| {
+            ModerationSignedRunnerRequestError::Unavailable(format!(
+                "failed to reserve bounded signed moderation payload: {error}"
+            ))
+        })?;
+    payload.resize(decoded_capacity, 0);
+    let decoded = BASE64_STANDARD
+        .decode_slice(payload_b64, &mut payload)
+        .map_err(|error| {
+            bad_request(format!("invalid signed moderation `payload_b64`: {error}"))
+        })?;
+    payload.truncate(decoded);
+    if payload.is_empty() {
+        return Err(bad_request(
+            "signed moderation `payload_b64` must decode to non-empty bytes".to_string(),
+        ));
+    }
+
+    let state = service.signed.as_ref().ok_or_else(|| {
+        ModerationSignedRunnerRequestError::Internal(
+            "signed runner state disappeared after route selection".to_string(),
+        )
+    })?;
+    let _transaction = state
+        .transaction_guard
+        .try_lock()
+        .map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => ModerationSignedRunnerRequestError::Unavailable(
+                "signed moderation runner already has an in-flight signing transaction".to_string(),
+            ),
+            std::sync::TryLockError::Poisoned(_) => ModerationSignedRunnerRequestError::Internal(
+                "signed moderation transaction lock is poisoned".to_string(),
+            ),
+        })?;
+    let now_unix =
+        moderation_trusted_now_unix().map_err(ModerationSignedRunnerRequestError::Internal)?;
+    let result = state
+        .signing_runner
+        .screen_signed(
+            &payload,
+            service.max_payload_bytes,
+            subject,
+            notes,
+            now_unix,
+        )
+        .map_err(|error| match error {
+            ModerationRunnerError::EmptyPayload | ModerationRunnerError::PayloadTooLarge { .. } => {
+                ModerationSignedRunnerRequestError::BadRequest(error.to_string())
+            }
+            ModerationRunnerError::InvalidTrustPolicy(_)
+            | ModerationRunnerError::InvalidSigningKey(_)
+            | ModerationRunnerError::ResultExpiryOverflow => {
+                ModerationSignedRunnerRequestError::Unavailable(error.to_string())
+            }
+            _ => ModerationSignedRunnerRequestError::Internal(error.to_string()),
+        })?;
+    let provenance_head = state
+        .provenance
+        .append_signed_result(
+            service.manifest(),
+            state.signing_runner.trust_policy(),
+            &state.trust_anchors,
+            state.minimum_governance_quorum,
+            result.clone(),
+            now_unix,
+        )
+        .map_err(|error| match error {
+            ModerationProvenanceStoreError::Locked(_) => {
+                ModerationSignedRunnerRequestError::Unavailable(error.to_string())
+            }
+            _ => ModerationSignedRunnerRequestError::Internal(error.to_string()),
+        })?;
+    let canonical = to_bytes(&result).map_err(|error| {
+        ModerationSignedRunnerRequestError::Internal(format!(
+            "failed to encode signed moderation result: {error}"
+        ))
+    })?;
+    if u64::try_from(canonical.len())
+        .ok()
+        .is_none_or(|length| length > MODERATION_SIGNED_RESULT_MAX_BYTES)
+    {
+        return Err(ModerationSignedRunnerRequestError::Internal(
+            "signed moderation result exceeds its hard encoded bound".to_string(),
+        ));
+    }
+    moderation_signed_result_summary_json(&result, &canonical, provenance_head)
+        .map_err(ModerationSignedRunnerRequestError::Internal)
+}
+
 fn moderation_runner_screen_request_json(
     service: &ModerationRunnerService,
     body: &[u8],
@@ -8281,7 +10598,25 @@ fn moderation_runner_screen_request_json(
     let fields = value
         .as_object()
         .ok_or_else(|| "moderation runner screen request must be a JSON object".to_string())?;
-    let subject = required_json_string(fields, "subject", "moderation runner screen request")?;
+    if let Some(field) = fields.keys().find(|field| {
+        !matches!(
+            field.as_str(),
+            "subject" | "payload_b64" | "screened_at_unix" | "notes"
+        )
+    }) {
+        return Err(format!(
+            "moderation runner screen request contains unsupported field `{field}`"
+        ));
+    }
+    let subject = fields
+        .get("subject")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "moderation runner screen request requires string `subject`".to_string())?;
+    validate_moderation_request_text(
+        subject,
+        MODERATION_RUNNER_MAX_SUBJECT_BYTES,
+        "moderation runner `subject`",
+    )?;
     let payload_b64 =
         required_json_string(fields, "payload_b64", "moderation runner screen request")?;
     let screened_at_unix = fields
@@ -8290,19 +10625,51 @@ fn moderation_runner_screen_request_json(
         .ok_or_else(|| {
             "moderation runner screen request requires numeric `screened_at_unix`".to_string()
         })?;
-    let notes = optional_json_string(fields, "notes", "moderation runner screen request")?;
-    let payload = BASE64_STANDARD
-        .decode(payload_b64)
+    if screened_at_unix == 0 {
+        return Err("moderation runner `screened_at_unix` must be greater than zero".to_string());
+    }
+    let notes = match fields.get("notes") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => {
+            validate_moderation_request_text(
+                value,
+                MODERATION_RUNNER_MAX_NOTES_BYTES,
+                "moderation runner `notes`",
+            )?;
+            Some(value.as_str())
+        }
+        Some(_) => return Err("moderation runner optional `notes` must be a string".to_string()),
+    };
+    let decoded_capacity = base64::decoded_len_estimate(payload_b64.len());
+    let maximum_payload = usize::try_from(service.max_payload_bytes)
+        .map_err(|_| "moderation runner payload bound does not fit usize".to_owned())?;
+    let padded_maximum = maximum_payload
+        .checked_add(2)
+        .ok_or_else(|| "moderation runner payload bound overflows usize".to_owned())?;
+    if decoded_capacity > padded_maximum {
+        return Err(format!(
+            "moderation runner `payload_b64` can decode beyond the configured {maximum_payload}-byte maximum"
+        ));
+    }
+    let mut payload = Vec::new();
+    payload
+        .try_reserve_exact(decoded_capacity)
+        .map_err(|error| format!("failed to reserve bounded moderation payload: {error}"))?;
+    payload.resize(decoded_capacity, 0);
+    let decoded = BASE64_STANDARD
+        .decode_slice(payload_b64, &mut payload)
         .map_err(|err| format!("invalid moderation runner `payload_b64`: {err}"))?;
+    payload.truncate(decoded);
     if payload.is_empty() {
         return Err("moderation runner `payload_b64` must decode to non-empty bytes".to_string());
     }
     moderation_local_runner_screening_json(
-        &service.manifest,
+        &service.runner,
         &payload,
         subject,
         screened_at_unix,
         notes,
+        service.max_payload_bytes,
     )
 }
 
@@ -8310,12 +10677,12 @@ fn moderation_runner_screen_request_proto(
     service: &ModerationRunnerService,
     request: ModerationRunnerScreenRequest,
 ) -> Result<ModerationRunnerScreenResponse, String> {
-    let subject = request.subject.trim();
-    if subject.is_empty() {
-        return Err(
-            "moderation runner gRPC screen request `subject` must not be empty".to_string(),
-        );
-    }
+    let subject = request.subject.as_str();
+    validate_moderation_request_text(
+        subject,
+        MODERATION_RUNNER_MAX_SUBJECT_BYTES,
+        "moderation runner gRPC `subject`",
+    )?;
     if request.payload.is_empty() {
         return Err(
             "moderation runner gRPC screen request `payload` must not be empty".to_string(),
@@ -8326,24 +10693,29 @@ fn moderation_runner_screen_request_proto(
             "moderation runner gRPC screen request payload exceeds configured maximum".to_string(),
         );
     }
+    if request.screened_at_unix == 0 {
+        return Err(
+            "moderation runner gRPC `screened_at_unix` must be greater than zero".to_string(),
+        );
+    }
     let notes = match request.notes.as_deref() {
         None => None,
         Some(value) => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                return Err(
-                    "moderation runner gRPC screen request `notes` must not be empty".to_string(),
-                );
-            }
-            Some(trimmed)
+            validate_moderation_request_text(
+                value,
+                MODERATION_RUNNER_MAX_NOTES_BYTES,
+                "moderation runner gRPC `notes`",
+            )?;
+            Some(value)
         }
     };
     let value = moderation_local_runner_screening_json(
-        &service.manifest,
+        &service.runner,
         &request.payload,
         subject,
         request.screened_at_unix,
         notes,
+        service.max_payload_bytes,
     )?;
     moderation_runner_screen_proto_from_json(&value)
 }
@@ -8366,29 +10738,137 @@ fn moderation_runner_status_json(
     );
     output.insert(
         "manifest_id_hex".into(),
-        Value::from(hex_encode(service.manifest.body.manifest_id)),
+        Value::from(hex_encode(service.manifest().body.manifest_id)),
     );
     output.insert(
         "manifest_digest_hex".into(),
-        Value::from(hex_encode(service.manifest.body.manifest_digest)),
+        Value::from(hex_encode(service.manifest().body.manifest_digest)),
     );
     output.insert(
         "runner_hash_hex".into(),
-        Value::from(hex_encode(service.manifest.body.runner_hash)),
+        Value::from(hex_encode(service.manifest().body.runner_hash)),
     );
     output.insert(
         "runtime_version".into(),
-        Value::from(service.manifest.body.runtime_version.clone()),
+        Value::from(service.manifest().body.runtime_version.clone()),
     );
     output.insert(
         "model_count".into(),
-        Value::from(service.manifest.body.models.len() as u64),
+        Value::from(
+            u64::try_from(service.manifest().body.models.len())
+                .expect("validated runner model count fits u64"),
+        ),
     );
     output.insert(
         "max_body_bytes".into(),
         Value::from(service.max_body_bytes as u64),
     );
-    output.insert("outbound_network".into(), Value::from("disabled"));
+    output.insert(
+        "max_payload_bytes".into(),
+        Value::from(u64::from(service.max_payload_bytes)),
+    );
+    output.insert(
+        "max_active_connections".into(),
+        Value::from(
+            u64::try_from(MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS)
+                .expect("runner connection limit fits u64"),
+        ),
+    );
+    output.insert(
+        "max_grpc_in_flight".into(),
+        Value::from(
+            u64::try_from(MODERATION_RUNNER_MAX_GRPC_IN_FLIGHT)
+                .expect("runner gRPC in-flight limit fits u64"),
+        ),
+    );
+    output.insert(
+        "max_grpc_response_bytes".into(),
+        Value::from(
+            u64::try_from(MODERATION_RUNNER_MAX_GRPC_RESPONSE_BYTES)
+                .expect("runner gRPC response limit fits u64"),
+        ),
+    );
+    output.insert(
+        "outbound_network".into(),
+        Value::from("model_engine_none_process_policy_required"),
+    );
+    output.insert(
+        "process_isolation".into(),
+        Value::from("external_runtime_attestation_required"),
+    );
+    output.insert("process_isolation_verified".into(), Value::from(false));
+    if let Some(state) = &service.signed {
+        let policy = state.signing_runner.trust_policy();
+        let snapshot = state.provenance.snapshot().ok();
+        output.insert(
+            "trust_boundary".into(),
+            Value::from("externally_anchored_signed_results"),
+        );
+        output.insert("signed_results".into(), Value::from(true));
+        output.insert("unsigned_screening_enabled".into(), Value::from(false));
+        output.insert(
+            "signed_screening_endpoint".into(),
+            Value::from("/v1/sorafs/moderation/runner/screen-signed"),
+        );
+        output.insert(
+            "trust_policy_id_hex".into(),
+            Value::from(hex_encode(policy.body.policy_id)),
+        );
+        output.insert(
+            "trust_policy_digest_hex".into(),
+            Value::from(hex_encode(policy.body.policy_digest)),
+        );
+        output.insert(
+            "result_signer_public_key".into(),
+            Value::from(state.signing_runner.signer_public_key().to_string()),
+        );
+        output.insert(
+            "minimum_governance_quorum".into(),
+            Value::from(u64::from(state.minimum_governance_quorum)),
+        );
+        output.insert(
+            "trusted_governance_anchor_count".into(),
+            Value::from(
+                u64::try_from(state.trust_anchors.len())
+                    .expect("bounded governance anchor count fits u64"),
+            ),
+        );
+        output.insert(
+            "provenance_path".into(),
+            Value::from(state.provenance.path().display().to_string()),
+        );
+        output.insert(
+            "provenance_verified".into(),
+            Value::from(snapshot.is_some()),
+        );
+        output.insert(
+            "provenance_entry_count".into(),
+            snapshot
+                .as_ref()
+                .map(|value| {
+                    Value::from(
+                        u64::try_from(value.entries.len())
+                            .expect("bounded provenance entry count fits u64"),
+                    )
+                })
+                .unwrap_or(Value::Null),
+        );
+        output.insert(
+            "provenance_head_digest_hex".into(),
+            snapshot
+                .map(|value| Value::from(hex_encode(value.head_digest)))
+                .unwrap_or(Value::Null),
+        );
+        output.insert("max_signed_in_flight".into(), Value::from(1_u64));
+    } else {
+        output.insert(
+            "trust_boundary".into(),
+            Value::from("unsigned_diagnostic_only"),
+        );
+        output.insert("signed_results".into(), Value::from(false));
+        output.insert("unsigned_screening_enabled".into(), Value::from(true));
+        output.insert("provenance_verified".into(), Value::from(false));
+    }
     output.insert(
         "listen".into(),
         listen
@@ -8408,14 +10888,24 @@ fn moderation_runner_status_proto(
         status: status.to_string(),
         source: "sorafs_cli".to_string(),
         manifest_source: service.manifest_source.clone(),
-        manifest_id_hex: hex_encode(service.manifest.body.manifest_id),
-        manifest_digest_hex: hex_encode(service.manifest.body.manifest_digest),
-        runner_hash_hex: hex_encode(service.manifest.body.runner_hash),
-        runtime_version: service.manifest.body.runtime_version.clone(),
-        model_count: service.manifest.body.models.len() as u64,
+        manifest_id_hex: hex_encode(service.manifest().body.manifest_id),
+        manifest_digest_hex: hex_encode(service.manifest().body.manifest_digest),
+        runner_hash_hex: hex_encode(service.manifest().body.runner_hash),
+        runtime_version: service.manifest().body.runtime_version.clone(),
+        model_count: u64::try_from(service.manifest().body.models.len())
+            .expect("validated runner model count fits u64"),
         max_body_bytes: service.max_body_bytes as u64,
-        outbound_network: "disabled".to_string(),
+        outbound_network: "model_engine_none_process_policy_required".to_string(),
         listen: listen.unwrap_or_default().to_string(),
+        max_payload_bytes: u64::from(service.max_payload_bytes),
+        max_active_connections: u64::try_from(MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS)
+            .expect("runner connection limit fits u64"),
+        process_isolation: "external_runtime_attestation_required".to_string(),
+        process_isolation_verified: false,
+        max_grpc_in_flight: u64::try_from(MODERATION_RUNNER_MAX_GRPC_IN_FLIGHT)
+            .expect("runner gRPC in-flight limit fits u64"),
+        max_grpc_response_bytes: u64::try_from(MODERATION_RUNNER_MAX_GRPC_RESPONSE_BYTES)
+            .expect("runner gRPC response limit fits u64"),
     }
 }
 
@@ -8436,6 +10926,33 @@ fn moderation_runner_screen_proto_from_json(
             return Err("runner screening result `notes` field is not a string".to_string());
         }
     };
+    let model_scores = fields
+        .get("model_scores")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "runner screening result is missing `model_scores`".to_string())?
+        .iter()
+        .map(|value| {
+            let score = value.as_object().ok_or_else(|| {
+                "runner screening result model score must be an object".to_string()
+            })?;
+            let score_bps = score
+                .get("score_bps")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| "runner model score is missing `score_bps`".to_string())?;
+            Ok(ModerationRunnerModelScore {
+                model_id_hex: required_json_string(score, "model_id_hex", "runner model score")?
+                    .to_string(),
+                artifact_digest_hex: required_json_string(
+                    score,
+                    "artifact_digest_hex",
+                    "runner model score",
+                )?
+                .to_string(),
+                score_bps: u32::try_from(score_bps)
+                    .map_err(|_| "runner model score does not fit into u32".to_string())?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     Ok(ModerationRunnerScreenResponse {
         subject: required_json_string(fields, "subject", "runner screening result")?.to_string(),
         subject_digest_hex: required_json_string(
@@ -8476,6 +10993,7 @@ fn moderation_runner_screen_proto_from_json(
         )?
         .to_string(),
         notes,
+        model_scores,
     })
 }
 
@@ -8586,13 +11104,239 @@ fn parse_fixed_hex<const N: usize>(
     Ok(out)
 }
 
+fn parse_moderation_max_payload_bytes(raw: &str, context: &str) -> Result<u32, String> {
+    let parsed = parse_u32_arg("--max-payload-bytes", raw, context)?;
+    if parsed == 0 || parsed > MODERATION_MODEL_MAX_INPUT_BYTES_V1 {
+        return Err(format!(
+            "`--max-payload-bytes` must be in 1..={MODERATION_MODEL_MAX_INPUT_BYTES_V1}"
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_moderation_max_body_bytes(raw: &str, context: &str) -> Result<usize, String> {
+    let parsed = parse_u64_arg("--max-body-bytes", raw, context)?;
+    let parsed = usize::try_from(parsed)
+        .map_err(|_| "`--max-body-bytes` does not fit into this platform's usize".to_owned())?;
+    if parsed == 0 || parsed > MODERATION_RUNNER_HARD_MAX_BODY_BYTES {
+        return Err(format!(
+            "`--max-body-bytes` must be in 1..={MODERATION_RUNNER_HARD_MAX_BODY_BYTES}"
+        ));
+    }
+    Ok(parsed)
+}
+
+fn validate_moderation_loopback_listen(value: &str, context: &str) -> Result<SocketAddr, String> {
+    let address = value.parse::<SocketAddr>().map_err(|error| {
+        format!("`--listen={value}` is not a socket address for {context}: {error}")
+    })?;
+    if !address.ip().is_loopback() {
+        return Err(format!(
+            "`--listen={value}` must use a loopback IP; expose the unauthenticated runner only through an authenticated local proxy"
+        ));
+    }
+    Ok(address)
+}
+
+fn validate_moderation_request_text(
+    value: &str,
+    maximum: usize,
+    field: &str,
+) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > maximum
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+    {
+        return Err(format!(
+            "{field} must be non-empty canonical text without padding/control characters and at most {maximum} bytes"
+        ));
+    }
+    Ok(())
+}
+
+fn read_file_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>, String> {
+    let before = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
+    if before.file_type().is_symlink() || !before.is_file() {
+        return Err(format!(
+            "{label} `{}` must be a regular non-symlink file",
+            path.display()
+        ));
+    }
+    if before.len() > maximum {
+        return Err(format!(
+            "{label} `{}` has {} bytes; maximum is {maximum}",
+            path.display(),
+            before.len()
+        ));
+    }
+    let identity = moderation_file_identity(&before);
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|error| format!("failed to open {label} `{}`: {error}", path.display()))?;
+    let opened = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect opened {label} `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if !opened.is_file() || moderation_file_identity(&opened) != identity {
+        return Err(format!(
+            "{label} `{}` changed identity while opening",
+            path.display()
+        ));
+    }
+    let capacity = usize::try_from(before.len())
+        .map_err(|_| format!("{label} size does not fit into this platform's usize"))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|error| format!("failed to reserve bounded {label} buffer: {error}"))?;
+    let read_limit = maximum
+        .checked_add(1)
+        .ok_or_else(|| format!("{label} read limit overflows u64"))?;
+    file.take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {label} `{}`: {error}", path.display()))?;
+    let observed_len =
+        u64::try_from(bytes.len()).map_err(|_| format!("{label} length does not fit into u64"))?;
+    if observed_len > maximum {
+        return Err(format!(
+            "{label} `{}` grew beyond the {maximum}-byte limit while reading",
+            path.display()
+        ));
+    }
+    let after = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to re-inspect {label} `{}`: {error}", path.display()))?;
+    if after.file_type().is_symlink()
+        || !after.is_file()
+        || moderation_file_identity(&after) != identity
+        || observed_len != before.len()
+    {
+        return Err(format!(
+            "{label} `{}` changed while it was being read",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+
+fn moderation_runner_current_executable_hash() -> Result<[u8; 32], String> {
+    let executable = env::current_exe()
+        .map_err(|error| format!("failed to locate current moderation runner binary: {error}"))?;
+    let canonical = fs::canonicalize(&executable).map_err(|error| {
+        format!(
+            "failed to canonicalize moderation runner binary `{}`: {error}",
+            executable.display()
+        )
+    })?;
+    let before = fs::symlink_metadata(&canonical).map_err(|error| {
+        format!(
+            "failed to inspect moderation runner binary `{}`: {error}",
+            canonical.display()
+        )
+    })?;
+    if before.file_type().is_symlink() || !before.is_file() {
+        return Err(format!(
+            "moderation runner binary `{}` must be a regular non-symlink file",
+            canonical.display()
+        ));
+    }
+    let identity = moderation_file_identity(&before);
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    let mut file = options.open(&canonical).map_err(|error| {
+        format!(
+            "failed to open moderation runner binary `{}`: {error}",
+            canonical.display()
+        )
+    })?;
+    let opened = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect opened moderation runner binary `{}`: {error}",
+            canonical.display()
+        )
+    })?;
+    if !opened.is_file() || moderation_file_identity(&opened) != identity {
+        return Err("moderation runner binary changed identity while opening".to_string());
+    }
+    let mut hasher = blake3::Hasher::new();
+    let mut chunk = [0_u8; 64 * 1024];
+    let mut total_bytes = 0_u64;
+    loop {
+        let read = file.read(&mut chunk).map_err(|error| {
+            format!(
+                "failed to hash moderation runner binary `{}`: {error}",
+                canonical.display()
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        total_bytes = total_bytes
+            .checked_add(
+                u64::try_from(read)
+                    .map_err(|_| "moderation runner read length does not fit u64".to_string())?,
+            )
+            .ok_or_else(|| "moderation runner binary length overflow".to_string())?;
+        hasher.update(&chunk[..read]);
+    }
+    let after = fs::symlink_metadata(&canonical).map_err(|error| {
+        format!(
+            "failed to re-inspect moderation runner binary `{}`: {error}",
+            canonical.display()
+        )
+    })?;
+    if after.file_type().is_symlink()
+        || !after.is_file()
+        || moderation_file_identity(&after) != identity
+        || total_bytes != before.len()
+    {
+        return Err("moderation runner binary changed while hashing".to_string());
+    }
+    Ok(*hasher.finalize().as_bytes())
+}
+
+#[cfg(unix)]
+fn moderation_file_identity(metadata: &Metadata) -> (u64, u64, u64, i64, i64) {
+    (
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+    )
+}
+
+#[cfg(not(unix))]
+fn moderation_file_identity(metadata: &Metadata) -> (u64, Option<SystemTime>) {
+    (metadata.len(), metadata.modified().ok())
+}
+
+fn load_moderation_runner_for_current_executable(
+    manifest: ModerationReproManifestV1,
+    artifact_root: &Path,
+) -> Result<LoadedModerationRunnerV1, String> {
+    let observed_runner_hash = moderation_runner_current_executable_hash()?;
+    LoadedModerationRunnerV1::load_verified(manifest, artifact_root, observed_runner_hash)
+        .map_err(|error| format!("failed to load verified moderation runner: {error}"))
+}
+
 fn load_moderation_repro_manifest(
     manifest_path: &Path,
     format: &str,
     context: &str,
 ) -> Result<ModerationReproManifestV1, String> {
-    let bytes = fs::read(manifest_path)
-        .map_err(|err| format!("failed to read `{}`: {err}", manifest_path.display()))?;
+    let bytes = read_file_bounded(
+        manifest_path,
+        MODERATION_RUNNER_MAX_MANIFEST_BYTES,
+        "moderation manifest",
+    )?;
 
     match format {
         "json" => norito::json::from_slice(&bytes).map_err(|err| {
@@ -8601,16 +11345,272 @@ fn load_moderation_repro_manifest(
                 manifest_path.display()
             )
         }),
-        "norito" => decode_from_bytes(&bytes).map_err(|err| {
-            format!(
-                "failed to decode Norito reproducibility manifest `{}` for `{context}`: {err}",
-                manifest_path.display()
+        "norito" => {
+            let byte_limit = usize::try_from(MODERATION_RUNNER_MAX_MANIFEST_BYTES)
+                .map_err(|_| "moderation manifest limit does not fit usize".to_string())?;
+            norito::decode_from_bytes_with_limits(
+                &bytes,
+                norito::DecodeLimits::new(1024, byte_limit, 4096, byte_limit, 32),
             )
-        }),
+            .map_err(|err| {
+                format!(
+                    "failed to decode Norito reproducibility manifest `{}` for `{context}`: {err}",
+                    manifest_path.display()
+                )
+            })
+        }
         other => Err(format!(
             "unsupported `--format={other}` for `{context}` (expected `json` or `norito`)"
         )),
     }
+}
+
+fn load_moderation_trust_policy(
+    policy_path: &Path,
+    format: &str,
+    context: &str,
+) -> Result<ModerationTrustPolicyV1, String> {
+    let bytes = read_file_bounded(
+        policy_path,
+        MODERATION_TRUST_POLICY_MAX_BYTES,
+        "moderation trust policy",
+    )?;
+    match format {
+        "json" => norito::json::from_slice(&bytes).map_err(|error| {
+            format!(
+                "failed to parse JSON moderation trust policy `{}` for `{context}`: {error}",
+                policy_path.display()
+            )
+        }),
+        "norito" => {
+            let byte_limit = usize::try_from(MODERATION_TRUST_POLICY_MAX_BYTES)
+                .map_err(|_| "moderation trust-policy limit does not fit usize".to_string())?;
+            let policy: ModerationTrustPolicyV1 = norito::decode_from_bytes_with_limits(
+                &bytes,
+                norito::DecodeLimits::new(4096, byte_limit, 4096, byte_limit, 32),
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to decode Norito moderation trust policy `{}` for `{context}`: {error}",
+                    policy_path.display()
+                )
+            })?;
+            let canonical = to_bytes(&policy).map_err(|error| {
+                format!("failed to re-encode moderation trust policy canonically: {error}")
+            })?;
+            if canonical != bytes {
+                return Err(format!(
+                    "Norito moderation trust policy `{}` is not canonically encoded",
+                    policy_path.display()
+                ));
+            }
+            Ok(policy)
+        }
+        other => Err(format!(
+            "unsupported `--trust-policy-format={other}` for `{context}` (expected `json` or `norito`)"
+        )),
+    }
+}
+
+fn parse_moderation_trust_anchor(value: &str, context: &str) -> Result<PublicKey, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!(
+            "`--trust-anchor` must not be empty for `{context}`"
+        ));
+    }
+    PublicKey::from_str(trimmed)
+        .map_err(|error| format!("invalid `--trust-anchor` for `{context}`: {error}"))
+}
+
+fn load_moderation_signing_key(path: &Path, context: &str) -> Result<PrivateKey, String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (path, context);
+        return Err(
+            "moderation result signing fails closed on non-Unix platforms until equivalent private-key file controls are implemented"
+                .to_string(),
+        );
+    }
+    #[cfg(unix)]
+    let canonical = {
+        let configured = fs::symlink_metadata(path).map_err(|error| {
+            format!(
+                "failed to inspect moderation result-signing key `{}`: {error}",
+                path.display()
+            )
+        })?;
+        if configured.file_type().is_symlink() || !configured.is_file() || configured.nlink() != 1 {
+            return Err(format!(
+                "moderation result-signing key `{}` must be a regular non-symlink with exactly one hard link",
+                path.display()
+            ));
+        }
+        if configured.mode() & 0o077 != 0 {
+            return Err(format!(
+                "moderation result-signing key `{}` must not grant group or world permissions",
+                path.display()
+            ));
+        }
+        fs::canonicalize(path).map_err(|error| {
+            format!(
+                "failed to canonicalize moderation result-signing key `{}`: {error}",
+                path.display()
+            )
+        })?
+    };
+    #[cfg(not(unix))]
+    let canonical = path.to_path_buf();
+    let bytes = read_file_bounded(
+        &canonical,
+        MODERATION_SIGNING_KEY_MAX_BYTES,
+        "moderation result-signing key",
+    )?;
+    #[cfg(unix)]
+    if fs::canonicalize(path).ok().as_ref() != Some(&canonical) {
+        return Err(format!(
+            "moderation result-signing key `{}` changed while loading",
+            path.display()
+        ));
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|error| {
+        format!(
+            "moderation result-signing key `{}` for `{context}` is not UTF-8: {error}",
+            path.display()
+        )
+    })?;
+    parse_private_key_inline(text)
+}
+
+fn load_moderation_signed_result(
+    path: &Path,
+    context: &str,
+) -> Result<ModerationSignedScreeningResultV1, String> {
+    let bytes = read_file_bounded(
+        path,
+        MODERATION_SIGNED_RESULT_MAX_BYTES,
+        "signed moderation result",
+    )?;
+    decode_moderation_signed_result(&bytes, &format!("`{}` for `{context}`", path.display()))
+}
+
+fn decode_moderation_signed_result(
+    bytes: &[u8],
+    context: &str,
+) -> Result<ModerationSignedScreeningResultV1, String> {
+    if bytes.is_empty()
+        || u64::try_from(bytes.len())
+            .ok()
+            .is_none_or(|length| length > MODERATION_SIGNED_RESULT_MAX_BYTES)
+    {
+        return Err(format!(
+            "signed moderation result {context} is outside the 1..={MODERATION_SIGNED_RESULT_MAX_BYTES}-byte bound"
+        ));
+    }
+    let byte_limit = usize::try_from(MODERATION_SIGNED_RESULT_MAX_BYTES)
+        .map_err(|_| "signed moderation result limit does not fit usize".to_string())?;
+    let result: ModerationSignedScreeningResultV1 = norito::decode_from_bytes_with_limits(
+        &bytes,
+        norito::DecodeLimits::new(4096, byte_limit, 4096, byte_limit, 32),
+    )
+    .map_err(|error| format!("failed to decode signed moderation result {context}: {error}"))?;
+    let canonical = to_bytes(&result)
+        .map_err(|error| format!("failed to re-encode signed moderation result: {error}"))?;
+    if canonical != bytes {
+        return Err(format!(
+            "signed moderation result {context} is not canonically encoded"
+        ));
+    }
+    Ok(result)
+}
+
+fn moderation_signed_result_summary_json(
+    result: &ModerationSignedScreeningResultV1,
+    canonical_bytes: &[u8],
+    provenance_head: [u8; 32],
+) -> Result<Value, String> {
+    let mut output = Map::new();
+    output.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.signed_runner_output.v1"),
+    );
+    output.insert(
+        "signed_result".into(),
+        to_value(result)
+            .map_err(|error| format!("failed to render signed result JSON: {error}"))?,
+    );
+    output.insert(
+        "signed_result_norito_b64".into(),
+        Value::from(BASE64_STANDARD.encode(canonical_bytes)),
+    );
+    output.insert(
+        "manifest_id_hex".into(),
+        Value::from(hex_encode(result.body.manifest_id)),
+    );
+    output.insert(
+        "trust_policy_id_hex".into(),
+        Value::from(hex_encode(result.body.trust_policy_id)),
+    );
+    output.insert(
+        "trust_policy_digest_hex".into(),
+        Value::from(hex_encode(result.body.trust_policy_digest)),
+    );
+    output.insert(
+        "signer_public_key".into(),
+        Value::from(result.signer_public_key.to_string()),
+    );
+    output.insert(
+        "evidence_digest_hex".into(),
+        Value::from(hex_encode(result.body.evidence_digest)),
+    );
+    output.insert(
+        "provenance_head_digest_hex".into(),
+        Value::from(hex_encode(provenance_head)),
+    );
+    output.insert("payload_bytes_included".into(), Value::from(false));
+    Ok(Value::Object(output))
+}
+
+fn moderation_authenticated_aggregate_summary_json(
+    aggregate: &ModerationCommitteeAggregateV1,
+    canonical_bytes: &[u8],
+    provenance_head: [u8; 32],
+) -> Result<Value, String> {
+    let mut output = Map::new();
+    output.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.authenticated_committee_output.v1"),
+    );
+    output.insert(
+        "aggregate".into(),
+        to_value(aggregate)
+            .map_err(|error| format!("failed to render committee aggregate JSON: {error}"))?,
+    );
+    output.insert(
+        "aggregate_norito_b64".into(),
+        Value::from(BASE64_STANDARD.encode(canonical_bytes)),
+    );
+    output.insert(
+        "aggregate_digest_hex".into(),
+        Value::from(hex_encode(aggregate.aggregate_digest)),
+    );
+    output.insert(
+        "trust_policy_digest_hex".into(),
+        Value::from(hex_encode(aggregate.trust_policy_digest)),
+    );
+    output.insert(
+        "distinct_signer_count".into(),
+        Value::from(
+            u64::try_from(aggregate.members.len())
+                .expect("bounded committee member count fits u64"),
+        ),
+    );
+    output.insert(
+        "provenance_head_digest_hex".into(),
+        Value::from(hex_encode(provenance_head)),
+    );
+    output.insert("payload_bytes_included".into(), Value::from(false));
+    Ok(Value::Object(output))
 }
 
 fn validate_moderation_local_runner_manifest(
@@ -8656,14 +11656,24 @@ fn validate_moderation_local_runner_manifest(
 }
 
 fn moderation_local_runner_screening_json(
-    manifest: &ModerationReproManifestV1,
+    runner: &LoadedModerationRunnerV1,
     payload: &[u8],
     subject: &str,
     screened_at_unix: u64,
     notes: Option<&str>,
+    max_payload_bytes: u32,
 ) -> Result<Value, String> {
+    if screened_at_unix == 0 {
+        return Err("moderation runner `screened_at_unix` must be greater than zero".to_string());
+    }
+    let manifest = runner.manifest();
     let subject_digest = *blake3_hash(payload).as_bytes();
-    let score = moderation_local_runner_combined_score(manifest, &subject_digest, payload)?;
+    let ModerationInferenceV1 {
+        combined_score_bps: score,
+        model_scores,
+    } = runner
+        .infer(payload, max_payload_bytes)
+        .map_err(|error| format!("moderation inference failed: {error}"))?;
     let verdict = moderation_score_verdict(score, manifest.body.thresholds);
     let policy_digest = moderation_local_runner_policy_digest(manifest)?;
     let evidence_digest = moderation_local_runner_evidence_digest(
@@ -8674,6 +11684,7 @@ fn moderation_local_runner_screening_json(
         verdict,
         screened_at_unix,
         &policy_digest,
+        &model_scores,
     );
 
     let mut output = Map::new();
@@ -8691,6 +11702,15 @@ fn moderation_local_runner_screening_json(
         Value::from(hex_encode(manifest.body.runner_hash)),
     );
     output.insert("combined_score_bps".into(), Value::from(u64::from(score)));
+    output.insert(
+        "model_scores".into(),
+        Value::Array(
+            model_scores
+                .iter()
+                .map(moderation_model_score_json)
+                .collect(),
+        ),
+    );
     output.insert("verdict".into(), Value::from(verdict.to_string()));
     output.insert("screened_at_unix".into(), Value::from(screened_at_unix));
     output.insert(
@@ -8711,56 +11731,18 @@ fn moderation_local_runner_screening_json(
     Ok(Value::Object(output))
 }
 
-fn moderation_local_runner_combined_score(
-    manifest: &ModerationReproManifestV1,
-    subject_digest: &[u8; 32],
-    payload: &[u8],
-) -> Result<u16, String> {
-    let payload_len = u64::try_from(payload.len())
-        .map_err(|_| "payload length does not fit into u64".to_string())?;
-    let mut weighted_sum = 0_u128;
-    let mut total_weight = 0_u128;
-
-    for model in &manifest.body.models {
-        let weight = model.weight.unwrap_or(10_000);
-        if weight == 0 {
-            continue;
-        }
-        let score = moderation_local_model_score_bps(manifest, model, subject_digest, payload_len);
-        weighted_sum = weighted_sum.saturating_add(u128::from(score) * u128::from(weight));
-        total_weight = total_weight.saturating_add(u128::from(weight));
-    }
-
-    if total_weight == 0 {
-        return Err("manifest must include at least one positive model weight".to_string());
-    }
-    let rounded = (weighted_sum + (total_weight / 2)) / total_weight;
-    u16::try_from(rounded).map_err(|_| "combined local runner score overflowed u16".to_string())
-}
-
-fn moderation_local_model_score_bps(
-    manifest: &ModerationReproManifestV1,
-    model: &ModerationModelFingerprintV1,
-    subject_digest: &[u8; 32],
-    payload_len: u64,
-) -> u16 {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(MODERATION_LOCAL_RUNNER_MODEL_SCORE_DOMAIN_V1);
-    hasher.update(&manifest.body.manifest_id);
-    hasher.update(&manifest.body.runner_hash);
-    update_hash_string(&mut hasher, &manifest.body.seed_material.domain_tag);
-    hasher.update(&manifest.body.seed_material.seed_version.to_le_bytes());
-    hasher.update(&manifest.body.seed_material.run_nonce);
-    hasher.update(&model.model_id);
-    hasher.update(&model.artifact_digest);
-    hasher.update(&model.weights_digest);
-    hasher.update(&model.opset.to_le_bytes());
-    hasher.update(subject_digest);
-    hasher.update(&payload_len.to_le_bytes());
-    let digest = hasher.finalize();
-    let mut first = [0_u8; 8];
-    first.copy_from_slice(&digest.as_bytes()[..8]);
-    (u64::from_le_bytes(first) % 10_001) as u16
+fn moderation_model_score_json(score: &ModerationModelScoreV1) -> Value {
+    let mut output = Map::new();
+    output.insert(
+        "model_id_hex".into(),
+        Value::from(hex_encode(score.model_id)),
+    );
+    output.insert(
+        "artifact_digest_hex".into(),
+        Value::from(hex_encode(score.artifact_digest)),
+    );
+    output.insert("score_bps".into(), Value::from(u64::from(score.score_bps)));
+    Value::Object(output)
 }
 
 fn moderation_score_verdict(score: u16, thresholds: ModerationThresholdsV1) -> &'static str {
@@ -8792,6 +11774,7 @@ fn moderation_local_runner_evidence_digest(
     verdict: &str,
     screened_at_unix: u64,
     policy_digest: &[u8; 32],
+    model_scores: &[ModerationModelScoreV1],
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(MODERATION_LOCAL_RUNNER_EVIDENCE_DOMAIN_V1);
@@ -8803,6 +11786,16 @@ fn moderation_local_runner_evidence_digest(
     update_hash_string(&mut hasher, verdict);
     hasher.update(&screened_at_unix.to_le_bytes());
     hasher.update(policy_digest);
+    hasher.update(
+        &u64::try_from(model_scores.len())
+            .expect("validated runner model count fits u64")
+            .to_le_bytes(),
+    );
+    for model_score in model_scores {
+        hasher.update(&model_score.model_id);
+        hasher.update(&model_score.artifact_digest);
+        hasher.update(&model_score.score_bps.to_le_bytes());
+    }
     *hasher.finalize().as_bytes()
 }
 
@@ -9843,6 +12836,7 @@ mod manifest_tests {
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::account::AccountId;
+    use iroha_data_model::sorafs::moderation::ModerationModelFingerprintV1;
     use norito::json::{Map, Value};
     use sorafs_orchestrator::proxy::LocalQuicProxyConfig;
     use tempfile::TempDir;
@@ -9916,6 +12910,20 @@ mod manifest_tests {
             !real_dir.join("output.txt").exists(),
             "symlink parent should not receive output"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn moderation_bounded_reader_rejects_symlink_input() {
+        let temp = TempDir::new().expect("tempdir");
+        let target = temp.path().join("target");
+        let linked = temp.path().join("linked");
+        fs::write(&target, b"manifest").expect("write target");
+        std::os::unix::fs::symlink(&target, &linked).expect("create symlink");
+
+        let error = read_file_bounded(&linked, 1024, "test input")
+            .expect_err("symlink input must be rejected");
+        assert!(error.contains("non-symlink"), "unexpected error: {error}");
     }
 
     #[test]
@@ -10017,11 +13025,13 @@ mod manifest_tests {
             ModerationReproSignatureV1, ModerationSeedMaterialV1,
         };
 
-        let body = ModerationReproBodyV1 {
+        let (models, _) = moderation_model_artifacts_fixture();
+        let mut body = ModerationReproBodyV1 {
             schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
             manifest_id: [0xA1; 16],
-            manifest_digest: [0xB2; 32],
-            runner_hash: [0xC3; 32],
+            manifest_digest: [0; 32],
+            runner_hash: moderation_runner_current_executable_hash()
+                .expect("hash fixture runner executable"),
             runtime_version: "sorafs-ai-runner local-test".to_string(),
             issued_at_unix: 1_800_000_000,
             seed_material: ModerationSeedMaterialV1 {
@@ -10033,24 +13043,11 @@ mod manifest_tests {
                 quarantine: 6_000,
                 escalate: 8_500,
             },
-            models: vec![
-                ModerationModelFingerprintV1 {
-                    model_id: [0x11; 16],
-                    artifact_digest: [0x22; 32],
-                    weights_digest: [0x33; 32],
-                    opset: 17,
-                    weight: Some(7_000),
-                },
-                ModerationModelFingerprintV1 {
-                    model_id: [0x44; 16],
-                    artifact_digest: [0x55; 32],
-                    weights_digest: [0x66; 32],
-                    opset: 17,
-                    weight: Some(3_000),
-                },
-            ],
+            models,
             notes: Some("local runner fixture".to_string()),
         };
+        body.refresh_manifest_digest()
+            .expect("refresh fixture manifest digest");
         let keypair = iroha_crypto::KeyPair::try_from_seed(vec![0xE5; 32], Algorithm::Ed25519)
             .expect("derive moderation fixture keypair");
         let signature = iroha_crypto::SignatureOf::try_new(keypair.private_key(), &body)
@@ -10065,7 +13062,68 @@ mod manifest_tests {
         }
     }
 
+    fn moderation_model_artifacts_fixture()
+    -> (Vec<ModerationModelFingerprintV1>, Vec<(String, Vec<u8>)>) {
+        use iroha_data_model::sorafs::moderation::{
+            MODERATION_MODEL_ARTIFACT_VERSION_V1, MODERATION_MODEL_FEATURE_COUNT_V1,
+            MODERATION_MODEL_WORKING_MEMORY_BYTES_V1, ModerationCalibrationKnotV1,
+            ModerationFeatureProfileV1, ModerationModelArtifactV1, ModerationModelEngineV1,
+            moderation_model_required_operations_v1,
+        };
+        use sorafs_orchestrator::moderation_runner::fingerprint_model_artifact;
+
+        let mut fingerprints = Vec::new();
+        let mut files = Vec::new();
+        for (model_id, filename, feature, signed_weight, ensemble_weight) in [
+            ([0x11; 16], "model-11.norito", b'a', 1, 7_000),
+            ([0x44; 16], "model-44.norito", b'z', -1, 3_000),
+        ] {
+            let calibration = vec![
+                ModerationCalibrationKnotV1 {
+                    input: -10_000,
+                    score_bps: 0,
+                },
+                ModerationCalibrationKnotV1 {
+                    input: 10_000,
+                    score_bps: 10_000,
+                },
+            ];
+            let mut weights = vec![0; MODERATION_MODEL_FEATURE_COUNT_V1];
+            weights[usize::from(feature)] = signed_weight;
+            let artifact = ModerationModelArtifactV1 {
+                schema_version: MODERATION_MODEL_ARTIFACT_VERSION_V1,
+                engine: ModerationModelEngineV1::DeterministicLinearV1,
+                feature_profile: ModerationFeatureProfileV1::ByteHistogramAndBigramV1,
+                model_id,
+                max_input_bytes: 4096,
+                max_operations: moderation_model_required_operations_v1(4096, calibration.len())
+                    .expect("fixture operation budget"),
+                working_memory_bytes: MODERATION_MODEL_WORKING_MEMORY_BYTES_V1,
+                bias: 0,
+                weights,
+                calibration,
+            };
+            let (fingerprint, bytes) =
+                fingerprint_model_artifact(filename, &artifact, Some(ensemble_weight))
+                    .expect("fixture model fingerprint");
+            fingerprints.push(fingerprint);
+            files.push((filename.to_owned(), bytes));
+        }
+        (fingerprints, files)
+    }
+
+    fn write_moderation_model_artifacts_fixture(root: &Path) {
+        fs::create_dir_all(root).expect("create fixture artifact root");
+        for (path, bytes) in moderation_model_artifacts_fixture().1 {
+            fs::write(root.join(path), bytes).expect("write fixture model artifact");
+        }
+    }
+
     fn resign_moderation_repro_manifest(manifest: &mut ModerationReproManifestV1) {
+        manifest
+            .body
+            .refresh_manifest_digest()
+            .expect("refresh fixture manifest digest");
         let keypair = iroha_crypto::KeyPair::try_from_seed(vec![0xE5; 32], Algorithm::Ed25519)
             .expect("derive moderation fixture keypair");
         let signature = iroha_crypto::SignatureOf::try_new(keypair.private_key(), &manifest.body)
@@ -10101,6 +13159,8 @@ mod manifest_tests {
         let manifest_path = root.join("repro.json");
         let payload_path = root.join("payload.bin");
         let out_path = root.join("screening.json");
+        let artifact_root = root.join("artifacts");
+        write_moderation_model_artifacts_fixture(&artifact_root);
         let payload = b"moderation payload bytes";
         fs::write(
             &manifest_path,
@@ -10111,6 +13171,7 @@ mod manifest_tests {
 
         moderation_run_local(vec![
             format!("--manifest={}", manifest_path.display()),
+            format!("--artifact-root={}", artifact_root.display()),
             format!("--payload={}", payload_path.display()),
             "--subject=cid:bafy-local-runner".to_string(),
             "--screened-at=1800001234".to_string(),
@@ -10121,12 +13182,19 @@ mod manifest_tests {
 
         let rendered = fs::read_to_string(&out_path).expect("read runner output");
         let value: Value = norito::json::from_str(&rendered).expect("parse runner output");
+        let expected_runner = LoadedModerationRunnerV1::load_verified(
+            manifest.clone(),
+            &artifact_root,
+            manifest.body.runner_hash,
+        )
+        .expect("load expected fixture runner");
         let expected = moderation_local_runner_screening_json(
-            &manifest,
+            &expected_runner,
             payload,
             "cid:bafy-local-runner",
             1_800_001_234,
             Some("local deterministic run"),
+            MODERATION_RUNNER_DEFAULT_MAX_PAYLOAD_BYTES,
         )
         .expect("direct local runner output");
         assert_eq!(value, expected);
@@ -10178,11 +13246,111 @@ mod manifest_tests {
     fn moderation_runner_fixture_service(
         manifest: ModerationReproManifestV1,
     ) -> ModerationRunnerService {
-        ModerationRunnerService {
+        let artifact_root = TempDir::new().expect("fixture artifact root");
+        write_moderation_model_artifacts_fixture(artifact_root.path());
+        let observed_runner_hash = manifest.body.runner_hash;
+        let runner = LoadedModerationRunnerV1::load_verified(
             manifest,
+            artifact_root.path(),
+            observed_runner_hash,
+        )
+        .expect("load fixture moderation runner");
+        ModerationRunnerService {
+            runner,
+            signed: None,
             manifest_source: "fixture-repro.json".to_string(),
             max_body_bytes: 4096,
+            max_payload_bytes: 4096,
         }
+    }
+
+    fn signed_trust_policy_fixture(
+        manifest: &ModerationReproManifestV1,
+        governance: &iroha_crypto::KeyPair,
+        runner_keys: &[&iroha_crypto::KeyPair],
+        result_quorum: u16,
+        now_unix: u64,
+    ) -> ModerationTrustPolicyV1 {
+        use iroha_data_model::sorafs::moderation::{
+            MODERATION_TRUST_POLICY_VERSION_V1, ModerationTrustPolicyBodyV1,
+            ModerationTrustPolicySignatureV1, ModerationTrustedSignerV1,
+        };
+
+        let mut trusted_signers = runner_keys
+            .iter()
+            .enumerate()
+            .map(|(index, keypair)| ModerationTrustedSignerV1 {
+                role: format!("runner-{index}"),
+                public_key: keypair.public_key().clone(),
+                valid_from_unix: now_unix - 60,
+                valid_until_unix: now_unix + 3_600,
+                revoked_at_unix: None,
+            })
+            .collect::<Vec<_>>();
+        trusted_signers.sort_by(|left, right| left.public_key.cmp(&right.public_key));
+        let mut body = ModerationTrustPolicyBodyV1 {
+            schema_version: MODERATION_TRUST_POLICY_VERSION_V1,
+            policy_id: [0xC1; 16],
+            policy_digest: [0; 32],
+            manifest_id: manifest.body.manifest_id,
+            manifest_digest: manifest.body.manifest_digest,
+            runner_hash: manifest.body.runner_hash,
+            issued_at_unix: now_unix - 120,
+            valid_from_unix: now_unix - 60,
+            valid_until_unix: now_unix + 3_600,
+            result_quorum,
+            governance_quorum: 1,
+            max_result_age_secs: 600,
+            max_result_ttl_secs: 300,
+            max_clock_skew_secs: 5,
+            trusted_signers,
+            notes: Some("externally anchored test policy".to_string()),
+        };
+        body.refresh_policy_digest().expect("policy digest");
+        ModerationTrustPolicyV1 {
+            signatures: vec![ModerationTrustPolicySignatureV1 {
+                role: "governance".to_string(),
+                public_key: governance.public_key().clone(),
+                signature: iroha_crypto::SignatureOf::try_new(governance.private_key(), &body)
+                    .expect("policy signature"),
+            }],
+            body,
+        }
+    }
+
+    fn moderation_signed_runner_fixture_service()
+    -> (ModerationRunnerService, TempDir, ModerationReproManifestV1) {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let mut service = moderation_runner_fixture_service(manifest.clone());
+        let now_unix = moderation_trusted_now_unix().expect("trusted time");
+        let governance = iroha_crypto::KeyPair::try_random().expect("governance key");
+        let runner_key = iroha_crypto::KeyPair::try_random().expect("runner key");
+        let policy =
+            signed_trust_policy_fixture(&manifest, &governance, &[&runner_key], 1, now_unix);
+        let trust_anchors = std::iter::once(governance.public_key().clone()).collect();
+        let signing_runner = LoadedModerationSigningRunnerV1::from_verified(
+            service.runner.clone(),
+            policy,
+            trust_anchors.clone(),
+            1,
+            runner_key.private_key().clone(),
+            now_unix,
+        )
+        .expect("signing runner");
+        let provenance_root = TempDir::new().expect("provenance root");
+        let provenance = ModerationProvenanceStoreV1::open(
+            provenance_root.path().join("runner-provenance.to"),
+            [0xD1; 16],
+        )
+        .expect("provenance store");
+        service.signed = Some(ModerationSignedRunnerState {
+            signing_runner,
+            provenance,
+            trust_anchors,
+            minimum_governance_quorum: 1,
+            transaction_guard: Mutex::new(()),
+        });
+        (service, provenance_root, manifest)
     }
 
     fn moderation_runner_http_request(method: &str, path: &str, body: &[u8]) -> Vec<u8> {
@@ -10299,7 +13467,7 @@ mod manifest_tests {
     fn moderation_registry_service_rejects_conflicting_manifest_id() {
         let repro_manifest = signed_moderation_repro_manifest_fixture();
         let mut conflicting_manifest = repro_manifest.clone();
-        conflicting_manifest.body.manifest_digest = [0xFA; 32];
+        conflicting_manifest.body.notes = Some("conflicting release metadata".to_string());
         resign_moderation_repro_manifest(&mut conflicting_manifest);
         let temp = TempDir::new().expect("tempdir");
         let state_path = temp.path().join("registry-state.to");
@@ -10340,10 +13508,332 @@ mod manifest_tests {
     ) -> ModerationCommitteeService {
         ModerationCommitteeService {
             manifest,
+            authenticated: None,
             manifest_source: "fixture-repro.json".to_string(),
             quorum,
             max_body_bytes: 4096,
         }
+    }
+
+    #[test]
+    fn signed_runner_endpoint_uses_server_time_and_persists_verified_result() {
+        let (service, _provenance_root, manifest) = moderation_signed_runner_fixture_service();
+        let request_body = to_vec(&Value::Object(Map::from_iter([
+            ("subject".into(), Value::from("cid:production-subject")),
+            (
+                "payload_b64".into(),
+                Value::from(BASE64_STANDARD.encode(b"signed payload")),
+            ),
+            ("notes".into(), Value::from("operator-reviewed")),
+        ])))
+        .expect("request JSON");
+        let request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/runner/screen-signed",
+            &request_body,
+        );
+        let response = moderation_runner_http_response(&service, &request, service.max_body_bytes);
+        let (header, output) = moderation_runner_response_parts(&response);
+        assert!(header.starts_with("HTTP/1.1 200 OK"), "{header}");
+        assert_eq!(
+            output
+                .get("payload_bytes_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let encoded = output
+            .get("signed_result_norito_b64")
+            .and_then(Value::as_str)
+            .expect("signed result bytes");
+        let bytes = BASE64_STANDARD.decode(encoded).expect("base64 result");
+        let result = decode_moderation_signed_result(&bytes, "test response")
+            .expect("canonical signed result");
+        assert_eq!(result.body.subject, "cid:production-subject");
+        assert_eq!(
+            result.body.subject_digest,
+            *blake3_hash(b"signed payload").as_bytes()
+        );
+        let state = service.signed.as_ref().expect("signed state");
+        result
+            .validate(
+                &manifest,
+                state.signing_runner.trust_policy(),
+                moderation_trusted_now_unix().expect("trusted time"),
+            )
+            .expect("independent signed result validation");
+        let provenance = state.provenance.snapshot().expect("provenance snapshot");
+        assert_eq!(provenance.entries.len(), 1);
+        provenance.validate_chain().expect("valid provenance chain");
+
+        let status = moderation_runner_status_json(&service, "ready", None);
+        assert_eq!(
+            status.get("signed_results").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            status.get("provenance_entry_count").and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn signed_runner_rejects_client_time_unsigned_route_and_unknown_fields() {
+        let (service, _provenance_root, _) = moderation_signed_runner_fixture_service();
+        let with_client_time = to_vec(&Value::Object(Map::from_iter([
+            ("subject".into(), Value::from("cid:subject")),
+            (
+                "payload_b64".into(),
+                Value::from(BASE64_STANDARD.encode(b"payload")),
+            ),
+            ("screened_at_unix".into(), Value::from(1_u64)),
+        ])))
+        .expect("request JSON");
+        let request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/runner/screen-signed",
+            &with_client_time,
+        );
+        let response = moderation_runner_http_response(&service, &request, service.max_body_bytes);
+        assert!(
+            moderation_runner_response_parts(&response)
+                .0
+                .starts_with("HTTP/1.1 400 Bad Request")
+        );
+
+        let unsigned_request =
+            moderation_runner_http_request("POST", "/v1/sorafs/moderation/runner/screen", b"{}");
+        let unsigned_response =
+            moderation_runner_http_response(&service, &unsigned_request, service.max_body_bytes);
+        assert!(
+            moderation_runner_response_parts(&unsigned_response)
+                .0
+                .starts_with("HTTP/1.1 409 Conflict")
+        );
+        assert_eq!(
+            service
+                .signed
+                .as_ref()
+                .expect("signed state")
+                .provenance
+                .snapshot()
+                .expect("snapshot")
+                .entries
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn signed_runner_fails_fast_when_signing_transaction_is_busy() {
+        let (service, _provenance_root, _) = moderation_signed_runner_fixture_service();
+        let state = service.signed.as_ref().expect("signed state");
+        let _held = state.transaction_guard.lock().expect("hold transaction");
+        let request_body = to_vec(&Value::Object(Map::from_iter([
+            ("subject".into(), Value::from("cid:subject")),
+            (
+                "payload_b64".into(),
+                Value::from(BASE64_STANDARD.encode(b"payload")),
+            ),
+        ])))
+        .expect("request JSON");
+        assert!(matches!(
+            moderation_runner_signed_screen_request_json(&service, &request_body)
+                .expect_err("busy signer fails fast"),
+            ModerationSignedRunnerRequestError::Unavailable(_)
+        ));
+    }
+
+    fn moderation_authenticated_committee_fixture_service() -> (
+        ModerationCommitteeService,
+        TempDir,
+        Vec<ModerationSignedScreeningResultV1>,
+    ) {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let runner_service = moderation_runner_fixture_service(manifest.clone());
+        let now_unix = moderation_trusted_now_unix().expect("trusted time");
+        let governance = iroha_crypto::KeyPair::try_random().expect("governance key");
+        let runner_a = iroha_crypto::KeyPair::try_random().expect("runner a");
+        let runner_b = iroha_crypto::KeyPair::try_random().expect("runner b");
+        let policy = signed_trust_policy_fixture(
+            &manifest,
+            &governance,
+            &[&runner_a, &runner_b],
+            2,
+            now_unix,
+        );
+        let trust_anchors: BTreeSet<PublicKey> =
+            std::iter::once(governance.public_key().clone()).collect();
+        let signer_a = LoadedModerationSigningRunnerV1::from_verified(
+            runner_service.runner.clone(),
+            policy.clone(),
+            trust_anchors.clone(),
+            1,
+            runner_a.private_key().clone(),
+            now_unix,
+        )
+        .expect("signer a");
+        let signer_b = LoadedModerationSigningRunnerV1::from_verified(
+            runner_service.runner,
+            policy.clone(),
+            trust_anchors.clone(),
+            1,
+            runner_b.private_key().clone(),
+            now_unix,
+        )
+        .expect("signer b");
+        let payload = b"committee payload";
+        let result_a = signer_a
+            .screen_signed(payload, 4096, "cid:committee-subject", None, now_unix)
+            .expect("result a");
+        let result_b = signer_b
+            .screen_signed(payload, 4096, "cid:committee-subject", None, now_unix)
+            .expect("result b");
+        let provenance_root = TempDir::new().expect("provenance root");
+        let provenance = ModerationProvenanceStoreV1::open(
+            provenance_root.path().join("committee-provenance.to"),
+            [0xD2; 16],
+        )
+        .expect("provenance store");
+        (
+            ModerationCommitteeService {
+                manifest,
+                authenticated: Some(ModerationAuthenticatedCommitteeState {
+                    trust_policy: policy,
+                    trust_anchors,
+                    minimum_governance_quorum: 1,
+                    provenance,
+                    transaction_guard: Mutex::new(()),
+                }),
+                manifest_source: "fixture-repro.json".to_string(),
+                quorum: 2,
+                max_body_bytes: 1024 * 1024,
+            },
+            provenance_root,
+            vec![result_a, result_b],
+        )
+    }
+
+    fn authenticated_committee_request(results: &[ModerationSignedScreeningResultV1]) -> Vec<u8> {
+        let encoded = results
+            .iter()
+            .map(|result| {
+                Value::from(
+                    BASE64_STANDARD.encode(to_bytes(result).expect("canonical signed result")),
+                )
+            })
+            .collect();
+        to_vec(&Value::Object(Map::from_iter([(
+            "signed_results_norito_b64".into(),
+            Value::Array(encoded),
+        )])))
+        .expect("committee request JSON")
+    }
+
+    #[test]
+    fn authenticated_committee_endpoint_verifies_quorum_and_persists_full_provenance() {
+        let (service, _provenance_root, results) =
+            moderation_authenticated_committee_fixture_service();
+        let body = authenticated_committee_request(&results);
+        let request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/committee/aggregate-authenticated",
+            &body,
+        );
+        let response =
+            moderation_committee_http_response(&service, &request, service.max_body_bytes);
+        let (header, output) = moderation_runner_response_parts(&response);
+        assert!(header.starts_with("HTTP/1.1 200 OK"), "{header}");
+        assert_eq!(
+            output.get("distinct_signer_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            output
+                .get("payload_bytes_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let encoded = output
+            .get("aggregate_norito_b64")
+            .and_then(Value::as_str)
+            .expect("aggregate bytes");
+        let bytes = BASE64_STANDARD.decode(encoded).expect("base64 aggregate");
+        let aggregate: ModerationCommitteeAggregateV1 =
+            decode_from_bytes(&bytes).expect("decode aggregate");
+        assert_eq!(aggregate.members.len(), 2);
+        assert_eq!(
+            aggregate.computed_aggregate_digest().unwrap(),
+            aggregate.aggregate_digest
+        );
+        let state = service.authenticated.as_ref().expect("authenticated state");
+        let provenance = state.provenance.snapshot().expect("snapshot");
+        assert_eq!(provenance.entries.len(), 3);
+        provenance.validate_chain().expect("valid chain");
+        assert!(matches!(
+            &provenance.entries[2].payload,
+            iroha_data_model::sorafs::moderation::ModerationProvenancePayloadV1::CommitteeAggregate(
+                _
+            )
+        ));
+    }
+
+    #[test]
+    fn authenticated_committee_rejects_duplicate_signer_payload_bytes_and_legacy_route() {
+        let (service, _provenance_root, results) =
+            moderation_authenticated_committee_fixture_service();
+        let duplicate_body =
+            authenticated_committee_request(&[results[0].clone(), results[0].clone()]);
+        let duplicate_request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/committee/aggregate-authenticated",
+            &duplicate_body,
+        );
+        let duplicate_response = moderation_committee_http_response(
+            &service,
+            &duplicate_request,
+            service.max_body_bytes,
+        );
+        assert!(
+            moderation_runner_response_parts(&duplicate_response)
+                .0
+                .starts_with("HTTP/1.1 400 Bad Request")
+        );
+
+        let payload_body = to_vec(&Value::Object(Map::from_iter([
+            ("signed_results_norito_b64".into(), Value::Array(Vec::new())),
+            ("payload_b64".into(), Value::from("c2VjcmV0")),
+        ])))
+        .expect("payload request");
+        assert!(matches!(
+            moderation_committee_authenticated_request_json(&service, &payload_body)
+                .expect_err("payload bytes forbidden"),
+            ModerationAuthenticatedCommitteeRequestError::BadRequest(_)
+        ));
+
+        let legacy_request = moderation_runner_http_request(
+            "POST",
+            "/v1/sorafs/moderation/committee/aggregate",
+            b"{}",
+        );
+        let legacy_response =
+            moderation_committee_http_response(&service, &legacy_request, service.max_body_bytes);
+        assert!(
+            moderation_runner_response_parts(&legacy_response)
+                .0
+                .starts_with("HTTP/1.1 409 Conflict")
+        );
+        assert_eq!(
+            service
+                .authenticated
+                .as_ref()
+                .expect("authenticated state")
+                .provenance
+                .snapshot()
+                .expect("snapshot")
+                .entries
+                .len(),
+            0
+        );
     }
 
     fn moderation_runner_canary_fixture_server(
@@ -10381,6 +13871,50 @@ mod manifest_tests {
         (format!("http://{addr}"), handle)
     }
 
+    fn moderation_canary_test_context(generated_at_unix: u64) -> ModerationCanaryDeploymentContext {
+        ModerationCanaryDeploymentContext {
+            generated_at_unix,
+            deployment_id: "ai-prescreen-production-20260701".to_string(),
+            environment: "production".to_string(),
+        }
+    }
+
+    fn moderation_canary_test_probe(
+        method: &'static str,
+        url: &str,
+        response: Value,
+    ) -> ModerationCanaryHttpProbe {
+        let request_body = if method == "GET" { &[][..] } else { b"{}" };
+        let response_body = to_vec(&response).expect("encode test canary response");
+        ModerationCanaryHttpProbe {
+            method,
+            url: url.to_string(),
+            status_code: 200,
+            request_bytes: u64::try_from(request_body.len()).expect("request length"),
+            request_body_blake3: *blake3_hash(request_body).as_bytes(),
+            response_bytes: u64::try_from(response_body.len()).expect("response length"),
+            response_body_blake3: *blake3_hash(&response_body).as_bytes(),
+            response,
+        }
+    }
+
+    fn moderation_canary_test_result_fingerprint(index: u8) -> Value {
+        let digest = [index; 32];
+        Value::Object(Map::from_iter([
+            (
+                "name".into(),
+                Value::from(format!(
+                    "ai-prescreen-committee-result-{}",
+                    hex_encode(digest)
+                )),
+            ),
+            ("bytes".into(), Value::from(256_u64 + u64::from(index))),
+            ("body_blake3_hex".into(), Value::from(hex_encode(digest))),
+            ("payload_bytes_included".into(), Value::from(false)),
+            ("private_payloads_included".into(), Value::from(false)),
+        ]))
+    }
+
     fn moderation_committee_result_fixture(
         manifest: &ModerationReproManifestV1,
         payload: &[u8],
@@ -10388,6 +13922,11 @@ mod manifest_tests {
         score: u16,
         screened_at_unix: u64,
     ) -> Value {
+        let service = moderation_runner_fixture_service(manifest.clone());
+        let inference = service
+            .runner
+            .infer(payload, service.max_payload_bytes)
+            .expect("fixture inference");
         let verdict = moderation_score_verdict(score, manifest.body.thresholds);
         let subject_digest = *blake3_hash(payload).as_bytes();
         let policy_digest = moderation_local_runner_policy_digest(manifest).expect("policy digest");
@@ -10399,13 +13938,15 @@ mod manifest_tests {
             verdict,
             screened_at_unix,
             &policy_digest,
+            &inference.model_scores,
         );
         let mut value = moderation_local_runner_screening_json(
-            manifest,
+            &service.runner,
             payload,
             subject,
             screened_at_unix,
             Some("committee fixture"),
+            service.max_payload_bytes,
         )
         .expect("runner output");
         let object = value.as_object_mut().expect("runner output object");
@@ -10445,7 +13986,7 @@ mod manifest_tests {
         );
         assert_eq!(
             body.get("outbound_network").and_then(Value::as_str),
-            Some("disabled")
+            Some("model_engine_none_process_policy_required")
         );
     }
 
@@ -10455,10 +13996,10 @@ mod manifest_tests {
         let service = moderation_runner_fixture_service(manifest.clone());
         let payload = b"runner service moderation payload";
         let body = norito::json::to_vec(&norito::json!({
-            "subject": " cid:bafy-runner-service ",
+            "subject": "cid:bafy-runner-service",
             "payload_b64": (BASE64_STANDARD.encode(payload)),
             "screened_at_unix": 1_800_002_000_u64,
-            "notes": " service fixture "
+            "notes": "service fixture"
         }))
         .expect("screen request JSON");
         let request =
@@ -10467,11 +14008,12 @@ mod manifest_tests {
         let response = moderation_runner_http_response(&service, &request, service.max_body_bytes);
         let (header, actual) = moderation_runner_response_parts(&response);
         let expected = moderation_local_runner_screening_json(
-            &manifest,
+            &service.runner,
             payload,
             "cid:bafy-runner-service",
             1_800_002_000,
             Some("service fixture"),
+            service.max_payload_bytes,
         )
         .expect("expected runner output");
 
@@ -10500,8 +14042,19 @@ mod manifest_tests {
             response.runner_hash_hex,
             hex_encode(manifest.body.runner_hash)
         );
-        assert_eq!(response.outbound_network, "disabled");
+        assert_eq!(
+            response.outbound_network,
+            "model_engine_none_process_policy_required"
+        );
         assert_eq!(response.listen, "127.0.0.1:9199");
+        assert_eq!(
+            response.max_grpc_in_flight,
+            u64::try_from(MODERATION_RUNNER_MAX_GRPC_IN_FLIGHT).expect("limit fits u64")
+        );
+        assert_eq!(
+            response.max_grpc_response_bytes,
+            u64::try_from(MODERATION_RUNNER_MAX_GRPC_RESPONSE_BYTES).expect("limit fits u64")
+        );
     }
 
     #[test]
@@ -10513,20 +14066,21 @@ mod manifest_tests {
         let response = moderation_runner_screen_request_proto(
             &service,
             ModerationRunnerScreenRequest {
-                subject: " cid:bafy-runner-grpc ".to_string(),
+                subject: "cid:bafy-runner-grpc".to_string(),
                 payload: payload.clone(),
                 screened_at_unix: 1_800_002_100,
-                notes: Some(" grpc fixture ".to_string()),
+                notes: Some("grpc fixture".to_string()),
             },
         )
         .expect("gRPC screen succeeds");
         let expected = moderation_runner_screen_proto_from_json(
             &moderation_local_runner_screening_json(
-                &manifest,
+                &service.runner,
                 &payload,
                 "cid:bafy-runner-grpc",
                 1_800_002_100,
                 Some("grpc fixture"),
+                service.max_payload_bytes,
             )
             .expect("local runner output"),
         )
@@ -10542,6 +14096,7 @@ mod manifest_tests {
         assert_eq!(response.evidence_digest_hex, expected.evidence_digest_hex);
         assert_eq!(response.policy_digest_hex, expected.policy_digest_hex);
         assert_eq!(response.notes, expected.notes);
+        assert_eq!(response.model_scores, expected.model_scores);
         assert_eq!(
             response.subject_digest_hex,
             hex_encode(blake3_hash(&payload).as_bytes())
@@ -10569,6 +14124,26 @@ mod manifest_tests {
         };
 
         assert!(error.contains("payload exceeds configured maximum"));
+    }
+
+    #[test]
+    fn moderation_runner_grpc_maximum_text_response_fits_the_transport_cap() {
+        let service = moderation_runner_fixture_service(signed_moderation_repro_manifest_fixture());
+        let response = moderation_runner_screen_request_proto(
+            &service,
+            ModerationRunnerScreenRequest {
+                subject: "s".repeat(MODERATION_RUNNER_MAX_SUBJECT_BYTES),
+                payload: b"payload".to_vec(),
+                screened_at_unix: 1,
+                notes: Some("n".repeat(MODERATION_RUNNER_MAX_NOTES_BYTES)),
+            },
+        )
+        .expect("maximum bounded text response");
+
+        assert!(
+            <ModerationRunnerScreenResponse as prost::Message>::encoded_len(&response)
+                < MODERATION_RUNNER_MAX_GRPC_RESPONSE_BYTES
+        );
     }
 
     #[test]
@@ -10613,11 +14188,216 @@ mod manifest_tests {
     }
 
     #[test]
+    fn moderation_http_limits_are_exact_bounded_and_overflow_safe() {
+        assert_eq!(
+            moderation_http_hard_limit(4, "test").expect("small hard limit"),
+            4 + MODERATION_RUNNER_MAX_HEADER_BYTES + 4
+        );
+        assert!(moderation_http_hard_limit(usize::MAX, "test").is_err());
+        assert_eq!(
+            parse_moderation_max_body_bytes(
+                &MODERATION_RUNNER_HARD_MAX_BODY_BYTES.to_string(),
+                "test",
+            )
+            .expect("exact hard maximum"),
+            MODERATION_RUNNER_HARD_MAX_BODY_BYTES
+        );
+        assert!(parse_moderation_max_body_bytes("0", "test").is_err());
+        assert!(
+            parse_moderation_max_body_bytes(
+                &(MODERATION_RUNNER_HARD_MAX_BODY_BYTES + 1).to_string(),
+                "test",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn moderation_runner_http_parser_rejects_smuggling_and_malformed_frames() {
+        let service = moderation_runner_fixture_service(signed_moderation_repro_manifest_fixture());
+        let malformed = [
+            b"GET /healthz HTTP/1.1\r\n\r\n".as_slice(),
+            b"GET /healthz HTTP/1.1\r\nHost: runner.local\r\nHost: second.local\r\n\r\n".as_slice(),
+            b"GET /healthz HTTP/1.1\r\nHost: \r\n\r\n".as_slice(),
+            b"GET /healthz HTTP/1.1\r\nHost: runner.local\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n".as_slice(),
+            b"GET /healthz HTTP/1.1\r\nHost: runner.local\r\nContent-Length: 00\r\n\r\n".as_slice(),
+            b"GET /healthz HTTP/1.1\r\nHost: runner.local\r\nContent-Length: +0\r\n\r\n".as_slice(),
+            b"POST /v1/sorafs/moderation/runner/screen HTTP/1.1\r\nHost: runner.local\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n".as_slice(),
+            b"GET /healthz HTTP/1.1\r\nHost: runner.local\r\nMalformed\r\n\r\n".as_slice(),
+            b"GET /healthz HTTP/1.1\r\nHost: runner.local\r\n folded: value\r\n\r\n".as_slice(),
+            b"GET /healthz HTTP/1.1 extra\r\nHost: runner.local\r\n\r\n".as_slice(),
+            b"GET /healthz HTTP/1.0\r\nHost: runner.local\r\n\r\n".as_slice(),
+            b"GE\tT /healthz HTTP/1.1\r\nHost: runner.local\r\n\r\n".as_slice(),
+            b"GET /healthz?ignored=true HTTP/1.1\r\nHost: runner.local\r\n\r\n".as_slice(),
+            b"GET /healthz HTTP/1.1\r\nHost: runner.local\r\nContent-Length: 0\r\n\r\nX".as_slice(),
+            b"GET /healthz HTTP/1.1\r\nBad Header: value\r\nHost: runner.local\r\n\r\n".as_slice(),
+            b"GET /healthz HTTP/1.1\r\nHost: runner.local\r\nX-Null: bad\0value\r\n\r\n".as_slice(),
+        ];
+        for request in malformed {
+            let response = moderation_runner_http_response(&service, request, 4096);
+            assert!(
+                response.starts_with(b"HTTP/1.1 400 Bad Request"),
+                "malformed request was not rejected: {}",
+                String::from_utf8_lossy(request)
+            );
+        }
+
+        let mut oversized_header =
+            b"GET /healthz HTTP/1.1\r\nHost: runner.local\r\nX-Fill: ".to_vec();
+        oversized_header.extend(vec![b'a'; MODERATION_RUNNER_MAX_HEADER_BYTES]);
+        oversized_header.extend_from_slice(b"\r\n\r\n");
+        let response = moderation_runner_http_response(&service, &oversized_header, 4096);
+        assert!(response.starts_with(b"HTTP/1.1 431 Request Header Fields Too Large"));
+    }
+
+    #[test]
+    fn moderation_runner_rejects_noncanonical_request_text() {
+        let service = moderation_runner_fixture_service(signed_moderation_repro_manifest_fixture());
+        for (subject, notes) in [
+            (" padded", Some("notes")),
+            ("subject", Some("notes\nwith-control")),
+        ] {
+            let body = norito::json::to_vec(&norito::json!({
+                "subject": subject,
+                "payload_b64": (BASE64_STANDARD.encode(b"payload")),
+                "screened_at_unix": 1_u64,
+                "notes": notes,
+            }))
+            .expect("request JSON");
+            assert!(moderation_runner_screen_request_json(&service, &body).is_err());
+        }
+
+        let oversized_subject = "x".repeat(MODERATION_RUNNER_MAX_SUBJECT_BYTES + 1);
+        let body = norito::json::to_vec(&norito::json!({
+            "subject": oversized_subject,
+            "payload_b64": (BASE64_STANDARD.encode(b"payload")),
+            "screened_at_unix": 1_u64,
+        }))
+        .expect("request JSON");
+        assert!(moderation_runner_screen_request_json(&service, &body).is_err());
+
+        let body = norito::json::to_vec(&norito::json!({
+            "subject": "subject",
+            "payload_b64": (BASE64_STANDARD.encode(b"payload")),
+            "screened_at_unix": 1_u64,
+            "unexpected": true,
+        }))
+        .expect("request JSON");
+        assert!(moderation_runner_screen_request_json(&service, &body).is_err());
+
+        let body = norito::json::to_vec(&norito::json!({
+            "subject": "subject",
+            "payload_b64": ("A".repeat(8192)),
+            "screened_at_unix": 1_u64,
+        }))
+        .expect("request JSON");
+        let error = moderation_runner_screen_request_json(&service, &body)
+            .expect_err("oversized decoded payload estimate must fail before allocation");
+        assert!(error.contains("can decode beyond"));
+
+        let body = norito::json::to_vec(&norito::json!({
+            "subject": "subject",
+            "payload_b64": (BASE64_STANDARD.encode(b"payload")),
+            "screened_at_unix": 0_u64,
+        }))
+        .expect("request JSON");
+        assert!(moderation_runner_screen_request_json(&service, &body).is_err());
+
+        let body = norito::json::to_vec(&norito::json!({
+            "subject": "subject",
+            "payload_b64": (BASE64_STANDARD.encode(b"payload")),
+            "screened_at_unix": 1_u64,
+            "notes": ("x".repeat(MODERATION_RUNNER_MAX_NOTES_BYTES + 1)),
+        }))
+        .expect("request JSON");
+        assert!(moderation_runner_screen_request_json(&service, &body).is_err());
+
+        assert!(
+            moderation_runner_screen_request_proto(
+                &service,
+                ModerationRunnerScreenRequest {
+                    subject: " padded".to_owned(),
+                    payload: b"payload".to_vec(),
+                    screened_at_unix: 1,
+                    notes: None,
+                },
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn moderation_runner_connection_admission_is_bounded() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let mut permits = Vec::new();
+        for _ in 0..MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS {
+            permits.push(
+                moderation_try_acquire_permit(&active, MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS)
+                    .expect("connection within the hard limit must be admitted"),
+            );
+        }
+        assert!(
+            moderation_try_acquire_permit(&active, MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS)
+                .is_none()
+        );
+        assert_eq!(
+            active.load(AtomicOrdering::Acquire),
+            MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS
+        );
+        permits.pop();
+        assert_eq!(
+            active.load(AtomicOrdering::Acquire),
+            MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS - 1
+        );
+        let replacement =
+            moderation_try_acquire_permit(&active, MODERATION_RUNNER_MAX_ACTIVE_CONNECTIONS)
+                .expect("dropping a permit must release capacity");
+        drop(replacement);
+        drop(permits);
+        assert_eq!(active.load(AtomicOrdering::Acquire), 0);
+    }
+
+    #[test]
+    fn moderation_runner_grpc_rejects_work_above_the_in_flight_limit() {
+        let in_flight = Arc::new(AtomicUsize::new(MODERATION_RUNNER_MAX_GRPC_IN_FLIGHT));
+        let handler = ModerationRunnerGrpcHandler {
+            service: Arc::new(moderation_runner_fixture_service(
+                signed_moderation_repro_manifest_fixture(),
+            )),
+            listen: MODERATION_RUNNER_GRPC_DEFAULT_LISTEN.to_owned(),
+            in_flight: Arc::clone(&in_flight),
+        };
+        let request = tonic::Request::new(ModerationRunnerScreenRequest {
+            subject: "cid:bafy-overload".to_owned(),
+            payload: b"must not be evaluated".to_vec(),
+            screened_at_unix: 1,
+            notes: None,
+        });
+
+        let result = Runtime::new().expect("Tokio runtime").block_on(
+            moderation_runner_grpc::runner_server::Runner::screen(&handler, request),
+        );
+        let error = match result {
+            Ok(_) => panic!("saturated gRPC runner must fail closed"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+        assert_eq!(
+            in_flight.load(AtomicOrdering::Acquire),
+            MODERATION_RUNNER_MAX_GRPC_IN_FLIGHT,
+            "a rejected call must not perturb the active-work counter"
+        );
+    }
+
+    #[test]
     fn moderation_runner_bundle_emits_supervised_artifacts() {
         let manifest = signed_moderation_repro_manifest_fixture();
         let temp = TempDir::new().expect("tempdir");
         let manifest_path = temp.path().join("repro.json");
         let bundle_dir = temp.path().join("runner-bundle");
+        let artifact_root = temp.path().join("source-artifacts");
+        write_moderation_model_artifacts_fixture(&artifact_root);
         fs::write(
             &manifest_path,
             norito::json::to_json_pretty(&manifest).expect("render manifest json"),
@@ -10626,6 +14406,7 @@ mod manifest_tests {
 
         moderation_runner_bundle(vec![
             format!("--manifest={}", manifest_path.display()),
+            format!("--artifact-root={}", artifact_root.display()),
             format!("--bundle-out={}", bundle_dir.display()),
             "--listen=127.0.0.1:9195".to_string(),
             "--max-body-bytes=8192".to_string(),
@@ -10650,12 +14431,16 @@ mod manifest_tests {
         .expect("parse bundle metadata");
 
         assert!(manifest_copy.exists());
+        assert!(bundle_dir.join("artifacts/model-11.norito").exists());
+        assert!(bundle_dir.join("artifacts/model-44.norito").exists());
         assert!(env.contains("SORAFS_CLI='/opt/sora/bin/sorafs_cli'"));
         assert!(env.contains("SORAFS_RUNNER_LISTEN='127.0.0.1:9195'"));
         assert!(run_script.contains("moderation runner-serve"));
         assert!(run_script.contains("--manifest=\"$SCRIPT_DIR/manifest.json\""));
         assert!(run_script.contains("--format=json"));
         assert!(systemd.contains("NoNewPrivileges=true"));
+        assert!(systemd.contains("IPAddressDeny=any"));
+        assert!(systemd.contains("IPAddressAllow=localhost"));
         assert!(systemd.contains("EnvironmentFile="));
         assert!(systemd.contains("User=sorafs-runner"));
         assert!(launchd.contains("<key>KeepAlive</key>"));
@@ -10741,6 +14526,14 @@ mod manifest_tests {
             format!("--payload={}", payload_path.display()),
             "--subject=cid:bafy-runner-canary".to_string(),
             "--screened-at=1800004000".to_string(),
+            "--generated-at-unix=1800004999".to_string(),
+            "--deployment-id=ai-prescreen-production-20260701".to_string(),
+            "--environment=production".to_string(),
+            "--deployment-context-reviewed=true".to_string(),
+            "--process-isolation-enforcement=systemd_ip_filter".to_string(),
+            "--process-isolation-attestation-digest=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f".to_string(),
+            "--process-isolation-verified-at=1800004998".to_string(),
+            "--process-isolation-reviewed=true".to_string(),
             "--checked-at=1800004999".to_string(),
             "--notes=fixture rollout canary".to_string(),
             "--timeout-ms=5000".to_string(),
@@ -10777,8 +14570,151 @@ mod manifest_tests {
             object.get("checked_at_unix").and_then(Value::as_u64),
             Some(1_800_004_999)
         );
+        assert_eq!(
+            object.get("generated_at_unix").and_then(Value::as_u64),
+            Some(1_800_004_999)
+        );
+        assert_eq!(
+            object.get("deployment_id").and_then(Value::as_str),
+            Some("ai-prescreen-production-20260701")
+        );
+        assert_eq!(
+            object.get("environment").and_then(Value::as_str),
+            Some("production")
+        );
+        assert_eq!(
+            object.get("synthetic").and_then(Value::as_bool),
+            Some(false)
+        );
+        let isolation = object
+            .get("process_isolation_evidence")
+            .and_then(Value::as_object)
+            .expect("runner isolation evidence");
+        assert_eq!(
+            isolation.get("status").and_then(Value::as_str),
+            Some("runtime_verified")
+        );
+        assert_eq!(
+            isolation.get("enforcement").and_then(Value::as_str),
+            Some("systemd_ip_filter")
+        );
+        assert_eq!(
+            isolation.get("reviewed").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            isolation.get("synthetic").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(object.get("probe_count").and_then(Value::as_u64), Some(2));
+        let probes = object
+            .get("probes")
+            .and_then(Value::as_array)
+            .expect("runner canary probes");
+        assert_eq!(probes.len(), 2);
+        assert_eq!(
+            probes[0].get("name").and_then(Value::as_str),
+            Some("status")
+        );
+        assert_eq!(
+            probes[1].get("name").and_then(Value::as_str),
+            Some("screen")
+        );
         assert!(object.get("runner_status").is_some());
         assert!(object.get("screening_result").is_some());
+    }
+
+    fn runner_canary_args_without_process_isolation() -> Vec<String> {
+        vec![
+            "--manifest=/nonexistent/repro.json".to_owned(),
+            "--runner-url=http://127.0.0.1:9194".to_owned(),
+            "--payload=/nonexistent/payload.bin".to_owned(),
+            "--subject=cid:bafy-isolation-negative".to_owned(),
+            "--screened-at=99".to_owned(),
+            "--generated-at-unix=100".to_owned(),
+            "--deployment-id=isolation-negative".to_owned(),
+            "--environment=production".to_owned(),
+            "--deployment-context-reviewed=true".to_owned(),
+        ]
+    }
+
+    #[test]
+    fn moderation_runner_canary_rejects_missing_or_forged_isolation_evidence() {
+        let error = moderation_runner_canary(runner_canary_args_without_process_isolation())
+            .expect_err("missing isolation enforcement must fail before I/O");
+        assert!(error.contains("--process-isolation-enforcement"));
+
+        let error = moderation_runner_canary(vec![
+            "--process-isolation-enforcement=application_claim".to_owned(),
+        ])
+        .expect_err("unsupported isolation enforcement must fail");
+        assert!(error.contains("must be one of"));
+
+        let error = moderation_runner_canary(vec![
+            "--process-isolation-attestation-digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        ])
+        .expect_err("repeated placeholder attestation must fail");
+        assert!(error.contains("placeholder"));
+
+        let mut args = runner_canary_args_without_process_isolation();
+        args.extend([
+            "--process-isolation-enforcement=systemd_ip_filter".to_owned(),
+            "--process-isolation-attestation-digest=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f".to_owned(),
+            "--process-isolation-verified-at=101".to_owned(),
+            "--process-isolation-reviewed=true".to_owned(),
+        ]);
+        let error = moderation_runner_canary(args)
+            .expect_err("future-dated isolation attestation must fail before I/O");
+        assert!(error.contains("must not be after"));
+    }
+
+    #[test]
+    fn moderation_canary_response_reader_enforces_declared_and_streamed_caps() {
+        fn response_with_body(
+            content_length: Option<u64>,
+            body_len: usize,
+        ) -> (reqwest::blocking::Response, thread::JoinHandle<()>) {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture server");
+            let address = listener.local_addr().expect("fixture address");
+            let handle = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().expect("accept fixture request");
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request).expect("read fixture request");
+                let length_header = content_length
+                    .map(|length| format!("Content-Length: {length}\r\n"))
+                    .unwrap_or_default();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\n{length_header}Connection: close\r\n\r\n"
+                )
+                .expect("write fixture headers");
+                if body_len > 0 {
+                    stream
+                        .write_all(&vec![b'x'; body_len])
+                        .expect("write fixture body");
+                }
+            });
+            let response = HttpClient::new()
+                .get(format!("http://{address}/"))
+                .send()
+                .expect("fixture response");
+            (response, handle)
+        }
+
+        let (response, handle) =
+            response_with_body(Some(MODERATION_CANARY_MAX_RESPONSE_BYTES + 1), 0);
+        let error = read_moderation_canary_response_bounded(response, "declared oversized")
+            .expect_err("oversized Content-Length must fail before body allocation");
+        handle.join().expect("fixture server exits");
+        assert!(error.contains("declared a response larger"));
+
+        let streamed_len = usize::try_from(MODERATION_CANARY_MAX_RESPONSE_BYTES + 1)
+            .expect("fixture cap fits usize");
+        let (response, handle) = response_with_body(None, streamed_len);
+        let error = read_moderation_canary_response_bounded(response, "streamed oversized")
+            .expect_err("connection-close response above the cap must fail");
+        handle.join().expect("fixture server exits");
+        assert!(error.contains("response exceeded"));
     }
 
     #[test]
@@ -10790,14 +14726,22 @@ mod manifest_tests {
         let subject = "cid:bafy-runner-canary";
         let service = moderation_runner_fixture_service(manifest.clone());
         let status_response = moderation_runner_status_json(&service, "ready", None);
-        let screening_response = moderation_local_runner_screening_json(
-            &manifest,
-            payload,
-            subject,
-            1_800_004_000,
-            None,
-        )
-        .expect("screening response");
+        let screen_request =
+            moderation_runner_canary_screen_request_json(payload, subject, 1_800_004_000, None);
+        let screen_request_body = to_vec(&screen_request).expect("screen request JSON");
+        let screening_response =
+            moderation_runner_screen_request_json(&service, &screen_request_body)
+                .expect("screening response");
+        let status_probe = moderation_canary_test_probe(
+            "GET",
+            "http://127.0.0.1:9194/v1/sorafs/moderation/runner/status",
+            status_response,
+        );
+        let screening_probe = moderation_canary_test_probe(
+            "POST",
+            "http://127.0.0.1:9194/v1/sorafs/moderation/runner/screen",
+            screening_response,
+        );
 
         let err = moderation_runner_canary_evidence_json(ModerationRunnerCanaryEvidenceInput {
             manifest: &expected_manifest,
@@ -10808,9 +14752,17 @@ mod manifest_tests {
             payload,
             screened_at_unix: 1_800_004_000,
             checked_at_unix: 1_800_004_999,
+            deployment_context: moderation_canary_test_context(1_800_004_999),
+            process_isolation: ModerationProcessIsolationEvidence {
+                enforcement: "systemd_ip_filter",
+                attestation_digest: core::array::from_fn(|index| {
+                    u8::try_from(index).expect("fixture digest index fits u8")
+                }),
+                verified_at_unix: 1_800_004_998,
+            },
             notes: None,
-            status_response,
-            screening_response,
+            status_probe,
+            screening_probe,
         })
         .expect_err("runner hash mismatch rejected");
 
@@ -10844,7 +14796,7 @@ mod manifest_tests {
         );
         assert_eq!(
             body.get("outbound_network").and_then(Value::as_str),
-            Some("disabled")
+            Some("network_capable_process_policy_required")
         );
     }
 
@@ -10987,6 +14939,8 @@ mod manifest_tests {
         assert!(run_script.contains("--manifest=\"$SCRIPT_DIR/manifest.json\""));
         assert!(run_script.contains("--quorum=\"$SORAFS_COMMITTEE_QUORUM\""));
         assert!(systemd.contains("NoNewPrivileges=true"));
+        assert!(systemd.contains("IPAddressDeny=any"));
+        assert!(systemd.contains("IPAddressAllow=localhost"));
         assert!(systemd.contains("EnvironmentFile="));
         assert!(systemd.contains("User=sorafs-committee"));
         assert!(launchd.contains("<key>KeepAlive</key>"));
@@ -11074,6 +15028,14 @@ mod manifest_tests {
             format!("--result={}", result_b.display()),
             format!("--result={}", result_a.display()),
             format!("--result={}", result_c.display()),
+            "--generated-at-unix=1800006999".to_string(),
+            "--deployment-id=ai-prescreen-production-20260701".to_string(),
+            "--environment=production".to_string(),
+            "--deployment-context-reviewed=true".to_string(),
+            "--process-isolation-enforcement=systemd_ip_filter".to_string(),
+            "--process-isolation-attestation-digest=202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f".to_string(),
+            "--process-isolation-verified-at=1800006998".to_string(),
+            "--process-isolation-reviewed=true".to_string(),
             "--checked-at=1800006999".to_string(),
             "--notes=fixture committee rollout canary".to_string(),
             "--timeout-ms=5000".to_string(),
@@ -11109,14 +15071,21 @@ mod manifest_tests {
             .and_then(Value::as_array)
             .expect("results array");
         assert_eq!(results.len(), 3);
-        let expected_first_result = result_b.display().to_string();
-        assert_eq!(
-            results
-                .first()
-                .and_then(Value::as_object)
-                .and_then(|row| row.get("name"))
-                .and_then(Value::as_str),
-            Some(expected_first_result.as_str())
+        let first_result = results
+            .first()
+            .and_then(Value::as_object)
+            .expect("first result fingerprint");
+        assert!(
+            first_result
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.starts_with("ai-prescreen-committee-result-"))
+        );
+        assert!(
+            first_result
+                .get("body_blake3_hex")
+                .and_then(Value::as_str)
+                .is_some_and(|digest| digest.len() == 64)
         );
         assert_eq!(
             object.get("subject_digest_hex").and_then(Value::as_str),
@@ -11134,8 +15103,108 @@ mod manifest_tests {
             object.get("checked_at_unix").and_then(Value::as_u64),
             Some(1_800_006_999)
         );
+        assert_eq!(
+            object.get("generated_at_unix").and_then(Value::as_u64),
+            Some(1_800_006_999)
+        );
+        assert_eq!(
+            object.get("synthetic").and_then(Value::as_bool),
+            Some(false)
+        );
+        let isolation = object
+            .get("process_isolation_evidence")
+            .and_then(Value::as_object)
+            .expect("committee isolation evidence");
+        assert_eq!(
+            isolation.get("status").and_then(Value::as_str),
+            Some("runtime_verified")
+        );
+        assert_eq!(
+            isolation.get("enforcement").and_then(Value::as_str),
+            Some("systemd_ip_filter")
+        );
+        assert_eq!(
+            isolation.get("reviewed").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            isolation.get("synthetic").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(object.get("probe_count").and_then(Value::as_u64), Some(2));
         assert!(object.get("committee_status").is_some());
         assert!(object.get("committee_aggregate").is_some());
+    }
+
+    #[test]
+    fn moderation_committee_rejects_excessive_result_count_and_file_size() {
+        let manifest = signed_moderation_repro_manifest_fixture();
+        let service = moderation_committee_fixture_service(manifest.clone(), 1);
+        let body = norito::json::to_vec(&norito::json!({
+            "results": (vec![Value::Null; MODERATION_COMMITTEE_MAX_RESULTS + 1]),
+        }))
+        .expect("oversized result inventory JSON");
+        let error = moderation_committee_aggregate_request_json(&service, &body)
+            .expect_err("committee result inventory above the cap must fail");
+        assert!(error.contains("accepts at most"));
+
+        let temp = TempDir::new().expect("tempdir");
+        let oversized = temp.path().join("oversized-result.json");
+        fs::write(
+            &oversized,
+            vec![
+                b'x';
+                usize::try_from(MODERATION_COMMITTEE_MAX_RESULT_BYTES + 1)
+                    .expect("fixture cap fits usize")
+            ],
+        )
+        .expect("write oversized result");
+        let error = load_moderation_committee_input(&oversized, &manifest)
+            .expect_err("oversized committee result file must fail before parsing");
+        assert!(error.contains("maximum"));
+    }
+
+    fn committee_canary_args_without_process_isolation() -> Vec<String> {
+        vec![
+            "--manifest=/nonexistent/repro.json".to_owned(),
+            "--committee-url=http://127.0.0.1:9196".to_owned(),
+            "--quorum=1".to_owned(),
+            "--result=/nonexistent/result.json".to_owned(),
+            "--generated-at-unix=100".to_owned(),
+            "--deployment-id=isolation-negative".to_owned(),
+            "--environment=production".to_owned(),
+            "--deployment-context-reviewed=true".to_owned(),
+        ]
+    }
+
+    #[test]
+    fn moderation_committee_canary_rejects_missing_or_forged_isolation_evidence() {
+        let error = moderation_committee_canary(committee_canary_args_without_process_isolation())
+            .expect_err("missing isolation enforcement must fail before I/O");
+        assert!(error.contains("--process-isolation-enforcement"));
+
+        let error = moderation_committee_canary(vec![
+            "--process-isolation-enforcement=application_claim".to_owned(),
+        ])
+        .expect_err("unsupported isolation enforcement must fail");
+        assert!(error.contains("must be one of"));
+
+        let error = moderation_committee_canary(vec![
+            "--process-isolation-attestation-digest=abababababababababababababababababababababababababababababababab".to_owned(),
+        ])
+        .expect_err("repeated-half placeholder attestation must fail");
+        assert!(error.contains("placeholder"));
+
+        let mut args = committee_canary_args_without_process_isolation();
+        args.extend([
+            "--process-isolation-enforcement=host_firewall".to_owned(),
+            "--process-isolation-attestation-digest=202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f".to_owned(),
+            "--process-isolation-verified-at=101".to_owned(),
+            "--process-isolation-reviewed=true".to_owned(),
+        ]);
+        let error = moderation_committee_canary(args)
+            .expect_err("future-dated isolation attestation must fail before I/O");
+        assert!(error.contains("must not be after"));
     }
 
     #[test]
@@ -11159,6 +15228,16 @@ mod manifest_tests {
         )
         .expect("expected aggregate");
         let aggregate_response = expected_aggregate.clone();
+        let status_probe = moderation_canary_test_probe(
+            "GET",
+            "http://127.0.0.1:9196/v1/sorafs/moderation/committee/status",
+            status_response,
+        );
+        let aggregate_probe = moderation_canary_test_probe(
+            "POST",
+            "http://127.0.0.1:9196/v1/sorafs/moderation/committee/aggregate",
+            aggregate_response,
+        );
 
         let err =
             moderation_committee_canary_evidence_json(ModerationCommitteeCanaryEvidenceInput {
@@ -11168,11 +15247,22 @@ mod manifest_tests {
                 aggregate_url: "http://127.0.0.1:9196/v1/sorafs/moderation/committee/aggregate",
                 quorum: 2,
                 checked_at_unix: 1_800_006_999,
+                deployment_context: moderation_canary_test_context(1_800_006_999),
+                process_isolation: ModerationProcessIsolationEvidence {
+                    enforcement: "systemd_ip_filter",
+                    attestation_digest: core::array::from_fn(|index| {
+                        u8::try_from(index + 32).expect("fixture digest index fits u8")
+                    }),
+                    verified_at_unix: 1_800_006_998,
+                },
                 notes: None,
-                result_sources: vec!["a.json".to_string(), "b.json".to_string()],
+                result_fingerprints: vec![
+                    moderation_canary_test_result_fingerprint(1),
+                    moderation_canary_test_result_fingerprint(2),
+                ],
                 expected_aggregate,
-                status_response,
-                aggregate_response,
+                status_probe,
+                aggregate_probe,
             })
             .expect_err("runner hash mismatch rejected");
 
@@ -12420,29 +16510,25 @@ fn submit_manifest_via_transaction_endpoint(
         prelude::{InstructionBox, Json, TransactionBuilder},
         sorafs::pin_registry::{ManifestAliasBinding, ManifestDigest},
     };
+    use norito::codec::Encode as _;
 
     let chain_id = resolve_chain_id_from_sorafs_registry(request.client, request.torii_base_url)?;
-    let manifest_digest = manifest
-        .digest()
-        .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-    let chunker = chunker_handle_from_profile(&manifest.chunking);
-    let policy = convert_pin_policy(&manifest.pin_policy);
+    let manifest_payload = manifest
+        .encode()
+        .map_err(|err| format!("failed to encode canonical manifest payload: {err}"))?;
     let alias = request.alias_inputs.map(|inputs| ManifestAliasBinding {
         namespace: inputs.namespace.clone(),
         name: inputs.name.clone(),
         proof: inputs.proof.clone(),
     });
     let successor_of = successor_digest.map(ManifestDigest::new);
-    let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest {
-        digest: ManifestDigest::new(*manifest_digest.as_bytes()),
-        chunker,
-        chunk_digest_sha3_256: chunk_digest,
-        content_length: manifest.content_length,
-        policy,
+    let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest::new(
+        manifest_payload,
+        chunk_digest,
         submitted_epoch,
         alias,
         successor_of,
-    };
+    );
     let mut tx_metadata = Metadata::default();
     if let Some(asset_id) = request
         .gas_asset_id
@@ -13267,9 +17353,9 @@ fn reputation_publish(raw_args: Vec<String>) -> Result<(), String> {
     let snapshot_path = snapshot_path.ok_or_else(|| {
         "missing required `--snapshot=PATH` for `sorafs_cli reputation publish`".to_string()
     })?;
-    let snapshot = read_reputation_snapshot(&snapshot_path)?;
-    let body = to_vec(&snapshot)
-        .map_err(|err| format!("failed to encode reputation snapshot JSON: {err}"))?;
+    let envelope = read_signed_reputation_snapshot(&snapshot_path)?;
+    let body = to_vec(&envelope)
+        .map_err(|err| format!("failed to encode signed reputation snapshot JSON: {err}"))?;
     let client = HttpClient::builder()
         .timeout(Duration::from_secs(30))
         .build()
@@ -13499,6 +17585,14 @@ fn read_reputation_snapshot(path: &Path) -> Result<ReputationSnapshotV1, String>
     Ok(snapshot)
 }
 
+fn read_signed_reputation_snapshot(path: &Path) -> Result<SignedReputationSnapshotV1, String> {
+    let maximum = u64::try_from(MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES)
+        .map_err(|_| "signed reputation snapshot size cap does not fit u64".to_owned())?;
+    let envelope_bytes = read_file_bounded(path, maximum, "signed reputation snapshot")?;
+    decode_signed_reputation_snapshot(&envelope_bytes)
+        .map_err(|err| format!("failed to decode signed reputation snapshot: {err}"))
+}
+
 fn reputation_endpoint(torii_url: &str, route: &str) -> Result<Url, String> {
     Url::parse(torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
@@ -13587,6 +17681,13 @@ fn reputation_provider_table(value: &Value) -> Result<String, String> {
         .get("leaf_index")
         .and_then(Value::as_u64)
         .ok_or_else(|| "reputation provider response is missing `proof.leaf_index`".to_string())?;
+    let leaf_count = proof
+        .get("leaf_count")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "reputation provider response is missing `proof.leaf_count`".to_string())?;
+    if leaf_count == 0 || leaf_index >= leaf_count {
+        return Err("reputation provider response has invalid proof leaf geometry".to_string());
+    }
     let sibling_count = proof
         .get("siblings_hex")
         .and_then(Value::as_array)
@@ -13596,7 +17697,7 @@ fn reputation_provider_table(value: &Value) -> Result<String, String> {
         .and_then(Value::as_str)
         .unwrap_or("");
     Ok(format!(
-        "provider_id\tscore_bps\tleaf_index\tproof_siblings\tmerkle_root_hex\n{provider_id}\t{score_bps}\t{leaf_index}\t{sibling_count}\t{merkle_root}"
+        "provider_id\tscore_bps\tleaf_index\tleaf_count\tproof_siblings\tmerkle_root_hex\n{provider_id}\t{score_bps}\t{leaf_index}\t{leaf_count}\t{sibling_count}\t{merkle_root}"
     ))
 }
 
@@ -17114,7 +21215,7 @@ fn governance_payload_kind_cli(payload: &GovernanceLogPayloadV1) -> &'static str
         }
         GovernanceLogPayloadV1::OrderbookSettlementReceipt(_) => "orderbook_settlement_receipt",
         GovernanceLogPayloadV1::ExternalPayload(_) => "external_payload",
-        GovernanceLogPayloadV1::ReputationSnapshot(_) => "reputation_snapshot",
+        GovernanceLogPayloadV1::SignedReputationSnapshot(_) => "reputation_snapshot",
     }
 }
 
@@ -18633,10 +22734,16 @@ fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
 mod tests {
     use std::{fs, path::Path};
 
+    use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::json::Map;
     use sorafs_manifest::{
-        GovernanceProofs, PinPolicy as ManifestPinPolicy, StorageClass as ManifestStorageClass,
+        GovernanceProofs, PinPolicy as ManifestPinPolicy, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+        REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+        ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1, ReputationWeightsV1,
+        SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, StorageClass as ManifestStorageClass,
+        build_reputation_snapshot,
     };
     use sorafs_orchestrator::{PolicyReport, PolicyStatus};
     use tempfile::tempdir;
@@ -18672,6 +22779,73 @@ mod tests {
 
     fn fixture_account(seed: u8) -> AccountId {
         AccountId::new(fixture_keypair(seed).public_key().clone())
+    }
+
+    #[test]
+    fn signed_reputation_publish_input_uses_bounded_canonical_envelope_decode() {
+        let input = ReputationProviderInputV1 {
+            version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
+            provider_id: "provider-a".to_owned(),
+            metrics: ReputationProviderMetricsV1 {
+                version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
+                por_success_bps: 9_800,
+                pdp_success_bps: 9_700,
+                potr_success_bps: 9_600,
+                latency_health_bps: 9_500,
+                dispute_rate_bps: 0,
+                token_violation_rate_bps: 0,
+                repair_breach_rate_bps: 0,
+            },
+            reserve_stage: ReputationReserveStageV1::Active,
+            previous_score_bps: None,
+            active_dispute: false,
+            slashing_event: false,
+        };
+        let scoring_evidence = ReputationScoringEvidenceV1 {
+            version: REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+            provider_inputs: vec![input.clone()],
+            trust_edges: Vec::new(),
+        };
+        let snapshot = build_reputation_snapshot(
+            [0x42; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &[input],
+            None,
+        )
+        .expect("build reputation snapshot");
+        let mut envelope = SignedReputationSnapshotV1 {
+            version: SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+            policy_digest: [0xA5; 32],
+            snapshot,
+            scoring_evidence_digest: scoring_evidence
+                .canonical_digest()
+                .expect("evidence digest"),
+            scoring_evidence,
+            signatures: Vec::new(),
+        };
+        let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
+        envelope.signatures.push(ReputationSnapshotSignatureV1 {
+            signer_id: "council-1".to_owned(),
+            signature: signing_key
+                .sign(&envelope.signing_digest().expect("signing digest"))
+                .to_bytes(),
+        });
+
+        let temp = tempdir().expect("temp dir");
+        let path = temp.path().join("signed-reputation.to");
+        let canonical = envelope.canonical_bytes().expect("encode signed envelope");
+        fs::write(&path, &canonical).expect("write signed envelope");
+        assert_eq!(
+            read_signed_reputation_snapshot(&path).expect("decode signed envelope"),
+            envelope
+        );
+
+        let mut noncanonical = canonical;
+        noncanonical.push(0);
+        fs::write(&path, noncanonical).expect("write trailing bytes");
+        assert!(read_signed_reputation_snapshot(&path).is_err());
+        assert!(reputation_usage().contains("SIGNED_ENVELOPE.to"));
     }
 
     #[test]
@@ -18931,15 +23105,12 @@ mod tests {
             prelude::{InstructionBox, TransactionBuilder},
             sorafs::pin_registry::ManifestDigest,
         };
+        use norito::codec::Encode as _;
 
         let manifest = sample_manifest();
-        let manifest_digest = manifest.digest().expect("manifest digest");
         let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest::new(
-            ManifestDigest::new(*manifest_digest.as_bytes()),
-            chunker_handle_from_profile(&manifest.chunking),
+            manifest.encode().expect("canonical manifest payload"),
             [0xCC; 32],
-            manifest.content_length,
-            convert_pin_policy(&manifest.pin_policy),
             42,
             None,
             Some(ManifestDigest::new([0xDD; 32])),

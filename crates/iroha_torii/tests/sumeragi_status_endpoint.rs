@@ -1,8 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for GET /v1/sumeragi/status
+//! Router-level tests for the authoritative Sumeragi v2 status endpoint.
 #![cfg(feature = "telemetry")]
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use axum::{
     Router,
@@ -16,16 +16,16 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World},
-    sumeragi::da::GateReason,
+    sumeragi,
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ChainId,
     block::{
-        BlockHeader,
-        consensus::{
-            SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiLanePayloadOwnership,
-            SumeragiStatusWire,
+        consensus::{SumeragiLaneBlockSessionStatus, SumeragiLanePayloadOwnership},
+        consensus_v2::{
+            self as v2, SumeragiV2BodyState, SumeragiV2Status, SumeragiV2StatusPhase,
+            SumeragiV2StatusResponse,
         },
     },
     nexus::{DataSpaceId, LaneId},
@@ -46,10 +46,9 @@ fn build_status_router() -> Router {
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query.clone()));
-    let queue_cfg = Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
+        Queue::default(),
         events_sender,
     ));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
@@ -57,7 +56,7 @@ fn build_status_router() -> Router {
 
     let telemetry = {
         let metrics = fixtures::shared_metrics();
-        let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
+        let (_mock_handle, time_source) = TimeSource::new_mock(core::time::Duration::default());
         iroha_core::telemetry::start(
             metrics,
             state.clone(),
@@ -65,13 +64,12 @@ fn build_status_router() -> Router {
             queue.clone(),
             peers_rx.clone(),
             local_peer_id,
-            ts,
+            time_source,
             true,
         )
         .0
     };
 
-    let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = iroha_torii::Torii::new(
         ChainId::from("test-chain"),
         kiso,
@@ -81,7 +79,7 @@ fn build_status_router() -> Router {
         query,
         kura,
         state,
-        da_receipt_signer,
+        cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         telemetry,
         true,
@@ -95,242 +93,79 @@ fn status_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn status_test_guard() -> std::sync::MutexGuard<'static, ()> {
-    status_lock()
+struct StatusFixtureGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl Drop for StatusFixtureGuard {
+    fn drop(&mut self) {
+        reset_status_state();
+    }
+}
+
+fn status_test_guard() -> StatusFixtureGuard {
+    let lock = status_lock()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    reset_status_state();
+    StatusFixtureGuard { _lock: lock }
 }
 
-fn hash_literal(hash: HashOf<BlockHeader>) -> String {
-    norito::json::to_value(&hash)
-        .expect("serialize hash literal")
-        .as_str()
-        .expect("hash serializes as JSON string")
-        .to_owned()
+fn reset_status_state() {
+    sumeragi::status::clear_v2_status();
+    sumeragi::status::clear_v2_operator_status();
+    sumeragi::status::set_v2_tx_queue_status(v2::SumeragiV2TxQueueStatus {
+        capacity: 64,
+        max_retained_bytes: 8_192,
+        ..v2::SumeragiV2TxQueueStatus::default()
+    });
+    sumeragi::status::clear_lane_payload_ownerships();
+    sumeragi::status::set_lane_settlement_commitments(Vec::new());
+    sumeragi::status::set_lane_relay_envelopes(Vec::new());
+    sumeragi::status::set_committed_lane_blocks(Vec::new());
+    sumeragi::status::set_lane_block_sessions(Vec::new());
+    sumeragi::status::set_local_removed_from_world(false);
 }
 
-#[allow(clippy::await_holding_lock, clippy::too_many_lines)]
-#[tokio::test]
-async fn sumeragi_status_endpoint_shape() {
-    let _guard = status_test_guard();
-    let app = build_status_router();
-    iroha_core::sumeragi::status::set_effective_timing(
-        150,
-        1_000,
-        1_500,
-        10_000,
-        3_000,
-        2_500,
-        750,
-        4,
-        2,
-        Some(iroha_core::sumeragi::status::NposTimeoutsSnapshot {
-            propose_ms: 200,
-            prevote_ms: 210,
-            precommit_ms: 220,
-            commit_ms: 230,
-            da_ms: 240,
-            aggregator_ms: 250,
-            exec_ms: 260,
-            witness_ms: 270,
-        }),
-    );
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sumeragi/status")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let body = BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-    assert!(v.get("leader_index").is_some());
-    assert_eq!(
-        v.get("effective_min_finality_ms")
-            .and_then(norito::json::Value::as_u64),
-        Some(150)
-    );
-    assert_eq!(
-        v.get("effective_block_time_ms")
-            .and_then(norito::json::Value::as_u64),
-        Some(1_000)
-    );
-    assert_eq!(
-        v.get("effective_commit_time_ms")
-            .and_then(norito::json::Value::as_u64),
-        Some(1_500)
-    );
-    assert_eq!(
-        v.get("effective_commit_quorum_timeout_ms")
-            .and_then(norito::json::Value::as_u64),
-        Some(3_000)
-    );
-    assert_eq!(
-        v.get("effective_availability_timeout_ms")
-            .and_then(norito::json::Value::as_u64),
-        Some(2_500)
-    );
-    assert_eq!(
-        v.get("effective_pacemaker_interval_ms")
-            .and_then(norito::json::Value::as_u64),
-        Some(750)
-    );
-    let commit_pipeline = v
-        .get("commit_pipeline")
-        .and_then(norito::json::Value::as_object)
-        .expect("commit_pipeline object");
-    assert_eq!(
-        commit_pipeline
-            .get("last_total_ms")
-            .and_then(norito::json::Value::as_u64),
-        Some(0)
-    );
-    let round_gap = v
-        .get("round_gap")
-        .and_then(norito::json::Value::as_object)
-        .expect("round_gap object");
-    assert_eq!(
-        round_gap
-            .get("last_deliver_to_next_propose_ms")
-            .and_then(norito::json::Value::as_u64),
-        Some(0)
-    );
-    assert_eq!(
-        v.get("effective_collectors_k")
-            .and_then(norito::json::Value::as_u64),
-        Some(4)
-    );
-    assert_eq!(
-        v.get("effective_redundant_send_r")
-            .and_then(norito::json::Value::as_u64),
-        Some(2)
-    );
-    let npos_timeouts = v
-        .get("effective_npos_timeouts")
-        .and_then(|value| value.as_object())
-        .expect("effective_npos_timeouts object");
-    assert_eq!(
-        npos_timeouts
-            .get("propose_ms")
-            .and_then(norito::json::Value::as_u64),
-        Some(200)
-    );
-    assert_eq!(
-        npos_timeouts
-            .get("witness_ms")
-            .and_then(norito::json::Value::as_u64),
-        Some(270)
-    );
-    let hq = v.get("highest_qc").and_then(|x| x.as_object()).unwrap();
-    assert!(hq.get("height").is_some());
-    assert!(hq.get("view").is_some());
-    assert!(hq.contains_key("subject_block_hash"));
-    let lq = v.get("locked_qc").and_then(|x| x.as_object()).unwrap();
-    assert!(lq.get("height").is_some());
-    assert!(lq.get("view").is_some());
-    assert!(lq.contains_key("subject_block_hash"));
-    assert!(v.get("gossip_fallback_total").is_some());
-    assert!(v.get("block_created_dropped_by_lock_total").is_some());
-    assert!(v.get("block_created_hint_mismatch_total").is_some());
-    assert!(v.get("block_created_proposal_mismatch_total").is_some());
-    assert!(v.get("pacemaker_backpressure_deferrals_total").is_some());
-    let proposal_gate = v.get("proposal_gate").and_then(|x| x.as_object()).unwrap();
-    assert!(proposal_gate.get("height").is_some());
-    assert!(proposal_gate.get("should_defer").is_some());
-    let view_change_causes = v
-        .get("view_change_causes")
-        .and_then(|x| x.as_object())
-        .unwrap();
-    assert!(view_change_causes.get("validation_reject_total").is_some());
-    assert!(view_change_causes.get("missing_payload_total").is_some());
-    assert!(view_change_causes.get("missing_qc_total").is_some());
-    assert!(view_change_causes.get("quorum_timeout_total").is_some());
-    assert!(view_change_causes.get("commit_failure_total").is_some());
-    assert!(view_change_causes.get("da_gate_total").is_some());
-    assert!(view_change_causes.get("last_cause").is_some());
-    assert!(view_change_causes.get("last_cause_timestamp_ms").is_some());
-    let validation_rejects = v
-        .get("validation_rejects")
-        .and_then(|x| x.as_object())
-        .unwrap();
-    assert!(validation_rejects.get("total").is_some());
-    assert!(validation_rejects.get("stateless_total").is_some());
-    assert!(validation_rejects.get("execution_total").is_some());
-    assert!(validation_rejects.get("prev_hash_total").is_some());
-    assert!(validation_rejects.get("prev_height_total").is_some());
-    assert!(validation_rejects.get("topology_total").is_some());
-    assert!(validation_rejects.get("last_reason").is_some());
-    assert!(validation_rejects.get("last_height").is_some());
-    assert!(validation_rejects.get("last_view").is_some());
-    assert!(validation_rejects.get("last_block").is_some());
-    assert!(validation_rejects.get("last_timestamp_ms").is_some());
-    let peer_key_policy = v
-        .get("peer_key_policy")
-        .and_then(|x| x.as_object())
-        .unwrap();
-    assert!(peer_key_policy.get("total").is_some());
-    assert!(peer_key_policy.get("missing_hsm_total").is_some());
-    let txq = v.get("tx_queue").and_then(|x| x.as_object()).unwrap();
-    assert!(txq.get("depth").is_some());
-    assert!(txq.get("capacity").is_some());
-    assert!(txq.get("retained_bytes").is_some());
-    assert!(txq.get("max_retained_bytes").is_some());
-    assert!(txq.get("saturated").is_some());
-    assert!(txq.get("saturated_by_count").is_some());
-    assert!(txq.get("saturated_by_bytes").is_some());
-    assert!(txq.get("saturated_by_age").is_some());
-    assert!(txq.get("oldest_queued_age_ms").is_some());
-    let worker_loop = v.get("worker_loop").and_then(|x| x.as_object()).unwrap();
-    assert!(worker_loop.get("queue_depths").is_some());
-    assert!(worker_loop.get("queue_diagnostics").is_some());
-    let commit_inflight = v
-        .get("commit_inflight")
-        .and_then(|x| x.as_object())
-        .unwrap();
-    assert!(commit_inflight.get("active").is_some());
-    assert!(commit_inflight.get("pause_queue_depths").is_some());
-    let prf = v.get("prf").and_then(|x| x.as_object()).unwrap();
-    assert!(prf.get("height").is_some());
-    assert!(prf.get("view").is_some());
-    assert!(prf.contains_key("epoch_seed"));
-    assert!(
-        v.get("view_change_proof_accepted_total")
-            .and_then(norito::json::Value::as_u64)
-            .is_some()
-    );
-    assert!(
-        v.get("view_change_proof_stale_total")
-            .and_then(norito::json::Value::as_u64)
-            .is_some()
-    );
-    assert!(
-        v.get("view_change_proof_rejected_total")
-            .and_then(norito::json::Value::as_u64)
-            .is_some()
-    );
-    assert!(
-        v.get("view_change_suggest_total")
-            .and_then(norito::json::Value::as_u64)
-            .is_some()
-    );
-    assert!(
-        v.get("view_change_install_total")
-            .and_then(norito::json::Value::as_u64)
-            .is_some()
-    );
-    iroha_core::sumeragi::status::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, 0, None);
+fn authoritative_status_fixture() -> SumeragiV2Status {
+    SumeragiV2Status {
+        protocol_version: v2::PROTOCOL_VERSION,
+        node_fingerprint: Hash::new(b"torii-v2-status-node"),
+        build_fingerprint: Hash::new(b"torii-v2-status-build"),
+        config_fingerprint: Hash::new(b"torii-v2-status-config"),
+        height_context_id: v2::HeightContextId(
+            HashOf::<v2::HeightContext>::from_untyped_unchecked(Hash::new(
+                b"torii-v2-status-context",
+            )),
+        ),
+        height: 7,
+        view: 2,
+        phase: SumeragiV2StatusPhase::Prepare,
+        leader: 1,
+        locked_prepare_qc: None,
+        highest_prepare_qc: None,
+        last_timeout_certificate: None,
+        body_state: SumeragiV2BodyState::Validated,
+        pending_persistence_id: None,
+        last_committed_height: 0,
+        last_committed_subject: None,
+        height_context: v2::SumeragiV2HeightContextStatus {
+            epoch: 1,
+            epoch_end_height: 10,
+            mode: v2::ConsensusMode::Permissioned,
+            epoch_seed: [0xA5; 32],
+            validator_count: 4,
+            quorum: v2::DualQuorum {
+                min_signers: 3,
+                total_power: 4,
+            },
+        },
+        last_commit_qc: None,
+    }
 }
 
-#[allow(clippy::await_holding_lock)]
-#[tokio::test]
-async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
-    let _guard = status_test_guard();
-    let ownership = SumeragiLanePayloadOwnership {
+fn lane_payload_ownership_fixture() -> SumeragiLanePayloadOwnership {
+    SumeragiLanePayloadOwnership {
         proposal_height: 12,
         proposal_view: 3,
         lane_id: LaneId::new(7),
@@ -339,7 +174,7 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
         lane_block_height: 2,
         lane_block_view: 1,
         subject_hash: Hash::prehashed([0x41; Hash::LENGTH]),
-        qc_mode_tag: "test-lane-qc-mode".to_string(),
+        qc_mode_tag: "test-lane-qc-mode".to_owned(),
         accepted_candidate_indices: vec![0, 2],
         accepted_transaction_hashes: vec![
             Hash::prehashed([0x44; Hash::LENGTH]),
@@ -353,537 +188,226 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
         lane_block_descriptor_min_quorum: 0,
         payload_ownership_hash: Hash::prehashed([0x42; Hash::LENGTH]),
         rbc_instance_hash: Hash::prehashed([0x43; Hash::LENGTH]),
-    };
-    iroha_core::sumeragi::status::set_lane_payload_ownerships(vec![ownership.clone()]);
-    iroha_core::sumeragi::status::set_committed_lane_blocks(Vec::new());
+    }
+}
+
+fn lane_block_session_fixture() -> SumeragiLaneBlockSessionStatus {
+    SumeragiLaneBlockSessionStatus {
+        lane_id: LaneId::new(7),
+        dataspace_id: DataSpaceId::new(42),
+        lane_incarnation: Hash::new(b"torii-status-endpoint-lane-incarnation"),
+        lane_block_height: 2,
+        lane_block_view: 1,
+        proposal_hash: Hash::prehashed([0x51; Hash::LENGTH]),
+        has_proposal: true,
+        prepare_vote_count: 3,
+        commit_vote_count: 2,
+        has_prepare_qc: true,
+        has_commit_qc: false,
+        pending_commit_vote_request: true,
+        pending_committed_session_drain: false,
+        committed_session_drained: false,
+        validator_count: 4,
+        min_quorum: 3,
+    }
+}
+
+async fn request_status(app: Router, accept: &str) -> axum::response::Response {
+    app.oneshot(
+        Request::builder()
+            .uri("/v1/sumeragi/status")
+            .header("Accept", accept)
+            .body(Body::empty())
+            .expect("build status request"),
+    )
+    .await
+    .expect("serve status request")
+}
+
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn sumeragi_status_endpoint_fails_closed_before_v2_replay() {
+    let _guard = status_test_guard();
     let app = build_status_router();
 
-    let json_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sumeragi/status")
-                .header("Accept", "application/json")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(json_resp.status(), StatusCode::OK);
+    for accept in ["application/json", "application/x-norito"] {
+        let response = request_status(app.clone(), accept).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+}
+
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn sumeragi_status_endpoint_rejects_impossible_operator_occupancy() {
+    let _guard = status_test_guard();
+    iroha_core::sumeragi::status::set_v2_status(authoritative_status_fixture());
+    iroha_core::sumeragi::status::set_v2_adapter_queue_status(v2::SumeragiV2AdapterQueueStatus {
+        ingress_keys: 2,
+        ingress_capacity: 1,
+        ..v2::SumeragiV2AdapterQueueStatus::default()
+    });
+
+    let response = request_status(build_status_router(), "application/json").await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn sumeragi_status_endpoint_exposes_complete_v2_json_shape() {
+    let _guard = status_test_guard();
+    let authoritative = authoritative_status_fixture();
+    iroha_core::sumeragi::status::set_v2_status(authoritative.clone());
+    iroha_core::sumeragi::status::set_lane_payload_ownerships(vec![
+        lane_payload_ownership_fixture(),
+    ]);
+    iroha_core::sumeragi::status::set_lane_block_sessions(vec![lane_block_session_fixture()]);
+    let response = request_status(build_status_router(), "application/json").await;
+
+    assert_eq!(response.status(), StatusCode::OK);
     assert!(
-        json_resp
+        response
             .headers()
             .get("content-type")
             .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.starts_with("application/json")),
-        "expected JSON content type"
+            .is_some_and(|value| value.starts_with("application/json"))
     );
-    let json_bytes = BodyExt::collect(json_resp.into_body())
+    let bytes = BodyExt::collect(response.into_body())
         .await
-        .unwrap()
+        .expect("collect JSON status response")
         .to_bytes();
-    let json_payload: norito::json::Value =
-        norito::json::from_slice(&json_bytes).expect("decode status JSON payload");
-    let json_root = json_payload
-        .as_object()
-        .expect("status JSON payload should be an object");
+    let value: norito::json::Value =
+        norito::json::from_slice(&bytes).expect("decode JSON status response");
+    let root = value.as_object().expect("status response object");
 
-    let norito_resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sumeragi/status")
-                .header("Accept", "application/x-norito")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(norito_resp.status(), StatusCode::OK);
+    assert!(root.get("authoritative").is_none(), "JSON stays flattened");
     assert_eq!(
-        norito_resp
+        root.get("protocol_version")
+            .and_then(norito::json::Value::as_u64),
+        Some(u64::from(v2::PROTOCOL_VERSION))
+    );
+    assert_eq!(
+        root.get("height").and_then(norito::json::Value::as_u64),
+        Some(authoritative.height)
+    );
+    assert_eq!(
+        root.get("view").and_then(norito::json::Value::as_u64),
+        Some(authoritative.view)
+    );
+    assert_eq!(
+        root.get("leader").and_then(norito::json::Value::as_u64),
+        Some(u64::from(authoritative.leader))
+    );
+    for (field, expected_len) in [
+        ("lane_settlement_commitments", 0),
+        ("lane_relay_envelopes", 0),
+        ("lane_payload_ownerships", 1),
+        ("committed_lane_blocks", 0),
+        ("lane_block_sessions", 1),
+    ] {
+        assert_eq!(
+            root.get(field)
+                .and_then(norito::json::Value::as_array)
+                .map(Vec::len),
+            Some(expected_len),
+            "unexpected {field} shape"
+        );
+    }
+    assert_eq!(
+        root.get("local_peer_removed")
+            .and_then(norito::json::Value::as_bool),
+        Some(false)
+    );
+    assert!(root.get("height_context").is_some());
+    assert!(root.get("operator").is_some());
+}
+
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
+    let _guard = status_test_guard();
+    let authoritative = authoritative_status_fixture();
+    let ownership = lane_payload_ownership_fixture();
+    let session = lane_block_session_fixture();
+    iroha_core::sumeragi::status::set_v2_status(authoritative.clone());
+    iroha_core::sumeragi::status::set_lane_payload_ownerships(vec![ownership.clone()]);
+    iroha_core::sumeragi::status::set_lane_block_sessions(vec![session.clone()]);
+    iroha_core::sumeragi::status::set_local_removed_from_world(true);
+    let app = build_status_router();
+
+    let json_response = request_status(app.clone(), "application/json").await;
+    assert_eq!(json_response.status(), StatusCode::OK);
+    let json_bytes = BodyExt::collect(json_response.into_body())
+        .await
+        .expect("collect JSON status response")
+        .to_bytes();
+    let json_value: norito::json::Value =
+        norito::json::from_slice(&json_bytes).expect("decode JSON status response");
+    let json_root = json_value.as_object().expect("JSON status object");
+
+    let norito_response = request_status(app, "application/x-norito").await;
+    assert_eq!(norito_response.status(), StatusCode::OK);
+    assert_eq!(
+        norito_response
             .headers()
             .get("content-type")
             .and_then(|value| value.to_str().ok()),
         Some("application/x-norito")
     );
-    let norito_bytes = BodyExt::collect(norito_resp.into_body())
+    let norito_bytes = BodyExt::collect(norito_response.into_body())
         .await
-        .unwrap()
+        .expect("collect Norito status response")
         .to_bytes();
-    let norito_wire: SumeragiStatusWire =
-        norito::decode_from_bytes(&norito_bytes).expect("decode status Norito payload");
+    let norito_wire: SumeragiV2StatusResponse =
+        norito::decode_from_bytes(&norito_bytes).expect("decode complete v2 status response");
 
+    assert_eq!(norito_wire.authoritative, authoritative);
+    assert_eq!(norito_wire.lane_payload_ownerships, vec![ownership]);
+    assert_eq!(norito_wire.lane_block_sessions, vec![session]);
+    assert!(norito_wire.local_peer_removed);
+    norito_wire
+        .validate()
+        .expect("valid typed v2 status response");
+    assert_eq!(
+        norito_wire.operator,
+        iroha_core::sumeragi::status::v2_operator_status()
+    );
     assert_eq!(
         json_root
-            .get("mode_tag")
-            .and_then(norito::json::Value::as_str),
-        Some(norito_wire.mode_tag.as_str())
+            .get("protocol_version")
+            .and_then(norito::json::Value::as_u64),
+        Some(u64::from(norito_wire.authoritative.protocol_version))
+    );
+    let expected_operator =
+        norito::json::to_value(&norito_wire.operator).expect("encode operator status");
+    assert_eq!(json_root.get("operator"), Some(&expected_operator));
+    assert_eq!(
+        json_root
+            .get("height")
+            .and_then(norito::json::Value::as_u64),
+        Some(norito_wire.authoritative.height)
+    );
+    assert_eq!(
+        json_root.get("view").and_then(norito::json::Value::as_u64),
+        Some(norito_wire.authoritative.view)
     );
     assert_eq!(
         json_root
-            .get("leader_index")
-            .and_then(norito::json::Value::as_u64),
-        Some(norito_wire.leader_index)
-    );
-    let highest_qc = json_root
-        .get("highest_qc")
-        .and_then(norito::json::Value::as_object)
-        .expect("highest_qc object");
-    assert_eq!(
-        highest_qc
-            .get("height")
-            .and_then(norito::json::Value::as_u64),
-        Some(norito_wire.highest_qc_height)
-    );
-    assert_eq!(
-        highest_qc.get("view").and_then(norito::json::Value::as_u64),
-        Some(norito_wire.highest_qc_view)
-    );
-    let locked_qc = json_root
-        .get("locked_qc")
-        .and_then(norito::json::Value::as_object)
-        .expect("locked_qc object");
-    assert_eq!(
-        locked_qc
-            .get("height")
-            .and_then(norito::json::Value::as_u64),
-        Some(norito_wire.locked_qc_height)
-    );
-    assert_eq!(
-        locked_qc.get("view").and_then(norito::json::Value::as_u64),
-        Some(norito_wire.locked_qc_view)
-    );
-    let proposal_gate = json_root
-        .get("proposal_gate")
-        .and_then(norito::json::Value::as_object)
-        .expect("proposal_gate object");
-    assert_eq!(
-        proposal_gate
-            .get("height")
-            .and_then(norito::json::Value::as_u64),
-        Some(norito_wire.proposal_gate.height)
-    );
-    assert_eq!(
-        proposal_gate
-            .get("should_defer")
-            .and_then(norito::json::Value::as_bool),
-        Some(norito_wire.proposal_gate.should_defer)
-    );
-
-    let json_relay_envelopes = json_root
-        .get("lane_relay_envelopes")
-        .and_then(norito::json::Value::as_array)
-        .expect("lane_relay_envelopes array");
-    assert_eq!(
-        json_relay_envelopes.len(),
-        norito_wire.lane_relay_envelopes.len()
-    );
-    if let Some(first_wire) = norito_wire.lane_relay_envelopes.first() {
-        let first_json = json_relay_envelopes
-            .first()
-            .and_then(norito::json::Value::as_object)
-            .expect("first lane relay envelope JSON object");
-        assert_eq!(
-            first_json
-                .get("lane_id")
-                .and_then(norito::json::Value::as_u64),
-            Some(u64::from(first_wire.lane_id.as_u32()))
-        );
-        assert_eq!(
-            first_json
-                .get("dataspace_id")
-                .and_then(norito::json::Value::as_u64),
-            Some(first_wire.dataspace_id.as_u64())
-        );
-        assert_eq!(
-            first_json
-                .get("block_height")
-                .and_then(norito::json::Value::as_u64),
-            Some(first_wire.block_height)
-        );
-    }
-
-    let json_ownerships = json_root
-        .get("lane_payload_ownerships")
-        .and_then(norito::json::Value::as_array)
-        .expect("lane_payload_ownerships array");
-    assert_eq!(
-        json_ownerships.len(),
-        norito_wire.lane_payload_ownerships.len()
-    );
-    let first_wire = norito_wire
-        .lane_payload_ownerships
-        .first()
-        .expect("seeded lane payload ownership in Norito payload");
-    let first_json = json_ownerships
-        .first()
-        .and_then(norito::json::Value::as_object)
-        .expect("first lane payload ownership JSON object");
-    assert_eq!(first_wire, &ownership);
-    assert_eq!(
-        first_json
-            .get("lane_id")
-            .and_then(norito::json::Value::as_u64),
-        Some(u64::from(ownership.lane_id.as_u32()))
-    );
-    assert_eq!(
-        first_json
-            .get("dataspace_id")
-            .and_then(norito::json::Value::as_u64),
-        Some(ownership.dataspace_id.as_u64())
-    );
-    assert_eq!(
-        first_json
-            .get("lane_block_height")
-            .and_then(norito::json::Value::as_u64),
-        Some(ownership.lane_block_height)
-    );
-    assert_eq!(
-        first_json
-            .get("qc_mode_tag")
-            .and_then(norito::json::Value::as_str),
-        Some(ownership.qc_mode_tag.as_str())
-    );
-    assert_eq!(
-        first_json
-            .get("accepted_candidate_indices")
+            .get("lane_payload_ownerships")
             .and_then(norito::json::Value::as_array)
             .map(Vec::len),
-        Some(ownership.accepted_candidate_indices.len())
-    );
-    let json_committed_lane_blocks = json_root
-        .get("committed_lane_blocks")
-        .and_then(norito::json::Value::as_array)
-        .expect("committed_lane_blocks array");
-    assert_eq!(
-        json_committed_lane_blocks.len(),
-        norito_wire.committed_lane_blocks.len()
-    );
-    iroha_core::sumeragi::status::clear_lane_payload_ownerships();
-    iroha_core::sumeragi::status::set_committed_lane_blocks(Vec::new());
-}
-
-#[allow(clippy::await_holding_lock)]
-#[tokio::test]
-async fn sumeragi_status_endpoint_locked_qc_monotonic() {
-    let _guard = status_test_guard();
-    iroha_core::sumeragi::status::set_locked_qc(0, 0, None);
-    let initial_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
-    let updated_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
-
-    let app = build_status_router();
-
-    iroha_core::sumeragi::status::set_locked_qc(10, 2, Some(initial_hash));
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sumeragi/status")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-    let lq = v.get("locked_qc").and_then(|x| x.as_object()).unwrap();
-    assert_eq!(
-        lq.get("height").and_then(norito::json::Value::as_u64),
-        Some(10)
+        Some(norito_wire.lane_payload_ownerships.len())
     );
     assert_eq!(
-        lq.get("view").and_then(norito::json::Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        lq.get("subject_block_hash")
-            .and_then(norito::json::Value::as_str)
-            .map(ToString::to_string),
-        Some(hash_literal(initial_hash))
-    );
-
-    iroha_core::sumeragi::status::set_locked_qc(9, 5, None);
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sumeragi/status")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-    let lq = v.get("locked_qc").and_then(|x| x.as_object()).unwrap();
-    assert_eq!(
-        lq.get("height").and_then(norito::json::Value::as_u64),
-        Some(10)
-    );
-    assert_eq!(
-        lq.get("view").and_then(norito::json::Value::as_u64),
-        Some(2)
-    );
-
-    iroha_core::sumeragi::status::set_locked_qc(12, 0, Some(updated_hash));
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sumeragi/status")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-    let lq = v.get("locked_qc").and_then(|x| x.as_object()).unwrap();
-    assert_eq!(
-        lq.get("height").and_then(norito::json::Value::as_u64),
-        Some(12)
-    );
-    assert_eq!(
-        lq.get("view").and_then(norito::json::Value::as_u64),
-        Some(0)
-    );
-    assert_eq!(
-        lq.get("subject_block_hash")
-            .and_then(norito::json::Value::as_str)
-            .map(ToString::to_string),
-        Some(hash_literal(updated_hash))
-    );
-}
-
-#[allow(clippy::await_holding_lock, clippy::too_many_lines)]
-#[tokio::test]
-async fn sumeragi_status_endpoint_reflects_leader_and_highest_qc() {
-    let _guard = status_test_guard();
-    let app = build_status_router();
-
-    iroha_core::sumeragi::status::set_leader_index(3);
-    iroha_core::sumeragi::status::set_highest_qc(7, 4);
-    let membership_hash = [0xCDu8; 32];
-    iroha_core::sumeragi::status::set_membership_view_hash(membership_hash, 11, 5, 2);
-    let expected_hash_hex = hex::encode(membership_hash);
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sumeragi/status")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-    assert_eq!(
-        v.get("leader_index").and_then(norito::json::Value::as_u64),
-        Some(3)
-    );
-    let hq = v.get("highest_qc").and_then(|x| x.as_object()).unwrap();
-    assert_eq!(
-        hq.get("height").and_then(norito::json::Value::as_u64),
-        Some(7)
-    );
-    assert_eq!(
-        hq.get("view").and_then(norito::json::Value::as_u64),
-        Some(4)
-    );
-    let membership = v
-        .get("membership")
-        .and_then(|value| value.as_object())
-        .expect("membership object present");
-    assert_eq!(
-        membership
-            .get("height")
-            .and_then(norito::json::Value::as_u64),
-        Some(11)
-    );
-    assert_eq!(
-        membership.get("view").and_then(norito::json::Value::as_u64),
-        Some(5)
-    );
-    assert_eq!(
-        membership
-            .get("epoch")
-            .and_then(norito::json::Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        membership
-            .get("view_hash")
-            .and_then(norito::json::Value::as_str),
-        Some(expected_hash_hex.as_str())
-    );
-    let membership_mismatch = v
-        .get("membership_mismatch")
-        .and_then(|value| value.as_object())
-        .expect("membership_mismatch object present");
-    assert!(
-        membership_mismatch
-            .get("active_peers")
+        json_root
+            .get("lane_block_sessions")
             .and_then(norito::json::Value::as_array)
-            .is_some_and(Vec::is_empty)
-    );
-    assert!(
-        membership_mismatch
-            .get("last_peer")
-            .is_some_and(norito::json::Value::is_null)
+            .map(Vec::len),
+        Some(norito_wire.lane_block_sessions.len())
     );
     assert_eq!(
-        membership_mismatch
-            .get("last_height")
-            .and_then(norito::json::Value::as_u64),
-        Some(0)
+        json_root
+            .get("local_peer_removed")
+            .and_then(norito::json::Value::as_bool),
+        Some(norito_wire.local_peer_removed)
     );
-    assert_eq!(
-        membership_mismatch
-            .get("last_view")
-            .and_then(norito::json::Value::as_u64),
-        Some(0)
-    );
-    assert_eq!(
-        membership_mismatch
-            .get("last_epoch")
-            .and_then(norito::json::Value::as_u64),
-        Some(0)
-    );
-    assert!(
-        membership_mismatch
-            .get("last_local_hash")
-            .is_some_and(norito::json::Value::is_null)
-    );
-    assert!(
-        membership_mismatch
-            .get("last_remote_hash")
-            .is_some_and(norito::json::Value::is_null)
-    );
-    assert_eq!(
-        membership_mismatch
-            .get("last_timestamp_ms")
-            .and_then(norito::json::Value::as_u64),
-        Some(0)
-    );
-}
-
-#[allow(clippy::await_holding_lock)]
-#[tokio::test]
-async fn sumeragi_status_endpoint_supports_norito_payload() {
-    let _guard = status_test_guard();
-    let app = build_status_router();
-    iroha_core::sumeragi::status::set_highest_qc(0, 0);
-    iroha_core::sumeragi::status::set_locked_qc(0, 0, None);
-    iroha_core::sumeragi::status::set_highest_qc(9, 4);
-    iroha_core::sumeragi::status::set_locked_qc(8, 3, None);
-    iroha_core::sumeragi::status::record_missing_block_fetch(3, 17);
-    iroha_core::sumeragi::status::record_da_gate_transition(
-        None,
-        Some(GateReason::MissingLocalData),
-    );
-    iroha_core::sumeragi::status::record_da_gate_transition(
-        Some(GateReason::MissingLocalData),
-        None,
-    );
-    iroha_core::sumeragi::status::record_da_gate_transition(
-        None,
-        Some(GateReason::MissingLocalData),
-    );
-    let kura_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
-    iroha_core::sumeragi::status::record_kura_store_failure(5, 2, kura_hash);
-    iroha_core::sumeragi::status::record_kura_store_retry(7, 11);
-    iroha_core::sumeragi::status::inc_kura_store_abort();
-    iroha_core::sumeragi::status::set_effective_timing(
-        120,
-        900,
-        1_300,
-        10_000,
-        2_600,
-        2_100,
-        700,
-        5,
-        3,
-        Some(iroha_core::sumeragi::status::NposTimeoutsSnapshot {
-            propose_ms: 210,
-            prevote_ms: 220,
-            precommit_ms: 230,
-            commit_ms: 240,
-            da_ms: 250,
-            aggregator_ms: 260,
-            exec_ms: 270,
-            witness_ms: 280,
-        }),
-    );
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sumeragi/status")
-                .header("Accept", "application/x-norito")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        resp.headers()
-            .get("content-type")
-            .and_then(|h| h.to_str().ok()),
-        Some("application/x-norito")
-    );
-
-    let bytes = BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
-    let wire: SumeragiStatusWire =
-        norito::decode_from_bytes(&bytes).expect("status Norito payload must decode");
-    assert!(wire.prf_epoch_seed.is_none());
-    assert_eq!(wire.prf_height, 0);
-    assert_eq!(wire.prf_view, 0);
-    assert!(wire.missing_block_fetch.total >= 1);
-    assert_eq!(wire.missing_block_fetch.last_targets, 3);
-    assert_eq!(wire.missing_block_fetch.last_dwell_ms, 17);
-    assert_eq!(wire.view_change_causes.validation_reject_total, 0);
-    assert_eq!(wire.validation_rejects.total, 0);
-    assert!(wire.validation_rejects.last_reason.is_none());
-    assert!(!wire.commit_inflight.active);
-    assert_eq!(wire.commit_inflight.timeout_total, 0);
-    assert_eq!(wire.commit_pipeline.last_total_ms, 0);
-    assert_eq!(wire.round_gap.last_deliver_to_next_propose_ms, 0);
-    assert_eq!(wire.worker_loop.queue_diagnostics.blocked_total.vote_rx, 0);
-    assert_eq!(wire.da_gate.reason, SumeragiDaGateReason::MissingLocalData);
-    assert_eq!(
-        wire.da_gate.last_satisfied,
-        SumeragiDaGateSatisfaction::MissingDataRecovered
-    );
-    assert!(wire.da_gate.missing_local_data_total >= 1);
-    assert_eq!(wire.da_gate.manifest_guard_total, 0);
-    assert!(wire.kura_store.failures_total >= 1);
-    assert!(wire.kura_store.abort_total >= 1);
-    assert_eq!(wire.kura_store.stage_total, 0);
-    assert_eq!(wire.kura_store.rollback_total, 0);
-    assert_eq!(wire.kura_store.lock_reset_total, 0);
-    assert_eq!(wire.kura_store.last_height, 5);
-    assert_eq!(wire.kura_store.last_view, 2);
-    assert_eq!(wire.kura_store.last_hash, Some(kura_hash));
-    assert_eq!(wire.kura_store.last_retry_attempt, 7);
-    assert_eq!(wire.kura_store.last_retry_backoff_ms, 11);
-    assert_eq!(wire.effective_min_finality_ms, 120);
-    assert_eq!(wire.effective_block_time_ms, 900);
-    assert_eq!(wire.effective_commit_time_ms, 1_300);
-    assert_eq!(wire.effective_commit_quorum_timeout_ms, 2_600);
-    assert_eq!(wire.effective_availability_timeout_ms, 2_100);
-    assert_eq!(wire.effective_pacemaker_interval_ms, 700);
-    assert_eq!(wire.effective_collectors_k, 5);
-    assert_eq!(wire.effective_redundant_send_r, 3);
-    let npos_timeouts = wire
-        .effective_npos_timeouts
-        .expect("effective_npos_timeouts");
-    assert_eq!(npos_timeouts.propose_ms, 210);
-    assert_eq!(npos_timeouts.witness_ms, 280);
-    iroha_core::sumeragi::status::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, 0, None);
 }

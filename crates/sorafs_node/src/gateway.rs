@@ -722,7 +722,8 @@ fn build_por_proof(
         .leaf_path(0)
         .ok_or_else(|| eyre::eyre!("PoR tree has no leaves"))?;
     let proof = por_tree
-        .prove_leaf(chunk_idx, segment_idx, leaf_idx, payload)
+        .try_prove_leaf(chunk_idx, segment_idx, leaf_idx, payload)
+        .map_err(|err| eyre::eyre!("failed to build PoR proof from payload: {err}"))?
         .ok_or_else(|| eyre::eyre!("failed to build PoR proof from payload"))?;
     let sample = PorProofSampleV1 {
         sample_index: 0,
@@ -3363,7 +3364,8 @@ mod tests {
                 blake3: chunk.digest,
             })
             .collect::<Vec<_>>();
-        let por_tree = PorMerkleTree::from_payload(&payload, &stored_chunks);
+        let por_tree = PorMerkleTree::try_from_payload(&payload, &stored_chunks)
+            .expect("build fixture PoR tree");
         (payload, por_tree)
     }
 

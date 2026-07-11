@@ -1848,10 +1848,10 @@ pub mod isi {
                     "recursive Kagemusha redeem verifier key is not registered",
                 )
             })?;
-        if record.status != ConfidentialStatus::Active {
+        if !record.is_active_at(state_transaction.block_height()) {
             return Err(labeled_invariant(
                 "verifier_key_inactive",
-                "recursive Kagemusha redeem verifier key is not active",
+                "recursive Kagemusha redeem verifier key is not active at the current block height",
             )
             .into());
         }
@@ -14218,6 +14218,99 @@ pub mod isi {
                     "verifier_key_invalid",
                     "pending-production backend tag",
                 );
+            }
+        }
+
+        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+        #[test]
+        fn kagemusha_recursive_redeem_resolver_enforces_unshield_verifier_lifecycle_at_block_height()
+         {
+            // This is the final redeem path's production verifier-resolution boundary. Driving
+            // `RedeemKagemushaRecursive::execute` to it requires generating the heavyweight real
+            // recursive and unshield Halo2 proofs used by the ignored end-to-end fixtures.
+            let domain_id = DomainId::try_new("offline", "universal").expect("domain id");
+            let definition_id = AssetDefinitionId::new(
+                domain_id,
+                "kgmr_lifecycle".parse().expect("asset definition name"),
+            );
+            let vk_id = VerifyingKeyId::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                "recursive-kagemusha-unshield-v3-lifecycle",
+            );
+            let mut record = crate::zk::confidential_v2::confidential_unshield_v3_vk_record(
+                crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                1,
+            )
+            .expect("canonical confidential unshield v3 verifier record");
+            record.activation_height = Some(10);
+            record.withdraw_height = Some(20);
+            let commitment = record.commitment;
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                record.circuit_id.clone(),
+                commitment,
+                crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1
+                    .to_vec(),
+                vec![0xC0],
+            );
+            let mut proof = ProofAttachment::new_ref(
+                crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                ProofBox::new(
+                    crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                    norito::to_bytes(&envelope).expect("encode lifecycle proof envelope"),
+                ),
+                vk_id.clone(),
+            );
+            proof.vk_commitment = Some(commitment);
+
+            let mut world = World::default();
+            world
+                .verifying_keys_by_circuit
+                .insert((record.circuit_id.clone(), record.version), vk_id.clone());
+            world.verifying_keys.insert(vk_id.clone(), record);
+            world.zk_assets.insert(definition_id.clone(), {
+                let mut zk_state = ZkAssetState::default();
+                zk_state.vk_unshield = Some(ZkAssetVerifierBinding {
+                    id: vk_id,
+                    commitment,
+                });
+                zk_state
+            });
+            let kura = Kura::blank_kura_for_testing();
+            let state = State::new(world, Arc::clone(&kura), LiveQueryStore::start_test());
+
+            for (height, should_be_active, boundary) in [
+                (9, false, "before activation"),
+                (10, true, "at activation"),
+                (19, true, "before withdrawal"),
+                (20, false, "at withdrawal"),
+            ] {
+                let header = BlockHeader::new(
+                    std::num::NonZeroU64::new(height).expect("non-zero lifecycle height"),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let transaction = block.transaction();
+                let result =
+                    resolve_kagemusha_unshield_verifier(&definition_id, &proof, &transaction);
+                match (should_be_active, result) {
+                    (true, Ok(_)) => {}
+                    (true, Err(err)) => {
+                        panic!("unshield verifier must be active {boundary}: {err}")
+                    }
+                    (false, Err(err)) => assert_offline_rejection(
+                        err,
+                        "verifier_key_inactive",
+                        "current block height",
+                    ),
+                    (false, Ok(_)) => {
+                        panic!("unshield verifier must be inactive {boundary}")
+                    }
+                }
             }
         }
 

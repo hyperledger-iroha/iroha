@@ -1627,8 +1627,8 @@
         "type": "object"
       },
       "Hash": {
-        "description": "Norito JSON hash string with checksum.",
-        "pattern": "^hash:[0-9a-fA-F]{64}#[0-9a-fA-F]{4}$",
+        "description": "Canonical Norito JSON hash literal. Consumers must also verify the CRC16 checksum and Iroha marker bit.",
+        "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
         "type": "string"
       },
       "IdentifierClaimLookupResponse": {
@@ -2085,8 +2085,79 @@
         ],
         "type": "object"
       },
+      "LaneRelayEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "block_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "commit_qc": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "da_commitment_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "rbc_bytes_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settlement_commitment": {
+            "$ref": "#/components/schemas/LaneSettlementCommitment"
+          },
+          "settlement_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "lane_id",
+          "lane_incarnation",
+          "dataspace_id",
+          "block_height",
+          "block_hash",
+          "da_commitment_hash",
+          "commit_qc",
+          "settlement_commitment",
+          "settlement_hash",
+          "rbc_bytes_total"
+        ],
+        "type": "object"
+      },
       "LaneSettlementCommitment": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "block_height": {
             "format": "uint64",
@@ -2099,22 +2170,28 @@
             "type": "integer"
           },
           "lane_id": {
-            "format": "uint64",
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
           },
           "native_amx_receipts": {
             "items": {
               "$ref": "#/components/schemas/NativeAmxReceipt"
             },
-            "type": "array"
+            "type": "array",
+            "uniqueItems": true
           },
           "nexus_fee_receipts": {
-            "description": "Versioned Nexus fee receipts encoded with their canonical Norito JSON shape.",
+            "description": "Versioned Nexus fee receipts with exact recomputation inputs.",
             "items": {
-              "$ref": "#/components/schemas/JsonValue"
+              "$ref": "#/components/schemas/NexusFeeReceipt"
             },
-            "type": "array"
+            "type": "array",
+            "uniqueItems": true
           },
           "receipts": {
             "items": {
@@ -2157,6 +2234,7 @@
         "required": [
           "block_height",
           "lane_id",
+          "lane_incarnation",
           "dataspace_id",
           "tx_count",
           "total_local_micro",
@@ -2171,7 +2249,7 @@
         "type": "object"
       },
       "LaneSettlementReceipt": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "local_amount_micro": {
             "pattern": "^[0-9]+$",
@@ -2211,7 +2289,7 @@
         "type": "object"
       },
       "LaneSwapMetadata": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "epsilon_bps": {
             "format": "uint16",
@@ -2818,14 +2896,39 @@
         "type": "object"
       },
       "NativeAmxAttestationBody": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
+          "authority_context_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "chain_id_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
           "coordinator_dataspace_id": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
+          "coordinator_lane_block_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "coordinator_lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "coordinator_lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "coordinator_proposal_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "epoch": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -2836,9 +2939,26 @@
             "type": "integer"
           },
           "participant_lane_id": {
-            "format": "uint64",
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
+          },
+          "participant_lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "participant_min_quorum": {
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "participant_validator_count": {
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "participant_validator_set_hash": {
+            "$ref": "#/components/schemas/Hash"
           },
           "phase": {
             "description": "Native AMX phase certified by the participant committee.",
@@ -2853,8 +2973,32 @@
           },
           "planned_coordinator_block_height": {
             "format": "uint64",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
+          },
+          "round": {
+            "additionalProperties": false,
+            "properties": {
+              "context_id": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "height": {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "view": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "context_id",
+              "height",
+              "view"
+            ],
+            "type": "object"
           },
           "source_id": {
             "description": "Source transaction hash/id as 32-byte hex.",
@@ -2866,24 +3010,35 @@
           }
         },
         "required": [
+          "round",
+          "epoch",
+          "chain_id_hash",
           "source_id",
           "tx_entrypoint_hash",
           "plan_digest",
           "phase",
           "coordinator_lane_id",
           "coordinator_dataspace_id",
+          "coordinator_lane_incarnation",
           "participant_lane_id",
           "participant_dataspace_id",
+          "participant_lane_incarnation",
+          "participant_validator_set_hash",
+          "participant_validator_count",
+          "participant_min_quorum",
+          "authority_context_height",
+          "coordinator_lane_block_view",
+          "coordinator_proposal_hash",
           "planned_coordinator_block_height"
         ],
         "type": "object"
       },
       "NativeAmxAttestationQc": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "bls_aggregate_signature": {
-            "description": "BLS aggregate signature bytes encoded as hex.",
-            "pattern": "^[0-9a-fA-F]*$",
+            "description": "Compressed 96-byte BLS12-381 aggregate signature encoded as hex.",
+            "pattern": "^[0-9a-fA-F]{192}$",
             "type": "string"
           },
           "body": {
@@ -2895,6 +3050,7 @@
               "minimum": 0,
               "type": "integer"
             },
+            "minItems": 1,
             "type": "array"
           },
           "validator_set": {
@@ -2902,15 +3058,28 @@
             "items": {
               "type": "string"
             },
-            "type": "array"
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
           },
           "validator_set_hash": {
             "$ref": "#/components/schemas/Hash"
           },
           "validator_set_hash_version": {
+            "enum": [
+              1
+            ],
             "format": "uint16",
-            "minimum": 0,
             "type": "integer"
+          },
+          "validator_set_pops": {
+            "description": "Historical compressed BLS proofs of possession aligned with validator_set.",
+            "items": {
+              "pattern": "^[0-9a-fA-F]{192}$",
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
           }
         },
         "required": [
@@ -2918,13 +3087,14 @@
           "validator_set_hash_version",
           "validator_set_hash",
           "validator_set",
+          "validator_set_pops",
           "signers_bitmap",
           "bls_aggregate_signature"
         ],
         "type": "object"
       },
       "NativeAmxLegRecord": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "commit_qc": {
             "$ref": "#/components/schemas/NativeAmxAttestationQc"
@@ -2935,7 +3105,8 @@
             "type": "integer"
           },
           "lane_id": {
-            "format": "uint64",
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
@@ -2952,7 +3123,85 @@
         "type": "object"
       },
       "NativeAmxReceipt": {
-        "additionalProperties": true,
+        "additionalProperties": false,
+        "properties": {
+          "authority_context_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "chain_id_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "coordinator_proposal_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_block_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "lane_block_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/NativeAmxLegRecord"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "plan_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "source_id": {
+            "description": "Source transaction hash/id as 32-byte hex.",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "version": {
+            "enum": [
+              2
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "source_id",
+          "chain_id_hash",
+          "plan_digest",
+          "lane_id",
+          "dataspace_id",
+          "lane_incarnation",
+          "authority_context_height",
+          "lane_block_height",
+          "lane_block_view",
+          "coordinator_proposal_hash",
+          "legs"
+        ],
+        "type": "object"
+      },
+      "NexusFeeReceipt": {
+        "additionalProperties": false,
         "properties": {
           "block_height": {
             "format": "uint64",
@@ -2964,104 +3213,172 @@
             "minimum": 0,
             "type": "integer"
           },
+          "fee_amount": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "type": "string"
+          },
+          "fee_asset_id": {
+            "minLength": 1,
+            "type": "string"
+          },
           "lane_id": {
-            "format": "uint64",
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
-          "legs": {
-            "items": {
-              "$ref": "#/components/schemas/NativeAmxLegRecord"
-            },
-            "type": "array"
+          "payer_account_id": {
+            "minLength": 1,
+            "type": "string"
           },
-          "plan_digest": {
-            "$ref": "#/components/schemas/Hash"
+          "schedule": {
+            "$ref": "#/components/schemas/NexusFeeScheduleInputs"
           },
           "source_id": {
-            "description": "Source transaction hash/id as 32-byte hex.",
             "pattern": "^[0-9a-fA-F]{64}$",
             "type": "string"
           },
           "version": {
+            "enum": [
+              1
+            ],
             "format": "uint16",
-            "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
           "version",
           "source_id",
-          "plan_digest",
-          "lane_id",
           "dataspace_id",
+          "lane_id",
           "block_height",
-          "legs"
+          "payer_account_id",
+          "fee_asset_id",
+          "fee_amount",
+          "schedule"
         ],
         "type": "object"
       },
-      "NexusLaneLifecycleResponse": {
+      "NexusFeeScheduleInputs": {
         "additionalProperties": false,
         "properties": {
-          "active_lane_count": {
-            "description": "Number of lanes active at the committed lane-authority height.",
+          "base_fee": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "type": "string"
+          },
+          "gas_used": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "active_lane_ids": {
-            "description": "Lane ids active at the committed lane-authority height.",
-            "items": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": "array"
-          },
-          "autoscale_capacity_lane_count": {
-            "description": "Number of active autoscale-managed elastic lanes that currently count as horizontal capacity.",
+          "instruction_count": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "autoscale_capacity_lane_ids": {
-            "description": "Active autoscale-managed elastic lane ids that currently count as horizontal capacity.",
-            "items": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": "array"
+          "per_byte_fee": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "type": "string"
           },
-          "configured_lane_count": {
-            "description": "Configured lane namespace size after the lifecycle plan.",
+          "per_gas_unit_fee": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "type": "string"
+          },
+          "per_instruction_fee": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "type": "string"
+          },
+          "tx_bytes_len": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
-          },
-          "lane_count": {
-            "deprecated": true,
-            "description": "Legacy alias for `configured_lane_count`.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "ok": {
-            "description": "True when the signed lane lifecycle plan was accepted and applied.",
-            "enum": [
-              true
-            ],
-            "type": "boolean"
           }
         },
         "required": [
-          "ok",
-          "configured_lane_count",
+          "tx_bytes_len",
+          "instruction_count",
+          "gas_used",
+          "base_fee",
+          "per_byte_fee",
+          "per_instruction_fee",
+          "per_gas_unit_fee"
+        ],
+        "type": "object"
+      },
+      "NexusLaneLifecycleIncarnationEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "incarnation": {
+            "description": "Non-zero commitment identifying this exact active lane incarnation.",
+            "type": "string"
+          },
+          "lane_id": {
+            "description": "Active lane identifier.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane_id",
+          "incarnation"
+        ],
+        "type": "object"
+      },
+      "NexusLaneLifecycleStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_hash": {
+            "description": "Domain-separated hash to place in `expected_catalog_hash` of `nexus_lane_lifecycle_v1`.",
+            "type": "string"
+          },
+          "incarnation_root": {
+            "description": "Domain-separated root to place in `expected_incarnation_root` of `nexus_lane_lifecycle_v1`.",
+            "type": "string"
+          },
+          "incarnations": {
+            "description": "Canonical active lane-id/incarnation commitments, exactly matching `lanes`.",
+            "items": {
+              "$ref": "#/components/schemas/NexusLaneLifecycleIncarnationEntry"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "lane_count": {
+            "description": "Exclusive lane-id bound for the current catalog namespace.",
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "lanes": {
+            "description": "Exact canonical active lane metadata ordered by lane id.",
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "nexus_enabled": {
+            "description": "Whether Nexus lane routing is enabled on this node.",
+            "type": "boolean"
+          },
+          "version": {
+            "description": "Lifecycle status layout version.",
+            "enum": [
+              1
+            ],
+            "format": "uint8",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "nexus_enabled",
           "lane_count",
-          "active_lane_count",
-          "active_lane_ids",
-          "autoscale_capacity_lane_count",
-          "autoscale_capacity_lane_ids"
+          "lanes",
+          "catalog_hash",
+          "incarnations",
+          "incarnation_root"
         ],
         "type": "object"
       },
@@ -5245,18 +5562,103 @@
         "type": "object"
       },
       "SumeragiStatusResponse": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
+          "body_state": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "build_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "config_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "height": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "height_context_id": {
+            "description": "Single-field HeightContextId tuple containing the frozen context hash.",
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "highest_prepare_qc": {
+            "$ref": "#/components/schemas/JsonValue",
+            "nullable": true
+          },
+          "lane_relay_envelopes": {
+            "description": "Relay envelopes that preserve and hash the exact settlement commitment.",
+            "items": {
+              "$ref": "#/components/schemas/LaneRelayEnvelope"
+            },
+            "type": "array"
+          },
           "lane_settlement_commitments": {
             "description": "Per-lane/dataspace settlement commitments surfaced for Nexus fee and native AMX audit consumers.",
             "items": {
               "$ref": "#/components/schemas/LaneSettlementCommitment"
             },
             "type": "array"
+          },
+          "last_committed_height": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_committed_subject": {
+            "$ref": "#/components/schemas/JsonValue",
+            "nullable": true
+          },
+          "last_timeout_certificate": {
+            "$ref": "#/components/schemas/JsonValue",
+            "nullable": true
+          },
+          "leader": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "locked_prepare_qc": {
+            "$ref": "#/components/schemas/JsonValue",
+            "nullable": true
+          },
+          "node_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "pending_persistence_id": {
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "protocol_version": {
+            "maximum": 2,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "view": {
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
-          "lane_settlement_commitments"
+          "protocol_version",
+          "node_fingerprint",
+          "build_fingerprint",
+          "config_fingerprint",
+          "height_context_id",
+          "height",
+          "view",
+          "phase",
+          "leader",
+          "body_state",
+          "last_committed_height",
+          "lane_settlement_commitments",
+          "lane_relay_envelopes"
         ],
         "type": "object"
       },
@@ -11945,16 +12347,6 @@
       "post": {
         "description": "Accepts JSON-RPC payloads for MCP tool discovery and invocation.",
         "operationId": "mcpJsonRpc",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
@@ -12674,41 +13066,26 @@
       }
     },
     "/v1/nexus/lifecycle": {
-      "post": {
-        "description": "Apply a Nexus lane lifecycle plan. Accepted responses report configured lane namespace size, active lane ids/count, and live autoscale-capacity lane ids/count separately.",
-        "operationId": "nexusLaneLifecycle",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
+      "get": {
+        "description": "Return the exact canonical lane catalog, active lane incarnations, and their domain-separated commitments. Use both commitments in a signed `SetParameter(nexus_lane_lifecycle_v1)` transaction. Responses support JSON and native Norito.",
+        "operationId": "getNexusLaneLifecycleStatus",
         "responses": {
-          "202": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NexusLaneLifecycleResponse"
+                  "$ref": "#/components/schemas/NexusLaneLifecycleStatusV1"
                 }
-              }
-            },
-            "description": "Lane lifecycle plan accepted."
-          },
-          "400": {
-            "content": {
-              "application/json": {
+              },
+              "application/x-norito": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/NexusLaneLifecycleStatusV1"
                 }
               }
             },
-            "description": "Lane lifecycle plan failed validation."
+            "description": "Exact current lane catalog and optimistic concurrency commitment."
           },
-          "401": {
+          "406": {
             "content": {
               "application/json": {
                 "schema": {
@@ -12716,8 +13093,20 @@
                 }
               }
             },
-            "description": "Operator authentication is required or invalid."
-          },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          }
+        },
+        "summary": "Fetch the lane lifecycle catalog commitment.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-tool-effect": "read"
+      },
+      "post": {
+        "deprecated": true,
+        "description": "This route never mutates state and always rejects valid request bodies. Submit a signed transaction containing `SetParameter` with custom id `nexus_lane_lifecycle_v1` instead.",
+        "operationId": "deprecatedPostNexusLaneLifecycle",
+        "responses": {
           "403": {
             "content": {
               "application/json": {
@@ -12726,10 +13115,10 @@
                 }
               }
             },
-            "description": "Operator is not authorized to apply lane lifecycle plans."
+            "description": "Node-local lane lifecycle mutation is disabled."
           }
         },
-        "summary": "Apply a lane lifecycle plan.",
+        "summary": "Retired node-local lifecycle mutation route.",
         "tags": [
           "Nexus"
         ],
@@ -16747,9 +17136,107 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/sorafs/capacity/por": {
+      "post": {
+        "deprecated": true,
+        "description": "This compatibility route always returns 410 Gone. PoR metering is derived from authenticated proof and verdict lifecycle transitions.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The compatibility route is retired and never mutates PoR state."
+          }
+        },
+        "summary": "Manual PoR observation retired.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/capacity/por-challenge": {
+      "post": {
+        "deprecated": true,
+        "description": "This authenticated compatibility route always returns 410 Gone. The verified coordinator scheduler is the only permitted challenge authority and remains fail-closed until authenticated external drand/VRF feeds are configured.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The compatibility route is retired and never mutates PoR state."
+          }
+        },
+        "summary": "External PoR challenge submission retired.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/capacity/por-proof": {
+      "post": {
+        "description": "Submit a domain-separated provider-signed proof whose request key and current admitted advert key match the proof signer.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit PoR proof.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/sorafs/capacity/por-verdict": {
       "post": {
-        "description": "Submit proof-of-replication verdict.",
+        "description": "Submit a fully signed verdict whose unique signers belong to the configured operator/auditor trust set and meet the PoR auditor threshold.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -18222,6 +18709,39 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/sorafs/por/trigger": {
+      "post": {
+        "deprecated": true,
+        "description": "This legacy manual-trigger compatibility route always returns 410 Gone after access checks. Challenges are issued only by the trusted PoR coordinator scheduler.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The compatibility route is retired and never mutates PoR state."
+          }
+        },
+        "summary": "Manual PoR trigger retired.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/sorafs/proof/stream": {
       "post": {
         "description": "Request a PoR or PoTR proof stream payload. PoR `sample_count` must be between 1 and 500. `proof_kind=pdp` is reserved for future SF-13 work and is rejected as an unsupported proof kind.",
@@ -19055,6 +19575,72 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/sorafs/storage/por-challenge": {
+      "post": {
+        "deprecated": true,
+        "description": "This compatibility route accepts the legacy envelope only to return 410 Gone without parsing or mutating PoR state. Use the trusted coordinator scheduler.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The compatibility route is retired and never mutates PoR state."
+          }
+        },
+        "summary": "Storage PoR challenge mutation retired.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/storage/por-proof": {
+      "post": {
+        "deprecated": true,
+        "description": "This compatibility route always returns 410 Gone without mutating PoR state. Submit proofs through `/v1/sorafs/capacity/por-proof`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The compatibility route is retired and never mutates PoR state."
+          }
+        },
+        "summary": "Storage PoR proof mutation retired.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/sorafs/storage/por-sample": {
       "post": {
         "description": "Request a proof-of-replication sample. The JSON `count` field must be between 1 and 500; the returned `samples` array is also capped by the stored manifest leaf count.",
@@ -19081,6 +19667,39 @@
           }
         },
         "summary": "Request a PoR sample.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/storage/por-verdict": {
+      "post": {
+        "deprecated": true,
+        "description": "This compatibility route always returns 410 Gone without mutating PoR state. Submit verdicts through `/v1/sorafs/capacity/por-verdict`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The compatibility route is retired and never mutates PoR state."
+          }
+        },
+        "summary": "Storage PoR verdict mutation retired.",
         "tags": [
           "SoraFS"
         ],
@@ -21646,7 +22265,7 @@
     },
     "/v1/zk/vk/{backend}/{name}": {
       "get": {
-        "description": "Fetch a verification key by backend and name.",
+        "description": "Fetch a verification key by backend and name. The response includes namespace and owner_manifest_id identity metadata plus record_norito_base64, the standard-base64 canonical Norito VerifyingKeyRecord archive used by SDK proof-attachment builders.",
         "parameters": [
           {
             "description": "Verification backend label.",

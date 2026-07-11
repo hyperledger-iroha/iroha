@@ -657,36 +657,24 @@ fn npos_base_epoch_seed(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 
         .unwrap_or_else(|| chain_epoch_seed(chain_id))
 }
 
-fn next_epoch_seed_from_seed_and_reveals(
-    seed: [u8; 32],
-    reveals: impl IntoIterator<Item = (u32, [u8; 32])>,
-) -> [u8; 32] {
+fn next_epoch_seed_from_seed(seed: [u8; 32]) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
 
     let mut h = Blake2b512::new();
     iroha_crypto::blake2::digest::Update::update(&mut h, &seed);
-    for (signer, reveal) in reveals {
-        iroha_crypto::blake2::digest::Update::update(&mut h, &signer.to_be_bytes());
-        iroha_crypto::blake2::digest::Update::update(&mut h, &reveal);
-    }
     let digest = iroha_crypto::blake2::Digest::finalize(h);
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest[..32]);
     out
 }
 
-fn next_epoch_seed_from_seed(seed: [u8; 32]) -> [u8; 32] {
-    next_epoch_seed_from_seed_and_reveals(seed, [])
-}
-
 fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
-    let mut reveals: Vec<(u32, [u8; 32])> = record
-        .participants
-        .iter()
-        .filter_map(|p| p.reveal.map(|reveal| (p.signer, reveal)))
-        .collect();
-    reveals.sort_by_key(|(signer, _)| *signer);
-    next_epoch_seed_from_seed_and_reveals(record.seed, reveals)
+    // The record's reveal set is proposer-selected until v2 carries a
+    // quorum-certified inclusion accumulator. Mixing that subset would let a
+    // boundary proposer grind next-epoch leader schedules by omitting valid
+    // reveals. Keep rollover deterministic and bias-free; authenticated reveal
+    // proofs remain available for diagnostics and a future certified beacon.
+    next_epoch_seed_from_seed(record.seed)
 }
 
 pub(crate) fn deterministic_npos_seed_for_epoch_from_world(
@@ -791,7 +779,7 @@ mod tests {
                 LaneBlockProposalV1, LaneBlockQcV1, Proposal, RbcChunk,
             },
         },
-        consensus::{VALIDATOR_SET_HASH_VERSION_V1, VrfEpochRecord},
+        consensus::{VALIDATOR_SET_HASH_VERSION_V1, VrfEpochRecord, VrfParticipantRecord},
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
         parameter::{
             Parameter,
@@ -1219,6 +1207,88 @@ mod tests {
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     }
 
+    fn sample_v2_control_and_chunk() -> (BlockMessage, BlockMessage) {
+        use iroha_data_model::block::consensus_v2 as wire;
+
+        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"v2-handle-routing-context",
+        )));
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"v2-handle-routing-block")),
+            payload_hash: Hash::new(b"v2-handle-routing-payload"),
+        };
+        let control = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+                round: wire::ConsensusRound {
+                    context_id,
+                    height: 1,
+                    view: 0,
+                },
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                signer: 0,
+                signature: vec![1],
+            }),
+        ));
+        let chunk = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"v2-handle-routing-manifest",
+                )),
+                index: 0,
+                bytes: vec![0x5A; 4096],
+                sender: 0,
+                signature: vec![2],
+            }),
+        ));
+        (control, chunk)
+    }
+
+    #[test]
+    fn authoritative_v2_routes_control_and_chunks_to_isolated_queues() {
+        let (handle, block_payload_rx, block_rx, rbc_chunk_rx, vote_rx) =
+            test_handle_with_state(state_with_committed_height(0));
+        let handle = handle.with_authoritative_v2();
+        let (control, chunk) = sample_v2_control_and_chunk();
+
+        assert!(handle.try_incoming_block_message(control));
+        assert!(matches!(
+            vote_rx.try_recv(),
+            Ok(InboundBlockMessage {
+                message: BlockMessage::V2(_),
+                ..
+            })
+        ));
+        assert!(handle.try_incoming_block_message(chunk));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Ok(InboundBlockMessage {
+                message: BlockMessage::V2(_),
+                ..
+            })
+        ));
+        assert_no_inbound_messages(&block_payload_rx, &block_rx, &rbc_chunk_rx, &vote_rx);
+    }
+
+    #[test]
+    fn authoritative_v2_rejects_retired_global_messages_before_enqueue() {
+        let (handle, block_payload_rx, block_rx, rbc_chunk_rx, vote_rx) =
+            test_handle_with_state(state_with_committed_height(0));
+        let handle = handle.with_authoritative_v2();
+
+        assert!(
+            !handle.try_incoming_block_message(BlockMessage::ConsensusParams(
+                ConsensusParamsAdvert {
+                    collectors_k: 1,
+                    redundant_send_r: 1,
+                    membership: None,
+                }
+            ))
+        );
+        assert_no_inbound_messages(&block_payload_rx, &block_rx, &rbc_chunk_rx, &vote_rx);
+    }
+
     #[test]
     fn trusted_roster_without_pops_keeps_bls_peers() {
         let kp0 = checked_bls_keypair();
@@ -1447,6 +1517,37 @@ mod tests {
             npos_seed_for_height_from_world(&view, state.chain_id_ref(), 15),
             next_epoch_seed_from_seed(epoch2_seed)
         );
+    }
+
+    #[test]
+    fn proposer_selected_vrf_reveal_subsets_cannot_bias_next_epoch_seed() {
+        let mut omitted = vrf_record(7, 80, 10, true);
+        omitted.seed = [0x5A; 32];
+        let first_reveal = [0x62; 32];
+        let mut included = omitted.clone();
+        included.participants.push(VrfParticipantRecord {
+            signer: 0,
+            commitment: Some(Hash::new(first_reveal).into()),
+            reveal: Some(first_reveal),
+            commit_proof: None,
+            reveal_proof: None,
+            last_updated_height: 79,
+        });
+        let second_reveal = [0x72; 32];
+        let mut different_subset = omitted.clone();
+        different_subset.participants.push(VrfParticipantRecord {
+            signer: 3,
+            commitment: Some(Hash::new(second_reveal).into()),
+            reveal: Some(second_reveal),
+            commit_proof: None,
+            reveal_proof: None,
+            last_updated_height: 79,
+        });
+
+        let expected = next_epoch_seed_from_seed(omitted.seed);
+        assert_eq!(next_epoch_seed_from_record(&omitted), expected);
+        assert_eq!(next_epoch_seed_from_record(&included), expected);
+        assert_eq!(next_epoch_seed_from_record(&different_subset), expected);
     }
 
     #[test]
@@ -12621,7 +12722,6 @@ pub mod collectors;
 pub mod consensus;
 pub mod da;
 pub mod election;
-pub mod engine;
 pub mod epoch;
 pub mod epoch_report;
 pub(crate) mod evidence;
@@ -12635,9 +12735,31 @@ pub(crate) mod penalties;
 pub mod rbc_sampling;
 pub mod rbc_status;
 pub mod rbc_store;
+pub(crate) mod safety_wal;
 pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
 pub mod status;
+pub(crate) mod v2;
+pub(crate) mod v2_apply;
+pub(crate) mod v2_block_sync;
+pub(crate) mod v2_body_store;
+pub(crate) mod v2_candidate;
+pub(crate) mod v2_chunks;
+pub(crate) mod v2_context;
+pub(crate) mod v2_context_store;
+pub(crate) mod v2_core;
+pub use v2_context::{
+    GenesisV2Bootstrap, V2GenesisBootstrapError, freeze_staged_genesis_v2,
+    signed_genesis_voting_peers, staged_genesis_nexus_amx_context_hash,
+};
+pub(crate) mod v2_effects;
+pub(crate) mod v2_lane_work;
+pub(crate) mod v2_npos;
+pub(crate) mod v2_recovery;
+pub(crate) mod v2_runner;
+pub(crate) mod v2_runtime;
+pub(crate) mod v2_transport;
+pub(crate) mod v2_worker;
 pub(crate) mod vnext;
 pub mod witness;
 pub use evidence::EvidenceValidationContext;
@@ -12687,6 +12809,9 @@ pub struct GenesisWithPubKey {
     pub genesis: Option<GenesisBlock>,
     /// Public key used to sign the genesis payload.
     pub public_key: PublicKey,
+    /// Verified, uncommitted height-one context derived from fresh genesis.
+    /// Absent only on the preserved non-empty-storage restart path.
+    pub v2_bootstrap: Option<GenesisV2Bootstrap>,
 }
 
 /// Configuration for the persisted RBC session store.
@@ -13380,6 +13505,12 @@ impl InboundBlockMessage {
         }
     }
 
+    /// Consume ingress metadata and return the normalized message plus its
+    /// authenticated outer sender.
+    pub(crate) fn into_message_and_sender(self) -> (BlockMessage, Option<PeerId>) {
+        (self.message, self.sender)
+    }
+
     fn with_enqueue_metadata(mut self, queue: status::WorkerQueueKind) -> Self {
         self.enqueued_at = Some(Instant::now());
         self.queue = Some(queue);
@@ -13533,7 +13664,9 @@ pub struct SumeragiHandle {
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     frontier_block_sync_hint: Arc<FrontierBlockSyncHint>,
+    ingress_ready: Arc<AtomicBool>,
     state: Option<Arc<State>>,
+    authoritative_v2: bool,
 }
 
 impl SumeragiHandle {
@@ -13570,8 +13703,17 @@ impl SumeragiHandle {
             vote_dedup,
             block_payload_dedup,
             frontier_block_sync_hint,
+            // Low-level unit fixtures construct handles directly. Production
+            // start replaces this with a shared, initially closed replay gate.
+            ingress_ready: Arc::new(AtomicBool::new(true)),
             state: None,
+            authoritative_v2: false,
         }
+    }
+
+    fn with_ingress_ready(mut self, ingress_ready: Arc<AtomicBool>) -> Self {
+        self.ingress_ready = ingress_ready;
+        self
     }
 
     fn with_wake(mut self, wake: mpsc::SyncSender<()>) -> Self {
@@ -13584,10 +13726,19 @@ impl SumeragiHandle {
         self
     }
 
+    fn with_authoritative_v2(mut self) -> Self {
+        self.authoritative_v2 = true;
+        self
+    }
+
     fn wake(&self) {
         if let Some(wake) = self.wake.as_ref() {
             let _ = wake.try_send(());
         }
+    }
+
+    fn ingress_is_ready(&self) -> bool {
+        self.ingress_ready.load(Ordering::Acquire)
     }
 
     fn committed_height_hint(&self) -> Option<u64> {
@@ -13776,38 +13927,39 @@ impl SumeragiHandle {
     /// consensus or lane-block recovery.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
         let msg = msg.normalize();
-        let blocking = matches!(
-            &msg,
-            BlockMessage::BlockSyncUpdate(_)
-                | BlockMessage::BlockCreated(_)
-                | BlockMessage::BlockBodyResponse(_)
-                | BlockMessage::FetchBlockBody(_)
-                | BlockMessage::CertifiedBlockFetch(_)
-                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                    priority: Some(message::FetchPendingBlockPriority::Consensus),
-                    ..
-                })
-                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                    commit_qc_only: Some(true),
-                    ..
-                })
-                | BlockMessage::Proposal(_)
-                | BlockMessage::LaneBlockProposal(_)
-                | BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_)
-                | BlockMessage::LaneBlockNewViewVote(_)
-                | BlockMessage::LaneBlockNewViewCertificate(_)
-                | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_)
-                | BlockMessage::QcVote(_)
-                | BlockMessage::Qc(_)
-                | BlockMessage::VrfCommit(_)
-                | BlockMessage::VrfReveal(_)
-                | BlockMessage::RbcInit(_)
-                | BlockMessage::RbcChunk(_)
-                | BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_)
-        );
+        let blocking = msg.v2_requires_blocking_ingress()
+            || matches!(
+                &msg,
+                BlockMessage::BlockSyncUpdate(_)
+                    | BlockMessage::BlockCreated(_)
+                    | BlockMessage::BlockBodyResponse(_)
+                    | BlockMessage::FetchBlockBody(_)
+                    | BlockMessage::CertifiedBlockFetch(_)
+                    | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
+                        priority: Some(message::FetchPendingBlockPriority::Consensus),
+                        ..
+                    })
+                    | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
+                        commit_qc_only: Some(true),
+                        ..
+                    })
+                    | BlockMessage::Proposal(_)
+                    | BlockMessage::LaneBlockProposal(_)
+                    | BlockMessage::LaneExecutablePayload(_)
+                    | BlockMessage::LaneExecutablePayloadHandoff(_)
+                    | BlockMessage::LaneBlockNewViewVote(_)
+                    | BlockMessage::LaneBlockNewViewCertificate(_)
+                    | BlockMessage::LaneBlockVote(_)
+                    | BlockMessage::LaneBlockQc(_)
+                    | BlockMessage::QcVote(_)
+                    | BlockMessage::Qc(_)
+                    | BlockMessage::VrfCommit(_)
+                    | BlockMessage::VrfReveal(_)
+                    | BlockMessage::RbcInit(_)
+                    | BlockMessage::RbcChunk(_)
+                    | BlockMessage::RbcReady(_)
+                    | BlockMessage::RbcDeliver(_)
+            );
         let mode = if blocking {
             IngressMode::Blocking
         } else {
@@ -13820,38 +13972,39 @@ impl SumeragiHandle {
     /// Returns `true` if the message was accepted by the queue.
     pub fn try_incoming_block_message_from(&self, sender: PeerId, msg: BlockMessage) -> bool {
         let msg = msg.normalize();
-        let blocking = matches!(
-            &msg,
-            BlockMessage::BlockSyncUpdate(_)
-                | BlockMessage::BlockCreated(_)
-                | BlockMessage::BlockBodyResponse(_)
-                | BlockMessage::FetchBlockBody(_)
-                | BlockMessage::CertifiedBlockFetch(_)
-                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                    priority: Some(message::FetchPendingBlockPriority::Consensus),
-                    ..
-                })
-                | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
-                    commit_qc_only: Some(true),
-                    ..
-                })
-                | BlockMessage::Proposal(_)
-                | BlockMessage::LaneBlockProposal(_)
-                | BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_)
-                | BlockMessage::LaneBlockNewViewVote(_)
-                | BlockMessage::LaneBlockNewViewCertificate(_)
-                | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_)
-                | BlockMessage::QcVote(_)
-                | BlockMessage::Qc(_)
-                | BlockMessage::VrfCommit(_)
-                | BlockMessage::VrfReveal(_)
-                | BlockMessage::RbcInit(_)
-                | BlockMessage::RbcChunk(_)
-                | BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_)
-        );
+        let blocking = msg.v2_requires_blocking_ingress()
+            || matches!(
+                &msg,
+                BlockMessage::BlockSyncUpdate(_)
+                    | BlockMessage::BlockCreated(_)
+                    | BlockMessage::BlockBodyResponse(_)
+                    | BlockMessage::FetchBlockBody(_)
+                    | BlockMessage::CertifiedBlockFetch(_)
+                    | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
+                        priority: Some(message::FetchPendingBlockPriority::Consensus),
+                        ..
+                    })
+                    | BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
+                        commit_qc_only: Some(true),
+                        ..
+                    })
+                    | BlockMessage::Proposal(_)
+                    | BlockMessage::LaneBlockProposal(_)
+                    | BlockMessage::LaneExecutablePayload(_)
+                    | BlockMessage::LaneExecutablePayloadHandoff(_)
+                    | BlockMessage::LaneBlockNewViewVote(_)
+                    | BlockMessage::LaneBlockNewViewCertificate(_)
+                    | BlockMessage::LaneBlockVote(_)
+                    | BlockMessage::LaneBlockQc(_)
+                    | BlockMessage::QcVote(_)
+                    | BlockMessage::Qc(_)
+                    | BlockMessage::VrfCommit(_)
+                    | BlockMessage::VrfReveal(_)
+                    | BlockMessage::RbcInit(_)
+                    | BlockMessage::RbcChunk(_)
+                    | BlockMessage::RbcReady(_)
+                    | BlockMessage::RbcDeliver(_)
+            );
         let mode = if blocking {
             IngressMode::Blocking
         } else {
@@ -13867,6 +14020,28 @@ impl SumeragiHandle {
         sender: Option<PeerId>,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            iroha_logger::debug!(
+                "rejecting Sumeragi ingress until context and safety WAL replay complete"
+            );
+            return false;
+        }
+        if self.authoritative_v2
+            && !matches!(
+                &msg,
+                BlockMessage::V2(_)
+                    | BlockMessage::LaneBlockProposal(_)
+                    | BlockMessage::LaneBlockVote(_)
+                    | BlockMessage::LaneBlockQc(_)
+                    | BlockMessage::VrfCommit(_)
+                    | BlockMessage::VrfReveal(_)
+            )
+        {
+            iroha_logger::debug!(
+                "rejecting retired Sumeragi v1 global message before live-v2 enqueue"
+            );
+            return false;
+        }
         let inbound = InboundBlockMessage::new(msg, sender);
         let log_drop = |kind: &'static str,
                         queue: status::WorkerQueueKind,
@@ -14045,6 +14220,40 @@ impl SumeragiHandle {
             return false;
         }
         match msg {
+            BlockMessage::V2(message) if self.authoritative_v2 => {
+                let class = V2IngressClass::for_payload(&message.payload);
+                let (tx, queue, kind) = match class {
+                    V2IngressClass::ConsensusControl
+                    | V2IngressClass::CommitCertificateResponse => (
+                        &self.votes,
+                        status::WorkerQueueKind::Votes,
+                        "SumeragiV2Control",
+                    ),
+                    V2IngressClass::PayloadManifest | V2IngressClass::CertifiedBodyResponse => (
+                        &self.block_payload,
+                        status::WorkerQueueKind::BlockPayload,
+                        "SumeragiV2Body",
+                    ),
+                    V2IngressClass::PayloadChunk => (
+                        &self.rbc_chunks,
+                        status::WorkerQueueKind::RbcChunks,
+                        "SumeragiV2Chunk",
+                    ),
+                    V2IngressClass::CertifiedBodyRequest
+                    | V2IngressClass::CommitCertificateRequest => (
+                        &self.block,
+                        status::WorkerQueueKind::Blocks,
+                        "SumeragiV2Request",
+                    ),
+                };
+                enqueue_with_mode(
+                    tx,
+                    InboundBlockMessage::new(BlockMessage::V2(message), sender),
+                    kind,
+                    queue,
+                    mode,
+                )
+            }
             BlockMessage::QcVote(vote) => {
                 let duplicate = !self.dedup_vote((
                     Self::phase_id(vote.phase),
@@ -14663,6 +14872,9 @@ impl SumeragiHandle {
         msg: ControlFlow,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         match mode {
             IngressMode::Blocking => {
                 self.wake();
@@ -14722,6 +14934,9 @@ impl SumeragiHandle {
         envelope: LaneRelayEnvelope,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         match mode {
             IngressMode::Blocking => {
                 self.wake();
@@ -14781,6 +14996,9 @@ impl SumeragiHandle {
         signature: MergeCommitteeSignature,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         match mode {
             IngressMode::Blocking => {
                 self.wake();
@@ -14939,6 +15157,9 @@ impl SumeragiHandle {
         message: crate::native_amx::NativeAmxMessage,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         let relay_message = || LaneRelayMessage::NativeAmx {
             sender: sender.clone(),
             message: message.clone(),
@@ -15475,8 +15696,15 @@ pub struct SumeragiStartArgs {
 
 impl SumeragiStartArgs {
     /// Launch the Sumeragi actor, returning handles for control and supervision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before allocating ingress channels or spawning the
+    /// worker when the configured live protocol has no complete production
+    /// runtime in this build.
     #[allow(clippy::too_many_lines)]
-    pub fn start(self, shutdown_signal: ShutdownSignal) -> (SumeragiHandle, Child) {
+    pub fn start(self, shutdown_signal: ShutdownSignal) -> Result<(SumeragiHandle, Child)> {
+        ensure_authoritative_consensus_runtime(self.config.protocol_version)?;
         let SumeragiStartArgs {
             config,
             common_config,
@@ -15524,6 +15752,7 @@ impl SumeragiStartArgs {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
+        let ingress_ready = Arc::new(AtomicBool::new(false));
 
         let handle = SumeragiHandle::new(
             block_payload_tx.clone(),
@@ -15536,8 +15765,10 @@ impl SumeragiStartArgs {
             Arc::clone(&vote_dedup),
             Arc::clone(&block_payload_dedup),
         )
+        .with_ingress_ready(Arc::clone(&ingress_ready))
         .with_wake(wake_tx.clone())
-        .with_state(Arc::clone(&state));
+        .with_state(Arc::clone(&state))
+        .with_authoritative_v2();
         let frontier_block_sync_hint = handle.frontier_block_sync_hint();
         frontier_block_sync_hint.set_initialized(false);
 
@@ -15568,6 +15799,7 @@ impl SumeragiStartArgs {
             vote_dedup,
             block_payload_dedup,
             frontier_block_sync_hint,
+            ingress_ready,
             vote_rx,
             block_payload_rx,
             block_rx,
@@ -15585,10 +15817,10 @@ impl SumeragiStartArgs {
             move || actor.run(),
         ));
 
-        (
+        Ok((
             handle,
             Child::new(join_handle, OnShutdown::Wait(Duration::from_secs(5))),
-        )
+        ))
     }
 }
 
@@ -15616,6 +15848,7 @@ struct SumeragiWorker {
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     frontier_block_sync_hint: Arc<FrontierBlockSyncHint>,
+    ingress_ready: Arc<AtomicBool>,
     vote_rx: mpsc::Receiver<InboundBlockMessage>,
     block_payload_rx: mpsc::Receiver<InboundBlockMessage>,
     block_rx: mpsc::Receiver<InboundBlockMessage>,
@@ -15626,6 +15859,56 @@ struct SumeragiWorker {
     wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
     rbc_status_handle: rbc_status::Handle,
+}
+
+fn ensure_authoritative_consensus_runtime(protocol_version: u32) -> Result<()> {
+    let expected = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION);
+    if protocol_version != expected {
+        return Err(eyre::eyre!(
+            "live consensus protocol {protocol_version} is unsupported; this build requires Sumeragi v2 ({expected})"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod authoritative_runtime_gate_tests {
+    use std::sync::atomic::Ordering;
+
+    use super::{BlockMessage, ensure_authoritative_consensus_runtime, test_sumeragi_handle};
+
+    #[test]
+    fn v2_is_the_only_authoritative_live_runtime() {
+        ensure_authoritative_consensus_runtime(u32::from(
+            iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+        ))
+        .expect("the complete serialized v2 effect runtime is authoritative");
+    }
+
+    #[test]
+    fn legacy_protocol_is_not_a_live_fallback() {
+        let error = ensure_authoritative_consensus_runtime(1)
+            .expect_err("v1 is decode-only and cannot be selected for live consensus");
+
+        assert!(
+            error
+                .to_string()
+                .contains("live consensus protocol 1 is unsupported")
+        );
+    }
+
+    #[test]
+    fn ingress_stays_closed_until_replay_owner_acknowledges_ready() {
+        let (handle, receiver) = test_sumeragi_handle(1);
+        handle.ingress_ready.store(false, Ordering::Release);
+
+        assert!(!handle.incoming_block_message(BlockMessage::invalid_wire_sentinel()));
+        assert!(receiver.try_recv().is_err());
+
+        handle.ingress_ready.store(true, Ordering::Release);
+        assert!(handle.incoming_block_message(BlockMessage::invalid_wire_sentinel()));
+        assert!(receiver.try_recv().is_ok());
+    }
 }
 
 /// Rate-limit ticks by the minimum gap so queue backlogs do not throttle consensus progress.
@@ -17771,8 +18054,14 @@ mod worker_iteration_warn_tests {
 }
 
 impl SumeragiWorker {
-    #[allow(clippy::too_many_lines)]
     fn run(self) {
+        v2_runner::run(self);
+    }
+
+    /// Retained decode/test implementation for first-release migration
+    /// archaeology. Live protocol v2 never enters this actor.
+    #[allow(dead_code, clippy::too_many_lines)]
+    fn run_legacy(self) {
         let startup_trace_started_at = Instant::now();
         log_sumeragi_startup_trace("sumeragi.worker.run.enter", startup_trace_started_at);
         let Self {
@@ -17809,7 +18098,16 @@ impl SumeragiWorker {
             vote_dedup: _vote_dedup,
             block_payload_dedup,
             frontier_block_sync_hint,
+            ingress_ready: _,
         } = self;
+        if let Err(error) = ensure_authoritative_consensus_runtime(config.protocol_version) {
+            iroha_logger::error!(
+                ?error,
+                protocol_version = config.protocol_version,
+                "Sumeragi consensus startup failed closed"
+            );
+            return;
+        }
         let fallback_params = iroha_data_model::parameter::system::SumeragiParameters::default();
         let msg_channel_cap_block_payload = config.queues.block_payload;
         let msg_channel_cap_votes = config.queues.votes;

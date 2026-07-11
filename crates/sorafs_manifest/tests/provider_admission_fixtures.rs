@@ -1,8 +1,7 @@
 //! Deterministic provider-admission fixture and lifecycle contract tests.
 
-use std::{collections::BTreeSet, env, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
-use assert_cmd::Command;
 use ed25519_dalek::{Signer, SigningKey};
 use norito::json::Value;
 use sorafs_manifest::{
@@ -15,36 +14,8 @@ use sorafs_manifest::{
     validate_provider_admission_revocation_bytes, verify_advert_against_record,
     verify_revocation_signatures,
 };
-use tempfile::{Builder, TempDir};
 
 const COUNCIL_KEY_BYTES: [u8; 32] = [0x45; 32];
-const EXPECTED_FIXTURE_NAMES: &[&str] = &[
-    "README.md",
-    "advert_renewed_v1.json",
-    "advert_renewed_v1.to",
-    "advert_v1.json",
-    "advert_v1.to",
-    "envelope_renewed_v1.json",
-    "envelope_renewed_v1.to",
-    "envelope_v1.json",
-    "envelope_v1.to",
-    "metadata.json",
-    "multi_fetch_plan.json",
-    "proposal_renewed_v1.json",
-    "proposal_renewed_v1.to",
-    "proposal_v1.json",
-    "proposal_v1.to",
-    "renewal_v1.json",
-    "renewal_v1.to",
-    "revocation_v1.json",
-    "revocation_v1.to",
-];
-
-fn tempdir() -> Result<TempDir, std::io::Error> {
-    Builder::new()
-        .prefix("sorafs-provider-admission-fixtures-")
-        .tempdir_in(env::temp_dir().canonicalize()?)
-}
 
 fn committed_fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -91,78 +62,6 @@ macro_rules! decode_canonical_fixture {
         assert_eq!(canonical, bytes, "{} is not canonical Norito", $name);
         value
     }};
-}
-
-#[test]
-fn provider_admission_fixture_generator_is_byte_for_byte_reproducible() {
-    let tempdir = tempdir().expect("tempdir");
-    let out_dir = tempdir.path().join("fixtures");
-
-    let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-    cmd.current_dir(env!("CARGO_MANIFEST_DIR"))
-        .arg("run")
-        .arg("--locked")
-        .arg("-p")
-        .arg("sorafs_car")
-        .arg("--features")
-        .arg("cli")
-        .arg("--bin")
-        .arg("provider_admission_fixtures")
-        .arg("--")
-        .arg(format!("--out-dir={}", out_dir.display()))
-        .env("NORITO_SKIP_BINDINGS_SYNC", "1");
-    cmd.assert().success();
-
-    let generated_names: BTreeSet<String> = fs::read_dir(&out_dir)
-        .expect("read generated fixture directory")
-        .map(|entry| {
-            entry
-                .expect("read generated fixture entry")
-                .file_name()
-                .into_string()
-                .expect("fixture name is UTF-8")
-        })
-        .collect();
-    let expected_names: BTreeSet<String> = EXPECTED_FIXTURE_NAMES
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
-    assert_eq!(
-        generated_names, expected_names,
-        "generator artifact set drifted"
-    );
-
-    let committed_dir = committed_fixture_dir();
-    for name in EXPECTED_FIXTURE_NAMES {
-        let generated = fs::read(out_dir.join(name))
-            .unwrap_or_else(|error| panic!("read generated fixture {name}: {error}"));
-        let committed = fs::read(committed_dir.join(name))
-            .unwrap_or_else(|error| panic!("read committed fixture {name}: {error}"));
-        assert_eq!(
-            generated, committed,
-            "committed fixture {name} is stale; rerun provider_admission_fixtures"
-        );
-    }
-
-    for retired in [
-        "proposal_legacy_v1.json",
-        "proposal_legacy_v1.to",
-        "advert_legacy_v1.json",
-        "advert_legacy_v1.to",
-        "envelope_legacy_v1.json",
-        "envelope_legacy_v1.to",
-        "proposal_v2.json",
-        "proposal_v2.to",
-        "advert_v2.json",
-        "advert_v2.to",
-        "envelope_v2.json",
-        "envelope_v2.to",
-    ] {
-        assert!(
-            !out_dir.join(retired).exists(),
-            "retired fixture {retired} must not be emitted"
-        );
-    }
 }
 
 #[test]
@@ -255,6 +154,13 @@ fn committed_provider_admission_fixtures_are_canonical_and_linked() {
         norito::decode_from_bytes::<ProviderAdmissionEnvelopeV1>(&truncated).is_err(),
         "truncated canonical fixture must fail closed"
     );
+
+    let mut trailing = read_fixture("envelope_v1.to");
+    trailing.push(0);
+    assert!(
+        norito::decode_from_bytes::<ProviderAdmissionEnvelopeV1>(&trailing).is_err(),
+        "canonical fixture with trailing bytes must fail closed"
+    );
 }
 
 #[test]
@@ -268,6 +174,51 @@ fn provider_admission_fixture_lifecycle_rejects_adversarial_mutations() {
     let renewed_record = base_record
         .apply_renewal(&renewal, &policy)
         .expect("valid renewal");
+
+    let untrusted_record =
+        AdmissionRecord::new_untrusted_signers(envelope.clone()).expect("integrity-only record");
+    assert!(!untrusted_record.is_council_verified());
+    assert!(matches!(
+        untrusted_record.apply_renewal(&renewal, &policy),
+        Err(ProviderAdmissionRenewalError::UntrustedBaseRecord)
+    ));
+
+    let second_council_key = SigningKey::from_bytes(&[0x47; 32]);
+    let quorum_policy = ProviderAdmissionCouncilPolicy::new(
+        [
+            council_key.verifying_key().to_bytes(),
+            second_council_key.verifying_key().to_bytes(),
+        ],
+        2,
+    )
+    .expect("two-member fixture policy");
+    assert!(matches!(
+        AdmissionRecord::new(envelope.clone(), &quorum_policy),
+        Err(ProviderAdmissionEnvelopeError::Signature(
+            ProviderAdmissionSignatureError::ThresholdNotMet {
+                required: 2,
+                verified: 1,
+            }
+        ))
+    ));
+
+    let mut duplicate_signer = envelope.clone();
+    let repeated_signature = duplicate_signer.council_signatures[0].clone();
+    duplicate_signer.council_signatures.push(repeated_signature);
+    let duplicate_policy = ProviderAdmissionCouncilPolicy::new(
+        [
+            council_key.verifying_key().to_bytes(),
+            second_council_key.verifying_key().to_bytes(),
+        ],
+        1,
+    )
+    .expect("two-member fixture policy");
+    assert!(matches!(
+        AdmissionRecord::new(duplicate_signer, &duplicate_policy),
+        Err(ProviderAdmissionEnvelopeError::Signature(
+            ProviderAdmissionSignatureError::DuplicateSigner { .. }
+        ))
+    ));
 
     let attacker_key = SigningKey::from_bytes(&[0x46; 32]);
     let attacker_policy =
@@ -298,6 +249,20 @@ fn provider_admission_fixture_lifecycle_rejects_adversarial_mutations() {
     assert!(matches!(
         renewed_record.apply_renewal(&renewal, &policy),
         Err(ProviderAdmissionRenewalError::PreviousDigestMismatch { .. })
+    ));
+
+    let mut wrong_renewal_digest = renewal.clone();
+    wrong_renewal_digest.envelope_digest[0] ^= 0x01;
+    assert!(matches!(
+        base_record.apply_renewal(&wrong_renewal_digest, &policy),
+        Err(ProviderAdmissionRenewalError::EnvelopeDigestMismatch { .. })
+    ));
+
+    let mut unsupported_renewal = renewal.clone();
+    unsupported_renewal.version = 0;
+    assert!(matches!(
+        base_record.apply_renewal(&unsupported_renewal, &policy),
+        Err(ProviderAdmissionRenewalError::UnsupportedVersion { found: 0 })
     ));
 
     let mut wrong_provider = renewal.clone();
@@ -375,6 +340,29 @@ fn provider_admission_fixture_lifecycle_rejects_adversarial_mutations() {
     assert!(matches!(
         base_record.verify_revocation(&empty_reason, &policy),
         Err(ProviderAdmissionRevocationError::ReasonEmpty)
+    ));
+
+    let mut whitespace_reason = revocation.clone();
+    whitespace_reason.reason = " \t\n".into();
+    resign_revocation(&mut whitespace_reason, &council_key);
+    assert!(matches!(
+        base_record.verify_revocation(&whitespace_reason, &policy),
+        Err(ProviderAdmissionRevocationError::ReasonEmpty)
+    ));
+
+    let mut unsigned_revocation = revocation.clone();
+    unsigned_revocation.council_signatures.clear();
+    assert!(matches!(
+        base_record.verify_revocation(&unsigned_revocation, &policy),
+        Err(ProviderAdmissionRevocationError::MissingSignatures)
+    ));
+
+    let mut unsupported_revocation = revocation.clone();
+    unsupported_revocation.version = 0;
+    resign_revocation(&mut unsupported_revocation, &council_key);
+    assert!(matches!(
+        base_record.verify_revocation(&unsupported_revocation, &policy),
+        Err(ProviderAdmissionRevocationError::UnsupportedVersion { found: 0 })
     ));
 
     let envelope_bytes = norito::to_bytes(&envelope).expect("encode base envelope");

@@ -40,10 +40,7 @@ use iroha_data_model::{
     account::AccountId,
     block::{
         BlockHeader, BlockSignature, SignedBlock,
-        consensus::{
-            NativeAmxAttestationBodyV1, NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt,
-            RbcEncoding, RbcReadySignature, SumeragiMembershipStatus,
-        },
+        consensus::{NativeAmxReceipt, RbcEncoding, RbcReadySignature, SumeragiMembershipStatus},
     },
     consensus::{
         NposConsensusEffects, VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome,
@@ -95,7 +92,7 @@ fn try_sign_consensus_preimage(
 /// policy remains applicable. `Some(Some(_))` is the exact pinned autoscale
 /// vector. `None` means a missing/malformed pin, absent lane, or validator-set
 /// mismatch and must never trigger a live-cache fallback.
-fn pinned_autoscale_validator_pops_for_set(
+pub(super) fn pinned_autoscale_validator_pops_for_set(
     state: &State,
     lane_id: LaneId,
     validator_set: &[PeerId],
@@ -179,6 +176,12 @@ fn queued_empty_frontier_can_make_progress(
         && !slot_has_round_liveness
 }
 
+fn reject_v2_input_on_legacy_actor(protocol_version: u16) -> Result<()> {
+    Err(eyre!(
+        "Sumeragi v2 frame (protocol {protocol_version}) reached the legacy actor; refusing to acknowledge or drop an authenticated consensus input"
+    ))
+}
+
 #[cfg(test)]
 mod queued_empty_frontier_can_make_progress_tests {
     use super::queued_empty_frontier_can_make_progress;
@@ -208,6 +211,25 @@ mod queued_empty_frontier_can_make_progress_tests {
                 "height={height} committed_height={committed_height} queue_len={queue_len} pending_blocks={pending_blocks} has_liveness={has_liveness}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod v2_legacy_actor_boundary_tests {
+    use super::reject_v2_input_on_legacy_actor;
+
+    #[test]
+    fn v2_input_fails_instead_of_being_silently_dropped() {
+        let error = reject_v2_input_on_legacy_actor(
+            iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+        )
+        .expect_err("the legacy actor cannot authenticate or execute a v2 reducer input");
+
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to acknowledge or drop")
+        );
     }
 }
 
@@ -520,11 +542,7 @@ use crate::{
         certified_merge_reference_digest, certified_merge_sidecar_holders,
         decode_certified_merge_sidecar, decode_merge_candidate_body,
     },
-    native_amx::{
-        NativeAmxAttestationRequestV1, NativeAmxMessage, NativeAmxSessionCache,
-        NativeAmxSessionError, NativeAmxSessionKey, NativeAmxVoteIngressError, NativeAmxVoteV1,
-        aggregate_votes_to_qc,
-    },
+    native_amx::NativeAmxMessage,
     nexus::lane_relay::LaneRelayBroadcaster,
     peers_gossiper::PeersGossiperHandle,
     queue::{BackpressureState, Queue, RoutingDecision},
@@ -539,7 +557,7 @@ mod block_sync;
 mod commit;
 mod kura;
 mod lane_blocks;
-mod lane_scheduler;
+pub(crate) mod lane_scheduler;
 mod locked_qc;
 mod mode;
 mod pacing;
@@ -559,7 +577,7 @@ mod roster;
 mod validation;
 mod vote_verify;
 mod votes;
-mod vrf;
+pub(crate) mod vrf;
 
 #[cfg(test)]
 use locked_qc::qc_extends_locked_if_present;
@@ -4122,6 +4140,8 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::InvalidGenesis(_)
         | BlockValidationError::BlockInThePast
         | BlockValidationError::BlockInTheFuture
+        | BlockValidationError::NonCanonicalV2BlockTime { .. }
+        | BlockValidationError::V2BlockTimeOverflow
         | BlockValidationError::TransactionInTheFuture
         | BlockValidationError::NposEffectsInvalid(_)
         | BlockValidationError::PreviousRosterEvidenceInvalid(_) => VALIDATION_REASON_STATELESS,
@@ -13243,7 +13263,6 @@ pub(super) struct Actor {
     kura: Arc<Kura>,
     network: IrohaNetwork,
     subsystems: ActorSubsystems,
-    native_amx_sessions: NativeAmxSessionCache,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     frontier_block_sync_hint: Arc<super::FrontierBlockSyncHint>,
     #[allow(dead_code)] // Retained until background broadcast wiring consumes the gossiper handle.
@@ -22197,6 +22216,9 @@ impl Actor {
             | crate::sumeragi::consensus::EvidencePayload::Censorship { .. } => {
                 self.effective_commit_topology()
             }
+            crate::sumeragi::consensus::EvidencePayload::SumeragiV2Equivocation(_) => {
+                self.effective_commit_topology()
+            }
         };
         if topology_peers.is_empty() {
             debug!(
@@ -22743,10 +22765,6 @@ impl Actor {
             startup_trace_started_at,
         );
 
-        let native_amx_sessions = NativeAmxSessionCache::with_limits(
-            config.native_amx.session_cache_max,
-            config.native_amx.session_body_bucket_max,
-        );
         let mut rbc_sessions = BTreeMap::new();
         let mut persisted_rbc_sessions = BTreeSet::new();
         let mut rbc_session_rosters = BTreeMap::new();
@@ -23178,7 +23196,6 @@ impl Actor {
             kura,
             network,
             subsystems,
-            native_amx_sessions,
             block_payload_dedup,
             frontier_block_sync_hint,
             peers_gossiper,
@@ -23684,8 +23701,22 @@ impl Actor {
                 lane_manifest_policy_digest,
             )
             .map_err(|err| eyre!("failed to construct Nexus consensus-policy digest: {err}"))?;
+        let v2_mode = match self.consensus_mode {
+            ConsensusMode::Permissioned => {
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
+            }
+            ConsensusMode::Npos => iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+        };
+        let block_cadence = {
+            let world = self.state.world_view();
+            Duration::from_millis(world.parameters().sumeragi().block_time_ms())
+        };
+        let v2_config_fingerprint = sumeragi
+            .v2_config(block_cadence, v2_mode)
+            .map_or([0; 32], |config| config.fingerprint().into());
         let config_caps = iroha_p2p::ConsensusConfigCaps {
             nexus_policy_digest,
+            v2_config_fingerprint,
             collectors_k: u16::try_from(collectors_k).unwrap_or(u16::MAX),
             redundant_send_r,
             da_enabled,
@@ -23721,7 +23752,7 @@ impl Actor {
                 &self.common_config,
                 &self.config,
                 &config_caps,
-            );
+            )?;
         // Existing peers may be at an earlier committed height and need the connection to catch
         // up. The updated caps gate subsequent handshakes without disconnecting healthy peers.
         self.network.update_consensus_caps(consensus_caps, false);
@@ -24774,6 +24805,10 @@ impl Actor {
     /// Consensus-critical merge work must not be starved indefinitely by
     /// earlier bounded tick stages that repeatedly consume the work budget.
     const TICK_MERGE_MAINTENANCE_FAIRNESS_STRIDE: u64 = 4;
+    /// A due proposal must eventually run even when earlier bounded stages
+    /// consume the work budget on every tick. Proposal admission and consensus
+    /// validation remain unchanged; this only bounds local scheduler delay.
+    const TICK_PROPOSAL_FAIRNESS_STRIDE: u64 = 4;
 
     fn merge_maintenance_due(
         tick_budget_exhausted: bool,
@@ -24783,6 +24818,15 @@ impl Actor {
         !tick_budget_exhausted
             || certified_source_progress
             || tick_counter % Self::TICK_MERGE_MAINTENANCE_FAIRNESS_STRIDE == 0
+    }
+
+    fn proposal_maintenance_due(
+        tick_budget_exhausted: bool,
+        proposal_due: bool,
+        tick_counter: u64,
+    ) -> bool {
+        proposal_due
+            && (!tick_budget_exhausted || tick_counter % Self::TICK_PROPOSAL_FAIRNESS_STRIDE == 0)
     }
 
     fn tick_heartbeat_log_due(now: Instant, last_log: Instant, interval: Duration) -> bool {
@@ -25195,15 +25239,23 @@ impl Actor {
         if queue_ready && self.pacemaker_queue_nudge_due(now) {
             self.subsystems.propose.pacemaker.next_deadline = now;
         }
+        let proposal_fairness_due = self.tick_counter % Self::TICK_PROPOSAL_FAIRNESS_STRIDE == 0;
+        let mut proposal_budget_exhausted =
+            Self::tick_budget_exhausted(tick_deadline, Instant::now());
+        let mut proposal_attempted = false;
         if queue_ready
             && proposal_backpressure_allows_queue_work(proposal_backpressure)
             && self.subsystems.commit.inflight.is_none()
         {
             let propose_start = Instant::now();
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.pacemaker_propose_ready");
-            if Self::tick_budget_exhausted(tick_deadline, propose_start) {
+            let attempt_budget_exhausted =
+                Self::tick_budget_exhausted(tick_deadline, propose_start);
+            proposal_budget_exhausted |= attempt_budget_exhausted;
+            if !Self::proposal_maintenance_due(attempt_budget_exhausted, true, self.tick_counter) {
                 self.subsystems.propose.pacemaker.next_deadline = propose_start;
             } else {
+                proposal_attempted = true;
                 if self.on_pacemaker_propose_ready(now) {
                     progress = true;
                 }
@@ -25232,12 +25284,17 @@ impl Actor {
         if should_attempt_proposal
             && !mode_flip_pending
             && self.subsystems.commit.inflight.is_none()
+            && !proposal_attempted
         {
             let propose_start = Instant::now();
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.pacemaker_attempt");
-            if Self::tick_budget_exhausted(tick_deadline, propose_start) {
+            let attempt_budget_exhausted =
+                Self::tick_budget_exhausted(tick_deadline, propose_start);
+            proposal_budget_exhausted |= attempt_budget_exhausted;
+            if !Self::proposal_maintenance_due(attempt_budget_exhausted, true, self.tick_counter) {
                 self.subsystems.propose.pacemaker.next_deadline = propose_start;
             } else {
+                proposal_attempted = true;
                 if self.on_pacemaker_propose_ready(now) {
                     progress = true;
                 }
@@ -25365,6 +25422,9 @@ impl Actor {
                         commit_pipeline_finalize_ms = commit_pipeline_timings.finalize.as_millis(),
                         pacemaker_eval_ms = pacemaker_eval_cost.as_millis(),
                         propose_ms = propose_cost.as_millis(),
+                        proposal_attempted,
+                        proposal_budget_exhausted,
+                        proposal_fairness_due,
                         progress,
                         queue_ready,
                         backpressure_saturated = state.is_saturated(),
@@ -25872,7 +25932,7 @@ impl Actor {
         &mut self,
         msg: &super::InboundBlockMessage,
     ) -> bool {
-        if matches!(msg.message, BlockMessage::Qc(_)) {
+        if matches!(msg.message, BlockMessage::Qc(_) | BlockMessage::V2(_)) {
             return false;
         }
         let Some((kind, height, view)) =
@@ -25909,6 +25969,9 @@ impl Actor {
             sender,
             ..
         } = msg;
+        if let BlockMessage::V2(message) = &msg {
+            return reject_v2_input_on_legacy_actor(message.protocol_version);
+        }
         if let BlockMessage::RbcInit(init) = &msg {
             debug!(
                 height = init.height,
@@ -26243,6 +26306,7 @@ impl Actor {
             }
             BlockMessage::LaneBlockVote(vote) => self.handle_lane_block_vote(vote, sender.as_ref()),
             BlockMessage::LaneBlockQc(qc) => self.handle_lane_block_qc(qc),
+            BlockMessage::V2(message) => reject_v2_input_on_legacy_actor(message.protocol_version),
         };
         if defer_committed_block_poll {
             self.process_committed_blocks_before_consensus("VrfMetadataPostHandle");
@@ -28746,513 +28810,12 @@ impl Actor {
         );
     }
 
-    fn on_native_amx_message(&mut self, sender: PeerId, message: NativeAmxMessage) -> Result<()> {
-        match message {
-            NativeAmxMessage::PrepareRequest(request) => {
-                self.handle_native_amx_attestation_request(
-                    sender,
-                    request,
-                    NativeAmxPhase::Prepare,
-                );
-            }
-            NativeAmxMessage::CommitRequest(request) => {
-                self.handle_native_amx_attestation_request(sender, request, NativeAmxPhase::Commit);
-            }
-            NativeAmxMessage::PrepareVote(vote) => {
-                self.record_native_amx_vote(vote, NativeAmxPhase::Prepare, Some(&sender));
-            }
-            NativeAmxMessage::CommitVote(vote) => {
-                self.record_native_amx_vote(vote, NativeAmxPhase::Commit, Some(&sender));
-            }
-        }
+    fn on_native_amx_message(&mut self, sender: PeerId, _message: NativeAmxMessage) -> Result<()> {
+        iroha_logger::debug!(
+            %sender,
+            "rejected context-bound native AMX message on decode-only legacy actor"
+        );
         Ok(())
-    }
-
-    fn handle_native_amx_attestation_request(
-        &mut self,
-        sender: PeerId,
-        request: NativeAmxAttestationRequestV1,
-        expected_phase: NativeAmxPhase,
-    ) {
-        let Some(vote) = self.local_native_amx_vote(request, expected_phase, Some(&sender)) else {
-            return;
-        };
-        let message = match expected_phase {
-            NativeAmxPhase::Prepare => NativeAmxMessage::PrepareVote(vote),
-            NativeAmxPhase::Commit => NativeAmxMessage::CommitVote(vote),
-        };
-        self.schedule_background(BackgroundRequest::PostNativeAmx {
-            peer: sender,
-            message,
-        });
-    }
-
-    fn request_native_amx_attestation_votes(
-        &mut self,
-        validator_set: &[PeerId],
-        request: NativeAmxAttestationRequestV1,
-    ) {
-        if let Err(err) = request.validate_plan_binding() {
-            iroha_logger::warn!(?err, "refusing to authorize malformed native AMX request");
-            return;
-        }
-        if let Err(err) = self.native_amx_sessions.authorize_request(&request) {
-            iroha_logger::warn!(?err, "refusing to authorize native AMX vote session");
-            return;
-        }
-        let local_peer = self.common_config.peer.id().clone();
-        for peer in validator_set {
-            if peer == &local_peer {
-                if let Some(vote) =
-                    self.local_native_amx_vote(request.clone(), request.body.phase, None)
-                {
-                    self.record_native_amx_vote(vote, request.body.phase, None);
-                }
-                continue;
-            }
-            let message = match request.body.phase {
-                NativeAmxPhase::Prepare => NativeAmxMessage::PrepareRequest(request.clone()),
-                NativeAmxPhase::Commit => NativeAmxMessage::CommitRequest(request.clone()),
-            };
-            self.schedule_background(BackgroundRequest::PostNativeAmx {
-                peer: peer.clone(),
-                message,
-            });
-        }
-    }
-
-    fn local_native_amx_vote(
-        &self,
-        request: NativeAmxAttestationRequestV1,
-        expected_phase: NativeAmxPhase,
-        sender: Option<&PeerId>,
-    ) -> Option<NativeAmxVoteV1> {
-        if let Err(err) = request.validate_plan_binding() {
-            iroha_logger::warn!(
-                ?err,
-                sender = ?sender,
-                "dropping native AMX request with invalid full-plan binding"
-            );
-            return None;
-        }
-        let coordinator_proposal = request.coordinator_proposal.clone();
-        let prepare_qc = request.prepare_qc.clone();
-        let body = request.body;
-        if body.phase != expected_phase {
-            iroha_logger::warn!(
-                expected = ?expected_phase,
-                actual = ?body.phase,
-                sender = ?sender,
-                "dropping native AMX request with wrong phase"
-            );
-            return None;
-        }
-
-        if body.chain_id_hash != self.chain_hash
-            || body.authority_context_height == 0
-            || body.coordinator_lane_block_height == 0
-            || body
-                .coordinator_lane_incarnation
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
-            || body
-                .participant_lane_incarnation
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
-            || body
-                .coordinator_proposal_hash
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
-        {
-            iroha_logger::warn!(
-                sender = ?sender,
-                height = body.authority_context_height,
-                "dropping native AMX request from unauthorized coordinator authority"
-            );
-            return None;
-        }
-
-        let nexus = self.state.nexus_snapshot();
-        if crate::state::nexus_active_lane_dataspace_at_height(
-            body.coordinator_lane_id,
-            &nexus,
-            body.authority_context_height,
-        ) != Some(body.coordinator_dataspace_id)
-            || crate::state::nexus_active_lane_dataspace_at_height(
-                body.participant_lane_id,
-                &nexus,
-                body.authority_context_height,
-            ) != Some(body.participant_dataspace_id)
-            || self
-                .state
-                .lane_incarnation_at_height(body.coordinator_lane_id, body.authority_context_height)
-                != Some(body.coordinator_lane_incarnation)
-            || self
-                .state
-                .lane_incarnation_at_height(body.participant_lane_id, body.authority_context_height)
-                != Some(body.participant_lane_incarnation)
-        {
-            iroha_logger::warn!(
-                sender = ?sender,
-                height = body.authority_context_height,
-                "dropping native AMX request for stale or mismatched lane route"
-            );
-            return None;
-        }
-
-        let coordinator_descriptor = &coordinator_proposal.descriptor;
-        let mut expected_coordinator_committee = self.state.authoritative_lane_peer_ids_at_height(
-            body.coordinator_lane_id,
-            body.authority_context_height,
-        );
-        expected_coordinator_committee.sort();
-        expected_coordinator_committee.dedup();
-        let expected_coordinator_count =
-            u32::try_from(expected_coordinator_committee.len()).unwrap_or(u32::MAX);
-        let expected_coordinator_quorum = u32::try_from(
-            crate::sumeragi::network_topology::commit_quorum_from_len(
-                expected_coordinator_committee.len(),
-            )
-            .max(1),
-        )
-        .unwrap_or(u32::MAX);
-        if expected_coordinator_committee.is_empty()
-            || expected_coordinator_committee.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
-            || coordinator_descriptor.validator_set != expected_coordinator_committee
-            || coordinator_descriptor.validator_set_hash
-                != HashOf::new(&expected_coordinator_committee)
-            || coordinator_descriptor.validator_count != expected_coordinator_count
-            || coordinator_descriptor.min_quorum != expected_coordinator_quorum
-        {
-            iroha_logger::warn!(
-                sender = ?sender,
-                proposal_hash = %body.coordinator_proposal_hash,
-                "dropping native AMX request with non-authoritative coordinator proposal committee"
-            );
-            return None;
-        }
-        let expected_leader = lane_scheduler::lane_block_redrive_leader(&coordinator_proposal, 0);
-        if sender.map_or_else(
-            || expected_leader != Some(self.common_config.peer.id()),
-            |sender| expected_leader != Some(sender),
-        ) {
-            iroha_logger::warn!(
-                sender = ?sender,
-                expected_leader = ?expected_leader,
-                "dropping native AMX request from a non-leader coordinator"
-            );
-            return None;
-        }
-
-        let mut participant_committee = self.state.authoritative_lane_peer_ids_at_height(
-            body.participant_lane_id,
-            body.authority_context_height,
-        );
-        participant_committee.sort();
-        participant_committee.dedup();
-        let expected_participant_count =
-            u32::try_from(participant_committee.len()).unwrap_or(u32::MAX);
-        let expected_participant_quorum = u32::try_from(
-            crate::sumeragi::network_topology::commit_quorum_from_len(participant_committee.len())
-                .max(1),
-        )
-        .unwrap_or(u32::MAX);
-        if participant_committee.is_empty()
-            || participant_committee.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
-            || participant_committee
-                .windows(2)
-                .any(|pair| pair[0] >= pair[1])
-            || body.participant_validator_set_hash != HashOf::new(&participant_committee)
-            || body.participant_validator_count != expected_participant_count
-            || body.participant_min_quorum != expected_participant_quorum
-        {
-            iroha_logger::warn!(
-                sender = ?sender,
-                participant_lane = body.participant_lane_id.as_u32(),
-                "dropping native AMX request with non-authoritative participant committee"
-            );
-            return None;
-        }
-        let local_peer = self.common_config.peer.id().clone();
-        if !participant_committee.contains(&local_peer) {
-            iroha_logger::warn!(
-                sender = ?sender,
-                %local_peer,
-                participant_lane = body.participant_lane_id.as_u32(),
-                "dropping native AMX request outside the participant lane committee"
-            );
-            return None;
-        }
-        if expected_phase == NativeAmxPhase::Commit
-            && prepare_qc
-                .as_ref()
-                .is_none_or(|qc| crate::native_amx::validate_self_contained_qc(qc).is_err())
-        {
-            iroha_logger::warn!(
-                sender = ?sender,
-                participant_lane = body.participant_lane_id.as_u32(),
-                "dropping native AMX commit request without a valid prepare QC"
-            );
-            return None;
-        }
-        if !roster_member_allowed_bls(&local_peer) {
-            iroha_logger::warn!(
-                sender = ?sender,
-                "dropping native AMX request because local consensus key is not BLS-normal"
-            );
-            return None;
-        }
-        {
-            let Some(pinned) = pinned_autoscale_validator_pops_for_set(
-                &self.state,
-                body.participant_lane_id,
-                &participant_committee,
-            ) else {
-                iroha_logger::warn!(
-                    sender = ?sender,
-                    %local_peer,
-                    participant_lane = body.participant_lane_id.as_u32(),
-                    "dropping native AMX request because the autoscale committee pin is missing or mismatched"
-                );
-                return None;
-            };
-            let pop = if let Some(pops) = pinned {
-                participant_committee
-                    .iter()
-                    .position(|peer| peer == &local_peer)
-                    .and_then(|index| pops.get(index).cloned())
-            } else {
-                let world = self.state.world_view();
-                crate::state::live_consensus_key_pop_for_peer(
-                    &world,
-                    &local_peer,
-                    body.authority_context_height,
-                )
-            };
-            let valid_pop = pop.is_some_and(|pop| {
-                pop.len() == crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
-                    && iroha_crypto::bls_normal_pop_verify(local_peer.public_key(), &pop).is_ok()
-            });
-            if !valid_pop {
-                iroha_logger::warn!(
-                    sender = ?sender,
-                    %local_peer,
-                    height = body.authority_context_height,
-                    "dropping native AMX request because local consensus key has no authoritative PoP"
-                );
-                return None;
-            }
-        }
-
-        let bls_signature = match try_sign_consensus_preimage(
-            self.common_config.key_pair.private_key(),
-            &body.signature_preimage(),
-        ) {
-            Ok(signature) => signature,
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    sender = ?sender,
-                    "dropping native AMX request because local consensus signing failed"
-                );
-                return None;
-            }
-        };
-        Some(NativeAmxVoteV1 {
-            body,
-            signer: local_peer,
-            bls_signature,
-        })
-    }
-
-    fn record_native_amx_vote(
-        &mut self,
-        vote: NativeAmxVoteV1,
-        expected_phase: NativeAmxPhase,
-        sender: Option<&PeerId>,
-    ) {
-        if let Err(err) = vote.validate_ingress_shape(expected_phase, sender) {
-            match err {
-                NativeAmxVoteIngressError::PhaseMismatch { expected, actual } => {
-                    iroha_logger::warn!(
-                        signer = %vote.signer,
-                        ?sender,
-                        ?expected,
-                        ?actual,
-                        "dropping native AMX vote because message phase does not match body"
-                    );
-                }
-                NativeAmxVoteIngressError::SenderMismatch => {
-                    iroha_logger::warn!(
-                        signer = %vote.signer,
-                        ?sender,
-                        "dropping native AMX vote because sender does not match signer"
-                    );
-                }
-                NativeAmxVoteIngressError::InvalidBody => {
-                    iroha_logger::warn!(
-                        signer = %vote.signer,
-                        "dropping native AMX vote with malformed or oversized body"
-                    );
-                }
-                NativeAmxVoteIngressError::SignerNotBlsNormal => {
-                    iroha_logger::warn!(
-                        signer = %vote.signer,
-                        "dropping native AMX vote because signer is not BLS-normal"
-                    );
-                }
-                NativeAmxVoteIngressError::InvalidSignature => {
-                    iroha_logger::warn!(
-                        signer = %vote.signer,
-                        "dropping native AMX vote with invalid signature"
-                    );
-                }
-            }
-            return;
-        }
-        let body = &vote.body;
-        let nexus = self.state.nexus_snapshot();
-        let mut participant_committee = self.state.authoritative_lane_peer_ids_at_height(
-            body.participant_lane_id,
-            body.authority_context_height,
-        );
-        participant_committee.sort();
-        participant_committee.dedup();
-        let expected_participant_count =
-            u32::try_from(participant_committee.len()).unwrap_or(u32::MAX);
-        let expected_participant_quorum = u32::try_from(
-            crate::sumeragi::network_topology::commit_quorum_from_len(participant_committee.len())
-                .max(1),
-        )
-        .unwrap_or(u32::MAX);
-        if body.chain_id_hash != self.chain_hash
-            || body.authority_context_height == 0
-            || participant_committee.is_empty()
-            || participant_committee.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
-            || participant_committee
-                .windows(2)
-                .any(|pair| pair[0] >= pair[1])
-            || body.participant_validator_set_hash != HashOf::new(&participant_committee)
-            || body.participant_validator_count != expected_participant_count
-            || body.participant_min_quorum != expected_participant_quorum
-            || crate::state::nexus_active_lane_dataspace_at_height(
-                body.coordinator_lane_id,
-                &nexus,
-                body.authority_context_height,
-            ) != Some(body.coordinator_dataspace_id)
-            || crate::state::nexus_active_lane_dataspace_at_height(
-                body.participant_lane_id,
-                &nexus,
-                body.authority_context_height,
-            ) != Some(body.participant_dataspace_id)
-            || self
-                .state
-                .lane_incarnation_at_height(body.coordinator_lane_id, body.authority_context_height)
-                != Some(body.coordinator_lane_incarnation)
-            || self
-                .state
-                .lane_incarnation_at_height(body.participant_lane_id, body.authority_context_height)
-                != Some(body.participant_lane_incarnation)
-            || !participant_committee.contains(&vote.signer)
-        {
-            iroha_logger::warn!(
-                signer = %vote.signer,
-                authority_context_height = body.authority_context_height,
-                coordinator_lane = body.coordinator_lane_id.as_u32(),
-                participant_lane = body.participant_lane_id.as_u32(),
-                "dropping native AMX vote outside the exact active route/incarnation/committee"
-            );
-            return;
-        }
-        if !self.native_amx_sessions.is_authorized_body(body) {
-            iroha_logger::warn!(
-                signer = %vote.signer,
-                proposal_hash = %body.coordinator_proposal_hash,
-                "dropping unsolicited native AMX vote outside an authorized coordinator session"
-            );
-            return;
-        }
-        {
-            let Some(pinned) = pinned_autoscale_validator_pops_for_set(
-                &self.state,
-                body.participant_lane_id,
-                &participant_committee,
-            ) else {
-                iroha_logger::warn!(
-                    signer = %vote.signer,
-                    participant_lane = body.participant_lane_id.as_u32(),
-                    "dropping native AMX vote because the autoscale committee pin is missing or mismatched"
-                );
-                return;
-            };
-            let pop = if let Some(pops) = pinned {
-                participant_committee
-                    .iter()
-                    .position(|peer| peer == &vote.signer)
-                    .and_then(|index| pops.get(index).cloned())
-            } else {
-                let world = self.state.world_view();
-                crate::state::live_consensus_key_pop_for_peer(
-                    &world,
-                    &vote.signer,
-                    vote.body.authority_context_height,
-                )
-            };
-            let Some(pop) = pop else {
-                iroha_logger::warn!(
-                    signer = %vote.signer,
-                    height = vote.body.authority_context_height,
-                    "dropping native AMX vote because signer has no authoritative PoP"
-                );
-                return;
-            };
-            if let Err(err) = iroha_crypto::bls_normal_pop_verify(vote.signer.public_key(), &pop) {
-                iroha_logger::warn!(
-                    signer = %vote.signer,
-                    ?err,
-                    "dropping native AMX vote with invalid signer PoP"
-                );
-                return;
-            }
-        }
-        if let Err(err) = vote.verify_signature() {
-            iroha_logger::warn!(
-                signer = %vote.signer,
-                ?err,
-                "dropping native AMX vote with invalid signature"
-            );
-            return;
-        }
-        let phase = vote.body.phase;
-        let signer = vote.signer.clone();
-        match self.native_amx_sessions.insert_vote(vote) {
-            Ok(()) => {
-                iroha_logger::debug!(%signer, ?phase, "cached native AMX vote");
-            }
-            Err(NativeAmxSessionError::DuplicateSigner) => {
-                iroha_logger::debug!(%signer, ?phase, "ignoring duplicate native AMX vote");
-            }
-            Err(NativeAmxSessionError::PhaseMismatch) => {
-                iroha_logger::warn!(%signer, ?phase, "dropping native AMX vote with phase mismatch");
-            }
-            Err(NativeAmxSessionError::PlanEquivocation) => {
-                iroha_logger::warn!(
-                    %signer,
-                    ?phase,
-                    "dropping native AMX vote that equivocates one source across routing plans"
-                );
-            }
-            Err(NativeAmxSessionError::UnauthorizedBody) => {
-                iroha_logger::warn!(
-                    %signer,
-                    ?phase,
-                    "dropping native AMX vote outside an authorized exact body"
-                );
-            }
-        }
     }
 
     fn current_merge_execution_round(
@@ -29756,7 +29319,7 @@ impl Actor {
             return Ok(false);
         }
 
-        let validator_set = commit_topology.clone();
+        let validator_set = commit_topology;
         let validator_set_hash = HashOf::new(&validator_set);
         let Some((round, parent_header)) = self.current_merge_execution_round(validator_set_hash)
         else {
@@ -29930,7 +29493,7 @@ impl Actor {
             return Ok(false);
         }
 
-        let topology = super::network_topology::Topology::new(commit_topology.clone());
+        let topology = super::network_topology::Topology::new(validator_set.clone());
         let local_index = self.local_validator_index_for_topology(&topology);
         let mut ordered_keys = Vec::with_capacity(candidates.len());
         let mut progress = false;
@@ -30480,7 +30043,8 @@ impl Actor {
             | BlockMessage::RbcChunkCompact(_)
             | BlockMessage::RbcInit(_)
             | BlockMessage::RbcDeliver(_)
-            | BlockMessage::RbcReady(_) => self.consensus_payload_frame_cap,
+            | BlockMessage::RbcReady(_)
+            | BlockMessage::V2(_) => self.consensus_payload_frame_cap,
             BlockMessage::FetchBlockBody(_)
             | BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Request(_))
             | BlockMessage::KuraReplicaAdvert(_)
@@ -30578,6 +30142,7 @@ impl Actor {
                     | BlockMessage::RbcChunkCompact(_)
                     | BlockMessage::RbcReady(_)
                     | BlockMessage::RbcDeliver(_)
+                    | BlockMessage::V2(_)
             ),
             BackgroundRequest::Broadcast { msg } => matches!(
                 msg.as_ref(),
@@ -30597,6 +30162,7 @@ impl Actor {
                     | BlockMessage::RbcChunkCompact(_)
                     | BlockMessage::RbcReady(_)
                     | BlockMessage::RbcDeliver(_)
+                    | BlockMessage::V2(_)
             ),
             _ => false,
         }
@@ -30923,7 +30489,29 @@ impl Actor {
             }
             BlockMessage::QcVote(vote) => Some((vote.height, vote.view)),
             BlockMessage::Qc(cert) => Some((cert.height, cert.view)),
+            BlockMessage::V2(message) => Self::v2_message_height_view(message),
         }
+    }
+
+    fn v2_message_height_view(
+        message: &iroha_data_model::block::consensus_v2::ConsensusMessageV2,
+    ) -> Option<(u64, u64)> {
+        use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
+
+        let round = match &message.payload {
+            ConsensusMessageV2Payload::Proposal(value) => value.round,
+            ConsensusMessageV2Payload::Vote(value) => value.round,
+            ConsensusMessageV2Payload::QuorumCertificate(value) => value.round,
+            ConsensusMessageV2Payload::TimeoutVote(value) => value.round,
+            ConsensusMessageV2Payload::TimeoutCertificate(value) => value.round,
+            ConsensusMessageV2Payload::PayloadManifest(value) => value.round,
+            ConsensusMessageV2Payload::CertifiedBodyRequest(value) => value.round,
+            ConsensusMessageV2Payload::CertifiedBodyResponse(value) => value.manifest.round,
+            ConsensusMessageV2Payload::CommitCertificateRequest(_)
+            | ConsensusMessageV2Payload::CommitCertificateResponse(_) => return None,
+            ConsensusMessageV2Payload::PayloadChunk(_) => return None,
+        };
+        Some((round.height, round.view))
     }
 
     fn block_message_status_kind(
@@ -30982,6 +30570,7 @@ impl Actor {
                 super::status::ConsensusMessageKind::FetchPendingBlock
             }
             BlockMessage::KuraReplicaAdvert(_) => return None,
+            BlockMessage::V2(_) => super::status::ConsensusMessageKind::V2,
         })
     }
 
@@ -31037,6 +30626,7 @@ impl Actor {
                 crate::sumeragi::consensus::Phase::Commit => "LaneBlockCert",
                 crate::sumeragi::consensus::Phase::NewView => "LaneBlockNewViewCert",
             },
+            BlockMessage::V2(_) => "SumeragiV2",
         }
     }
 

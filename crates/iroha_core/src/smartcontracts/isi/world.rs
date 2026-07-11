@@ -93,7 +93,9 @@ pub mod isi {
             LaneRelayEnvelopeRef, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
             lane_relay_fastpq_claim_digest, nexus_fee_budget_claim_digest, proof_matches_manifest,
         },
-        parameter::{Parameter, SumeragiParameter},
+        parameter::{
+            Parameter, SumeragiParameter, custom::CustomParameter, system::SumeragiNposParameters,
+        },
         prelude::*,
         proof::{ProofId, VerifyingKeyId, VerifyingKeyRecord},
         query::error::FindError,
@@ -169,6 +171,64 @@ pub mod isi {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message.into().into(),
         ))
+    }
+
+    fn validate_sumeragi_npos_parameter(custom: &CustomParameter) -> Result<(), Error> {
+        if custom.id != SumeragiNposParameters::parameter_id() {
+            return Ok(());
+        }
+        let npos = SumeragiNposParameters::from_custom_parameter(custom).ok_or_else(|| {
+            invalid_smart_contract_parameter(
+                "sumeragi_npos_parameters payload must be valid SumeragiNposParameters JSON",
+            )
+        })?;
+        let epoch_length = npos.epoch_length_blocks();
+        let commit_window = npos.vrf_commit_window_blocks();
+        let reveal_window = npos.vrf_reveal_window_blocks();
+        if epoch_length == 0 {
+            return Err(invalid_smart_contract_parameter(
+                "sumeragi.npos.epoch_length_blocks must be greater than zero",
+            ));
+        }
+        if commit_window == 0 {
+            return Err(invalid_smart_contract_parameter(
+                "sumeragi.npos.vrf.commit_window_blocks must be greater than zero",
+            ));
+        }
+        if reveal_window == 0 {
+            return Err(invalid_smart_contract_parameter(
+                "sumeragi.npos.vrf.reveal_window_blocks must be greater than zero",
+            ));
+        }
+        if commit_window > epoch_length {
+            return Err(invalid_smart_contract_parameter(
+                "sumeragi.npos.vrf.commit_window_blocks must not exceed epoch_length_blocks",
+            ));
+        }
+        if commit_window
+            .checked_add(reveal_window)
+            .is_none_or(|reveal_end| reveal_end > epoch_length)
+        {
+            return Err(invalid_smart_contract_parameter(
+                "sumeragi.npos.vrf commit and reveal windows must fit within epoch_length_blocks",
+            ));
+        }
+        if npos.evidence_horizon_blocks() == 0 {
+            return Err(invalid_smart_contract_parameter(
+                "sumeragi.npos.reconfig.evidence_horizon_blocks must be greater than zero",
+            ));
+        }
+        if npos.activation_lag_blocks() == 0 {
+            return Err(invalid_smart_contract_parameter(
+                "sumeragi.npos.reconfig.activation_lag_blocks must be greater than zero",
+            ));
+        }
+        if npos.slashing_delay_blocks() == 0 {
+            return Err(invalid_smart_contract_parameter(
+                "sumeragi.npos.reconfig.slashing_delay_blocks must be greater than zero",
+            ));
+        }
+        Ok(())
     }
 
     fn parse_trigger_callback_alias_namespace(
@@ -16829,32 +16889,7 @@ pub mod isi {
                             );
                         })*
                         Parameter::Custom(next) => {
-                            if let Some(npos) = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(&next) {
-                                if npos.evidence_horizon_blocks() == 0 {
-                                    return Err(InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(
-                                            "sumeragi.npos.reconfig.evidence_horizon_blocks must be greater than zero"
-                                                .to_owned(),
-                                        ),
-                                    ));
-                                }
-                                if npos.activation_lag_blocks() == 0 {
-                                    return Err(InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(
-                                            "sumeragi.npos.reconfig.activation_lag_blocks must be greater than zero"
-                                                .to_owned(),
-                                        ),
-                                    ));
-                                }
-                                if npos.slashing_delay_blocks() == 0 {
-                                    return Err(InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(
-                                            "sumeragi.npos.reconfig.slashing_delay_blocks must be greater than zero"
-                                                .to_owned(),
-                                        ),
-                                    ));
-                                }
-                            }
+                            validate_sumeragi_npos_parameter(&next)?;
                             let params = state_transaction.world.parameters.get_mut();
                             // Set new value via public setter; previous value is unknown via public API
                             params.set_parameter(Parameter::Custom(next.clone()));
@@ -25046,12 +25081,16 @@ pub mod isi {
                 digest,
                 iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
                     digest,
+                    iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from(
+                        sorafs_manifest::canonical_manifest_root_cid([0xBC; 32]),
+                    )
+                    .expect("canonical root CID"),
                     iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
                         profile_id: 1,
                         namespace: "sorafs".to_string(),
                         name: "sf1".to_string(),
                         semver: "1.0.0".to_string(),
-                        multihash_code: 0x1E,
+                        multihash_code: 0x1F,
                     },
                     [0xDC; 32],
                     iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
@@ -31408,6 +31447,135 @@ pub mod isi {
             assert_eq!(params.min_finality_ms(), 100);
             assert_eq!(params.block_time_ms(), 333);
             assert_eq!(params.commit_time_ms(), 667);
+        }
+
+        #[test]
+        fn set_parameter_rejects_malformed_reserved_npos_payload() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let reserved_id = SumeragiNposParameters::parameter_id();
+            let malformed = iroha_data_model::parameter::custom::CustomParameter::new(
+                reserved_id.clone(),
+                iroha_primitives::json::Json::new(vec!["not", "npos", "parameters"]),
+            );
+
+            let err = SetParameter(Parameter::Custom(malformed))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("malformed payload under the reserved NPoS id must be rejected");
+            match err {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert_eq!(
+                    msg,
+                    "sumeragi_npos_parameters payload must be valid SumeragiNposParameters JSON"
+                ),
+                other => panic!("unexpected error type: {other:?}"),
+            }
+            assert!(
+                !stx.world.parameters.get().custom.contains_key(&reserved_id),
+                "a malformed reserved parameter must not enter WSV"
+            );
+        }
+
+        #[test]
+        fn set_parameter_rejects_invalid_npos_vrf_schedules() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut assert_rejected = |params: SumeragiNposParameters, expected: &str| {
+                let mut stx = state_block.transaction();
+                let err = SetParameter(Parameter::Custom(params.into_custom_parameter()))
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("invalid NPoS VRF schedule must be rejected");
+                match err {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
+                        assert_eq!(msg, expected)
+                    }
+                    other => panic!("unexpected error type: {other:?}"),
+                }
+            };
+
+            assert_rejected(
+                SumeragiNposParameters {
+                    epoch_length_blocks: 0,
+                    ..Default::default()
+                },
+                "sumeragi.npos.epoch_length_blocks must be greater than zero",
+            );
+            assert_rejected(
+                SumeragiNposParameters {
+                    vrf_commit_window_blocks: 0,
+                    ..Default::default()
+                },
+                "sumeragi.npos.vrf.commit_window_blocks must be greater than zero",
+            );
+            assert_rejected(
+                SumeragiNposParameters {
+                    vrf_reveal_window_blocks: 0,
+                    ..Default::default()
+                },
+                "sumeragi.npos.vrf.reveal_window_blocks must be greater than zero",
+            );
+            assert_rejected(
+                SumeragiNposParameters {
+                    epoch_length_blocks: 10,
+                    vrf_commit_window_blocks: 11,
+                    vrf_reveal_window_blocks: 1,
+                    ..Default::default()
+                },
+                "sumeragi.npos.vrf.commit_window_blocks must not exceed epoch_length_blocks",
+            );
+            assert_rejected(
+                SumeragiNposParameters {
+                    epoch_length_blocks: 10,
+                    vrf_commit_window_blocks: 6,
+                    vrf_reveal_window_blocks: 5,
+                    ..Default::default()
+                },
+                "sumeragi.npos.vrf commit and reveal windows must fit within epoch_length_blocks",
+            );
+            assert_rejected(
+                SumeragiNposParameters {
+                    epoch_length_blocks: u64::MAX,
+                    vrf_commit_window_blocks: u64::MAX - 1,
+                    vrf_reveal_window_blocks: 2,
+                    ..Default::default()
+                },
+                "sumeragi.npos.vrf commit and reveal windows must fit within epoch_length_blocks",
+            );
+        }
+
+        #[test]
+        fn set_parameter_accepts_valid_npos_schedule() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let expected = SumeragiNposParameters {
+                epoch_length_blocks: 10,
+                vrf_commit_window_blocks: 3,
+                vrf_reveal_window_blocks: 3,
+                ..Default::default()
+            };
+
+            SetParameter(Parameter::Custom(expected.clone().into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("valid NPoS schedule must be accepted");
+
+            let actual = stx
+                .world
+                .parameters
+                .get()
+                .custom
+                .get(&SumeragiNposParameters::parameter_id())
+                .and_then(SumeragiNposParameters::from_custom_parameter);
+            assert_eq!(actual, Some(expected));
         }
 
         #[test]

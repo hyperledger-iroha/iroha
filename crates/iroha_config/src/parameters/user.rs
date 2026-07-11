@@ -9941,11 +9941,8 @@ pub struct SumeragiPacingGovernor {
 /// User-level configuration container for `SumeragiModeFlip`.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiModeFlip {
-    /// Enable runtime consensus mode flips driven by on-chain parameters and activation heights.
-    #[config(
-        env = "SUMERAGI_MODE_FLIP_ENABLED",
-        default = "defaults::sumeragi::MODE_FLIP_ENABLED"
-    )]
+    /// Legacy field retained for clear configuration diagnostics; protocol v2 requires `false`.
+    #[config(default = "defaults::sumeragi::MODE_FLIP_ENABLED")]
     pub enabled: bool,
 }
 
@@ -9977,9 +9974,9 @@ pub struct SumeragiCollectors {
 /// User-level configuration container for `SumeragiBlock`.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiBlock {
-    /// Optional cap on transactions included in a block (`None` = unlimited).
-    #[config(env = "SUMERAGI_BLOCK_MAX_TRANSACTIONS")]
-    pub max_transactions: Option<NonZeroUsize>,
+    /// Cap on transactions included in a block; v2 supplies a finite default.
+    #[config(default = "defaults::sumeragi::V2_BLOCK_MAX_TRANSACTIONS")]
+    pub max_transactions: NonZeroUsize,
     /// Optional cap on IVM-heavy transactions included in a block (`None` = unlimited).
     #[config(env = "SUMERAGI_BLOCK_MAX_IVM_TRANSACTIONS")]
     pub max_ivm_transactions: Option<NonZeroUsize>,
@@ -9989,9 +9986,9 @@ pub struct SumeragiBlock {
     /// Optional cap on block gas limit when commit time is fast (`None` = disabled).
     #[config(env = "SUMERAGI_BLOCK_FAST_GAS_LIMIT_PER_BLOCK")]
     pub fast_gas_limit_per_block: Option<NonZeroU64>,
-    /// Optional cap on payload bytes per block when RBC is disabled (`None` = unlimited).
-    #[config(env = "SUMERAGI_BLOCK_MAX_PAYLOAD_BYTES")]
-    pub max_payload_bytes: Option<NonZeroUsize>,
+    /// Cap on canonical body bytes; v2 supplies a finite default.
+    #[config(default = "defaults::sumeragi::V2_BLOCK_MAX_PAYLOAD_BYTES")]
+    pub max_payload_bytes: NonZeroUsize,
     /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
     #[config(
         env = "SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER",
@@ -10000,10 +9997,11 @@ pub struct SumeragiBlock {
     pub proposal_queue_scan_multiplier: NonZeroUsize,
 }
 
-/// User-level configuration container for advanced Sumeragi overrides.
+/// Legacy Sumeragi-v1 tuning container retained while archival code is removed.
 ///
-/// These knobs are intended for targeted tuning; defaults are provided elsewhere
-/// and should be sufficient for typical deployments.
+/// Live v2 consumes only finite queue capacities from this container. Adaptive
+/// timing, collector, global-RBC, and phase-timeout values are quarantined and
+/// either ignored or rejected by `actual::Sumeragi::v2_config`.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct SumeragiAdvanced {
     /// Consensus queue capacities (override-only).
@@ -10915,14 +10913,17 @@ pub struct SumeragiKeys {
 /// User-level configuration container for `Sumeragi`.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct Sumeragi {
-    /// Node role: `validator` (default) or `observer`.
-    #[config(env = "NODE_ROLE", default = "NodeRole::Validator")]
+    /// Consensus protocol version. Only protocol v2 is admitted by this release.
+    #[config(default = "defaults::sumeragi::PROTOCOL_VERSION")]
+    pub protocol_version: u32,
+    /// Absolute round deadline in milliseconds; partial progress never resets it.
+    #[config(default = "defaults::sumeragi::ROUND_TIMEOUT_MS")]
+    pub round_timeout_ms: u64,
+    /// Node-local role: `validator` (default) or `observer`.
+    #[config(default = "NodeRole::Validator")]
     pub role: NodeRole,
-    /// Runtime consensus mode: `permissioned` (default) or `npos`.
-    #[config(
-        env = "SUMERAGI_CONSENSUS_MODE",
-        default = "ConsensusMode::Permissioned"
-    )]
+    /// Legacy local-mode fallback; live v2 takes its mode from signed genesis.
+    #[config(default = "ConsensusMode::Permissioned")]
     pub consensus_mode: ConsensusMode,
     /// Mode-flip guardrails.
     #[config(nested)]
@@ -10996,8 +10997,7 @@ pub struct SumeragiNpos {
 /// User-level configuration container for advanced NPoS overrides.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct SumeragiAdvancedNpos {
-    /// Per-phase pacemaker timeouts.
-    /// Unset values are derived from on-chain `SumeragiParameters.block_time_ms`.
+    /// Retired per-phase pacemaker timeouts; live v2 requires every value unset.
     #[config(nested)]
     pub timeouts: SumeragiNposTimeouts,
 }
@@ -11476,6 +11476,8 @@ impl From<actual::SumeragiPacingGovernor> for SumeragiPacingGovernor {
 impl Sumeragi {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Sumeragi> {
         let Self {
+            protocol_version,
+            round_timeout_ms,
             role,
             consensus_mode,
             mode_flip,
@@ -11505,6 +11507,46 @@ impl Sumeragi {
             native_amx,
             npos: npos_advanced,
         } = advanced;
+
+        let protocol_version_ok = if protocol_version == defaults::sumeragi::PROTOCOL_VERSION {
+            true
+        } else {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "sumeragi.protocol_version must be {} for this release",
+                    defaults::sumeragi::PROTOCOL_VERSION
+                )),
+            );
+            false
+        };
+        let round_timeout_ok = if round_timeout_ms == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.round_timeout_ms must be greater than zero"),
+            );
+            false
+        } else if round_timeout_ms < u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR)
+            || round_timeout_ms % u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR) != 0
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "sumeragi.round_timeout_ms must be exactly divisible by {}",
+                    defaults::sumeragi::RETRANSMIT_DIVISOR,
+                )),
+            );
+            false
+        } else {
+            true
+        };
+        let mode_flip_ok = if mode_flip.enabled {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.mode_flip.enabled must be false for protocol v2"),
+            );
+            false
+        } else {
+            true
+        };
 
         let collectors_ok = if collectors.k == 0 {
             emitter.emit(
@@ -11992,7 +12034,10 @@ impl Sumeragi {
         let resilience = resilience.parse(emitter)?;
         let npos = npos.parse(npos_advanced.timeouts, emitter)?;
 
-        if !(collectors_ok
+        if !(protocol_version_ok
+            && round_timeout_ok
+            && mode_flip_ok
+            && collectors_ok
             && redundant_ok
             && queues_ok
             && worker_budget_ok
@@ -12111,6 +12156,8 @@ impl Sumeragi {
         };
 
         Some(actual::Sumeragi {
+            protocol_version,
+            round_timeout: std::time::Duration::from_millis(round_timeout_ms),
             role: match role {
                 NodeRole::Validator => actual::NodeRole::Validator,
                 NodeRole::Observer => actual::NodeRole::Observer,
@@ -12128,13 +12175,13 @@ impl Sumeragi {
                 parallel_topology_fanout: collectors.parallel_topology_fanout,
             },
             block: actual::SumeragiBlock {
-                max_transactions: block.max_transactions,
+                max_transactions: Some(block.max_transactions),
                 max_ivm_transactions: block.max_ivm_transactions,
                 fast_finality_max_transactions: block
                     .fast_finality_max_transactions
                     .or(defaults::sumeragi::FAST_FINALITY_MAX_TRANSACTIONS),
                 fast_gas_limit_per_block: block.fast_gas_limit_per_block,
-                max_payload_bytes: block.max_payload_bytes,
+                max_payload_bytes: Some(block.max_payload_bytes),
                 proposal_queue_scan_multiplier: block.proposal_queue_scan_multiplier,
             },
             queues: actual::SumeragiQueues {
@@ -23542,6 +23589,10 @@ pub struct SorafsStorage {
     /// Local orderbook admission policy.
     #[config(nested)]
     pub orderbook: SorafsOrderbookConfig,
+    /// Canonical Norito trust-policy file required for reputation snapshot admission.
+    ///
+    /// When absent, the reputation publication endpoint remains fail-closed.
+    pub reputation_trust_policy_path: Option<PathBuf>,
     /// Local SFM-4c privacy aggregate publication scheduler.
     #[config(nested)]
     pub privacy_aggregates: SorafsPrivacyAggregateScheduleConfig,
@@ -23584,6 +23635,7 @@ impl Default for SorafsStorage {
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsStreamTokenConfig::default(),
             orderbook: SorafsOrderbookConfig::default(),
+            reputation_trust_policy_path: None,
             privacy_aggregates: SorafsPrivacyAggregateScheduleConfig::default(),
             evidence_viewer_audits: SorafsEvidenceViewerAuditScheduleConfig::default(),
             reserve_lifecycle: SorafsReserveLifecycleScheduleConfig::default(),
@@ -23602,20 +23654,16 @@ impl SorafsStorage {
         if self.pdp_sample_window == 0
             || self.pdp_sample_window > defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX
         {
-            emitter.emit(
-                Report::new(ParseError::InvalidToriiConfig).attach(format!(
-                    "torii.sorafs.storage.pdp_sample_window must be within 1..={}, got {}",
-                    defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX,
-                    self.pdp_sample_window
-                )),
-            );
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "torii.sorafs.storage.pdp_sample_window must be within 1..={}, got {}",
+                defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX,
+                self.pdp_sample_window
+            )));
         }
         if self.pdp_tree_memory_limit_bytes.0 == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidToriiConfig).attach(
-                    "torii.sorafs.storage.pdp_tree_memory_limit_bytes must be greater than zero",
-                ),
-            );
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage.pdp_tree_memory_limit_bytes must be greater than zero",
+            ));
         }
         actual::SorafsStorage {
             enabled: self.enabled,
@@ -23632,6 +23680,7 @@ impl SorafsStorage {
             metering_smoothing: self.metering_smoothing.parse(),
             stream_tokens: self.stream_tokens.parse(),
             orderbook: self.orderbook.parse(),
+            reputation_trust_policy_path: self.reputation_trust_policy_path,
             privacy_aggregates: self.privacy_aggregates.parse(),
             evidence_viewer_audits: self.evidence_viewer_audits.parse(),
             reserve_lifecycle: self.reserve_lifecycle.parse(),
@@ -26969,6 +27018,51 @@ price_tick_micro_xor = 0
         let policy = actual.torii.sorafs_storage.orderbook;
         assert_eq!(policy.min_order_gib, 1);
         assert_eq!(policy.price_tick_micro_xor, 1);
+    }
+
+    #[test]
+    fn sorafs_storage_pdp_policy_parses_governed_bounds() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(
+            r"
+[storage]
+pdp_sample_window = 37
+pdp_tree_memory_limit_bytes = 8388608
+",
+        )
+        .expect("parse SoraFS PDP policy");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let actual = load_root(table);
+        let storage = actual.torii.sorafs_storage;
+        assert_eq!(storage.pdp_sample_window, 37);
+        assert_eq!(storage.pdp_tree_memory_limit_bytes.0, 8_388_608);
+    }
+
+    #[test]
+    fn sorafs_storage_pdp_policy_rejects_zero_and_over_protocol_window() {
+        for (sample_window, memory_limit, expected) in [
+            (0, 8_388_608, "pdp_sample_window must be within"),
+            (501, 8_388_608, "pdp_sample_window must be within"),
+            (
+                37,
+                0,
+                "pdp_tree_memory_limit_bytes must be greater than zero",
+            ),
+        ] {
+            let mut table = base_table();
+            let sorafs: Table = toml::from_str(&format!(
+                "[storage]\npdp_sample_window = {sample_window}\npdp_tree_memory_limit_bytes = {memory_limit}\n"
+            ))
+            .expect("parse invalid SoraFS PDP policy fixture");
+            table.insert("sorafs".into(), Value::Table(sorafs));
+
+            let error = load_user_root(table)
+                .parse()
+                .expect_err("invalid PDP policy must fail config parsing");
+            let report = format!("{error:?}");
+            assert!(report.contains(expected), "{report}");
+        }
     }
 
     #[test]

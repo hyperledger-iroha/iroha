@@ -3,7 +3,10 @@ use std::{io::Write, sync::Arc};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    block::{BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus},
+    block::{
+        BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus,
+        consensus_v2::ConsensusMessageV2,
+    },
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
@@ -85,6 +88,12 @@ pub enum BlockMessage {
     LaneBlockVote(#[skip_try_from] crate::lane_consensus::LaneBlockVoteV1),
     /// Standalone lane-local block QC aggregating lane-validator BLS signatures.
     LaneBlockQc(#[skip_try_from] super::consensus::LaneBlockQcV1),
+    /// Explicitly versioned global Sumeragi v2 message.
+    ///
+    /// This variant is appended so legacy v1 discriminants remain stable for
+    /// archival decoding. Live protocol-v2 consensus rejects the legacy global
+    /// Proposal/QC/RBC variants above.
+    V2(#[skip_try_from] ConsensusMessageV2),
 }
 
 impl BlockMessage {
@@ -152,11 +161,82 @@ impl BlockMessage {
         })
     }
 
+    /// Classify an explicitly versioned Sumeragi v2 envelope for bounded
+    /// ingress routing.
+    ///
+    /// Keeping consensus control, body traffic, and payload chunks on distinct
+    /// queues prevents an authenticated bulk transfer (or a retired-v1 flood)
+    /// from head-of-line blocking votes and certificates.
+    #[must_use]
+    pub const fn v2_ingress_class(&self) -> Option<V2IngressClass> {
+        let Self::V2(message) = self else {
+            return None;
+        };
+        Some(V2IngressClass::for_payload(&message.payload))
+    }
+
+    /// Whether this v2 message belongs to the safety-critical control lane.
+    ///
+    /// Requests and retransmittable body/chunk traffic use bounded best-effort
+    /// ingress. Votes, certificates, proposals, and authenticated CommitQC
+    /// responses retain blocking delivery semantics on their isolated queue.
+    #[must_use]
+    pub const fn v2_requires_blocking_ingress(&self) -> bool {
+        matches!(
+            self.v2_ingress_class(),
+            Some(V2IngressClass::ConsensusControl | V2IngressClass::CommitCertificateResponse)
+        )
+    }
+
     /// Network priority for this consensus message.
     ///
     /// RBC chunks are required for deliver quorum; deprioritising them stalls consensus.
     pub fn priority(&self) -> iroha_p2p::Priority {
         iroha_p2p::Priority::High
+    }
+}
+
+/// Operational ingress lane for one Sumeragi v2 envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum V2IngressClass {
+    /// Proposal, vote, QC, timeout vote, or timeout certificate.
+    ConsensusControl,
+    /// Small manifest metadata used to authenticate chunk reconstruction.
+    PayloadManifest,
+    /// Potentially large encoded payload chunk.
+    PayloadChunk,
+    /// Authenticated request for one certified body.
+    CertifiedBodyRequest,
+    /// Potentially large certified body response.
+    CertifiedBodyResponse,
+    /// Authenticated request for one durable CommitQC.
+    CommitCertificateRequest,
+    /// Authenticated CommitQC response admitted to the reducer.
+    CommitCertificateResponse,
+}
+
+impl V2IngressClass {
+    /// Classify one decoded v2 payload without cloning its potentially large
+    /// body or chunk bytes.
+    #[must_use]
+    pub const fn for_payload(
+        payload: &iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload,
+    ) -> Self {
+        use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload as Payload;
+
+        match payload {
+            Payload::Proposal(_)
+            | Payload::Vote(_)
+            | Payload::QuorumCertificate(_)
+            | Payload::TimeoutVote(_)
+            | Payload::TimeoutCertificate(_) => Self::ConsensusControl,
+            Payload::PayloadManifest(_) => Self::PayloadManifest,
+            Payload::PayloadChunk(_) => Self::PayloadChunk,
+            Payload::CertifiedBodyRequest(_) => Self::CertifiedBodyRequest,
+            Payload::CertifiedBodyResponse(_) => Self::CertifiedBodyResponse,
+            Payload::CommitCertificateRequest(_) => Self::CommitCertificateRequest,
+            Payload::CommitCertificateResponse(_) => Self::CommitCertificateResponse,
+        }
     }
 }
 
@@ -2494,6 +2574,54 @@ mod tests {
             }
             other => panic!("expected fetch message to remain unchanged, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn v2_ingress_class_separates_control_from_bulk_chunks() {
+        use iroha_data_model::block::consensus_v2 as wire;
+
+        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"v2-ingress-context",
+        )));
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"v2-ingress-block")),
+            payload_hash: Hash::new(b"v2-ingress-payload"),
+        };
+        let control = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+                round: wire::ConsensusRound {
+                    context_id,
+                    height: 7,
+                    view: 3,
+                },
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                signer: 0,
+                signature: vec![1],
+            }),
+        ));
+        let chunk = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"v2-ingress-manifest")),
+                index: 0,
+                bytes: vec![0xA5; 1024],
+                sender: 0,
+                signature: vec![2],
+            }),
+        ));
+
+        assert_eq!(
+            control.v2_ingress_class(),
+            Some(V2IngressClass::ConsensusControl)
+        );
+        assert!(control.v2_requires_blocking_ingress());
+        assert_eq!(chunk.v2_ingress_class(), Some(V2IngressClass::PayloadChunk));
+        assert!(!chunk.v2_requires_blocking_ingress());
+        assert_eq!(
+            BlockMessage::invalid_wire_sentinel().v2_ingress_class(),
+            None
+        );
     }
 
     #[cfg(feature = "bls")]

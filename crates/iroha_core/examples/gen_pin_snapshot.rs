@@ -20,8 +20,8 @@ use iroha_data_model::{
         capacity::ProviderId,
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
-            ManifestDigest, PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
-            ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+            ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy, PinStatus,
+            ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
     },
 };
@@ -36,8 +36,9 @@ use norito::{json, json::Value, to_bytes};
 #[cfg(test)]
 use sorafs_manifest::pin_registry::verify_alias_proof_bundle;
 use sorafs_manifest::{
-    AliasBindingV1, CouncilSignature, REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1,
-    ReplicationOrderSlaV1, ReplicationOrderV1, chunker_registry,
+    AliasBindingV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
+    REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+    ReplicationOrderV1, chunker_registry,
     pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
 };
 
@@ -50,10 +51,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     bootstrap_sorafs(&mut tx);
 
     let digest = default_digest();
-    let chunk_digest = default_chunk_digest();
     let council_keys = council_keypair();
 
-    register_and_approve(&mut tx, digest, chunk_digest, &council_keys)?;
+    register_and_approve(&mut tx, digest, &council_keys)?;
 
     let alias_binding = alias_binding_for(digest, "sora", "docs", 12, 36, &council_keys)?;
     BindManifestAlias {
@@ -150,15 +150,10 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
 fn register_and_approve(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     digest: ManifestDigest,
-    chunk_digest: [u8; 32],
     council_keys: &KeyPair,
 ) -> Result<(), iroha_crypto::Error> {
     RegisterPinManifest {
-        digest,
-        chunker: default_chunker(),
-        chunk_digest_sha3_256: chunk_digest,
-        content_length: default_content_length(),
-        policy: default_policy(),
+        manifest_payload: default_manifest_payload(),
         submitted_epoch: 5,
         alias: None,
         successor_of: None,
@@ -215,6 +210,10 @@ fn manifest_snapshot(manifest: &PinManifestRecord) -> json::Map {
     manifest_obj.insert(
         "digest_hex".into(),
         Value::String(hex::encode(manifest.digest.as_bytes())),
+    );
+    manifest_obj.insert(
+        "root_cid_hex".into(),
+        Value::String(hex::encode(manifest.root_cid.as_bytes())),
     );
     let (status_label, status_epoch) = match manifest.status {
         PinStatus::Pending => ("pending", None),
@@ -314,6 +313,10 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
     order_obj.insert(
         "manifest_digest_hex".into(),
         Value::String(hex::encode(order.manifest_digest.as_bytes())),
+    );
+    order_obj.insert(
+        "manifest_root_cid_hex".into(),
+        Value::String(hex::encode(order.manifest_root_cid.as_bytes())),
     );
     order_obj.insert(
         "issued_by".into(),
@@ -420,7 +423,41 @@ fn default_block_header() -> iroha_data_model::block::BlockHeader {
 }
 
 fn default_digest() -> ManifestDigest {
-    ManifestDigest::new([0xAA; 32])
+    ManifestDigest::from_manifest(&default_manifest()).expect("digest fixture manifest")
+}
+
+fn default_manifest() -> ManifestV1 {
+    ManifestBuilder::new()
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xA5; 32]))
+        .dag_codec(DagCodecId(chunker_registry::MANIFEST_DAG_CODEC))
+        .chunking_from_registry(chunker_registry::default_descriptor().id)
+        .chunk_digest_sha3_256(default_chunk_digest())
+        .content_length(default_content_length())
+        .car_digest([0xB5; 32])
+        .car_size(default_content_length() + 4096)
+        .pin_policy(sorafs_manifest::PinPolicy {
+            min_replicas: default_policy().min_replicas,
+            storage_class: sorafs_manifest::StorageClass::Hot,
+            retention_epoch: default_policy().retention_epoch,
+        })
+        .governance(GovernanceProofs::default())
+        .build()
+        .expect("fixture manifest")
+}
+
+fn default_manifest_payload() -> Vec<u8> {
+    default_manifest()
+        .encode()
+        .expect("encode fixture manifest")
+}
+
+fn root_cid_for_manifest(digest: ManifestDigest) -> ManifestRootCid {
+    assert_eq!(
+        digest,
+        default_digest(),
+        "snapshot uses the default manifest"
+    );
+    ManifestRootCid::try_from_slice(&default_manifest().root_cid).expect("canonical root CID")
 }
 
 fn default_chunk_digest() -> [u8; 32] {
@@ -456,7 +493,7 @@ fn replication_order(
     ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
         order_id: *order_id.as_bytes(),
-        manifest_cid: b"bafyreplicaexamplecidroot".to_vec(),
+        manifest_cid: root_cid_for_manifest(manifest).as_bytes().to_vec(),
         manifest_digest: *manifest.as_bytes(),
         chunking_profile: format!(
             "{}.{}@{}",
@@ -487,7 +524,7 @@ fn alias_binding_for(
 ) -> Result<ManifestAliasBinding, iroha_crypto::Error> {
     let binding_payload = AliasBindingV1 {
         alias: format!("{namespace}/{name}"),
-        manifest_cid: digest.as_bytes().to_vec(),
+        manifest_cid: root_cid_for_manifest(digest).as_bytes().to_vec(),
         bound_at,
         expiry_epoch,
     };
@@ -601,6 +638,7 @@ mod tests {
     fn test_manifest_record() -> PinManifestRecord {
         PinManifestRecord::new(
             default_digest(),
+            root_cid_for_manifest(default_digest()),
             default_chunker(),
             default_chunk_digest(),
             default_policy(),

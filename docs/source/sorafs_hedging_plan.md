@@ -13,6 +13,16 @@ line items, and billing statements. Pure helpers replay weighted fixed-point
 reference-price aggregation, stale/rejected-feed refusal, divergence degradation
 flags, micro-XOR to USD-micro conversion with deterministic ceiling, billing
 totals, and BLAKE3 digest ids for statements and line items.
+The first-release payload validators now also enforce bounded canonical text,
+at most 64 uniquely identified and uniquely sourced feeds, an exact 10,000 bps
+weight budget, sorted feed/reason inventories, and checked weighted arithmetic.
+Statements cap account and line cardinality, sort line IDs canonically, reject
+duplicate source events, bind category to debit/credit direction and metered
+quantity, require the reference decision to be effective exactly at the period
+end, and expose an exact predecessor/account/contiguous-period transition
+validator. Digest preimages include their canonical Norito byte length. The
+generated positive and adversarial fixture set was regenerated against these
+rules and passes the full fixture validator.
 The reference validator also accepts those payloads through
 `validate_hedging_payload_bytes`, and `sorafs-validate hedging`/`billing` can
 validate feed, decision, line-item, and statement files with deterministic
@@ -152,6 +162,26 @@ feed, reference-price, line-item, statement, and negative fixture set. A
 checked-in Grafana dashboard plus Prometheus alert/test fixtures and telemetry
 helper methods now define the hedging/billing observability contract that
 deployed services must satisfy.
+`HedgingPriceFeedV1.evidence_digest` remains an intrinsic evidence binding only;
+the raw payload by itself does not authenticate an external feed signer. The
+manifest crate now ships `SignedHedgingPriceFeedV1` and an external
+`HedgingFeedTrustPolicyV1` that binds strong Ed25519 keys to exact
+`(feed_id, source)` pairs, validity/freshness/skew limits, and explicit
+revocations. `GovernedHedgingReferencePriceDecisionV1` retains and replays all
+signed inputs, while `GovernedBillingStatementV1` prevents a statement from
+downgrading its reference price to unauthenticated raw feeds. Their canonical
+decoders are byte/allocation bounded and reject trailing or compressed
+noncanonical Norito. `SignedHedgingFeedLedgerV1` now supplies the deterministic
+collector-side high-water state: it keeps one latest signed sample per feed,
+binds the external policy digest, rejects global admission-clock rollback,
+per-feed observation rollback, exact replay, same-time equivocation, reused
+evidence digests, malformed ordering, and tampered restart checkpoints. Updates
+replace the prior per-feed high-water mark, so the checkpoint stays bounded for
+an indefinitely running collector; every governed decision still retains its
+complete signed input set for immutable audit history. Deployment admission
+must still remain disabled until the
+collector, hedging daemon, and statement publisher load the external policy and
+accept only these governed wrappers at their runtime boundaries.
 
 Implemented adjacent foundations include SoraFS reserve quote/ledger tooling,
 DA rent/bonus telemetry, reserve ledger digest dashboards, generic subscription
@@ -169,7 +199,7 @@ runtime implementation.
 ## Target Architecture
 | Component | Responsibility | Current workspace status |
 |-----------|----------------|--------------------------|
-| Hedging engine | Aggregate price feeds, derive the reference XOR/USD rate, track exposure, and optionally execute hedges. | Local pure reference-price decision helper and reference validator are shipped; daemon, exposure tracking, and hedge execution are not shipped. |
+| Hedging engine | Aggregate price feeds, derive the reference XOR/USD rate, track exposure, and optionally execute hedges. | Local pure reference-price decision helper, governed signed-feed high-water/checkpoint state, and reference validator are shipped; daemon, exposure tracking, and hedge execution are not shipped. |
 | Price feed collectors | Fetch primary/secondary/tertiary feeds and normalize them into signed price payloads. | Not shipped for SoraFS hedging. |
 | Billing aggregator | Consume settlement, rent, egress, fee, and penalty events and produce account accruals. | Local line-item and statement builders are shipped; event ingestion and accrual service are not shipped. |
 | Statement publisher | Store, sign, publish, notify, and track acknowledgements for statements. | Not shipped. |

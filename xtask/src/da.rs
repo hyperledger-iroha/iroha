@@ -1487,7 +1487,7 @@ fn synthesize_manifest_from_payload(
         break_mask: 1,
     };
     let mut store = ChunkStore::with_profile(profile);
-    store.ingest_bytes(payload);
+    store.ingest_bytes(payload)?;
 
     let chunk_commitments = store
         .chunks()

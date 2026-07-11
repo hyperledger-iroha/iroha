@@ -30,6 +30,7 @@ use iroha_data_model::{
         EvidenceRecord, SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiQcEntry,
         SumeragiQcSnapshot, SumeragiStatusWire,
     },
+    block::consensus_v2::{PROTOCOL_VERSION, SumeragiV2Status, SumeragiV2StatusResponse},
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
         ingest::{DaIngestReceipt, DaIngestRequest},
@@ -5020,6 +5021,34 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     norito::json::Value::Object(root)
 }
 
+#[derive(Debug, JsonDeserialize, JsonSerialize)]
+struct SumeragiV2StatusJson {
+    #[norito(flatten)]
+    authoritative: SumeragiV2Status,
+    lane_settlement_commitments: Vec<iroha_data_model::block::consensus::LaneBlockCommitment>,
+    lane_relay_envelopes: Vec<iroha_data_model::nexus::LaneRelayEnvelope>,
+    lane_payload_ownerships: Vec<iroha_data_model::block::consensus::SumeragiLanePayloadOwnership>,
+    committed_lane_blocks: Vec<iroha_data_model::block::consensus::SumeragiCommittedLaneBlock>,
+    lane_block_sessions: Vec<iroha_data_model::block::consensus::SumeragiLaneBlockSessionStatus>,
+    local_peer_removed: bool,
+    operator: iroha_data_model::block::consensus_v2::SumeragiV2OperatorStatus,
+}
+
+impl From<SumeragiV2StatusJson> for SumeragiV2StatusResponse {
+    fn from(status: SumeragiV2StatusJson) -> Self {
+        Self {
+            authoritative: status.authoritative,
+            lane_settlement_commitments: status.lane_settlement_commitments,
+            lane_relay_envelopes: status.lane_relay_envelopes,
+            lane_payload_ownerships: status.lane_payload_ownerships,
+            committed_lane_blocks: status.committed_lane_blocks,
+            lane_block_sessions: status.lane_block_sessions,
+            local_peer_removed: status.local_peer_removed,
+            operator: status.operator,
+        }
+    }
+}
+
 fn sumeragi_qc_json_payload(snapshot: SumeragiQcSnapshot) -> norito::json::Value {
     use norito::json::{Map, Value};
 
@@ -5129,6 +5158,58 @@ impl Client {
             return Ok(Self::evidence_status_payload(response.status()));
         }
         Ok(norito::json::from_slice(response.body())?)
+    }
+
+    /// GET `/v1/sumeragi/status` as the authoritative protocol-v2 response.
+    ///
+    /// This is the production status API for live v2 chains. It preserves the
+    /// exact reducer snapshot together with the bounded lane observability
+    /// vectors and validates every returned relay envelope before exposing the
+    /// payload to callers.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails, Torii has not completed v2
+    /// replay, decoding fails, the protocol version is not v2, or a relay
+    /// envelope fails verification.
+    pub fn get_sumeragi_v2_status(&self) -> Result<SumeragiV2StatusResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
+        let response = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_NORITO),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get authoritative Sumeragi v2 status: {} {}",
+                response.status(),
+                std::str::from_utf8(response.body()).unwrap_or("")
+            ));
+        }
+        let content_type = Self::response_content_type(&response);
+        let status = if content_type.starts_with(APPLICATION_NORITO) {
+            decode_from_bytes::<SumeragiV2StatusResponse>(response.body()).map_err(|error| {
+                eyre!("Failed to decode authoritative Sumeragi v2 Norito status: {error}")
+            })?
+        } else if Self::is_json_content_type(content_type) {
+            norito::json::from_slice::<SumeragiV2StatusJson>(response.body())?.into()
+        } else {
+            match decode_from_bytes::<SumeragiV2StatusResponse>(response.body()) {
+                Ok(status) => status,
+                Err(norito_error) => {
+                    let json = norito::json::from_slice::<SumeragiV2StatusJson>(response.body())
+                        .map_err(|json_error| {
+                            eyre!(
+                                "Failed to decode authoritative Sumeragi v2 status without a supported content type: Norito: {norito_error}; JSON: {json_error}"
+                            )
+                        })?;
+                    json.into()
+                }
+            }
+        };
+        status.validate().map_err(|error| {
+            eyre!("Torii returned invalid authoritative Sumeragi v2 status: {error}")
+        })?;
+        verify_lane_relay_envelopes(&status.lane_relay_envelopes)?;
+        Ok(status)
     }
 
     /// GET `/v1/sumeragi/status` — consensus status snapshot.
@@ -5247,8 +5328,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the status request fails or if relay envelopes fail validation or deduplication.
     pub fn get_cross_lane_transfer_proofs(&self) -> Result<Vec<CrossLaneTransferProof>> {
-        let status = self.get_sumeragi_status_wire()?;
-        verify_lane_relay_envelopes(&status.lane_relay_envelopes)?;
+        let status = self.get_sumeragi_v2_status()?;
         Ok(status
             .lane_relay_envelopes
             .into_iter()
@@ -5630,8 +5710,26 @@ impl Client {
 }
 
 #[cfg(test)]
+fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) -> Response<Vec<u8>> {
+    let mut builder = Response::builder().status(status);
+    if let Some(ct) = content_type {
+        builder = builder.header("content-type", ct);
+    }
+    builder.body(body).unwrap()
+}
+
+#[cfg(test)]
+fn lifecycle_status(enabled: bool) -> LaneLifecycleStatusV1 {
+    let catalog = LaneCatalog::default();
+    let incarnations = std::collections::BTreeMap::from([(
+        LaneId::SINGLE,
+        Hash::new(b"client-lifecycle-status-incarnation"),
+    )]);
+    LaneLifecycleStatusV1::new(enabled, &catalog, &incarnations).expect("valid lifecycle status")
+}
+
+#[cfg(test)]
 mod status_tests {
-    use http::Response as HttpResponse;
     use iroha_telemetry::metrics::{
         BuildStatus, CryptoStatus, GovernanceStatus, Halo2Status, StackStatus,
         SumeragiConsensusStatus,
@@ -5639,28 +5737,6 @@ mod status_tests {
     use norito::json::Value as JsonValue;
 
     use super::*;
-
-    fn mk_response(
-        status: StatusCode,
-        body: Vec<u8>,
-        content_type: Option<&str>,
-    ) -> Response<Vec<u8>> {
-        let mut builder = HttpResponse::builder().status(status);
-        if let Some(ct) = content_type {
-            builder = builder.header("content-type", ct);
-        }
-        builder.body(body).unwrap()
-    }
-
-    fn lifecycle_status(enabled: bool) -> LaneLifecycleStatusV1 {
-        let catalog = LaneCatalog::default();
-        let incarnations = std::collections::BTreeMap::from([(
-            LaneId::SINGLE,
-            Hash::new(b"client-lifecycle-status-incarnation"),
-        )]);
-        LaneLifecycleStatusV1::new(enabled, &catalog, &incarnations)
-            .expect("valid lifecycle status")
-    }
 
     #[test]
     fn decode_status_prefers_norito_bare() {
@@ -5820,44 +5896,6 @@ mod status_tests {
         assert_eq!(got.peers, 2);
         assert_eq!(got.blocks, 3);
         assert_eq!(got.queue_size, 1);
-    }
-
-    #[test]
-    fn lane_lifecycle_status_decodes_json_and_norito() {
-        let status = lifecycle_status(true);
-        let json = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
-        let response = mk_response(StatusCode::OK, json, Some(APPLICATION_JSON));
-        assert_eq!(
-            Client::decode_lane_lifecycle_status_for_test(&response)
-                .expect("decode lifecycle status JSON"),
-            status
-        );
-
-        let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
-        let response = mk_response(StatusCode::OK, bytes, Some(APPLICATION_NORITO));
-        assert_eq!(
-            Client::decode_lane_lifecycle_status_for_test(&response)
-                .expect("decode lifecycle status Norito"),
-            status
-        );
-    }
-
-    #[test]
-    fn lane_lifecycle_status_rejects_forged_commitment_and_malformed_payload() {
-        let mut status = lifecycle_status(true);
-        status.catalog_hash = Hash::prehashed([0x71; Hash::LENGTH]);
-        let body = norito::json::to_vec(&status).expect("encode forged lifecycle status");
-        let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
-        let error = Client::decode_lane_lifecycle_status_for_test(&response)
-            .expect_err("forged lifecycle commitment must fail closed");
-        assert!(error.to_string().contains("catalog hash mismatch"));
-
-        let response = mk_response(
-            StatusCode::OK,
-            br#"{"version":1,"nexus_enabled":true}"#.to_vec(),
-            Some(APPLICATION_JSON),
-        );
-        assert!(Client::decode_lane_lifecycle_status_for_test(&response).is_err());
     }
 }
 
@@ -6085,6 +6123,47 @@ mod evidence_response_tests {
             message.contains("failed to decode JSON payload"),
             "unexpected error: {message}"
         );
+    }
+    #[test]
+    fn lane_lifecycle_status_decodes_json_and_norito() {
+        let status = lifecycle_status(true);
+        let json = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
+        let response = mk_response(StatusCode::OK, json, Some(APPLICATION_JSON));
+        assert_eq!(
+            Client::decode_lane_lifecycle_status_for_test(&response)
+                .expect("decode lifecycle status JSON"),
+            status
+        );
+
+        let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
+        let response = mk_response(StatusCode::OK, bytes, Some(APPLICATION_NORITO));
+        assert_eq!(
+            Client::decode_lane_lifecycle_status_for_test(&response)
+                .expect("decode lifecycle status Norito"),
+            status
+        );
+    }
+
+    #[test]
+    fn lane_lifecycle_status_rejects_forged_commitment_and_malformed_payload() {
+        let mut status = lifecycle_status(true);
+        status.catalog_hash = Hash::prehashed([0x71; Hash::LENGTH]);
+        let body = norito::json::to_vec(&status).expect("encode forged lifecycle status");
+        let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
+        let error = Client::decode_lane_lifecycle_status_for_test(&response)
+            .expect_err("forged lifecycle commitment must fail closed");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("catalog hash mismatch"),
+            "unexpected error: {message}"
+        );
+
+        let response = mk_response(
+            StatusCode::OK,
+            br#"{"version":1,"nexus_enabled":true}"#.to_vec(),
+            Some(APPLICATION_JSON),
+        );
+        assert!(Client::decode_lane_lifecycle_status_for_test(&response).is_err());
     }
 }
 
@@ -7564,9 +7643,7 @@ mod evidence_http_tests {
             .pin_policy(sorafs_manifest::PinPolicy::default())
             .build()
             .expect("manifest build");
-        let explicit_manifest_bytes = manifest
-            .encode_legacy_norito()
-            .expect("legacy manifest encoding");
+        let explicit_manifest_bytes = manifest.encode().expect("canonical manifest encoding");
         let explicit_digest = *manifest.digest().expect("manifest digest").as_bytes();
 
         let payload = Client::build_sorafs_pin_register_payload(
@@ -8193,6 +8270,7 @@ mod evidence_http_tests {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
+            consensus_admitted_at_height: None,
         }
     }
 
@@ -19806,7 +19884,7 @@ mod tests {
         };
         let status = SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
             mode_activation_lag_blocks: None,
@@ -23456,7 +23534,7 @@ mod tests {
         let block_hash = block_header.hash();
         SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
             mode_activation_lag_blocks: None,
@@ -23686,6 +23764,188 @@ mod tests {
         base_sumeragi_status(&block_header, settlement, relay)
     }
 
+    fn sample_sumeragi_v2_status_response() -> SumeragiV2StatusResponse {
+        let legacy = sample_sumeragi_status();
+        SumeragiV2StatusResponse {
+            authoritative: SumeragiV2Status {
+                protocol_version: PROTOCOL_VERSION,
+                node_fingerprint: Hash::new(b"client-v2-status-node"),
+                build_fingerprint: Hash::new(b"client-v2-status-build"),
+                config_fingerprint: Hash::new(b"client-v2-status-config"),
+                height_context_id:
+                    iroha_data_model::block::consensus_v2::HeightContextId(HashOf::<
+                        iroha_data_model::block::consensus_v2::HeightContext,
+                    >::from_untyped_unchecked(
+                        Hash::new(b"client-v2-status-context"),
+                    )),
+                height: 7,
+                view: 2,
+                phase: iroha_data_model::block::consensus_v2::SumeragiV2StatusPhase::Prepare,
+                leader: 1,
+                locked_prepare_qc: None,
+                highest_prepare_qc: None,
+                last_timeout_certificate: None,
+                body_state: iroha_data_model::block::consensus_v2::SumeragiV2BodyState::Validated,
+                pending_persistence_id: None,
+                last_committed_height: 0,
+                last_committed_subject: None,
+                height_context:
+                    iroha_data_model::block::consensus_v2::SumeragiV2HeightContextStatus {
+                        epoch: 1,
+                        epoch_end_height: 10,
+                        mode: iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                        epoch_seed: [0xA5; 32],
+                        validator_count: 4,
+                        quorum: iroha_data_model::block::consensus_v2::DualQuorum {
+                            min_signers: 3,
+                            total_power: 4,
+                        },
+                    },
+                last_commit_qc: None,
+            },
+            lane_settlement_commitments: legacy.lane_settlement_commitments,
+            lane_relay_envelopes: legacy.lane_relay_envelopes,
+            lane_payload_ownerships: legacy.lane_payload_ownerships,
+            committed_lane_blocks: legacy.committed_lane_blocks,
+            lane_block_sessions: legacy.lane_block_sessions,
+            local_peer_removed: false,
+            operator: iroha_data_model::block::consensus_v2::SumeragiV2OperatorStatus {
+                view_change_install_total: 3,
+                busy_deferral_total: 2,
+                adapter_queues:
+                    iroha_data_model::block::consensus_v2::SumeragiV2AdapterQueueStatus {
+                        ingress_keys: 2,
+                        ingress_capacity: 64,
+                        deferred_completion: 0,
+                        deferred_progress: 1,
+                        deferred_progress_capacity: 256,
+                        deferred_normal: 4,
+                        deferred_normal_capacity: 1_024,
+                    },
+                tx_queue: iroha_data_model::block::consensus_v2::SumeragiV2TxQueueStatus {
+                    tracked_transactions: 5,
+                    queued_transactions: 4,
+                    capacity: 64,
+                    retained_bytes: 1_024,
+                    max_retained_bytes: 8_192,
+                    oldest_queued_age_ms: 20,
+                    saturated_by_count: false,
+                    saturated_by_bytes: false,
+                    saturated_by_age: false,
+                },
+            },
+        }
+    }
+
+    fn sample_sumeragi_v2_status_with_relay() -> (SumeragiV2StatusResponse, LaneRelayEnvelope) {
+        let status = sample_sumeragi_v2_status_response();
+        let relay = status
+            .lane_relay_envelopes
+            .first()
+            .cloned()
+            .expect("sample v2 status relay");
+        (status, relay)
+    }
+
+    fn sumeragi_v2_status_json_bytes(status: &SumeragiV2StatusResponse) -> Vec<u8> {
+        norito::json::to_vec(&SumeragiV2StatusJson {
+            authoritative: status.authoritative.clone(),
+            lane_settlement_commitments: status.lane_settlement_commitments.clone(),
+            lane_relay_envelopes: status.lane_relay_envelopes.clone(),
+            lane_payload_ownerships: status.lane_payload_ownerships.clone(),
+            committed_lane_blocks: status.committed_lane_blocks.clone(),
+            lane_block_sessions: status.lane_block_sessions.clone(),
+            local_peer_removed: status.local_peer_removed,
+            operator: status.operator,
+        })
+        .expect("encode flattened v2 status payload as json")
+    }
+
+    #[test]
+    fn get_sumeragi_v2_status_decodes_complete_norito_and_flattened_json() {
+        let expected = sample_sumeragi_v2_status_response();
+        let client = client_with_base_url(base_url());
+
+        let norito_response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&expected).expect("serialize complete v2 status"))
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let actual = with_mock_http(respond_with(&snapshots, norito_response), || {
+            client.get_sumeragi_v2_status()
+        })
+        .expect("decode complete Norito v2 status");
+        assert_eq!(actual, expected);
+        let request = snapshots
+            .lock()
+            .expect("lock request snapshots")
+            .first()
+            .cloned()
+            .expect("v2 status request snapshot");
+        assert_eq!(request.url.path(), "/v1/sumeragi/status");
+        assert!(request.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("accept") && value == APPLICATION_NORITO
+        }));
+
+        let flattened = SumeragiV2StatusJson {
+            authoritative: expected.authoritative.clone(),
+            lane_settlement_commitments: expected.lane_settlement_commitments.clone(),
+            lane_relay_envelopes: expected.lane_relay_envelopes.clone(),
+            lane_payload_ownerships: expected.lane_payload_ownerships.clone(),
+            committed_lane_blocks: expected.committed_lane_blocks.clone(),
+            lane_block_sessions: expected.lane_block_sessions.clone(),
+            local_peer_removed: expected.local_peer_removed,
+            operator: expected.operator,
+        };
+        let json_response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&flattened).expect("serialize flattened v2 status"))
+            .unwrap();
+        let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let actual = with_mock_http(respond_with(&json_snapshots, json_response), || {
+            client.get_sumeragi_v2_status()
+        })
+        .expect("decode flattened JSON v2 status");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn get_sumeragi_v2_status_rejects_wrong_version_and_tampered_relay() {
+        let client = client_with_base_url(base_url());
+        let mut wrong_version = sample_sumeragi_v2_status_response();
+        wrong_version.authoritative.protocol_version = PROTOCOL_VERSION + 1;
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&wrong_version).expect("serialize wrong-version status"))
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        assert!(
+            with_mock_http(respond_with(&snapshots, response), || {
+                client.get_sumeragi_v2_status()
+            })
+            .is_err()
+        );
+
+        let mut tampered = sample_sumeragi_v2_status_response();
+        tampered.lane_relay_envelopes[0].settlement_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0xFF; Hash::LENGTH]));
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&tampered).expect("serialize tampered-relay status"))
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        assert!(
+            with_mock_http(respond_with(&snapshots, response), || {
+                client.get_sumeragi_v2_status()
+            })
+            .is_err()
+        );
+    }
+
     #[test]
     fn get_sumeragi_status_prefers_norito_and_handles_json() {
         let status = sample_sumeragi_status();
@@ -23878,7 +24138,7 @@ mod tests {
             lane_block_view: 2,
             subject_hash,
             qc_mode_tag: relay_envelope
-                .lane_qc_mode_tag("iroha2-consensus::permissioned-sumeragi@v1"),
+                .lane_qc_mode_tag("iroha2-consensus::permissioned-sumeragi@v2"),
             accepted_candidate_indices: vec![0, 2],
             accepted_transaction_hashes: vec![
                 Hash::prehashed([0xBA; Hash::LENGTH]),
@@ -23895,7 +24155,7 @@ mod tests {
         };
         let status = SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
             mode_activation_lag_blocks: None,
@@ -24876,7 +25136,7 @@ mod tests {
     #[test]
     fn get_cross_lane_transfer_proofs_returns_verified_envelopes() {
         let client = client_with_base_url(base_url());
-        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let (status, relay_envelope) = sample_sumeragi_v2_status_with_relay();
         let body = norito::to_bytes(&status).expect("encode status payload");
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
@@ -24896,8 +25156,8 @@ mod tests {
     #[test]
     fn get_cross_lane_transfer_proofs_accepts_json_status_payload() {
         let client = client_with_base_url(base_url());
-        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let body = norito::json::to_vec(&status).expect("encode status payload as json");
+        let (status, relay_envelope) = sample_sumeragi_v2_status_with_relay();
+        let body = sumeragi_v2_status_json_bytes(&status);
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)
@@ -24916,7 +25176,7 @@ mod tests {
     #[test]
     fn get_cross_lane_transfer_proofs_returns_empty_for_empty_envelopes() {
         let client = client_with_base_url(base_url());
-        let (mut status, _) = sample_sumeragi_status_with_relay();
+        let (mut status, _) = sample_sumeragi_v2_status_with_relay();
         status.lane_relay_envelopes = Vec::new();
         let body = norito::to_bytes(&status).expect("encode status payload");
         let response = HttpResponse::builder()
@@ -24936,7 +25196,7 @@ mod tests {
     #[test]
     fn get_cross_lane_transfer_proofs_rejects_duplicate_keys() {
         let client = client_with_base_url(base_url());
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let (mut status, relay_envelope) = sample_sumeragi_v2_status_with_relay();
         status.lane_relay_envelopes = vec![relay_envelope.clone(), relay_envelope];
         let body = norito::to_bytes(&status).expect("encode status payload");
         let response = HttpResponse::builder()
@@ -24959,9 +25219,9 @@ mod tests {
     #[test]
     fn get_cross_lane_transfer_proofs_rejects_duplicate_keys_from_json_payload() {
         let client = client_with_base_url(base_url());
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let (mut status, relay_envelope) = sample_sumeragi_v2_status_with_relay();
         status.lane_relay_envelopes = vec![relay_envelope.clone(), relay_envelope];
-        let body = norito::json::to_vec(&status).expect("encode status payload as json");
+        let body = sumeragi_v2_status_json_bytes(&status);
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)
@@ -24982,7 +25242,7 @@ mod tests {
     #[test]
     fn get_cross_lane_transfer_proofs_accepts_distinct_dataspaces_on_same_lane_and_height() {
         let client = client_with_base_url(base_url());
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let (mut status, relay_envelope) = sample_sumeragi_v2_status_with_relay();
         let second = make_lane_relay_for_status(
             relay_envelope.lane_id,
             DataSpaceId::new(relay_envelope.dataspace_id.as_u64() + 1),
@@ -25014,7 +25274,7 @@ mod tests {
     #[test]
     fn get_cross_lane_transfer_proofs_accepts_distinct_lanes_on_same_dataspace_and_height() {
         let client = client_with_base_url(base_url());
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let (mut status, relay_envelope) = sample_sumeragi_v2_status_with_relay();
         let second = make_lane_relay_for_status(
             LaneId::new(relay_envelope.lane_id.as_u32() + 1),
             relay_envelope.dataspace_id,
@@ -25046,7 +25306,7 @@ mod tests {
     #[test]
     fn get_cross_lane_transfer_proofs_preserves_envelope_order() {
         let client = client_with_base_url(base_url());
-        let (mut status, first) = sample_sumeragi_status_with_relay();
+        let (mut status, first) = sample_sumeragi_v2_status_with_relay();
         let second = make_lane_relay_for_status(
             LaneId::new(first.lane_id.as_u32() + 2),
             DataSpaceId::new(first.dataspace_id.as_u64() + 3),
@@ -25074,7 +25334,7 @@ mod tests {
     #[test]
     fn get_cross_lane_transfer_proofs_accepts_same_lane_dataspace_across_heights() {
         let client = client_with_base_url(base_url());
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let (mut status, relay_envelope) = sample_sumeragi_v2_status_with_relay();
         let second = make_lane_relay_for_status(
             relay_envelope.lane_id,
             relay_envelope.dataspace_id,
@@ -25106,7 +25366,7 @@ mod tests {
     #[test]
     fn get_cross_lane_transfer_proofs_reports_invalid_relay_before_duplicate_error() {
         let client = client_with_base_url(base_url());
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let (mut status, relay_envelope) = sample_sumeragi_v2_status_with_relay();
         let mut tampered_duplicate = relay_envelope.clone();
         tampered_duplicate.settlement_hash =
             HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
@@ -25125,7 +25385,7 @@ mod tests {
         .expect_err("invalid relay must be rejected");
         let message = err.to_string();
         assert!(
-            message.contains("Invalid lane relay envelope in status payload"),
+            message.contains("relay settlement hash does not match payload"),
             "unexpected error message: {message}"
         );
         assert!(
@@ -25138,12 +25398,12 @@ mod tests {
     fn get_cross_lane_transfer_proofs_reports_invalid_relay_before_duplicate_error_from_json_payload()
      {
         let client = client_with_base_url(base_url());
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let (mut status, relay_envelope) = sample_sumeragi_v2_status_with_relay();
         let mut tampered_duplicate = relay_envelope.clone();
         tampered_duplicate.settlement_hash =
             HashOf::from_untyped_unchecked(Hash::prehashed([0xAC; Hash::LENGTH]));
         status.lane_relay_envelopes = vec![relay_envelope, tampered_duplicate];
-        let body = norito::json::to_vec(&status).expect("encode status payload as json");
+        let body = sumeragi_v2_status_json_bytes(&status);
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)
@@ -25157,7 +25417,7 @@ mod tests {
         .expect_err("invalid json relay must be rejected");
         let message = err.to_string();
         assert!(
-            message.contains("Invalid lane relay envelope in status payload"),
+            message.contains("relay settlement hash does not match payload"),
             "unexpected error message: {message}"
         );
         assert!(

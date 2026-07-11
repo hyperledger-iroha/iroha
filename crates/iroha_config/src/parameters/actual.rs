@@ -39,6 +39,7 @@ use iroha_data_model::{
     ChainId,
     account::AccountId,
     asset::prelude::AssetDefinitionId,
+    block::consensus_v2::{self as consensus_v2, GenesisActiveNexusLaneRecord},
     block::{BlockHeader, consensus::RbcEncoding},
     compute::{
         ComputeAuthPolicy, ComputeFeeSplit, ComputeGovernanceError, ComputePriceAmplifiers,
@@ -845,7 +846,7 @@ identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A
 identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 "#;
 
-    fn minimal_root() -> Root {
+    pub(super) fn minimal_root() -> Root {
         let table: Table = toml::from_str(MINIMAL_CONFIG).expect("parse minimal config table");
         Root::from_toml_source(TomlSource::inline(table)).expect("load minimal config")
     }
@@ -4514,6 +4515,524 @@ pub struct Pipeline {
     pub amx_per_syscall_ns: u64,
 }
 
+impl Default for Pipeline {
+    fn default() -> Self {
+        Self {
+            ivm_proved: IvmProvedExecution {
+                enabled: defaults::pipeline::ivm_proved::ENABLED,
+                skip_replay: defaults::pipeline::ivm_proved::SKIP_REPLAY,
+                allowed_circuits: Vec::new(),
+            },
+            dynamic_prepass: defaults::pipeline::DYNAMIC_PREPASS,
+            access_set_cache_enabled: defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
+            parallel_overlay: defaults::pipeline::PARALLEL_OVERLAY,
+            workers: defaults::pipeline::WORKERS,
+            stateless_cache_cap: defaults::pipeline::STATELESS_CACHE_CAP,
+            parallel_apply: defaults::pipeline::PARALLEL_APPLY,
+            ready_queue_heap: defaults::pipeline::READY_QUEUE_HEAP,
+            gpu_key_bucket: defaults::pipeline::GPU_KEY_BUCKET,
+            debug_trace_scheduler_inputs: defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
+            debug_trace_tx_eval: defaults::pipeline::DEBUG_TRACE_TX_EVAL,
+            signature_batch_max: defaults::pipeline::SIGNATURE_BATCH_MAX,
+            signature_batch_max_ed25519: defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
+            signature_batch_max_secp256k1: defaults::pipeline::SIGNATURE_BATCH_MAX_SECP256K1,
+            signature_batch_max_pqc: defaults::pipeline::SIGNATURE_BATCH_MAX_PQC,
+            signature_batch_max_bls: defaults::pipeline::SIGNATURE_BATCH_MAX_BLS,
+            cache_size: defaults::pipeline::CACHE_SIZE,
+            ivm_cache_max_decoded_ops: defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
+            ivm_cache_max_bytes: defaults::pipeline::IVM_CACHE_MAX_BYTES,
+            ivm_prover_threads: defaults::pipeline::IVM_PROVER_THREADS,
+            overlay_max_instructions: defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
+            overlay_max_bytes: defaults::pipeline::OVERLAY_MAX_BYTES,
+            overlay_chunk_instructions: defaults::pipeline::OVERLAY_CHUNK_INSTRUCTIONS,
+            gas: Gas {
+                tech_account_id: defaults::pipeline::GAS_TECH_ACCOUNT_ID.to_owned(),
+                accepted_assets: Vec::new(),
+                units_per_gas: Vec::new(),
+            },
+            ivm_max_cycles_upper_bound: defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
+            ivm_max_decoded_instructions: defaults::pipeline::IVM_MAX_DECODED_INSTRUCTIONS,
+            ivm_max_decoded_bytes: defaults::pipeline::IVM_MAX_DECODED_BYTES,
+            quarantine_max_txs_per_block: defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
+            quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
+            quarantine_tx_max_millis: defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
+            query_default_cursor_mode: QueryCursorMode::Ephemeral,
+            query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
+            query_stored_min_gas_units: defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
+            amx_per_dataspace_budget_ms: defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
+            amx_group_budget_ms: defaults::pipeline::AMX_GROUP_BUDGET_MS,
+            amx_per_instruction_ns: defaults::pipeline::AMX_PER_INSTRUCTION_NS,
+            amx_per_memory_access_ns: defaults::pipeline::AMX_PER_MEMORY_ACCESS_NS,
+            amx_per_syscall_ns: defaults::pipeline::AMX_PER_SYSCALL_NS,
+        }
+    }
+}
+
+/// Compute the canonical Sumeragi v2 commitment to the Nexus and AMX inputs
+/// that can change proposal assembly or deterministic validation.
+///
+/// The commitment deliberately excludes local storage paths, worker pool
+/// sizing, caches, and telemetry. It includes the validated lane geometry,
+/// dataspace and routing catalogs, lane election/fee/AXT/DA policy, the five
+/// deterministic AMX budgets, and staged active public-lane validator records.
+/// Active records are sorted by their storage key before encoding so callers
+/// cannot accidentally make the commitment depend on iteration order.
+#[must_use]
+pub fn sumeragi_v2_nexus_amx_context_hash(
+    nexus: &Nexus,
+    pipeline: &Pipeline,
+    active_validators: &[GenesisActiveNexusLaneRecord],
+) -> Hash {
+    fn append<T: Encode>(out: &mut Vec<u8>, tag: &'static str, value: &T) {
+        let bytes = value.encode();
+        let tag_len = u32::try_from(tag.len()).expect("static projection tag fits in u32");
+        let bytes_len = u64::try_from(bytes.len()).expect("projection field fits in u64");
+        out.extend_from_slice(&tag_len.to_le_bytes());
+        out.extend_from_slice(tag.as_bytes());
+        out.extend_from_slice(&bytes_len.to_le_bytes());
+        out.extend_from_slice(&bytes);
+    }
+
+    let mut preimage = b"sumeragi-v2:nexus-amx-context\0v1".to_vec();
+    append(&mut preimage, "nexus.enabled", &nexus.enabled);
+
+    append(
+        &mut preimage,
+        "nexus.lane_catalog.lane_count",
+        &nexus.lane_catalog.lane_count().get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.lane_catalog.lanes",
+        &nexus.lane_catalog.lanes().to_vec(),
+    );
+
+    append(
+        &mut preimage,
+        "nexus.dataspace_catalog.count",
+        &u64::try_from(nexus.dataspace_catalog.entries().len())
+            .expect("dataspace catalog length fits in u64"),
+    );
+    for entry in nexus.dataspace_catalog.entries() {
+        append(&mut preimage, "nexus.dataspace.id", &entry.id);
+        append(&mut preimage, "nexus.dataspace.alias", &entry.alias);
+        append(
+            &mut preimage,
+            "nexus.dataspace.description",
+            &entry.description,
+        );
+        append(
+            &mut preimage,
+            "nexus.dataspace.fault_tolerance",
+            &entry.fault_tolerance,
+        );
+    }
+
+    append(
+        &mut preimage,
+        "nexus.routing.default_lane",
+        &nexus.routing_policy.default_lane,
+    );
+    append(
+        &mut preimage,
+        "nexus.routing.default_dataspace",
+        &nexus.routing_policy.default_dataspace,
+    );
+    append(
+        &mut preimage,
+        "nexus.routing.rule_count",
+        &u64::try_from(nexus.routing_policy.rules.len()).expect("routing rule count fits in u64"),
+    );
+    for rule in &nexus.routing_policy.rules {
+        append(&mut preimage, "nexus.routing.rule.lane", &rule.lane);
+        append(
+            &mut preimage,
+            "nexus.routing.rule.dataspace",
+            &rule.dataspace,
+        );
+        append(
+            &mut preimage,
+            "nexus.routing.rule.account",
+            &rule.matcher.account,
+        );
+        append(
+            &mut preimage,
+            "nexus.routing.rule.instruction",
+            &rule.matcher.instruction,
+        );
+        append(
+            &mut preimage,
+            "nexus.routing.rule.description",
+            &rule.matcher.description,
+        );
+    }
+
+    let public_validator_mode = match nexus.staking.public_validator_mode {
+        LaneValidatorMode::StakeElected => 0_u8,
+        LaneValidatorMode::AdminManaged => 1,
+    };
+    let restricted_validator_mode = match nexus.staking.restricted_validator_mode {
+        LaneValidatorMode::StakeElected => 0_u8,
+        LaneValidatorMode::AdminManaged => 1,
+    };
+    append(
+        &mut preimage,
+        "nexus.staking.public_validator_mode",
+        &public_validator_mode,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.restricted_validator_mode",
+        &restricted_validator_mode,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.min_validator_stake",
+        &nexus.staking.min_validator_stake,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.max_validators",
+        &nexus.staking.max_validators.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.unbonding_delay_ns",
+        &nexus.staking.unbonding_delay.as_nanos(),
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.withdraw_grace_ns",
+        &nexus.staking.withdraw_grace.as_nanos(),
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.max_slash_bps",
+        &nexus.staking.max_slash_bps,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.reward_dust_threshold",
+        &nexus.staking.reward_dust_threshold,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.stake_asset_id",
+        &nexus.staking.stake_asset_id,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.stake_escrow_account_id",
+        &nexus.staking.stake_escrow_account_id,
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.slash_sink_account_id",
+        &nexus.staking.slash_sink_account_id,
+    );
+
+    append(&mut preimage, "nexus.fees.asset", &nexus.fees.fee_asset_id);
+    append(
+        &mut preimage,
+        "nexus.fees.sink",
+        &nexus.fees.fee_sink_account_id,
+    );
+    append(&mut preimage, "nexus.fees.base", &nexus.fees.base_fee);
+    append(
+        &mut preimage,
+        "nexus.fees.per_byte",
+        &nexus.fees.per_byte_fee,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.per_instruction",
+        &nexus.fees.per_instruction_fee,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.per_gas_unit",
+        &nexus.fees.per_gas_unit_fee,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.sponsorship_enabled",
+        &nexus.fees.sponsorship_enabled,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.sponsor_max_fee",
+        &nexus.fees.sponsor_max_fee,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.sponsor_balance_floor",
+        &nexus.fees.sponsor_verified_balance_safety_floor,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.canonical_sponsor",
+        &nexus.fees.canonical_sponsor_account_id,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.receipts_activation_height",
+        &nexus.fees.fee_receipts_activation_height,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.external_settlement_enabled",
+        &nexus.fees.external_settlement_enabled,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.burn_from_unix_timestamp_ms",
+        &nexus.fees.burn_from_unix_timestamp_ms,
+    );
+    let settlement_mode = match nexus.fees.settlement_mode {
+        NexusFeeSettlementMode::Direct => 0_u8,
+        NexusFeeSettlementMode::LaneRelayBurn => 1,
+    };
+    append(
+        &mut preimage,
+        "nexus.fees.settlement_mode",
+        &settlement_mode,
+    );
+    append(
+        &mut preimage,
+        "nexus.fees.successful_claim_exempt_authorities",
+        &nexus.fees.successful_claim_fee_exempt_authorities,
+    );
+    append(
+        &mut preimage,
+        "nexus.dataspace_fee_sponsors",
+        &nexus.dataspace_fee_sponsors,
+    );
+    append(
+        &mut preimage,
+        "nexus.dataspace_fee_sponsor_policies",
+        &nexus.dataspace_fee_sponsor_policies,
+    );
+
+    append(
+        &mut preimage,
+        "nexus.axt.slot_length_ms",
+        &nexus.axt.slot_length_ms.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.axt.max_clock_skew_ms",
+        &nexus.axt.max_clock_skew_ms,
+    );
+    append(
+        &mut preimage,
+        "nexus.axt.proof_cache_ttl_slots",
+        &nexus.axt.proof_cache_ttl_slots.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.axt.replay_retention_slots",
+        &nexus.axt.replay_retention_slots.get(),
+    );
+
+    append(
+        &mut preimage,
+        "nexus.fusion.floor_teu",
+        &nexus.fusion.floor_teu,
+    );
+    append(
+        &mut preimage,
+        "nexus.fusion.exit_teu",
+        &nexus.fusion.exit_teu,
+    );
+    append(
+        &mut preimage,
+        "nexus.fusion.observation_slots",
+        &nexus.fusion.observation_slots.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.fusion.max_window_slots",
+        &nexus.fusion.max_window_slots.get(),
+    );
+
+    append(
+        &mut preimage,
+        "nexus.autoscale.enabled",
+        &nexus.autoscale.enabled,
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.min_lanes",
+        &nexus.autoscale.min_lanes.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.max_lanes",
+        &nexus.autoscale.max_lanes.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.target_block_ms",
+        &nexus.autoscale.target_block_ms.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_out_latency_ratio_bits",
+        &nexus.autoscale.scale_out_latency_ratio.to_bits(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_in_latency_ratio_bits",
+        &nexus.autoscale.scale_in_latency_ratio.to_bits(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_out_utilization_ratio_bits",
+        &nexus.autoscale.scale_out_utilization_ratio.to_bits(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_in_utilization_ratio_bits",
+        &nexus.autoscale.scale_in_utilization_ratio.to_bits(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_out_window_blocks",
+        &nexus.autoscale.scale_out_window_blocks.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.scale_in_window_blocks",
+        &nexus.autoscale.scale_in_window_blocks.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.cooldown_blocks",
+        &nexus.autoscale.cooldown_blocks.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.per_lane_target_tps",
+        &nexus.autoscale.per_lane_target_tps.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.autoscale.last_transition_height",
+        &nexus.autoscale.last_transition_height,
+    );
+
+    append(
+        &mut preimage,
+        "nexus.commit.window_slots",
+        &nexus.commit.window_slots.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.q_in_slot_total",
+        &nexus.da.q_in_slot_total.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.q_in_slot_per_ds_min",
+        &nexus.da.q_in_slot_per_ds_min.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.sample_size_base",
+        &nexus.da.sample_size_base.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.sample_size_max",
+        &nexus.da.sample_size_max.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.threshold_base",
+        &nexus.da.threshold_base.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.per_attester_shards",
+        &nexus.da.per_attester_shards.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.audit.sample_size",
+        &nexus.da.audit.sample_size.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.audit.window_count",
+        &nexus.da.audit.window_count.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.audit.interval_ns",
+        &nexus.da.audit.interval.as_nanos(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.recovery.request_timeout_ns",
+        &nexus.da.recovery.request_timeout.as_nanos(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.rotation.max_hits_per_window",
+        &nexus.da.rotation.max_hits_per_window.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.rotation.window_slots",
+        &nexus.da.rotation.window_slots.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.rotation.seed_tag",
+        &nexus.da.rotation.seed_tag,
+    );
+    append(
+        &mut preimage,
+        "nexus.da.rotation.latency_decay_bits",
+        &nexus.da.rotation.latency_decay.to_bits(),
+    );
+
+    append(
+        &mut preimage,
+        "pipeline.amx_per_dataspace_budget_ms",
+        &pipeline.amx_per_dataspace_budget_ms,
+    );
+    append(
+        &mut preimage,
+        "pipeline.amx_group_budget_ms",
+        &pipeline.amx_group_budget_ms,
+    );
+    append(
+        &mut preimage,
+        "pipeline.amx_per_instruction_ns",
+        &pipeline.amx_per_instruction_ns,
+    );
+    append(
+        &mut preimage,
+        "pipeline.amx_per_memory_access_ns",
+        &pipeline.amx_per_memory_access_ns,
+    );
+    append(
+        &mut preimage,
+        "pipeline.amx_per_syscall_ns",
+        &pipeline.amx_per_syscall_ns,
+    );
+    let mut active_validators = active_validators.to_vec();
+    active_validators.sort_by(|(left, _), (right, _)| left.cmp(right));
+    append(
+        &mut preimage,
+        "staged.active_public_lane_validators",
+        &active_validators,
+    );
+
+    Hash::new(preimage)
+}
+
 /// Pipeline settings controlling admission and verification of `Executable::IvmProved`.
 #[derive(Debug, Clone)]
 pub struct IvmProvedExecution {
@@ -5238,7 +5757,7 @@ pub struct SumeragiCollectors {
 /// Block assembly limits.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiBlock {
-    /// Optional cap on transactions included in a single block (None = unlimited).
+    /// Cap on transactions included in a single block; v2 requires `Some`.
     pub max_transactions: Option<NonZeroUsize>,
     /// Optional cap on IVM-heavy transactions included in a single block (None = unlimited).
     pub max_ivm_transactions: Option<NonZeroUsize>,
@@ -5246,7 +5765,7 @@ pub struct SumeragiBlock {
     pub fast_finality_max_transactions: Option<NonZeroUsize>,
     /// Optional cap on block gas limit when commit time is fast (None = disabled).
     pub fast_gas_limit_per_block: Option<NonZeroU64>,
-    /// Optional cap on block payload bytes when RBC is disabled (None = unlimited).
+    /// Cap on canonical block-body bytes; v2 requires `Some`.
     pub max_payload_bytes: Option<NonZeroUsize>,
     /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
     pub proposal_queue_scan_multiplier: NonZeroUsize,
@@ -5259,7 +5778,7 @@ pub struct SumeragiQueues {
     pub votes: usize,
     /// Capacity for the block payload channel.
     pub block_payload: usize,
-    /// Capacity for the RBC chunk channel.
+    /// Capacity for v2 payload-chunk ingress (legacy code calls this the RBC channel).
     pub rbc_chunks: usize,
     /// Capacity for the fast-path block/recovery channel (fetches, body responses, params).
     pub blocks: usize,
@@ -5604,13 +6123,17 @@ pub struct SumeragiDebugRbc {
 /// Consensus (Sumeragi) configuration.
 #[derive(Debug, Clone)]
 pub struct Sumeragi {
+    /// Consensus wire/state-machine protocol version.
+    pub protocol_version: u32,
+    /// Absolute round deadline. Receiving partial progress does not reset this timer.
+    pub round_timeout: Duration,
     /// Node participation role (validator or observer).
     pub role: NodeRole,
-    /// Runtime consensus mode selection (permissioned vs npos).
+    /// Legacy local-mode fallback; v2 takes mode from the signed height context.
     pub consensus_mode: ConsensusMode,
-    /// Runtime consensus mode flip gating.
+    /// Retired runtime mode-flip setting; v2 validation requires it disabled.
     pub mode_flip: SumeragiModeFlip,
-    /// Collector selection configuration.
+    /// Legacy collector configuration, ignored by the all-validator v2 control path.
     pub collectors: SumeragiCollectors,
     /// Block assembly limits.
     pub block: SumeragiBlock,
@@ -5618,25 +6141,25 @@ pub struct Sumeragi {
     pub queues: SumeragiQueues,
     /// Worker-loop scheduling limits.
     pub worker: SumeragiWorker,
-    /// Pacemaker configuration.
+    /// Legacy adaptive pacemaker configuration, ignored by v2.
     pub pacemaker: SumeragiPacemaker,
-    /// Deterministic pacing governor configuration.
+    /// Legacy pacing-governor configuration, ignored by v2.
     pub pacing_governor: SumeragiPacingGovernor,
-    /// Volatile resilience tuning limits.
+    /// Retired adaptive resilience settings; v2 validation requires them disabled.
     pub resilience: SumeragiResilience,
-    /// Experimental vNext performance-fault configuration.
+    /// Retired vNext performance-fault configuration, ignored by v2.
     pub vnext: SumeragiVNext,
     /// DA (data-availability) configuration.
     pub da: SumeragiDa,
     /// Persistence/retry configuration.
     pub persistence: SumeragiPersistence,
-    /// Recovery-related configuration.
+    /// Legacy heuristic recovery configuration, ignored by certified v2 recovery.
     pub recovery: SumeragiRecovery,
     /// Deterministic transport fanout configuration.
     pub fanout: SumeragiFanout,
     /// Ingress gating and penalty configuration.
     pub gating: SumeragiGating,
-    /// RBC (reliable broadcast) configuration.
+    /// Legacy global-RBC configuration; v2 obtains chunk geometry from `HeightContext`.
     pub rbc: SumeragiRbc,
     /// Native AMX control-plane cache limits.
     pub native_amx: SumeragiNativeAmx,
@@ -5646,16 +6169,522 @@ pub struct Sumeragi {
     pub keys: SumeragiKeys,
     /// NPoS-specific consensus parameters.
     pub npos: SumeragiNpos,
-    /// Adaptive observability/auto-mitigation knobs.
+    /// Retired adaptive observability; v2 validation requires it disabled.
     pub adaptive_observability: AdaptiveObservability,
     /// Debug-only configuration.
     pub debug: SumeragiDebug,
 }
 
+impl Sumeragi {
+    /// Interval used to retransmit critical v2 votes, QCs, TCs, and body requests.
+    #[must_use]
+    pub fn retransmit_interval(&self) -> Duration {
+        self.round_timeout / defaults::sumeragi::RETRANSMIT_DIVISOR
+    }
+
+    /// Build the canonical, shared Sumeragi v2 runtime configuration.
+    ///
+    /// `mode` and `block_cadence` must come from the signed genesis/current
+    /// height context. The similarly named legacy local mode selector is
+    /// deliberately ignored: a mutable node configuration must not select a
+    /// consensus mode. Node role is also excluded because validators and
+    /// observers are expected to use different roles while agreeing on the
+    /// same shared fingerprint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a v2 limit is unbounded, a duration cannot be
+    /// represented canonically in milliseconds, or a retired adaptive,
+    /// phase-timeout, mode-flip, DA-off, fast-finality, or fault-injection
+    /// setting is enabled.
+    pub fn v2_config(
+        &self,
+        block_cadence: Duration,
+        mode: consensus_v2::ConsensusMode,
+    ) -> core::result::Result<SumeragiV2Config, SumeragiV2ConfigError> {
+        if self.protocol_version != defaults::sumeragi::PROTOCOL_VERSION {
+            return Err(SumeragiV2ConfigError::UnsupportedProtocolVersion {
+                expected: defaults::sumeragi::PROTOCOL_VERSION,
+                actual: self.protocol_version,
+            });
+        }
+        if self.mode_flip.enabled {
+            return Err(SumeragiV2ConfigError::RetiredSetting(
+                "sumeragi.mode_flip.enabled",
+            ));
+        }
+        if !self.da.enabled {
+            return Err(SumeragiV2ConfigError::MandatoryDaDisabled);
+        }
+        if self.adaptive_observability.enabled {
+            return Err(SumeragiV2ConfigError::RetiredSetting(
+                "sumeragi.adaptive_observability.enabled",
+            ));
+        }
+        if self.resilience.enabled {
+            return Err(SumeragiV2ConfigError::RetiredSetting(
+                "sumeragi.advanced.resilience.enabled",
+            ));
+        }
+        if self.npos.timeouts_overrides.has_overrides() {
+            return Err(SumeragiV2ConfigError::RetiredSetting(
+                "sumeragi.advanced.npos.timeouts",
+            ));
+        }
+        if self.block.max_ivm_transactions.is_some() {
+            return Err(SumeragiV2ConfigError::RetiredSetting(
+                "sumeragi.block.max_ivm_transactions",
+            ));
+        }
+        if self.block.fast_finality_max_transactions.is_some() {
+            return Err(SumeragiV2ConfigError::RetiredSetting(
+                "sumeragi.block.fast_finality_max_transactions",
+            ));
+        }
+        if self.block.fast_gas_limit_per_block.is_some() {
+            return Err(SumeragiV2ConfigError::RetiredSetting(
+                "sumeragi.block.fast_gas_limit_per_block",
+            ));
+        }
+        if self.debug.force_soft_fork
+            || self.debug.disable_background_worker
+            || self.debug.rbc.drop_every_nth_chunk.is_some()
+            || self.debug.rbc.shuffle_chunks
+            || self.debug.rbc.duplicate_inits
+            || self.debug.rbc.force_deliver_quorum_one
+            || self.debug.rbc.corrupt_witness_ack
+            || self.debug.rbc.corrupt_ready_signature
+            || self.debug.rbc.drop_validator_mask != 0
+            || self.debug.rbc.equivocate_chunk_mask != 0
+            || self.debug.rbc.equivocate_validator_mask != 0
+            || self.debug.rbc.conflicting_ready_mask != 0
+            || self.debug.rbc.partial_chunk_mask != 0
+        {
+            return Err(SumeragiV2ConfigError::RetiredSetting("sumeragi.debug"));
+        }
+
+        let block_cadence_ms = canonical_duration_ms("block cadence", block_cadence)?;
+        let round_timeout_ms = canonical_duration_ms("round timeout", self.round_timeout)?;
+        let retransmit_divisor = u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR);
+        if round_timeout_ms < retransmit_divisor || round_timeout_ms % retransmit_divisor != 0 {
+            return Err(SumeragiV2ConfigError::InvalidRetransmissionDivision {
+                timeout_ms: round_timeout_ms,
+                divisor: defaults::sumeragi::RETRANSMIT_DIVISOR,
+            });
+        }
+
+        let max_transactions =
+            self.block
+                .max_transactions
+                .ok_or(SumeragiV2ConfigError::UnboundedLimit(
+                    "sumeragi.block.max_transactions",
+                ))?;
+        let max_payload_bytes =
+            self.block
+                .max_payload_bytes
+                .ok_or(SumeragiV2ConfigError::UnboundedLimit(
+                    "sumeragi.block.max_payload_bytes",
+                ))?;
+        let max_transactions =
+            canonical_size("sumeragi.block.max_transactions", max_transactions.get())?;
+        let max_payload_bytes =
+            canonical_size("sumeragi.block.max_payload_bytes", max_payload_bytes.get())?;
+        let queue_scan_multiplier = canonical_size(
+            "sumeragi.block.proposal_queue_scan_multiplier",
+            self.block.proposal_queue_scan_multiplier.get(),
+        )?;
+        let max_queue_scan = max_transactions.checked_mul(queue_scan_multiplier).ok_or(
+            SumeragiV2ConfigError::LimitOverflow("Sumeragi v2 proposal queue scan"),
+        )?;
+
+        let control_queue_capacity =
+            canonical_nonzero_size("sumeragi.advanced.queues.control", self.queues.control)?;
+        let runtime_command_capacity = control_queue_capacity.max(
+            u64::try_from(defaults::sumeragi::V2_MIN_RUNTIME_COMMAND_CAPACITY)
+                .expect("static v2 queue minimum fits u64"),
+        );
+        let runtime_progress_reserve = (runtime_command_capacity / 8).max(1);
+        let runtime_completion_reserve = (runtime_command_capacity / 4).max(1);
+        if runtime_progress_reserve
+            .checked_add(runtime_completion_reserve)
+            .is_none_or(|reserved| reserved >= runtime_command_capacity)
+        {
+            return Err(SumeragiV2ConfigError::InvalidQueueAllocation);
+        }
+
+        let body_queue_capacity =
+            canonical_nonzero_size("sumeragi.advanced.queues.blocks", self.queues.blocks)?;
+        let chunk_queue_capacity = canonical_nonzero_size(
+            "sumeragi.advanced.queues.rbc_chunks",
+            self.queues.rbc_chunks,
+        )?;
+        let ready_body_capacity = canonical_nonzero_size(
+            "sumeragi.advanced.queues.block_payload",
+            self.queues.block_payload,
+        )?;
+        let ready_body_bytes = max_payload_bytes
+            .checked_mul(defaults::sumeragi::V2_READY_BODY_BYTE_MULTIPLIER)
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 ready-body byte capacity",
+            ))?;
+
+        if self.keys.allowed_algorithms.is_empty()
+            || !self.keys.allowed_algorithms.contains(&Algorithm::BlsNormal)
+        {
+            return Err(SumeragiV2ConfigError::MissingBlsNormal);
+        }
+        let allowed_algorithms = self.keys.allowed_algorithms.iter().copied().collect();
+        let mut allowed_hsm_providers = Vec::with_capacity(self.keys.allowed_hsm_providers.len());
+        for provider in &self.keys.allowed_hsm_providers {
+            let provider = provider.trim();
+            if provider.is_empty() {
+                return Err(SumeragiV2ConfigError::EmptyHsmProvider);
+            }
+            allowed_hsm_providers.push(provider.to_owned());
+        }
+        allowed_hsm_providers.sort();
+        allowed_hsm_providers.dedup();
+        if self.keys.require_hsm && allowed_hsm_providers.is_empty() {
+            return Err(SumeragiV2ConfigError::MissingHsmProvider);
+        }
+
+        let npos = match mode {
+            consensus_v2::ConsensusMode::Permissioned => None,
+            consensus_v2::ConsensusMode::Npos => Some(self.v2_npos_config()?),
+        };
+
+        Ok(SumeragiV2Config {
+            format_version: SUMERAGI_V2_CONFIG_FORMAT_VERSION,
+            protocol_version: consensus_v2::PROTOCOL_VERSION,
+            mode,
+            block_cadence_ms,
+            round_timeout_ms,
+            retransmit_interval_ms: round_timeout_ms / retransmit_divisor,
+            limits: SumeragiV2Limits {
+                max_transactions,
+                max_payload_bytes,
+                max_queue_scan,
+                control_queue_capacity,
+                runtime_command_capacity,
+                runtime_progress_reserve,
+                runtime_completion_reserve,
+                body_queue_capacity,
+                chunk_queue_capacity,
+                effect_work_capacity: control_queue_capacity,
+                ready_body_capacity,
+                ready_body_bytes,
+                certified_request_capacity: body_queue_capacity,
+            },
+            key_policy: SumeragiV2KeyPolicy {
+                activation_lead_blocks: self.keys.activation_lead_blocks,
+                overlap_grace_blocks: self.keys.overlap_grace_blocks,
+                expiry_grace_blocks: self.keys.expiry_grace_blocks,
+                require_hsm: self.keys.require_hsm,
+                allowed_algorithms,
+                allowed_hsm_providers,
+            },
+            npos,
+        })
+    }
+
+    fn v2_npos_config(&self) -> core::result::Result<SumeragiV2NposConfig, SumeragiV2ConfigError> {
+        let npos = self.npos;
+        if npos.epoch_length_blocks == 0 {
+            return Err(SumeragiV2ConfigError::NonPositive(
+                "sumeragi.npos.epoch_length_blocks",
+            ));
+        }
+        if !npos.use_stake_snapshot_roster {
+            return Err(SumeragiV2ConfigError::NposStakeSnapshotRequired);
+        }
+        if npos.vrf.commit_window_blocks == 0
+            || npos.vrf.reveal_window_blocks == 0
+            || npos.vrf.commit_deadline_offset_blocks == 0
+            || npos.vrf.reveal_deadline_offset_blocks == 0
+        {
+            return Err(SumeragiV2ConfigError::NonPositive(
+                "sumeragi.npos.vrf window/deadline",
+            ));
+        }
+        if npos.vrf.commit_deadline_offset_blocks > npos.vrf.reveal_deadline_offset_blocks
+            || npos.vrf.reveal_deadline_offset_blocks > npos.epoch_length_blocks
+        {
+            return Err(SumeragiV2ConfigError::InvalidVrfWindows);
+        }
+        if npos.election.min_self_bond == 0
+            || npos.election.min_nomination_bond == 0
+            || npos.election.finality_margin_blocks == 0
+        {
+            return Err(SumeragiV2ConfigError::NonPositive(
+                "sumeragi.npos.election bond/finality limit",
+            ));
+        }
+        if npos.election.max_nominator_concentration_pct > 100
+            || npos.election.seat_band_pct > 100
+            || npos.election.max_entity_correlation_pct > 100
+        {
+            return Err(SumeragiV2ConfigError::InvalidElectionPercentage);
+        }
+        if npos.reconfig.evidence_horizon_blocks == 0
+            || npos.reconfig.activation_lag_blocks == 0
+            || npos.reconfig.slashing_delay_blocks == 0
+        {
+            return Err(SumeragiV2ConfigError::NonPositive(
+                "sumeragi.npos.reconfig limit",
+            ));
+        }
+
+        Ok(SumeragiV2NposConfig {
+            epoch_length_blocks: npos.epoch_length_blocks,
+            use_stake_snapshot_roster: npos.use_stake_snapshot_roster,
+            vrf_commit_window_blocks: npos.vrf.commit_window_blocks,
+            vrf_reveal_window_blocks: npos.vrf.reveal_window_blocks,
+            vrf_commit_deadline_offset_blocks: npos.vrf.commit_deadline_offset_blocks,
+            vrf_reveal_deadline_offset_blocks: npos.vrf.reveal_deadline_offset_blocks,
+            max_validators: npos.election.max_validators,
+            min_self_bond: npos.election.min_self_bond,
+            min_nomination_bond: npos.election.min_nomination_bond,
+            max_nominator_concentration_pct: npos.election.max_nominator_concentration_pct,
+            seat_band_pct: npos.election.seat_band_pct,
+            max_entity_correlation_pct: npos.election.max_entity_correlation_pct,
+            finality_margin_blocks: npos.election.finality_margin_blocks,
+            evidence_horizon_blocks: npos.reconfig.evidence_horizon_blocks,
+            activation_lag_blocks: npos.reconfig.activation_lag_blocks,
+            slashing_delay_blocks: npos.reconfig.slashing_delay_blocks,
+        })
+    }
+}
+
+/// Version of the canonical Norito shared-config projection.
+pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 1;
+
+const SUMERAGI_V2_CONFIG_FINGERPRINT_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:shared-config-fingerprint\0";
+
+/// Canonical shared Sumeragi v2 runtime configuration.
+///
+/// Every field uses a fixed-width type so its Norito encoding and fingerprint
+/// are independent of target pointer width. This is the only configuration
+/// projection validators should use for the v2 adapter, handshake, rollout
+/// checks, and status reporting.
+#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+pub struct SumeragiV2Config {
+    /// Projection schema version.
+    pub format_version: u16,
+    /// Live consensus wire protocol version.
+    pub protocol_version: u16,
+    /// Genesis/height-context selected consensus mode.
+    pub mode: consensus_v2::ConsensusMode,
+    /// Target block cadence in milliseconds.
+    pub block_cadence_ms: u64,
+    /// One absolute, non-adaptive round timeout in milliseconds.
+    pub round_timeout_ms: u64,
+    /// Derived retransmission interval (`round_timeout_ms / 5`).
+    pub retransmit_interval_ms: u64,
+    /// Finite block and adapter queue limits.
+    pub limits: SumeragiV2Limits,
+    /// Consensus signing-key policy.
+    pub key_policy: SumeragiV2KeyPolicy,
+    /// NPoS election/reconfiguration settings, present only in NPoS mode.
+    pub npos: Option<SumeragiV2NposConfig>,
+}
+
+impl SumeragiV2Config {
+    /// Hash the domain-separated canonical Norito projection.
+    #[must_use]
+    pub fn fingerprint(&self) -> Hash {
+        let encoded = self.encode();
+        let mut preimage =
+            Vec::with_capacity(SUMERAGI_V2_CONFIG_FINGERPRINT_DOMAIN.len() + encoded.len());
+        preimage.extend_from_slice(SUMERAGI_V2_CONFIG_FINGERPRINT_DOMAIN);
+        preimage.extend_from_slice(&encoded);
+        Hash::new(preimage)
+    }
+}
+
+/// Finite limits consumed by the serialized v2 runtime and its adapters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
+pub struct SumeragiV2Limits {
+    /// Maximum transactions selected for one candidate block.
+    pub max_transactions: u64,
+    /// Maximum canonical block body size in bytes.
+    pub max_payload_bytes: u64,
+    /// Maximum queued transactions inspected for one proposal attempt.
+    pub max_queue_scan: u64,
+    /// Explicit I/O/effect-service command capacity.
+    pub control_queue_capacity: u64,
+    /// Effective serialized reducer command capacity.
+    pub runtime_command_capacity: u64,
+    /// Reducer FIFO slots reserved for progress certificates.
+    pub runtime_progress_reserve: u64,
+    /// Reducer FIFO slots reserved for trusted asynchronous completions.
+    pub runtime_completion_reserve: u64,
+    /// Capacity for certified bodies and block-sync ingress.
+    pub body_queue_capacity: u64,
+    /// Capacity for payload chunk ingress and orphan buffering.
+    pub chunk_queue_capacity: u64,
+    /// Maximum outstanding asynchronous reducer effects.
+    pub effect_work_capacity: u64,
+    /// Maximum reconstructed bodies waiting for reducer delivery.
+    pub ready_body_capacity: u64,
+    /// Aggregate byte bound for reconstructed bodies waiting for delivery.
+    pub ready_body_bytes: u64,
+    /// Maximum certified body-fetch requests in flight.
+    pub certified_request_capacity: u64,
+}
+
+/// Canonical consensus signing-key policy.
+#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+pub struct SumeragiV2KeyPolicy {
+    /// Minimum activation lead in blocks.
+    pub activation_lead_blocks: u64,
+    /// Dual-key overlap window in blocks.
+    pub overlap_grace_blocks: u64,
+    /// Expiry grace window in blocks.
+    pub expiry_grace_blocks: u64,
+    /// Whether a recognized HSM binding is mandatory.
+    pub require_hsm: bool,
+    /// Canonically sorted allowed signing algorithms.
+    pub allowed_algorithms: Vec<Algorithm>,
+    /// Canonically sorted and deduplicated allowed HSM providers.
+    pub allowed_hsm_providers: Vec<String>,
+}
+
+/// Canonical NPoS settings that are frozen at epoch boundaries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
+pub struct SumeragiV2NposConfig {
+    /// Epoch length in blocks.
+    pub epoch_length_blocks: u64,
+    /// Require the finalized stake snapshot as the voting roster source.
+    pub use_stake_snapshot_roster: bool,
+    /// VRF commitment window length in blocks.
+    pub vrf_commit_window_blocks: u64,
+    /// VRF reveal window length in blocks.
+    pub vrf_reveal_window_blocks: u64,
+    /// VRF commitment deadline offset from epoch start.
+    pub vrf_commit_deadline_offset_blocks: u64,
+    /// VRF reveal deadline offset from epoch start.
+    pub vrf_reveal_deadline_offset_blocks: u64,
+    /// Maximum elected validators (`0` means no configured cap).
+    pub max_validators: u32,
+    /// Minimum validator self-bond.
+    pub min_self_bond: u64,
+    /// Minimum nominator bond.
+    pub min_nomination_bond: u64,
+    /// Maximum contribution from one nominator, in percent.
+    pub max_nominator_concentration_pct: u8,
+    /// Permitted seat-allocation variance, in percent.
+    pub seat_band_pct: u8,
+    /// Maximum correlated ownership, in percent.
+    pub max_entity_correlation_pct: u8,
+    /// Finality margin before a new epoch roster activates.
+    pub finality_margin_blocks: u64,
+    /// Retention horizon for reconfiguration evidence.
+    pub evidence_horizon_blocks: u64,
+    /// Delay between finalized election and roster activation.
+    pub activation_lag_blocks: u64,
+    /// Delay before finalized slashing evidence is applied.
+    pub slashing_delay_blocks: u64,
+}
+
+/// Invalid or non-canonical Sumeragi v2 runtime configuration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SumeragiV2ConfigError {
+    /// A live protocol revision other than v2 was requested.
+    #[error("unsupported Sumeragi protocol version {actual}; expected {expected}")]
+    UnsupportedProtocolVersion {
+        /// Required protocol version.
+        expected: u32,
+        /// Configured protocol version.
+        actual: u32,
+    },
+    /// A required duration was zero.
+    #[error("{0} must be greater than zero")]
+    NonPositive(&'static str),
+    /// A duration cannot be represented as an exact whole number of milliseconds.
+    #[error("{0} must be an exact whole number of milliseconds")]
+    NonCanonicalDuration(&'static str),
+    /// A duration or size exceeded its fixed-width canonical representation.
+    #[error("{0} exceeds the canonical u64 representation")]
+    LimitOverflow(&'static str),
+    /// A mandatory finite bound was omitted.
+    #[error("{0} must be configured with a finite non-zero bound")]
+    UnboundedLimit(&'static str),
+    /// The one-fifth retransmission interval was not exactly representable.
+    #[error(
+        "round timeout {timeout_ms}ms must be at least and exactly divisible by retransmission divisor {divisor}"
+    )]
+    InvalidRetransmissionDivision {
+        /// Configured round timeout.
+        timeout_ms: u64,
+        /// Protocol-defined divisor.
+        divisor: u32,
+    },
+    /// Reserved reducer FIFO capacity consumed the whole queue.
+    #[error("Sumeragi v2 reducer queue reserves leave no normal-ingress capacity")]
+    InvalidQueueAllocation,
+    /// A retired v1/adaptive setting was enabled.
+    #[error("retired consensus setting `{0}` is not admitted by Sumeragi v2")]
+    RetiredSetting(&'static str),
+    /// Mandatory data availability was disabled.
+    #[error("Sumeragi v2 requires data availability")]
+    MandatoryDaDisabled,
+    /// The signing policy did not admit BLS-Normal.
+    #[error("Sumeragi v2 consensus key policy must include BlsNormal")]
+    MissingBlsNormal,
+    /// A configured HSM provider normalized to an empty string.
+    #[error("Sumeragi v2 HSM provider names must not be empty")]
+    EmptyHsmProvider,
+    /// HSM binding was required without an admitted provider.
+    #[error("Sumeragi v2 requires at least one HSM provider when HSM binding is mandatory")]
+    MissingHsmProvider,
+    /// NPoS was configured without the finalized stake snapshot roster.
+    #[error("Sumeragi v2 NPoS requires the finalized stake snapshot roster")]
+    NposStakeSnapshotRequired,
+    /// VRF windows/deadlines were out of order or outside the epoch.
+    #[error("Sumeragi v2 NPoS VRF deadlines must be ordered within the epoch")]
+    InvalidVrfWindows,
+    /// An NPoS election percentage exceeded 100.
+    #[error("Sumeragi v2 NPoS election percentages must be in 0..=100")]
+    InvalidElectionPercentage,
+}
+
+fn canonical_duration_ms(
+    field: &'static str,
+    duration: Duration,
+) -> core::result::Result<u64, SumeragiV2ConfigError> {
+    if duration.is_zero() {
+        return Err(SumeragiV2ConfigError::NonPositive(field));
+    }
+    let millis = u64::try_from(duration.as_millis())
+        .map_err(|_| SumeragiV2ConfigError::LimitOverflow(field))?;
+    if Duration::from_millis(millis) != duration {
+        return Err(SumeragiV2ConfigError::NonCanonicalDuration(field));
+    }
+    Ok(millis)
+}
+
+fn canonical_size(
+    field: &'static str,
+    value: usize,
+) -> core::result::Result<u64, SumeragiV2ConfigError> {
+    u64::try_from(value).map_err(|_| SumeragiV2ConfigError::LimitOverflow(field))
+}
+
+fn canonical_nonzero_size(
+    field: &'static str,
+    value: usize,
+) -> core::result::Result<u64, SumeragiV2ConfigError> {
+    if value == 0 {
+        return Err(SumeragiV2ConfigError::NonPositive(field));
+    }
+    canonical_size(field, value)
+}
+
 /// NPoS configuration bundle.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiNpos {
-    /// Explicit per-phase timeout overrides (advanced config only).
+    /// Retired per-phase timeout overrides; v2 validation rejects any value.
     pub timeouts_overrides: SumeragiNposTimeoutOverrides,
     /// VRF commit/reveal windows.
     pub vrf: SumeragiNposVrf,
@@ -7566,6 +8595,8 @@ pub struct SorafsStorage {
     pub stream_tokens: SorafsTokenConfig,
     /// Local orderbook admission policy.
     pub orderbook: SorafsOrderbook,
+    /// Canonical Norito trust-policy file required for reputation snapshot admission.
+    pub reputation_trust_policy_path: Option<PathBuf>,
     /// Local SFM-4c privacy aggregate publication scheduler.
     pub privacy_aggregates: SorafsPrivacyAggregateSchedule,
     /// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
@@ -7755,6 +8786,7 @@ impl Default for SorafsStorage {
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsTokenConfig::default(),
             orderbook: SorafsOrderbook::default(),
+            reputation_trust_policy_path: None,
             privacy_aggregates: SorafsPrivacyAggregateSchedule::default(),
             evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule::default(),
             reserve_lifecycle: SorafsReserveLifecycleSchedule::default(),
@@ -10784,6 +11816,11 @@ impl Default for FraudMonitoring {
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::{
+        metadata::Metadata,
+        nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+    };
+
     use super::*;
 
     #[test]
@@ -11176,6 +12213,309 @@ mod tests {
         assert!(!overrides.has_overrides());
     }
 
+    fn default_v2_sumeragi() -> Sumeragi {
+        super::sora_profile_tests::minimal_root().sumeragi
+    }
+
+    fn v2_fingerprint(config: &Sumeragi, mode: consensus_v2::ConsensusMode) -> Hash {
+        config
+            .v2_config(Duration::from_secs(1), mode)
+            .expect("test v2 config must validate")
+            .fingerprint()
+    }
+
+    #[test]
+    fn sumeragi_v2_shared_config_default_fingerprint_is_stable() {
+        let config = default_v2_sumeragi();
+        let shared = config
+            .v2_config(
+                Duration::from_secs(1),
+                consensus_v2::ConsensusMode::Permissioned,
+            )
+            .expect("default v2 config");
+
+        assert_eq!(shared.protocol_version, consensus_v2::PROTOCOL_VERSION);
+        assert_eq!(shared.block_cadence_ms, 1_000);
+        assert_eq!(shared.round_timeout_ms, 10_000);
+        assert_eq!(shared.retransmit_interval_ms, 2_000);
+        assert_eq!(shared.limits.max_transactions, 512);
+        assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
+        assert_eq!(shared.limits.max_queue_scan, 2_048);
+        assert_eq!(
+            hex::encode(shared.fingerprint().as_ref()),
+            "4ee74a27ea90c44097e8cb678e953c1a25745ea346a27a3f2af8b5b797a8df83",
+        );
+    }
+
+    #[test]
+    fn sumeragi_v2_shared_fingerprint_binds_every_runtime_category() {
+        let base = default_v2_sumeragi();
+        let permissioned = consensus_v2::ConsensusMode::Permissioned;
+        let baseline = v2_fingerprint(&base, permissioned);
+
+        macro_rules! assert_config_change {
+            ($label:literal, $change:expr) => {{
+                let mut changed = base.clone();
+                ($change)(&mut changed);
+                assert_ne!(
+                    baseline,
+                    v2_fingerprint(&changed, permissioned),
+                    "{} must change the shared v2 fingerprint",
+                    $label,
+                );
+            }};
+        }
+
+        assert_config_change!("round timeout", |config: &mut Sumeragi| {
+            config.round_timeout += Duration::from_millis(5);
+        });
+        assert_config_change!("transaction bound", |config: &mut Sumeragi| {
+            config.block.max_transactions = NonZeroUsize::new(511);
+        });
+        assert_config_change!("payload bound", |config: &mut Sumeragi| {
+            config.block.max_payload_bytes = NonZeroUsize::new(8 * 1024 * 1024);
+        });
+        assert_config_change!("queue scan bound", |config: &mut Sumeragi| {
+            config.block.proposal_queue_scan_multiplier = NonZeroUsize::new(3).expect("non-zero");
+        });
+        assert_config_change!("control queue", |config: &mut Sumeragi| {
+            config.queues.control += 8;
+        });
+        assert_config_change!("body queue", |config: &mut Sumeragi| {
+            config.queues.blocks += 1;
+        });
+        assert_config_change!("chunk queue", |config: &mut Sumeragi| {
+            config.queues.rbc_chunks += 1;
+        });
+        assert_config_change!("ready-body queue", |config: &mut Sumeragi| {
+            config.queues.block_payload += 1;
+        });
+        assert_config_change!("key activation", |config: &mut Sumeragi| {
+            config.keys.activation_lead_blocks += 1;
+        });
+        assert_config_change!("key overlap", |config: &mut Sumeragi| {
+            config.keys.overlap_grace_blocks += 1;
+        });
+        assert_config_change!("key expiry", |config: &mut Sumeragi| {
+            config.keys.expiry_grace_blocks += 1;
+        });
+        assert_config_change!("HSM requirement", |config: &mut Sumeragi| {
+            config.keys.require_hsm = true;
+        });
+        assert_config_change!("key algorithms", |config: &mut Sumeragi| {
+            config.keys.allowed_algorithms.insert(Algorithm::Ed25519);
+        });
+        assert_config_change!("HSM providers", |config: &mut Sumeragi| {
+            config
+                .keys
+                .allowed_hsm_providers
+                .insert("test-hsm".to_owned());
+        });
+
+        let changed_cadence = base
+            .v2_config(Duration::from_millis(1_005), permissioned)
+            .expect("changed cadence")
+            .fingerprint();
+        assert_ne!(baseline, changed_cadence);
+        let changed_mode = base
+            .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos)
+            .expect("changed genesis mode")
+            .fingerprint();
+        assert_ne!(baseline, changed_mode);
+
+        let npos_baseline = changed_mode;
+        macro_rules! assert_npos_change {
+            ($label:literal, $change:expr) => {{
+                let mut changed = base.clone();
+                ($change)(&mut changed.npos);
+                assert_ne!(
+                    npos_baseline,
+                    v2_fingerprint(&changed, consensus_v2::ConsensusMode::Npos),
+                    "{} must change the NPoS shared fingerprint",
+                    $label,
+                );
+            }};
+        }
+        assert_npos_change!("epoch policy", |npos: &mut SumeragiNpos| {
+            npos.epoch_length_blocks += 1;
+        });
+        assert_npos_change!("VRF policy", |npos: &mut SumeragiNpos| {
+            npos.vrf.commit_window_blocks += 1;
+        });
+        assert_npos_change!("election policy", |npos: &mut SumeragiNpos| {
+            npos.election.min_self_bond += 1;
+        });
+        assert_npos_change!("reconfiguration policy", |npos: &mut SumeragiNpos| {
+            npos.reconfig.evidence_horizon_blocks += 1;
+        });
+    }
+
+    #[test]
+    fn sumeragi_v2_fingerprint_excludes_node_local_and_quarantined_fields() {
+        let base = default_v2_sumeragi();
+        let mode = consensus_v2::ConsensusMode::Permissioned;
+        let baseline = v2_fingerprint(&base, mode);
+        let mut changed = base.clone();
+        changed.role = NodeRole::Observer;
+        changed.consensus_mode = ConsensusMode::Npos;
+        changed.collectors.k += 1;
+        changed.collectors.redundant_send_r += 1;
+        changed.rbc.chunk_max_bytes += 2;
+        changed.rbc.session_ttl += Duration::from_secs(1);
+        changed.worker.iteration_budget_cap += Duration::from_millis(1);
+        changed.pacemaker.max_backoff += Duration::from_millis(1);
+        changed.recovery.missing_qc_reacquire_window += Duration::from_millis(1);
+
+        assert_eq!(
+            baseline,
+            v2_fingerprint(&changed, mode),
+            "node role and retired collector/RBC/adaptive-recovery machinery must not enter the shared v2 projection",
+        );
+    }
+
+    #[test]
+    fn sumeragi_v2_validator_and_observer_share_one_config_fingerprint() {
+        let mut validator = default_v2_sumeragi();
+        validator.role = NodeRole::Validator;
+        let mut observer = validator.clone();
+        observer.role = NodeRole::Observer;
+
+        assert_eq!(
+            v2_fingerprint(&validator, consensus_v2::ConsensusMode::Permissioned),
+            v2_fingerprint(&observer, consensus_v2::ConsensusMode::Permissioned),
+            "node-local participation role must not partition a v2 network",
+        );
+    }
+
+    #[test]
+    fn sumeragi_v2_config_rejects_unbounded_or_legacy_behavior() {
+        let mode = consensus_v2::ConsensusMode::Permissioned;
+        let assert_error = |config: &Sumeragi, expected: SumeragiV2ConfigError| {
+            assert_eq!(
+                config
+                    .v2_config(Duration::from_secs(1), mode)
+                    .expect_err("invalid v2 config must fail closed"),
+                expected,
+            );
+        };
+
+        let mut config = default_v2_sumeragi();
+        config.block.max_transactions = None;
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::UnboundedLimit("sumeragi.block.max_transactions"),
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.block.max_payload_bytes = None;
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::UnboundedLimit("sumeragi.block.max_payload_bytes"),
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.queues.control = 0;
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::NonPositive("sumeragi.advanced.queues.control"),
+        );
+
+        let retired: [(&str, fn(&mut Sumeragi)); 5] = [
+            ("sumeragi.mode_flip.enabled", |config: &mut Sumeragi| {
+                config.mode_flip.enabled = true
+            }),
+            (
+                "sumeragi.adaptive_observability.enabled",
+                |config: &mut Sumeragi| config.adaptive_observability.enabled = true,
+            ),
+            (
+                "sumeragi.advanced.resilience.enabled",
+                |config: &mut Sumeragi| config.resilience.enabled = true,
+            ),
+            (
+                "sumeragi.block.max_ivm_transactions",
+                |config: &mut Sumeragi| config.block.max_ivm_transactions = NonZeroUsize::new(1),
+            ),
+            (
+                "sumeragi.block.fast_finality_max_transactions",
+                |config: &mut Sumeragi| {
+                    config.block.fast_finality_max_transactions = NonZeroUsize::new(1);
+                },
+            ),
+        ];
+        for (field, mutate) in retired {
+            let mut config = default_v2_sumeragi();
+            mutate(&mut config);
+            assert_error(&config, SumeragiV2ConfigError::RetiredSetting(field));
+        }
+
+        let mut config = default_v2_sumeragi();
+        config.npos.timeouts_overrides.propose = Some(Duration::from_millis(1));
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::RetiredSetting("sumeragi.advanced.npos.timeouts"),
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.debug.rbc.equivocate_chunk_mask = 1;
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::RetiredSetting("sumeragi.debug"),
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.da.enabled = false;
+        assert_error(&config, SumeragiV2ConfigError::MandatoryDaDisabled);
+    }
+
+    #[test]
+    fn sumeragi_v2_config_rejects_noncanonical_timing_and_npos() {
+        let config = default_v2_sumeragi();
+        assert_eq!(
+            config
+                .v2_config(
+                    Duration::from_millis(1) + Duration::from_nanos(1),
+                    consensus_v2::ConsensusMode::Permissioned,
+                )
+                .expect_err("sub-millisecond cadence must fail"),
+            SumeragiV2ConfigError::NonCanonicalDuration("block cadence"),
+        );
+
+        let mut invalid_timeout = config.clone();
+        invalid_timeout.round_timeout = Duration::from_millis(10_001);
+        assert_eq!(
+            invalid_timeout
+                .v2_config(
+                    Duration::from_secs(1),
+                    consensus_v2::ConsensusMode::Permissioned,
+                )
+                .expect_err("non-integral one-fifth interval must fail"),
+            SumeragiV2ConfigError::InvalidRetransmissionDivision {
+                timeout_ms: 10_001,
+                divisor: 5,
+            },
+        );
+
+        let mut no_snapshot = config.clone();
+        no_snapshot.npos.use_stake_snapshot_roster = false;
+        assert_eq!(
+            no_snapshot
+                .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos,)
+                .expect_err("NPoS without a frozen stake snapshot must fail"),
+            SumeragiV2ConfigError::NposStakeSnapshotRequired,
+        );
+
+        let mut invalid_windows = config;
+        invalid_windows.npos.vrf.reveal_deadline_offset_blocks =
+            invalid_windows.npos.epoch_length_blocks + 1;
+        assert_eq!(
+            invalid_windows
+                .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos,)
+                .expect_err("VRF deadline outside epoch must fail"),
+            SumeragiV2ConfigError::InvalidVrfWindows,
+        );
+    }
+
     #[test]
     fn viral_incentives_default_survives_chain_override() {
         let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
@@ -11212,5 +12552,154 @@ mod tests {
                 .collect();
 
         assert_eq!(defaults.submitters, expected);
+    }
+
+    #[test]
+    fn sumeragi_v2_default_nexus_amx_hash_is_stable() {
+        let hash = sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[]);
+        assert_eq!(
+            hex::encode(hash.as_ref()),
+            "76fc637fec320c7ead22a65e693658fbb1187a3b0152900d64644c841e77ca7f",
+        );
+        assert_eq!(
+            <[u8; 32]>::from(hash),
+            iroha_data_model::block::consensus_v2::RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
+            "data-model genesis defaults must track the canonical config projection",
+        );
+    }
+
+    fn test_active_validator(seed: u8, lane: LaneId) -> GenesisActiveNexusLaneRecord {
+        let peer = PeerId::new(
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic BLS test key")
+                .public_key()
+                .clone(),
+        );
+        let validator = AccountId::new(peer.public_key().clone());
+        let record = PublicLaneValidatorRecord {
+            lane_id: lane,
+            validator: validator.clone(),
+            peer_id: peer,
+            stake_account: validator.clone(),
+            total_stake: Numeric::from(10_u64),
+            self_stake: Numeric::from(10_u64),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: Some(0),
+            activation_height: Some(1),
+            last_reward_epoch: None,
+        };
+        ((lane, validator), record)
+    }
+
+    #[test]
+    fn sumeragi_v2_nexus_amx_hash_binds_every_projection_category() {
+        let nexus = Nexus::default();
+        let pipeline = Pipeline::default();
+        let baseline = sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[]);
+        let assert_nexus_change = |label: &str, changed: Nexus| {
+            assert_ne!(
+                baseline,
+                sumeragi_v2_nexus_amx_context_hash(&changed, &pipeline, &[]),
+                "{label} must change the signed Nexus/AMX commitment"
+            );
+        };
+
+        let mut changed = nexus.clone();
+        changed.enabled = !changed.enabled;
+        assert_nexus_change("Nexus enabled state", changed);
+
+        let mut changed = nexus.clone();
+        changed.lane_catalog = sora_lane_catalog();
+        assert_nexus_change("lane catalog", changed);
+
+        let mut changed = nexus.clone();
+        changed.dataspace_catalog = sora_dataspace_catalog();
+        assert_nexus_change("dataspace catalog", changed);
+
+        let mut changed = nexus.clone();
+        changed.routing_policy.default_lane = LaneId::new(1);
+        assert_nexus_change("routing policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.staking.min_validator_stake += 1;
+        assert_nexus_change("staking policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.fees.sponsorship_enabled = !changed.fees.sponsorship_enabled;
+        assert_nexus_change("fee policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.fees.burn_from_unix_timestamp_ms += 1;
+        assert_nexus_change("fee settlement activation", changed);
+
+        let mut changed = nexus.clone();
+        changed
+            .dataspace_fee_sponsors
+            .insert(DataSpaceId::UNIVERSAL, "sponsor".to_owned());
+        assert_nexus_change("dataspace sponsor policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.axt.max_clock_skew_ms += 1;
+        assert_nexus_change("AXT policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.fusion.floor_teu += 1;
+        assert_nexus_change("lane fusion policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.autoscale.enabled = !changed.autoscale.enabled;
+        assert_nexus_change("lane autoscale policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.commit.window_slots = NonZeroU16::new(changed.commit.window_slots.get() + 1)
+            .expect("incremented window stays non-zero");
+        assert_nexus_change("commit policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.da.q_in_slot_total = NonZeroU32::new(changed.da.q_in_slot_total.get() + 1)
+            .expect("incremented DA budget stays non-zero");
+        assert_nexus_change("DA sampling policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.da.audit.interval += Duration::from_nanos(1);
+        assert_nexus_change("DA audit policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.da.recovery.request_timeout += Duration::from_nanos(1);
+        assert_nexus_change("DA recovery policy", changed);
+
+        let mut changed = nexus.clone();
+        changed.da.rotation.seed_tag.push('x');
+        assert_nexus_change("DA rotation policy", changed);
+
+        let mut changed_pipeline = pipeline.clone();
+        changed_pipeline.amx_per_instruction_ns += 1;
+        assert_ne!(
+            baseline,
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &changed_pipeline, &[]),
+            "deterministic AMX budgets must change the signed commitment"
+        );
+
+        let active = [test_active_validator(0xA1, LaneId::SINGLE)];
+        assert_ne!(
+            baseline,
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &active),
+            "staged active validators must change the signed commitment"
+        );
+    }
+
+    #[test]
+    fn sumeragi_v2_nexus_amx_hash_canonicalizes_active_validator_order() {
+        let nexus = Nexus::default();
+        let pipeline = Pipeline::default();
+        let first = test_active_validator(0xA2, LaneId::new(1));
+        let second = test_active_validator(0xA3, LaneId::SINGLE);
+        let forward = [first.clone(), second.clone()];
+        let reverse = [second, first];
+        assert_eq!(
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &forward),
+            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &reverse),
+        );
     }
 }

@@ -6,6 +6,7 @@ use std::{
 };
 
 use iroha_logger::prelude::*;
+use zeroize::Zeroizing;
 
 use crate::sumeragi::message::BlockMessageWire;
 
@@ -14,7 +15,7 @@ use super::*;
 /// Domain separator for VRF commit input derivation.
 const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
 
-pub(super) fn derive_vrf_material_from_key(
+pub(crate) fn derive_vrf_material_from_key(
     chain_hash: &Hash,
     private_key: &PrivateKey,
     epoch: u64,
@@ -27,9 +28,27 @@ pub(super) fn derive_vrf_material_from_key(
     msg.extend_from_slice(chain_hash.as_ref());
     msg.extend_from_slice(&epoch.to_be_bytes());
     msg.extend_from_slice(&u64::from(signer).to_be_bytes());
-    let signature = Signature::try_new(private_key, &msg)
-        .map_err(|err| eyre!("failed to sign local VRF input material: {err}"))?;
-    let reveal: [u8; 32] = Hash::new(signature.payload()).into();
+    let reveal: [u8; 32] = if private_key.algorithm() == iroha_crypto::Algorithm::BlsNormal {
+        // Live v2 validator keys are BLS-normal. Ordinary BLS signing uses
+        // randomized key splitting, so hashing an ordinary signature would
+        // produce a different reveal after a crash. The dedicated VRF
+        // primitive is deterministic for the same key and frozen input.
+        let payload = Zeroizing::new(
+            private_key
+                .try_payload()
+                .map_err(|err| eyre!("failed to expose BLS key for VRF derivation: {err}"))?,
+        );
+        let secret = iroha_crypto::BlsNormal::parse_private_key(payload.as_slice())
+            .map_err(|err| eyre!("failed to parse BLS key for VRF derivation: {err}"))?;
+        let (output, _proof) =
+            iroha_crypto::vrf::prove_normal_with_chain(&secret, chain_hash.as_ref(), &msg)
+                .map_err(|err| eyre!("failed to derive deterministic BLS VRF material: {err}"))?;
+        output.0
+    } else {
+        let signature = Signature::try_new(private_key, &msg)
+            .map_err(|err| eyre!("failed to sign local VRF input material: {err}"))?;
+        Hash::new(signature.payload()).into()
+    };
     let commitment: [u8; 32] = Hash::new(reveal).into();
     Ok((reveal, commitment))
 }
@@ -895,6 +914,14 @@ impl Actor {
                         Self::merge_vrf_observation(existing.commitment, participant.commitment)?;
                     existing.reveal =
                         Self::merge_vrf_observation(existing.reveal, participant.reveal)?;
+                    existing.commit_proof = Self::merge_vrf_proof(
+                        existing.commit_proof.as_ref(),
+                        participant.commit_proof.as_ref(),
+                    )?;
+                    existing.reveal_proof = Self::merge_vrf_proof(
+                        existing.reveal_proof.as_ref(),
+                        participant.reveal_proof.as_ref(),
+                    )?;
                     existing.last_updated_height = existing
                         .last_updated_height
                         .max(participant.last_updated_height);
@@ -915,6 +942,17 @@ impl Actor {
         }
     }
 
+    fn merge_vrf_proof<T: Clone + PartialEq>(
+        base: Option<&T>,
+        incoming: Option<&T>,
+    ) -> Option<Option<T>> {
+        match (base, incoming) {
+            (Some(lhs), Some(rhs)) if lhs != rhs => None,
+            (Some(value), _) | (_, Some(value)) => Some(Some(value.clone())),
+            (None, None) => Some(None),
+        }
+    }
+
     fn merge_vrf_late_reveals(
         base: &[VrfLateRevealRecord],
         incoming: &[VrfLateRevealRecord],
@@ -926,8 +964,17 @@ impl Actor {
                     entry.insert(reveal.clone());
                 }
                 Entry::Occupied(entry) => {
-                    if entry.get().reveal != reveal.reveal {
+                    if entry.get().reveal != reveal.reveal
+                        || entry
+                            .get()
+                            .reveal_proof
+                            .as_ref()
+                            .is_some_and(|proof| reveal.reveal_proof.as_ref() != Some(proof))
+                    {
                         return None;
+                    }
+                    if entry.get().reveal_proof.is_none() && reveal.reveal_proof.is_some() {
+                        entry.into_mut().clone_from(reveal);
                     }
                 }
             }
@@ -1045,6 +1092,14 @@ impl Actor {
                     old.commitment
                         .is_none_or(|commitment| new.commitment == Some(commitment))
                         && old.reveal.is_none_or(|reveal| new.reveal == Some(reveal))
+                        && old
+                            .commit_proof
+                            .as_ref()
+                            .is_none_or(|proof| new.commit_proof.as_ref() == Some(proof))
+                        && old
+                            .reveal_proof
+                            .as_ref()
+                            .is_none_or(|proof| new.reveal_proof.as_ref() == Some(proof))
                         && new.last_updated_height >= old.last_updated_height
                 })
             })
@@ -1090,6 +1145,8 @@ impl Actor {
                 signer: *signer,
                 commitment: None,
                 reveal: None,
+                commit_proof: None,
+                reveal_proof: None,
                 last_updated_height: updated_at_height,
             });
             entry.commitment = Some(*commitment);
@@ -1100,6 +1157,8 @@ impl Actor {
                 signer: *signer,
                 commitment: None,
                 reveal: None,
+                commit_proof: None,
+                reveal_proof: None,
                 last_updated_height: updated_at_height,
             });
             entry.reveal = Some(*reveal);
@@ -1110,6 +1169,7 @@ impl Actor {
             .map(|(signer, reveal, noted_at_height)| VrfLateRevealRecord {
                 signer,
                 reveal,
+                reveal_proof: None,
                 noted_at_height,
             })
             .collect();

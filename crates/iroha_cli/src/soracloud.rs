@@ -128,7 +128,6 @@ const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
 const PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME: &str = "soracloud/public_service_discovery";
 const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
 const PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1: u16 = 1;
-const SORAFS_TAIRA_LEGACY_MANIFEST_NORITO_ENV: &str = "IROHA_SORAFS_TAIRA_LEGACY_MANIFEST_NORITO";
 const APP_STATIC_SITE_INDEX_DOCUMENT: &str = "index.html";
 const PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT: &str = "index.json";
 const HEADER_IROHA_ACCOUNT: &str = "X-Iroha-Account";
@@ -9458,24 +9457,10 @@ fn fetch_existing_public_service_discovery_registry(
     Ok(Some(registry))
 }
 
-fn sorafs_taira_legacy_manifest_norito_enabled() -> bool {
-    env::var_os(SORAFS_TAIRA_LEGACY_MANIFEST_NORITO_ENV).is_some_and(|value| {
-        let value = value.to_string_lossy();
-        let value = value.trim().to_ascii_lowercase();
-        !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
-    })
-}
-
 fn encode_sorafs_manifest_for_storage(manifest: &ManifestV1) -> Result<(Vec<u8>, blake3::Hash)> {
-    let manifest_bytes = if sorafs_taira_legacy_manifest_norito_enabled() {
-        manifest
-            .encode_legacy_norito()
-            .wrap_err("failed to encode legacy SoraFS manifest")?
-    } else {
-        manifest
-            .encode()
-            .wrap_err("failed to encode SoraFS manifest")?
-    };
+    let manifest_bytes = manifest
+        .encode()
+        .wrap_err("failed to encode SoraFS manifest")?;
     let manifest_digest = blake3::hash(&manifest_bytes);
     Ok((manifest_bytes, manifest_digest))
 }

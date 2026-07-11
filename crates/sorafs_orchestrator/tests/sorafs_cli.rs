@@ -13,7 +13,7 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
 use blake3::hash as blake3_hash;
-use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hex::{decode as hex_decode, encode as hex_encode};
 use httpmock::prelude::*;
 #[cfg(feature = "local-quic-proxy")]
@@ -39,9 +39,11 @@ use sorafs_manifest::{
     ManifestV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
     PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
     PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
-    REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1, ReputationProviderMetricsV1,
-    ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1, StorageClass,
-    StreamTokenBodyV1, StreamTokenV1, XorAmount, build_reputation_snapshot,
+    REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+    ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1, ReputationSnapshotV1,
+    ReputationWeightsV1, SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SignedReputationSnapshotV1,
+    StorageClass, StreamTokenBodyV1, StreamTokenV1, XorAmount, build_reputation_snapshot,
     validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
@@ -585,7 +587,7 @@ fn proof_stream_command_consumes_ndjson() {
 
     let payload: Vec<u8> = (0..512).map(|i| i as u8).collect();
     let mut chunk_store = ChunkStore::new();
-    chunk_store.ingest_bytes(&payload);
+    chunk_store.ingest_bytes(&payload).expect("ingest payload");
     let por_root_hex = hex_encode(chunk_store.por_tree().root());
 
     let manifest = ManifestBuilder::new()
@@ -606,7 +608,9 @@ fn proof_stream_command_consumes_ndjson() {
     fs::write(&manifest_path, &manifest_bytes).expect("write manifest");
     let manifest_digest_hex = hex_encode(manifest.digest().expect("digest").as_bytes());
 
-    let samples = chunk_store.sample_leaves(1, 7, &payload);
+    let samples = chunk_store
+        .sample_leaves(1, 7, &payload)
+        .expect("sample PoR leaves");
     assert_eq!(samples.len(), 1);
     let (flat_index, por_proof) = samples.into_iter().next().expect("sample");
 
@@ -2504,6 +2508,52 @@ fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
     .expect("reputation snapshot")
 }
 
+fn signed_reputation_snapshot_fixture() -> SignedReputationSnapshotV1 {
+    let snapshot = reputation_snapshot_fixture();
+    let metrics = ReputationProviderMetricsV1 {
+        version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
+        por_success_bps: 9_800,
+        pdp_success_bps: 9_700,
+        potr_success_bps: 9_600,
+        latency_health_bps: 9_000,
+        dispute_rate_bps: 100,
+        token_violation_rate_bps: 50,
+        repair_breach_rate_bps: 0,
+    };
+    let provider_input = |provider_id: &str| ReputationProviderInputV1 {
+        version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
+        provider_id: provider_id.to_owned(),
+        metrics,
+        reserve_stage: ReputationReserveStageV1::Active,
+        previous_score_bps: None,
+        active_dispute: false,
+        slashing_event: false,
+    };
+    let scoring_evidence = ReputationScoringEvidenceV1 {
+        version: REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+        provider_inputs: vec![provider_input("provider-a"), provider_input("provider-b")],
+        trust_edges: Vec::new(),
+    };
+    let mut envelope = SignedReputationSnapshotV1 {
+        version: SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+        policy_digest: [0xA5; 32],
+        snapshot,
+        scoring_evidence_digest: scoring_evidence
+            .canonical_digest()
+            .expect("scoring evidence digest"),
+        scoring_evidence,
+        signatures: Vec::new(),
+    };
+    let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
+    envelope.signatures.push(ReputationSnapshotSignatureV1 {
+        signer_id: "council-1".to_owned(),
+        signature: signing_key
+            .sign(&envelope.signing_digest().expect("signing digest"))
+            .to_bytes(),
+    });
+    envelope
+}
+
 fn reputation_snapshot_summary_value(snapshot: &ReputationSnapshotV1) -> Value {
     let mut root = Map::new();
     root.insert(
@@ -2551,6 +2601,10 @@ fn reputation_provider_response_value(snapshot: &ReputationSnapshotV1, provider_
     proof_map.insert(
         "leaf_index".into(),
         Value::from(u64::from(proof.leaf_index)),
+    );
+    proof_map.insert(
+        "leaf_count".into(),
+        Value::from(u64::from(proof.leaf_count)),
     );
     proof_map.insert(
         "siblings_hex".into(),
@@ -2685,15 +2739,18 @@ fn reputation_verify_validates_snapshot_and_merkle_proof() {
 #[test]
 fn reputation_publish_posts_snapshot_and_writes_summary() {
     let tempdir = tempdir().expect("tempdir");
-    let snapshot = reputation_snapshot_fixture();
-    let snapshot_path = tempdir.path().join("reputation-snapshot.to");
+    let envelope = signed_reputation_snapshot_fixture();
+    let snapshot = &envelope.snapshot;
+    let snapshot_path = tempdir.path().join("signed-reputation-snapshot.to");
     let summary_path = tempdir.path().join("reputation-publish.json");
     fs::write(
         &snapshot_path,
-        to_bytes(&snapshot).expect("encode reputation snapshot"),
+        envelope
+            .canonical_bytes()
+            .expect("encode signed reputation snapshot"),
     )
     .expect("write reputation snapshot");
-    let response_value = reputation_snapshot_summary_value(&snapshot);
+    let response_value = reputation_snapshot_summary_value(snapshot);
     let response_body = to_vec(&response_value).expect("encode response");
 
     let server = MockServer::start();

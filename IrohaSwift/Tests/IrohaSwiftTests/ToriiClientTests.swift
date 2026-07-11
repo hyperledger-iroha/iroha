@@ -170,6 +170,41 @@ private func nativeAmxStatusPayload(
         "rbc_bytes_total": 2048,
     ]
     return try JSONSerialization.data(withJSONObject: [
+        "protocol_version": 2,
+        "node_fingerprint": nativeAmxTestHash(0xA1),
+        "build_fingerprint": nativeAmxTestHash(0xA3),
+        "config_fingerprint": nativeAmxTestHash(0xA5),
+        "height_context_id": [nativeAmxTestHash(0xA7)],
+        "height": 42,
+        "view": 6,
+        "phase": ["phase": "Prepare", "details": NSNull()],
+        "leader": 0,
+        "body_state": ["state": "Validated", "details": NSNull()],
+        "last_committed_height": 0,
+        "height_context": [
+            "epoch": 2,
+            "epoch_end_height": 100,
+            "mode": ["mode": "Permissioned", "details": NSNull()],
+            "epoch_seed": Array(repeating: 0xA5, count: 32),
+            "validator_count": 4,
+            "quorum": ["min_signers": 3, "total_power": 4],
+        ],
+        "operator": [
+            "view_change_install_total": 2,
+            "busy_deferral_total": 1,
+            "adapter_queues": [
+                "ingress_keys": 1, "ingress_capacity": 64,
+                "deferred_completion": 0, "deferred_progress": 0,
+                "deferred_progress_capacity": 256, "deferred_normal": 0,
+                "deferred_normal_capacity": 1024,
+            ],
+            "tx_queue": [
+                "tracked_transactions": 2, "queued_transactions": 1, "capacity": 64,
+                "retained_bytes": 1024, "max_retained_bytes": 8192,
+                "oldest_queued_age_ms": 5, "saturated_by_count": false,
+                "saturated_by_bytes": false, "saturated_by_age": false,
+            ],
+        ],
         "lane_settlement_commitments": [commitment],
         "lane_relay_envelopes": [relay],
     ])
@@ -10603,12 +10638,20 @@ final class ToriiClientHeaderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetVerifyingKeyAsync() async throws {
+        let recordNorito = noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
+            payload: Data([0x01]),
+            flags: NoritoHeader.compactLen
+        )
         let payload = """
         {
           "id": { "backend": "halo2/ipa", "name": "vk main" },
+          "record_norito_base64": "\(recordNorito.base64EncodedString())",
           "record": {
             "version": 2,
             "circuit_id": "halo2/ipa::transfer_v2",
+            "owner_manifest_id": "manifest-v2",
+            "namespace": "offline_kagemusha",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
@@ -10641,10 +10684,102 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertEqual(detail.id.backend, "halo2/ipa")
         XCTAssertEqual(detail.id.name, "vk main")
         XCTAssertEqual(detail.record.version, 2)
+        XCTAssertEqual(detail.record.ownerManifestId, "manifest-v2")
+        XCTAssertEqual(detail.record.namespace, "offline_kagemusha")
         XCTAssertEqual(detail.record.publicInputsSchemaHashHex,
                        "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3")
         XCTAssertEqual(detail.record.inlineKey?.backend, "halo2/ipa")
         XCTAssertEqual(detail.record.inlineKey?.bytes, Data([0x01, 0x02, 0x03]))
+        XCTAssertEqual(detail.recordNorito, recordNorito)
+    }
+
+    func testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha() throws {
+        let recordNorito = noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
+            payload: Data([0x01]),
+            flags: NoritoHeader.compactLen
+        )
+        let payload = """
+        {
+          "id": { "backend": "halo2/ipa", "name": "unshield-v3" },
+          "record_norito_base64": "\(recordNorito.base64EncodedString())",
+          "record": {
+            "version": 3,
+            "circuit_id": "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+            "owner_manifest_id": "confidential-v3",
+            "namespace": "offline_kagemusha",
+            "backend": "halo2/ipa",
+            "curve": "pallas",
+            "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "vk_len": 96,
+            "max_proof_bytes": 196608,
+            "status": "Active"
+          }
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder().decode(ToriiVerifyingKeyDetail.self, from: payload)
+        let reference = try detail.asKagemushaRecursiveSpendVerifierRecordRef()
+
+        XCTAssertEqual(reference.verifierKeyId, "halo2/ipa:unshield-v3")
+        XCTAssertEqual(reference.recordBytes, recordNorito)
+    }
+
+    func testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64() throws {
+        let recordNorito = noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
+            payload: Data([0x01]),
+            flags: NoritoHeader.compactLen
+        )
+        let canonical = recordNorito.base64EncodedString()
+        XCTAssertTrue(canonical.hasSuffix("="))
+
+        func payload(recordBase64: String?) -> Data {
+            let archiveField = recordBase64.map {
+                "\"record_norito_base64\": \"\($0)\","
+            } ?? ""
+            return """
+            {
+              "id": { "backend": "halo2/ipa", "name": "unshield-v3" },
+              \(archiveField)
+              "record": {
+                "version": 3,
+                "circuit_id": "unshield-v3",
+                "backend": "halo2/ipa",
+                "curve": "pallas",
+                "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "vk_len": 96,
+                "max_proof_bytes": 196608,
+                "status": "Active"
+              }
+            }
+            """.data(using: .utf8)!
+        }
+
+        for noncanonical in ["", " \(canonical)", String(canonical.dropLast())] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiVerifyingKeyDetail.self,
+                    from: payload(recordBase64: noncanonical)
+                )
+            ) { error in
+                XCTAssertTrue(String(describing: error).contains("record_norito_base64"))
+            }
+        }
+
+        let legacyDetail = try JSONDecoder().decode(
+            ToriiVerifyingKeyDetail.self,
+            from: payload(recordBase64: nil)
+        )
+        XCTAssertNil(legacyDetail.recordNorito)
+        XCTAssertThrowsError(try legacyDetail.asKagemushaRecursiveSpendVerifierRecordRef()) { error in
+            XCTAssertEqual(
+                error.localizedDescription,
+                "Torii response payload was invalid: verifying-key detail is missing record_norito_base64"
+            )
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -13280,102 +13415,123 @@ id: 88
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetSumeragiStatusParsesMembershipAsync() async throws {
+    func testGetSumeragiStatusParsesAuthoritativeV2SnapshotAsync() async throws {
         let payload = """
-        {"leader_index":1,"membership":{"height":11,"view":3,"epoch":2,"view_hash":"deadbeef"}}
+        {
+            "protocol_version": 2,
+            "node_fingerprint": "hash:NODE#0001",
+            "build_fingerprint": "hash:BUILD#0001",
+            "config_fingerprint": "hash:CONFIG#0001",
+            "height_context_id": ["hash:CONTEXT#0001"],
+            "height": 15,
+            "view": 4,
+            "phase": {"phase": "Prepare", "details": null},
+            "leader": 1,
+            "locked_prepare_qc": {
+                "round": {
+                    "context_id": ["hash:CONTEXT#0001"],
+                    "height": 15,
+                    "view": 3
+                },
+                "phase": {"phase": "Prepare", "details": null},
+                "subject": {
+                    "parent_block_hash": "hash:PARENT#0001",
+                    "block_hash": "hash:BLOCK#0001",
+                    "payload_hash": "hash:PAYLOAD#0001"
+                }
+            },
+            "highest_prepare_qc": {
+                "round": {
+                    "context_id": ["hash:CONTEXT#0001"],
+                    "height": 15,
+                    "view": 3
+                },
+                "phase": {"phase": "Prepare", "details": null},
+                "subject": {
+                    "parent_block_hash": "hash:PARENT#0001",
+                    "block_hash": "hash:BLOCK#0001",
+                    "payload_hash": "hash:PAYLOAD#0001"
+                }
+            },
+            "last_timeout_certificate": {
+                "round": {
+                    "context_id": ["hash:CONTEXT#0001"],
+                    "height": 15,
+                    "view": 3
+                },
+                "highest_prepare_qc": {
+                    "round": {
+                        "context_id": ["hash:CONTEXT#0001"],
+                        "height": 15,
+                        "view": 3
+                    },
+                    "phase": {"phase": "Prepare", "details": null},
+                    "subject": {
+                        "parent_block_hash": "hash:PARENT#0001",
+                        "block_hash": "hash:BLOCK#0001",
+                        "payload_hash": "hash:PAYLOAD#0001"
+                    }
+                },
+                "certificate_hash": "hash:TC#0001"
+            },
+            "body_state": {"state": "Validated", "details": null},
+            "pending_persistence_id": 17,
+            "last_committed_height": 14,
+            "last_committed_subject": {
+                "parent_block_hash": "hash:PARENT#0001",
+                "block_hash": "hash:BLOCK#0001",
+                "payload_hash": "hash:PAYLOAD#0001"
+            },
+            "height_context": {
+                "epoch": 2,
+                "epoch_end_height": 100,
+                "mode": {"mode": "Permissioned", "details": null},
+                "epoch_seed": [165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165,165],
+                "validator_count": 4,
+                "quorum": {"min_signers": 3, "total_power": 4}
+            },
+            "last_commit_qc": {
+                "certificate": {
+                    "round": {"context_id": ["hash:CONTEXT#0001"], "height": 14, "view": 2},
+                    "phase": {"phase": "Commit", "details": null},
+                    "subject": {
+                        "parent_block_hash": "hash:PARENT#0001",
+                        "block_hash": "hash:BLOCK#0001",
+                        "payload_hash": "hash:PAYLOAD#0001"
+                    }
+                },
+                "validator_count": 4,
+                "signer_count": 3,
+                "min_signers": 3,
+                "signed_power": 3,
+                "total_power": 4
+            },
+            "lane_payload_ownerships": [{"lane_id": 7, "dataspace_id": 42}],
+            "committed_lane_blocks": [{"lane_id": 7, "lane_block_height": 2}],
+            "lane_block_sessions": [{"lane_id": 7, "lane_block_view": 1}],
+            "local_peer_removed": true,
+            "operator": {
+                "view_change_install_total": 5,
+                "busy_deferral_total": 2,
+                "adapter_queues": {
+                    "ingress_keys": 2, "ingress_capacity": 64,
+                    "deferred_completion": 0, "deferred_progress": 1,
+                    "deferred_progress_capacity": 256, "deferred_normal": 3,
+                    "deferred_normal_capacity": 1024
+                },
+                "tx_queue": {
+                    "tracked_transactions": 5, "queued_transactions": 4, "capacity": 64,
+                    "retained_bytes": 1024, "max_retained_bytes": 8192,
+                    "oldest_queued_age_ms": 25, "saturated_by_count": false,
+                    "saturated_by_bytes": false, "saturated_by_age": false
+                }
+            }
+        }
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/sumeragi/status")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            return (response, payload)
-        }
-
-        let snapshot = try await makeClient().getSumeragiStatus()
-        XCTAssertEqual(snapshot.membership?.height, 11)
-        XCTAssertEqual(snapshot.membership?.view, 3)
-        XCTAssertEqual(snapshot.membership?.epoch, 2)
-        XCTAssertEqual(snapshot.membership?.viewHash, "deadbeef")
-        guard case let .number(leaderIndex)? = snapshot.fields["leader_index"] else {
-            XCTFail("Expected leader_index to be decoded as number")
-            return
-        }
-        XCTAssertEqual(leaderIndex, 1)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetSumeragiStatusDecodesLaneSnapshots() async throws {
-        let payload = """
-        {
-            "membership": {"height": 15, "view": 4, "epoch": 2, "view_hash": "cab00d1e"},
-            "lane_commitments": [
-                {
-                    "block_height": 42,
-                    "lane_id": 7,
-                    "tx_count": 3,
-                    "total_chunks": 5,
-                    "rbc_bytes_total": 2048,
-                    "teu_total": 96,
-                    "block_hash": "deadbeef"
-                }
-            ],
-            "dataspace_commitments": [
-                {
-                    "block_height": 42,
-                    "lane_id": 7,
-                    "dataspace_id": 9,
-                    "tx_count": 1,
-                    "total_chunks": 2,
-                    "rbc_bytes_total": 512,
-                    "teu_total": 32,
-                    "block_hash": "feedface"
-                }
-            ],
-            "lane_governance": [
-                {
-                    "lane_id": 7,
-                    "alias": "payments",
-                    "dataspace_id": 9,
-                    "visibility": "public",
-                    "storage_profile": "full_replica",
-                    "governance": "parliament",
-                    "manifest_required": true,
-                    "manifest_ready": true,
-                    "manifest_path": "/etc/lanes/payments.json",
-                    "validator_ids": ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"],
-                    "quorum": 2,
-                    "protected_namespaces": ["treasury"],
-                    "runtime_upgrade": {
-                        "allow": true,
-                        "require_metadata": true,
-                        "metadata_key": "upgrade-id",
-                        "allowed_ids": ["payments-v1"]
-                    },
-                    "privacy_commitments": [
-                        {
-                            "id": 5,
-                            "scheme": "merkle",
-                            "merkle": {"root": "0xaaaabbbb", "max_depth": 16}
-                        },
-                        {
-                            "id": 6,
-                            "scheme": "snark",
-                            "snark": {
-                                "circuit_id": 2,
-                                "verifying_key_digest": "0x11112222",
-                                "statement_hash": "0x33334444",
-                                "proof_hash": "0x55556666"
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
-        """.data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/sumeragi/status")
             let response = HTTPURLResponse(
                 url: request.url!,
                 statusCode: 200,
@@ -13386,25 +13542,33 @@ id: 88
         }
 
         let snapshot = try await makeClient().getSumeragiStatus()
-        XCTAssertEqual(snapshot.membership?.height, 15)
-        XCTAssertEqual(snapshot.laneCommitments.count, 1)
-        XCTAssertEqual(snapshot.laneCommitments.first?.laneId, 7)
-        XCTAssertEqual(snapshot.laneCommitments.first?.teuTotal, 96)
-        XCTAssertEqual(snapshot.dataspaceCommitments.first?.dataspaceId, 9)
-        XCTAssertEqual(snapshot.dataspaceCommitments.first?.rbcBytesTotal, 512)
-        XCTAssertEqual(snapshot.laneGovernance.first?.alias, "payments")
-        XCTAssertEqual(snapshot.laneGovernance.first?.dataspaceId, 9)
-        XCTAssertEqual(snapshot.laneGovernance.first?.visibility, "public")
-        XCTAssertEqual(snapshot.laneGovernance.first?.storageProfile, "full_replica")
-        XCTAssertEqual(snapshot.laneGovernance.first?.validatorIds.count, 2)
-        XCTAssertEqual(snapshot.laneGovernance.first?.runtimeUpgrade?.metadataKey, "upgrade-id")
-        XCTAssertEqual(snapshot.laneGovernance.first?.privacyCommitments.count, 2)
-        XCTAssertEqual(snapshot.laneGovernance.first?.privacyCommitments.first?.merkle?.maxDepth, 16)
-        XCTAssertEqual(snapshot.laneGovernance.first?.privacyCommitments.last?.snark?.circuitId, 2)
-        guard case let .array(governanceRaw)? = snapshot.fields["lane_governance"] else {
-            return XCTFail("Expected raw governance array in fields")
-        }
-        XCTAssertEqual(governanceRaw.count, 1)
+        XCTAssertEqual(snapshot.protocolVersion, 2)
+        XCTAssertEqual(snapshot.nodeFingerprint, "hash:NODE#0001")
+        XCTAssertEqual(snapshot.buildFingerprint, "hash:BUILD#0001")
+        XCTAssertEqual(snapshot.configFingerprint, "hash:CONFIG#0001")
+        XCTAssertEqual(snapshot.heightContextID.hash, "hash:CONTEXT#0001")
+        XCTAssertEqual(snapshot.height, 15)
+        XCTAssertEqual(snapshot.view, 4)
+        XCTAssertEqual(snapshot.phase, .prepare)
+        XCTAssertEqual(snapshot.leader, 1)
+        XCTAssertEqual(snapshot.lockedPrepareQC?.round.view, 3)
+        XCTAssertEqual(snapshot.highestPrepareQC?.phase, .prepare)
+        XCTAssertEqual(
+            snapshot.lastTimeoutCertificate?.highestPrepareQC?.subject.blockHash,
+            "hash:BLOCK#0001"
+        )
+        XCTAssertEqual(snapshot.bodyState, .validated)
+        XCTAssertEqual(snapshot.pendingPersistenceID, 17)
+        XCTAssertEqual(snapshot.lastCommittedHeight, 14)
+        XCTAssertEqual(snapshot.lastCommittedSubject?.payloadHash, "hash:PAYLOAD#0001")
+        XCTAssertEqual(snapshot.heightContext.mode, .permissioned)
+        XCTAssertEqual(snapshot.heightContext.quorum.minSigners, 3)
+        XCTAssertEqual(snapshot.lastCommitQC?.signedPower, 3)
+        XCTAssertEqual(snapshot.operatorStatus.txQueue.queuedTransactions, 4)
+        XCTAssertEqual(snapshot.lanePayloadOwnerships.count, 1)
+        XCTAssertEqual(snapshot.committedLaneBlocks.count, 1)
+        XCTAssertEqual(snapshot.laneBlockSessions.count, 1)
+        XCTAssertTrue(snapshot.localPeerRemoved)
     }
 
     func testSumeragiStatusPreservesNativeAmxAndNexusFeeReceipts() throws {
@@ -13506,7 +13670,7 @@ id: 88
                 "height": 12,
                 "view": 3,
                 "epoch": 4,
-                "mode_tag": "iroha2-consensus::permissioned-sumeragi@v1",
+                "mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
                 "validator_set_hash": "\(String(repeating: "d", count: 64))",
                 "validator_set_hash_version": 1,
                 "validator_set": ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"],
@@ -13550,45 +13714,90 @@ id: 88
         XCTAssertEqual(event.dataspaceId, "9")
     }
 
-    func testSumeragiMembershipDecodingWithoutViewHash() throws {
-        let payload = """
+    func testSumeragiV2StatusRejectsLegacyVersionAndMalformedTaggedStates() throws {
+        let legacy = """
         {"membership":{"height":5,"view":2,"epoch":1}}
         """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: legacy)
+        )
 
-        let snapshot = try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: payload)
-        XCTAssertEqual(snapshot.membership?.height, 5)
-        XCTAssertEqual(snapshot.membership?.view, 2)
-        XCTAssertEqual(snapshot.membership?.epoch, 1)
-        XCTAssertNil(snapshot.membership?.viewHash)
-        XCTAssertNil(snapshot.fields["leader_index"])
-    }
+        let wrongProtocol = """
+        {
+            "protocol_version": 1,
+            "node_fingerprint": "node",
+            "build_fingerprint": "build",
+            "config_fingerprint": "config",
+            "height_context_id": ["context"],
+            "height": 1,
+            "view": 0,
+            "phase": {"phase": "AwaitingProposal", "details": null},
+            "leader": 0,
+            "body_state": {"state": "Missing", "details": null},
+            "last_committed_height": 0
+        }
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: wrongProtocol)
+        )
 
-    func testSumeragiStatusDecodesModeAndConsensusCaps() throws {
-        let payload: [String: Any] = [
-            "mode_tag": "iroha2-consensus::permissioned-sumeragi@v1",
-            "staged_mode_tag": "iroha2-consensus::npos-sumeragi@v1",
-            "staged_mode_activation_height": 10,
-            "mode_activation_lag_blocks": 2,
-            "consensus_caps": [
-                "collectors_k": 2,
-                "redundant_send_r": 1,
-                "da_enabled": true,
-                "rbc_chunk_max_bytes": 1024,
-                "rbc_session_ttl_ms": 5000,
-                "rbc_store_max_sessions": 64,
-                "rbc_store_soft_sessions": 32,
-                "rbc_store_max_bytes": 4096,
-                "rbc_store_soft_bytes": 2048,
-            ],
-        ]
-        let data = try JSONSerialization.data(withJSONObject: payload, options: [])
-        let snapshot = try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: data)
-        XCTAssertEqual(snapshot.modeTag, "iroha2-consensus::permissioned-sumeragi@v1")
-        XCTAssertEqual(snapshot.stagedModeTag, "iroha2-consensus::npos-sumeragi@v1")
-        XCTAssertEqual(snapshot.stagedModeActivationHeight, 10)
-        XCTAssertEqual(snapshot.modeActivationLagBlocks, 2)
-        XCTAssertEqual(snapshot.consensusCaps?.collectorsK, 2)
-        XCTAssertEqual(snapshot.consensusCaps?.rbcChunkMaxBytes, 1024)
+        let unknownPhase = """
+        {
+            "protocol_version": 2,
+            "node_fingerprint": "node",
+            "build_fingerprint": "build",
+            "config_fingerprint": "config",
+            "height_context_id": ["context"],
+            "height": 1,
+            "view": 0,
+            "phase": {"phase": "LegacyRbcReady", "details": null},
+            "leader": 0,
+            "body_state": {"state": "Missing", "details": null},
+            "last_committed_height": 0
+        }
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: unknownPhase)
+        )
+
+        let retiredRBCField = """
+        {
+            "protocol_version": 2,
+            "node_fingerprint": "node",
+            "build_fingerprint": "build",
+            "config_fingerprint": "config",
+            "height_context_id": ["context"],
+            "height": 1,
+            "view": 0,
+            "phase": {"phase": "AwaitingProposal", "details": null},
+            "leader": 0,
+            "body_state": {"state": "Missing", "details": null},
+            "last_committed_height": 0,
+            "rbc_status": "delivered"
+        }
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: retiredRBCField)
+        )
+
+        let malformedDetails = """
+        {
+            "protocol_version": 2,
+            "node_fingerprint": "node",
+            "build_fingerprint": "build",
+            "config_fingerprint": "config",
+            "height_context_id": ["context"],
+            "height": 1,
+            "view": 0,
+            "phase": {"phase": "AwaitingProposal", "details": "legacy"},
+            "leader": 0,
+            "body_state": {"state": "Missing", "details": null},
+            "last_committed_height": 0
+        }
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: malformedDetails)
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)

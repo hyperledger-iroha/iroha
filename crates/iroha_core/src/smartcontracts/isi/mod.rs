@@ -162,6 +162,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDispute>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::IssueReplicationOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CompleteReplicationOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireReplicationOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetPricingSchedule>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::UpsertProviderCredit>,
     dispatch_instruction::<iroha_data_model::isi::content::PublishContentBundle>,

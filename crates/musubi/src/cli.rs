@@ -39,9 +39,7 @@ use iroha_data_model::{
         SearchMusubiPackages,
     },
     smart_contract::ContractAlias,
-    sorafs::pin_registry::{
-        ChunkerProfileHandle, ManifestDigest, PinPolicy as DataModelPinPolicy, StorageClass,
-    },
+    sorafs::pin_registry::ManifestDigest,
 };
 use ivm::{
     KotodamaCompiler,
@@ -763,11 +761,8 @@ impl PublishArgs {
                 println!("sorafs_storage_pin_uploaded = true");
             }
             let pin_hash = client.submit_blocking(RegisterPinManifest::new(
-                generated_sorafs.digest,
-                generated_sorafs.chunker.clone(),
+                generated_sorafs.manifest_bytes.clone(),
                 generated_sorafs.chunk_digest_sha3_256,
-                generated_sorafs.payload.len() as u64,
-                generated_sorafs.pin_policy,
                 0,
                 None,
                 None,
@@ -2376,8 +2371,6 @@ struct SorafsBuildSummary {
     digest: ManifestDigest,
     car_hash: [u8; 32],
     chunk_digest_sha3_256: [u8; 32],
-    chunker: ChunkerProfileHandle,
-    pin_policy: DataModelPinPolicy,
     source_plan: MusubiSourceArchivePlan,
     manifest_bytes: Vec<u8>,
     payload: Vec<u8>,
@@ -2423,7 +2416,11 @@ fn build_sorafs_source_manifest(
         .content_length(plan.content_length)
         .car_digest(*stats.car_archive_digest.as_bytes())
         .car_size(stats.car_size)
-        .pin_policy(sorafs_manifest::PinPolicy::default())
+        .pin_policy(sorafs_manifest::PinPolicy {
+            min_replicas: 3,
+            storage_class: sorafs_manifest::StorageClass::Hot,
+            retention_epoch: 86_400,
+        })
         .extend_metadata([
             (
                 "musubi.package".to_owned(),
@@ -2447,8 +2444,6 @@ fn build_sorafs_source_manifest(
     let digest = ManifestDigest::from_manifest(&manifest_v1)
         .map_err(|err| eyre!("failed to digest SoraFS manifest: {err}"))?;
     let chunk_digest_sha3_256 = compute_chunk_plan_digest_sha3(&plan.chunks);
-    let chunker = chunker_from_manifest(&manifest_v1);
-    let pin_policy = pin_policy_from_manifest(&manifest_v1);
     let source_plan = source_archive_plan_from_car_plan(
         &plan,
         *stats.car_archive_digest.as_bytes(),
@@ -2471,8 +2466,6 @@ fn build_sorafs_source_manifest(
         digest,
         car_hash: *stats.car_archive_digest.as_bytes(),
         chunk_digest_sha3_256,
-        chunker,
-        pin_policy,
         source_plan,
         manifest_bytes,
         payload,
@@ -2511,32 +2504,6 @@ fn source_archive_plan_from_car_plan(
         chunks,
         files,
     ))
-}
-
-fn chunker_from_manifest(manifest: &sorafs_manifest::ManifestV1) -> ChunkerProfileHandle {
-    ChunkerProfileHandle {
-        profile_id: manifest.chunking.profile_id.0,
-        namespace: manifest.chunking.namespace.clone(),
-        name: manifest.chunking.name.clone(),
-        semver: manifest.chunking.semver.clone(),
-        multihash_code: manifest.chunking.multihash_code,
-    }
-}
-
-fn pin_policy_from_manifest(manifest: &sorafs_manifest::ManifestV1) -> DataModelPinPolicy {
-    DataModelPinPolicy {
-        min_replicas: manifest.pin_policy.min_replicas,
-        storage_class: storage_class_from_manifest(manifest.pin_policy.storage_class),
-        retention_epoch: manifest.pin_policy.retention_epoch,
-    }
-}
-
-fn storage_class_from_manifest(storage_class: sorafs_manifest::StorageClass) -> StorageClass {
-    match storage_class {
-        sorafs_manifest::StorageClass::Hot => StorageClass::Hot,
-        sorafs_manifest::StorageClass::Warm => StorageClass::Warm,
-        sorafs_manifest::StorageClass::Cold => StorageClass::Cold,
-    }
 }
 
 struct PublishArtifactPaths {

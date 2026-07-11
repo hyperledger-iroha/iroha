@@ -20703,7 +20703,7 @@ mod test {
                 "budget_hit_total": 0
             },
             "sumeragi": {
-                "mode_tag": "iroha2-consensus::permissioned-sumeragi@v1",
+                "mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
                 "staged_mode_tag": null,
                 "staged_mode_activation_height": null,
                 "mode_activation_lag_blocks": null,
@@ -20882,7 +20882,7 @@ mod test {
                 "budget_hit_total": 0
               },
               "sumeragi": {
-                "mode_tag": "iroha2-consensus::permissioned-sumeragi@v1",
+                "mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
                 "leader_index": 1,
                 "highest_qc_height": 10,
                 "locked_qc_height": 9,

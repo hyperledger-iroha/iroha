@@ -170,7 +170,7 @@ use mv::{
 use nonzero_ext::nonzero;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
-    codec::{Decode, DecodeAll, Encode},
+    codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
@@ -1740,9 +1740,8 @@ fn decode_canonical_merge_reservation_key(
             "encoded lane reservation key exceeds the hard byte limit".to_owned(),
         ));
     }
-    let mut input = encoded;
-    let decoded =
-        crate::queue::LaneQueueReservationKeyV1::decode_all(&mut input).map_err(|_| {
+    let decoded = norito::decode_from_bytes::<crate::queue::LaneQueueReservationKeyV1>(encoded)
+        .map_err(|_| {
             MergeLedgerCommitError::ExecutionBatchInvalid(
                 "encoded lane reservation key is not valid exact Norito".to_owned(),
             )
@@ -1763,12 +1762,12 @@ fn decode_canonical_merge_routing_plan(
             "encoded routing plan exceeds the hard byte limit".to_owned(),
         ));
     }
-    let mut input = encoded;
-    let decoded = crate::queue::RoutingPlan::decode_all(&mut input).map_err(|_| {
-        MergeLedgerCommitError::ExecutionBatchInvalid(
-            "encoded routing plan is not valid exact Norito".to_owned(),
-        )
-    })?;
+    let decoded =
+        norito::decode_from_bytes::<crate::queue::RoutingPlan>(encoded).map_err(|_| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "encoded routing plan is not valid exact Norito".to_owned(),
+            )
+        })?;
     if decoded.encode() != encoded {
         return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
             "encoded routing plan is not canonical Norito".to_owned(),
@@ -3916,9 +3915,6 @@ impl<'world> WorldBlock<'world> {
             peers,
             viral_reward_budget,
             viral_campaign_budget,
-        );
-        append_merge_executor_delta(&mut out, "executor", &self.executor);
-        cell!(
             executor_data_model,
             sorafs_pricing,
             soradns_directory_latest,
@@ -3929,6 +3925,7 @@ impl<'world> WorldBlock<'world> {
             merge_hint_roots,
             merge_global_state_root,
         );
+        append_merge_executor_delta(&mut out, "executor", &self.executor);
         self.triggers.append_merge_execution_write_set(&mut out);
         storage!(
             consensus_keys,
@@ -22773,7 +22770,6 @@ impl State {
     /// Proposal assembly uses these watermarks to avoid assigning lane-local
     /// block heights from an earlier lane incarnation while holding the
     /// consensus actor lock.
-    #[cfg(test)]
     pub(crate) fn da_shard_canonical_reset_heights_snapshot_cached(&self) -> BTreeMap<LaneId, u64> {
         self.da_shard_cursors
             .read()
@@ -24930,6 +24926,33 @@ impl State {
     #[track_caller]
     pub fn durable_block_hash(&self, height: NonZeroUsize) -> Option<HashOf<BlockHeader>> {
         self.kura.get_durable_block_hash(height)
+    }
+
+    /// Load the immutable Sumeragi v2 context which authenticated a historical
+    /// consensus height.
+    ///
+    /// The lookup is read-only and returns `None` when the deterministic
+    /// context history is absent. Consensus evidence admission treats absence
+    /// as a fail-closed validation error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the canonical finality artifact or context store
+    /// cannot be inspected, or when its immutable frame fails validation.
+    pub(crate) fn sumeragi_v2_height_context(
+        &self,
+        height: u64,
+    ) -> Result<Option<iroha_data_model::block::consensus_v2::HeightContext>> {
+        if let Some(artifact) = self.kura.v2_finality_artifact(height)? {
+            return Ok(Some(artifact.height_context));
+        }
+        let Some(store) = crate::sumeragi::v2_context_store::V2ContextStore::open_existing(
+            self.kura.sumeragi_v2_storage_root(),
+        )?
+        else {
+            return Ok(None);
+        };
+        Ok(store.load(height)?.map(|record| record.context().clone()))
     }
 
     /// Resolve a committed block height by block hash using Kura's index.
@@ -28150,6 +28173,16 @@ impl State {
                 if let Some(receipt) = native_amx_receipt {
                     let mut source_id = [0u8; Hash::LENGTH];
                     source_id.copy_from_slice(reservation.signed_transaction_hash.as_ref());
+                    let expected_v2_context =
+                        crate::block::expected_native_amx_v2_context_from_receipt(
+                            receipt,
+                            source_epoch,
+                        )
+                        .map_err(|message| {
+                            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                                "invalid availability-certified native-AMX context: {message}"
+                            ))
+                        })?;
                     crate::block::validate_native_amx_receipt_against_plan(
                         receipt,
                         &source.origin_proposal,
@@ -28159,6 +28192,7 @@ impl State {
                         source_chain_hash,
                         &state_block.nexus.dataspace_catalog,
                         &*state_block,
+                        Some(expected_v2_context),
                     )
                     .map_err(|message| {
                         MergeLedgerCommitError::ExecutionBatchInvalid(format!(
@@ -30763,11 +30797,12 @@ impl State {
                 for leg in &receipt.legs {
                     for qc in [&leg.prepare_qc, &leg.commit_qc] {
                         if qc.validator_set.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
-                            || qc.validator_set_pops.len()
-                                > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
+                            || qc.validator_set_pops.len() != qc.validator_set.len()
                             || qc.validator_set_pops.iter().any(|pop| {
                                 pop.len() != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
                             })
+                            || qc.signers_bitmap.len()
+                                > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS.div_ceil(8)
                             || qc.bls_aggregate_signature.len()
                                 != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
                         {
@@ -31131,6 +31166,16 @@ impl State {
                 };
                 let mut source_id = [0u8; Hash::LENGTH];
                 source_id.copy_from_slice(reservation.signed_transaction_hash.as_ref());
+                let expected_v2_context =
+                    crate::block::expected_native_amx_v2_context_from_receipt(
+                        receipt,
+                        execution.autonomous_epoch,
+                    )
+                    .map_err(|message| {
+                        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                            "invalid availability-certified native-AMX context: {message}"
+                        ))
+                    })?;
                 crate::block::validate_native_amx_receipt_against_plan(
                     receipt,
                     &source.origin_proposal,
@@ -31140,6 +31185,7 @@ impl State {
                     execution.autonomous_chain_id_hash,
                     &authority.nexus.dataspace_catalog,
                     &authority,
+                    Some(expected_v2_context),
                 )
                 .map_err(|message| {
                     MergeLedgerCommitError::ExecutionBatchInvalid(format!(
@@ -35988,14 +36034,17 @@ pub trait StateReadOnly: WorldStateSnapshot {
     /// Resolve authoritative validator peer ids for a lane from the snapshot.
     fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId>;
 
-    /// Resolve authoritative validator peer ids for a lane at an explicit proposal height.
+    /// Resolve authoritative validator peer ids for a lane at an explicit
+    /// consensus height.
+    ///
+    /// Callers validating a proposed height must not silently substitute the
+    /// pre-state height: key activation, lane lifecycle, and autoscale
+    /// ownership are height-sensitive consensus inputs.
     fn authoritative_lane_peer_ids_at_height(
         &self,
         lane_id: LaneId,
-        _block_height: u64,
-    ) -> Vec<PeerId> {
-        self.authoritative_lane_peer_ids(lane_id)
-    }
+        block_height: u64,
+    ) -> Vec<PeerId>;
 
     /// Get a reference to the block one before the latest block.
     /// Returns None if at least 2 blocks are not committed.
@@ -36182,10 +36231,8 @@ macro_rules! impl_state_ro {
                 }))
             }
             fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
-                self.authoritative_lane_peer_ids_at_height(
-                    lane_id,
-                    u64::try_from(self.height()).unwrap_or(u64::MAX),
-                )
+                let block_height = u64::try_from(self.height()).unwrap_or(u64::MAX);
+                self.authoritative_lane_peer_ids_at_height(lane_id, block_height)
             }
             fn authoritative_lane_peer_ids_at_height(
                 &self,
@@ -39867,6 +39914,7 @@ impl<'state> StateBlock<'state> {
 
         let mut tx = self.transaction();
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate {
             tx.world
                 .withdraw_numeric_asset(asset_id, amount)
@@ -40489,6 +40537,7 @@ impl<'state> StateBlock<'state> {
                 &dataspace_catalog,
                 &staking_cfg,
                 signed_block.header().height().get(),
+                signed_block.header().view_change_index(),
                 now_ms,
                 telemetry,
             )
@@ -65629,13 +65678,14 @@ mod tests {
                 true,
             )
             .expect("seed internally managed elastic lane");
+        let retired_lane_incarnation = state
+            .lane_incarnation(retired_lane_id)
+            .expect("retire candidate must have an active incarnation");
 
         let (session, signer_pops) = sample_committed_lane_block_session_for_state_test(
             retired_lane_id,
             DataSpaceId::UNIVERSAL,
-            state
-                .lane_incarnation(retired_lane_id)
-                .expect("managed lane has an active incarnation"),
+            retired_lane_incarnation,
             1,
         );
         kura.persist_committed_lane_block_session(&session, &signer_pops)
@@ -66128,6 +66178,9 @@ mod tests {
                 true,
             )
             .expect("seed internally managed elastic lane");
+        let retired_lane_incarnation = state
+            .lane_incarnation(retired_lane_id)
+            .expect("retire candidate must have an active incarnation");
 
         let retirement =
             prepare_certified_autoscale_retirement_for_test(&mut state, &kura, retired_lane_id);
@@ -66146,9 +66199,7 @@ mod tests {
         let (session, signer_pops) = sample_committed_lane_block_session_for_state_test(
             retired_lane_id,
             DataSpaceId::UNIVERSAL,
-            state
-                .lane_incarnation(retired_lane_id)
-                .expect("managed lane has an active incarnation"),
+            retired_lane_incarnation,
             1,
         );
         kura.persist_committed_lane_block_session(&session, &signer_pops)
@@ -75450,6 +75501,7 @@ mod tests {
             .write()
             .insert(lane1_h1.clone())
             .expect("lane1 relay stored");
+        let historical_lane_incarnation = lane1_h1.lane_incarnation;
         let candidate = merge_candidate_from_relay(&state, 1, &lane1_h1);
         let merge_qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         state
@@ -75462,11 +75514,11 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         assert!(
-            restarted.merge_latest_lane_snapshots.read().keys().any(
-                |(lane_id, dataspace_id, _)| {
-                    (*lane_id, *dataspace_id) == (LaneId::new(1), DataSpaceId::UNIVERSAL)
-                }
-            ),
+            restarted.merge_latest_lane_snapshots.read().contains_key(&(
+                LaneId::new(1),
+                DataSpaceId::UNIVERSAL,
+                historical_lane_incarnation,
+            )),
             "startup should rehydrate historical merge snapshots from Kura"
         );
         seed_stale_da_cursors_for_lane_recreation(
@@ -75486,11 +75538,11 @@ mod tests {
             })
             .expect("config swap recreates lane1");
         assert!(
-            !restarted.merge_latest_lane_snapshots.read().keys().any(
-                |(lane_id, dataspace_id, _)| {
-                    (*lane_id, *dataspace_id) == (LaneId::new(1), DataSpaceId::UNIVERSAL)
-                }
-            ),
+            !restarted.merge_latest_lane_snapshots.read().contains_key(&(
+                LaneId::new(1),
+                DataSpaceId::UNIVERSAL,
+                historical_lane_incarnation,
+            )),
             "set_nexus addition must reset rehydrated merge history for the lane id"
         );
         assert_recreated_lane_da_cursors_accept_fresh_sequence(&restarted, LaneId::new(1));
@@ -78629,6 +78681,7 @@ mod tests {
             .write()
             .insert(lane1_h1.clone())
             .expect("lane1 relay stored");
+        let historical_lane_incarnation = lane1_h1.lane_incarnation;
         let candidate = merge_candidate_from_relay(&state, 1, &lane1_h1);
         let merge_qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         state
@@ -78649,11 +78702,11 @@ mod tests {
         );
         restarted.nexus.write().enabled = true;
         assert!(
-            restarted.merge_latest_lane_snapshots.read().keys().any(
-                |(lane_id, dataspace_id, _)| {
-                    (*lane_id, *dataspace_id) == (LaneId::new(1), DataSpaceId::UNIVERSAL)
-                }
-            ),
+            restarted.merge_latest_lane_snapshots.read().contains_key(&(
+                LaneId::new(1),
+                DataSpaceId::UNIVERSAL,
+                historical_lane_incarnation,
+            )),
             "startup should rehydrate historical merge snapshots from Kura"
         );
         seed_stale_da_cursors_for_lane_recreation(
@@ -78669,11 +78722,11 @@ mod tests {
             .apply_lane_lifecycle(&add_lane)
             .expect("recreated second lane after restart");
         assert!(
-            !restarted.merge_latest_lane_snapshots.read().keys().any(
-                |(lane_id, dataspace_id, _)| {
-                    (*lane_id, *dataspace_id) == (LaneId::new(1), DataSpaceId::UNIVERSAL)
-                }
-            ),
+            !restarted.merge_latest_lane_snapshots.read().contains_key(&(
+                LaneId::new(1),
+                DataSpaceId::UNIVERSAL,
+                historical_lane_incarnation,
+            )),
             "adding a fresh lane incarnation must clear rehydrated merge history"
         );
         assert_recreated_lane_da_cursors_accept_fresh_sequence(&restarted, LaneId::new(1));
@@ -78728,7 +78781,8 @@ mod tests {
         )
         .expect("two-lane catalog");
         let two_lane_config = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
-        let kura = strict_kura_for_testing(temp_dir.path().join("kura"), &two_lane_config);
+        let initial_lane_config = RuntimeLaneConfig::default();
+        let kura = strict_kura_for_testing(temp_dir.path().join("kura"), &initial_lane_config);
         let mut state = State::new_for_testing(
             World::default(),
             Arc::clone(&kura),
@@ -78915,13 +78969,14 @@ mod tests {
             block_hashes.push(old_block.hash());
             block_hashes.commit_for_tests();
         }
+        let stale_lane_incarnation = state
+            .lane_incarnation(recreated_lane_id)
+            .expect("configured lane must have an active incarnation");
 
         let (stale_session, stale_signer_pops) = sample_committed_lane_block_session_for_state_test(
             recreated_lane_id,
             DataSpaceId::UNIVERSAL,
-            state
-                .lane_incarnation(recreated_lane_id)
-                .expect("pre-reset lane has an active incarnation"),
+            stale_lane_incarnation,
             old_block_height,
         );
         kura.persist_committed_lane_block_session(&stale_session, &stale_signer_pops)
@@ -78976,6 +79031,12 @@ mod tests {
                 ..Default::default()
             })
             .expect("same-lane policy reset should apply");
+        let policy_lane_incarnations = state.lane_incarnations_snapshot();
+        let policy_lane_incarnation_activation_heights =
+            state.lane_incarnation_activation_heights_snapshot();
+        let fresh_lane_incarnation = state
+            .lane_incarnation(recreated_lane_id)
+            .expect("reset lane must have a fresh active incarnation");
 
         let reset_journal = DaShardCursorJournal::load(
             &state.nexus_snapshot().lane_config,
@@ -79025,6 +79086,9 @@ mod tests {
             nexus.lane_catalog = policy_catalog;
             nexus.lane_config = policy_config;
         }
+        *restarted.lane_incarnations.write() = policy_lane_incarnations;
+        *restarted.lane_incarnation_activation_heights.write() =
+            policy_lane_incarnation_activation_heights;
         restarted
             .ensure_da_indexes_hydrated()
             .expect("restart should hydrate persisted reset watermark");
@@ -79049,9 +79113,7 @@ mod tests {
         let (fresh_session, fresh_signer_pops) = sample_committed_lane_block_session_for_state_test(
             recreated_lane_id,
             DataSpaceId::UNIVERSAL,
-            restarted
-                .lane_incarnation(recreated_lane_id)
-                .expect("recreated lane has an active incarnation"),
+            fresh_lane_incarnation,
             fresh_height,
         );
         kura.persist_committed_lane_block_session(&fresh_session, &fresh_signer_pops)
@@ -79244,7 +79306,11 @@ mod tests {
                     DataSpaceId::UNIVERSAL,
                     validator_ids.clone(),
                 ),
-                (recreated_lane_id, DataSpaceId::UNIVERSAL, validator_ids),
+                (
+                    recreated_lane_id,
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
             ],
         );
         configure_commit_topology_preserving_world_peers(&state, 1);
@@ -79320,8 +79386,12 @@ mod tests {
                 .is_some(),
             "test setup should persist a spoofed contract-map sibling"
         );
+        state.merge_entry_candidates_from_lane_relays();
         assert!(
-            !state.merge_entry_candidates_from_lane_relays().is_empty(),
+            state
+                .lane_relay_snapshot()
+                .iter()
+                .any(|relay| relay == &old_envelope),
             "test setup should prove the old verified record can hydrate before reset"
         );
 
@@ -79383,6 +79453,17 @@ mod tests {
             "recreated lane must not rehydrate the retired incarnation's verified relay"
         );
 
+        install_lane_manifest_registry(
+            &state,
+            &[
+                (
+                    LaneId::SINGLE,
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (recreated_lane_id, DataSpaceId::UNIVERSAL, validator_ids),
+            ],
+        );
         let fresh_envelope =
             sample_lane_relay_envelope_for_state(&state, 1, recreated_lane_id, &validator_keypairs);
         state
@@ -79390,6 +79471,13 @@ mod tests {
             .write()
             .insert(fresh_envelope.clone())
             .expect("fresh recreated-lane relay stored");
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"recreated-lane-relay-parent",
+            )));
+            block_hashes.commit_for_tests();
+        }
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -79601,7 +79689,8 @@ mod tests {
         )
         .expect("two-lane catalog");
         let two_lane_config = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
-        let kura = strict_kura_for_testing(temp_dir.path().join("kura"), &two_lane_config);
+        let initial_lane_config = RuntimeLaneConfig::default();
+        let kura = strict_kura_for_testing(temp_dir.path().join("kura"), &initial_lane_config);
         let mut state = State::new_for_testing(
             World::default(),
             Arc::clone(&kura),
@@ -101018,15 +101107,18 @@ mod tests {
         let err = state
             .commit_merge_entry(merge_entry_from_candidate(replay_candidate, qc))
             .expect_err("higher-epoch lane snapshot replay must be rejected");
-        assert!(matches!(
-            err,
-            MergeLedgerCommitError::NonMonotonicLaneSnapshot {
-                lane_id,
-                dataspace_id,
-                latest_height: 1,
-                attempted_height: 1,
-            } if lane_id == LaneId::new(0) && dataspace_id == DataSpaceId::UNIVERSAL
-        ), "unexpected replay rejection: {err:?}");
+        assert!(
+            matches!(
+                err,
+                MergeLedgerCommitError::NonMonotonicLaneSnapshot {
+                    lane_id,
+                    dataspace_id,
+                    latest_height: 1,
+                    attempted_height: 1,
+                } if lane_id == LaneId::new(0) && dataspace_id == DataSpaceId::UNIVERSAL
+            ),
+            "unexpected replay rejection: {err:?}"
+        );
         assert_eq!(state.merge_ledger().len(), 1);
     }
 
@@ -101060,15 +101152,18 @@ mod tests {
                 regressed_qc,
             ))
             .expect_err("merge commit must reject a skipped lane height");
-        assert!(matches!(
-            err,
-            MergeLedgerCommitError::NonContiguousLaneSnapshot {
-                lane_id,
-                dataspace_id,
-                expected_height: 1,
-                attempted_height: 2,
-            } if lane_id == LaneId::new(0) && dataspace_id == DataSpaceId::UNIVERSAL
-        ), "unexpected skipped-snapshot rejection: {err:?}");
+        assert!(
+            matches!(
+                err,
+                MergeLedgerCommitError::NonContiguousLaneSnapshot {
+                    lane_id,
+                    dataspace_id,
+                    expected_height: 1,
+                    attempted_height: 2,
+                } if lane_id == LaneId::new(0) && dataspace_id == DataSpaceId::UNIVERSAL
+            ),
+            "unexpected skipped-snapshot rejection: {err:?}"
+        );
         assert!(state.merge_ledger().is_empty());
     }
 
@@ -101590,10 +101685,10 @@ mod tests {
         let err = state
             .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
             .expect_err("short BLS aggregate signature must fail closed");
-        assert!(matches!(
-            err,
-            MergeLedgerCommitError::ExecutionBatchInvalid(_)
-        ), "unexpected short aggregate-signature error: {err:?}");
+        assert!(
+            matches!(err, MergeLedgerCommitError::ExecutionBatchInvalid(_)),
+            "unexpected short aggregate-signature error: {err:?}"
+        );
     }
 
     #[test]
@@ -101630,10 +101725,10 @@ mod tests {
         let err = state
             .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
             .expect_err("short BLS proof of possession must fail closed");
-        assert!(matches!(
-            err,
-            MergeLedgerCommitError::ExecutionBatchInvalid(_)
-        ), "unexpected short signer-PoP error: {err:?}");
+        assert!(
+            matches!(err, MergeLedgerCommitError::ExecutionBatchInvalid(_)),
+            "unexpected short signer-PoP error: {err:?}"
+        );
     }
 
     #[test]

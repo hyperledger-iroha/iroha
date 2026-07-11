@@ -77,15 +77,14 @@ use rand::{
 use reqwest::blocking::Client as BlockingHttpClient;
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriteStats, CarWriter, ChunkStore, FilePlan, PorMerkleTree,
-    fetch_plan::{chunk_fetch_specs_from_json, chunk_fetch_specs_to_json, parse_digest_hex},
+    fetch_plan::{chunk_fetch_specs_from_json, parse_digest_hex, try_chunk_fetch_specs_to_json},
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::chunker_registry;
 use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorAmount};
 use sorafs_manifest::repair::{
-    REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
-    RepairSlashProposalV1, RepairTicketId, RepairWorkerActionV1,
-    RepairWorkerSignaturePayloadV1,
+    REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairSlashProposalV1,
+    RepairTicketId, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
 };
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
@@ -13162,7 +13161,7 @@ impl Run for ToolkitPackArgs {
             manifest_bytes: &manifest_bytes,
             manifest_digest: &manifest_digest,
             por_tree: chunk_store.por_tree(),
-        });
+        })?;
         let report_object = report
             .as_object_mut()
             .ok_or_else(|| eyre!("internal error: report root is not a JSON object"))?;
@@ -13327,7 +13326,7 @@ fn build_hybrid_manifest_aad(
 }
 
 #[allow(clippy::too_many_lines)]
-fn build_pack_report(ctx: &PackReportContext<'_>) -> Value {
+fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
     let chunk_digests: Vec<Value> = ctx
         .plan
         .chunks
@@ -13341,7 +13340,8 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Value {
         })
         .collect();
 
-    let chunk_fetch_specs = chunk_fetch_specs_to_json(ctx.plan);
+    let chunk_fetch_specs = try_chunk_fetch_specs_to_json(ctx.plan)
+        .map_err(|err| eyre!("failed to derive chunk fetch plan: {err}"))?;
 
     let mut chunking_obj = Map::new();
     chunking_obj.insert(
@@ -13528,7 +13528,7 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Value {
         Value::from(ctx.por_tree.chunks().len() as u64),
     );
 
-    Value::Object(report_obj)
+    Ok(Value::Object(report_obj))
 }
 
 #[derive(clap::Args, Debug)]
@@ -24354,7 +24354,7 @@ mod tests {
             ModerationThresholdsV1,
         };
 
-        let body = ModerationReproBodyV1 {
+        let mut body = ModerationReproBodyV1 {
             schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
             manifest_id: [0xA1; 16],
             manifest_digest: [0xB2; 32],
@@ -24372,13 +24372,22 @@ mod tests {
             },
             models: vec![ModerationModelFingerprintV1 {
                 model_id: [0x11; 16],
+                artifact_path: "models/model-11.norito".to_string(),
+                artifact_bytes: 1,
                 artifact_digest: [0x22; 32],
                 weights_digest: [0x33; 32],
-                opset: 17,
+                engine: iroha_data_model::sorafs::moderation::ModerationModelEngineV1::DeterministicLinearV1,
+                feature_profile: iroha_data_model::sorafs::moderation::ModerationFeatureProfileV1::ByteHistogramAndBigramV1,
+                calibration_knot_count: 2,
+                max_input_bytes: 1024,
+                max_operations: 3073,
+                working_memory_bytes: 4096,
                 weight: Some(10_000),
             }],
             notes: Some("cli registry fixture".to_string()),
         };
+        body.refresh_manifest_digest()
+            .expect("refresh moderation fixture digest");
         let keypair = KeyPair::try_from_seed(vec![0xE5; 32], Algorithm::Ed25519)
             .expect("derive moderation fixture keypair");
         let signature = iroha_crypto::SignatureOf::try_new(keypair.private_key(), &body)

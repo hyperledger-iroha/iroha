@@ -50,6 +50,10 @@ use iroha_data_model::{
             CertPhase, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1, NativeAmxReceipt,
             SumeragiLanePayloadOwnership,
         },
+        consensus_v2::{
+            BlockSubject, HeightContextId, QuorumCertificateRef,
+            finality::{V2FinalityArtifact, V2FinalityValidationError},
+        },
         decode_framed_signed_block,
     },
     consensus::{Qc, ValidatorSetCheckpoint},
@@ -86,6 +90,7 @@ use crate::{
         DurableLanePayloadAvailabilityCertificateV1, LaneExecutablePayloadV1,
         MAX_LANE_NEW_VIEW_CERTIFICATES,
     },
+    queue::{LaneQueueReservationKeyV1, RoutingPlan},
 };
 
 impl From<CommittedBlock> for Arc<SignedBlock> {
@@ -102,6 +107,7 @@ const PIPELINE_DIR_NAME: &str = "pipeline";
 const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
 const WSV_CHECKPOINTS_DIR_NAME: &str = "wsv_checkpoints";
 const COMMIT_MANIFESTS_DIR_NAME: &str = "commit_manifests";
+const V2_FINALITY_ARTIFACTS_DIR_NAME: &str = "v2_finality";
 const LANE_ARTIFACTS_DIR_NAME: &str = "lane_artifacts";
 const LANE_ARTIFACTS_DATA_FILE: &str = "ownerships.norito";
 const LANE_ARTIFACTS_INDEX_FILE: &str = "ownerships.index";
@@ -395,6 +401,12 @@ pub struct Kura {
     /// Bitmask of observed canonical reader kinds after their initial prune-poison check.
     #[cfg(test)]
     canonical_read_kinds_after_prune_check: AtomicUsize,
+    /// Test hook for forcing the next Sumeragi v2 finality sidecar write to fail.
+    #[cfg(test)]
+    fail_next_v2_finality_write: AtomicBool,
+    /// Test hook for forcing the next lane-block application-receipt write to fail.
+    #[cfg(test)]
+    fail_next_lane_block_application_receipt_write: AtomicBool,
     /// Counts raw durable-budget metadata reads for focused cache tests.
     #[cfg(test)]
     durable_budget_metadata_reads: AtomicUsize,
@@ -518,6 +530,76 @@ pub enum FastpqProofEnqueueResult {
     },
     /// A canonical prune is active or prune recovery requires a process restart.
     RejectedPruneRecovery,
+}
+
+/// Proof that Kura durably associated a canonical block with a v2 finality artifact.
+///
+/// Fields are intentionally private and the type has no public constructor.
+/// Kura creates a receipt only after the artifact file and its directory entry
+/// have been synchronously persisted.
+#[derive(Clone, Debug)]
+#[must_use]
+pub struct KuraV2CommitReceipt {
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    context_id: HeightContextId,
+    subject: BlockSubject,
+    certificate: QuorumCertificateRef,
+    artifact_hash: HashOf<V2FinalityArtifact>,
+}
+
+impl KuraV2CommitReceipt {
+    /// Return the durably associated block height.
+    #[must_use]
+    pub fn height(&self) -> u64 {
+        self.height
+    }
+
+    /// Return the durably associated canonical block hash.
+    #[must_use]
+    pub fn block_hash(&self) -> HashOf<BlockHeader> {
+        self.block_hash
+    }
+
+    /// Return the frozen height-context identifier.
+    #[must_use]
+    pub fn context_id(&self) -> HeightContextId {
+        self.context_id
+    }
+
+    /// Return the exact subject durably certified by Kura.
+    #[must_use]
+    pub fn subject(&self) -> BlockSubject {
+        self.subject
+    }
+
+    /// Return the exact CommitQC reference durably associated with the block.
+    #[must_use]
+    pub fn certificate(&self) -> QuorumCertificateRef {
+        self.certificate
+    }
+
+    /// Return the hash of the exact artifact bytes represented by this receipt.
+    #[must_use]
+    pub fn artifact_hash(&self) -> HashOf<V2FinalityArtifact> {
+        self.artifact_hash
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(artifact: &V2FinalityArtifact) -> Self {
+        v2_commit_receipt(artifact)
+    }
+}
+
+fn v2_commit_receipt(artifact: &V2FinalityArtifact) -> KuraV2CommitReceipt {
+    KuraV2CommitReceipt {
+        height: artifact.height,
+        block_hash: artifact.block_hash,
+        context_id: artifact.context_id(),
+        subject: artifact.subject,
+        certificate: artifact.commit_qc.as_ref(),
+        artifact_hash: HashOf::new(artifact),
+    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -2046,6 +2128,10 @@ impl Kura {
             #[cfg(test)]
             canonical_read_kinds_after_prune_check: AtomicUsize::new(0),
             #[cfg(test)]
+            fail_next_v2_finality_write: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_lane_block_application_receipt_write: AtomicBool::new(false),
+            #[cfg(test)]
             durable_budget_metadata_reads: AtomicUsize::new(0),
             #[cfg(test)]
             pause_eviction_after_snapshot: AtomicBool::new(false),
@@ -2193,6 +2279,10 @@ impl Kura {
             observe_canonical_reads_after_prune_check: AtomicBool::new(false),
             #[cfg(test)]
             canonical_read_kinds_after_prune_check: AtomicUsize::new(0),
+            #[cfg(test)]
+            fail_next_v2_finality_write: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_lane_block_application_receipt_write: AtomicBool::new(false),
             #[cfg(test)]
             durable_budget_metadata_reads: AtomicUsize::new(0),
             #[cfg(test)]
@@ -6086,6 +6176,163 @@ impl Kura {
         Self::commit_manifest_path_for(&self.active_blocks_dir.lock(), height)
     }
 
+    fn v2_finality_artifact_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(V2_FINALITY_ARTIFACTS_DIR_NAME)
+    }
+
+    fn v2_finality_artifact_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
+        Self::v2_finality_artifact_dir_for(blocks_dir).join(format!("{height:020}.norito"))
+    }
+
+    fn v2_finality_artifact_dir(&self) -> PathBuf {
+        Self::v2_finality_artifact_dir_for(&self.active_blocks_dir.lock())
+    }
+
+    fn v2_finality_artifact_path(&self, height: u64) -> PathBuf {
+        Self::v2_finality_artifact_path_for(&self.active_blocks_dir.lock(), height)
+    }
+
+    /// Return the chain-scoped root for consensus-v2 journals and transport stores.
+    ///
+    /// The returned directory is adjacent to Kura's canonical block and finality
+    /// files, so a configured chain never shares a safety WAL or body store with
+    /// another Kura instance. Callers create and synchronise their own children;
+    /// Kura deliberately does not create this path as a side effect of lookup.
+    pub(crate) fn sumeragi_v2_storage_root(&self) -> PathBuf {
+        self.active_blocks_dir.lock().join("sumeragi_v2")
+    }
+
+    /// Persist a structurally valid v2 finality artifact for an already durable block.
+    ///
+    /// The returned [`KuraV2CommitReceipt`] is created only after the artifact
+    /// contents, atomic rename, artifact directory, and a newly created
+    /// artifact-directory entry have been synchronously persisted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the artifact is malformed, its height or block hash
+    /// differs from Kura's canonical durable block, or persistence fails.
+    pub fn store_v2_finality_artifact(
+        &self,
+        artifact: &V2FinalityArtifact,
+    ) -> Result<KuraV2CommitReceipt> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        artifact.validate()?;
+        let height = artifact.height;
+        let block_hash = artifact.block_hash;
+
+        // Keep the lock order used by every directly persisted consensus
+        // sidecar: prune first, sidecar second, block-store writer last. This
+        // prevents a prune/replacement from interleaving between the
+        // canonical-hash check and atomic publication.
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let _block_write_guard = self.block_store_write_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_durable_block_at_height(height, block_hash)?;
+        #[cfg(test)]
+        if self
+            .fail_next_v2_finality_write
+            .swap(false, Ordering::Relaxed)
+        {
+            return Err(Error::IO(
+                std::io::Error::other("Kura Sumeragi v2 finality injected failure"),
+                PathBuf::from("v2_finality_test_fail"),
+            ));
+        }
+
+        let dir = self.v2_finality_artifact_dir();
+        create_dir_all_with_context(&dir)?;
+        if let Some(parent) = dir.parent() {
+            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        }
+
+        let path = dir.join(format!("{height:020}.norito"));
+        if let Some(existing) = Self::decode_v2_finality_artifact_at(&path)? {
+            existing.validate()?;
+            if existing != *artifact {
+                return Err(Error::ConflictingV2FinalityArtifact { height });
+            }
+            return Ok(v2_commit_receipt(&existing));
+        }
+        let bytes = artifact.encode();
+        Self::write_atomic_synced(&path, &bytes)?;
+        Ok(v2_commit_receipt(artifact))
+    }
+
+    fn decode_v2_finality_artifact_at(path: &Path) -> Result<Option<V2FinalityArtifact>> {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(Error::IO(error, path.to_path_buf())),
+        };
+        let mut cursor = bytes.as_slice();
+        V2FinalityArtifact::decode_all(&mut cursor)
+            .map(Some)
+            .map_err(Error::NoritoFrame)
+    }
+
+    /// Read and structurally validate a v2 finality artifact for a durable block.
+    ///
+    /// A missing final path returns `Ok(None)`. Incomplete temporary files left
+    /// before the atomic rename are ignored. A malformed final path or an
+    /// artifact that does not match Kura's canonical durable block fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if decoding or structural validation fails, the height
+    /// is zero or absent from the durable chain, or the canonical hash differs.
+    pub fn v2_finality_artifact(&self, height: u64) -> Result<Option<V2FinalityArtifact>> {
+        self.ensure_prune_recovery_not_required()?;
+        let path = self.v2_finality_artifact_path(height);
+        let artifact = {
+            let _sidecar_guard = self.sidecar_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            Self::decode_v2_finality_artifact_at(&path)?
+        };
+        let Some(artifact) = artifact else {
+            self.ensure_prune_recovery_not_required()?;
+            return Ok(None);
+        };
+        artifact.validate()?;
+
+        let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?) else {
+            return Err(Error::NoritoFrame(norito::core::Error::Message(
+                "v2 finality artifact height must be non-zero".into(),
+            )));
+        };
+        let block_hash = self.get_durable_block_hash(block_height);
+        self.ensure_prune_recovery_not_required()?;
+        let Some(block_hash) = block_hash else {
+            return Err(Error::BlockHeightGap {
+                expected_next_height: u64::try_from(self.durable_blocks_count())?.saturating_add(1),
+                actual_height: height,
+            });
+        };
+        artifact.validate_for_block(height, block_hash)?;
+        self.ensure_prune_recovery_not_required()?;
+        Ok(Some(artifact))
+    }
+
+    /// Recover a validated durable v2 finality artifact together with the
+    /// same non-forgeable receipt minted by the write path.
+    ///
+    /// Final artifact paths are immutable: an idempotent repeat is accepted,
+    /// while a conflicting rewrite is rejected by
+    /// [`Self::store_v2_finality_artifact`]. Therefore a successfully read and
+    /// canonical-block-checked artifact is sufficient to reconstruct its
+    /// receipt during startup replay.
+    pub fn v2_finality_artifact_with_receipt(
+        &self,
+        height: u64,
+    ) -> Result<Option<(V2FinalityArtifact, KuraV2CommitReceipt)>> {
+        let Some(artifact) = self.v2_finality_artifact(height)? else {
+            return Ok(None);
+        };
+        let receipt = v2_commit_receipt(&artifact);
+        Ok(Some((artifact, receipt)))
+    }
+
     /// Persist the canonical WSV checkpoint for a committed block height.
     ///
     /// The checkpoint is stored after the block body is durable and after WSV commit succeeds.
@@ -6661,6 +6908,39 @@ impl Kura {
                 if !file_type.is_file() && !file_type.is_symlink() {
                     return Err(Error::PruneIntentConflict(format!(
                         "commit-manifest suffix entry {} is not removable as a file",
+                        path.display()
+                    )));
+                }
+                std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))?;
+            }
+        }
+        sync_dir(dir).map_err(|err| Error::IO(err, dir.to_path_buf()))?;
+        Ok(())
+    }
+
+    fn prune_v2_finality_artifacts_above(&self, height: u64) -> Result<()> {
+        let _guard = self.sidecar_lock.lock();
+        let dir = self.v2_finality_artifact_dir();
+        Self::prune_v2_finality_artifacts_above_in_dir(&dir, height)
+    }
+
+    fn prune_v2_finality_artifacts_above_in_dir(dir: &Path, height: u64) -> Result<()> {
+        if !dir.exists() {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(dir).map_err(|err| Error::IO(err, dir.to_path_buf()))? {
+            let entry = entry.map_err(|err| Error::IO(err, dir.to_path_buf()))?;
+            let path = entry.path();
+            let Some(artifact_height) = numbered_norito_sidecar_height(&path) else {
+                continue;
+            };
+            if artifact_height > height {
+                let file_type = entry
+                    .file_type()
+                    .map_err(|err| Error::IO(err, path.clone()))?;
+                if !file_type.is_file() && !file_type.is_symlink() {
+                    return Err(Error::PruneIntentConflict(format!(
+                        "Sumeragi v2 finality suffix entry {} is not removable as a file",
                         path.display()
                     )));
                 }
@@ -8149,6 +8429,7 @@ impl Kura {
         self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
         self.prune_wsv_checkpoints_above(height.saturating_sub(1))?;
         self.prune_commit_manifests_above(height.saturating_sub(1))?;
+        self.prune_v2_finality_artifacts_above(height.saturating_sub(1))?;
         self.append_debug_block_dump(&block);
         Ok(())
     }
@@ -8874,6 +9155,11 @@ impl Kura {
                 intent.target_height,
                 "commit-manifest directory",
             )?;
+            Self::validate_no_numbered_sidecar_suffix(
+                &self.v2_finality_artifact_dir(),
+                intent.target_height,
+                "Sumeragi v2 finality directory",
+            )?;
             self.validate_pipeline_sidecars_for_prune(intent.target_height, true)?;
         }
         Ok(())
@@ -8904,6 +9190,8 @@ impl Kura {
             Self::prune_wsv_checkpoints_above_in_dir(&wsv_dir, intent.target_height)?;
             let manifest_dir = self.commit_manifest_dir();
             Self::prune_commit_manifests_above_in_dir(&manifest_dir, intent.target_height)?;
+            let finality_dir = self.v2_finality_artifact_dir();
+            Self::prune_v2_finality_artifacts_above_in_dir(&finality_dir, intent.target_height)?;
             self.truncate_pipeline_sidecars_for_prune(intent.target_height)?;
         }
         self.validate_completed_prune_intent(intent)?;
@@ -9047,6 +9335,11 @@ impl Kura {
             source_height,
             "commit-manifest directory",
         )?;
+        Self::validate_no_numbered_sidecar_suffix(
+            &self.v2_finality_artifact_dir(),
+            source_height,
+            "Sumeragi v2 finality directory",
+        )?;
         self.validate_pipeline_sidecars_for_prune(source_height, false)?;
         let _write_guard = self.block_store_write_lock.lock();
         {
@@ -9146,6 +9439,12 @@ impl Kura {
             Self::prune_commit_manifests_above_in_dir(&manifest_dir, height)
         );
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_COMMIT_MANIFESTS);
+
+        let finality_dir = self.v2_finality_artifact_dir();
+        forward_or_stop!(
+            "Sumeragi v2 finality suffix",
+            Self::prune_v2_finality_artifacts_above_in_dir(&finality_dir, height)
+        );
 
         forward_or_stop!(
             "pipeline and roster sidecar suffixes",
@@ -9538,6 +9837,16 @@ impl Kura {
     pub(crate) fn fail_prune_sidecar_promotion_for_tests(&self, stage: usize) {
         self.fail_prune_sidecar_promotion_stage
             .store(stage, Ordering::Relaxed);
+    }
+
+    pub(crate) fn fail_next_v2_finality_write_for_tests(&self) {
+        self.fail_next_v2_finality_write
+            .store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn fail_next_lane_block_application_receipt_write_for_tests(&self) {
+        self.fail_next_lane_block_application_receipt_write
+            .store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn block_file_lengths_for_tests(&self) -> (u64, u64, u64) {
@@ -10766,9 +11075,9 @@ pub struct RecoveredLaneBlockPayload {
     /// Accepted entrypoints in lane descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
     /// Exact durable queue reservation identities in entrypoint order.
-    pub reservation_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
+    pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
     /// Complete routing plans in entrypoint order.
-    pub routing_plans: Vec<crate::queue::RoutingPlan>,
+    pub routing_plans: Vec<RoutingPlan>,
     /// Producer-authenticated native-AMX receipts in entrypoint order.
     pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
@@ -10805,10 +11114,10 @@ pub struct LaneBlockExecutionInputArtifact {
     pub entrypoints: Vec<TransactionEntrypoint>,
     /// Exact durable queue reservation identities in entrypoint order.
     #[norito(default)]
-    pub reservation_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
+    pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
     /// Complete routing plans in entrypoint order.
     #[norito(default)]
-    pub routing_plans: Vec<crate::queue::RoutingPlan>,
+    pub routing_plans: Vec<RoutingPlan>,
     /// Producer-authenticated native-AMX receipts in entrypoint order.
     #[norito(default)]
     pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
@@ -14532,6 +14841,16 @@ impl Kura {
                     lane_id.as_u32(),
                     lane_block_height
                 ),
+            ));
+        }
+        #[cfg(test)]
+        if self
+            .fail_next_lane_block_application_receipt_write
+            .swap(false, Ordering::Relaxed)
+        {
+            return Err(Error::IO(
+                std::io::Error::other("Kura lane-block application receipt injected failure"),
+                data_path,
             ));
         }
 
@@ -19279,6 +19598,13 @@ pub enum Error {
     VersionedCodec(#[from] iroha_version::error::Error),
     /// Failed to frame or deframe Norito payload
     NoritoFrame(#[from] norito::core::Error),
+    /// Invalid Sumeragi v2 finality artifact: {0}
+    V2FinalityArtifact(#[from] V2FinalityValidationError),
+    /// Conflicting immutable Sumeragi v2 finality artifact at height `{height}`
+    ConflictingV2FinalityArtifact {
+        /// Height whose finality path already contains a different artifact.
+        height: u64,
+    },
     /// Failed to allocate buffer
     Alloc(#[from] std::collections::TryReserveError),
     /// Tried reading block data out of bounds: start `{start_block_height}`, count `{block_count}`
@@ -19405,6 +19731,11 @@ mod tests {
         block::{
             BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext,
             consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, SumeragiLanePayloadOwnership},
+            consensus_v2::{
+                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+                GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
+                ValidatorPower, finality::V2FinalityArtifact,
+            },
         },
         consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1},
         domain::{Domain, DomainId},
@@ -19441,6 +19772,56 @@ mod tests {
         },
     };
 
+    fn v2_finality_artifact_for_block(block: &SignedBlock) -> V2FinalityArtifact {
+        let mut roster = (0..4)
+            .map(|_| ValidatorPower {
+                validator: checked_peer_id(),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let height = block.header().height().get();
+        assert_eq!(height, 1, "fixture uses a genesis-height block");
+        let context = HeightContext {
+            chain_id: ChainId::from("kura-v2-finality-test"),
+            protocol_version: PROTOCOL_VERSION,
+            height,
+            epoch: 0,
+            epoch_end_height: 100,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"kura finality nexus amx context"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0x42; 32],
+        };
+        let subject = BlockSubject {
+            parent_block_hash: None,
+            block_hash: block.hash(),
+            payload_hash: Hash::new(b"canonical consensus body"),
+        };
+        let commit_qc = QuorumCertificate {
+            round: ConsensusRound {
+                context_id: context.id(),
+                height,
+                view: 0,
+            },
+            phase: GlobalPhase::Commit,
+            subject,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xA5; 48],
+        };
+        V2FinalityArtifact::new(context, subject, commit_qc, None)
+    }
+
     #[test]
     fn checked_keypair_helpers_preserve_requested_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -19468,6 +19849,191 @@ mod tests {
             block_store_path.file_name().and_then(|name| name.to_str()),
             Some("blocks")
         );
+    }
+
+    #[test]
+    fn v2_finality_artifact_roundtrips_with_unforgeable_receipt() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+
+        let receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("persist finality artifact");
+
+        assert_eq!(receipt.height(), artifact.height);
+        assert_eq!(receipt.block_hash(), block.hash());
+        assert_eq!(receipt.context_id(), artifact.context_id());
+        assert_eq!(receipt.subject(), artifact.subject);
+        assert_eq!(receipt.certificate(), artifact.commit_qc.as_ref());
+        assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
+        assert_eq!(
+            kura.v2_finality_artifact(artifact.height)
+                .expect("read finality artifact"),
+            Some(artifact.clone())
+        );
+        let (recovered, recovered_receipt) = kura
+            .v2_finality_artifact_with_receipt(artifact.height)
+            .expect("recover artifact and receipt")
+            .expect("artifact exists");
+        assert_eq!(recovered, artifact);
+        assert_eq!(recovered_receipt.height(), receipt.height());
+        assert_eq!(recovered_receipt.block_hash(), receipt.block_hash());
+        assert_eq!(recovered_receipt.context_id(), receipt.context_id());
+        assert_eq!(recovered_receipt.subject(), receipt.subject());
+        assert_eq!(recovered_receipt.certificate(), receipt.certificate());
+        assert_eq!(recovered_receipt.artifact_hash(), receipt.artifact_hash());
+        assert!(kura.v2_finality_artifact_path(artifact.height).is_file());
+        assert!(
+            !kura
+                .v2_finality_artifact_path(artifact.height)
+                .with_extension("norito.tmp")
+                .exists(),
+            "successful atomic write must not leave a temporary artifact"
+        );
+    }
+
+    #[test]
+    fn v2_finality_artifact_is_immutable_after_first_durable_write() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let first_receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("persist finality artifact");
+        let repeated_receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("identical artifact is idempotent");
+        assert_eq!(
+            repeated_receipt.artifact_hash(),
+            first_receipt.artifact_hash()
+        );
+
+        let mut conflicting = artifact.clone();
+        conflicting.commit_qc.aggregate_signature[0] ^= 0x80;
+        conflicting
+            .validate()
+            .expect("changed aggregate bytes remain structurally valid");
+        assert!(matches!(
+            kura.store_v2_finality_artifact(&conflicting),
+            Err(Error::ConflictingV2FinalityArtifact { height: 1 })
+        ));
+        assert_eq!(
+            kura.v2_finality_artifact(1)
+                .expect("read immutable original"),
+            Some(artifact)
+        );
+    }
+
+    #[test]
+    fn v2_finality_store_and_read_fail_closed_while_prune_poisoned() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let original_receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("persist finality artifact");
+
+        kura.prune_recovery_required.store(true, Ordering::Release);
+        assert!(matches!(
+            kura.store_v2_finality_artifact(&artifact),
+            Err(Error::PruneRecoveryRequired)
+        ));
+        assert!(matches!(
+            kura.v2_finality_artifact(artifact.height),
+            Err(Error::PruneRecoveryRequired)
+        ));
+        assert!(matches!(
+            kura.v2_finality_artifact_with_receipt(artifact.height),
+            Err(Error::PruneRecoveryRequired)
+        ));
+
+        kura.prune_recovery_required.store(false, Ordering::Release);
+        assert_eq!(
+            kura.v2_finality_artifact(artifact.height)
+                .expect("read original after clearing test poison"),
+            Some(artifact.clone()),
+            "poisoned operations must not mutate the durable artifact"
+        );
+        let (recovered, recovered_receipt) = kura
+            .v2_finality_artifact_with_receipt(artifact.height)
+            .expect("recover original after clearing test poison")
+            .expect("artifact remains present");
+        assert_eq!(recovered, artifact);
+        assert_eq!(
+            recovered_receipt.artifact_hash(),
+            original_receipt.artifact_hash()
+        );
+    }
+
+    #[test]
+    fn v2_finality_artifact_rejects_canonical_block_mismatch() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let mut artifact = v2_finality_artifact_for_block(&block);
+        let wrong_hash = HashOf::from_untyped_unchecked(Hash::new(b"another block"));
+        artifact.block_hash = wrong_hash;
+        artifact.subject.block_hash = wrong_hash;
+        artifact.commit_qc.subject = artifact.subject;
+        artifact
+            .validate()
+            .expect("mismatch is internally coherent");
+
+        let error = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect_err("Kura must reject a foreign block hash");
+
+        assert!(matches!(
+            error,
+            Error::BlockHeightConflict {
+                height: 1,
+                expected,
+                actual,
+            } if expected == block.hash() && actual == wrong_hash
+        ));
+        assert_eq!(
+            kura.v2_finality_artifact(1)
+                .expect("missing artifact is not an error"),
+            None
+        );
+    }
+
+    #[test]
+    fn v2_finality_read_ignores_partial_temporary_file_but_fails_on_partial_final_file() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let _receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("persist finality artifact");
+
+        let path = kura.v2_finality_artifact_path(artifact.height);
+        let encoded = artifact.encode();
+        let partial = &encoded[..encoded.len() / 2];
+        std::fs::write(path.with_extension("norito.tmp"), partial)
+            .expect("write interrupted temporary artifact");
+
+        assert_eq!(
+            kura.v2_finality_artifact(artifact.height)
+                .expect("temporary file must not shadow durable artifact"),
+            Some(artifact)
+        );
+
+        std::fs::write(&path, partial).expect("replace final artifact with truncated bytes");
+        assert!(matches!(
+            kura.v2_finality_artifact(1),
+            Err(Error::NoritoFrame(_))
+        ));
     }
 
     #[test]
@@ -31453,6 +32019,10 @@ mod tests {
             let temp_dir = TempDir::new().expect("tempdir");
             let (config, blocks, merge_entries) = populate_prune_recovery_fixture(&temp_dir);
             let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen");
+            let retained_finality = v2_finality_artifact_for_block(&blocks[0]);
+            let retained_receipt = kura
+                .store_v2_finality_artifact(&retained_finality)
+                .expect("seed retained v2 finality artifact");
             kura.fail_prune_after_stage_for_tests(stage);
 
             let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -31500,6 +32070,18 @@ mod tests {
             ));
             assert!(matches!(
                 kura.commit_manifest(2),
+                Err(Error::PruneRecoveryRequired)
+            ));
+            assert!(matches!(
+                kura.store_v2_finality_artifact(&retained_finality),
+                Err(Error::PruneRecoveryRequired)
+            ));
+            assert!(matches!(
+                kura.v2_finality_artifact(retained_finality.height),
+                Err(Error::PruneRecoveryRequired)
+            ));
+            assert!(matches!(
+                kura.v2_finality_artifact_with_receipt(retained_finality.height),
                 Err(Error::PruneRecoveryRequired)
             ));
             assert!(matches!(
@@ -31553,6 +32135,23 @@ mod tests {
                     .commit_manifest(4)
                     .expect("manifest query")
                     .is_none(),
+                "stage {stage}"
+            );
+            assert_eq!(
+                recovered
+                    .v2_finality_artifact(retained_finality.height)
+                    .expect("retained finality query after recovery"),
+                Some(retained_finality.clone()),
+                "stage {stage}"
+            );
+            let (recovered_finality, recovered_receipt) = recovered
+                .v2_finality_artifact_with_receipt(retained_finality.height)
+                .expect("retained finality receipt query after recovery")
+                .expect("retained finality artifact survives recovery");
+            assert_eq!(recovered_finality, retained_finality, "stage {stage}");
+            assert_eq!(
+                recovered_receipt.artifact_hash(),
+                retained_receipt.artifact_hash(),
                 "stage {stage}"
             );
             assert!(
@@ -31783,6 +32382,14 @@ mod tests {
         };
         assert!(block2_sidecar.exists());
         assert!(block3_sidecar.exists());
+        let finality_dir = kura.v2_finality_artifact_dir();
+        std::fs::create_dir_all(&finality_dir).expect("create v2 finality sidecar directory");
+        let block2_finality = kura.v2_finality_artifact_path(2);
+        let block3_finality = kura.v2_finality_artifact_path(3);
+        std::fs::write(&block2_finality, b"retained-finality")
+            .expect("seed retained v2 finality sidecar");
+        std::fs::write(&block3_finality, b"pruned-finality")
+            .expect("seed pruned v2 finality sidecar");
 
         kura.prune_to_height(2).expect("prune to height 2");
 
@@ -31793,6 +32400,14 @@ mod tests {
         assert!(
             !block3_sidecar.exists(),
             "sidecar above the pruned tip should be removed"
+        );
+        assert!(
+            block2_finality.exists(),
+            "v2 finality at the retained tip should stay available"
+        );
+        assert!(
+            !block3_finality.exists(),
+            "v2 finality above the pruned tip should be removed"
         );
         assert_eq!(
             kura.get_durable_block_hash(nonzero!(2_usize)),

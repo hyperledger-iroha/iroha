@@ -45,7 +45,11 @@ use crate::{
     ReplicationOrderValidationError, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1,
     SettlementChannelV1, SettlementReceiptV1, SignatureAlgorithm, SignedAuditorRequestPayloadV1,
     SignedAuditorRequestV1, SignedReplicationOrderV1, SignedReplicationOrderValidationError,
-    TradeEventV1, XorAmount, sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
+    TradeEventV1, XorAmount, decode_billing_line_item_v1, decode_billing_statement_v1,
+    decode_hedging_price_feed_v1, decode_hedging_reference_price_decision_v1,
+    decode_order_cancel_v1, decode_order_request_v1, decode_orderbook_runtime_snapshot_v1,
+    decode_settlement_channel_v1, decode_settlement_receipt_v1, decode_trade_event_v1,
+    sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
     sign_settlement_receipt_ed25519_v1, validate_governance_dag_head_against_chain_v1,
     verify_envelope_untrusted_signers, verify_pdp_bundle_v1, verify_pdp_witnesses_v1,
     verify_pop_commitment_root_signature_v1, verify_pop_credential_signature_v1,
@@ -2386,7 +2390,7 @@ fn governance_payload_kind(payload: &GovernanceLogPayloadV1) -> &'static str {
         GovernanceLogPayloadV1::PorProof(_) => "por_proof",
         GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict",
         GovernanceLogPayloadV1::DealSettlement(_) => "deal_settlement",
-        GovernanceLogPayloadV1::ReputationSnapshot(_) => "reputation_snapshot",
+        GovernanceLogPayloadV1::SignedReputationSnapshot(_) => "reputation_snapshot",
         GovernanceLogPayloadV1::ModerationBallotEvent(_) => "moderation_ballot_event",
         GovernanceLogPayloadV1::AppealFinanceReport(_) => "appeal_finance_report",
         GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(_) => "appeal_finance_weekly_rollup",
@@ -2417,7 +2421,7 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         GovernanceLogValidationError::PorProof(error) => por_proof_validation_code(error),
         GovernanceLogValidationError::AuditVerdict(_)
         | GovernanceLogValidationError::DealSettlement(_)
-        | GovernanceLogValidationError::ReputationSnapshot(_)
+        | GovernanceLogValidationError::SignedReputationSnapshot(_)
         | GovernanceLogValidationError::ModerationBallotEvent(_)
         | GovernanceLogValidationError::AppealFinanceReport(_)
         | GovernanceLogValidationError::AppealFinanceWeeklyRollup(_)
@@ -2444,7 +2448,7 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
         GovernanceLogValidationError::PorProof(_) => CATEGORY_VALIDATION,
         GovernanceLogValidationError::AuditVerdict(_)
         | GovernanceLogValidationError::DealSettlement(_)
-        | GovernanceLogValidationError::ReputationSnapshot(_)
+        | GovernanceLogValidationError::SignedReputationSnapshot(_)
         | GovernanceLogValidationError::ModerationBallotEvent(_)
         | GovernanceLogValidationError::AppealFinanceReport(_)
         | GovernanceLogValidationError::AppealFinanceWeeklyRollup(_)
@@ -2854,44 +2858,38 @@ pub fn validate_orderbook_payload_bytes(
     )];
 
     match kind {
-        OrderbookValidationPayloadKindV1::OrderRequest => {
-            match norito::decode_from_bytes::<OrderRequestV1>(bytes) {
-                Ok(payload) => validate_orderbook_payload_value(
-                    kind,
-                    payload.validate(),
-                    order_request_context(&payload),
-                    inputs,
-                    generated_at,
-                ),
-                Err(error) => orderbook_decode_error(kind, error.to_string(), inputs, generated_at),
-            }
-        }
-        OrderbookValidationPayloadKindV1::OrderCancel => {
-            match norito::decode_from_bytes::<OrderCancelV1>(bytes) {
-                Ok(payload) => validate_orderbook_payload_value(
-                    kind,
-                    payload.validate(),
-                    order_cancel_context(&payload),
-                    inputs,
-                    generated_at,
-                ),
-                Err(error) => orderbook_decode_error(kind, error.to_string(), inputs, generated_at),
-            }
-        }
-        OrderbookValidationPayloadKindV1::TradeEvent => {
-            match norito::decode_from_bytes::<TradeEventV1>(bytes) {
-                Ok(payload) => validate_orderbook_payload_value(
-                    kind,
-                    payload.validate(),
-                    trade_event_context(&payload),
-                    inputs,
-                    generated_at,
-                ),
-                Err(error) => orderbook_decode_error(kind, error.to_string(), inputs, generated_at),
-            }
-        }
+        OrderbookValidationPayloadKindV1::OrderRequest => match decode_order_request_v1(bytes) {
+            Ok(payload) => validate_orderbook_payload_value(
+                kind,
+                payload.validate(),
+                order_request_context(&payload),
+                inputs,
+                generated_at,
+            ),
+            Err(error) => orderbook_decode_error(kind, error.to_string(), inputs, generated_at),
+        },
+        OrderbookValidationPayloadKindV1::OrderCancel => match decode_order_cancel_v1(bytes) {
+            Ok(payload) => validate_orderbook_payload_value(
+                kind,
+                payload.validate(),
+                order_cancel_context(&payload),
+                inputs,
+                generated_at,
+            ),
+            Err(error) => orderbook_decode_error(kind, error.to_string(), inputs, generated_at),
+        },
+        OrderbookValidationPayloadKindV1::TradeEvent => match decode_trade_event_v1(bytes) {
+            Ok(payload) => validate_orderbook_payload_value(
+                kind,
+                payload.validate(),
+                trade_event_context(&payload),
+                inputs,
+                generated_at,
+            ),
+            Err(error) => orderbook_decode_error(kind, error.to_string(), inputs, generated_at),
+        },
         OrderbookValidationPayloadKindV1::SettlementChannel => {
-            match norito::decode_from_bytes::<SettlementChannelV1>(bytes) {
+            match decode_settlement_channel_v1(bytes) {
                 Ok(payload) => validate_orderbook_payload_value(
                     kind,
                     payload.validate(),
@@ -2903,7 +2901,7 @@ pub fn validate_orderbook_payload_bytes(
             }
         }
         OrderbookValidationPayloadKindV1::SettlementReceipt => {
-            match norito::decode_from_bytes::<SettlementReceiptV1>(bytes) {
+            match decode_settlement_receipt_v1(bytes) {
                 Ok(payload) => validate_orderbook_payload_value(
                     kind,
                     payload.validate(),
@@ -2915,7 +2913,7 @@ pub fn validate_orderbook_payload_bytes(
             }
         }
         OrderbookValidationPayloadKindV1::RuntimeSnapshot => {
-            match norito::decode_from_bytes::<OrderbookRuntimeSnapshotV1>(bytes) {
+            match decode_orderbook_runtime_snapshot_v1(bytes) {
                 Ok(payload) => validate_orderbook_payload_value(
                     kind,
                     payload.validate(),
@@ -2944,20 +2942,18 @@ pub fn validate_hedging_payload_bytes(
     )];
 
     match kind {
-        HedgingValidationPayloadKindV1::PriceFeed => {
-            match norito::decode_from_bytes::<HedgingPriceFeedV1>(bytes) {
-                Ok(payload) => validate_hedging_payload_value(
-                    kind,
-                    payload.validate(),
-                    hedging_price_feed_context(&payload),
-                    inputs,
-                    generated_at,
-                ),
-                Err(error) => hedging_decode_error(kind, error.to_string(), inputs, generated_at),
-            }
-        }
+        HedgingValidationPayloadKindV1::PriceFeed => match decode_hedging_price_feed_v1(bytes) {
+            Ok(payload) => validate_hedging_payload_value(
+                kind,
+                payload.validate(),
+                hedging_price_feed_context(&payload),
+                inputs,
+                generated_at,
+            ),
+            Err(error) => hedging_decode_error(kind, error.to_string(), inputs, generated_at),
+        },
         HedgingValidationPayloadKindV1::ReferencePriceDecision => {
-            match norito::decode_from_bytes::<HedgingReferencePriceDecisionV1>(bytes) {
+            match decode_hedging_reference_price_decision_v1(bytes) {
                 Ok(payload) => validate_hedging_payload_value(
                     kind,
                     payload.validate(),
@@ -2969,7 +2965,7 @@ pub fn validate_hedging_payload_bytes(
             }
         }
         HedgingValidationPayloadKindV1::BillingLineItem => {
-            match norito::decode_from_bytes::<BillingLineItemV1>(bytes) {
+            match decode_billing_line_item_v1(bytes) {
                 Ok(payload) => validate_hedging_payload_value(
                     kind,
                     payload.validate(),
@@ -2981,7 +2977,7 @@ pub fn validate_hedging_payload_bytes(
             }
         }
         HedgingValidationPayloadKindV1::BillingStatement => {
-            match norito::decode_from_bytes::<BillingStatementV1>(bytes) {
+            match decode_billing_statement_v1(bytes) {
                 Ok(payload) => validate_hedging_payload_value(
                     kind,
                     payload.validate(),
@@ -3235,7 +3231,7 @@ pub fn sign_orderbook_payload_bytes_ed25519_v1(
     match kind {
         OrderbookValidationPayloadKindV1::OrderRequest => {
             let schema = kind.schema();
-            let payload = norito::decode_from_bytes::<OrderRequestV1>(bytes).map_err(|err| {
+            let payload = decode_order_request_v1(bytes).map_err(|err| {
                 OrderbookPayloadSigningError::Decode {
                     schema,
                     reason: err.to_string(),
@@ -3251,7 +3247,7 @@ pub fn sign_orderbook_payload_bytes_ed25519_v1(
         }
         OrderbookValidationPayloadKindV1::OrderCancel => {
             let schema = kind.schema();
-            let payload = norito::decode_from_bytes::<OrderCancelV1>(bytes).map_err(|err| {
+            let payload = decode_order_cancel_v1(bytes).map_err(|err| {
                 OrderbookPayloadSigningError::Decode {
                     schema,
                     reason: err.to_string(),
@@ -3267,13 +3263,12 @@ pub fn sign_orderbook_payload_bytes_ed25519_v1(
         }
         OrderbookValidationPayloadKindV1::SettlementReceipt => {
             let schema = kind.schema();
-            let payload =
-                norito::decode_from_bytes::<SettlementReceiptV1>(bytes).map_err(|err| {
-                    OrderbookPayloadSigningError::Decode {
-                        schema,
-                        reason: err.to_string(),
-                    }
-                })?;
+            let payload = decode_settlement_receipt_v1(bytes).map_err(|err| {
+                OrderbookPayloadSigningError::Decode {
+                    schema,
+                    reason: err.to_string(),
+                }
+            })?;
             let signed =
                 sign_settlement_receipt_ed25519_v1(payload, &signing_key).map_err(|err| {
                     OrderbookPayloadSigningError::Sign {
@@ -6359,24 +6354,38 @@ fn hedging_validation_code(error: &HedgingValidationError) -> &'static str {
         | HedgingValidationError::UnsupportedBillingLineVersion { .. }
         | HedgingValidationError::UnsupportedBillingStatementVersion { .. } => "SFS-VAL-002",
         HedgingValidationError::InvalidText { .. }
+        | HedgingValidationError::TextTooLong { .. }
+        | HedgingValidationError::ResourceLimitExceeded { .. }
+        | HedgingValidationError::NonCanonicalOrder { .. }
         | HedgingValidationError::InvalidDigest { .. }
         | HedgingValidationError::InvalidTimestamp { .. }
         | HedgingValidationError::InvalidBasisPoints { .. }
         | HedgingValidationError::NoPriceFeeds
         | HedgingValidationError::DuplicateFeedId { .. }
+        | HedgingValidationError::DuplicateFeedSource { .. }
+        | HedgingValidationError::InvalidFeedWeightSum { .. }
         | HedgingValidationError::ZeroMaxFeedAge
         | HedgingValidationError::ZeroReferencePrice
         | HedgingValidationError::DuplicateDegradationReason
         | HedgingValidationError::ZeroBillingAmount
+        | HedgingValidationError::ZeroBillingQuantity
+        | HedgingValidationError::BillingLineDirectionMismatch
         | HedgingValidationError::ZeroUsdAmount
         | HedgingValidationError::EmptyAccountId
         | HedgingValidationError::NoBillingLines
-        | HedgingValidationError::DuplicateLineId => "SFS-VAL-001",
+        | HedgingValidationError::DuplicateLineId
+        | HedgingValidationError::DuplicateBillingSource { .. }
+        | HedgingValidationError::SelfReferentialStatement => "SFS-VAL-001",
         HedgingValidationError::RejectedFeed { .. }
         | HedgingValidationError::FutureFeed { .. }
         | HedgingValidationError::StaleFeed { .. }
         | HedgingValidationError::InvalidPeriod
-        | HedgingValidationError::InvalidDueAt => "SFS-POL-020",
+        | HedgingValidationError::InvalidDueAt
+        | HedgingValidationError::ReferencePriceOutsidePeriod { .. }
+        | HedgingValidationError::PreviousStatementMismatch
+        | HedgingValidationError::StatementAccountMismatch
+        | HedgingValidationError::NonContiguousStatementPeriod { .. }
+        | HedgingValidationError::UnexpectedInitialStatementPredecessor => "SFS-POL-020",
         HedgingValidationError::ReferencePriceMismatch { .. }
         | HedgingValidationError::DegradationMismatch
         | HedgingValidationError::BillingTotalsMismatch
@@ -6384,6 +6393,8 @@ fn hedging_validation_code(error: &HedgingValidationError) -> &'static str {
         | HedgingValidationError::DigestMismatch { .. } => "SFS-HDG-001",
         HedgingValidationError::AmountOverflow
         | HedgingValidationError::AmountUnderflow
+        | HedgingValidationError::LengthOverflow
+        | HedgingValidationError::AllocationFailed { .. }
         | HedgingValidationError::Norito(_) => "SFS-INT-001",
     }
 }
@@ -6629,6 +6640,9 @@ fn replication_order_validation_code(error: &ReplicationOrderValidationError) ->
     match error {
         ReplicationOrderValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
         ReplicationOrderValidationError::InvalidManifestDigest => "SFS-VAL-001",
+        ReplicationOrderValidationError::InvalidManifestCidLength { .. }
+        | ReplicationOrderValidationError::InertManifestCid
+        | ReplicationOrderValidationError::MalformedManifestCid { .. } => "SFS-VAL-005",
         ReplicationOrderValidationError::UnknownChunkerHandle { .. }
         | ReplicationOrderValidationError::NonCanonicalProfileHandle { .. } => "SFS-VAL-003",
         ReplicationOrderValidationError::InvalidDeadline
@@ -7245,7 +7259,7 @@ mod tests {
         crate::build_billing_statement_v1(
             b"buyer-account".to_vec(),
             1_000,
-            1_700,
+            1_800,
             2_000,
             reference_price,
             vec![storage, credit],
@@ -7574,7 +7588,7 @@ mod tests {
         ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
             order_id: [0xAB; 32],
-            manifest_cid: b"bafyreplicaexamplecidroot".to_vec(),
+            manifest_cid: crate::canonical_manifest_root_cid([0x41; 32]),
             manifest_digest: [0x42; 32],
             chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
             target_replicas: 2,
@@ -8654,6 +8668,34 @@ mod tests {
     }
 
     #[test]
+    fn validate_hedging_payload_bytes_rejects_oversized_and_noncanonical_archives() {
+        let oversized = vec![0_u8; crate::HEDGING_SMALL_PAYLOAD_MAX_CANONICAL_BYTES_V1 + 1];
+        let outcome = validate_hedging_payload_bytes(
+            HedgingValidationPayloadKindV1::PriceFeed,
+            &oversized,
+            "oversized-feed.to",
+            32,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-NORITO-001");
+        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert!(outcome.message.contains("maximum canonical size"));
+
+        let mut noncanonical = to_bytes(&hedging_feed("primary", 1_000_000, 1_790))
+            .expect("encode canonical hedging feed");
+        noncanonical.push(0);
+        let outcome = validate_hedging_payload_bytes(
+            HedgingValidationPayloadKindV1::PriceFeed,
+            &noncanonical,
+            "noncanonical-feed.to",
+            32,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-NORITO-001");
+        assert_eq!(outcome.category, CATEGORY_NORITO);
+    }
+
+    #[test]
     fn validate_hedging_payload_bytes_rejects_stale_decision_feed() {
         let mut decision = hedging_reference_decision();
         decision.feeds[0].observed_at_unix = 1_000;
@@ -8819,7 +8861,10 @@ mod tests {
     #[test]
     fn validate_pop_payload_bytes_rejects_signature_tampering() {
         let (mut credential, _, _) = signed_pop_material();
-        credential.credential_id = pop_digest(0x99);
+        // Keep the tampered value structurally canonical so this negative
+        // reaches signature verification instead of being rejected earlier as
+        // a malformed Pasta scalar.
+        credential.credential_id = pop_scalar(0x99);
         let bytes = to_bytes(&credential).expect("encode tampered credential");
         let outcome = validate_pop_payload_bytes(
             PopValidationPayloadKindV1::Credential,
@@ -9159,6 +9204,31 @@ mod tests {
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
+    }
+
+    #[test]
+    fn orderbook_reference_and_signing_paths_reject_oversized_archive() {
+        let archive = vec![0_u8; crate::ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1 + 1];
+        let outcome = validate_orderbook_payload_bytes(
+            OrderbookValidationPayloadKindV1::OrderRequest,
+            &archive,
+            "oversized-order.to",
+            33,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-NORITO-001");
+        assert_eq!(outcome.category, CATEGORY_NORITO);
+        assert!(outcome.message.contains("maximum canonical size"));
+
+        assert!(matches!(
+            sign_orderbook_payload_bytes_ed25519_v1(
+                OrderbookValidationPayloadKindV1::OrderRequest,
+                &archive,
+                &[0xB7; 32],
+            ),
+            Err(OrderbookPayloadSigningError::Decode { reason, .. })
+                if reason.contains("maximum canonical size")
+        ));
     }
 
     #[test]

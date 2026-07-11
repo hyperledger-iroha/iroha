@@ -27,7 +27,7 @@ mod transparency;
 
 pub use deal::{
     ClientSnapshot, DealEngine, DealEngineError, DealSettlementOutcome, DealSnapshot,
-    ProviderSnapshot, UsageOutcome,
+    ProviderSnapshot, UsageOutcome, derive_micropayment_ticket_id,
 };
 pub use moderation::{
     ModerationAppealDeposit, ModerationBallotAnnouncement, ModerationBallotChallengeDecision,
@@ -219,6 +219,7 @@ const AUX_RUNTIME_STATE_SNAPSHOT_FILE: &str = "auxiliary-snapshot.to";
 const RUNTIME_STATE_INITIALIZATION_FILE: &str = "initialized-v1";
 const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v1\n";
 const AUX_RUNTIME_STATE_VERSION_V1: u8 = 1;
+const ADMITTED_REPUTATION_SNAPSHOT_VERSION_V1: u8 = 1;
 const GOVERNANCE_OUTBOX_VERSION_V1: u8 = 1;
 const GOVERNANCE_OUTBOX_BINDING_DOMAIN_V1: &[u8] = b"sorafs.node.governance_outbox.binding.v1";
 const REPAIR_MUTATION_INTENT_VERSION_V1: u8 = 1;
@@ -287,17 +288,23 @@ pub use repair::{
 };
 use reserve::ReserveLifecycleRuntime;
 use sorafs_car::{CarBuildPlan, PorProof};
+use sorafs_manifest::reputation::signed::{
+    MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES, decode_reputation_trust_policy,
+    decode_signed_reputation_snapshot,
+};
 use sorafs_manifest::{
     AppealFinanceReconciliationSummaryV1, ManifestV1, OrderCancelV1, OrderRequestV1, OrderSideV1,
     OrderTierV1, OrderbookRuntimeSnapshotV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
     REPUTATION_PROVIDER_METRICS_VERSION_V1, ReconciliationValidationError,
     ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-    ReputationSnapshotEventV1, ReputationSnapshotV1, ReputationWeightsV1,
-    SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
-    SettlementChannelStatusV1, SettlementReceiptV1, SoraFsAppealFinanceAccountFlowV1,
-    SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    ReputationScoringEvidenceV1, ReputationSnapshotEventV1, ReputationSnapshotTrustPolicyV1,
+    ReputationSnapshotV1, ReputationWeightsV1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+    SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementChannelStatusV1, SettlementReceiptV1,
+    SignedReputationSnapshotV1, SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
     SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
+    build_reputation_snapshot_with_trust_edges,
     capacity::{CapacityTelemetryV1, ReplicationOrderV1},
     deal::{DealSettlementStatusV1, DealSettlementV1},
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
@@ -313,7 +320,7 @@ use sorafs_manifest::{
         RepairTaskStateV1, RepairTicketId, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
         repair_audit_payload_digest_v1,
     },
-    score_provider_reputation,
+    validate_reputation_snapshot_transition,
 };
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -1038,6 +1045,114 @@ fn read_local_checkpoint_bounded(path: &Path, max_bytes: u64) -> io::Result<Opti
     Ok(Some(bytes))
 }
 
+fn read_reputation_trust_policy_file(path: &Path) -> io::Result<Vec<u8>> {
+    let path = absolute_local_checkpoint_path(path)?;
+    let path = path.as_path();
+    reject_unsafe_checkpoint_ancestors(path)?;
+    let before_open = fs::symlink_metadata(path)?;
+    validate_reputation_trust_policy_file_metadata(path, &before_open)?;
+    let max_bytes = u64::try_from(MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES)
+        .map_err(|_| io::Error::other("reputation trust-policy size cap does not fit u64"))?;
+    if before_open.len() > max_bytes {
+        return Err(io::Error::other(format!(
+            "reputation trust policy `{}` is {} bytes, exceeding limit {max_bytes}",
+            path.display(),
+            before_open.len()
+        )));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_local_no_follow_flag(&mut options);
+    let file = options.open(path)?;
+    let opened = file.metadata()?;
+    validate_reputation_trust_policy_file_metadata(path, &opened)?;
+    if opened.len() > max_bytes || !reputation_policy_metadata_stable(&before_open, &opened) {
+        return Err(io::Error::other(format!(
+            "reputation trust policy `{}` changed identity or exceeded its size limit while opening",
+            path.display()
+        )));
+    }
+    let capacity = usize::try_from(opened.len()).map_err(|_| {
+        io::Error::other(format!(
+            "reputation trust policy `{}` length does not fit memory address space",
+            path.display()
+        ))
+    })?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(capacity).map_err(|_| {
+        io::Error::other(format!(
+            "failed to reserve memory for reputation trust policy `{}`",
+            path.display()
+        ))
+    })?;
+    let mut limited = file.take(max_bytes.saturating_add(1));
+    limited.read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
+        return Err(io::Error::other(format!(
+            "reputation trust policy `{}` grew beyond limit {max_bytes} while reading",
+            path.display()
+        )));
+    }
+    let after_read_file = limited.get_ref().metadata()?;
+    let after_read = fs::symlink_metadata(path)?;
+    validate_reputation_trust_policy_file_metadata(path, &after_read)?;
+    if !reputation_policy_metadata_stable(&opened, &after_read_file)
+        || !reputation_policy_metadata_stable(&after_read_file, &after_read)
+    {
+        return Err(io::Error::other(format!(
+            "reputation trust policy `{}` changed while being read",
+            path.display()
+        )));
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn reputation_policy_metadata_stable(expected: &fs::Metadata, observed: &fs::Metadata) -> bool {
+    expected.dev() == observed.dev()
+        && expected.ino() == observed.ino()
+        && expected.len() == observed.len()
+        && expected.mtime() == observed.mtime()
+        && expected.mtime_nsec() == observed.mtime_nsec()
+        && expected.ctime() == observed.ctime()
+        && expected.ctime_nsec() == observed.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn reputation_policy_metadata_stable(expected: &fs::Metadata, observed: &fs::Metadata) -> bool {
+    expected.len() == observed.len()
+        && expected.modified().ok() == observed.modified().ok()
+        && same_local_file_identity(expected, observed)
+}
+
+fn validate_reputation_trust_policy_file_metadata(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> io::Result<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(io::Error::other(format!(
+            "reputation trust policy `{}` must be a regular non-symlink file",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        if metadata.nlink() != 1 {
+            return Err(io::Error::other(format!(
+                "reputation trust policy `{}` must have exactly one hard link",
+                path.display()
+            )));
+        }
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err(io::Error::other(format!(
+                "reputation trust policy `{}` must not be writable by group or other users",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn collect_secure_object_store_files(
     root: &Path,
     current: &Path,
@@ -1720,10 +1835,10 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
         report: &SorafsReconciliationReportV1,
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
-    /// Persist a reputation snapshot to the governance pipeline.
+    /// Persist an externally authorized reputation snapshot to the governance pipeline.
     fn publish_reputation_snapshot(
         &self,
-        snapshot: &ReputationSnapshotV1,
+        snapshot: &SignedReputationSnapshotV1,
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
     /// Persist a moderation ballot lifecycle event to the governance pipeline.
@@ -2069,8 +2184,9 @@ pub struct NodeHandle {
     auxiliary_checkpoint_lock: Arc<Mutex<()>>,
     durability_failure: Arc<Mutex<Option<String>>>,
     auxiliary_runtime_checkpoint_path: Option<PathBuf>,
+    reputation_trust_policy: Option<Arc<ReputationSnapshotTrustPolicyV1>>,
     latest_reputation_snapshot: Arc<RwLock<Option<ReputationSnapshotV1>>>,
-    reputation_snapshots: Arc<RwLock<BTreeMap<[u8; 16], ReputationSnapshotV1>>>,
+    reputation_snapshots: Arc<RwLock<BTreeMap<[u8; 16], AdmittedReputationSnapshotV1>>>,
     reputation_events: Arc<RwLock<BoundedEventHistory<ReputationSnapshotEventV1>>>,
     reputation_event_sender: broadcast::Sender<ReputationSnapshotEventV1>,
     orderbook: Arc<RwLock<OrderbookRuntime>>,
@@ -2132,7 +2248,7 @@ enum GovernanceOutboxKindV1 {
     RepairSlashSubmitted,
     GcAudit,
     ReconciliationReport,
-    ReputationSnapshot,
+    SignedReputationSnapshot,
     ModerationBallotEvent,
     TransparencyLedgerPublication,
     ProofTokenIssuance,
@@ -2151,7 +2267,7 @@ impl GovernanceOutboxKindV1 {
             Self::RepairSlashSubmitted => 3,
             Self::GcAudit => 4,
             Self::ReconciliationReport => 5,
-            Self::ReputationSnapshot => 6,
+            Self::SignedReputationSnapshot => 6,
             Self::ModerationBallotEvent => 7,
             Self::TransparencyLedgerPublication => 8,
             Self::ProofTokenIssuance => 9,
@@ -3088,6 +3204,16 @@ where
     Ok(value)
 }
 
+fn decode_canonical_signed_reputation_payload(
+    bytes: &[u8],
+) -> Result<SignedReputationSnapshotV1, GovernancePublishError> {
+    decode_signed_reputation_snapshot(bytes).map_err(|err| {
+        GovernancePublishError::other(format!(
+            "decode signed reputation governance payload: {err}"
+        ))
+    })
+}
+
 fn validate_repair_audit_event(
     entry_sequence: u64,
     event: &RepairAuditEventV1,
@@ -3185,10 +3311,8 @@ fn validate_governance_outbox_entry(
             .validate()
             .map_err(|err| GovernancePublishError::other(err.to_string()))?;
         }
-        GovernanceOutboxKindV1::ReputationSnapshot => {
-            decode_canonical_governance_payload::<ReputationSnapshotV1>(&entry.payload_bytes)?
-                .validate()
-                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        GovernanceOutboxKindV1::SignedReputationSnapshot => {
+            decode_canonical_signed_reputation_payload(&entry.payload_bytes)?;
         }
         GovernanceOutboxKindV1::ModerationBallotEvent => {
             decode_canonical_governance_payload::<SoraFsModerationBallotGovernanceEventV1>(
@@ -3319,9 +3443,8 @@ fn publish_governance_outbox_entry(
             )?;
             publisher.publish_reconciliation_report(&payload, &entry.payload_bytes)
         }
-        GovernanceOutboxKindV1::ReputationSnapshot => {
-            let payload =
-                decode_canonical_governance_payload::<ReputationSnapshotV1>(&entry.payload_bytes)?;
+        GovernanceOutboxKindV1::SignedReputationSnapshot => {
+            let payload = decode_canonical_signed_reputation_payload(&entry.payload_bytes)?;
             publisher.publish_reputation_snapshot(&payload, &entry.payload_bytes)
         }
         GovernanceOutboxKindV1::ModerationBallotEvent => {
@@ -3367,6 +3490,15 @@ fn publish_governance_outbox_entry(
     }
 }
 
+/// Signed reputation envelope plus the exact admission time used for freshness checks.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct AdmittedReputationSnapshotV1 {
+    version: u8,
+    admitted_at_unix: u64,
+    encoded_len: u64,
+    envelope: SignedReputationSnapshotV1,
+}
+
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct AuxiliaryRuntimeCheckpointV1 {
     version: u8,
@@ -3383,7 +3515,7 @@ struct AuxiliaryRuntimeCheckpointV1 {
     gc_eviction_intent_next_sequence: u64,
     gc_eviction_intents: Vec<GcEvictionIntentV1>,
     gc_eviction_audit_links: Vec<GcEvictionAuditLinkV1>,
-    reputation_snapshots: Vec<ReputationSnapshotV1>,
+    reputation_snapshots: Vec<AdmittedReputationSnapshotV1>,
     latest_reputation_snapshot_id: Option<[u8; 16]>,
     reputation_events: Vec<ReputationSnapshotEventV1>,
     transparency_source_entries: Vec<TransparencyLedgerSourceEntry>,
@@ -3409,6 +3541,15 @@ struct OrderbookEventInput {
     settlement_channel_ids: Vec<[u8; 32]>,
     receipt_id: Option<[u8; 32]>,
     expired_order_ids: Vec<[u8; 32]>,
+}
+
+/// Unsigned deterministic reputation material intended for external governance signing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReputationSnapshotSigningMaterialV1 {
+    /// Canonical snapshot reproduced by the scoring evidence.
+    pub snapshot: ReputationSnapshotV1,
+    /// Complete provider inputs and trust edges required to replay the snapshot.
+    pub scoring_evidence: ReputationScoringEvidenceV1,
 }
 
 /// Error type returned by storage-related operations on [`NodeHandle`].
@@ -3447,6 +3588,17 @@ pub enum NodeInitError {
     /// Governance publication was configured but its durable publisher could not start.
     #[error("failed to initialise SoraFS governance publisher: {0}")]
     GovernancePublisher(String),
+    /// The configured external reputation trust policy could not be read or validated.
+    #[error(
+        "failed to load SoraFS reputation trust policy `{path}`: {message}",
+        path = path.display()
+    )]
+    ReputationTrustPolicy {
+        /// Configured trust-policy path.
+        path: PathBuf,
+        /// Validation or I/O diagnostic.
+        message: String,
+    },
 }
 
 impl NodeInitError {
@@ -3457,6 +3609,21 @@ impl NodeInitError {
             message: error.to_string(),
         }
     }
+}
+
+fn load_reputation_trust_policy(
+    path: &Path,
+) -> Result<ReputationSnapshotTrustPolicyV1, NodeInitError> {
+    let bytes = read_reputation_trust_policy_file(path).map_err(|error| {
+        NodeInitError::ReputationTrustPolicy {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+    decode_reputation_trust_policy(&bytes).map_err(|error| NodeInitError::ReputationTrustPolicy {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })
 }
 
 /// Errors raised while computing reconciliation summaries.
@@ -3532,6 +3699,11 @@ impl NodeHandle {
         repair_config: RepairConfig,
         gc_config: GcConfig,
     ) -> Result<Self, NodeInitError> {
+        let reputation_trust_policy = config
+            .reputation_trust_policy_path()
+            .map(|path| load_reputation_trust_policy(path))
+            .transpose()?
+            .map(Arc::new);
         let repair_config = repair_config.with_default_state_dir(config.data_dir());
         let gc_config = gc_config.with_default_state_dir(config.data_dir());
         let scheduler_config = StorageSchedulerConfig::from_storage_config(&config);
@@ -3644,6 +3816,7 @@ impl NodeHandle {
             auxiliary_checkpoint_lock: Arc::new(Mutex::new(())),
             durability_failure: Arc::new(Mutex::new(None)),
             auxiliary_runtime_checkpoint_path,
+            reputation_trust_policy,
             latest_reputation_snapshot: Arc::new(RwLock::new(None)),
             reputation_snapshots: Arc::new(RwLock::new(BTreeMap::new())),
             reputation_events: Arc::new(RwLock::new(BoundedEventHistory::new(event_history_limit))),
@@ -3953,33 +4126,44 @@ impl NodeHandle {
         self.deal_engine.clone()
     }
 
-    /// Deposit provider bond collateral (nano-XOR units).
-    pub fn deposit_provider_bond(
+    /// Apply an authenticated provider bond funding request at the exact next sequence.
+    ///
+    /// External callers must authenticate the request and bind `provider_id` to the admitted
+    /// provider identity before invoking this trusted runtime boundary.
+    pub fn fund_provider_bond_sequenced(
         &self,
         provider_id: ProviderId,
         amount_nano: u128,
+        funding_sequence: u64,
     ) -> Result<ProviderSnapshot, DealEngineError> {
         self.mutate_deal_engine_durably(|engine| {
             engine
-                .deposit_provider_bond(provider_id, amount_nano)
+                .deposit_provider_bond_sequenced(provider_id, amount_nano, funding_sequence)
                 .map(|snapshot| (snapshot, true))
         })
     }
 
-    /// Deposit client credit balance (nano-XOR units).
-    pub fn deposit_client_credit(
+    /// Apply an authenticated operator client-credit funding request at the exact next sequence.
+    ///
+    /// External callers must authenticate a configured operator before invoking this trusted
+    /// runtime boundary.
+    pub fn fund_client_credit_sequenced(
         &self,
         client_id: ClientId,
         amount_nano: u128,
+        funding_sequence: u64,
     ) -> Result<ClientSnapshot, DealEngineError> {
         self.mutate_deal_engine_durably(|engine| {
             engine
-                .deposit_client_credit(client_id, amount_nano)
+                .deposit_client_credit_sequenced(client_id, amount_nano, funding_sequence)
                 .map(|snapshot| (snapshot, true))
         })
     }
 
     /// Open a deal using the supplied proposal and activation epoch.
+    ///
+    /// External callers must authenticate a configured operator and require a current admitted
+    /// advert for the proposal's provider before invoking this trusted runtime boundary.
     pub fn open_deal(
         &self,
         proposal: DealProposal,
@@ -3993,6 +4177,9 @@ impl NodeHandle {
     }
 
     /// Record usage attributed to a deal and evaluate probabilistic micropayments.
+    ///
+    /// External callers must bind an authenticated request signer to the deal provider's current
+    /// admitted advert before invoking this trusted runtime boundary.
     pub fn record_deal_usage(
         &self,
         report: DealUsageReport,
@@ -4732,37 +4919,109 @@ impl NodeHandle {
         }
     }
 
-    /// Persist and cache the latest SoraFS reputation snapshot.
+    /// Admit, persist, and publish an externally authorized reputation snapshot.
     ///
     /// The local snapshot, head linkage, replay event, and publication intent
     /// are committed together before external delivery. Retrying the exact same
     /// snapshot id is idempotent and retries publication; conflicting ids or
     /// non-monotonic heads are rejected.
-    pub fn publish_reputation_snapshot(
+    pub fn publish_signed_reputation_snapshot(
         &self,
-        snapshot: ReputationSnapshotV1,
+        envelope: SignedReputationSnapshotV1,
     ) -> Result<(), GovernancePublishError> {
         let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
         self.ensure_durability_healthy()
             .map_err(GovernancePublishError::other)?;
-        snapshot
-            .validate()
-            .map_err(|err| GovernancePublishError::other(format!("invalid snapshot: {err}")))?;
-        let encoded = norito::to_bytes(&snapshot)
-            .map_err(|err| GovernancePublishError::other(format!("encode snapshot: {err}")))?;
+        let policy = self.reputation_trust_policy.as_deref().ok_or_else(|| {
+            GovernancePublishError::other(
+                "signed reputation admission is disabled: no external trust policy is configured",
+            )
+        })?;
+        let admitted_at_unix = unix_now_secs();
+        envelope.verify(policy, admitted_at_unix).map_err(|err| {
+            GovernancePublishError::other(format!("signed reputation admission failed: {err}"))
+        })?;
+        let snapshot = &envelope.snapshot;
+        let encoded = envelope.canonical_bytes().map_err(|err| {
+            GovernancePublishError::other(format!("encode signed reputation snapshot: {err}"))
+        })?;
+        let encoded_len = u64::try_from(encoded.len()).map_err(|_| {
+            GovernancePublishError::other(
+                "signed reputation snapshot length does not fit checkpoint accounting",
+            )
+        })?;
         let mut snapshots = self
             .reputation_snapshots
             .write()
             .map_err(|_| GovernancePublishError::other("reputation snapshot index poisoned"))?;
-        if let Some(existing) = snapshots.get(&snapshot.snapshot_id) {
-            if existing != &snapshot {
-                return Err(GovernancePublishError::other(format!(
-                    "reputation snapshot id {} conflicts with retained canonical bytes",
-                    hex::encode(snapshot.snapshot_id)
-                )));
-            }
+        if snapshots
+            .get(&snapshot.snapshot_id)
+            .is_some_and(|existing| existing.envelope != envelope)
+        {
+            return Err(GovernancePublishError::other(format!(
+                "signed reputation snapshot id {} conflicts with retained canonical envelope bytes",
+                hex::encode(snapshot.snapshot_id)
+            )));
+        }
+        let retained_envelope_bytes = snapshots.values().try_fold(0_u64, |total, admitted| {
+            total.checked_add(admitted.encoded_len).ok_or_else(|| {
+                GovernancePublishError::other(
+                    "retained signed reputation checkpoint byte accounting overflow",
+                )
+            })
+        })?;
+        let outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
+        let mut pending_envelope_bytes = 0_u64;
+        let mut exact_envelope_pending = false;
+        for entry in outbox
+            .entries
+            .values()
+            .filter(|entry| entry.kind == GovernanceOutboxKindV1::SignedReputationSnapshot)
+        {
+            let len = u64::try_from(entry.payload_bytes.len()).map_err(|_| {
+                GovernancePublishError::other(
+                    "pending signed reputation outbox length does not fit u64",
+                )
+            })?;
+            pending_envelope_bytes = pending_envelope_bytes.checked_add(len).ok_or_else(|| {
+                GovernancePublishError::other(
+                    "pending signed reputation checkpoint byte accounting overflow",
+                )
+            })?;
+            exact_envelope_pending |= entry.payload_bytes == encoded;
+        }
+        drop(outbox);
+        let additional_map_bytes = if snapshots.contains_key(&snapshot.snapshot_id) {
+            0
+        } else {
+            encoded_len
+        };
+        let additional_outbox_bytes = if exact_envelope_pending {
+            0
+        } else {
+            encoded_len
+        };
+        let required_reputation_bytes = retained_envelope_bytes
+            .checked_add(pending_envelope_bytes)
+            .and_then(|total| total.checked_add(additional_map_bytes))
+            .and_then(|total| total.checked_add(additional_outbox_bytes))
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "signed reputation checkpoint byte accounting overflow",
+                )
+            })?;
+        let checkpoint_max_bytes = self.config.runtime_retention().checkpoint_max_bytes();
+        if required_reputation_bytes > checkpoint_max_bytes {
+            return Err(GovernancePublishError::other(format!(
+                "signed reputation state requires at least {required_reputation_bytes} checkpoint bytes, exceeding configured limit {checkpoint_max_bytes}"
+            )));
+        }
+        if snapshots.contains_key(&snapshot.snapshot_id) {
             drop(snapshots);
             let previous_outbox = self
                 .governance_outbox
@@ -4770,7 +5029,7 @@ impl NodeHandle {
                 .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
                 .clone();
             let (_, inserted) = self.enqueue_governance_outbox_unlocked(
-                GovernanceOutboxKindV1::ReputationSnapshot,
+                GovernanceOutboxKindV1::SignedReputationSnapshot,
                 encoded,
             )?;
             if inserted && let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
@@ -4802,39 +5061,30 @@ impl NodeHandle {
             .read()
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
             .clone();
-        match latest.as_ref() {
-            Some(head) => {
-                if snapshot.previous_snapshot_id != Some(head.snapshot_id) {
-                    return Err(GovernancePublishError::other(format!(
-                        "reputation snapshot {} must extend current head {}",
-                        hex::encode(snapshot.snapshot_id),
-                        hex::encode(head.snapshot_id)
-                    )));
-                }
-                if snapshot.generated_at_unix <= head.generated_at_unix {
-                    return Err(GovernancePublishError::other(
-                        "reputation snapshot generated_at_unix must advance the current head",
-                    ));
-                }
-            }
-            None if snapshot.previous_snapshot_id.is_some() => {
-                return Err(GovernancePublishError::other(
-                    "first reputation snapshot must not reference a previous snapshot",
-                ));
-            }
-            None => {}
-        }
+        validate_reputation_snapshot_transition(latest.as_ref(), snapshot).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "signed reputation snapshot does not extend the exact retained head: {err}"
+            ))
+        })?;
         let next_sequence = events
             .latest_sequence
             .checked_add(1)
             .ok_or_else(|| GovernancePublishError::other("event sequence exhausted"))?;
         let event =
-            ReputationSnapshotEventV1::from_snapshot(next_sequence, &snapshot).map_err(|err| {
+            ReputationSnapshotEventV1::from_snapshot(next_sequence, snapshot).map_err(|err| {
                 GovernancePublishError::other(format!(
                     "validated reputation snapshot could not produce an event: {err}"
                 ))
             })?;
-        snapshots.insert(snapshot.snapshot_id, snapshot.clone());
+        snapshots.insert(
+            snapshot.snapshot_id,
+            AdmittedReputationSnapshotV1 {
+                version: ADMITTED_REPUTATION_SNAPSHOT_VERSION_V1,
+                admitted_at_unix,
+                encoded_len,
+                envelope: envelope.clone(),
+            },
+        );
         let event = match events.append(|sequence| {
             debug_assert_eq!(sequence, next_sequence);
             event
@@ -4855,9 +5105,16 @@ impl NodeHandle {
         while snapshots.len() > state_limit {
             let Some(evict) = snapshots
                 .values()
-                .filter(|candidate| !retained_snapshot_ids.contains(&candidate.snapshot_id))
-                .min_by_key(|candidate| (candidate.generated_at_unix, candidate.snapshot_id))
-                .map(|candidate| candidate.snapshot_id)
+                .filter(|candidate| {
+                    !retained_snapshot_ids.contains(&candidate.envelope.snapshot.snapshot_id)
+                })
+                .min_by_key(|candidate| {
+                    (
+                        candidate.envelope.snapshot.generated_at_unix,
+                        candidate.envelope.snapshot.snapshot_id,
+                    )
+                })
+                .map(|candidate| candidate.envelope.snapshot.snapshot_id)
             else {
                 *snapshots = previous_snapshots;
                 *events = previous_events;
@@ -4882,9 +5139,10 @@ impl NodeHandle {
         drop(snapshots);
         drop(events);
         drop(latest);
-        if let Err(err) = self
-            .enqueue_governance_outbox_unlocked(GovernanceOutboxKindV1::ReputationSnapshot, encoded)
-        {
+        if let Err(err) = self.enqueue_governance_outbox_unlocked(
+            GovernanceOutboxKindV1::SignedReputationSnapshot,
+            encoded,
+        ) {
             *self.reputation_snapshots.write().map_err(|_| {
                 GovernancePublishError::other("reputation snapshot rollback lock poisoned")
             })? = previous_snapshots;
@@ -4920,18 +5178,18 @@ impl NodeHandle {
         Ok(())
     }
 
-    /// Publish a reputation snapshot with local reserve lifecycle stages applied.
+    /// Build unsigned reputation snapshot material with local reserve lifecycle stages applied.
     ///
-    /// Providers already present in the latest reputation snapshot keep their
-    /// raw metrics and previous score for deterministic smoothing. Providers
-    /// that only exist in local reserve state are added with neutral proof
-    /// metrics so the reserve-stage penalty is still visible downstream.
-    pub fn publish_reserve_adjusted_reputation_snapshot(
+    /// This method never mutates or publishes reputation state. The complete
+    /// returned scoring evidence must be bound into an externally signed
+    /// [`SignedReputationSnapshotV1`] and submitted through
+    /// [`Self::publish_signed_reputation_snapshot`].
+    pub fn build_reserve_adjusted_reputation_material(
         &self,
         snapshot_id: [u8; 16],
         generated_at_unix: u64,
         weights: ReputationWeightsV1,
-    ) -> Result<ReputationSnapshotV1, GovernancePublishError> {
+    ) -> Result<ReputationSnapshotSigningMaterialV1, GovernancePublishError> {
         let reserve_snapshot = self.reserve_lifecycle_snapshot(generated_at_unix);
         if reserve_snapshot.providers.is_empty() {
             return Err(GovernancePublishError::other(
@@ -4939,9 +5197,11 @@ impl NodeHandle {
             ));
         }
 
-        let previous_snapshot = self.latest_reputation_snapshot();
-        let previous_by_provider = previous_snapshot
+        let previous_envelope = self.latest_signed_reputation_snapshot();
+        let previous_snapshot = previous_envelope
             .as_ref()
+            .map(|envelope| &envelope.snapshot);
+        let previous_by_provider = previous_snapshot
             .map(|snapshot| {
                 snapshot
                     .providers
@@ -4950,17 +5210,22 @@ impl NodeHandle {
                     .collect::<HashMap<_, _>>()
             })
             .unwrap_or_default();
-        let previous_snapshot_id = previous_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.snapshot_id);
+        let previous_snapshot_id = previous_snapshot.map(|snapshot| snapshot.snapshot_id);
 
-        let mut providers = previous_snapshot
+        let mut provider_inputs = previous_envelope
             .as_ref()
-            .map_or_else(Vec::new, |snapshot| snapshot.providers.clone());
-        let mut provider_positions = providers
+            .map_or_else(Vec::new, |envelope| {
+                envelope.scoring_evidence.provider_inputs.clone()
+            });
+        for input in &mut provider_inputs {
+            input.previous_score_bps = previous_by_provider
+                .get(&input.provider_id)
+                .map(|provider| provider.score_bps);
+        }
+        let mut provider_positions = provider_inputs
             .iter()
             .enumerate()
-            .map(|(index, provider)| (provider.provider_id.clone(), index))
+            .map(|(index, input)| (input.provider_id.clone(), index))
             .collect::<HashMap<_, _>>();
 
         for summary in reserve_snapshot.providers {
@@ -4974,27 +5239,39 @@ impl NodeHandle {
                 }),
                 reserve_stage: reserve_lifecycle_stage_to_reputation(summary.lifecycle.stage),
                 previous_score_bps: previous.map(|provider| provider.score_bps),
-                active_dispute: false,
-                slashing_event: false,
+                active_dispute: provider_positions
+                    .get(&provider_id)
+                    .map(|position| provider_inputs[*position].active_dispute)
+                    .unwrap_or(false),
+                slashing_event: provider_positions
+                    .get(&provider_id)
+                    .map(|position| provider_inputs[*position].slashing_event)
+                    .unwrap_or(false),
             };
-            let scored = score_provider_reputation(&input, &weights).map_err(|err| {
-                GovernancePublishError::other(format!(
-                    "score reserve-adjusted reputation provider `{provider_id}`: {err}"
-                ))
-            })?;
             if let Some(position) = provider_positions.get(&provider_id).copied() {
-                providers[position] = scored;
+                provider_inputs[position] = input;
             } else {
-                provider_positions.insert(provider_id, providers.len());
-                providers.push(scored);
+                provider_positions.insert(provider_id, provider_inputs.len());
+                provider_inputs.push(input);
             }
         }
-
-        let snapshot = ReputationSnapshotV1::from_providers(
+        provider_inputs.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
+        let trust_edges = previous_envelope
+            .as_ref()
+            .map_or_else(Vec::new, |envelope| {
+                envelope.scoring_evidence.trust_edges.clone()
+            });
+        let scoring_evidence = ReputationScoringEvidenceV1 {
+            version: sorafs_manifest::REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+            provider_inputs,
+            trust_edges,
+        };
+        let snapshot = build_reputation_snapshot_with_trust_edges(
             snapshot_id,
             generated_at_unix,
             weights,
-            providers,
+            &scoring_evidence.provider_inputs,
+            &scoring_evidence.trust_edges,
             previous_snapshot_id,
         )
         .map_err(|err| {
@@ -5002,8 +5279,15 @@ impl NodeHandle {
                 "build reserve-adjusted reputation snapshot: {err}"
             ))
         })?;
-        self.publish_reputation_snapshot(snapshot.clone())?;
-        Ok(snapshot)
+        scoring_evidence.verify_snapshot(&snapshot).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "verify reserve-adjusted reputation scoring evidence: {err}"
+            ))
+        })?;
+        Ok(ReputationSnapshotSigningMaterialV1 {
+            snapshot,
+            scoring_evidence,
+        })
     }
 
     /// Publish a typed SoraFS appeal finance report to the governance pipeline.
@@ -5804,10 +6088,35 @@ impl NodeHandle {
     /// Return a published reputation snapshot by snapshot identifier.
     #[must_use]
     pub fn reputation_snapshot(&self, snapshot_id: [u8; 16]) -> Option<ReputationSnapshotV1> {
-        self.reputation_snapshots
+        self.reputation_snapshots.read().ok().and_then(|guard| {
+            guard
+                .get(&snapshot_id)
+                .map(|admitted| admitted.envelope.snapshot.clone())
+        })
+    }
+
+    /// Return the latest full signed reputation envelope and scoring evidence.
+    #[must_use]
+    pub fn latest_signed_reputation_snapshot(&self) -> Option<SignedReputationSnapshotV1> {
+        let snapshot_id = self
+            .latest_reputation_snapshot
             .read()
             .ok()
-            .and_then(|guard| guard.get(&snapshot_id).cloned())
+            .and_then(|guard| guard.as_ref().map(|snapshot| snapshot.snapshot_id))?;
+        self.signed_reputation_snapshot(snapshot_id)
+    }
+
+    /// Return a retained full signed reputation envelope by snapshot identifier.
+    #[must_use]
+    pub fn signed_reputation_snapshot(
+        &self,
+        snapshot_id: [u8; 16],
+    ) -> Option<SignedReputationSnapshotV1> {
+        self.reputation_snapshots.read().ok().and_then(|guard| {
+            guard
+                .get(&snapshot_id)
+                .map(|admitted| admitted.envelope.clone())
+        })
     }
 
     /// Return reputation snapshot events after `since_sequence`, capped by `limit`.
@@ -9437,24 +9746,74 @@ impl NodeHandle {
             }
         }
         let mut snapshots = BTreeMap::new();
-        for snapshot in checkpoint.reputation_snapshots {
-            snapshot.validate().map_err(|err| {
-                GovernancePublishError::other(format!(
-                    "invalid reputation snapshot in auxiliary checkpoint: {err}"
-                ))
+        let mut previous_reputation_snapshot_id = None;
+        for admitted in checkpoint.reputation_snapshots {
+            if admitted.version != ADMITTED_REPUTATION_SNAPSHOT_VERSION_V1
+                || admitted.admitted_at_unix == 0
+                || admitted.encoded_len == 0
+            {
+                return Err(GovernancePublishError::other(
+                    "invalid admitted reputation snapshot version or timestamp in auxiliary checkpoint",
+                ));
+            }
+            let policy = self.reputation_trust_policy.as_deref().ok_or_else(|| {
+                GovernancePublishError::other(
+                    "auxiliary checkpoint contains signed reputation state but no external trust policy is configured",
+                )
             })?;
-            if snapshots.insert(snapshot.snapshot_id, snapshot).is_some() {
+            admitted
+                .envelope
+                .verify(policy, admitted.admitted_at_unix)
+                .map_err(|err| {
+                    GovernancePublishError::other(format!(
+                        "invalid signed reputation snapshot in auxiliary checkpoint: {err}"
+                    ))
+                })?;
+            let canonical_len = u64::try_from(
+                admitted
+                    .envelope
+                    .canonical_bytes()
+                    .map_err(|err| {
+                        GovernancePublishError::other(format!(
+                            "failed to canonicalize signed reputation snapshot in auxiliary checkpoint: {err}"
+                        ))
+                    })?
+                    .len(),
+            )
+            .map_err(|_| {
+                GovernancePublishError::other(
+                    "signed reputation checkpoint envelope length does not fit u64",
+                )
+            })?;
+            if admitted.encoded_len != canonical_len {
+                return Err(GovernancePublishError::other(
+                    "signed reputation checkpoint encoded length mismatch",
+                ));
+            }
+            let snapshot_id = admitted.envelope.snapshot.snapshot_id;
+            if previous_reputation_snapshot_id.is_some_and(|previous| previous >= snapshot_id) {
+                return Err(GovernancePublishError::other(
+                    "reputation snapshot checkpoint entries must be strictly ordered by snapshot id",
+                ));
+            }
+            previous_reputation_snapshot_id = Some(snapshot_id);
+            if snapshots.insert(snapshot_id, admitted).is_some() {
                 return Err(GovernancePublishError::other(
                     "duplicate reputation snapshot id in auxiliary checkpoint",
                 ));
             }
         }
         let latest_snapshot = match checkpoint.latest_reputation_snapshot_id {
-            Some(snapshot_id) => Some(snapshots.get(&snapshot_id).cloned().ok_or_else(|| {
-                GovernancePublishError::other(
-                    "latest reputation snapshot id is absent from auxiliary checkpoint",
-                )
-            })?),
+            Some(snapshot_id) => Some(
+                snapshots
+                    .get(&snapshot_id)
+                    .map(|admitted| admitted.envelope.snapshot.clone())
+                    .ok_or_else(|| {
+                        GovernancePublishError::other(
+                            "latest reputation snapshot id is absent from auxiliary checkpoint",
+                        )
+                    })?,
+            ),
             None if snapshots.is_empty() => None,
             None => {
                 return Err(GovernancePublishError::other(
@@ -9462,6 +9821,40 @@ impl NodeHandle {
                 ));
             }
         };
+        let mut reputation_chain = Vec::new();
+        reputation_chain
+            .try_reserve_exact(snapshots.len())
+            .map_err(|_| {
+                GovernancePublishError::other(
+                    "failed to reserve retained reputation-chain validation state",
+                )
+            })?;
+        reputation_chain.extend(snapshots.values());
+        reputation_chain.sort_by_key(|admitted| {
+            (
+                admitted.envelope.snapshot.generated_at_unix,
+                admitted.envelope.snapshot.snapshot_id,
+            )
+        });
+        for pair in reputation_chain.windows(2) {
+            validate_reputation_snapshot_transition(
+                Some(&pair[0].envelope.snapshot),
+                &pair[1].envelope.snapshot,
+            )
+            .map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "retained reputation snapshots are not one exact monotonic chain: {err}"
+                ))
+            })?;
+        }
+        if let (Some(latest), Some(last)) = (latest_snapshot.as_ref(), reputation_chain.last())
+            && latest.snapshot_id != last.envelope.snapshot.snapshot_id
+        {
+            return Err(GovernancePublishError::other(
+                "latest reputation snapshot is not the final retained signed envelope",
+            ));
+        }
+        drop(reputation_chain);
         let repair_mutation_intents = restore_repair_mutation_intents(
             checkpoint.repair_mutation_next_sequence,
             checkpoint.repair_mutation_intents,
@@ -9547,11 +9940,12 @@ impl NodeHandle {
                     "invalid reputation event in auxiliary checkpoint: {err}"
                 ))
             })?;
-            let Some(snapshot) = snapshots.get(&event.snapshot_id) else {
+            let Some(admitted) = snapshots.get(&event.snapshot_id) else {
                 return Err(GovernancePublishError::other(
                     "reputation event references a missing retained snapshot",
                 ));
             };
+            let snapshot = &admitted.envelope.snapshot;
             let provider_count = u32::try_from(snapshot.providers.len()).map_err(|_| {
                 GovernancePublishError::other(
                     "retained reputation snapshot provider count exceeds u32",
@@ -9675,6 +10069,25 @@ impl NodeHandle {
             checkpoint.governance_outbox_entries,
             state_limit,
         )?;
+        for entry in governance_outbox
+            .entries
+            .values()
+            .filter(|entry| entry.kind == GovernanceOutboxKindV1::SignedReputationSnapshot)
+        {
+            let envelope = decode_canonical_signed_reputation_payload(&entry.payload_bytes)?;
+            let Some(admitted) = snapshots.get(&envelope.snapshot.snapshot_id) else {
+                return Err(GovernancePublishError::other(format!(
+                    "pending signed reputation outbox entry {} has no retained admitted envelope",
+                    entry.sequence
+                )));
+            };
+            if admitted.envelope != envelope {
+                return Err(GovernancePublishError::other(format!(
+                    "pending signed reputation outbox entry {} conflicts with retained admitted bytes",
+                    entry.sequence
+                )));
+            }
+        }
         if gc_eviction_audit_links
             .values()
             .any(|link| link.outbox_sequence >= governance_outbox.next_sequence)
@@ -11335,8 +11748,32 @@ impl NodeHandle {
         else {
             return Ok(());
         };
-        let checkpoint = norito::decode_from_bytes::<OrderbookRuntimeCheckpointV1>(&bytes)
+        let retention = self.config.runtime_retention();
+        let maximum_bytes = usize::try_from(retention.checkpoint_max_bytes()).unwrap_or(usize::MAX);
+        let maximum_sequence_elements = retention
+            .state_entry_limit()
+            .max(retention.event_history_limit());
+        let decode_limits = norito::DecodeLimits::new(
+            maximum_sequence_elements,
+            maximum_bytes,
+            maximum_bytes.saturating_mul(2),
+            maximum_bytes.saturating_mul(4),
+            64,
+        );
+        let checkpoint = norito::decode_from_bytes_with_limits::<OrderbookRuntimeCheckpointV1>(
+            &bytes,
+            decode_limits,
+        )
+        .map_err(|err| NodeInitError::checkpoint("orderbook runtime", path, err))?;
+        let canonical = norito::to_bytes(&checkpoint)
             .map_err(|err| NodeInitError::checkpoint("orderbook runtime", path, err))?;
+        if canonical != bytes {
+            return Err(NodeInitError::checkpoint(
+                "orderbook runtime",
+                path,
+                "checkpoint is not the exact canonical Norito encoding",
+            ));
+        }
         if checkpoint.version != ORDERBOOK_RUNTIME_STATE_VERSION_V1 {
             return Err(NodeInitError::checkpoint(
                 "orderbook runtime",
@@ -11344,7 +11781,6 @@ impl NodeHandle {
                 format!("unsupported checkpoint version {}", checkpoint.version),
             ));
         }
-        let retention = self.config.runtime_retention();
         if checkpoint.events.len() > retention.event_history_limit() {
             return Err(NodeInitError::checkpoint(
                 "orderbook runtime",
@@ -11596,6 +12032,9 @@ impl NodeHandle {
     }
 
     /// Finalise a deal settlement for the supplied epoch.
+    ///
+    /// External callers must authenticate a configured operator before invoking this trusted
+    /// runtime boundary.
     pub fn settle_deal(
         &self,
         deal_id: DealId,
@@ -11618,9 +12057,10 @@ impl NodeHandle {
         )?;
         let provider_hex = hex::encode(outcome.record.provider_id.as_bytes());
         let status_label = match outcome.governance.status {
+            DealSettlementStatusV1::WindowSettled => "window_settled",
             DealSettlementStatusV1::Completed => "completed",
             DealSettlementStatusV1::Cancelled => "cancelled",
-            DealSettlementStatusV1::Slashed => "slashed",
+            DealSettlementStatusV1::Defaulted => "defaulted",
         };
         global_sorafs_node_otel().record_deal_settlement(
             &provider_hex,
@@ -11636,6 +12076,51 @@ impl NodeHandle {
                 %err,
                 %provider_hex,
                 "SoraFS settlement artefact remains pending in the governance outbox"
+            );
+        } else {
+            let status = if self.pending_governance_publication_count() == 0 {
+                "success"
+            } else {
+                "pending"
+            };
+            global_sorafs_node_otel().record_settlement_publish(&provider_hex, status);
+        }
+        Ok(outcome)
+    }
+
+    /// Cancel an idle active deal at its exact next settlement boundary.
+    ///
+    /// The caller is a trusted runtime boundary and must authenticate a configured operator
+    /// authority before invoking this method.
+    pub fn cancel_deal(
+        &self,
+        deal_id: DealId,
+        cancellation_epoch: u64,
+        reason: String,
+    ) -> Result<DealSettlementOutcome, DealEngineError> {
+        let outcome = self.mutate_deal_engine_durably_with_governance(
+            |engine| {
+                engine
+                    .cancel(deal_id, cancellation_epoch, reason)
+                    .map(|outcome| (outcome, true))
+            },
+            |outcome| {
+                let encoded = norito::to_bytes(&outcome.governance).map_err(|err| {
+                    GovernancePublishError::other(format!(
+                        "encode deal cancellation governance artifact: {err}"
+                    ))
+                })?;
+                Ok((GovernanceOutboxKindV1::DealSettlement, encoded))
+            },
+        )?;
+        let provider_hex = hex::encode(outcome.record.provider_id.as_bytes());
+        global_sorafs_node_otel().record_deal_settlement(&provider_hex, "cancelled", 0, 0, 0, 0);
+        if let Err(err) = self.flush_governance_outbox() {
+            global_sorafs_node_otel().record_settlement_publish(&provider_hex, "pending");
+            iroha_logger::warn!(
+                %err,
+                %provider_hex,
+                "SoraFS cancellation artefact remains pending in the governance outbox"
             );
         } else {
             let status = if self.pending_governance_publication_count() == 0 {
@@ -15449,6 +15934,7 @@ mod tests {
             Arc, Barrier, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
+        time::Duration,
     };
 
     use iroha_crypto::{Algorithm, Signature as IrohaSignature, SignatureOf};
@@ -15459,7 +15945,7 @@ mod tests {
             capacity::{CapacityDeclarationRecord, ProviderId},
             deal::{
                 BYTES_PER_GIB, ClientId, DealProposal, DealStatus, DealTerms, DealUsageReport,
-                GIB_HOURS_PER_MONTH, MicropaymentTicket, TicketId,
+                GIB_HOURS_PER_MONTH, MicropaymentTicket,
             },
             moderation::{
                 ADVERSARIAL_CORPUS_VERSION_V1, AdversarialCorpusManifestV1,
@@ -15486,16 +15972,21 @@ mod tests {
         ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, OrderCancelReasonV1,
         OrderCancelV1, OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookSignatureV1, PinPolicy,
         REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
-        ReputationDegradationFlagV1, ReputationProviderInputV1, ReputationProviderMetricsV1,
-        ReputationReserveStageV1, ReputationWeightsV1, SETTLEMENT_RECEIPT_VERSION_V1,
+        REPUTATION_SCORING_EVIDENCE_VERSION_V1, REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1,
+        REPUTATION_TRUSTED_SIGNER_VERSION_V1, ReputationDegradationFlagV1,
+        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+        ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1,
+        ReputationSnapshotTrustPolicyV1, ReputationTrustedSignerV1, ReputationWeightsV1,
+        SETTLEMENT_RECEIPT_VERSION_V1, SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
         SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
         SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
         SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementChannelV1, SettlementReceiptV1,
-        SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
-        SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
-        SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
-        SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
-        SoraFsModerationVoteChoiceV1, SorafsReconciliationReportV1, build_reputation_snapshot,
+        SignedReputationSnapshotV1, SoraFsAppealFinanceAccountFlowV1,
+        SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1,
+        SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
+        SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventKindV1,
+        SoraFsModerationBallotGovernanceEventV1, SoraFsModerationVoteChoiceV1,
+        SorafsReconciliationReportV1, build_reputation_snapshot,
         capacity::{
             CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, CapacityMetadataEntry,
             ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
@@ -15555,6 +16046,58 @@ mod tests {
         let cfg = StorageConfig::builder()
             .enabled(true)
             .data_dir(root.join("storage"))
+            .build();
+        (cfg, temp_dir)
+    }
+
+    fn reputation_signing_key() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+            .expect("derive reputation signing key")
+    }
+
+    fn reputation_trust_policy_fixture() -> ReputationSnapshotTrustPolicyV1 {
+        ReputationSnapshotTrustPolicyV1 {
+            version: REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1,
+            policy_id: [0xA5; 32],
+            valid_from_unix: 1_700_000_000,
+            valid_until_unix: 2_000_000_000,
+            max_snapshot_age_secs: 600,
+            max_future_skew_secs: 30,
+            min_signatures: 1,
+            signers: vec![ReputationTrustedSignerV1 {
+                version: REPUTATION_TRUSTED_SIGNER_VERSION_V1,
+                signer_id: "council-1".to_owned(),
+                public_key: reputation_signing_key()
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("export reputation verifying key")
+                    .1
+                    .try_into()
+                    .expect("Ed25519 public key is fixed-width"),
+            }],
+            revoked_signer_ids: Vec::new(),
+        }
+    }
+
+    fn storage_config_with_reputation_policy() -> (StorageConfig, TempDir) {
+        storage_config_with_reputation_policy_fixture(&reputation_trust_policy_fixture())
+    }
+
+    fn storage_config_with_reputation_policy_fixture(
+        policy: &ReputationSnapshotTrustPolicyV1,
+    ) -> (StorageConfig, TempDir) {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let policy_path = root.join("reputation-trust-policy.to");
+        let policy_bytes = policy
+            .canonical_bytes()
+            .expect("encode reputation trust policy");
+        write_local_checkpoint_atomic(&policy_path, &policy_bytes)
+            .expect("write reputation trust policy");
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(root.join("storage"))
+            .reputation_trust_policy_path(Some(policy_path))
             .build();
         (cfg, temp_dir)
     }
@@ -16160,13 +16703,14 @@ mod tests {
 
     fn moderation_repro_manifest_fixture(
         manifest_id_byte: u8,
-        manifest_digest_byte: u8,
         runner_hash_byte: u8,
     ) -> ModerationReproManifestV1 {
-        let body = ModerationReproBodyV1 {
+        let mut body = ModerationReproBodyV1 {
             schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
             manifest_id: [manifest_id_byte; 16],
-            manifest_digest: [manifest_digest_byte; 32],
+            // The digest is derived from the canonical body below; it is not
+            // an operator-selected fixture label.
+            manifest_digest: [0; 32],
             runner_hash: [runner_hash_byte; 32],
             runtime_version: format!("sorafs-ai-runner {runner_hash_byte}.0.0"),
             issued_at_unix: 1_800_000_000 + u64::from(runner_hash_byte),
@@ -16181,13 +16725,22 @@ mod tests {
             },
             models: vec![ModerationModelFingerprintV1 {
                 model_id: [0x55; 16],
+                artifact_path: "models/model-55.norito".to_string(),
+                artifact_bytes: 1,
                 artifact_digest: [0x66; 32],
                 weights_digest: [0x77; 32],
-                opset: 17,
+                engine: iroha_data_model::sorafs::moderation::ModerationModelEngineV1::DeterministicLinearV1,
+                feature_profile: iroha_data_model::sorafs::moderation::ModerationFeatureProfileV1::ByteHistogramAndBigramV1,
+                calibration_knot_count: 2,
+                max_input_bytes: 1024,
+                max_operations: 3073,
+                working_memory_bytes: 4096,
                 weight: Some(10_000),
             }],
             notes: Some("registry fixture".to_string()),
         };
+        body.refresh_manifest_digest()
+            .expect("refresh moderation fixture digest");
         let keypair = iroha_crypto::KeyPair::try_from_seed(vec![0x9A; 32], Algorithm::Ed25519)
             .expect("moderation fixture seed must derive keypair");
         let signature = SignatureOf::try_new(keypair.private_key(), &body)
@@ -16388,11 +16941,7 @@ mod tests {
         session
     }
 
-    fn reputation_snapshot_fixture_with(
-        snapshot_id: [u8; 16],
-        generated_at_unix: u64,
-        previous_snapshot_id: Option<[u8; 16]>,
-    ) -> ReputationSnapshotV1 {
+    fn reputation_provider_input_fixture() -> ReputationProviderInputV1 {
         let metrics = ReputationProviderMetricsV1 {
             version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
             por_success_bps: 9_800,
@@ -16403,7 +16952,7 @@ mod tests {
             token_violation_rate_bps: 50,
             repair_breach_rate_bps: 0,
         };
-        let input = ReputationProviderInputV1 {
+        ReputationProviderInputV1 {
             version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
             provider_id: "provider-a".to_string(),
             metrics,
@@ -16411,19 +16960,72 @@ mod tests {
             previous_score_bps: None,
             active_dispute: false,
             slashing_event: false,
+        }
+    }
+
+    fn signed_reputation_snapshot_fixture_with(
+        snapshot_id: [u8; 16],
+        generated_at_unix: u64,
+        previous_snapshot_id: Option<[u8; 16]>,
+    ) -> SignedReputationSnapshotV1 {
+        signed_reputation_snapshot_fixture_for_policy(
+            &reputation_trust_policy_fixture(),
+            snapshot_id,
+            generated_at_unix,
+            previous_snapshot_id,
+        )
+    }
+
+    fn signed_reputation_snapshot_fixture_for_policy(
+        policy: &ReputationSnapshotTrustPolicyV1,
+        snapshot_id: [u8; 16],
+        generated_at_unix: u64,
+        previous_snapshot_id: Option<[u8; 16]>,
+    ) -> SignedReputationSnapshotV1 {
+        let input = reputation_provider_input_fixture();
+        let scoring_evidence = ReputationScoringEvidenceV1 {
+            version: REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+            provider_inputs: vec![input.clone()],
+            trust_edges: Vec::new(),
         };
-        build_reputation_snapshot(
+        let snapshot = build_reputation_snapshot(
             snapshot_id,
             generated_at_unix,
             ReputationWeightsV1::default(),
             &[input],
             previous_snapshot_id,
         )
-        .expect("reputation snapshot fixture")
+        .expect("reputation snapshot fixture");
+        let mut envelope = SignedReputationSnapshotV1 {
+            version: SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+            policy_digest: policy.canonical_digest().expect("reputation policy digest"),
+            snapshot,
+            scoring_evidence_digest: scoring_evidence
+                .canonical_digest()
+                .expect("reputation evidence digest"),
+            scoring_evidence,
+            signatures: Vec::new(),
+        };
+        let signing_key = reputation_signing_key();
+        let signature = IrohaSignature::try_new(
+            signing_key.private_key(),
+            &envelope
+                .signing_digest()
+                .expect("reputation signing digest"),
+        )
+        .expect("sign reputation snapshot");
+        envelope.signatures.push(ReputationSnapshotSignatureV1 {
+            signer_id: "council-1".to_owned(),
+            signature: signature
+                .payload()
+                .try_into()
+                .expect("Ed25519 signature is fixed-width"),
+        });
+        envelope
     }
 
-    fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
-        reputation_snapshot_fixture_with([0x42; 16], 1_800_000_000, None)
+    fn signed_reputation_snapshot_fixture() -> SignedReputationSnapshotV1 {
+        signed_reputation_snapshot_fixture_with([0x42; 16], unix_now_secs(), None)
     }
 
     fn transparency_ledger_publication_fixture() -> ModerationLedgerCyclePublicationV1 {
@@ -16767,13 +17369,14 @@ mod tests {
     fn moderation_model_registry_admits_repro_manifest_and_rejects_conflict() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
-        let manifest = moderation_repro_manifest_fixture(0x10, 0x20, 0x30);
+        let manifest = moderation_repro_manifest_fixture(0x10, 0x30);
+        let expected_manifest_digest = manifest.body.manifest_digest;
 
         let record = handle
             .admit_moderation_repro_manifest(manifest.clone())
             .expect("admit repro manifest");
         assert_eq!(record.manifest_id, [0x10; 16]);
-        assert_eq!(record.manifest_digest, [0x20; 32]);
+        assert_eq!(record.manifest_digest, expected_manifest_digest);
         assert_eq!(record.runner_hash, [0x30; 32]);
         assert_eq!(record.model_count, 1);
         assert_eq!(record.signer_count, 1);
@@ -16784,7 +17387,7 @@ mod tests {
         assert_eq!(repeated, record);
 
         let err = handle
-            .admit_moderation_repro_manifest(moderation_repro_manifest_fixture(0x10, 0x21, 0x31))
+            .admit_moderation_repro_manifest(moderation_repro_manifest_fixture(0x10, 0x31))
             .expect_err("conflicting manifest id rejected");
         assert!(matches!(
             err,
@@ -16827,7 +17430,7 @@ mod tests {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let source = NodeHandle::new(cfg.clone());
         let repro_record = source
-            .admit_moderation_repro_manifest(moderation_repro_manifest_fixture(0x12, 0x22, 0x32))
+            .admit_moderation_repro_manifest(moderation_repro_manifest_fixture(0x12, 0x32))
             .expect("admit repro manifest");
         let corpus_record = source
             .admit_moderation_corpus_manifest(adversarial_corpus_manifest_fixture())
@@ -18363,7 +18966,7 @@ mod tests {
             .build();
         let handle = NodeHandle::new(cfg);
 
-        let repro = moderation_repro_manifest_fixture(0x11, 0x21, 0x31);
+        let repro = moderation_repro_manifest_fixture(0x11, 0x31);
         let admitted = handle
             .admit_moderation_repro_manifest(repro.clone())
             .expect("admit repro at boundary");
@@ -18375,9 +18978,7 @@ mod tests {
         );
         assert!(matches!(
             handle
-                .admit_moderation_repro_manifest(moderation_repro_manifest_fixture(
-                    0x12, 0x22, 0x32,
-                ))
+                .admit_moderation_repro_manifest(moderation_repro_manifest_fixture(0x12, 0x32,))
                 .expect_err("new repro above capacity must fail"),
             ModerationModelRegistryError::ResourceExhausted {
                 resource: "reproducibility_manifests",
@@ -19750,6 +20351,32 @@ mod tests {
             &norito::to_bytes(&checkpoint).expect("encode forged checkpoint"),
         )
         .expect("write forged checkpoint");
+        drop(handle);
+
+        assert!(matches!(
+            NodeHandle::try_new(cfg),
+            Err(NodeInitError::Checkpoint {
+                component: "orderbook runtime",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn orderbook_startup_rejects_noncanonical_checkpoint_suffix() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        handle
+            .submit_orderbook_order(
+                orderbook_order(0x74, OrderSideV1::Ask, 1_500_000, b"provider"),
+                1_800_000_000,
+            )
+            .expect("commit order");
+        let checkpoint_path = orderbook_runtime_snapshot_path(cfg.data_dir());
+        let mut bytes = fs::read(&checkpoint_path).expect("read orderbook checkpoint");
+        bytes.push(0);
+        write_local_checkpoint_atomic(&checkpoint_path, &bytes)
+            .expect("write noncanonical checkpoint");
         drop(handle);
 
         assert!(matches!(
@@ -21745,10 +22372,10 @@ mod tests {
         let client_id = ClientId::new([0xCC; 32]);
 
         handle
-            .deposit_provider_bond(provider_id, 3_000_000_000)
+            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
             .expect("deposit provider bond");
         handle
-            .deposit_client_credit(client_id, 1_000_000_000)
+            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
             .expect("deposit client credit");
 
         let terms = DealTerms {
@@ -21775,43 +22402,26 @@ mod tests {
             .open_deal(proposal, activation_epoch)
             .expect("open deal");
 
+        let mut tickets = (1_u64..=5)
+            .map(|storage_gib_hours| MicropaymentTicket {
+                ticket_id: derive_micropayment_ticket_id(
+                    record.deal_id,
+                    activation_epoch + 1,
+                    storage_gib_hours,
+                    0,
+                ),
+                issued_epoch: activation_epoch + 1,
+                storage_gib_hours,
+                egress_bytes: 0,
+            })
+            .collect::<Vec<_>>();
+        tickets.sort_unstable_by_key(|ticket| ticket.ticket_id);
         let usage = DealUsageReport {
             deal_id: record.deal_id,
             epoch: activation_epoch + 1,
             storage_gib_hours: (4u128 * GIB_HOURS_PER_MONTH) as u64,
             egress_bytes: BYTES_PER_GIB as u64,
-            tickets: vec![
-                MicropaymentTicket {
-                    ticket_id: TicketId([1; 32]),
-                    issued_epoch: activation_epoch + 1,
-                    storage_gib_hours: 0,
-                    egress_bytes: 0,
-                },
-                MicropaymentTicket {
-                    ticket_id: TicketId([2; 32]),
-                    issued_epoch: activation_epoch + 1,
-                    storage_gib_hours: 0,
-                    egress_bytes: 0,
-                },
-                MicropaymentTicket {
-                    ticket_id: TicketId([3; 32]),
-                    issued_epoch: activation_epoch + 1,
-                    storage_gib_hours: 0,
-                    egress_bytes: 0,
-                },
-                MicropaymentTicket {
-                    ticket_id: TicketId([4; 32]),
-                    issued_epoch: activation_epoch + 1,
-                    storage_gib_hours: 0,
-                    egress_bytes: 0,
-                },
-                MicropaymentTicket {
-                    ticket_id: TicketId([5; 32]),
-                    issued_epoch: activation_epoch + 1,
-                    storage_gib_hours: 0,
-                    egress_bytes: 0,
-                },
-            ],
+            tickets,
         };
 
         let usage_outcome = handle.record_deal_usage(usage).expect("record usage");
@@ -21833,16 +22443,16 @@ mod tests {
 
         let governance = &outcome.governance;
         assert_eq!(governance.deal_id, *record.deal_id.as_bytes());
-        assert_eq!(governance.status, DealSettlementStatusV1::Completed);
+        assert_eq!(governance.status, DealSettlementStatusV1::WindowSettled);
         assert_eq!(governance.settled_at, activation_epoch + 7);
         let ledger = &governance.ledger;
         assert_eq!(ledger.deal_id, *record.deal_id.as_bytes());
         assert_eq!(ledger.provider_id, *provider_id.as_bytes());
         assert_eq!(ledger.client_id, *client_id.as_bytes());
-        assert_eq!(ledger.provider_accrual.as_micro(), 850_000);
-        assert_eq!(ledger.client_liability.as_micro(), 850_000);
-        assert_eq!(ledger.bond_locked.as_micro(), 2_400_000);
-        assert_eq!(ledger.bond_slashed.as_micro(), 0);
+        assert_eq!(ledger.provider_accrual_nano, 850_000_000);
+        assert_eq!(ledger.client_liability_nano, 850_000_000);
+        assert_eq!(ledger.bond_locked_nano, 2_400_000_000);
+        assert_eq!(ledger.bond_slashed_nano, 0);
         assert_eq!(ledger.captured_at, activation_epoch + 7);
 
         let snapshot = handle.deal_snapshot(record.deal_id).expect("snapshot");
@@ -21853,6 +22463,125 @@ mod tests {
             .provider_snapshot(provider_id)
             .expect("provider snapshot");
         assert!(provider_snapshot.bond_locked_nano >= 2_400_000_000);
+    }
+
+    #[test]
+    fn authenticated_deal_funding_and_cancellation_survive_restart() {
+        let (base, _dir) = storage_config_with_temp_dir();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(base.data_dir().clone())
+            .build();
+        let provider_id = ProviderId::new([0xD7; 32]);
+        let client_id = ClientId::new([0xC7; 32]);
+        let activation_epoch = 1_720_000_000;
+        let source = NodeHandle::new(cfg.clone());
+
+        source
+            .fund_provider_bond_sequenced(provider_id, 1_000, 1)
+            .expect("persist first provider funding sequence");
+        source
+            .fund_client_credit_sequenced(client_id, 500, 1)
+            .expect("persist first client funding sequence");
+        assert!(matches!(
+            source.fund_provider_bond_sequenced(provider_id, 10, 1),
+            Err(DealEngineError::FundingSequenceMismatch {
+                expected: 2,
+                found: 1,
+                ..
+            })
+        ));
+        assert!(matches!(
+            source.fund_client_credit_sequenced(client_id, 10, 3),
+            Err(DealEngineError::FundingSequenceMismatch {
+                expected: 2,
+                found: 3,
+                ..
+            })
+        ));
+
+        let record = source
+            .open_deal(
+                DealProposal {
+                    provider_id,
+                    client_id,
+                    storage_class: StorageClass::Hot,
+                    capacity_gib: 1,
+                    start_epoch: activation_epoch,
+                    end_epoch: activation_epoch + 10,
+                    terms: DealTerms {
+                        storage_price_nano_per_gib_month: 100,
+                        egress_price_nano_per_gib: 10,
+                        settlement_window_epochs: 5,
+                        micropayment_probability_bps: 1,
+                        micropayment_payout_nano: 1,
+                    },
+                    metadata: Metadata::default(),
+                },
+                activation_epoch,
+            )
+            .expect("persist active deal");
+        let cancellation = source
+            .cancel_deal(
+                record.deal_id,
+                activation_epoch + 5,
+                "operator-approved client termination".to_owned(),
+            )
+            .expect("persist canonical cancellation");
+        assert_eq!(
+            cancellation.governance.status,
+            DealSettlementStatusV1::Cancelled
+        );
+        let expected_governance = norito::to_bytes(&cancellation.governance)
+            .expect("encode expected cancellation governance");
+        assert_eq!(source.pending_governance_publication_count(), 1);
+        drop(source);
+
+        let restored = NodeHandle::new(cfg);
+        assert_eq!(
+            restored.pending_governance_publication_count(),
+            1,
+            "cancellation governance outbox survives restart"
+        );
+        let deal = restored
+            .deal_snapshot(record.deal_id)
+            .expect("cancelled deal restored");
+        assert!(
+            matches!(deal.status, DealStatus::Cancelled(epoch) if epoch == activation_epoch + 5)
+        );
+        assert_eq!(deal.locked_bond_nano, 0);
+        let provider = restored
+            .deal_engine()
+            .provider_snapshot(provider_id)
+            .expect("provider restored");
+        assert_eq!(provider.funding_sequence, 1);
+        assert_eq!(provider.bond_available_nano, 1_000);
+        let client = restored
+            .deal_engine()
+            .client_snapshot(client_id)
+            .expect("client restored");
+        assert_eq!(client.funding_sequence, 1);
+        assert_eq!(client.credit_balance_nano, 500);
+
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        restored
+            .try_set_governance_publisher(trait_publisher)
+            .expect("publisher registration replays restored cancellation outbox");
+        assert_eq!(publisher.take(), vec![expected_governance]);
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+
+        restored
+            .fund_provider_bond_sequenced(provider_id, 10, 2)
+            .expect("next sequence accepted after restart");
+        assert!(matches!(
+            restored.cancel_deal(
+                record.deal_id,
+                activation_epoch + 10,
+                "replay cancellation".to_owned(),
+            ),
+            Err(DealEngineError::DealInactive(deal_id)) if deal_id == record.deal_id
+        ));
     }
 
     #[test]
@@ -21868,10 +22597,10 @@ mod tests {
         let activation_epoch = 1_700_000_000;
         let source = NodeHandle::new(cfg.clone());
         source
-            .deposit_provider_bond(provider_id, 3_000_000_000)
+            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
             .expect("persist provider bond");
         source
-            .deposit_client_credit(client_id, 1_000_000_000)
+            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
             .expect("persist client credit");
         let record = source
             .open_deal(
@@ -21895,16 +22624,16 @@ mod tests {
             )
             .expect("persist deal");
         let replay_ticket = MicropaymentTicket {
-            ticket_id: TicketId([0xE1; 32]),
+            ticket_id: derive_micropayment_ticket_id(record.deal_id, activation_epoch + 1, 1, 0),
             issued_epoch: activation_epoch + 1,
-            storage_gib_hours: 0,
+            storage_gib_hours: 1,
             egress_bytes: 0,
         };
         source
             .record_deal_usage(DealUsageReport {
                 deal_id: record.deal_id,
                 epoch: activation_epoch + 1,
-                storage_gib_hours: 0,
+                storage_gib_hours: GIB_HOURS_PER_MONTH as u64,
                 egress_bytes: 0,
                 tickets: vec![replay_ticket.clone()],
             })
@@ -21933,13 +22662,15 @@ mod tests {
             .record_deal_usage(DealUsageReport {
                 deal_id: record.deal_id,
                 epoch: activation_epoch + 1,
-                storage_gib_hours: 0,
+                storage_gib_hours: GIB_HOURS_PER_MONTH as u64,
                 egress_bytes: 0,
                 tickets: vec![replay_ticket],
             })
-            .expect("replay retained ticket");
-        assert_eq!(replay.tickets_duplicate, 1);
-        assert_eq!(replay.tickets_won, 0);
+            .expect_err("replayed usage epoch rejected");
+        assert!(matches!(
+            replay,
+            DealEngineError::UsageEpochNotMonotonic { .. }
+        ));
     }
 
     #[test]
@@ -21955,10 +22686,10 @@ mod tests {
         let client_id = ClientId::new([0xBC; 32]);
 
         handle
-            .deposit_provider_bond(provider_id, 3_000_000_000)
+            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
             .expect("deposit provider bond");
         handle
-            .deposit_client_credit(client_id, 1_000_000_000)
+            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
             .expect("deposit client credit");
 
         let terms = DealTerms {
@@ -22014,18 +22745,21 @@ mod tests {
 
     #[test]
     fn publish_reputation_snapshot_updates_cache_and_governance_publisher() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
+        let (cfg, _dir) = storage_config_with_reputation_policy();
         let handle = NodeHandle::new(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
-        let snapshot = reputation_snapshot_fixture();
-        let expected = to_bytes(&snapshot).expect("encode reputation snapshot");
+        let envelope = signed_reputation_snapshot_fixture();
+        let snapshot = envelope.snapshot.clone();
+        let expected = envelope
+            .canonical_bytes()
+            .expect("encode signed reputation snapshot");
         let mut event_receiver = handle.subscribe_reputation_events();
 
         handle
-            .publish_reputation_snapshot(snapshot.clone())
-            .expect("publish reputation snapshot");
+            .publish_signed_reputation_snapshot(envelope.clone())
+            .expect("publish signed reputation snapshot");
 
         let published = publisher.take();
         assert_eq!(published, vec![expected]);
@@ -22039,6 +22773,14 @@ mod tests {
             .expect("historical reputation snapshot");
         assert_eq!(historical.snapshot_id, snapshot.snapshot_id);
         assert_eq!(historical.merkle_root, snapshot.merkle_root);
+        assert_eq!(
+            handle.latest_signed_reputation_snapshot(),
+            Some(envelope.clone())
+        );
+        assert_eq!(
+            handle.signed_reputation_snapshot(snapshot.snapshot_id),
+            Some(envelope)
+        );
         let events = handle.reputation_events_since(None, 10);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].sequence, 1);
@@ -22054,41 +22796,204 @@ mod tests {
     }
 
     #[test]
+    fn signed_reputation_admission_fails_closed_without_policy_and_on_adversarial_envelopes() {
+        let (unconfigured, _dir) = storage_config_with_temp_dir();
+        let unconfigured_handle = NodeHandle::new(unconfigured);
+        let error = unconfigured_handle
+            .publish_signed_reputation_snapshot(signed_reputation_snapshot_fixture())
+            .expect_err("missing external policy must fail closed");
+        assert!(error.to_string().contains("no external trust policy"));
+        assert!(
+            unconfigured_handle
+                .latest_signed_reputation_snapshot()
+                .is_none()
+        );
+
+        let (configured, _dir) = storage_config_with_reputation_policy();
+        let handle = NodeHandle::new(configured);
+        let now = unix_now_secs();
+        let mut adversarial = Vec::new();
+
+        let mut bad_signature = signed_reputation_snapshot_fixture_with([0x51; 16], now, None);
+        bad_signature.signatures[0].signature[0] ^= 0x80;
+        adversarial.push(bad_signature);
+
+        let mut wrong_policy = signed_reputation_snapshot_fixture_with([0x52; 16], now, None);
+        wrong_policy.policy_digest[0] ^= 0x40;
+        adversarial.push(wrong_policy);
+
+        adversarial.push(signed_reputation_snapshot_fixture_with(
+            [0x53; 16],
+            now.saturating_sub(601),
+            None,
+        ));
+        adversarial.push(signed_reputation_snapshot_fixture_with(
+            [0x54; 16],
+            now.saturating_add(60),
+            None,
+        ));
+
+        let mut tampered_evidence = signed_reputation_snapshot_fixture_with([0x55; 16], now, None);
+        tampered_evidence.scoring_evidence.provider_inputs[0]
+            .metrics
+            .por_success_bps -= 1;
+        adversarial.push(tampered_evidence);
+
+        let mut untrusted_signer = signed_reputation_snapshot_fixture_with([0x56; 16], now, None);
+        untrusted_signer.signatures[0].signer_id = "attacker".to_owned();
+        adversarial.push(untrusted_signer);
+
+        let mut no_quorum = signed_reputation_snapshot_fixture_with([0x57; 16], now, None);
+        no_quorum.signatures.clear();
+        adversarial.push(no_quorum);
+
+        for envelope in adversarial {
+            handle
+                .publish_signed_reputation_snapshot(envelope)
+                .expect_err("adversarial signed envelope must be rejected");
+            assert!(handle.latest_reputation_snapshot().is_none());
+            assert_eq!(handle.pending_governance_publication_count(), 0);
+        }
+    }
+
+    #[test]
+    fn reputation_trust_policy_loading_rejects_missing_noncanonical_and_unsafe_files() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let missing = root.join("missing-policy.to");
+        let missing_config = StorageConfig::builder()
+            .enabled(false)
+            .reputation_trust_policy_path(Some(missing))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(missing_config),
+            Err(NodeInitError::ReputationTrustPolicy { .. })
+        ));
+
+        let malformed = root.join("malformed-policy.to");
+        write_local_checkpoint_atomic(&malformed, b"not canonical Norito")
+            .expect("write malformed policy");
+        let malformed_config = StorageConfig::builder()
+            .enabled(false)
+            .reputation_trust_policy_path(Some(malformed))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(malformed_config),
+            Err(NodeInitError::ReputationTrustPolicy { .. })
+        ));
+
+        let oversized = root.join("oversized-policy.to");
+        let oversized_bytes = vec![0_u8; MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES + 1];
+        write_local_checkpoint_atomic(&oversized, &oversized_bytes)
+            .expect("write oversized policy");
+        let oversized_config = StorageConfig::builder()
+            .enabled(false)
+            .reputation_trust_policy_path(Some(oversized))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(oversized_config),
+            Err(NodeInitError::ReputationTrustPolicy { .. })
+        ));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let target = root.join("valid-policy.to");
+            write_local_checkpoint_atomic(
+                &target,
+                &reputation_trust_policy_fixture()
+                    .canonical_bytes()
+                    .expect("encode valid policy"),
+            )
+            .expect("write valid policy");
+
+            let symlink_path = root.join("policy-symlink.to");
+            symlink(&target, &symlink_path).expect("create policy symlink");
+            let symlink_config = StorageConfig::builder()
+                .enabled(false)
+                .reputation_trust_policy_path(Some(symlink_path))
+                .build();
+            assert!(matches!(
+                NodeHandle::try_new(symlink_config),
+                Err(NodeInitError::ReputationTrustPolicy { .. })
+            ));
+
+            let writable_path = root.join("writable-policy.to");
+            write_local_checkpoint_atomic(
+                &writable_path,
+                &reputation_trust_policy_fixture()
+                    .canonical_bytes()
+                    .expect("encode writable policy"),
+            )
+            .expect("write policy before permission tamper");
+            fs::set_permissions(&writable_path, fs::Permissions::from_mode(0o666))
+                .expect("make policy writable by other users");
+            let writable_config = StorageConfig::builder()
+                .enabled(false)
+                .reputation_trust_policy_path(Some(writable_path))
+                .build();
+            assert!(matches!(
+                NodeHandle::try_new(writable_config),
+                Err(NodeInitError::ReputationTrustPolicy { .. })
+            ));
+
+            let hardlink_path = root.join("policy-hardlink.to");
+            fs::hard_link(&target, &hardlink_path).expect("create policy hard link");
+            let hardlink_config = StorageConfig::builder()
+                .enabled(false)
+                .reputation_trust_policy_path(Some(hardlink_path))
+                .build();
+            assert!(matches!(
+                NodeHandle::try_new(hardlink_config),
+                Err(NodeInitError::ReputationTrustPolicy { .. })
+            ));
+        }
+    }
+
+    #[test]
     fn reputation_snapshot_rejects_conflicting_ids_and_evicts_only_unreferenced_history() {
-        let (base, _dir) = storage_config_with_temp_dir();
+        let (base, _dir) = storage_config_with_reputation_policy();
         let cfg = StorageConfig::builder()
             .enabled(true)
             .data_dir(base.data_dir().clone())
+            .reputation_trust_policy_path(base.reputation_trust_policy_path().cloned())
             .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
             .build();
         let handle = NodeHandle::new(cfg);
         handle.set_governance_publisher(Arc::new(RecordingPublisher::default()));
-        let first = reputation_snapshot_fixture();
+        let first = signed_reputation_snapshot_fixture();
         handle
-            .publish_reputation_snapshot(first.clone())
+            .publish_signed_reputation_snapshot(first.clone())
             .expect("publish first snapshot");
 
-        let conflicting =
-            reputation_snapshot_fixture_with(first.snapshot_id, first.generated_at_unix + 1, None);
+        let conflicting = signed_reputation_snapshot_fixture_with(
+            first.snapshot.snapshot_id,
+            first.snapshot.generated_at_unix + 1,
+            None,
+        );
         let conflict_error = handle
-            .publish_reputation_snapshot(conflicting)
+            .publish_signed_reputation_snapshot(conflicting)
             .expect_err("conflicting canonical bytes under one id must fail");
         assert!(conflict_error.to_string().contains("conflicts"));
 
-        let broken_head =
-            reputation_snapshot_fixture_with([0x43; 16], first.generated_at_unix + 1, None);
+        let broken_head = signed_reputation_snapshot_fixture_with(
+            [0x43; 16],
+            first.snapshot.generated_at_unix + 1,
+            None,
+        );
         let head_error = handle
-            .publish_reputation_snapshot(broken_head)
+            .publish_signed_reputation_snapshot(broken_head)
             .expect_err("snapshot must extend current head");
-        assert!(head_error.to_string().contains("must extend current head"));
+        assert!(head_error.to_string().contains("exact retained head"));
 
-        let next = reputation_snapshot_fixture_with(
+        let next = signed_reputation_snapshot_fixture_with(
             [0x44; 16],
-            first.generated_at_unix + 1,
-            Some(first.snapshot_id),
+            first.snapshot.generated_at_unix + 1,
+            Some(first.snapshot.snapshot_id),
         );
         handle
-            .publish_reputation_snapshot(next)
+            .publish_signed_reputation_snapshot(next)
             .expect("unreferenced predecessor can be safely evicted");
         assert_eq!(
             handle
@@ -22096,7 +23001,11 @@ mod tests {
                 .map(|snapshot| snapshot.snapshot_id),
             Some([0x44; 16])
         );
-        assert!(handle.reputation_snapshot(first.snapshot_id).is_none());
+        assert!(
+            handle
+                .reputation_snapshot(first.snapshot.snapshot_id)
+                .is_none()
+        );
         assert_eq!(handle.reputation_events_since(None, 10).len(), 1);
         assert_eq!(
             handle.reputation_events_since(None, 10)[0].snapshot_id,
@@ -22106,14 +23015,15 @@ mod tests {
 
     #[test]
     fn reputation_snapshot_publish_failure_keeps_durable_state_for_exact_retry() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
+        let (cfg, _dir) = storage_config_with_reputation_policy();
         let handle = NodeHandle::new(cfg.clone());
         let failing = Arc::new(FailingPublisher::default());
         handle.set_governance_publisher(failing.clone());
-        let snapshot = reputation_snapshot_fixture();
+        let envelope = signed_reputation_snapshot_fixture();
+        let snapshot = envelope.snapshot.clone();
 
         handle
-            .publish_reputation_snapshot(snapshot.clone())
+            .publish_signed_reputation_snapshot(envelope.clone())
             .expect_err("external publisher failure is surfaced");
         assert_eq!(failing.attempts(), 1);
         assert_eq!(handle.pending_governance_publication_count(), 1);
@@ -22131,6 +23041,10 @@ mod tests {
             Some(snapshot.clone())
         );
         assert_eq!(restored.reputation_events_since(None, 10).len(), 1);
+        assert_eq!(
+            restored.latest_signed_reputation_snapshot(),
+            Some(envelope.clone())
+        );
         assert_eq!(restored.pending_governance_publication_count(), 1);
         let recording = Arc::new(RecordingPublisher::default());
         restored
@@ -22138,10 +23052,76 @@ mod tests {
             .expect("publisher registration replays durable pending snapshot");
         assert_eq!(
             recording.take(),
-            vec![to_bytes(&snapshot).expect("encode snapshot")]
+            vec![envelope.canonical_bytes().expect("encode signed snapshot")]
         );
         assert_eq!(restored.pending_governance_publication_count(), 0);
         assert_eq!(restored.reputation_events_since(None, 10).len(), 1);
+    }
+
+    #[test]
+    fn reputation_restart_rejects_missing_or_changed_external_policy() {
+        let (cfg, _dir) = storage_config_with_reputation_policy();
+        let envelope = signed_reputation_snapshot_fixture();
+        let handle = NodeHandle::new(cfg.clone());
+        handle
+            .publish_signed_reputation_snapshot(envelope)
+            .expect("persist signed reputation envelope");
+        drop(handle);
+
+        let no_policy_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(cfg.data_dir().clone())
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(no_policy_config),
+            Err(NodeInitError::Checkpoint {
+                component: "auxiliary runtime",
+                ..
+            })
+        ));
+
+        let policy_path = cfg
+            .reputation_trust_policy_path()
+            .expect("configured reputation policy");
+        let mut changed_policy = reputation_trust_policy_fixture();
+        changed_policy.policy_id[0] ^= 0x01;
+        write_local_checkpoint_atomic(
+            policy_path,
+            &changed_policy
+                .canonical_bytes()
+                .expect("encode changed policy"),
+        )
+        .expect("replace reputation policy");
+        assert!(matches!(
+            NodeHandle::try_new(cfg),
+            Err(NodeInitError::Checkpoint {
+                component: "auxiliary runtime",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn reputation_restart_reuses_original_admission_time_for_freshness() {
+        let mut short_policy = reputation_trust_policy_fixture();
+        short_policy.max_snapshot_age_secs = 1;
+        let (cfg, _dir) = storage_config_with_reputation_policy_fixture(&short_policy);
+        let handle = NodeHandle::new(cfg.clone());
+        let envelope = signed_reputation_snapshot_fixture_for_policy(
+            &short_policy,
+            [0x61; 16],
+            unix_now_secs(),
+            None,
+        );
+        handle
+            .publish_signed_reputation_snapshot(envelope.clone())
+            .expect("admit fresh signed envelope");
+        drop(handle);
+
+        std::thread::sleep(Duration::from_secs(2));
+        let restored = NodeHandle::try_new(cfg)
+            .expect("restart replays the persisted original admission time");
+        assert_eq!(restored.latest_signed_reputation_snapshot(), Some(envelope));
     }
 
     #[test]
@@ -22324,11 +23304,11 @@ mod tests {
 
     #[test]
     fn reputation_checkpoint_rejects_event_snapshot_metadata_tampering() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
+        let (cfg, _dir) = storage_config_with_reputation_policy();
         let handle = NodeHandle::new(cfg.clone());
         handle
-            .publish_reputation_snapshot(reputation_snapshot_fixture())
-            .expect("publish snapshot");
+            .publish_signed_reputation_snapshot(signed_reputation_snapshot_fixture())
+            .expect("publish signed snapshot");
         drop(handle);
 
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
@@ -22352,7 +23332,71 @@ mod tests {
     }
 
     #[test]
-    fn publish_reserve_adjusted_reputation_snapshot_penalizes_defaulted_provider() {
+    fn reputation_checkpoint_rejects_envelope_admission_and_outbox_tampering() {
+        let (cfg, _dir) = storage_config_with_reputation_policy();
+        let handle = NodeHandle::new(cfg.clone());
+        handle
+            .publish_signed_reputation_snapshot(signed_reputation_snapshot_fixture())
+            .expect("persist signed reputation envelope");
+        drop(handle);
+
+        let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let original = fs::read(&path).expect("read auxiliary checkpoint");
+        for case in 0..7_u8 {
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+                norito::decode_from_bytes(&original).expect("decode auxiliary checkpoint");
+            match case {
+                0 => {
+                    checkpoint.reputation_snapshots[0].version ^= 1;
+                }
+                1 => checkpoint.reputation_snapshots[0].admitted_at_unix = 0,
+                2 => {
+                    checkpoint.reputation_snapshots[0].envelope.signatures[0].signature[0] ^= 0x80;
+                }
+                3 => checkpoint.reputation_snapshots[0].envelope.policy_digest[0] ^= 0x40,
+                4 => {
+                    checkpoint.reputation_snapshots[0]
+                        .envelope
+                        .scoring_evidence_digest[0] ^= 0x20;
+                }
+                5 => checkpoint.reputation_snapshots[0].encoded_len ^= 1,
+                6 => {
+                    let replacement =
+                        signed_reputation_snapshot_fixture_with([0x7A; 16], unix_now_secs(), None);
+                    let entry = checkpoint
+                        .governance_outbox_entries
+                        .first_mut()
+                        .expect("pending reputation outbox entry");
+                    entry.payload_bytes = replacement
+                        .canonical_bytes()
+                        .expect("encode replacement signed envelope");
+                    entry.payload_digest = *blake3::hash(&entry.payload_bytes).as_bytes();
+                    entry.binding_digest = governance_outbox_binding_digest(
+                        entry.version,
+                        entry.sequence,
+                        entry.kind,
+                        entry.payload_digest,
+                    );
+                }
+                _ => unreachable!("bounded checkpoint tamper case"),
+            }
+            write_local_checkpoint_atomic(
+                &path,
+                &norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
+            )
+            .expect("write tampered checkpoint");
+            assert!(matches!(
+                NodeHandle::try_new(cfg.clone()),
+                Err(NodeInitError::Checkpoint {
+                    component: "auxiliary runtime",
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn build_reserve_adjusted_reputation_material_penalizes_without_publishing() {
         let cfg = StorageConfig::builder().enabled(false).build();
         let handle = NodeHandle::new(cfg);
         handle
@@ -22364,13 +23408,18 @@ mod tests {
             ))
             .expect("record defaulted reserve provider");
 
-        let snapshot = handle
-            .publish_reserve_adjusted_reputation_snapshot(
+        let material = handle
+            .build_reserve_adjusted_reputation_material(
                 [0x71; 16],
                 1_800_000_250,
                 ReputationWeightsV1::default(),
             )
-            .expect("publish reserve-adjusted reputation snapshot");
+            .expect("build reserve-adjusted reputation material");
+        material
+            .scoring_evidence
+            .verify_snapshot(&material.snapshot)
+            .expect("material replays exactly");
+        let snapshot = &material.snapshot;
 
         let provider_id = hex::encode([0x71; 32]);
         let provider = snapshot
@@ -22387,17 +23436,12 @@ mod tests {
             provider.score_bps <= 2_000,
             "default reserve stage must materially lower reputation"
         );
-        assert_eq!(
-            handle
-                .latest_reputation_snapshot()
-                .expect("latest reputation snapshot")
-                .snapshot_id,
-            snapshot.snapshot_id
-        );
+        assert!(handle.latest_reputation_snapshot().is_none());
+        assert_eq!(handle.pending_governance_publication_count(), 0);
     }
 
     #[test]
-    fn publish_reserve_adjusted_reputation_snapshot_uses_accepted_appeal_override() {
+    fn build_reserve_adjusted_reputation_material_uses_accepted_appeal_override() {
         let cfg = StorageConfig::builder().enabled(false).build();
         let handle = NodeHandle::new(cfg);
         let provider_id = [0x72; 32];
@@ -22409,13 +23453,14 @@ mod tests {
                 1_800_000_150,
             ))
             .expect("record defaulted reserve provider");
-        let default_snapshot = handle
-            .publish_reserve_adjusted_reputation_snapshot(
+        let default_material = handle
+            .build_reserve_adjusted_reputation_material(
                 [0x72; 16],
                 1_800_000_250,
                 ReputationWeightsV1::default(),
             )
-            .expect("publish default reserve reputation snapshot");
+            .expect("build default reserve reputation material");
+        let default_snapshot = &default_material.snapshot;
         let provider_id_hex = hex::encode(provider_id);
         let default_provider = default_snapshot
             .providers
@@ -22437,13 +23482,14 @@ mod tests {
                 ReserveAppealStatus::Accepted,
             ))
             .expect("accept reserve appeal");
-        let adjusted_snapshot = handle
-            .publish_reserve_adjusted_reputation_snapshot(
+        let adjusted_material = handle
+            .build_reserve_adjusted_reputation_material(
                 [0x73; 16],
                 2_300_000_000,
                 ReputationWeightsV1::default(),
             )
-            .expect("publish appeal-adjusted reserve reputation snapshot");
+            .expect("build appeal-adjusted reserve reputation material");
+        let adjusted_snapshot = &adjusted_material.snapshot;
         let adjusted_provider = adjusted_snapshot
             .providers
             .iter()
@@ -22460,10 +23506,8 @@ mod tests {
                 .degradation_flags
                 .contains(&ReputationDegradationFlagV1::ReserveDefault)
         );
-        assert_eq!(
-            adjusted_snapshot.previous_snapshot_id,
-            Some(default_snapshot.snapshot_id)
-        );
+        assert_eq!(adjusted_snapshot.previous_snapshot_id, None);
+        assert!(handle.latest_reputation_snapshot().is_none());
     }
 
     #[test]
@@ -23339,18 +24383,18 @@ mod tests {
         let client_id = ClientId::new([0x20; 32]);
 
         handle
-            .deposit_provider_bond(provider_id, 1_000_000_000)
+            .fund_provider_bond_sequenced(provider_id, 1_000_000_000, 1)
             .expect("deposit provider bond");
         handle
-            .deposit_client_credit(client_id, 1_000_000_000)
+            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
             .expect("deposit client credit");
 
         let terms = DealTerms {
             storage_price_nano_per_gib_month: 100_000_000,
             egress_price_nano_per_gib: 25_000_000,
             settlement_window_epochs: 5,
-            micropayment_probability_bps: 0,
-            micropayment_payout_nano: 0,
+            micropayment_probability_bps: 1,
+            micropayment_payout_nano: 1,
         };
 
         let activation_epoch = 1_680_000_000;
@@ -23420,7 +24464,7 @@ mod tests {
             .and_then(|meta| meta.get("status"))
             .and_then(norito::json::Value::as_str)
             .expect("status present");
-        assert_eq!(status, "completed");
+        assert_eq!(status, "window_settled");
     }
 
     #[test]
@@ -23436,10 +24480,10 @@ mod tests {
         let client_id = ClientId::new([0xEF; 32]);
 
         handle
-            .deposit_provider_bond(provider_id, 3_000_000_000)
+            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
             .expect("deposit provider bond");
         handle
-            .deposit_client_credit(client_id, 1_000_000_000)
+            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
             .expect("deposit client credit");
 
         let terms = DealTerms {
@@ -23601,7 +24645,7 @@ mod tests {
         let provider = ProviderId::new(challenge.provider_id);
 
         handle
-            .deposit_provider_bond(provider, 10_000)
+            .fund_provider_bond_sequenced(provider, 10_000, 1)
             .expect("deposit provider bond");
 
         let mut verdict = por_sample_verdict(&challenge, [0; 32]);
@@ -23653,7 +24697,7 @@ mod tests {
         let challenge = por_sample_challenge();
         let provider = ProviderId::new(challenge.provider_id);
         handle
-            .deposit_provider_bond(provider, 2_000)
+            .fund_provider_bond_sequenced(provider, 2_000, 1)
             .expect("deposit provider bond");
 
         let mut verdict = por_sample_verdict(&challenge, [0; 32]);
@@ -27998,7 +29042,7 @@ mod tests {
 
         fn publish_reputation_snapshot(
             &self,
-            _snapshot: &ReputationSnapshotV1,
+            _snapshot: &SignedReputationSnapshotV1,
             encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.payloads.lock().expect("publisher lock poisoned");
@@ -28142,7 +29186,7 @@ mod tests {
 
         fn publish_reputation_snapshot(
             &self,
-            _snapshot: &ReputationSnapshotV1,
+            _snapshot: &SignedReputationSnapshotV1,
             _encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");

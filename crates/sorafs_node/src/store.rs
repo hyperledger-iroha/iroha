@@ -1,8 +1,9 @@
 //! Persistent storage backend for the embedded SoraFS node.
 //!
 //! This module wraps `sorafs_car::ChunkStore` with an on-disk manifest index,
-//! deterministic chunk layout, Proof-of-Retrievability (PoR) resume support,
-//! and quota enforcement derived from Torii storage configuration.
+//! deterministic chunk layout, verified Proof-of-Retrievability (PoR) recovery,
+//! canonical Proof-of-Data-Possession (PDP) commitments, and quota enforcement
+//! derived from Torii storage configuration.
 
 #![allow(unexpected_cfgs)]
 
@@ -29,12 +30,17 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use sorafs_car::{
-    self, CarBuildPlan, CarChunk, ChunkStore, ChunkStoreError, FilePlan, PayloadSource,
-    PorChunkTree, PorLeaf, PorMerkleTree, PorProof, PorSegment, TaikaiSegmentHint,
+    self, CarBuildPlan, CarChunk, ChunkStore, ChunkStoreError, DirectoryPublicationStatus,
+    FilePlan, PayloadSource, PorMerkleTree, PorProof, TaikaiSegmentHint,
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     MANIFEST_VERSION_V1, ManifestV1,
+    pdp::{
+        PDP_MAX_SEGMENT_SAMPLES_V1, PdpCommitmentV1, PdpCommitmentValidationError,
+        PdpMerkleReadError, PdpMerkleTreeError, PdpMerkleTreeV1, PdpProofLeafV1, PdpSampleV1,
+        estimated_heap_bytes as estimated_pdp_heap_bytes,
+    },
     retention::{RetentionMetadataError, RetentionSourceV1},
 };
 use thiserror::Error;
@@ -57,6 +63,18 @@ static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static GC_TRASH_COUNTER: AtomicU64 = AtomicU64::new(0);
 static INGEST_STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+struct ChunkReadTestHook {
+    path: PathBuf,
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+static CHUNK_READ_TEST_HOOK: Mutex<Option<ChunkReadTestHook>> = Mutex::new(None);
+#[cfg(test)]
+static CHUNK_READ_TEST_SERIAL: Mutex<()> = Mutex::new(());
+
 fn storage_decode_limits(max_bytes: u64) -> norito::DecodeLimits {
     let byte_limit = usize::try_from(max_bytes).unwrap_or(usize::MAX);
     norito::DecodeLimits::new(
@@ -66,6 +84,27 @@ fn storage_decode_limits(max_bytes: u64) -> norito::DecodeLimits {
         byte_limit.checked_mul(4).unwrap_or(usize::MAX),
         64,
     )
+}
+
+fn ensure_persistent_artifact_size(
+    artifact: &'static str,
+    bytes: &[u8],
+    maximum: u64,
+) -> Result<(), StorageError> {
+    let actual =
+        u64::try_from(bytes.len()).map_err(|_| StorageError::PersistentArtifactTooLarge {
+            artifact,
+            actual: bytes.len(),
+            maximum,
+        })?;
+    if actual > maximum {
+        return Err(StorageError::PersistentArtifactTooLarge {
+            artifact,
+            actual: bytes.len(),
+            maximum,
+        });
+    }
+    Ok(())
 }
 
 /// Errors raised by the SoraFS storage backend.
@@ -90,6 +129,16 @@ pub enum StorageError {
         path: String,
         /// Stable diagnostic explaining the rejected invariant.
         reason: String,
+    },
+    /// A canonical artifact exceeded the maximum size accepted during restart.
+    #[error("{artifact} is {actual} bytes; maximum is {maximum}")]
+    PersistentArtifactTooLarge {
+        /// Stable artifact label.
+        artifact: &'static str,
+        /// Encoded byte length.
+        actual: usize,
+        /// Restart decode ceiling.
+        maximum: u64,
     },
     /// Another process already owns the configured storage directory.
     #[error("SoraFS storage directory is already in use: {path}")]
@@ -173,6 +222,58 @@ pub enum StorageError {
     /// Failed to rebuild the PoR tree from persisted chunk data.
     #[error("failed to build PoR tree: {0}")]
     ChunkStore(#[from] ChunkStoreError),
+    /// Bounded PoR commitment geometry overflowed its persistent representation.
+    #[error("PoR commitment geometry overflow while accounting for {context}")]
+    PorCommitmentGeometryOverflow {
+        /// Counter or range whose checked conversion failed.
+        context: &'static str,
+    },
+    /// Checked allocation geometry overflowed before any allocation was attempted.
+    #[error("storage allocation geometry overflow while accounting for {context}")]
+    AllocationGeometryOverflow {
+        /// Collection or byte buffer whose length calculation overflowed.
+        context: &'static str,
+    },
+    /// Failed to construct or validate a canonical PDP tree.
+    #[error("failed to build PDP tree: {0}")]
+    PdpTree(#[from] PdpMerkleTreeError),
+    /// Persisted or newly constructed PDP commitment metadata is invalid.
+    #[error("invalid PDP commitment: {0}")]
+    PdpCommitment(#[from] PdpCommitmentValidationError),
+    /// Retaining another canonical PDP tree would exceed the configured aggregate budget.
+    #[error("PDP tree memory budget exceeded: required {required} bytes, available {available}")]
+    PdpTreeMemoryExceeded {
+        /// Retained bytes required by the candidate tree.
+        required: u64,
+        /// Bytes remaining under the aggregate retained-tree budget.
+        available: u64,
+    },
+    /// Configured PDP sample window is outside the v1 protocol range.
+    #[error("PDP sample window {found} is outside 1..={maximum}")]
+    InvalidPdpSampleWindow {
+        /// Configured value.
+        found: u16,
+        /// V1 protocol ceiling.
+        maximum: usize,
+    },
+    /// The requested manifest has no PDP commitment (valid only for an empty payload).
+    #[error("manifest {manifest_id} has no PDP commitment")]
+    PdpUnavailable {
+        /// Canonical manifest identifier.
+        manifest_id: String,
+    },
+    /// A canonical PDP witness could not be produced from the stored payload.
+    #[error("PDP witness construction failed: {reason}")]
+    PdpWitness {
+        /// Stable diagnostic from bounded sample validation or verified payload I/O.
+        reason: String,
+    },
+    /// Manifest content length does not match the payload described by the ingestion plan.
+    #[error("manifest content length does not match the ingestion plan")]
+    ManifestContentLengthMismatch,
+    /// The system clock cannot produce a non-zero Unix timestamp for commitment sealing.
+    #[error("system clock cannot produce a valid PDP commitment timestamp")]
+    InvalidSystemTime,
     /// Manifest with the requested identifier does not exist.
     #[error("manifest {manifest_id} not found")]
     ManifestNotFound {
@@ -231,15 +332,18 @@ struct StorageState {
     manifests: BTreeMap<String, StoredManifest>,
     total_bytes: u64,
     reserved_bytes: u64,
+    pdp_tree_bytes: u64,
+    reserved_pdp_tree_bytes: u64,
     inflight_manifests: BTreeSet<String>,
     access_counter: u64,
-    chunk_refcounts: BTreeMap<[u8; 32], u32>,
+    chunk_refcounts: Vec<ChunkRefcountEntry>,
 }
 
 struct IngestReservation<'a> {
     backend: &'a StorageBackend,
     manifest_id: String,
     reserved_bytes: u64,
+    reserved_pdp_tree_bytes: u64,
     active: bool,
 }
 
@@ -248,7 +352,33 @@ impl IngestReservation<'_> {
         if !self.active {
             return;
         }
-        state.reserved_bytes = state.reserved_bytes.saturating_sub(self.reserved_bytes);
+        match state.reserved_bytes.checked_sub(self.reserved_bytes) {
+            Some(remaining) => state.reserved_bytes = remaining,
+            None => {
+                let reserved = state.reserved_bytes;
+                state.reserved_bytes = 0;
+                iroha_logger::error!(
+                    reserved,
+                    release = self.reserved_bytes,
+                    "storage byte reservation accounting underflow"
+                );
+            }
+        }
+        match state
+            .reserved_pdp_tree_bytes
+            .checked_sub(self.reserved_pdp_tree_bytes)
+        {
+            Some(remaining) => state.reserved_pdp_tree_bytes = remaining,
+            None => {
+                let reserved = state.reserved_pdp_tree_bytes;
+                state.reserved_pdp_tree_bytes = 0;
+                iroha_logger::error!(
+                    reserved,
+                    release = self.reserved_pdp_tree_bytes,
+                    "PDP tree reservation accounting underflow"
+                );
+            }
+        }
         state.inflight_manifests.remove(&self.manifest_id);
         self.active = false;
     }
@@ -297,6 +427,12 @@ impl StorageState {
             .saturating_sub(self.total_bytes)
             .saturating_sub(self.reserved_bytes)
     }
+
+    fn available_pdp_tree_memory(&self, max_bytes: u64) -> u64 {
+        max_bytes
+            .saturating_sub(self.pdp_tree_bytes)
+            .saturating_sub(self.reserved_pdp_tree_bytes)
+    }
 }
 
 /// Summary of a manifest stored on disk.
@@ -315,7 +451,13 @@ pub struct StoredManifest {
     last_access: u64,
     files: Vec<StoredFileRecord>,
     chunk_files: Vec<ChunkFileRecord>,
-    por_tree: StoredPorTree,
+    por_tree: Arc<PorMerkleTree>,
+    por_commitment: Option<StoredPorCommitmentV1>,
+    por_commitment_digest: Option<[u8; 32]>,
+    pdp_commitment: Option<PdpCommitmentV1>,
+    pdp_commitment_digest: Option<[u8; 32]>,
+    pdp_tree: Option<Arc<PdpMerkleTreeV1>>,
+    pdp_tree_memory_bytes: u64,
     manifest_path: PathBuf,
     io_lock: Arc<RwLock<()>>,
 }
@@ -377,10 +519,78 @@ impl StoredManifest {
             last_access: parts.last_access,
             files: parts.files,
             chunk_files: parts.chunk_files,
-            por_tree: parts.por_tree,
+            por_tree: parts.por_tree.into_arc(),
+            por_commitment: None,
+            por_commitment_digest: None,
+            pdp_commitment: None,
+            pdp_commitment_digest: None,
+            pdp_tree: None,
+            pdp_tree_memory_bytes: 0,
             manifest_path: parts.manifest_path,
             io_lock: Arc::new(RwLock::new(())),
         }
+    }
+
+    fn try_clone_runtime(&self) -> Result<Self, StorageError> {
+        let mut files = Vec::new();
+        files.try_reserve_exact(self.files.len()).map_err(|_| {
+            StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                context: "runtime manifest file records",
+                requested: self.files.len(),
+            })
+        })?;
+        for file in &self.files {
+            files.push(StoredFileRecord {
+                path: try_clone_logical_path(&file.path, "runtime manifest logical path")?,
+                offset: file.offset,
+                size: file.size,
+                first_chunk: file.first_chunk,
+                chunk_count: file.chunk_count,
+            });
+        }
+        let mut chunk_files = Vec::new();
+        chunk_files
+            .try_reserve_exact(self.chunk_files.len())
+            .map_err(|_| {
+                StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                    context: "runtime manifest chunk records",
+                    requested: self.chunk_files.len(),
+                })
+            })?;
+        for chunk in &self.chunk_files {
+            chunk_files.push(try_clone_chunk_file_record(chunk)?);
+        }
+        Ok(Self {
+            manifest_id: try_clone_text(&self.manifest_id, "runtime manifest id")?,
+            manifest_cid: try_clone_bytes(&self.manifest_cid, "runtime manifest CID")?,
+            manifest_digest: self.manifest_digest,
+            payload_digest: self.payload_digest,
+            content_length: self.content_length,
+            chunk_profile_handle: try_clone_text(
+                &self.chunk_profile_handle,
+                "runtime chunk profile handle",
+            )?,
+            stripe_layout: self.stripe_layout,
+            stored_at_unix_secs: self.stored_at_unix_secs,
+            retention_epoch: self.retention_epoch,
+            retention_source: try_clone_retention_source(self.retention_source.as_ref())?,
+            last_access: self.last_access,
+            files,
+            chunk_files,
+            por_tree: Arc::clone(&self.por_tree),
+            por_commitment: self
+                .por_commitment
+                .as_ref()
+                .map(try_clone_por_commitment)
+                .transpose()?,
+            por_commitment_digest: self.por_commitment_digest,
+            pdp_commitment: try_clone_pdp_commitment(self.pdp_commitment.as_ref())?,
+            pdp_commitment_digest: self.pdp_commitment_digest,
+            pdp_tree: self.pdp_tree.as_ref().map(Arc::clone),
+            pdp_tree_memory_bytes: self.pdp_tree_memory_bytes,
+            manifest_path: try_clone_path_buf(&self.manifest_path, "runtime manifest path")?,
+            io_lock: Arc::clone(&self.io_lock),
+        })
     }
 
     /// Canonical identifier derived from the manifest digest (hex string).
@@ -535,7 +745,13 @@ impl StoredManifest {
                         content_length: self.content_length,
                     });
                 }
-                chunks.push(chunk.clone());
+                chunks.try_reserve(1).map_err(|_| {
+                    StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                        context: "chunk range response",
+                        requested: 1,
+                    })
+                })?;
+                chunks.push(try_clone_chunk_file_record(chunk)?);
                 cursor = chunk_end;
                 if cursor == end {
                     return Ok(ChunkSlice {
@@ -556,7 +772,13 @@ impl StoredManifest {
                     });
                 }
                 start_index = Some(idx);
-                chunks.push(chunk.clone());
+                chunks.try_reserve(1).map_err(|_| {
+                    StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                        context: "chunk range response",
+                        requested: 1,
+                    })
+                })?;
+                chunks.push(try_clone_chunk_file_record(chunk)?);
                 cursor = chunk_end;
                 if cursor == end {
                     return Ok(ChunkSlice {
@@ -647,10 +869,102 @@ impl StoredManifest {
         }
     }
 
+    /// Fallibly reconstruct a [`CarBuildPlan`] with an optional Taikai hint per chunk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an allocation error when chunk, file, path, or hint metadata cannot be cloned.
+    pub fn try_to_car_plan_with_hint(
+        &self,
+        profile: ChunkProfile,
+        taikai_hint: Option<&TaikaiSegmentHint>,
+    ) -> Result<CarBuildPlan, StorageError> {
+        let mut chunks = Vec::new();
+        chunks
+            .try_reserve_exact(self.chunk_files.len())
+            .map_err(|_| {
+                StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                    context: "rebuild CAR chunk plan",
+                    requested: self.chunk_files.len(),
+                })
+            })?;
+        for chunk in &self.chunk_files {
+            chunks.push(CarChunk {
+                offset: chunk.offset,
+                length: chunk.length,
+                digest: chunk.digest,
+                taikai_segment_hint: taikai_hint.map(try_clone_taikai_segment_hint).transpose()?,
+            });
+        }
+
+        let mut files = Vec::new();
+        files.try_reserve_exact(self.files.len()).map_err(|_| {
+            StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                context: "rebuild CAR file plan",
+                requested: self.files.len(),
+            })
+        })?;
+        for file in &self.files {
+            files.push(FilePlan {
+                path: try_clone_logical_path(&file.path, "rebuild CAR logical path")?,
+                first_chunk: file.first_chunk,
+                chunk_count: file.chunk_count,
+                size: file.size,
+            });
+        }
+        Ok(CarBuildPlan {
+            chunk_profile: profile,
+            payload_digest: Hash::from_bytes(*self.payload_digest()),
+            content_length: self.content_length,
+            chunks,
+            files,
+        })
+    }
+
+    fn try_to_car_plan(&self, profile: ChunkProfile) -> Result<CarBuildPlan, StorageError> {
+        self.try_to_car_plan_with_hint(profile, None)
+    }
+
     /// Build an in-memory PoR tree for the stored manifest.
     #[must_use]
     pub fn por_tree(&self) -> PorMerkleTree {
-        self.por_tree.to_merkle_tree()
+        (*self.por_tree).clone()
+    }
+
+    /// Borrow the runtime PoR tree rebuilt from verified payload bytes.
+    #[must_use]
+    pub fn por_tree_ref(&self) -> &PorMerkleTree {
+        self.por_tree.as_ref()
+    }
+
+    /// Domain-separated digest binding the bounded PoR commitment into the index.
+    #[must_use]
+    pub fn por_commitment_digest(&self) -> Option<&[u8; 32]> {
+        self.por_commitment_digest.as_ref()
+    }
+
+    /// Canonical PDP commitment persisted for this non-empty payload.
+    #[must_use]
+    pub fn pdp_commitment(&self) -> Option<&PdpCommitmentV1> {
+        self.pdp_commitment.as_ref()
+    }
+
+    /// Domain-separated digest binding the PDP commitment into the storage index.
+    #[must_use]
+    pub fn pdp_commitment_digest(&self) -> Option<&[u8; 32]> {
+        self.pdp_commitment_digest.as_ref()
+    }
+
+    /// Canonical runtime PDP tree rebuilt or constructed from verified payload bytes.
+    #[must_use]
+    pub fn pdp_tree(&self) -> Option<&PdpMerkleTreeV1> {
+        self.pdp_tree.as_deref()
+    }
+
+    /// Exact retained-node-slab bytes charged to the aggregate PDP tree budget.
+    #[must_use]
+    pub fn pdp_tree_memory_bytes(&self) -> u64 {
+        self.pdp_tree_memory_bytes
     }
 
     /// Path to the Norito-encoded manifest bytes stored on disk.
@@ -720,155 +1034,127 @@ impl ChunkSlice {
     }
 }
 
-/// Persistent representation of the PoR tree used for manifest resume.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+/// Compatibility wrapper used by [`StoredManifestParts`] for synthetic manifests.
+///
+/// Production persistence never serializes this value; only a bounded PoR commitment summary is
+/// written to disk, and the full tree is rebuilt from verified chunks on startup.
+#[derive(Debug, Clone)]
 pub struct StoredPorTree {
-    root: [u8; 32],
-    payload_len: u64,
-    chunks: Vec<StoredPorChunk>,
+    tree: Arc<PorMerkleTree>,
 }
 
 impl StoredPorTree {
-    /// Rebuild an in-memory PoR tree from the stored representation.
+    /// Clone the wrapped runtime tree.
     #[must_use]
     pub fn to_merkle_tree(&self) -> PorMerkleTree {
-        let mut chunk_nodes = Vec::with_capacity(self.chunks.len());
-        let mut chunk_roots = Vec::with_capacity(self.chunks.len());
-        for chunk in &self.chunks {
-            let (node, root) = chunk.to_chunk_tree();
-            chunk_nodes.push(node);
-            chunk_roots.push(root);
-        }
-        PorMerkleTree::from_chunks(chunk_nodes, chunk_roots, self.payload_len)
+        (*self.tree).clone()
+    }
+
+    fn into_arc(self) -> Arc<PorMerkleTree> {
+        self.tree
     }
 }
 
 impl From<&PorMerkleTree> for StoredPorTree {
     fn from(tree: &PorMerkleTree) -> Self {
-        let chunks = tree
-            .chunks()
-            .iter()
-            .map(StoredPorChunk::from)
-            .collect::<Vec<_>>();
         Self {
-            root: *tree.root(),
-            payload_len: tree.payload_len(),
-            chunks,
+            tree: Arc::new(tree.clone()),
         }
     }
 }
 
+const POR_COMMITMENT_VERSION_V1: u8 = 1;
+const POR_COMMITMENT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.node.por.commitment.digest.v1\0";
+
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
-struct StoredPorChunk {
+struct StoredPorCommitmentV1 {
+    version: u8,
+    root: [u8; 32],
+    payload_len: u64,
+    chunk_count: u32,
+    segment_count: u64,
+    leaf_count: u64,
+    chunks: Vec<StoredPorChunkCommitmentV1>,
+}
+
+#[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+struct StoredPorChunkCommitmentV1 {
     chunk_index: u32,
     offset: u64,
     length: u32,
     chunk_digest: [u8; 32],
     root: [u8; 32],
-    segments: Vec<StoredPorSegment>,
+    segment_count: u32,
+    leaf_count: u32,
 }
 
-impl StoredPorChunk {
-    fn to_chunk_tree(&self) -> (PorChunkTree, [u8; 32]) {
-        let segments = self
-            .segments
-            .iter()
-            .map(StoredPorSegment::to_segment)
-            .collect::<Vec<_>>();
-        (
-            PorChunkTree {
-                chunk_index: self.chunk_index as usize,
-                offset: self.offset,
-                length: self.length,
-                chunk_digest: self.chunk_digest,
-                root: self.root,
-                segments: segments.clone(),
-            },
-            self.root,
-        )
-    }
-}
-
-impl From<&PorChunkTree> for StoredPorChunk {
-    fn from(chunk: &PorChunkTree) -> Self {
-        let segments = chunk
-            .segments
-            .iter()
-            .map(StoredPorSegment::from)
-            .collect::<Vec<_>>();
-        Self {
-            chunk_index: chunk.chunk_index as u32,
-            offset: chunk.offset,
-            length: chunk.length,
-            chunk_digest: chunk.chunk_digest,
-            root: chunk.root,
-            segments,
+impl StoredPorCommitmentV1 {
+    fn from_tree(tree: &PorMerkleTree) -> Result<Self, StorageError> {
+        let mut chunks = Vec::new();
+        chunks.try_reserve_exact(tree.chunks().len()).map_err(|_| {
+            StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                context: "bounded PoR commitment chunks",
+                requested: tree.chunks().len(),
+            })
+        })?;
+        let mut segment_count = 0_u64;
+        let mut leaf_count = 0_u64;
+        for chunk in tree.chunks() {
+            let chunk_segments = persistent_u32("por.chunk.segment_count", chunk.segments.len())?;
+            let chunk_leaves = chunk.segments.iter().try_fold(0_usize, |total, segment| {
+                total.checked_add(segment.leaves.len()).ok_or(
+                    StorageError::PorCommitmentGeometryOverflow {
+                        context: "chunk leaf count",
+                    },
+                )
+            })?;
+            let chunk_leaves = persistent_u32("por.chunk.leaf_count", chunk_leaves)?;
+            segment_count = segment_count.checked_add(u64::from(chunk_segments)).ok_or(
+                StorageError::PorCommitmentGeometryOverflow {
+                    context: "segment count",
+                },
+            )?;
+            leaf_count = leaf_count.checked_add(u64::from(chunk_leaves)).ok_or(
+                StorageError::PorCommitmentGeometryOverflow {
+                    context: "leaf count",
+                },
+            )?;
+            chunks.push(StoredPorChunkCommitmentV1 {
+                chunk_index: persistent_u32("por.chunk_index", chunk.chunk_index)?,
+                offset: chunk.offset,
+                length: chunk.length,
+                chunk_digest: chunk.chunk_digest,
+                root: chunk.root,
+                segment_count: chunk_segments,
+                leaf_count: chunk_leaves,
+            });
         }
+        Ok(Self {
+            version: POR_COMMITMENT_VERSION_V1,
+            root: *tree.root(),
+            payload_len: tree.payload_len(),
+            chunk_count: persistent_u32("por.chunk_count", chunks.len())?,
+            segment_count,
+            leaf_count,
+            chunks,
+        })
     }
-}
 
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
-struct StoredPorSegment {
-    offset: u64,
-    length: u32,
-    digest: [u8; 32],
-    leaves: Vec<StoredPorLeaf>,
-}
-
-impl StoredPorSegment {
-    fn to_segment(&self) -> PorSegment {
-        PorSegment {
-            offset: self.offset,
-            length: self.length,
-            digest: self.digest,
-            leaves: self
-                .leaves
-                .iter()
-                .map(StoredPorLeaf::to_leaf)
-                .collect::<Vec<_>>(),
-        }
-    }
-}
-
-impl From<&PorSegment> for StoredPorSegment {
-    fn from(segment: &PorSegment) -> Self {
-        Self {
-            offset: segment.offset,
-            length: segment.length,
-            digest: segment.digest,
-            leaves: segment
-                .leaves
-                .iter()
-                .map(StoredPorLeaf::from)
-                .collect::<Vec<_>>(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
-struct StoredPorLeaf {
-    offset: u64,
-    length: u32,
-    digest: [u8; 32],
-}
-
-impl StoredPorLeaf {
-    fn to_leaf(&self) -> PorLeaf {
-        PorLeaf {
-            offset: self.offset,
-            length: self.length,
-            digest: self.digest,
-        }
-    }
-}
-
-impl From<&PorLeaf> for StoredPorLeaf {
-    fn from(leaf: &PorLeaf) -> Self {
-        Self {
-            offset: leaf.offset,
-            length: leaf.length,
-            digest: leaf.digest,
-        }
+    fn digest(&self) -> Result<[u8; 32], StorageError> {
+        let bytes = norito::to_bytes(self)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(POR_COMMITMENT_DIGEST_DOMAIN_V1);
+        hasher.update(
+            &u64::try_from(bytes.len())
+                .map_err(|_| StorageError::LayoutValueTooLarge {
+                    field: "por.commitment_bytes",
+                    value: bytes.len(),
+                    max: u64::MAX,
+                })?
+                .to_le_bytes(),
+        );
+        hasher.update(&bytes);
+        Ok(hasher.finalize().into())
     }
 }
 
@@ -913,6 +1199,8 @@ struct ManifestIndexEntry {
     content_length: u64,
     chunk_profile_handle: String,
     chunk_count: u32,
+    por_commitment_digest: [u8; 32],
+    pdp_commitment_digest: Option<[u8; 32]>,
     stored_at_unix_secs: u64,
     #[norito(default)]
     retention_epoch: u64,
@@ -942,7 +1230,8 @@ struct StoredManifestRecord {
     #[norito(default)]
     files: Vec<StoredFileRecordNorito>,
     chunk_files: Vec<StoredChunkRecord>,
-    por_tree: StoredPorTree,
+    por_commitment: StoredPorCommitmentV1,
+    pdp_commitment: Option<PdpCommitmentV1>,
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
@@ -971,24 +1260,170 @@ struct StoredChunkRole {
     group_id: u32,
 }
 
-fn chunk_refcount_map(entries: &[ChunkRefcountEntry]) -> BTreeMap<[u8; 32], u32> {
-    let mut map = BTreeMap::new();
-    for entry in entries {
-        if entry.count == 0 {
-            continue;
-        }
-        map.insert(entry.digest, entry.count);
-    }
-    map
+fn reserve_refcount_entries(
+    entries: &mut Vec<ChunkRefcountEntry>,
+    additional: usize,
+) -> Result<(), StorageError> {
+    entries.try_reserve(additional).map_err(|_| {
+        StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+            context: "chunk reference counts",
+            requested: additional,
+        })
+    })
 }
 
-fn chunk_refcount_entries(map: &BTreeMap<[u8; 32], u32>) -> Vec<ChunkRefcountEntry> {
-    map.iter()
-        .map(|(digest, count)| ChunkRefcountEntry {
-            digest: *digest,
-            count: *count,
+fn try_clone_refcount_entries(
+    entries: &[ChunkRefcountEntry],
+) -> Result<Vec<ChunkRefcountEntry>, StorageError> {
+    let mut cloned = Vec::new();
+    cloned.try_reserve_exact(entries.len()).map_err(|_| {
+        StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+            context: "chunk reference count snapshot",
+            requested: entries.len(),
         })
-        .collect()
+    })?;
+    cloned.extend_from_slice(entries);
+    Ok(cloned)
+}
+
+fn try_clone_manifest_index(index: &ManifestIndex) -> Result<ManifestIndex, StorageError> {
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(index.entries.len())
+        .map_err(|_| {
+            StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                context: "storage index entries",
+                requested: index.entries.len(),
+            })
+        })?;
+    for entry in &index.entries {
+        entries.push(ManifestIndexEntry {
+            manifest_id: try_clone_text(&entry.manifest_id, "storage index manifest id")?,
+            manifest_cid: try_clone_bytes(&entry.manifest_cid, "storage index manifest CID")?,
+            manifest_digest: entry.manifest_digest,
+            payload_digest: entry.payload_digest,
+            content_length: entry.content_length,
+            chunk_profile_handle: try_clone_text(
+                &entry.chunk_profile_handle,
+                "storage index chunk profile",
+            )?,
+            chunk_count: entry.chunk_count,
+            por_commitment_digest: entry.por_commitment_digest,
+            pdp_commitment_digest: entry.pdp_commitment_digest,
+            stored_at_unix_secs: entry.stored_at_unix_secs,
+            retention_epoch: entry.retention_epoch,
+            retention_source: try_clone_retention_source(entry.retention_source.as_ref())?,
+            last_access: entry.last_access,
+        });
+    }
+    Ok(ManifestIndex {
+        version: index.version,
+        total_bytes: index.total_bytes,
+        gc_freed_bytes_total: index.gc_freed_bytes_total,
+        gc_evictions_total: index.gc_evictions_total,
+        chunk_refcounts: try_clone_refcount_entries(&index.chunk_refcounts)?,
+        entries,
+    })
+}
+
+fn try_clone_bytes(value: &[u8], context: &'static str) -> Result<Vec<u8>, StorageError> {
+    let mut cloned = Vec::new();
+    cloned.try_reserve_exact(value.len()).map_err(|_| {
+        StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+            context,
+            requested: value.len(),
+        })
+    })?;
+    cloned.extend_from_slice(value);
+    Ok(cloned)
+}
+
+fn try_clone_path_buf(path: &Path, context: &'static str) -> Result<PathBuf, StorageError> {
+    let mut cloned = PathBuf::new();
+    cloned
+        .try_reserve_exact(path.as_os_str().len())
+        .map_err(|_| {
+            StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                context,
+                requested: path.as_os_str().len(),
+            })
+        })?;
+    cloned.push(path);
+    Ok(cloned)
+}
+
+fn try_clone_chunk_file_record(chunk: &ChunkFileRecord) -> Result<ChunkFileRecord, StorageError> {
+    Ok(ChunkFileRecord {
+        path: try_clone_path_buf(&chunk.path, "runtime chunk path")?,
+        offset: chunk.offset,
+        length: chunk.length,
+        digest: chunk.digest,
+        role: chunk.role,
+        group_id: chunk.group_id,
+    })
+}
+
+fn try_clone_taikai_segment_hint(
+    hint: &TaikaiSegmentHint,
+) -> Result<TaikaiSegmentHint, StorageError> {
+    Ok(TaikaiSegmentHint {
+        event: try_clone_text(&hint.event, "Taikai event hint")?,
+        stream: try_clone_text(&hint.stream, "Taikai stream hint")?,
+        rendition: try_clone_text(&hint.rendition, "Taikai rendition hint")?,
+        sequence: hint.sequence,
+        payload_len: hint.payload_len,
+        payload_digest: hint.payload_digest,
+    })
+}
+
+fn try_clone_retention_source(
+    source: Option<&RetentionSourceV1>,
+) -> Result<Option<RetentionSourceV1>, StorageError> {
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(source.sources.len())
+        .map_err(|_| {
+            StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                context: "retention source kinds",
+                requested: source.sources.len(),
+            })
+        })?;
+    sources.extend_from_slice(&source.sources);
+    Ok(Some(RetentionSourceV1 {
+        version: source.version,
+        pin_policy_epoch: source.pin_policy_epoch,
+        deal_end_epoch: source.deal_end_epoch,
+        governance_cap_epoch: source.governance_cap_epoch,
+        effective_epoch: source.effective_epoch,
+        sources,
+    }))
+}
+
+fn increment_refcount(
+    entries: &mut Vec<ChunkRefcountEntry>,
+    digest: [u8; 32],
+    path: &Path,
+) -> Result<(), StorageError> {
+    match entries.binary_search_by_key(&digest, |entry| entry.digest) {
+        Ok(index) => {
+            entries[index].count = entries[index]
+                .count
+                .checked_add(1)
+                .ok_or_else(|| corrupt_storage_state(path, "chunk reference count overflow"))?;
+        }
+        Err(index) => entries.insert(index, ChunkRefcountEntry { digest, count: 1 }),
+    }
+    Ok(())
+}
+
+fn refcount(entries: &[ChunkRefcountEntry], digest: &[u8; 32]) -> Option<u32> {
+    entries
+        .binary_search_by_key(digest, |entry| entry.digest)
+        .ok()
+        .map(|index| entries[index].count)
 }
 
 fn corrupt_storage_state(path: &Path, reason: impl Into<String>) -> StorageError {
@@ -1298,7 +1733,14 @@ fn read_bounded_regular_file(path: &Path, max_len: u64) -> Result<Vec<u8>, Stora
     let length = usize::try_from(opened_metadata.len()).map_err(|_| {
         corrupt_storage_state(path, "artifact length is not representable on this host")
     })?;
-    let mut bytes = vec![0_u8; length];
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(length).map_err(|_| {
+        corrupt_storage_state(
+            path,
+            format!("failed to allocate {length} bytes for bounded artifact"),
+        )
+    })?;
+    bytes.resize(length, 0);
     file.read_exact(&mut bytes)?;
     let mut trailing = [0_u8; 1];
     if file.read(&mut trailing)? != 0 {
@@ -1394,6 +1836,7 @@ fn validate_persisted_manifest(
     manifest_bytes: &[u8],
     metadata_path: &Path,
     manifest_path: &Path,
+    expected_pdp_sample_window: u16,
 ) -> Result<(), StorageError> {
     validate_manifest_id(&entry.manifest_id, &entry.manifest_digest, metadata_path)?;
     validate_manifest_id(&record.manifest_id, &record.manifest_digest, metadata_path)?;
@@ -1436,6 +1879,7 @@ fn validate_persisted_manifest(
             "manifest payload does not match persisted metadata",
         ));
     }
+    validate_persisted_retention(entry, record, manifest, metadata_path)?;
     if record.files.is_empty() {
         return Err(corrupt_storage_state(
             metadata_path,
@@ -1443,15 +1887,24 @@ fn validate_persisted_manifest(
         ));
     }
     let mut file_offset = 0_u64;
-    let mut file_paths = BTreeSet::new();
+    let mut previous_path: Option<&[String]> = None;
     for file in &record.files {
         validate_logical_file_path(&file.path, metadata_path)?;
-        if !file_paths.insert(file.path.clone()) {
-            return Err(corrupt_storage_state(
-                metadata_path,
-                "manifest file layout contains duplicate logical paths",
-            ));
+        if let Some(previous) = previous_path {
+            if previous >= file.path.as_slice() {
+                return Err(corrupt_storage_state(
+                    metadata_path,
+                    "manifest file paths are duplicated or not strictly ordered",
+                ));
+            }
+            if file.path.starts_with(previous) {
+                return Err(corrupt_storage_state(
+                    metadata_path,
+                    "manifest file path descends from another logical file",
+                ));
+            }
         }
+        previous_path = Some(&file.path);
         if record.files.len() > 1 && file.path.is_empty() {
             return Err(corrupt_storage_state(
                 metadata_path,
@@ -1546,46 +1999,331 @@ fn validate_persisted_manifest(
         ));
     }
 
-    if record.por_tree.payload_len != record.content_length
-        || record.por_tree.chunks.len() != record.chunk_files.len()
-    {
+    validate_persisted_por(entry, record, metadata_path)?;
+    validate_persisted_pdp(
+        entry,
+        record,
+        manifest,
+        metadata_path,
+        expected_pdp_sample_window,
+    )?;
+    Ok(())
+}
+
+fn validate_persisted_retention(
+    entry: &ManifestIndexEntry,
+    record: &StoredManifestRecord,
+    manifest: &ManifestV1,
+    metadata_path: &Path,
+) -> Result<(), StorageError> {
+    let entry_source = entry.retention_source.as_ref().ok_or_else(|| {
+        corrupt_storage_state(
+            metadata_path,
+            "storage index is missing canonical retention source metadata",
+        )
+    })?;
+    let record_source = record.retention_source.as_ref().ok_or_else(|| {
+        corrupt_storage_state(
+            metadata_path,
+            "manifest record is missing canonical retention source metadata",
+        )
+    })?;
+    entry_source.validate().map_err(|error| {
+        corrupt_storage_state(
+            metadata_path,
+            format!("storage index retention source is invalid: {error}"),
+        )
+    })?;
+    record_source.validate().map_err(|error| {
+        corrupt_storage_state(
+            metadata_path,
+            format!("manifest record retention source is invalid: {error}"),
+        )
+    })?;
+    if entry_source != record_source {
         return Err(corrupt_storage_state(
             metadata_path,
-            "PoR tree geometry does not match manifest chunks",
+            "manifest retention source does not match its storage index entry",
         ));
     }
-    for (index, (por_chunk, chunk)) in record
-        .por_tree
-        .chunks
-        .iter()
-        .zip(&record.chunk_files)
-        .enumerate()
-    {
-        if por_chunk.chunk_index as usize != index
-            || por_chunk.offset != chunk.offset
-            || por_chunk.length != chunk.length
-            || por_chunk.chunk_digest != chunk.digest
-        {
-            return Err(corrupt_storage_state(
-                metadata_path,
-                format!("PoR chunk #{index} does not match chunk metadata"),
-            ));
-        }
-    }
-    let rebuilt_por = record.por_tree.to_merkle_tree();
-    if rebuilt_por.root() != &record.por_tree.root {
+    if record.retention_epoch != record_source.effective_epoch() {
         return Err(corrupt_storage_state(
             metadata_path,
-            "PoR root does not match the persisted chunk roots",
+            "retention epoch does not match the canonical retention source",
+        ));
+    }
+    let expected = RetentionSourceV1::from_manifest(manifest).map_err(|error| {
+        corrupt_storage_state(
+            metadata_path,
+            format!("manifest retention metadata is invalid: {error}"),
+        )
+    })?;
+    if record_source != &expected {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "persisted retention source does not match the canonical manifest policy",
         ));
     }
     Ok(())
 }
 
+fn validate_persisted_por(
+    entry: &ManifestIndexEntry,
+    record: &StoredManifestRecord,
+    metadata_path: &Path,
+) -> Result<(), StorageError> {
+    let commitment = &record.por_commitment;
+    if commitment.version != POR_COMMITMENT_VERSION_V1 {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            format!("unsupported PoR commitment version {}", commitment.version),
+        ));
+    }
+    let digest = commitment.digest().map_err(|error| {
+        corrupt_storage_state(
+            metadata_path,
+            format!("failed to digest PoR commitment: {error}"),
+        )
+    })?;
+    if digest != entry.por_commitment_digest {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "PoR commitment digest does not match the storage index",
+        ));
+    }
+    if commitment.payload_len != record.content_length
+        || usize::try_from(commitment.chunk_count).ok() != Some(record.chunk_files.len())
+        || commitment.chunks.len() != record.chunk_files.len()
+    {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "PoR commitment geometry does not match manifest chunks",
+        ));
+    }
+    if record.content_length == 0
+        && (commitment.chunk_count != 0
+            || commitment.segment_count != 0
+            || commitment.leaf_count != 0)
+    {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "empty payload has non-empty PoR commitment geometry",
+        ));
+    }
+    let mut segment_count = 0_u64;
+    let mut leaf_count = 0_u64;
+    for (index, (por_chunk, chunk)) in commitment
+        .chunks
+        .iter()
+        .zip(&record.chunk_files)
+        .enumerate()
+    {
+        if usize::try_from(por_chunk.chunk_index).ok() != Some(index)
+            || por_chunk.offset != chunk.offset
+            || por_chunk.length != chunk.length
+            || por_chunk.chunk_digest != chunk.digest
+            || (chunk.length != 0 && (por_chunk.segment_count == 0 || por_chunk.leaf_count == 0))
+        {
+            return Err(corrupt_storage_state(
+                metadata_path,
+                format!("PoR chunk commitment #{index} does not match chunk metadata"),
+            ));
+        }
+        segment_count = segment_count
+            .checked_add(u64::from(por_chunk.segment_count))
+            .ok_or_else(|| corrupt_storage_state(metadata_path, "PoR segment count overflow"))?;
+        leaf_count = leaf_count
+            .checked_add(u64::from(por_chunk.leaf_count))
+            .ok_or_else(|| corrupt_storage_state(metadata_path, "PoR leaf count overflow"))?;
+    }
+    if segment_count != commitment.segment_count || leaf_count != commitment.leaf_count {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "PoR commitment aggregate geometry does not match its chunks",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_persisted_pdp(
+    entry: &ManifestIndexEntry,
+    record: &StoredManifestRecord,
+    manifest: &ManifestV1,
+    metadata_path: &Path,
+    expected_sample_window: u16,
+) -> Result<(), StorageError> {
+    match (&record.pdp_commitment, entry.pdp_commitment_digest) {
+        (None, None) => {
+            if record.content_length == 0 {
+                Ok(())
+            } else {
+                Err(corrupt_storage_state(
+                    metadata_path,
+                    "non-empty payload is missing its PDP commitment",
+                ))
+            }
+        }
+        (Some(_), _) if record.content_length == 0 => Err(corrupt_storage_state(
+            metadata_path,
+            "empty payload must not contain a PDP commitment",
+        )),
+        (None, Some(_)) => {
+            let message = if record.content_length == 0 {
+                "empty payload index contains an orphan PDP commitment digest"
+            } else {
+                "non-empty payload is missing its PDP commitment"
+            };
+            Err(corrupt_storage_state(metadata_path, message))
+        }
+        (Some(commitment), expected_digest) => {
+            commitment.validate().map_err(|error| {
+                corrupt_storage_state(metadata_path, format!("invalid PDP commitment: {error}"))
+            })?;
+            let actual_digest = commitment.commitment_digest().map_err(|error| {
+                corrupt_storage_state(
+                    metadata_path,
+                    format!("failed to digest PDP commitment: {error}"),
+                )
+            })?;
+            if expected_digest != Some(actual_digest) {
+                return Err(corrupt_storage_state(
+                    metadata_path,
+                    "PDP commitment digest does not match the storage index",
+                ));
+            }
+            if commitment.manifest_digest != record.manifest_digest
+                || commitment.payload_len != record.content_length
+                || commitment.chunk_profile != manifest.chunking
+                || commitment.sample_window != expected_sample_window
+                || commitment.sealed_at != record.stored_at_unix_secs
+            {
+                return Err(corrupt_storage_state(
+                    metadata_path,
+                    "PDP commitment binding, geometry, profile, sample window, or seal time mismatched",
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn pdp_tree_memory_for_payload(payload_len: u64) -> Result<u64, StorageError> {
+    if payload_len == 0 {
+        return Ok(0);
+    }
+    let bytes = estimated_pdp_heap_bytes(payload_len)?;
+    u64::try_from(bytes).map_err(|_| StorageError::PdpTree(PdpMerkleTreeError::GeometryOverflow))
+}
+
+fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, StorageError> {
+    let profile = &manifest.chunking;
+    Ok(ChunkProfile {
+        min_size: usize::try_from(profile.min_size)
+            .map_err(|_| StorageError::ChunkProfileMismatch)?,
+        target_size: usize::try_from(profile.target_size)
+            .map_err(|_| StorageError::ChunkProfileMismatch)?,
+        max_size: usize::try_from(profile.max_size)
+            .map_err(|_| StorageError::ChunkProfileMismatch)?,
+        break_mask: u64::from(profile.break_mask),
+    })
+}
+
+fn rebuild_runtime_trees(
+    manifest: &StoredManifest,
+    profile: ChunkProfile,
+) -> Result<(Arc<PorMerkleTree>, Option<Arc<PdpMerkleTreeV1>>), StorageError> {
+    let plan = manifest.try_to_car_plan(profile)?;
+    let heap_limit = plan
+        .validate()
+        .map_err(ChunkStoreError::from)?
+        .estimated_ingest_heap_bytes()
+        .max(1);
+    let mut chunk_store = ChunkStore::with_profile_and_heap_limit(profile, heap_limit)?;
+    let mut source = ManifestPayload::new(manifest);
+    chunk_store.ingest_plan_source(&plan, &mut source)?;
+    let por_tree = Arc::new(chunk_store.take_por_tree());
+    let pdp_tree = chunk_store.take_pdp_tree().map(Arc::new);
+    Ok((por_tree, pdp_tree))
+}
+
+fn validate_rebuilt_por(
+    commitment: &StoredPorCommitmentV1,
+    tree: &PorMerkleTree,
+    metadata_path: &Path,
+) -> Result<(), StorageError> {
+    let rebuilt = StoredPorCommitmentV1::from_tree(tree).map_err(|error| {
+        corrupt_storage_state(
+            metadata_path,
+            format!("rebuilt PoR commitment is invalid: {error}"),
+        )
+    })?;
+    if rebuilt != *commitment {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "PoR root or geometry differs from the tree rebuilt from chunk bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_rebuilt_pdp(
+    commitment: Option<&PdpCommitmentV1>,
+    tree: Option<&PdpMerkleTreeV1>,
+    metadata_path: &Path,
+) -> Result<(), StorageError> {
+    match (commitment, tree) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(corrupt_storage_state(
+            metadata_path,
+            "rebuilt a PDP tree for metadata without a commitment",
+        )),
+        (Some(_), None) => Err(corrupt_storage_state(
+            metadata_path,
+            "failed to rebuild the persisted PDP commitment tree",
+        )),
+        (Some(commitment), Some(tree)) => {
+            let rebuilt = PdpCommitmentV1::from_tree(
+                tree,
+                commitment.manifest_digest,
+                try_clone_chunking_profile(&commitment.chunk_profile)?,
+                commitment.sample_window,
+                commitment.sealed_at,
+            )
+            .map_err(|error| {
+                corrupt_storage_state(
+                    metadata_path,
+                    format!("rebuilt PDP commitment is invalid: {error}"),
+                )
+            })?;
+            if rebuilt != *commitment {
+                return Err(corrupt_storage_state(
+                    metadata_path,
+                    "PDP roots or geometry differ from the tree rebuilt from chunk bytes",
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
 impl StorageBackend {
     /// Create a new storage backend rooted at the directory described by `config`.
     pub fn new(config: StorageConfig) -> Result<Self, StorageError> {
-        let root_dir = config.data_dir().clone();
+        if config.pdp_sample_window() == 0
+            || usize::from(config.pdp_sample_window()) > PDP_MAX_SEGMENT_SAMPLES_V1
+        {
+            return Err(StorageError::InvalidPdpSampleWindow {
+                found: config.pdp_sample_window(),
+                maximum: PDP_MAX_SEGMENT_SAMPLES_V1,
+            });
+        }
+        if config.pdp_tree_memory_limit_bytes().0 == 0 {
+            return Err(StorageError::PdpTreeMemoryExceeded {
+                required: 1,
+                available: 0,
+            });
+        }
+        let root_dir = try_clone_path_buf(config.data_dir(), "storage root directory")?;
         let manifests_dir = root_dir.join(MANIFEST_DIR_NAME);
         let index_path = root_dir.join("index.norito");
 
@@ -1625,7 +2363,9 @@ impl StorageBackend {
         let mut indexed_manifest_ids = BTreeSet::new();
         for entry in &index.entries {
             validate_manifest_id(&entry.manifest_id, &entry.manifest_digest, &index_path)?;
-            if !indexed_manifest_ids.insert(entry.manifest_id.clone()) {
+            if !indexed_manifest_ids
+                .insert(try_clone_text(&entry.manifest_id, "indexed manifest id")?)
+            {
                 return Err(corrupt_storage_state(
                     &index_path,
                     format!("duplicate manifest id {}", entry.manifest_id),
@@ -1637,8 +2377,9 @@ impl StorageBackend {
         clean_stale_ingest_transactions(&root_dir)?;
 
         let mut total_bytes = 0_u64;
+        let mut pdp_tree_bytes = 0_u64;
         let mut manifests = BTreeMap::new();
-        let mut chunk_refcounts: BTreeMap<[u8; 32], u32> = BTreeMap::new();
+        let mut chunk_refcounts = Vec::new();
         let mut access_counter = 0u64;
 
         for entry in &mut index.entries {
@@ -1670,34 +2411,76 @@ impl StorageBackend {
                 &manifest_bytes,
                 &metadata_path,
                 &manifest_path,
+                config.pdp_sample_window(),
             )?;
-            if record.retention_source.is_none() {
-                record.retention_source = entry.retention_source.clone();
-            }
-            if entry.retention_source.is_none() {
-                entry.retention_source = record.retention_source.clone();
-            }
             let last_access = record.last_access.max(entry.last_access);
             record.last_access = last_access;
             entry.last_access = last_access;
             access_counter = access_counter.max(last_access);
 
-            let manifest =
-                StoredManifest::from_record(record, manifest_path, Arc::new(RwLock::new(())));
-            for (chunk_index, chunk) in manifest.chunk_files.iter().enumerate() {
-                read_verified_chunk(chunk, chunk_index).map_err(|err| {
-                    corrupt_storage_state(&chunk.path, format!("chunk verification failed: {err}"))
+            let candidate_pdp_bytes = pdp_tree_memory_for_payload(record.content_length)?;
+            let available_pdp_bytes = config
+                .pdp_tree_memory_limit_bytes()
+                .0
+                .saturating_sub(pdp_tree_bytes);
+            if candidate_pdp_bytes > available_pdp_bytes {
+                return Err(StorageError::PdpTreeMemoryExceeded {
+                    required: candidate_pdp_bytes,
+                    available: available_pdp_bytes,
+                });
+            }
+
+            let io_lock = Arc::new(RwLock::new(()));
+            let mut stored_manifest = StoredManifest::from_record(
+                record,
+                manifest_path,
+                io_lock,
+                Some(entry.por_commitment_digest),
+                Arc::new(PorMerkleTree::empty()),
+                entry.pdp_commitment_digest,
+                None,
+                0,
+            )?;
+            let profile = chunk_profile_from_manifest(&manifest)?;
+            let (rebuilt_por, rebuilt_pdp) = rebuild_runtime_trees(&stored_manifest, profile)
+                .map_err(|error| {
+                    corrupt_storage_state(
+                        &metadata_path,
+                        format!("failed to rebuild trees from verified chunk bytes: {error}"),
+                    )
                 })?;
-                let counter = chunk_refcounts.entry(chunk.digest).or_insert(0);
-                *counter = counter.checked_add(1).ok_or_else(|| {
-                    corrupt_storage_state(&index_path, "chunk reference count overflow")
-                })?;
+            validate_rebuilt_por(
+                stored_manifest.por_commitment.as_ref().ok_or_else(|| {
+                    corrupt_storage_state(&metadata_path, "runtime PoR commitment is missing")
+                })?,
+                &rebuilt_por,
+                &metadata_path,
+            )?;
+            validate_rebuilt_pdp(
+                stored_manifest.pdp_commitment.as_ref(),
+                rebuilt_pdp.as_deref(),
+                &metadata_path,
+            )?;
+            stored_manifest.por_tree = rebuilt_por;
+            stored_manifest.pdp_tree = rebuilt_pdp;
+            stored_manifest.pdp_tree_memory_bytes = candidate_pdp_bytes;
+            reserve_refcount_entries(&mut chunk_refcounts, stored_manifest.chunk_files.len())?;
+            for chunk in &stored_manifest.chunk_files {
+                increment_refcount(&mut chunk_refcounts, chunk.digest, &index_path)?;
             }
 
             total_bytes = total_bytes
-                .checked_add(manifest.content_length)
+                .checked_add(stored_manifest.content_length)
                 .ok_or_else(|| corrupt_storage_state(&index_path, "total byte count overflow"))?;
-            manifests.insert(entry.manifest_id.clone(), manifest);
+            pdp_tree_bytes = pdp_tree_bytes
+                .checked_add(candidate_pdp_bytes)
+                .ok_or_else(|| {
+                    corrupt_storage_state(&index_path, "PDP tree byte accounting overflow")
+                })?;
+            manifests.insert(
+                try_clone_text(&entry.manifest_id, "runtime manifest map key")?,
+                stored_manifest,
+            );
         }
 
         let max_capacity = config.max_capacity_bytes().0;
@@ -1709,14 +2492,13 @@ impl StorageBackend {
         }
 
         let mut index_dirty = false;
-        let stored_refcounts = chunk_refcount_map(&index.chunk_refcounts);
-        if stored_refcounts != chunk_refcounts {
+        if index.chunk_refcounts != chunk_refcounts {
             iroha_logger::warn!(
-                stored = stored_refcounts.len(),
+                stored = index.chunk_refcounts.len(),
                 computed = chunk_refcounts.len(),
                 "chunk refcount index mismatch; rebuilding from manifests"
             );
-            index.chunk_refcounts = chunk_refcount_entries(&chunk_refcounts);
+            index.chunk_refcounts = try_clone_refcount_entries(&chunk_refcounts)?;
             index_dirty = true;
         }
 
@@ -1732,6 +2514,7 @@ impl StorageBackend {
 
         if index_dirty {
             let bytes = norito::to_bytes(&index)?;
+            ensure_persistent_artifact_size("storage index", &bytes, MAX_STORAGE_INDEX_BYTES)?;
             write_atomic_classified(&index_path, &bytes)
                 .map_err(AtomicWriteError::into_storage_error)?;
         }
@@ -1741,6 +2524,8 @@ impl StorageBackend {
             manifests,
             total_bytes,
             reserved_bytes: 0,
+            pdp_tree_bytes,
+            reserved_pdp_tree_bytes: 0,
             inflight_manifests: BTreeSet::new(),
             access_counter,
             chunk_refcounts,
@@ -1777,6 +2562,24 @@ impl StorageBackend {
             .read()
             .expect("storage state poisoned")
             .total_bytes
+    }
+
+    /// Aggregate bytes retained by canonical runtime PDP node slabs.
+    #[must_use]
+    pub fn pdp_tree_memory_bytes(&self) -> u64 {
+        self.state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pdp_tree_bytes
+    }
+
+    /// Bytes currently reserved by in-flight PDP tree builds.
+    #[must_use]
+    pub fn reserved_pdp_tree_memory_bytes(&self) -> u64 {
+        self.state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reserved_pdp_tree_bytes
     }
 
     /// Returns the remaining capacity (in bytes) under the configured quota.
@@ -1847,7 +2650,7 @@ impl StorageBackend {
     #[must_use]
     pub(crate) fn chunk_refcount_snapshot(&self) -> Vec<ChunkRefcountEntry> {
         let state = self.state.read().expect("storage state poisoned");
-        chunk_refcount_entries(&state.chunk_refcounts)
+        state.chunk_refcounts.clone()
     }
 
     /// Returns the total GC counters tracked in the index.
@@ -1875,11 +2678,7 @@ impl StorageBackend {
                     manifest_id: manifest_id.to_owned(),
                 })?;
         for chunk in &manifest.chunk_files {
-            if state
-                .chunk_refcounts
-                .get(&chunk.digest)
-                .is_some_and(|count| *count > 1)
-            {
+            if refcount(&state.chunk_refcounts, &chunk.digest).is_some_and(|count| count > 1) {
                 return Ok(true);
             }
         }
@@ -1897,7 +2696,7 @@ impl StorageBackend {
             .ok_or_else(|| StorageError::ManifestNotFound {
                 manifest_id: manifest_id.to_owned(),
             })?
-            .clone();
+            .try_clone_runtime()?;
         let _io_guard = stored
             .io_lock
             .write()
@@ -1906,17 +2705,19 @@ impl StorageBackend {
         let manifest_dir = stored
             .manifest_path()
             .parent()
-            .expect("manifest path must have parent")
+            .ok_or_else(|| {
+                corrupt_storage_state(stored.manifest_path(), "manifest path has no parent")
+            })?
             .to_path_buf();
-        let mut new_index = state.index.clone();
-        let mut refcounts = state.chunk_refcounts.clone();
+        let mut new_index = try_clone_manifest_index(&state.index)?;
+        let mut refcounts = try_clone_refcount_entries(&state.chunk_refcounts)?;
         for chunk in &stored.chunk_files {
-            match refcounts.get(&chunk.digest).copied() {
-                Some(1) => {
-                    refcounts.remove(&chunk.digest);
+            match refcounts.binary_search_by_key(&chunk.digest, |entry| entry.digest) {
+                Ok(index) if refcounts[index].count == 1 => {
+                    refcounts.remove(index);
                 }
-                Some(count) if count > 1 => {
-                    refcounts.insert(chunk.digest, count - 1);
+                Ok(index) if refcounts[index].count > 1 => {
+                    refcounts[index].count -= 1;
                 }
                 _ => {
                     return Err(corrupt_storage_state(
@@ -1955,13 +2756,23 @@ impl StorageBackend {
             .gc_evictions_total
             .checked_add(1)
             .ok_or_else(|| corrupt_storage_state(&self.index_path, "GC counter overflow"))?;
-        new_index.chunk_refcounts = chunk_refcount_entries(&refcounts);
+        new_index.chunk_refcounts = try_clone_refcount_entries(&refcounts)?;
+        let new_pdp_tree_bytes = state
+            .pdp_tree_bytes
+            .checked_sub(stored.pdp_tree_memory_bytes)
+            .ok_or_else(|| {
+                corrupt_storage_state(
+                    &self.index_path,
+                    "evicted manifest exceeds accounted PDP tree bytes",
+                )
+            })?;
 
         let index_bytes = norito::to_bytes(&new_index).map_err(StorageError::Norito)?;
+        ensure_persistent_artifact_size("storage index", &index_bytes, MAX_STORAGE_INDEX_BYTES)?;
         let trash_path = self.gc_trash_path(manifest_id);
-        let trash_root = trash_path
-            .parent()
-            .expect("GC transaction path must have a parent");
+        let trash_root = trash_path.parent().ok_or_else(|| {
+            corrupt_storage_state(&trash_path, "GC transaction path has no parent")
+        })?;
         validate_atomic_output_path(&trash_root.join(".sorafs-gc-root-probe"))?;
         fs::create_dir_all(trash_root)?;
         validate_real_directory(trash_root)?;
@@ -2017,6 +2828,7 @@ impl StorageBackend {
 
         state.index = new_index;
         state.total_bytes = state.index.total_bytes;
+        state.pdp_tree_bytes = new_pdp_tree_bytes;
         state.manifests.remove(manifest_id);
         state.chunk_refcounts = refcounts;
         drop(state);
@@ -2069,7 +2881,7 @@ impl StorageBackend {
             });
         }
 
-        let mut updated = manifest.clone();
+        let mut updated = manifest.try_clone_runtime()?;
         updated.stripe_layout = Some(stripe_layout);
         for (chunk, role) in updated.chunk_files.iter_mut().zip(chunk_roles.iter()) {
             chunk.role = Some(role.role);
@@ -2080,9 +2892,16 @@ impl StorageBackend {
         let metadata_path = updated
             .manifest_path
             .parent()
-            .expect("manifest path must have parent")
+            .ok_or_else(|| {
+                corrupt_storage_state(&updated.manifest_path, "manifest path has no parent")
+            })?
             .join(METADATA_FILE_NAME);
         let metadata_bytes = norito::to_bytes(&record)?;
+        ensure_persistent_artifact_size(
+            "manifest metadata",
+            &metadata_bytes,
+            MAX_MANIFEST_METADATA_BYTES,
+        )?;
         let durability_error = match write_atomic_classified(&metadata_path, &metadata_bytes) {
             Ok(()) => None,
             Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
@@ -2149,7 +2968,7 @@ impl StorageBackend {
             });
         }
 
-        let mut updated = manifest.clone();
+        let mut updated = manifest.try_clone_runtime()?;
         if let Some(roles) = chunk_roles {
             let expected = manifest.chunk_files.len();
             if roles.len() != expected {
@@ -2172,9 +2991,16 @@ impl StorageBackend {
         let metadata_path = updated
             .manifest_path
             .parent()
-            .expect("manifest path must have parent")
+            .ok_or_else(|| {
+                corrupt_storage_state(&updated.manifest_path, "manifest path has no parent")
+            })?
             .join(METADATA_FILE_NAME);
         let metadata_bytes = norito::to_bytes(&record)?;
+        ensure_persistent_artifact_size(
+            "manifest metadata",
+            &metadata_bytes,
+            MAX_MANIFEST_METADATA_BYTES,
+        )?;
         let durability_error = match write_atomic_classified(&metadata_path, &metadata_bytes) {
             Ok(()) => None,
             Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
@@ -2225,14 +3051,24 @@ impl StorageBackend {
                 version: manifest.version,
             });
         }
+        plan.validate().map_err(ChunkStoreError::from)?;
 
         let manifest_bytes = manifest.encode()?;
-        let manifest_digest: [u8; 32] = manifest.digest()?.into();
+        ensure_persistent_artifact_size("manifest", &manifest_bytes, MAX_MANIFEST_BYTES)?;
+        let manifest_digest: [u8; 32] = blake3::hash(&manifest_bytes).into();
         let manifest_id = hex::encode(manifest_digest);
+        let inflight_manifest_id = try_clone_text(&manifest_id, "in-flight manifest id")?;
+        let reservation_manifest_id =
+            try_clone_text(&manifest_id, "ingest reservation manifest id")?;
+        let runtime_manifest_id = try_clone_text(&manifest_id, "runtime manifest map key")?;
         let payload_digest = *plan.payload_digest.as_bytes();
         let required_bytes = plan.content_length;
 
         ensure_chunk_profile_match(manifest, plan)?;
+        if manifest.content_length != plan.content_length {
+            return Err(StorageError::ManifestContentLengthMismatch);
+        }
+        let required_pdp_tree_bytes = pdp_tree_memory_for_payload(plan.content_length)?;
 
         let mut state = self
             .state
@@ -2248,7 +3084,14 @@ impl StorageBackend {
             });
         }
 
-        if state.manifests.len() >= self.config.max_pins() {
+        let reserved_manifest_count = state
+            .manifests
+            .len()
+            .checked_add(state.inflight_manifests.len())
+            .ok_or(StorageError::PinLimitReached {
+                limit: self.config.max_pins(),
+            })?;
+        if reserved_manifest_count >= self.config.max_pins() {
             return Err(StorageError::PinLimitReached {
                 limit: self.config.max_pins(),
             });
@@ -2262,31 +3105,53 @@ impl StorageBackend {
             });
         }
 
-        state.reserved_bytes = state.reserved_bytes.checked_add(required_bytes).ok_or(
+        let new_reserved_bytes = state.reserved_bytes.checked_add(required_bytes).ok_or(
             StorageError::CapacityExceeded {
                 required: required_bytes,
                 available: state.available_capacity(max_capacity),
             },
         )?;
-        state.inflight_manifests.insert(manifest_id.clone());
+        let pdp_tree_memory_limit = self.config.pdp_tree_memory_limit_bytes().0;
+        let available_pdp_tree_memory = state.available_pdp_tree_memory(pdp_tree_memory_limit);
+        if required_pdp_tree_bytes > available_pdp_tree_memory {
+            return Err(StorageError::PdpTreeMemoryExceeded {
+                required: required_pdp_tree_bytes,
+                available: available_pdp_tree_memory,
+            });
+        }
+        let new_reserved_pdp_tree_bytes = state
+            .reserved_pdp_tree_bytes
+            .checked_add(required_pdp_tree_bytes)
+            .ok_or(StorageError::PdpTreeMemoryExceeded {
+                required: required_pdp_tree_bytes,
+                available: available_pdp_tree_memory,
+            })?;
+        state.reserved_bytes = new_reserved_bytes;
+        state.reserved_pdp_tree_bytes = new_reserved_pdp_tree_bytes;
+        state.inflight_manifests.insert(inflight_manifest_id);
         drop(state);
 
         let mut reservation = IngestReservation {
             backend: self,
-            manifest_id: manifest_id.clone(),
+            manifest_id: reservation_manifest_id,
             reserved_bytes: required_bytes,
+            reserved_pdp_tree_bytes: required_pdp_tree_bytes,
             active: true,
         };
 
         let manifest_dir = self.manifests_dir.join(&manifest_id);
         let staging_dir = self.ingest_staging_path(&manifest_id);
-        let mut staging_guard = StagingDirectory::new(staging_dir.clone());
+        let mut staging_guard = StagingDirectory::new(try_clone_path_buf(
+            &staging_dir,
+            "ingest staging directory",
+        )?);
         prepare_ingest_staging_directory(&staging_dir)?;
         let chunks_dir = staging_dir.join(CHUNKS_DIR_NAME);
         let staged_manifest_path = staging_dir.join(MANIFEST_FILE_NAME);
         let metadata_path = staging_dir.join(METADATA_FILE_NAME);
 
-        let (mut chunk_records, por_tree) = self.ingest_payload(plan, reader, &chunks_dir)?;
+        let (mut chunk_records, por_tree, pdp_tree) =
+            self.ingest_payload(plan, reader, &chunks_dir)?;
 
         if let Some(roles) = chunk_roles {
             let expected = chunk_records.len();
@@ -2306,11 +3171,31 @@ impl StorageBackend {
 
         write_atomic(&staged_manifest_path, &manifest_bytes)?;
 
-        let stored_at_unix_secs = unix_timestamp();
+        let stored_at_unix_secs = unix_timestamp()?;
+        let pdp_commitment = match pdp_tree.as_deref() {
+            Some(tree) => Some(PdpCommitmentV1::from_tree(
+                tree,
+                manifest_digest,
+                try_clone_chunking_profile(&manifest.chunking)?,
+                self.config.pdp_sample_window(),
+                stored_at_unix_secs,
+            )?),
+            None if plan.content_length == 0 => None,
+            None => {
+                return Err(StorageError::PdpTree(PdpMerkleTreeError::CorruptTree));
+            }
+        };
+        let pdp_commitment_digest = pdp_commitment
+            .as_ref()
+            .map(PdpCommitmentV1::commitment_digest)
+            .transpose()?;
+        let por_commitment = StoredPorCommitmentV1::from_tree(&por_tree)?;
+        let por_commitment_digest = por_commitment.digest()?;
         let retention_source = RetentionSourceV1::from_manifest(manifest)?;
         let retention_epoch = retention_source.effective_epoch();
         let files = stored_files_from_plan(plan)?;
         let persisted_files = persistent_file_records(&files)?;
+        let chunk_profile_handle = try_canonical_profile_handle(manifest)?;
         let last_access = {
             let mut state = self.state.write().expect("storage state poisoned");
             self.ensure_durability_healthy()?;
@@ -2323,23 +3208,34 @@ impl StorageBackend {
         let chunk_count = persistent_u32("chunk_count", plan.chunks.len())?;
 
         let metadata_record = StoredManifestRecord {
-            manifest_id: manifest_id.clone(),
-            manifest_cid: manifest.root_cid.clone(),
+            manifest_id: try_clone_text(&manifest_id, "stored manifest id")?,
+            manifest_cid: try_clone_bytes(&manifest.root_cid, "stored manifest CID")?,
             manifest_digest,
             payload_digest,
             content_length: plan.content_length,
-            chunk_profile_handle: canonical_profile_handle(manifest),
+            chunk_profile_handle,
             stripe_layout,
             stored_at_unix_secs,
             retention_epoch,
-            retention_source: Some(retention_source.clone()),
+            retention_source: Some(retention_source),
             last_access,
             files: persisted_files,
-            chunk_files: chunk_records.clone(),
-            por_tree: StoredPorTree::from(&por_tree),
+            chunk_files: chunk_records,
+            por_commitment,
+            pdp_commitment,
         };
 
         write_manifest_metadata(&metadata_record, &metadata_path)?;
+        let stored_manifest = StoredManifest::from_record(
+            metadata_record,
+            manifest_dir.join(MANIFEST_FILE_NAME),
+            Arc::new(RwLock::new(())),
+            Some(por_commitment_digest),
+            por_tree,
+            pdp_commitment_digest,
+            pdp_tree,
+            required_pdp_tree_bytes,
+        )?;
 
         let mut state = self
             .state
@@ -2352,32 +3248,59 @@ impl StorageBackend {
             });
         }
 
-        let mut new_index = state.index.clone();
+        let mut new_index = try_clone_manifest_index(&state.index)?;
         new_index.total_bytes = state.total_bytes.checked_add(required_bytes).ok_or(
             StorageError::CapacityExceeded {
                 required: required_bytes,
                 available: state.available_capacity(self.config.max_capacity_bytes().0),
             },
         )?;
-        let mut refcounts = state.chunk_refcounts.clone();
-        for record in &chunk_records {
-            let counter = refcounts.entry(record.digest).or_insert(0);
-            *counter = counter.checked_add(1).ok_or_else(|| {
-                corrupt_storage_state(&self.index_path, "chunk reference count overflow")
+        let new_pdp_tree_bytes = state
+            .pdp_tree_bytes
+            .checked_add(required_pdp_tree_bytes)
+            .ok_or_else(|| {
+                corrupt_storage_state(&self.index_path, "PDP tree byte accounting overflow")
             })?;
+        if new_pdp_tree_bytes > self.config.pdp_tree_memory_limit_bytes().0 {
+            return Err(StorageError::PdpTreeMemoryExceeded {
+                required: required_pdp_tree_bytes,
+                available: state
+                    .available_pdp_tree_memory(self.config.pdp_tree_memory_limit_bytes().0),
+            });
         }
-        new_index.chunk_refcounts = chunk_refcount_entries(&refcounts);
+        let mut refcounts = try_clone_refcount_entries(&state.chunk_refcounts)?;
+        reserve_refcount_entries(&mut refcounts, stored_manifest.chunk_files.len())?;
+        for record in &stored_manifest.chunk_files {
+            increment_refcount(&mut refcounts, record.digest, &self.index_path)?;
+        }
+        new_index.chunk_refcounts = try_clone_refcount_entries(&refcounts)?;
+        new_index.entries.try_reserve(1).map_err(|_| {
+            StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                context: "storage index manifest entry",
+                requested: 1,
+            })
+        })?;
         new_index.entries.push(ManifestIndexEntry {
-            manifest_id: manifest_id.clone(),
-            manifest_cid: manifest.root_cid.clone(),
+            manifest_id: try_clone_text(&manifest_id, "storage index manifest id")?,
+            manifest_cid: try_clone_bytes(
+                &stored_manifest.manifest_cid,
+                "storage index manifest CID",
+            )?,
             manifest_digest,
             payload_digest,
             content_length: plan.content_length,
-            chunk_profile_handle: canonical_profile_handle(manifest),
+            chunk_profile_handle: try_clone_text(
+                &stored_manifest.chunk_profile_handle,
+                "storage index chunk profile",
+            )?,
             chunk_count,
+            por_commitment_digest,
+            pdp_commitment_digest,
             stored_at_unix_secs,
             retention_epoch,
-            retention_source: Some(retention_source.clone()),
+            retention_source: try_clone_retention_source(
+                stored_manifest.retention_source.as_ref(),
+            )?,
             last_access,
         });
 
@@ -2388,6 +3311,7 @@ impl StorageBackend {
                 return Err(StorageError::Norito(err));
             }
         };
+        ensure_persistent_artifact_size("storage index", &index_bytes, MAX_STORAGE_INDEX_BYTES)?;
 
         match fs::symlink_metadata(&manifest_dir) {
             Ok(_) => {
@@ -2403,9 +3327,9 @@ impl StorageBackend {
             }
         }
         fs::rename(&staging_dir, &manifest_dir)?;
-        let staging_root = staging_dir
-            .parent()
-            .expect("ingest transaction path must have a parent");
+        let staging_root = staging_dir.parent().ok_or_else(|| {
+            corrupt_storage_state(&staging_dir, "ingest transaction path has no parent")
+        })?;
         if let Err(primary) =
             sync_directory(&self.manifests_dir).and_then(|()| sync_directory(staging_root))
         {
@@ -2445,14 +3369,11 @@ impl StorageBackend {
             }
         };
 
-        let manifest_path = manifest_dir.join(MANIFEST_FILE_NAME);
-        let stored_manifest =
-            StoredManifest::from_record(metadata_record, manifest_path, Arc::new(RwLock::new(())));
-
         let new_total_bytes = new_index.total_bytes;
         state.index = new_index;
         state.total_bytes = new_total_bytes;
-        state.manifests.insert(manifest_id.clone(), stored_manifest);
+        state.pdp_tree_bytes = new_pdp_tree_bytes;
+        state.manifests.insert(runtime_manifest_id, stored_manifest);
         state.chunk_refcounts = refcounts;
         reservation.release(&mut state);
 
@@ -2508,26 +3429,28 @@ impl StorageBackend {
         let next_access = state.access_counter.checked_add(1).ok_or_else(|| {
             corrupt_storage_state(&self.index_path, "manifest access counter overflow")
         })?;
-        state.access_counter = next_access;
-        let (record, metadata_path, manifest, retention_source) = {
-            let manifest = state.manifests.get_mut(manifest_id).ok_or_else(|| {
-                StorageError::ManifestNotFound {
-                    manifest_id: manifest_id.to_owned(),
-                }
-            })?;
-            manifest.last_access = next_access;
-            let retention_source = manifest.retention_source.clone();
-            let record = manifest.to_record()?;
-            let metadata_path = manifest
-                .manifest_path
-                .parent()
-                .expect("manifest path must have parent")
-                .join(METADATA_FILE_NAME);
-            (record, metadata_path, manifest.clone(), retention_source)
-        };
-
-        let entry = state
-            .index
+        let mut manifest = state
+            .manifests
+            .get(manifest_id)
+            .ok_or_else(|| StorageError::ManifestNotFound {
+                manifest_id: manifest_id.to_owned(),
+            })?
+            .try_clone_runtime()?;
+        manifest.last_access = next_access;
+        let retention_source = try_clone_retention_source(manifest.retention_source.as_ref())?;
+        let record = manifest.to_record()?;
+        let metadata_path = manifest
+            .manifest_path
+            .parent()
+            .ok_or_else(|| {
+                corrupt_storage_state(
+                    &manifest.manifest_path,
+                    "manifest path has no parent directory",
+                )
+            })?
+            .join(METADATA_FILE_NAME);
+        let mut new_index = try_clone_manifest_index(&state.index)?;
+        let entry = new_index
             .entries
             .iter_mut()
             .find(|entry| entry.manifest_id == manifest_id)
@@ -2540,7 +3463,24 @@ impl StorageBackend {
         entry.last_access = next_access;
         entry.retention_source = retention_source;
         let metadata_bytes = norito::to_bytes(&record).map_err(StorageError::Norito)?;
-        let index_bytes = norito::to_bytes(&state.index).map_err(StorageError::Norito)?;
+        let index_bytes = norito::to_bytes(&new_index).map_err(StorageError::Norito)?;
+        ensure_persistent_artifact_size(
+            "manifest metadata",
+            &metadata_bytes,
+            MAX_MANIFEST_METADATA_BYTES,
+        )?;
+        ensure_persistent_artifact_size("storage index", &index_bytes, MAX_STORAGE_INDEX_BYTES)?;
+        let state_manifest = manifest.try_clone_runtime()?;
+        let state_entry =
+            state
+                .manifests
+                .get_mut(manifest_id)
+                .ok_or_else(|| StorageError::ManifestNotFound {
+                    manifest_id: manifest_id.to_owned(),
+                })?;
+        *state_entry = state_manifest;
+        state.access_counter = next_access;
+        state.index = new_index;
         drop(state);
 
         let mut durability_error = None;
@@ -2645,7 +3585,14 @@ impl StorageBackend {
                 });
             }
 
-            let mut buffer = vec![0u8; len];
+            let mut buffer = Vec::new();
+            buffer.try_reserve_exact(len).map_err(|_| {
+                StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                    context: "payload range response",
+                    requested: len,
+                })
+            })?;
+            buffer.resize(len, 0);
             read_into_manifest(manifest, offset, &mut buffer)?;
             Ok(buffer)
         })
@@ -2713,7 +3660,7 @@ impl StorageBackend {
         }
 
         self.with_manifest_for_access(manifest_id, |manifest| {
-            let por_tree = manifest.por_tree();
+            let por_tree = manifest.por_tree_ref();
             let total = por_tree.leaf_count();
             if total == 0 {
                 return Ok(Vec::new());
@@ -2722,7 +3669,19 @@ impl StorageBackend {
             let target = count.min(total);
             let mut rng_state = seed;
             let mut seen = HashSet::new();
-            let mut samples = Vec::with_capacity(target);
+            seen.try_reserve(target).map_err(|_| {
+                StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                    context: "PoR sampled leaf set",
+                    requested: target,
+                })
+            })?;
+            let mut samples = Vec::new();
+            samples.try_reserve_exact(target).map_err(|_| {
+                StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                    context: "PoR proof samples",
+                    requested: target,
+                })
+            })?;
 
             while samples.len() < target {
                 rng_state = splitmix64(rng_state);
@@ -2747,16 +3706,63 @@ impl StorageBackend {
         })
     }
 
+    /// Build canonical PDP witnesses from verified random-access chunk reads.
+    ///
+    /// The manifest lifecycle read lease remains held for sample validation, every exact
+    /// no-follow chunk read, digest verification, and proof construction. Consequently an
+    /// eviction cannot remove or replace the payload while witnesses are being assembled.
+    pub fn prove_pdp_samples(
+        &self,
+        manifest_id: &str,
+        samples: &[PdpSampleV1],
+    ) -> Result<Vec<PdpProofLeafV1>, StorageError> {
+        self.with_manifest_for_access(manifest_id, |manifest| {
+            let tree =
+                manifest
+                    .pdp_tree
+                    .as_deref()
+                    .ok_or_else(|| StorageError::PdpUnavailable {
+                        manifest_id: manifest_id.to_owned(),
+                    })?;
+            if manifest.pdp_commitment.is_none() || manifest.pdp_commitment_digest.is_none() {
+                return Err(corrupt_storage_state(
+                    manifest.manifest_path(),
+                    "runtime PDP tree is missing its commitment binding",
+                ));
+            }
+            tree.prove_samples_with(samples, |offset, buffer| {
+                read_into_manifest(manifest, offset, buffer)?;
+                Ok(buffer.len())
+            })
+            .map_err(pdp_witness_error)
+        })
+    }
+
     fn ingest_payload<R: Read>(
         &self,
         plan: &CarBuildPlan,
         reader: &mut R,
         chunks_dir: &Path,
-    ) -> Result<(Vec<StoredChunkRecord>, PorMerkleTree), StorageError> {
-        let mut chunk_store = ChunkStore::with_profile(plan.chunk_profile);
+    ) -> Result<
+        (
+            Vec<StoredChunkRecord>,
+            Arc<PorMerkleTree>,
+            Option<Arc<PdpMerkleTreeV1>>,
+        ),
+        StorageError,
+    > {
+        let heap_limit = plan
+            .validate()
+            .map_err(ChunkStoreError::from)?
+            .estimated_ingest_heap_bytes()
+            .max(1);
+        let mut chunk_store =
+            ChunkStore::with_profile_and_heap_limit(plan.chunk_profile, heap_limit)?;
         let output = chunk_store
             .ingest_plan_stream_to_directory(plan, reader, chunks_dir)
             .map_err(StorageError::ChunkStore)?;
+
+        self.ensure_chunk_publication_durable(output.publication, chunks_dir)?;
 
         if output.total_bytes != plan.content_length {
             return Err(StorageError::PayloadLengthMismatch {
@@ -2765,18 +3771,51 @@ impl StorageBackend {
             });
         }
 
-        let records = output
-            .records
-            .into_iter()
-            .map(|record| StoredChunkRecord {
+        let mut records = Vec::new();
+        records
+            .try_reserve_exact(output.records.len())
+            .map_err(|_| {
+                StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                    context: "node stored chunk records",
+                    requested: output.records.len(),
+                })
+            })?;
+        for record in output.records {
+            records.push(StoredChunkRecord {
                 file_name: record.file_name,
                 offset: record.offset,
                 length: record.length,
                 digest: record.digest,
                 role: None,
-            })
-            .collect::<Vec<_>>();
-        Ok((records, chunk_store.por_tree().clone()))
+            });
+        }
+        let por_tree = Arc::new(chunk_store.take_por_tree());
+        let pdp_tree = chunk_store.take_pdp_tree().map(Arc::new);
+        Ok((records, por_tree, pdp_tree))
+    }
+
+    fn ensure_chunk_publication_durable(
+        &self,
+        publication: DirectoryPublicationStatus,
+        chunks_dir: &Path,
+    ) -> Result<(), StorageError> {
+        if publication == DirectoryPublicationStatus::PublishedButDurabilityUncertain {
+            let error = AtomicWriteError::DurabilityUncertain {
+                path: chunks_dir.to_path_buf(),
+                source: io::Error::other(
+                    "chunk directory was published but its identity or parent durability could not be confirmed",
+                ),
+            };
+            self.fail_stop_durability(&error);
+            return Err(error.into_storage_error());
+        }
+        Ok(())
+    }
+}
+
+fn pdp_witness_error(error: PdpMerkleReadError<ChunkStoreError>) -> StorageError {
+    StorageError::PdpWitness {
+        reason: error.to_string(),
     }
 }
 
@@ -2785,77 +3824,131 @@ impl StoredManifest {
         record: StoredManifestRecord,
         manifest_path: PathBuf,
         io_lock: Arc<RwLock<()>>,
-    ) -> Self {
-        let files = if record.files.is_empty() {
-            vec![StoredFileRecord {
-                path: Vec::new(),
-                offset: 0,
-                size: record.content_length,
-                first_chunk: 0,
-                chunk_count: record.chunk_files.len(),
-            }]
-        } else {
-            record
-                .files
-                .iter()
-                .map(|file| StoredFileRecord {
-                    path: file.path.clone(),
-                    offset: file.offset,
-                    size: file.size,
-                    first_chunk: file.first_chunk as usize,
-                    chunk_count: file.chunk_count as usize,
+        por_commitment_digest: Option<[u8; 32]>,
+        por_tree: Arc<PorMerkleTree>,
+        pdp_commitment_digest: Option<[u8; 32]>,
+        pdp_tree: Option<Arc<PdpMerkleTreeV1>>,
+        pdp_tree_memory_bytes: u64,
+    ) -> Result<Self, StorageError> {
+        let manifest_dir = manifest_path.parent().ok_or_else(|| {
+            corrupt_storage_state(&manifest_path, "manifest path has no parent directory")
+        })?;
+        let StoredManifestRecord {
+            manifest_id,
+            manifest_cid,
+            manifest_digest,
+            payload_digest,
+            content_length,
+            chunk_profile_handle,
+            stripe_layout,
+            stored_at_unix_secs,
+            retention_epoch,
+            retention_source,
+            last_access,
+            files: persistent_files,
+            chunk_files: persistent_chunks,
+            por_commitment,
+            pdp_commitment,
+        } = record;
+        let mut files = Vec::new();
+        files
+            .try_reserve_exact(persistent_files.len())
+            .map_err(|_| {
+                StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                    context: "stored manifest file records",
+                    requested: persistent_files.len(),
                 })
-                .collect::<Vec<_>>()
-        };
-        let chunk_files = record
-            .chunk_files
-            .iter()
-            .map(|chunk| ChunkFileRecord {
-                path: manifest_path
-                    .parent()
-                    .expect("manifest path must have parent")
-                    .join(CHUNKS_DIR_NAME)
-                    .join(&chunk.file_name),
+            })?;
+        for file in persistent_files {
+            files.push(StoredFileRecord {
+                path: file.path,
+                offset: file.offset,
+                size: file.size,
+                first_chunk: usize::try_from(file.first_chunk).map_err(|_| {
+                    corrupt_storage_state(
+                        &manifest_path,
+                        "file first_chunk is not representable on this host",
+                    )
+                })?,
+                chunk_count: usize::try_from(file.chunk_count).map_err(|_| {
+                    corrupt_storage_state(
+                        &manifest_path,
+                        "file chunk_count is not representable on this host",
+                    )
+                })?,
+            });
+        }
+        let mut chunk_files = Vec::new();
+        chunk_files
+            .try_reserve_exact(persistent_chunks.len())
+            .map_err(|_| {
+                StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                    context: "stored manifest chunk records",
+                    requested: persistent_chunks.len(),
+                })
+            })?;
+        for chunk in persistent_chunks {
+            chunk_files.push(ChunkFileRecord {
+                path: manifest_dir.join(CHUNKS_DIR_NAME).join(&chunk.file_name),
                 offset: chunk.offset,
                 length: chunk.length,
                 digest: chunk.digest,
                 role: chunk.role.as_ref().map(|role| role.role),
                 group_id: chunk.role.as_ref().map(|role| role.group_id),
-            })
-            .collect::<Vec<_>>();
+            });
+        }
 
-        Self {
-            manifest_id: record.manifest_id,
-            manifest_cid: record.manifest_cid,
-            manifest_digest: record.manifest_digest,
-            payload_digest: record.payload_digest,
-            content_length: record.content_length,
-            chunk_profile_handle: record.chunk_profile_handle,
-            stripe_layout: record.stripe_layout,
-            stored_at_unix_secs: record.stored_at_unix_secs,
-            retention_epoch: record.retention_epoch,
-            retention_source: record.retention_source,
-            last_access: record.last_access,
+        Ok(Self {
+            manifest_id,
+            manifest_cid,
+            manifest_digest,
+            payload_digest,
+            content_length,
+            chunk_profile_handle,
+            stripe_layout,
+            stored_at_unix_secs,
+            retention_epoch,
+            retention_source,
+            last_access,
             files,
             chunk_files,
-            por_tree: record.por_tree,
+            por_tree,
+            por_commitment: Some(por_commitment),
+            por_commitment_digest,
+            pdp_commitment,
+            pdp_commitment_digest,
+            pdp_tree,
+            pdp_tree_memory_bytes,
             manifest_path,
             io_lock,
-        }
+        })
     }
 
     fn to_record(&self) -> Result<StoredManifestRecord, StorageError> {
         let files = persistent_file_records(&self.files)?;
-        let chunk_files = self
-            .chunk_files
-            .iter()
-            .map(|chunk| StoredChunkRecord {
-                file_name: chunk
-                    .path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_default()
-                    .to_owned(),
+        let mut chunk_files = Vec::new();
+        chunk_files
+            .try_reserve_exact(self.chunk_files.len())
+            .map_err(|_| {
+                StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                    context: "persistent chunk records",
+                    requested: self.chunk_files.len(),
+                })
+            })?;
+        for chunk in &self.chunk_files {
+            let file_name = chunk
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    corrupt_storage_state(
+                        &chunk.path,
+                        "stored chunk path has no canonical UTF-8 file name",
+                    )
+                })?;
+            let file_name = try_clone_text(file_name, "persistent chunk file name")?;
+            chunk_files.push(StoredChunkRecord {
+                file_name,
                 offset: chunk.offset,
                 length: chunk.length,
                 digest: chunk.digest,
@@ -2863,24 +3956,31 @@ impl StoredManifest {
                     role,
                     group_id: chunk.group_id.unwrap_or(0),
                 }),
-            })
-            .collect();
+            });
+        }
 
         Ok(StoredManifestRecord {
-            manifest_id: self.manifest_id.clone(),
-            manifest_cid: self.manifest_cid.clone(),
+            manifest_id: try_clone_text(&self.manifest_id, "manifest id")?,
+            manifest_cid: try_clone_bytes(&self.manifest_cid, "manifest CID")?,
             manifest_digest: self.manifest_digest,
             payload_digest: self.payload_digest,
             content_length: self.content_length,
-            chunk_profile_handle: self.chunk_profile_handle.clone(),
+            chunk_profile_handle: try_clone_text(
+                &self.chunk_profile_handle,
+                "chunk profile handle",
+            )?,
             stripe_layout: self.stripe_layout,
             stored_at_unix_secs: self.stored_at_unix_secs,
             retention_epoch: self.retention_epoch,
-            retention_source: self.retention_source.clone(),
+            retention_source: try_clone_retention_source(self.retention_source.as_ref())?,
             last_access: self.last_access,
             files,
             chunk_files,
-            por_tree: self.por_tree.clone(),
+            por_commitment: match &self.por_commitment {
+                Some(commitment) => try_clone_por_commitment(commitment)?,
+                None => StoredPorCommitmentV1::from_tree(self.por_tree.as_ref())?,
+            },
+            pdp_commitment: try_clone_pdp_commitment(self.pdp_commitment.as_ref())?,
         })
     }
 }
@@ -2888,18 +3988,130 @@ impl StoredManifest {
 fn persistent_file_records(
     files: &[StoredFileRecord],
 ) -> Result<Vec<StoredFileRecordNorito>, StorageError> {
-    files
-        .iter()
-        .map(|file| {
-            Ok(StoredFileRecordNorito {
-                path: file.path.clone(),
-                offset: file.offset,
-                size: file.size,
-                first_chunk: persistent_u32("file.first_chunk", file.first_chunk)?,
-                chunk_count: persistent_u32("file.chunk_count", file.chunk_count)?,
-            })
+    let mut records = Vec::new();
+    records.try_reserve_exact(files.len()).map_err(|_| {
+        StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+            context: "persistent file records",
+            requested: files.len(),
         })
-        .collect()
+    })?;
+    for file in files {
+        records.push(StoredFileRecordNorito {
+            path: try_clone_logical_path(&file.path, "persistent logical file path")?,
+            offset: file.offset,
+            size: file.size,
+            first_chunk: persistent_u32("file.first_chunk", file.first_chunk)?,
+            chunk_count: persistent_u32("file.chunk_count", file.chunk_count)?,
+        });
+    }
+    Ok(records)
+}
+
+fn try_clone_text(value: &str, context: &'static str) -> Result<String, StorageError> {
+    let mut cloned = String::new();
+    cloned.try_reserve_exact(value.len()).map_err(|_| {
+        StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+            context,
+            requested: value.len(),
+        })
+    })?;
+    cloned.push_str(value);
+    Ok(cloned)
+}
+
+fn try_clone_logical_path(
+    path: &[String],
+    context: &'static str,
+) -> Result<Vec<String>, StorageError> {
+    let mut cloned = Vec::new();
+    cloned.try_reserve_exact(path.len()).map_err(|_| {
+        StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+            context,
+            requested: path.len(),
+        })
+    })?;
+    for component in path {
+        cloned.push(try_clone_text(component, context)?);
+    }
+    Ok(cloned)
+}
+
+fn try_clone_chunking_profile(
+    profile: &sorafs_manifest::ChunkingProfileV1,
+) -> Result<sorafs_manifest::ChunkingProfileV1, StorageError> {
+    let mut aliases = Vec::new();
+    aliases
+        .try_reserve_exact(profile.aliases.len())
+        .map_err(|_| {
+            StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                context: "PDP chunk profile aliases",
+                requested: profile.aliases.len(),
+            })
+        })?;
+    for alias in &profile.aliases {
+        aliases.push(try_clone_text(alias, "PDP chunk profile alias")?);
+    }
+    Ok(sorafs_manifest::ChunkingProfileV1 {
+        profile_id: profile.profile_id,
+        namespace: try_clone_text(&profile.namespace, "PDP chunk profile namespace")?,
+        name: try_clone_text(&profile.name, "PDP chunk profile name")?,
+        semver: try_clone_text(&profile.semver, "PDP chunk profile semver")?,
+        min_size: profile.min_size,
+        target_size: profile.target_size,
+        max_size: profile.max_size,
+        break_mask: profile.break_mask,
+        multihash_code: profile.multihash_code,
+        aliases,
+    })
+}
+
+fn try_clone_pdp_commitment(
+    commitment: Option<&PdpCommitmentV1>,
+) -> Result<Option<PdpCommitmentV1>, StorageError> {
+    let Some(commitment) = commitment else {
+        return Ok(None);
+    };
+    Ok(Some(PdpCommitmentV1 {
+        version: commitment.version,
+        manifest_digest: commitment.manifest_digest,
+        chunk_profile: try_clone_chunking_profile(&commitment.chunk_profile)?,
+        payload_len: commitment.payload_len,
+        hot_leaf_size: commitment.hot_leaf_size,
+        segment_size: commitment.segment_size,
+        hot_leaf_count: commitment.hot_leaf_count,
+        segment_count: commitment.segment_count,
+        commitment_root_hot: commitment.commitment_root_hot,
+        commitment_root_segment: commitment.commitment_root_segment,
+        hash_algorithm: commitment.hash_algorithm,
+        hot_tree_height: commitment.hot_tree_height,
+        segment_tree_height: commitment.segment_tree_height,
+        sample_window: commitment.sample_window,
+        sealed_at: commitment.sealed_at,
+    }))
+}
+
+fn try_clone_por_commitment(
+    commitment: &StoredPorCommitmentV1,
+) -> Result<StoredPorCommitmentV1, StorageError> {
+    let mut chunks = Vec::new();
+    chunks
+        .try_reserve_exact(commitment.chunks.len())
+        .map_err(|_| {
+            StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                context: "PoR commitment chunks",
+                requested: commitment.chunks.len(),
+            })
+        })?;
+    chunks.extend_from_slice(&commitment.chunks);
+    Ok(StoredPorCommitmentV1 {
+        version: commitment.version,
+        root: commitment.root,
+        payload_len: commitment.payload_len,
+        chunk_count: commitment.chunk_count,
+        segment_count: commitment.segment_count,
+        leaf_count: commitment.leaf_count,
+        chunks,
+    })
 }
 
 fn validate_persistent_file_layout(files: &[StoredFileRecord]) -> Result<(), StorageError> {
@@ -2917,8 +4129,14 @@ fn stored_files_from_plan(plan: &CarBuildPlan) -> Result<Vec<StoredFileRecord>, 
         });
     }
     let mut offset = 0u64;
-    let mut paths = BTreeSet::new();
-    let mut records = Vec::with_capacity(plan.files.len());
+    let mut previous_path: Option<&[String]> = None;
+    let mut records = Vec::new();
+    records.try_reserve_exact(plan.files.len()).map_err(|_| {
+        StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+            context: "stored file records",
+            requested: plan.files.len(),
+        })
+    })?;
     for file in &plan.files {
         if file.path.iter().any(|component| {
             component.is_empty()
@@ -2937,11 +4155,19 @@ fn stored_files_from_plan(plan: &CarBuildPlan) -> Result<Vec<StoredFileRecord>, 
                 reason: "only a single-file plan may use an empty logical path".to_owned(),
             });
         }
-        if !paths.insert(file.path.clone()) {
-            return Err(StorageError::InvalidFileLayout {
-                reason: "logical file paths must be unique".to_owned(),
-            });
+        if let Some(previous) = previous_path {
+            if previous >= file.path.as_slice() {
+                return Err(StorageError::InvalidFileLayout {
+                    reason: "logical file paths must be strictly ordered and unique".to_owned(),
+                });
+            }
+            if file.path.starts_with(previous) {
+                return Err(StorageError::InvalidFileLayout {
+                    reason: "logical file path descends from another file".to_owned(),
+                });
+            }
         }
+        previous_path = Some(&file.path);
 
         let file_end =
             offset
@@ -2988,7 +4214,7 @@ fn stored_files_from_plan(plan: &CarBuildPlan) -> Result<Vec<StoredFileRecord>, 
         }
 
         records.push(StoredFileRecord {
-            path: file.path.clone(),
+            path: try_clone_logical_path(&file.path, "stored logical file path")?,
             offset,
             size: file.size,
             first_chunk: file.first_chunk,
@@ -3011,26 +4237,56 @@ fn canonical_profile_handle(manifest: &ManifestV1) -> String {
     )
 }
 
+fn try_canonical_profile_handle(manifest: &ManifestV1) -> Result<String, StorageError> {
+    let required = manifest
+        .chunking
+        .namespace
+        .len()
+        .checked_add(manifest.chunking.name.len())
+        .and_then(|length| length.checked_add(manifest.chunking.semver.len()))
+        .and_then(|length| length.checked_add(2))
+        .ok_or(StorageError::AllocationGeometryOverflow {
+            context: "chunk profile handle length",
+        })?;
+    let mut handle = String::new();
+    handle.try_reserve_exact(required).map_err(|_| {
+        StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+            context: "chunk profile handle",
+            requested: required,
+        })
+    })?;
+    handle.push_str(&manifest.chunking.namespace);
+    handle.push('.');
+    handle.push_str(&manifest.chunking.name);
+    handle.push('@');
+    handle.push_str(&manifest.chunking.semver);
+    Ok(handle)
+}
+
 fn ensure_chunk_profile_match(
     manifest: &ManifestV1,
     plan: &CarBuildPlan,
 ) -> Result<(), StorageError> {
     let profile = plan.chunk_profile;
-    if profile.min_size as u32 != manifest.chunking.min_size
-        || profile.target_size as u32 != manifest.chunking.target_size
-        || profile.max_size as u32 != manifest.chunking.max_size
-        || profile.break_mask as u32 != manifest.chunking.break_mask
+    if u32::try_from(profile.min_size).ok() != Some(manifest.chunking.min_size)
+        || u32::try_from(profile.target_size).ok() != Some(manifest.chunking.target_size)
+        || u32::try_from(profile.max_size).ok() != Some(manifest.chunking.max_size)
+        || u32::try_from(profile.break_mask).ok() != Some(manifest.chunking.break_mask)
     {
         return Err(StorageError::ChunkProfileMismatch);
     }
     Ok(())
 }
 
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
+fn unix_timestamp() -> Result<u64, StorageError> {
+    let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .unwrap_or(0)
+        .map_err(|_| StorageError::InvalidSystemTime)?;
+    if timestamp == 0 {
+        return Err(StorageError::InvalidSystemTime);
+    }
+    Ok(timestamp)
 }
 
 fn prepare_ingest_staging_directory(path: &Path) -> io::Result<()> {
@@ -3295,6 +4551,11 @@ fn write_manifest_metadata(
     metadata_path: &Path,
 ) -> Result<(), StorageError> {
     let metadata_bytes = norito::to_bytes(record)?;
+    ensure_persistent_artifact_size(
+        "manifest metadata",
+        &metadata_bytes,
+        MAX_MANIFEST_METADATA_BYTES,
+    )?;
     write_atomic(metadata_path, &metadata_bytes)?;
     Ok(())
 }
@@ -3442,7 +4703,17 @@ fn read_verified_chunk(
         ));
     }
 
-    let mut bytes = vec![0_u8; expected_len];
+    #[cfg(test)]
+    pause_chunk_read_for_test(&record.path)?;
+
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(expected_len)
+        .map_err(|_| ChunkStoreError::AllocationFailed {
+            context: "verified chunk bytes",
+            requested: expected_len,
+        })?;
+    bytes.resize(expected_len, 0);
     file.read_exact(&mut bytes).map_err(ChunkStoreError::Io)?;
     let mut trailing = [0_u8; 1];
     if file.read(&mut trailing).map_err(ChunkStoreError::Io)? != 0 {
@@ -3466,6 +4737,29 @@ fn read_verified_chunk(
         return Err(ChunkStoreError::DigestMismatch { chunk_index });
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+fn pause_chunk_read_for_test(path: &Path) -> Result<(), ChunkStoreError> {
+    let hook = {
+        let mut guard = CHUNK_READ_TEST_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.as_ref().is_some_and(|hook| hook.path == path) {
+            guard.take()
+        } else {
+            None
+        }
+    };
+    if let Some(hook) = hook {
+        hook.entered.send(()).map_err(|_| {
+            ChunkStoreError::Io(io::Error::other("chunk-read test observer dropped"))
+        })?;
+        hook.release.recv().map_err(|_| {
+            ChunkStoreError::Io(io::Error::other("chunk-read test release dropped"))
+        })?;
+    }
+    Ok(())
 }
 
 fn validate_chunk_file_metadata(
@@ -3537,12 +4831,38 @@ mod tests {
             .build()
     }
 
+    fn temp_config_with_pdp_limit(temp_dir: &TempDir, limit: u64) -> StorageConfig {
+        let temp_path = temp_dir.path().canonicalize().expect("canonical tempdir");
+        StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_path.join("storage"))
+            .pdp_tree_memory_limit_bytes(iroha_config::base::util::Bytes(limit))
+            .build()
+    }
+
     fn canonical_temp_path(temp_dir: &TempDir) -> PathBuf {
         temp_dir.path().canonicalize().expect("canonical tempdir")
     }
 
     fn single_file_plan(bytes: &[u8]) -> Result<CarBuildPlan, CarPlanError> {
         CarBuildPlan::single_file(bytes)
+    }
+
+    fn empty_file_plan() -> CarBuildPlan {
+        let plan = CarBuildPlan {
+            chunk_profile: ChunkProfile::DEFAULT,
+            payload_digest: blake3::hash(&[]),
+            content_length: 0,
+            chunks: Vec::new(),
+            files: vec![FilePlan {
+                path: Vec::new(),
+                first_chunk: 0,
+                chunk_count: 0,
+                size: 0,
+            }],
+        };
+        plan.validate().expect("canonical empty plan");
+        plan
     }
 
     fn test_manifest(payload: &[u8], plan: &CarBuildPlan, root_byte: u8) -> ManifestV1 {
@@ -3575,6 +4895,45 @@ mod tests {
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
         (config, backend, manifest_id)
+    }
+
+    fn rewrite_manifest_record(
+        backend: &StorageBackend,
+        manifest_id: &str,
+        mutate: impl FnOnce(&mut StoredManifestRecord),
+    ) {
+        let metadata_path = backend
+            .manifests_dir
+            .join(manifest_id)
+            .join(METADATA_FILE_NAME);
+        let bytes = fs::read(&metadata_path).expect("read manifest metadata");
+        let mut record: StoredManifestRecord =
+            norito::decode_from_bytes(&bytes).expect("decode manifest metadata");
+        mutate(&mut record);
+        fs::write(
+            &metadata_path,
+            norito::to_bytes(&record).expect("encode manifest metadata"),
+        )
+        .expect("rewrite manifest metadata");
+    }
+
+    fn rewrite_manifest_index(backend: &StorageBackend, mutate: impl FnOnce(&mut ManifestIndex)) {
+        let bytes = fs::read(&backend.index_path).expect("read manifest index");
+        let mut index: ManifestIndex =
+            norito::decode_from_bytes(&bytes).expect("decode manifest index");
+        mutate(&mut index);
+        fs::write(
+            &backend.index_path,
+            norito::to_bytes(&index).expect("encode manifest index"),
+        )
+        .expect("rewrite manifest index");
+    }
+
+    fn first_pdp_sample() -> Vec<PdpSampleV1> {
+        vec![PdpSampleV1 {
+            segment_index: 0,
+            hot_leaf_indices: vec![0],
+        }]
     }
 
     fn replace_with_empty_index(config: &StorageConfig) {
@@ -4421,6 +5780,69 @@ mod tests {
     }
 
     #[test]
+    fn restart_rejects_noncanonical_or_unbound_retention_sources() {
+        for case in 0..4_u8 {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let (config, backend, manifest_id) =
+                ingest_test_payload(&temp_dir, b"retention source tamper", 0xB0 + case);
+
+            match case {
+                0 => {
+                    rewrite_manifest_record(&backend, &manifest_id, |record| {
+                        record
+                            .retention_source
+                            .as_mut()
+                            .expect("retention source")
+                            .effective_epoch = 1;
+                    });
+                }
+                1 => {
+                    rewrite_manifest_record(&backend, &manifest_id, |record| {
+                        record.retention_source = None;
+                    });
+                }
+                2 => {
+                    rewrite_manifest_index(&backend, |index| {
+                        index.entries[0]
+                            .retention_source
+                            .as_mut()
+                            .expect("retention source")
+                            .version ^= 1;
+                    });
+                }
+                3 => {
+                    let rewrite_source = |source: &mut RetentionSourceV1| {
+                        source.pin_policy_epoch = 7;
+                        source.effective_epoch = 7;
+                        source.sources =
+                            vec![sorafs_manifest::retention::RetentionSourceKindV1::PinPolicy];
+                    };
+                    rewrite_manifest_record(&backend, &manifest_id, |record| {
+                        record.retention_epoch = 7;
+                        rewrite_source(record.retention_source.as_mut().expect("retention source"));
+                    });
+                    rewrite_manifest_index(&backend, |index| {
+                        index.entries[0].retention_epoch = 7;
+                        rewrite_source(
+                            index.entries[0]
+                                .retention_source
+                                .as_mut()
+                                .expect("retention source"),
+                        );
+                    });
+                }
+                _ => unreachable!("bounded test case"),
+            }
+
+            drop(backend);
+            assert!(matches!(
+                StorageBackend::new(config),
+                Err(StorageError::CorruptStorageState { .. })
+            ));
+        }
+    }
+
+    #[test]
     fn last_access_persists_after_reads() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
@@ -4638,6 +6060,26 @@ mod tests {
         assert_eq!(rebuilt.chunks, plan.chunks);
         assert_eq!(rebuilt.payload_digest, plan.payload_digest);
         assert_eq!(rebuilt.files, plan.files);
+
+        let hint = TaikaiSegmentHint {
+            event: "event-a".to_owned(),
+            stream: "stream-a".to_owned(),
+            rendition: "1080p".to_owned(),
+            sequence: 7,
+            payload_len: Some(plan.content_length),
+            payload_digest: Some(*plan.payload_digest.as_bytes()),
+        };
+        let fallible = stored
+            .try_to_car_plan_with_hint(sorafs_chunker::ChunkProfile::DEFAULT, Some(&hint))
+            .expect("fallibly rebuild CAR plan with Taikai hint");
+        assert_eq!(fallible.files, plan.files);
+        assert_eq!(fallible.chunks.len(), plan.chunks.len());
+        assert!(
+            fallible
+                .chunks
+                .iter()
+                .all(|chunk| chunk.taikai_segment_hint.as_ref() == Some(&hint))
+        );
     }
 
     #[test]
@@ -4892,6 +6334,699 @@ mod tests {
             backend.read_payload_range(&manifest_id, 0, payload.len()),
             Err(StorageError::ChunkStore(ChunkStoreError::Io(_)))
         ));
+    }
+
+    #[test]
+    fn pdp_commitment_tree_and_witnesses_survive_restart() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = (0..300_000_u32)
+            .map(|index| (index.wrapping_mul(31) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, &payload, 0xE1);
+        let stored = backend.manifest(&manifest_id).expect("stored manifest");
+        let commitment = stored
+            .pdp_commitment()
+            .cloned()
+            .expect("non-empty payload commitment");
+        let commitment_digest = commitment.commitment_digest().expect("commitment digest");
+        assert_eq!(stored.pdp_commitment_digest(), Some(&commitment_digest));
+        let tree = stored.pdp_tree().expect("runtime PDP tree");
+        assert_eq!(tree.hot_root(), commitment.commitment_root_hot);
+        assert_eq!(tree.segment_root(), commitment.commitment_root_segment);
+        assert_eq!(tree.payload_len(), payload.len() as u64);
+        assert_eq!(
+            stored.pdp_tree_memory_bytes(),
+            pdp_tree_memory_for_payload(payload.len() as u64).expect("tree memory")
+        );
+        let samples = vec![
+            PdpSampleV1 {
+                segment_index: 0,
+                hot_leaf_indices: vec![0, 7, 63],
+            },
+            PdpSampleV1 {
+                segment_index: 1,
+                hot_leaf_indices: vec![0, 9],
+            },
+        ];
+        let before = backend
+            .prove_pdp_samples(&manifest_id, &samples)
+            .expect("PDP witnesses before restart");
+        assert_eq!(before.len(), 2);
+        assert_eq!(before[0].hot_leaves[0].leaf_bytes, payload[..4_096]);
+        let retained = backend.pdp_tree_memory_bytes();
+        drop(stored);
+        drop(backend);
+
+        let reloaded = StorageBackend::new(config).expect("restart backend");
+        assert_eq!(reloaded.pdp_tree_memory_bytes(), retained);
+        let restored = reloaded.manifest(&manifest_id).expect("restored manifest");
+        assert_eq!(restored.pdp_commitment(), Some(&commitment));
+        assert_eq!(restored.pdp_commitment_digest(), Some(&commitment_digest));
+        assert_eq!(
+            reloaded
+                .prove_pdp_samples(&manifest_id, &samples)
+                .expect("PDP witnesses after restart"),
+            before
+        );
+    }
+
+    #[test]
+    fn persisted_por_commitment_is_bounded_by_chunk_count_not_leaf_count() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = (0..2_097_152_u32)
+            .map(|index| (index.wrapping_mul(17) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, &payload, 0xE0);
+        let stored = backend.manifest(&manifest_id).expect("stored manifest");
+        let metadata_path = stored
+            .manifest_path()
+            .parent()
+            .expect("manifest directory")
+            .join(METADATA_FILE_NAME);
+        let metadata_bytes = fs::read(&metadata_path).expect("read bounded metadata");
+        let record: StoredManifestRecord =
+            norito::decode_from_bytes(&metadata_bytes).expect("decode metadata");
+        let tree = stored.por_tree_ref();
+        assert!(tree.segment_count() > tree.chunks().len());
+        assert!(tree.leaf_count() > tree.segment_count());
+        assert_eq!(
+            record.por_commitment.chunks.len(),
+            stored.chunk_count(),
+            "persistent PoR summary has exactly one bounded entry per content chunk"
+        );
+        assert_eq!(record.por_commitment.leaf_count, tree.leaf_count() as u64);
+        let linear_chunk_bound = 16_384_usize
+            .checked_add(stored.chunk_count().saturating_mul(512))
+            .expect("metadata size bound");
+        assert!(
+            metadata_bytes.len() <= linear_chunk_bound,
+            "{} bytes of metadata exceeded O(chunk count) bound {linear_chunk_bound} for {} PoR leaves",
+            metadata_bytes.len(),
+            tree.leaf_count()
+        );
+    }
+
+    #[test]
+    fn restart_rejects_tampered_pdp_por_and_payload_bindings() {
+        for case in 0_u8..10 {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let payload = vec![case.wrapping_add(1); 300_000];
+            let (config, backend, manifest_id) =
+                ingest_test_payload(&temp_dir, &payload, 0xE2_u8.wrapping_add(case));
+            match case {
+                0 => rewrite_manifest_record(&backend, &manifest_id, |record| {
+                    record
+                        .pdp_commitment
+                        .as_mut()
+                        .expect("commitment")
+                        .commitment_root_hot[0] ^= 0x80;
+                }),
+                1 => rewrite_manifest_index(&backend, |index| {
+                    index.entries[0]
+                        .pdp_commitment_digest
+                        .as_mut()
+                        .expect("commitment digest")[0] ^= 0x40;
+                }),
+                2 => rewrite_manifest_record(&backend, &manifest_id, |record| {
+                    record
+                        .pdp_commitment
+                        .as_mut()
+                        .expect("commitment")
+                        .manifest_digest[0] ^= 0x20;
+                }),
+                3 => rewrite_manifest_record(&backend, &manifest_id, |record| {
+                    record
+                        .pdp_commitment
+                        .as_mut()
+                        .expect("commitment")
+                        .sealed_at += 1;
+                }),
+                4 => rewrite_manifest_record(&backend, &manifest_id, |record| {
+                    record
+                        .pdp_commitment
+                        .as_mut()
+                        .expect("commitment")
+                        .sample_window += 1;
+                }),
+                5 => rewrite_manifest_record(&backend, &manifest_id, |record| {
+                    record
+                        .pdp_commitment
+                        .as_mut()
+                        .expect("commitment")
+                        .hot_leaf_count += 1;
+                }),
+                6 => rewrite_manifest_record(&backend, &manifest_id, |record| {
+                    record.por_commitment.root[0] ^= 0x10;
+                }),
+                7 => {
+                    rewrite_manifest_record(&backend, &manifest_id, |record| {
+                        record.payload_digest[0] ^= 0x08;
+                    });
+                    rewrite_manifest_index(&backend, |index| {
+                        index.entries[0].payload_digest[0] ^= 0x08;
+                    });
+                }
+                8 => {
+                    let metadata_path = backend
+                        .manifests_dir
+                        .join(&manifest_id)
+                        .join(METADATA_FILE_NAME);
+                    let bytes = fs::read(&metadata_path).expect("read manifest metadata");
+                    let mut record: StoredManifestRecord =
+                        norito::decode_from_bytes(&bytes).expect("decode manifest metadata");
+                    let commitment = record.pdp_commitment.as_mut().expect("commitment");
+                    commitment.commitment_root_segment[0] ^= 0x04;
+                    let digest = commitment.commitment_digest().expect("commitment digest");
+                    fs::write(
+                        &metadata_path,
+                        norito::to_bytes(&record).expect("encode manifest metadata"),
+                    )
+                    .expect("rewrite manifest metadata");
+                    rewrite_manifest_index(&backend, |index| {
+                        index.entries[0].pdp_commitment_digest = Some(digest);
+                    });
+                }
+                9 => {
+                    let metadata_path = backend
+                        .manifests_dir
+                        .join(&manifest_id)
+                        .join(METADATA_FILE_NAME);
+                    let bytes = fs::read(&metadata_path).expect("read manifest metadata");
+                    let mut record: StoredManifestRecord =
+                        norito::decode_from_bytes(&bytes).expect("decode manifest metadata");
+                    record.por_commitment.root[0] ^= 0x02;
+                    let digest = record
+                        .por_commitment
+                        .digest()
+                        .expect("PoR commitment digest");
+                    fs::write(
+                        &metadata_path,
+                        norito::to_bytes(&record).expect("encode manifest metadata"),
+                    )
+                    .expect("rewrite manifest metadata");
+                    rewrite_manifest_index(&backend, |index| {
+                        index.entries[0].por_commitment_digest = digest;
+                    });
+                }
+                _ => unreachable!(),
+            }
+            drop(backend);
+            assert!(
+                matches!(
+                    StorageBackend::new(config),
+                    Err(StorageError::CorruptStorageState { .. })
+                ),
+                "tampering case {case} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_payload_has_no_pdp_commitment_or_tree() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let config = temp_config(&temp_dir);
+        let backend = StorageBackend::new(config.clone()).expect("backend init");
+        let payload = [];
+        let plan = empty_file_plan();
+        let manifest = test_manifest(&payload, &plan, 0xEA);
+        let mut reader = payload.as_slice();
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest empty payload");
+        let stored = backend
+            .manifest(&manifest_id)
+            .expect("stored empty manifest");
+        assert_eq!(stored.content_length(), 0);
+        assert_eq!(stored.chunk_count(), 0);
+        assert!(stored.pdp_commitment().is_none());
+        assert!(stored.pdp_commitment_digest().is_none());
+        assert!(stored.pdp_tree().is_none());
+        assert_eq!(stored.pdp_tree_memory_bytes(), 0);
+        assert!(stored.por_commitment_digest().is_some());
+        assert!(stored.por_tree_ref().is_empty());
+        assert_eq!(backend.pdp_tree_memory_bytes(), 0);
+        assert!(matches!(
+            backend.prove_pdp_samples(&manifest_id, &first_pdp_sample()),
+            Err(StorageError::PdpUnavailable { .. })
+        ));
+        drop(stored);
+        drop(backend);
+
+        let restarted = StorageBackend::new(config).expect("restart empty payload");
+        let restored = restarted
+            .manifest(&manifest_id)
+            .expect("restored empty payload");
+        assert!(restored.pdp_commitment().is_none());
+        assert!(restored.pdp_tree().is_none());
+        assert!(restored.por_tree_ref().is_empty());
+        assert_eq!(restarted.pdp_tree_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn empty_payload_rejects_noncanonical_por_summary_geometry_and_root() {
+        for case in 0_u8..4 {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let config = temp_config(&temp_dir);
+            let backend = StorageBackend::new(config.clone()).expect("backend init");
+            let payload = [];
+            let plan = empty_file_plan();
+            let manifest = test_manifest(&payload, &plan, 0xD0_u8.wrapping_add(case));
+            let mut reader = payload.as_slice();
+            let manifest_id = backend
+                .ingest_manifest(&manifest, &plan, &mut reader)
+                .expect("ingest empty payload");
+            let metadata_path = backend
+                .manifests_dir
+                .join(&manifest_id)
+                .join(METADATA_FILE_NAME);
+            let bytes = fs::read(&metadata_path).expect("read manifest metadata");
+            let mut record: StoredManifestRecord =
+                norito::decode_from_bytes(&bytes).expect("decode manifest metadata");
+            match case {
+                0 => record.por_commitment.chunk_count = 1,
+                1 => record.por_commitment.segment_count = 1,
+                2 => record.por_commitment.leaf_count = 1,
+                3 => record.por_commitment.root[0] ^= 0x01,
+                _ => unreachable!(),
+            }
+            let digest = record
+                .por_commitment
+                .digest()
+                .expect("PoR commitment digest");
+            fs::write(
+                &metadata_path,
+                norito::to_bytes(&record).expect("encode manifest metadata"),
+            )
+            .expect("rewrite manifest metadata");
+            rewrite_manifest_index(&backend, |index| {
+                index.entries[0].por_commitment_digest = digest;
+            });
+            drop(backend);
+            assert!(
+                matches!(
+                    StorageBackend::new(config),
+                    Err(StorageError::CorruptStorageState { .. })
+                ),
+                "empty PoR tampering case {case} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn pdp_tree_budget_rejects_ingest_and_restart_overcommit() {
+        let payload = vec![0xA5; 300_000];
+        let required =
+            pdp_tree_memory_for_payload(payload.len() as u64).expect("PDP tree estimate");
+        assert!(required > 0);
+
+        let ingest_dir = tempfile::tempdir().expect("create ingest temp dir");
+        let ingest_config = temp_config_with_pdp_limit(&ingest_dir, required - 1);
+        let ingest_backend = StorageBackend::new(ingest_config).expect("backend init");
+        let plan = single_file_plan(&payload).expect("plan");
+        let manifest = test_manifest(&payload, &plan, 0xEB);
+        let mut reader = payload.as_slice();
+        assert!(matches!(
+            ingest_backend.ingest_manifest(&manifest, &plan, &mut reader),
+            Err(StorageError::PdpTreeMemoryExceeded {
+                required: found,
+                available
+            }) if found == required && available == required - 1
+        ));
+        assert_eq!(ingest_backend.manifest_count(), 0);
+        assert_eq!(ingest_backend.pdp_tree_memory_bytes(), 0);
+        assert_eq!(ingest_backend.reserved_pdp_tree_memory_bytes(), 0);
+
+        let restart_dir = tempfile::tempdir().expect("create restart temp dir");
+        let generous = temp_config_with_pdp_limit(&restart_dir, required);
+        let backend = StorageBackend::new(generous).expect("backend init");
+        let manifest = test_manifest(&payload, &plan, 0xEC);
+        let mut reader = payload.as_slice();
+        backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest within tree budget");
+        drop(backend);
+        let constrained = temp_config_with_pdp_limit(&restart_dir, required - 1);
+        assert!(matches!(
+            StorageBackend::new(constrained),
+            Err(StorageError::PdpTreeMemoryExceeded {
+                required: found,
+                available
+            }) if found == required && available == required - 1
+        ));
+    }
+
+    #[test]
+    fn backend_rejects_invalid_direct_pdp_configuration_before_filesystem_mutation() {
+        for (sample_window, memory_limit) in [(0, 1), (501, 1), (1, 0)] {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let data_dir = canonical_temp_path(&temp_dir).join("storage");
+            let config = StorageConfig::builder()
+                .enabled(true)
+                .data_dir(data_dir.clone())
+                .pdp_sample_window(sample_window)
+                .pdp_tree_memory_limit_bytes(iroha_config::base::util::Bytes(memory_limit))
+                .build();
+            assert!(StorageBackend::new(config).is_err());
+            assert!(
+                !data_dir.exists(),
+                "invalid PDP config must fail before creating storage"
+            );
+        }
+    }
+
+    #[test]
+    fn uncertain_chunk_directory_publication_fail_stops_backend() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+        let chunks_dir = backend.root_dir().join("uncertain-chunks");
+        assert!(matches!(
+            backend.ensure_chunk_publication_durable(
+                DirectoryPublicationStatus::PublishedButDurabilityUncertain,
+                &chunks_dir,
+            ),
+            Err(StorageError::DurabilityUncertain { .. })
+        ));
+        assert!(matches!(
+            backend.ensure_durability_healthy(),
+            Err(StorageError::DurabilityPoisoned { .. })
+        ));
+        assert!(matches!(
+            backend.read_payload_range("missing", 0, 1),
+            Err(StorageError::DurabilityPoisoned { .. })
+        ));
+    }
+
+    #[test]
+    fn restart_sums_all_retained_pdp_trees_against_budget() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let first_payload = vec![0x91; 300_000];
+        let second_payload = vec![0x92; 300_000];
+        let per_tree =
+            pdp_tree_memory_for_payload(first_payload.len() as u64).expect("PDP tree estimate");
+        let total_limit = per_tree.checked_mul(2).expect("two-tree budget");
+        let generous = temp_config_with_pdp_limit(&temp_dir, total_limit);
+        let backend = StorageBackend::new(generous).expect("backend init");
+        for (payload, root) in [(&first_payload, 0xE7), (&second_payload, 0xE8)] {
+            let plan = single_file_plan(payload).expect("plan");
+            let manifest = test_manifest(payload, &plan, root);
+            let mut reader = payload.as_slice();
+            backend
+                .ingest_manifest(&manifest, &plan, &mut reader)
+                .expect("ingest within summed budget");
+        }
+        assert_eq!(backend.pdp_tree_memory_bytes(), total_limit);
+        drop(backend);
+
+        let constrained = temp_config_with_pdp_limit(&temp_dir, total_limit - 1);
+        assert!(matches!(
+            StorageBackend::new(constrained),
+            Err(StorageError::PdpTreeMemoryExceeded {
+                required,
+                available
+            }) if required == per_tree && available == per_tree - 1
+        ));
+    }
+
+    #[test]
+    fn pdp_tree_reservation_blocks_concurrent_ingest_and_releases_on_failure() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = vec![0xB6; 300_000];
+        let required =
+            pdp_tree_memory_for_payload(payload.len() as u64).expect("PDP tree estimate");
+        let config = temp_config_with_pdp_limit(&temp_dir, required);
+        let backend = Arc::new(StorageBackend::new(config).expect("backend init"));
+        let plan = single_file_plan(&payload).expect("plan");
+        let first_manifest = test_manifest(&payload, &plan, 0xED);
+        let second_manifest = test_manifest(&payload, &plan, 0xEE);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let mut gated = GatedReader {
+            bytes: Cursor::new(payload.clone()),
+            entered: Some(entered_tx),
+            release: release_rx,
+            fail_after_release: true,
+        };
+        let worker_backend = Arc::clone(&backend);
+        let worker_plan = plan.clone();
+        let worker = thread::spawn(move || {
+            worker_backend.ingest_manifest(&first_manifest, &worker_plan, &mut gated)
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first ingest reaches payload read");
+        assert_eq!(backend.reserved_pdp_tree_memory_bytes(), required);
+
+        let mut competing_reader = payload.as_slice();
+        assert!(matches!(
+            backend.ingest_manifest(&second_manifest, &plan, &mut competing_reader),
+            Err(StorageError::PdpTreeMemoryExceeded {
+                required: found,
+                available: 0
+            }) if found == required
+        ));
+        release_tx.send(()).expect("release failed ingest");
+        assert!(worker.join().expect("worker joins").is_err());
+        assert_eq!(backend.reserved_pdp_tree_memory_bytes(), 0);
+        assert_eq!(backend.pdp_tree_memory_bytes(), 0);
+
+        let mut retry_reader = payload.as_slice();
+        backend
+            .ingest_manifest(&second_manifest, &plan, &mut retry_reader)
+            .expect("reservation released for retry");
+        assert_eq!(backend.pdp_tree_memory_bytes(), required);
+        assert_eq!(backend.reserved_pdp_tree_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn pdp_tree_budget_is_released_after_eviction() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let first_payload = vec![0xC7; 300_000];
+        let second_payload = vec![0xD8; 300_000];
+        let required =
+            pdp_tree_memory_for_payload(first_payload.len() as u64).expect("PDP tree estimate");
+        let config = temp_config_with_pdp_limit(&temp_dir, required);
+        let backend = StorageBackend::new(config).expect("backend init");
+        let first_plan = single_file_plan(&first_payload).expect("first plan");
+        let first_manifest = test_manifest(&first_payload, &first_plan, 0xEF);
+        let mut first_reader = first_payload.as_slice();
+        let first_id = backend
+            .ingest_manifest(&first_manifest, &first_plan, &mut first_reader)
+            .expect("first ingest");
+        assert_eq!(backend.pdp_tree_memory_bytes(), required);
+
+        let second_plan = single_file_plan(&second_payload).expect("second plan");
+        let second_manifest = test_manifest(&second_payload, &second_plan, 0xF0);
+        let mut blocked_reader = second_payload.as_slice();
+        assert!(matches!(
+            backend.ingest_manifest(&second_manifest, &second_plan, &mut blocked_reader),
+            Err(StorageError::PdpTreeMemoryExceeded { available: 0, .. })
+        ));
+        backend
+            .evict_manifest(&first_id)
+            .expect("evict first manifest");
+        assert_eq!(backend.pdp_tree_memory_bytes(), 0);
+
+        let mut admitted_reader = second_payload.as_slice();
+        backend
+            .ingest_manifest(&second_manifest, &second_plan, &mut admitted_reader)
+            .expect("second ingest after eviction");
+        assert_eq!(backend.pdp_tree_memory_bytes(), required);
+    }
+
+    #[test]
+    fn pdp_witnesses_reject_noncanonical_duplicate_and_out_of_range_samples() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = vec![0x19; 300_000];
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, &payload, 0xF1);
+        let invalid_samples = vec![
+            Vec::new(),
+            vec![PdpSampleV1 {
+                segment_index: 0,
+                hot_leaf_indices: Vec::new(),
+            }],
+            vec![
+                PdpSampleV1 {
+                    segment_index: 0,
+                    hot_leaf_indices: vec![0],
+                },
+                PdpSampleV1 {
+                    segment_index: 0,
+                    hot_leaf_indices: vec![1],
+                },
+            ],
+            vec![
+                PdpSampleV1 {
+                    segment_index: 1,
+                    hot_leaf_indices: vec![0],
+                },
+                PdpSampleV1 {
+                    segment_index: 0,
+                    hot_leaf_indices: vec![0],
+                },
+            ],
+            vec![PdpSampleV1 {
+                segment_index: 2,
+                hot_leaf_indices: vec![0],
+            }],
+            vec![PdpSampleV1 {
+                segment_index: 0,
+                hot_leaf_indices: vec![0, 0],
+            }],
+            vec![PdpSampleV1 {
+                segment_index: 0,
+                hot_leaf_indices: vec![2, 1],
+            }],
+            vec![PdpSampleV1 {
+                segment_index: 0,
+                hot_leaf_indices: vec![64],
+            }],
+            vec![PdpSampleV1 {
+                segment_index: 1,
+                hot_leaf_indices: vec![10],
+            }],
+        ];
+        for (case, samples) in invalid_samples.iter().enumerate() {
+            assert!(
+                matches!(
+                    backend.prove_pdp_samples(&manifest_id, samples),
+                    Err(StorageError::PdpWitness { .. })
+                ),
+                "invalid sample case {case} must fail before returning a witness"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdp_witness_reads_reject_symlink_and_hardlink_chunks() {
+        use std::os::unix::fs::symlink;
+
+        for hardlink in [false, true] {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let payload = vec![0x2A; 32_768];
+            let (_config, backend, manifest_id) =
+                ingest_test_payload(&temp_dir, &payload, if hardlink { 0xF2 } else { 0xF3 });
+            let chunk = backend
+                .manifest(&manifest_id)
+                .and_then(|stored| stored.chunk(0).cloned())
+                .expect("stored chunk");
+            let alias = canonical_temp_path(&temp_dir).join("pdp-chunk-alias.bin");
+            if hardlink {
+                fs::hard_link(&chunk.path, &alias).expect("create hard link");
+            } else {
+                fs::write(&alias, &payload).expect("write symlink target");
+                fs::remove_file(&chunk.path).expect("remove stored chunk");
+                symlink(&alias, &chunk.path).expect("install symlink");
+            }
+            assert!(matches!(
+                backend.prove_pdp_samples(&manifest_id, &first_pdp_sample()),
+                Err(StorageError::PdpWitness { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn pdp_witness_rejects_chunk_mutation_during_exact_read() {
+        let _serial = CHUNK_READ_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = vec![0x3B; 32_768];
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, &payload, 0xF4);
+        let backend = Arc::new(backend);
+        let chunk = backend
+            .manifest(&manifest_id)
+            .and_then(|stored| stored.chunk(0).cloned())
+            .expect("stored chunk");
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *CHUNK_READ_TEST_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ChunkReadTestHook {
+            path: chunk.path.clone(),
+            entered: entered_tx,
+            release: release_rx,
+        });
+        let proof_backend = Arc::clone(&backend);
+        let proof_manifest_id = manifest_id.clone();
+        let proof = thread::spawn(move || {
+            proof_backend.prove_pdp_samples(&proof_manifest_id, &first_pdp_sample())
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("proof read opened the chunk");
+        let mut mutated = fs::read(&chunk.path).expect("read chunk for mutation");
+        mutated[0] ^= 0x80;
+        fs::write(&chunk.path, mutated).expect("mutate opened chunk");
+        release_tx.send(()).expect("release proof read");
+        assert!(matches!(
+            proof.join().expect("proof worker joins"),
+            Err(StorageError::PdpWitness { .. })
+        ));
+    }
+
+    #[test]
+    fn pdp_proof_io_lease_blocks_concurrent_eviction() {
+        let _serial = CHUNK_READ_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = vec![0x4C; 32_768];
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, &payload, 0xF5);
+        let backend = Arc::new(backend);
+        let chunk = backend
+            .manifest(&manifest_id)
+            .and_then(|stored| stored.chunk(0).cloned())
+            .expect("stored chunk");
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *CHUNK_READ_TEST_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ChunkReadTestHook {
+            path: chunk.path,
+            entered: entered_tx,
+            release: release_rx,
+        });
+        let proof_backend = Arc::clone(&backend);
+        let proof_manifest_id = manifest_id.clone();
+        let proof = thread::spawn(move || {
+            proof_backend.prove_pdp_samples(&proof_manifest_id, &first_pdp_sample())
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("proof holds manifest I/O lease");
+
+        let (evicted_tx, evicted_rx) = mpsc::channel();
+        let evict_backend = Arc::clone(&backend);
+        let evict_manifest_id = manifest_id.clone();
+        let eviction = thread::spawn(move || {
+            evicted_tx
+                .send(evict_backend.evict_manifest(&evict_manifest_id))
+                .expect("send eviction result");
+        });
+        assert!(matches!(
+            evicted_rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        release_tx.send(()).expect("release proof read");
+        assert_eq!(
+            proof
+                .join()
+                .expect("proof worker joins")
+                .expect("proof completes")
+                .len(),
+            1
+        );
+        assert_eq!(
+            evicted_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("eviction completes")
+                .expect("eviction succeeds"),
+            payload.len() as u64
+        );
+        eviction.join().expect("eviction worker joins");
+        assert!(backend.manifest(&manifest_id).is_none());
+        assert_eq!(backend.pdp_tree_memory_bytes(), 0);
     }
 
     #[test]

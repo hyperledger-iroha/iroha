@@ -2345,12 +2345,14 @@ public struct ToriiIdentifierClaimRecord: Codable, Sendable {
 
 public struct ToriiIdentifierReceiptAttestation: Codable, Sendable {
     public let kind: String
+    public let algorithm: String?
     public let signature: String?
     public let proofBackend: String?
     public let proofB64: String?
 
     private enum CodingKeys: String, CodingKey {
         case kind
+        case algorithm
         case signature
         case proofBackend = "proof_backend"
         case proofB64 = "proof_b64"
@@ -2366,6 +2368,7 @@ public struct ToriiIdentifierReceiptAttestation: Codable, Sendable {
                 debugDescription: "identifier receipt attestation kind must be exact and contain no surrounding whitespace."
             )
         }
+        let decodedAlgorithm = try container.decodeIfPresent(String.self, forKey: .algorithm)
         signature = try container.decodeIfPresent(String.self, forKey: .signature)
         proofBackend = try container.decodeIfPresent(String.self, forKey: .proofBackend)
         proofB64 = try container.decodeIfPresent(String.self, forKey: .proofB64)
@@ -2378,6 +2381,16 @@ public struct ToriiIdentifierReceiptAttestation: Codable, Sendable {
                     debugDescription: "signed identifier receipt attestations require only signature."
                 )
             }
+            let resolvedAlgorithm = decodedAlgorithm ?? SigningAlgorithm.ed25519.wireName
+            guard !resolvedAlgorithm.isEmpty,
+                  resolvedAlgorithm.trimmingCharacters(in: .whitespacesAndNewlines) == resolvedAlgorithm else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .algorithm,
+                    in: container,
+                    debugDescription: "algorithm must be exact and contain no surrounding whitespace."
+                )
+            }
+            algorithm = resolvedAlgorithm
             if signature?.trimmingCharacters(in: .whitespacesAndNewlines) != signature {
                 throw DecodingError.dataCorruptedError(
                     forKey: .signature,
@@ -2400,6 +2413,7 @@ public struct ToriiIdentifierReceiptAttestation: Codable, Sendable {
             }
         case "proof":
             guard signature == nil,
+                  decodedAlgorithm == nil,
                   proofBackend?.isEmpty == false,
                   proofB64?.isEmpty == false else {
                 throw DecodingError.dataCorruptedError(
@@ -2408,6 +2422,7 @@ public struct ToriiIdentifierReceiptAttestation: Codable, Sendable {
                     debugDescription: "proof identifier receipt attestations require proof_backend and proof_b64."
                 )
             }
+            algorithm = nil
             if proofBackend?.trimmingCharacters(in: .whitespacesAndNewlines) != proofBackend {
                 throw DecodingError.dataCorruptedError(
                     forKey: .proofBackend,
@@ -9149,6 +9164,8 @@ public struct ToriiVerifyingKeyInline: Decodable, Sendable {
 public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
     public let version: Int
     public let circuitId: String
+    public let ownerManifestId: String?
+    public let namespace: String?
     public let backend: String
     public let curve: String
     public let publicInputsSchemaHashHex: String
@@ -9166,6 +9183,8 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case version
         case circuitId = "circuit_id"
+        case ownerManifestId = "owner_manifest_id"
+        case namespace
         case backend
         case curve
         case publicInputsSchemaHashHex = "public_inputs_schema_hash"
@@ -9191,6 +9210,27 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
         circuitId = try ToriiValidation.normalizedExactNonEmpty(rawCircuitId,
                                                                 field: "circuit_id",
                                                                 codingPath: container.codingPath + [CodingKeys.circuitId])
+        if let rawOwnerManifestId = try container.decodeIfPresent(
+            String.self,
+            forKey: .ownerManifestId
+        ) {
+            ownerManifestId = try ToriiValidation.normalizedExactNonEmpty(
+                rawOwnerManifestId,
+                field: "owner_manifest_id",
+                codingPath: container.codingPath + [CodingKeys.ownerManifestId]
+            )
+        } else {
+            ownerManifestId = nil
+        }
+        if let rawNamespace = try container.decodeIfPresent(String.self, forKey: .namespace) {
+            namespace = try ToriiValidation.normalizedExactNonEmpty(
+                rawNamespace,
+                field: "namespace",
+                codingPath: container.codingPath + [CodingKeys.namespace]
+            )
+        } else {
+            namespace = nil
+        }
         let rawBackend = try container.decode(String.self, forKey: .backend)
         backend = try ToriiValidation.normalizedProductionVerifyBackend(
             rawBackend,
@@ -9309,6 +9349,56 @@ public struct ToriiVerifyingKeyId: Decodable, Sendable, Equatable {
 public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
     public let id: ToriiVerifyingKeyId
     public let record: ToriiVerifyingKeyRecord
+    /// Exact canonical Norito record archive returned by newer Torii nodes.
+    /// Older nodes omit this field, in which case attachment construction is unavailable.
+    public let recordNorito: Data?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case record
+        case recordNoritoBase64 = "record_norito_base64"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(ToriiVerifyingKeyId.self, forKey: .id)
+        record = try container.decode(ToriiVerifyingKeyRecord.self, forKey: .record)
+
+        guard let encoded = try container.decodeIfPresent(
+            String.self,
+            forKey: .recordNoritoBase64
+        ) else {
+            recordNorito = nil
+            return
+        }
+        guard !encoded.isEmpty,
+              let decoded = Data(base64Encoded: encoded),
+              !decoded.isEmpty,
+              decoded.base64EncodedString() == encoded
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .recordNoritoBase64,
+                in: container,
+                debugDescription: "record_norito_base64 must be canonical, non-empty Standard Base64"
+            )
+        }
+        recordNorito = decoded
+    }
+
+    /// Binds the exact archived record to its Torii registry identifier.
+    public func asKagemushaRecursiveSpendVerifierRecordRef() throws
+        -> KagemushaRecursiveSpendVerifierRecordRef
+    {
+        guard let recordNorito else {
+            throw ToriiClientError.invalidPayload(
+                "verifying-key detail is missing record_norito_base64"
+            )
+        }
+        return try KagemushaRecursiveSpendVerifierRecordRef(
+            verifierKeyId: "\(id.backend):\(id.name)",
+            recordBytes: recordNorito
+        )
+    }
 }
 
 public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
@@ -14729,8 +14819,33 @@ public struct ToriiLaneSnarkCommitmentSnapshot: Decodable, Sendable, Equatable {
     }
 }
 
+/// Consensus handshake caps exposed by `/v1/sumeragi/status`.
+public struct ToriiConsensusCaps: Decodable, Sendable {
+    public let collectorsK: UInt64
+    public let redundantSendR: UInt64
+    public let daEnabled: Bool
+    public let rbcChunkMaxBytes: UInt64
+    public let rbcSessionTtlMs: UInt64
+    public let rbcStoreMaxSessions: UInt64
+    public let rbcStoreSoftSessions: UInt64
+    public let rbcStoreMaxBytes: UInt64
+    public let rbcStoreSoftBytes: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case collectorsK = "collectors_k"
+        case redundantSendR = "redundant_send_r"
+        case daEnabled = "da_enabled"
+        case rbcChunkMaxBytes = "rbc_chunk_max_bytes"
+        case rbcSessionTtlMs = "rbc_session_ttl_ms"
+        case rbcStoreMaxSessions = "rbc_store_max_sessions"
+        case rbcStoreSoftSessions = "rbc_store_soft_sessions"
+        case rbcStoreMaxBytes = "rbc_store_max_bytes"
+        case rbcStoreSoftBytes = "rbc_store_soft_bytes"
+    }
+}
+
 /// Snapshot returned by `/v1/sumeragi/status`, preserving unknown fields while decoding known ones.
-public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable {
+public struct ToriiSumeragiTelemetrySnapshot: Decodable, Sendable {
     /// Runtime consensus mode tag (permissioned or npos).
     public let modeTag: String?
     /// Staged consensus mode if activation is pending.
@@ -14813,6 +14928,493 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable {
     }
 }
 
+/// A frozen Sumeragi v2 height-context identifier in Torii's canonical JSON shape.
+public struct ToriiSumeragiV2HeightContextID: Decodable, Sendable, Equatable {
+    public let hash: String
+
+    public init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        self.hash = try container.decode(String.self)
+        guard container.isAtEnd else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "height_context_id must contain exactly one hash"
+            )
+        }
+    }
+}
+
+/// A Sumeragi v2 consensus round reported by the status endpoint.
+public struct ToriiSumeragiV2ConsensusRound: Decodable, Sendable, Equatable {
+    public let contextID: ToriiSumeragiV2HeightContextID
+    public let height: UInt64
+    public let view: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case contextID = "context_id"
+        case height
+        case view
+    }
+}
+
+/// The only global Sumeragi v2 quorum-certificate phases.
+public enum ToriiSumeragiV2GlobalPhase: String, Decodable, Sendable {
+    case prepare = "Prepare"
+    case commit = "Commit"
+
+    private enum CodingKeys: String, CodingKey {
+        case phase
+        case details
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .phase)
+        guard container.contains(.details), try container.decodeNil(forKey: .details) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .details,
+                in: container,
+                debugDescription: "Sumeragi v2 global phase details must be null"
+            )
+        }
+        guard let value = Self(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .phase,
+                in: container,
+                debugDescription: "unknown Sumeragi v2 global phase: \(raw)"
+            )
+        }
+        self = value
+    }
+}
+
+/// A block subject authenticated by Sumeragi v2 votes and certificates.
+public struct ToriiSumeragiV2BlockSubject: Decodable, Sendable, Equatable {
+    public let parentBlockHash: String?
+    public let blockHash: String
+    public let payloadHash: String
+
+    private enum CodingKeys: String, CodingKey {
+        case parentBlockHash = "parent_block_hash"
+        case blockHash = "block_hash"
+        case payloadHash = "payload_hash"
+    }
+}
+
+/// A stable reference to a Sumeragi v2 quorum certificate.
+public struct ToriiSumeragiV2QuorumCertificateRef: Decodable, Sendable, Equatable {
+    public let round: ToriiSumeragiV2ConsensusRound
+    public let phase: ToriiSumeragiV2GlobalPhase
+    public let subject: ToriiSumeragiV2BlockSubject
+}
+
+/// A stable reference to the most recently installed timeout certificate.
+public struct ToriiSumeragiV2TimeoutCertificateRef: Decodable, Sendable, Equatable {
+    public let round: ToriiSumeragiV2ConsensusRound
+    public let highestPrepareQC: ToriiSumeragiV2QuorumCertificateRef?
+    public let certificateHash: String
+
+    private enum CodingKeys: String, CodingKey {
+        case round
+        case highestPrepareQC = "highest_prepare_qc"
+        case certificateHash = "certificate_hash"
+    }
+}
+
+/// High-level phase of the single authoritative Sumeragi v2 reducer.
+public enum ToriiSumeragiV2StatusPhase: String, Decodable, Sendable {
+    case awaitingProposal = "AwaitingProposal"
+    case reconstructingPayload = "ReconstructingPayload"
+    case validatingPayload = "ValidatingPayload"
+    case prepare = "Prepare"
+    case commit = "Commit"
+    case pendingApply = "PendingApply"
+
+    private enum CodingKeys: String, CodingKey {
+        case phase
+        case details
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .phase)
+        guard container.contains(.details), try container.decodeNil(forKey: .details) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .details,
+                in: container,
+                debugDescription: "Sumeragi v2 status phase details must be null"
+            )
+        }
+        guard let value = Self(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .phase,
+                in: container,
+                debugDescription: "unknown Sumeragi v2 status phase: \(raw)"
+            )
+        }
+        self = value
+    }
+}
+
+/// Local body availability/application state of the Sumeragi v2 reducer.
+public enum ToriiSumeragiV2BodyState: String, Decodable, Sendable {
+    case missing = "Missing"
+    case reconstructing = "Reconstructing"
+    case stored = "Stored"
+    case validated = "Validated"
+    case pendingApply = "PendingApply"
+    case applied = "Applied"
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case details
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .state)
+        guard container.contains(.details), try container.decodeNil(forKey: .details) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .details,
+                in: container,
+                debugDescription: "Sumeragi v2 body-state details must be null"
+            )
+        }
+        guard let value = Self(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .state,
+                in: container,
+                debugDescription: "unknown Sumeragi v2 body state: \(raw)"
+            )
+        }
+        self = value
+    }
+}
+
+/// Consensus mode frozen in an authoritative Sumeragi v2 height context.
+public enum ToriiSumeragiV2ConsensusMode: String, Decodable, Sendable {
+    case permissioned = "Permissioned"
+    case npos = "Npos"
+
+    private enum CodingKeys: String, CodingKey { case mode, details }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .mode)
+        guard container.contains(.details), try container.decodeNil(forKey: .details) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .details, in: container,
+                debugDescription: "Sumeragi v2 consensus-mode details must be null"
+            )
+        }
+        guard let value = Self(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .mode, in: container,
+                debugDescription: "unknown Sumeragi v2 consensus mode: \(raw)"
+            )
+        }
+        self = value
+    }
+}
+
+/// Frozen count-and-power quorum in the status height context.
+public struct ToriiSumeragiV2DualQuorum: Decodable, Sendable, Equatable {
+    public let minSigners: UInt32
+    public let totalPower: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case minSigners = "min_signers"
+        case totalPower = "total_power"
+    }
+}
+
+/// Frozen election context behind the authoritative reducer snapshot.
+public struct ToriiSumeragiV2HeightContextStatus: Decodable, Sendable, Equatable {
+    public let epoch: UInt64
+    public let epochEndHeight: UInt64
+    public let mode: ToriiSumeragiV2ConsensusMode
+    public let epochSeed: [UInt8]
+    public let validatorCount: UInt32
+    public let quorum: ToriiSumeragiV2DualQuorum
+
+    private enum CodingKeys: String, CodingKey {
+        case epoch
+        case epochEndHeight = "epoch_end_height"
+        case mode
+        case epochSeed = "epoch_seed"
+        case validatorCount = "validator_count"
+        case quorum
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        epoch = try container.decode(UInt64.self, forKey: .epoch)
+        epochEndHeight = try container.decode(UInt64.self, forKey: .epochEndHeight)
+        mode = try container.decode(ToriiSumeragiV2ConsensusMode.self, forKey: .mode)
+        epochSeed = try container.decode([UInt8].self, forKey: .epochSeed)
+        guard epochSeed.count == 32 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .epochSeed, in: container,
+                debugDescription: "Sumeragi v2 epoch seed must contain 32 bytes"
+            )
+        }
+        validatorCount = try container.decode(UInt32.self, forKey: .validatorCount)
+        quorum = try container.decode(ToriiSumeragiV2DualQuorum.self, forKey: .quorum)
+    }
+}
+
+/// Power-aware latest durable CommitQC summary.
+public struct ToriiSumeragiV2CommitQCStatus: Decodable, Sendable, Equatable {
+    public let certificate: ToriiSumeragiV2QuorumCertificateRef
+    public let validatorCount: UInt32
+    public let signerCount: UInt32
+    public let minSigners: UInt32
+    public let signedPower: UInt64
+    public let totalPower: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case certificate
+        case validatorCount = "validator_count"
+        case signerCount = "signer_count"
+        case minSigners = "min_signers"
+        case signedPower = "signed_power"
+        case totalPower = "total_power"
+    }
+}
+
+/// Bounded reducer-adapter queue occupancy.
+public struct ToriiSumeragiV2AdapterQueueStatus: Decodable, Sendable, Equatable {
+    public let ingressKeys: UInt64
+    public let ingressCapacity: UInt64
+    public let deferredCompletion: UInt64
+    public let deferredProgress: UInt64
+    public let deferredProgressCapacity: UInt64
+    public let deferredNormal: UInt64
+    public let deferredNormalCapacity: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case ingressKeys = "ingress_keys"
+        case ingressCapacity = "ingress_capacity"
+        case deferredCompletion = "deferred_completion"
+        case deferredProgress = "deferred_progress"
+        case deferredProgressCapacity = "deferred_progress_capacity"
+        case deferredNormal = "deferred_normal"
+        case deferredNormalCapacity = "deferred_normal_capacity"
+    }
+}
+
+/// Exact transaction-queue pressure sampled by the v2 runner.
+public struct ToriiSumeragiV2TxQueueStatus: Decodable, Sendable, Equatable {
+    public let trackedTransactions: UInt64
+    public let queuedTransactions: UInt64
+    public let capacity: UInt64
+    public let retainedBytes: UInt64
+    public let maxRetainedBytes: UInt64
+    public let oldestQueuedAgeMs: UInt64
+    public let saturatedByCount: Bool
+    public let saturatedByBytes: Bool
+    public let saturatedByAge: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case trackedTransactions = "tracked_transactions"
+        case queuedTransactions = "queued_transactions"
+        case capacity
+        case retainedBytes = "retained_bytes"
+        case maxRetainedBytes = "max_retained_bytes"
+        case oldestQueuedAgeMs = "oldest_queued_age_ms"
+        case saturatedByCount = "saturated_by_count"
+        case saturatedByBytes = "saturated_by_bytes"
+        case saturatedByAge = "saturated_by_age"
+    }
+}
+
+/// Local operator diagnostics kept outside reducer-authoritative state.
+public struct ToriiSumeragiV2OperatorStatus: Decodable, Sendable, Equatable {
+    public let viewChangeInstallTotal: UInt64
+    public let busyDeferralTotal: UInt64
+    public let adapterQueues: ToriiSumeragiV2AdapterQueueStatus
+    public let txQueue: ToriiSumeragiV2TxQueueStatus
+
+    private enum CodingKeys: String, CodingKey {
+        case viewChangeInstallTotal = "view_change_install_total"
+        case busyDeferralTotal = "busy_deferral_total"
+        case adapterQueues = "adapter_queues"
+        case txQueue = "tx_queue"
+    }
+}
+
+/// Authoritative protocol-v2-only snapshot returned by `/v1/sumeragi/status`.
+public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
+    public let protocolVersion: UInt16
+    public let nodeFingerprint: String
+    public let buildFingerprint: String
+    public let configFingerprint: String
+    public let heightContextID: ToriiSumeragiV2HeightContextID
+    public let height: UInt64
+    public let view: UInt64
+    public let phase: ToriiSumeragiV2StatusPhase
+    public let leader: UInt32
+    public let lockedPrepareQC: ToriiSumeragiV2QuorumCertificateRef?
+    public let highestPrepareQC: ToriiSumeragiV2QuorumCertificateRef?
+    public let lastTimeoutCertificate: ToriiSumeragiV2TimeoutCertificateRef?
+    public let bodyState: ToriiSumeragiV2BodyState
+    public let pendingPersistenceID: UInt64?
+    public let lastCommittedHeight: UInt64
+    public let lastCommittedSubject: ToriiSumeragiV2BlockSubject?
+    public let heightContext: ToriiSumeragiV2HeightContextStatus
+    public let lastCommitQC: ToriiSumeragiV2CommitQCStatus?
+    /// Exact per-lane settlement commitments included in the protocol-v2 status.
+    public let laneSettlementCommitments: [ToriiLaneSettlementCommitment]
+    /// Relay envelopes carrying the exact settlement commitments consumed by Nexus merge.
+    public let laneRelayEnvelopes: [ToriiLaneRelayEnvelope]
+    /// Canonical lane payload-ownership records emitted by the v2 lane adapter.
+    public let lanePayloadOwnerships: [ToriiJSONValue]
+    /// Certified lane-block application summaries emitted by the v2 lane adapter.
+    public let committedLaneBlocks: [ToriiJSONValue]
+    /// Bounded active lane-block consensus-session summaries.
+    public let laneBlockSessions: [ToriiJSONValue]
+    /// Whether finalized membership removed this node from the live topology.
+    public let localPeerRemoved: Bool
+    /// Local bounded diagnostics sampled independently of authoritative reducer facts.
+    public let operatorStatus: ToriiSumeragiV2OperatorStatus
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case protocolVersion = "protocol_version"
+        case nodeFingerprint = "node_fingerprint"
+        case buildFingerprint = "build_fingerprint"
+        case configFingerprint = "config_fingerprint"
+        case heightContextID = "height_context_id"
+        case height
+        case view
+        case phase
+        case leader
+        case lockedPrepareQC = "locked_prepare_qc"
+        case highestPrepareQC = "highest_prepare_qc"
+        case lastTimeoutCertificate = "last_timeout_certificate"
+        case bodyState = "body_state"
+        case pendingPersistenceID = "pending_persistence_id"
+        case lastCommittedHeight = "last_committed_height"
+        case lastCommittedSubject = "last_committed_subject"
+        case heightContext = "height_context"
+        case lastCommitQC = "last_commit_qc"
+        case laneSettlementCommitments = "lane_settlement_commitments"
+        case laneRelayEnvelopes = "lane_relay_envelopes"
+        case lanePayloadOwnerships = "lane_payload_ownerships"
+        case committedLaneBlocks = "committed_lane_blocks"
+        case laneBlockSessions = "lane_block_sessions"
+        case localPeerRemoved = "local_peer_removed"
+        case operatorStatus = "operator"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: ToriiSumeragiV2DynamicCodingKey.self)
+        let allowed = Set(CodingKeys.allCases.map(\.rawValue))
+        if let unknown = dynamic.allKeys.first(where: { !allowed.contains($0.stringValue) }) {
+            throw DecodingError.dataCorruptedError(
+                forKey: unknown,
+                in: dynamic,
+                debugDescription: "unknown Sumeragi v2 status field \(unknown.stringValue)"
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let protocolVersion = try container.decode(UInt16.self, forKey: .protocolVersion)
+        guard protocolVersion == 2 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .protocolVersion,
+                in: container,
+                debugDescription: "unsupported Sumeragi status protocol version \(protocolVersion)"
+            )
+        }
+        self.protocolVersion = protocolVersion
+        self.nodeFingerprint = try container.decode(String.self, forKey: .nodeFingerprint)
+        self.buildFingerprint = try container.decode(String.self, forKey: .buildFingerprint)
+        self.configFingerprint = try container.decode(String.self, forKey: .configFingerprint)
+        self.heightContextID = try container.decode(
+            ToriiSumeragiV2HeightContextID.self,
+            forKey: .heightContextID
+        )
+        self.height = try container.decode(UInt64.self, forKey: .height)
+        self.view = try container.decode(UInt64.self, forKey: .view)
+        self.phase = try container.decode(ToriiSumeragiV2StatusPhase.self, forKey: .phase)
+        self.leader = try container.decode(UInt32.self, forKey: .leader)
+        self.lockedPrepareQC = try container.decodeIfPresent(
+            ToriiSumeragiV2QuorumCertificateRef.self,
+            forKey: .lockedPrepareQC
+        )
+        self.highestPrepareQC = try container.decodeIfPresent(
+            ToriiSumeragiV2QuorumCertificateRef.self,
+            forKey: .highestPrepareQC
+        )
+        self.lastTimeoutCertificate = try container.decodeIfPresent(
+            ToriiSumeragiV2TimeoutCertificateRef.self,
+            forKey: .lastTimeoutCertificate
+        )
+        self.bodyState = try container.decode(ToriiSumeragiV2BodyState.self, forKey: .bodyState)
+        self.pendingPersistenceID = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .pendingPersistenceID
+        )
+        self.lastCommittedHeight = try container.decode(
+            UInt64.self,
+            forKey: .lastCommittedHeight
+        )
+        self.lastCommittedSubject = try container.decodeIfPresent(
+            ToriiSumeragiV2BlockSubject.self,
+            forKey: .lastCommittedSubject
+        )
+        self.heightContext = try container.decode(
+            ToriiSumeragiV2HeightContextStatus.self,
+            forKey: .heightContext
+        )
+        self.lastCommitQC = try container.decodeIfPresent(
+            ToriiSumeragiV2CommitQCStatus.self,
+            forKey: .lastCommitQC
+        )
+        self.laneSettlementCommitments = try container.decodeIfPresent(
+            [ToriiLaneSettlementCommitment].self,
+            forKey: .laneSettlementCommitments
+        ) ?? []
+        self.laneRelayEnvelopes = try container.decodeIfPresent(
+            [ToriiLaneRelayEnvelope].self,
+            forKey: .laneRelayEnvelopes
+        ) ?? []
+        self.lanePayloadOwnerships = try container.decodeIfPresent(
+            [ToriiJSONValue].self,
+            forKey: .lanePayloadOwnerships
+        ) ?? []
+        self.committedLaneBlocks = try container.decodeIfPresent(
+            [ToriiJSONValue].self,
+            forKey: .committedLaneBlocks
+        ) ?? []
+        self.laneBlockSessions = try container.decodeIfPresent(
+            [ToriiJSONValue].self,
+            forKey: .laneBlockSessions
+        ) ?? []
+        self.localPeerRemoved = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .localPeerRemoved
+        ) ?? false
+        self.operatorStatus = try container.decode(
+            ToriiSumeragiV2OperatorStatus.self,
+            forKey: .operatorStatus
+        )
+    }
+}
+
+private struct ToriiSumeragiV2DynamicCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        self.intValue = nil
+    }
+
+    init?(intValue: Int) {
+        self.stringValue = String(intValue)
+        self.intValue = intValue
+    }
+}
 /// Commit QC record returned by `/v1/sumeragi/commit_qc/{hash}`.
 public struct ToriiSumeragiCommitQcRecord: Decodable, Sendable, Equatable {
     public let subjectBlockHash: String
@@ -14852,31 +15454,6 @@ public struct ToriiSumeragiCommitQc: Decodable, Sendable, Equatable {
         case validatorSet = "validator_set"
         case signersBitmap = "signers_bitmap"
         case blsAggregateSignature = "bls_aggregate_signature"
-    }
-}
-
-/// Consensus handshake caps exposed by `/v1/sumeragi/status`.
-public struct ToriiConsensusCaps: Decodable, Sendable {
-    public let collectorsK: UInt64
-    public let redundantSendR: UInt64
-    public let daEnabled: Bool
-    public let rbcChunkMaxBytes: UInt64
-    public let rbcSessionTtlMs: UInt64
-    public let rbcStoreMaxSessions: UInt64
-    public let rbcStoreSoftSessions: UInt64
-    public let rbcStoreMaxBytes: UInt64
-    public let rbcStoreSoftBytes: UInt64
-
-    private enum CodingKeys: String, CodingKey {
-        case collectorsK = "collectors_k"
-        case redundantSendR = "redundant_send_r"
-        case daEnabled = "da_enabled"
-        case rbcChunkMaxBytes = "rbc_chunk_max_bytes"
-        case rbcSessionTtlMs = "rbc_session_ttl_ms"
-        case rbcStoreMaxSessions = "rbc_store_max_sessions"
-        case rbcStoreSoftSessions = "rbc_store_soft_sessions"
-        case rbcStoreMaxBytes = "rbc_store_max_bytes"
-        case rbcStoreSoftBytes = "rbc_store_soft_bytes"
     }
 }
 

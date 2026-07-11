@@ -16,9 +16,20 @@ use norito::{
 use thiserror::Error;
 
 use crate::{
-    CouncilSignature, PinPolicy, chunker_registry,
-    validation::{ManifestValidationError, PinPolicyConstraints, validate_pin_policy},
+    BLAKE3_256_MULTIHASH_CODE, CouncilSignature, PinPolicy, chunker_registry,
+    validation::{
+        ManifestValidationError, PinPolicyConstraints, validate_manifest_root_cid,
+        validate_pin_policy,
+    },
 };
+
+fn validate_first_release_manifest_cid(cid: &[u8]) -> Result<(), ManifestValidationError> {
+    validate_manifest_root_cid(
+        cid,
+        chunker_registry::MANIFEST_DAG_CODEC,
+        BLAKE3_256_MULTIHASH_CODE,
+    )
+}
 
 /// Canonical pin registry record for a manifest.
 #[derive(
@@ -53,6 +64,11 @@ impl PinRecordV1 {
         if self.manifest_cid.is_empty() {
             return Err(PinRecordValidationError::EmptyManifestCid);
         }
+        validate_first_release_manifest_cid(&self.manifest_cid).map_err(|error| {
+            PinRecordValidationError::MalformedManifestCid {
+                reason: error.to_string(),
+            }
+        })?;
         if self.chunk_plan_digest.iter().all(|&byte| byte == 0) {
             return Err(PinRecordValidationError::InvalidChunkPlanDigest);
         }
@@ -83,12 +99,15 @@ impl PinRecordV1 {
         }
         validate_pin_policy(&self.pin_policy, &PinPolicyConstraints::default())
             .map_err(PinRecordValidationError::InvalidPinPolicy)?;
-        if self
-            .successor_of
-            .as_ref()
-            .is_some_and(|parent| parent.is_empty())
-        {
-            return Err(PinRecordValidationError::InvalidSuccessorCid);
+        if let Some(parent) = &self.successor_of {
+            if parent.is_empty() {
+                return Err(PinRecordValidationError::EmptySuccessorCid);
+            }
+            validate_first_release_manifest_cid(parent).map_err(|error| {
+                PinRecordValidationError::MalformedSuccessorCid {
+                    reason: error.to_string(),
+                }
+            })?;
         }
         if let Some(hash) = self.governance_envelope_hash
             && hash.iter().all(|&byte| byte == 0)
@@ -104,6 +123,8 @@ impl PinRecordV1 {
 pub enum PinRecordValidationError {
     #[error("manifest CID must not be empty")]
     EmptyManifestCid,
+    #[error("manifest CID is not canonical first-release CIDv1: {reason}")]
+    MalformedManifestCid { reason: String },
     #[error("chunk plan digest must be non-zero")]
     InvalidChunkPlanDigest,
     #[error("PoR root must be non-zero")]
@@ -120,7 +141,9 @@ pub enum PinRecordValidationError {
     #[error("pin policy invalid: {0}")]
     InvalidPinPolicy(ManifestValidationError),
     #[error("successor manifest CID must not be empty")]
-    InvalidSuccessorCid,
+    EmptySuccessorCid,
+    #[error("successor manifest CID is not canonical first-release CIDv1: {reason}")]
+    MalformedSuccessorCid { reason: String },
     #[error("governance envelope hash must be non-zero")]
     InvalidGovernanceEnvelopeHash,
 }
@@ -145,6 +168,11 @@ impl AliasBindingV1 {
         if self.manifest_cid.is_empty() {
             return Err(AliasBindingValidationError::EmptyManifestCid);
         }
+        validate_first_release_manifest_cid(&self.manifest_cid).map_err(|error| {
+            AliasBindingValidationError::MalformedManifestCid {
+                reason: error.to_string(),
+            }
+        })?;
         if self.expiry_epoch < self.bound_at {
             return Err(AliasBindingValidationError::ExpiryBeforeBound {
                 bound_at: self.bound_at,
@@ -191,6 +219,8 @@ pub enum AliasBindingValidationError {
     AliasHasWhitespace,
     #[error("manifest CID must not be empty")]
     EmptyManifestCid,
+    #[error("manifest CID is not canonical first-release CIDv1: {reason}")]
+    MalformedManifestCid { reason: String },
     #[error("alias expiry {expiry_epoch} precedes binding epoch {bound_at}")]
     ExpiryBeforeBound { bound_at: u64, expiry_epoch: u64 },
 }
@@ -217,6 +247,13 @@ pub struct AliasProofBundleV1 {
     pub council_signatures: Vec<CouncilSignature>,
 }
 
+/// Maximum encoded alias proof accepted by first-release consumers.
+pub const MAX_ALIAS_PROOF_ENCODED_BYTES: usize = 1024 * 1024;
+/// Maximum Merkle-tree height represented by an alias inclusion proof.
+pub const MAX_ALIAS_PROOF_MERKLE_DEPTH: usize = 64;
+/// Maximum distinct council signatures carried by one alias proof.
+pub const MAX_ALIAS_PROOF_COUNCIL_SIGNATURES: usize = 64;
+
 impl AliasProofBundleV1 {
     /// Validates structural invariants for the bundle.
     pub fn validate(&self) -> Result<(), AliasProofBundleValidationError> {
@@ -228,19 +265,49 @@ impl AliasProofBundleV1 {
             return Err(AliasProofBundleValidationError::EmptyRegistryRoot);
         }
 
-        if self.expires_at_unix < self.generated_at_unix {
+        if self.generated_at_unix == 0 {
+            return Err(AliasProofBundleValidationError::InvalidGeneratedAt);
+        }
+
+        if self.expires_at_unix <= self.generated_at_unix {
             return Err(AliasProofBundleValidationError::GeneratedAfterExpiry {
                 generated_at_unix: self.generated_at_unix,
                 expires_at_unix: self.expires_at_unix,
             });
         }
 
+        if self.merkle_path.len() > MAX_ALIAS_PROOF_MERKLE_DEPTH {
+            return Err(AliasProofBundleValidationError::MerklePathTooDeep {
+                found: self.merkle_path.len(),
+                maximum: MAX_ALIAS_PROOF_MERKLE_DEPTH,
+            });
+        }
+
+        if self.council_signatures.len() > MAX_ALIAS_PROOF_COUNCIL_SIGNATURES {
+            return Err(AliasProofBundleValidationError::TooManyCouncilSignatures {
+                found: self.council_signatures.len(),
+                maximum: MAX_ALIAS_PROOF_COUNCIL_SIGNATURES,
+            });
+        }
+
+        let mut previous_signer = None;
         for (index, signature) in self.council_signatures.iter().enumerate() {
             if signature.signer.iter().all(|&byte| byte == 0) {
                 return Err(AliasProofBundleValidationError::EmptyCouncilSigner { index });
             }
-            if signature.signature.is_empty() {
-                return Err(AliasProofBundleValidationError::EmptyCouncilSignature { index });
+            if previous_signer.is_some_and(|previous| previous >= signature.signer) {
+                return Err(
+                    AliasProofBundleValidationError::NonCanonicalCouncilSignerOrder { index },
+                );
+            }
+            previous_signer = Some(signature.signer);
+            if signature.signature.len() != 64 {
+                return Err(
+                    AliasProofBundleValidationError::InvalidCouncilSignatureLength {
+                        index,
+                        found: signature.signature.len(),
+                    },
+                );
             }
             if crate::inert_bytes(&signature.signature) {
                 return Err(AliasProofBundleValidationError::InertCouncilSignature { index });
@@ -258,15 +325,25 @@ pub enum AliasProofBundleValidationError {
     InvalidAliasBinding(AliasBindingValidationError),
     #[error("registry root must not be zero")]
     EmptyRegistryRoot,
-    #[error("expires_at_unix {expires_at_unix} precedes generated_at_unix {generated_at_unix}")]
+    #[error("generated_at_unix must be positive")]
+    InvalidGeneratedAt,
+    #[error(
+        "expires_at_unix {expires_at_unix} must be greater than generated_at_unix {generated_at_unix}"
+    )]
     GeneratedAfterExpiry {
         generated_at_unix: u64,
         expires_at_unix: u64,
     },
+    #[error("alias proof Merkle path has {found} entries; maximum is {maximum}")]
+    MerklePathTooDeep { found: usize, maximum: usize },
+    #[error("alias proof has {found} council signatures; maximum is {maximum}")]
+    TooManyCouncilSignatures { found: usize, maximum: usize },
     #[error("council signature at index {index} has a zeroed signer identifier")]
     EmptyCouncilSigner { index: usize },
-    #[error("council signature at index {index} must not be empty")]
-    EmptyCouncilSignature { index: usize },
+    #[error("council signers must be distinct and strictly ascending (violation at index {index})")]
+    NonCanonicalCouncilSignerOrder { index: usize },
+    #[error("council signature at index {index} must contain 64 bytes (found {found})")]
+    InvalidCouncilSignatureLength { index: usize, found: usize },
     #[error("council signature at index {index} must not be all zero")]
     InertCouncilSignature { index: usize },
 }
@@ -487,6 +564,8 @@ impl ReplicationOrderV1 {
         if self.manifest_cid.is_empty() {
             return Err(ReplicationOrderValidationError::EmptyManifestCid);
         }
+        validate_first_release_manifest_cid(&self.manifest_cid)
+            .map_err(|_| ReplicationOrderValidationError::MalformedManifestCid)?;
         if self.providers.is_empty() {
             return Err(ReplicationOrderValidationError::MissingProviders);
         }
@@ -529,6 +608,8 @@ pub enum ReplicationOrderValidationError {
     InvalidOrderId,
     #[error("manifest CID must not be empty")]
     EmptyManifestCid,
+    #[error("manifest CID is not canonical first-release CIDv1")]
+    MalformedManifestCid,
     #[error("replication order must target at least one provider")]
     MissingProviders,
     #[error("provider identifier must not be zero")]
@@ -704,10 +785,14 @@ mod tests {
         0xff, 0x7f,
     ];
 
+    fn canonical_cid(seed: u8) -> Vec<u8> {
+        crate::canonical_manifest_root_cid([seed; 32])
+    }
+
     fn sample_alias_binding() -> AliasBindingV1 {
         AliasBindingV1 {
             alias: "docs/main".into(),
-            manifest_cid: b"bafyexamplecid".to_vec(),
+            manifest_cid: canonical_cid(0x10),
             bound_at: 1_700_000_000,
             expiry_epoch: 1_700_086_400,
         }
@@ -723,7 +808,7 @@ mod tests {
 
     fn sample_pin_record() -> PinRecordV1 {
         PinRecordV1 {
-            manifest_cid: b"bafyexamplecid".to_vec(),
+            manifest_cid: canonical_cid(0x20),
             chunk_plan_digest: [0x11; 32],
             por_root: [0x22; 32],
             profile_handle: "sorafs.sf1@1.0.0".to_owned(),
@@ -753,6 +838,25 @@ mod tests {
     }
 
     #[test]
+    fn pin_record_rejects_malformed_and_inert_cids() {
+        for malformed in [vec![0xAA; 36], crate::canonical_manifest_root_cid([0; 32])] {
+            let mut record = sample_pin_record();
+            record.manifest_cid = malformed;
+            assert!(matches!(
+                record.validate(),
+                Err(PinRecordValidationError::MalformedManifestCid { .. })
+            ));
+        }
+
+        let mut record = sample_pin_record();
+        record.successor_of = Some(vec![0xAA; 36]);
+        assert!(matches!(
+            record.validate(),
+            Err(PinRecordValidationError::MalformedSuccessorCid { .. })
+        ));
+    }
+
+    #[test]
     fn alias_binding_validation() {
         let binding = sample_alias_binding();
         binding.validate().expect("valid alias binding");
@@ -762,7 +866,7 @@ mod tests {
     fn alias_binding_accepts_account_style_alias() {
         let binding = AliasBindingV1 {
             alias: "alias@capability.dataspace".into(),
-            manifest_cid: b"cid".to_vec(),
+            manifest_cid: canonical_cid(0x30),
             bound_at: 1,
             expiry_epoch: 2,
         };
@@ -774,7 +878,7 @@ mod tests {
     fn alias_binding_rejects_whitespace() {
         let binding = AliasBindingV1 {
             alias: " docs ".into(),
-            manifest_cid: b"cid".to_vec(),
+            manifest_cid: canonical_cid(0x30),
             bound_at: 1,
             expiry_epoch: 2,
         };
@@ -782,6 +886,16 @@ mod tests {
         assert!(matches!(
             err,
             AliasBindingValidationError::AliasHasWhitespace
+        ));
+    }
+
+    #[test]
+    fn alias_binding_rejects_noncanonical_manifest_cid() {
+        let mut binding = sample_alias_binding();
+        binding.manifest_cid[0] = 2;
+        assert!(matches!(
+            binding.validate(),
+            Err(AliasBindingValidationError::MalformedManifestCid { .. })
         ));
     }
 
@@ -795,7 +909,7 @@ mod tests {
             merkle_path: vec![[0xBB; 32], [0xCC; 32]],
             council_signatures: vec![crate::CouncilSignature {
                 signer: [0xDD; 32],
-                signature: vec![0x01, 0x02, 0x03],
+                signature: vec![0x01; 64],
             }],
         }
     }
@@ -862,13 +976,70 @@ mod tests {
     }
 
     #[test]
+    fn alias_proof_bundle_rejects_zero_generation_and_zero_lifetime() {
+        let mut zero_generation = sample_alias_proof_bundle();
+        zero_generation.generated_at_unix = 0;
+        assert!(matches!(
+            zero_generation.validate(),
+            Err(AliasProofBundleValidationError::InvalidGeneratedAt)
+        ));
+
+        let mut zero_lifetime = sample_alias_proof_bundle();
+        zero_lifetime.expires_at_unix = zero_lifetime.generated_at_unix;
+        assert!(matches!(
+            zero_lifetime.validate(),
+            Err(AliasProofBundleValidationError::GeneratedAfterExpiry { .. })
+        ));
+    }
+
+    #[test]
+    fn alias_proof_bundle_rejects_resource_exhaustion_shapes() {
+        let mut deep = sample_alias_proof_bundle();
+        deep.merkle_path = vec![[0xA5; 32]; MAX_ALIAS_PROOF_MERKLE_DEPTH + 1];
+        assert!(matches!(
+            deep.validate(),
+            Err(AliasProofBundleValidationError::MerklePathTooDeep { .. })
+        ));
+
+        let mut signature_flood = sample_alias_proof_bundle();
+        signature_flood.council_signatures = (0..=MAX_ALIAS_PROOF_COUNCIL_SIGNATURES)
+            .map(|index| crate::CouncilSignature {
+                signer: [u8::try_from(index + 1).expect("test index fits u8"); 32],
+                signature: vec![0x01; 64],
+            })
+            .collect();
+        assert!(matches!(
+            signature_flood.validate(),
+            Err(AliasProofBundleValidationError::TooManyCouncilSignatures { .. })
+        ));
+    }
+
+    #[test]
+    fn alias_proof_bundle_rejects_duplicate_and_unsorted_signers() {
+        for signers in [vec![[0x11; 32], [0x11; 32]], vec![[0x22; 32], [0x11; 32]]] {
+            let mut bundle = sample_alias_proof_bundle();
+            bundle.council_signatures = signers
+                .into_iter()
+                .map(|signer| crate::CouncilSignature {
+                    signer,
+                    signature: vec![0x01; 64],
+                })
+                .collect();
+            assert!(matches!(
+                bundle.validate(),
+                Err(AliasProofBundleValidationError::NonCanonicalCouncilSignerOrder { .. })
+            ));
+        }
+    }
+
+    #[test]
     fn alias_proof_bundle_rejects_empty_council_signature() {
         let mut bundle = sample_alias_proof_bundle();
         bundle.council_signatures[0].signature.clear();
         let err = bundle.validate().unwrap_err();
         assert!(matches!(
             err,
-            AliasProofBundleValidationError::EmptyCouncilSignature { .. }
+            AliasProofBundleValidationError::InvalidCouncilSignatureLength { found: 0, .. }
         ));
     }
 
@@ -974,7 +1145,7 @@ mod tests {
     fn sample_replication_order() -> ReplicationOrderV1 {
         ReplicationOrderV1 {
             order_id: [0x44; 32],
-            manifest_cid: b"bafyexamplecid".to_vec(),
+            manifest_cid: canonical_cid(0x40),
             providers: vec![[0x55; 32], [0x66; 32], [0x77; 32]],
             redundancy: 2,
             deadline: 1_700_090_000,
@@ -997,6 +1168,16 @@ mod tests {
             err,
             ReplicationOrderValidationError::DuplicateProvider { .. }
         ));
+    }
+
+    #[test]
+    fn replication_order_rejects_noncanonical_manifest_cid() {
+        let mut order = sample_replication_order();
+        order.manifest_cid[2] ^= 1;
+        assert_eq!(
+            order.validate(),
+            Err(ReplicationOrderValidationError::MalformedManifestCid)
+        );
     }
 
     #[test]

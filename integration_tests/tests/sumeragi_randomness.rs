@@ -77,19 +77,13 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
     let chain_id = network.chain_id();
     let (target_signer, signer_key_pair, reveal, commitment) =
         find_recorded_vrf_material(network.peers(), &chain_id, epoch, &auto_snapshot)?;
-    let status = client.get_sumeragi_status()?;
-    let mode_tag = if status.mode_tag.is_empty() {
-        NPOS_TAG
-    } else {
-        status.mode_tag.as_str()
-    };
     let commit_sig_hex = vrf_commit_signature_hex(
         &chain_id,
         &signer_key_pair,
         epoch,
         target_signer,
         commitment,
-        mode_tag,
+        NPOS_TAG,
     );
     let reveal_sig_hex = vrf_reveal_signature_hex(
         &chain_id,
@@ -97,7 +91,7 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
         epoch,
         target_signer,
         reveal,
-        mode_tag,
+        NPOS_TAG,
     );
 
     submit_vrf_commit(

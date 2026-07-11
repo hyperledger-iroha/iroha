@@ -2889,7 +2889,7 @@ class TonSccpProverTest {
             request.sourceAdapterDeploymentBindingHash,
         )
         assertEquals(
-            "0xf0a1c6d7b987392d9956a2e291552287d063dea146772d1f16909a79e0afe5ca",
+            "0x6548be874ada8df7dc4e05cb5d66bf02534d337e369bacc146b3f6cc866c29da",
             request.requestHash,
         )
         val proofResult = SccpTon.wrapProofResult(
@@ -2897,7 +2897,7 @@ class TonSccpProverTest {
             request,
         )
         assertEquals(
-            "0x09df47e8a2509f4e7fbb6cf4b0b271bb87fd8c1d76b37823332d08ee2c062e5e",
+            "0x635f99bd9a9af1446398f53578acf8bf7158b83a25628adb6671e1b16fcf306b",
             proofResult.envelopeHash,
         )
     }
@@ -3213,7 +3213,7 @@ class TonSccpProverTest {
         writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
         writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
         writeTestNoritoField(encoder) {
-            writeTestNoritoString(it, "iroha2-consensus::permissioned-sumeragi@v1")
+            writeTestNoritoString(it, "iroha2-consensus::permissioned-sumeragi@v2")
         }
         writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.finalityBlockHash.removePrefix("0x"))) }
         writeTestNoritoField(encoder) { it.writeBytes(ByteArray(32)) }

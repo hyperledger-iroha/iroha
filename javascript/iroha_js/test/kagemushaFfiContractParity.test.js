@@ -17894,18 +17894,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*15\\s\*;[\s\S]*?C native bridge ABI version/u,
-    "SDK parity guard must pin the native C bridge ABI-15 advertisement",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*16\\s\*;[\s\S]*?C native bridge ABI version/u,
+    "SDK parity guard must pin the native C bridge ABI-16 advertisement",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;/u,
-    "native C bridge ABI negative control must mutate ABI 15 back to the stale ABI 12 value",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 16;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;/u,
+    "native C bridge ABI negative control must mutate ABI 16 back to the stale ABI 12 value",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*15\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
-    "native C bridge ABI negative control must require the exact ABI-15 diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*16\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "native C bridge ABI negative control must require the exact ABI-16 diagnostic",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
@@ -18054,8 +18054,37 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
 
   const expectedPrivacyWorkflowPaths = [
+    ".github/workflows/mobile_sdk_artifacts.yml",
+    "crates/iroha_core/Cargo.toml",
+    "crates/iroha_core/src/smartcontracts/isi/offline.rs",
+    "crates/iroha_core/examples/confidential_v2_vk_json.rs",
+    "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs",
+    "crates/iroha_torii/src/openapi.rs",
+    "crates/iroha_torii/src/routing.rs",
+    "crates/iroha_torii/tests/grouped/zk.rs",
+    "crates/iroha_torii/tests/zk_vk_get_integration.rs",
+    "ci/check_swift_confidential_unshield_redeem_e2e.sh",
+    "scripts/build_norito_xcframework.sh",
+    "scripts/check_mobile_sdk_artifacts.sh",
+    "scripts/check_mobile_sdk_artifacts_test.sh",
+    "docs/portal/static/openapi/manifest.json",
+    "docs/portal/static/openapi/torii.json",
+    "docs/portal/static/openapi/versions.json",
+    "docs/portal/static/openapi/versions/current/manifest.json",
+    "docs/portal/static/openapi/versions/current/torii.json",
+    "IrohaSwift/Sources/IrohaSwift/Norito.swift",
     "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+    "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
@@ -19042,8 +19071,9 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     {
       start: 'if mode == "--negative-control-swift-sdk-parse-workflow":',
       end: 'if mode == "--negative-control-swift-sdk-parse-surface-script":',
-      expected: "Kagemusha payload workflow must run the Swift recursive spend SDK parse check",
-      label: "Swift SDK parse workflow branch must require the parse command label",
+      expected:
+        "Kagemusha payload workflow must run the Swift confidential-unshield redeem E2E check in the combined job",
+      label: "Swift SDK parse workflow branch must require the combined E2E command label",
     },
     {
       start: 'if mode == "--negative-control-swift-sdk-offline-readiness-test-filter-script":',
@@ -21247,7 +21277,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     nonCsharpPallasMetadataOptionShapeBranch,
-    /python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?_kagemusha_read_fixed_bytes_payload\(payload\[start:end\], flags, 32, field\)[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecs\.kt[\s\S]*?NoritoDecoder\(payload, decoder\.flags, decoder\.flagsHint\)[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendRequestCodecs\.java[\s\S]*?readFixedBytes\(child, 32, field\)[\s\S]*?IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendRequestCodecs\.swift[\s\S]*?payload\.count >= 32[\s\S]*?javascript\/iroha_js\/src\/crypto\.js[\s\S]*?Buffer\.from\(payload\.subarray\(length\.offset, end\)\)[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?Buffer\.from\(payload\.subarray\(length\.offset, end\)\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_fixed_array_payload\(0x70, 32\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?fixedArrayPayload\(0x70, 32\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?fixedArrayPayload\(\(byte\) 0x70, 32\)[\s\S]*?IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?vkCommitmentPayload: Self\.fixedArrayPayload\(0x70, count: 32\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaFixedArrayPayload\(0x70, 32\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?kagemushaFixedArrayPayload\(0x70, 32\)[\s\S]*?run_checks\(mutated\)/u,
+    /python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?_kagemusha_read_fixed_bytes_payload\(payload\[start:end\], flags, 32, field\)[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecs\.kt[\s\S]*?NoritoDecoder\(payload, decoder\.flags, decoder\.flagsHint\)[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendRequestCodecs\.java[\s\S]*?readFixedBytes\(child, 32, field\)[\s\S]*?IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendRequestCodecs\.swift[\s\S]*?let value = payload[\s\S]*?javascript\/iroha_js\/src\/crypto\.js[\s\S]*?Buffer\.from\(payload\.subarray\(length\.offset, end\)\)[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?Buffer\.from\(payload\.subarray\(length\.offset, end\)\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_fixed_array_payload\(0x70, 32\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursive spend decoder rejects norito length-delimited option metadata[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendDecoderRejectsNoritoLengthDelimitedOptionMetadata[\s\S]*?IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?testPallasMetadataRejectsPackedAndConstVecFixed32Options[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaFixedArrayPayload\(0x70, 32\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?kagemushaFixedArrayPayload\(0x70, 32\)[\s\S]*?run_checks\(mutated\)/u,
     "non-C# Pallas metadata option-shape negative control must mutate Python, Kotlin, Android Java, Swift, and JavaScript decoders and test vectors",
   );
   assertContainsAll(
@@ -21318,7 +21348,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     nonCsharpPallasMetadataOptionShapeBranch,
-    /pallas_metadata_decoder_patterns = \{[\s\S]*?Python Pallas metadata option raw fixed32 decoder[\s\S]*?Kotlin Pallas metadata option raw fixed32 decoder[\s\S]*?Android Java Pallas metadata option raw fixed32 decoder[\s\S]*?def expected_pallas_metadata_option_shape_label\(old, label\):[\s\S]*?Swift Pallas metadata option raw fixed32 decoder[\s\S]*?payload\.count == 32[\s\S]*?JavaScript Pallas metadata option raw fixed32 decoder[\s\S]*?old\.splitlines\(\)\[0\]\.rstrip\(\)[\s\S]*?vkCommitmentPayload: kagemushaFixedArrayPayload\(0x70, 32\)[\s\S]*?expected_label = expected_pallas_metadata_option_shape_label\(old, label\)[\s\S]*?if expected_label not in message:[\s\S]*?non-C# Pallas metadata option-shape drift was rejected for the wrong reason/u,
+    /pallas_metadata_decoder_patterns = \{[\s\S]*?Python Pallas metadata option raw fixed32 decoder[\s\S]*?Kotlin Pallas metadata option generic fixed32 decoder[\s\S]*?Android Java Pallas metadata option generic fixed32 decoder[\s\S]*?def expected_pallas_metadata_option_shape_label\(old, label\):[\s\S]*?Swift Pallas metadata option generic fixed32 decoder[\s\S]*?readFixed32Flexible\(field: field\)[\s\S]*?JavaScript Pallas metadata option raw fixed32 decoder[\s\S]*?old\.splitlines\(\)\[0\]\.rstrip\(\)[\s\S]*?vkCommitmentPayload: kagemushaFixedArrayPayload\(0x70, 32\)[\s\S]*?expected_label = expected_pallas_metadata_option_shape_label\(old, label\)[\s\S]*?if expected_label not in message:[\s\S]*?non-C# Pallas metadata option-shape drift was rejected for the wrong reason/u,
     "non-C# Pallas metadata option-shape negative control must require exact emitted diagnostics for every mutated SDK marker",
   );
   assert.match(

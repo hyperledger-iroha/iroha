@@ -1258,7 +1258,7 @@ fn payload_kind(payload: &GovernanceLogPayloadV1) -> String {
         GovernanceLogPayloadV1::PorProof(_) => "por_proof".to_owned(),
         GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict".to_owned(),
         GovernanceLogPayloadV1::DealSettlement(_) => "deal_settlement".to_owned(),
-        GovernanceLogPayloadV1::ReputationSnapshot(_) => "reputation_snapshot".to_owned(),
+        GovernanceLogPayloadV1::SignedReputationSnapshot(_) => "reputation_snapshot".to_owned(),
         GovernanceLogPayloadV1::ModerationBallotEvent(_) => "moderation_ballot_event".to_owned(),
         GovernanceLogPayloadV1::AppealFinanceReport(_) => "appeal_finance_report".to_owned(),
         GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(_) => {
@@ -3359,7 +3359,7 @@ mod tests {
         GovernanceLogNodeV1, GovernanceLogSignatureV1,
         deal::{
             DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
-            DealSettlementStatusV1, DealSettlementV1, XorAmount,
+            DealSettlementStatusV1, DealSettlementV1,
         },
         governance_dag_block_cid_v1,
     };
@@ -3733,24 +3733,52 @@ mod tests {
     fn settlement(sequence: u64, timestamp: u64) -> DealSettlementV1 {
         let mut deal_id = [0x11; 32];
         deal_id[..8].copy_from_slice(&sequence.saturating_add(1).to_le_bytes());
-        DealSettlementV1 {
-            version: DEAL_SETTLEMENT_VERSION_V1,
+        let settled_at = timestamp.saturating_sub(1);
+        let mut ledger = DealLedgerSnapshotV1 {
+            version: DEAL_LEDGER_VERSION_V1,
+            snapshot_id: [0; 32],
+            sequence: 1,
+            previous_snapshot_id: None,
             deal_id,
-            ledger: DealLedgerSnapshotV1 {
-                version: DEAL_LEDGER_VERSION_V1,
-                deal_id,
-                provider_id: [0x22; 32],
-                client_id: [0x33; 32],
-                provider_accrual: XorAmount::from_micro(10),
-                client_liability: XorAmount::from_micro(10),
-                bond_locked: XorAmount::from_micro(20),
-                bond_slashed: XorAmount::zero(),
-                captured_at: timestamp.saturating_sub(2),
-            },
+            terms_digest: [0x44; 32],
+            provider_id: [0x22; 32],
+            client_id: [0x33; 32],
+            deal_start_epoch: settled_at.saturating_sub(2),
+            deal_end_epoch: settled_at.saturating_sub(1),
+            settlement_window_epochs: 2,
+            window_start_epoch: settled_at.saturating_sub(2),
+            window_end_epoch: settled_at,
+            provider_accrual_nano: 10,
+            client_liability_nano: 10,
+            micropayment_credit_generated_nano: 0,
+            micropayment_credit_applied_nano: 0,
+            micropayment_credit_carry_nano: 0,
+            client_debit_nano: 10,
+            outstanding_liability_nano: 0,
+            bond_total_nano: 20,
+            bond_locked_nano: 0,
+            bond_slashed_nano: 0,
+            bond_released_nano: 20,
+            window_expected_charge_nano: 10,
+            window_micropayment_generated_nano: 0,
+            window_micropayment_applied_nano: 0,
+            window_client_debit_nano: 10,
+            window_bond_slashed_nano: 0,
+            window_bond_released_nano: 20,
+            captured_at: settled_at,
+        };
+        ledger.snapshot_id = ledger.derive_snapshot_id().expect("ledger id");
+        let mut settlement = DealSettlementV1 {
+            version: DEAL_SETTLEMENT_VERSION_V1,
+            settlement_id: [0; 32],
+            deal_id,
+            ledger,
             status: DealSettlementStatusV1::Completed,
-            settled_at: timestamp.saturating_sub(1),
+            settled_at,
             audit_notes: None,
-        }
+        };
+        settlement.settlement_id = settlement.derive_settlement_id().expect("settlement id");
+        settlement
     }
 
     fn signed_source(count: usize, seed: u8, first_timestamp: u64) -> SourceSnapshot {

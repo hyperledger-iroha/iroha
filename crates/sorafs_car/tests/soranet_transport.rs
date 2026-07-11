@@ -92,7 +92,7 @@ fn build_manifest(
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: sorafs_manifest::StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 1,
         })
         .governance(governance)
         .build()

@@ -50,11 +50,15 @@ public struct KagemushaRecursiveSpendVerifierRecordRef: Equatable, Sendable {
     public let recordBytes: Data
 
     public init(verifierKeyId: String, recordBytes: Data) throws {
-        try KagemushaRecursiveSpendRequestCodecs.requirePortableId(verifierKeyId, field: "verifierKeyId")
+        _ = try KagemushaRecursiveSpendRequestCodecs.parseVerifierKeyId(
+            verifierKeyId,
+            field: "verifierKeyId"
+        )
         _ = try KagemushaRecursiveSpendRequestCodecs.payloadArchive(
             recordBytes,
             schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
-            field: "recordBytes"
+            field: "recordBytes",
+            expectedPaddingLength: 0
         )
         self.verifierKeyId = verifierKeyId
         self.recordBytes = recordBytes
@@ -631,6 +635,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
     private static let privacyFfiVersionV1: UInt32 = 1
     private static let privacyFfiStatusOk: UInt32 = 0
     private static let privacySchemaBuildProofResult: UInt8 = 0x42
+    private static let privacySchemaVerifyProofResult: UInt8 = 0x56
     private static let backendTagHalo2IpaPasta: UInt32 = VerifyingKeyBackendTag.halo2IpaPasta.rawValue
     private static let confidentialStatusActive: UInt32 = 1
     private static let confidentialV2MaxProofBytes = 192 * 1024
@@ -638,6 +643,8 @@ public enum KagemushaRecursiveSpendRequestCodecs {
     private static let confidentialRecordCurve = "pallas"
     private static let confidentialTransferAlgorithmId = "confidential-transfer-v2"
     private static let confidentialTransferEntrypoint = "buildConfidentialTransferProofV2"
+    private static let confidentialUnshieldAlgorithmId = "unshield"
+    private static let confidentialUnshieldEntrypoint = "buildConfidentialUnshieldProofV3"
     private static let zk1Magic = Data([0x5a, 0x4b, 0x31, 0x00])
     private static let zk1MaxTlvBytes = 8 * 1024 * 1024
     private static let zk1MaxInstanceColumns = 64
@@ -828,6 +835,92 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         return noritoEncode(typeName: redeemRequestWireName, payload: writer.data, flags: requestFlags)
     }
 
+    public static func buildRedeemProofAttachment(
+        unshieldProofOutputArchive: Data,
+        unshieldVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef,
+        blockHeight: UInt64? = nil
+    ) throws -> Data {
+        try buildRedeemProofAttachment(
+            unshieldProofOutputArchive: unshieldProofOutputArchive,
+            unshieldVerifierRecord: unshieldVerifierRecord,
+            blockHeight: blockHeight,
+            verifyProof: PrivacyNativeBridge.verifyProofV1
+        )
+    }
+
+    static func buildRedeemProofAttachment(
+        unshieldProofOutputArchive: Data,
+        unshieldVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef,
+        blockHeight: UInt64? = nil,
+        verifyProof: (Data) throws -> Data
+    ) throws -> Data {
+        let proof = try parsePrivacyBuildResult(
+            unshieldProofOutputArchive,
+            expectedAlgorithmId: confidentialUnshieldAlgorithmId,
+            expectedEntrypoint: confidentialUnshieldEntrypoint,
+            expectedVkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+            label: "unshieldProofOutputArchive"
+        )
+        let verifyRequest = try PrivacyConfidentialWitnessCodecs
+            .buildConfidentialUnshieldVerifyRequestV1(proof: proof.proof)
+        let verifyResult = try verifyProof(verifyRequest)
+        try requireSuccessfulPrivacyVerifyResult(
+            verifyResult,
+            expectedProof: proof.proof,
+            label: "unshieldProofVerification"
+        )
+        return try encodeRedeemProofAttachment(
+            proof: proof,
+            unshieldVerifierRecord: unshieldVerifierRecord,
+            blockHeight: blockHeight
+        )
+    }
+
+    static func buildRedeemProofAttachmentStructurally(
+        unshieldProofOutputArchive: Data,
+        unshieldVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef,
+        blockHeight: UInt64? = nil
+    ) throws -> Data {
+        let proof = try parsePrivacyBuildResult(
+            unshieldProofOutputArchive,
+            expectedAlgorithmId: confidentialUnshieldAlgorithmId,
+            expectedEntrypoint: confidentialUnshieldEntrypoint,
+            expectedVkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+            label: "unshieldProofOutputArchive"
+        )
+        return try encodeRedeemProofAttachment(
+            proof: proof,
+            unshieldVerifierRecord: unshieldVerifierRecord,
+            blockHeight: blockHeight
+        )
+    }
+
+    private static func encodeRedeemProofAttachment(
+        proof: KagemushaPrivacyBuildResult,
+        unshieldVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef,
+        blockHeight: UInt64?
+    ) throws -> Data {
+        let envelope = try decodeOpenVerifyEnvelope(
+            proof.proof,
+            label: "unshield proof"
+        )
+        let verifierRecord = try decodeAndValidateVerifierRecord(
+            unshieldVerifierRecord,
+            envelope: envelope,
+            expectedCircuitId: confidentialUnshieldV3CircuitId,
+            expectedSchema: PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema(),
+            proofArchiveSize: proof.proof.count,
+            blockHeight: blockHeight,
+            enforceLifecycleWindow: true,
+            label: "unshieldVerifierRecord"
+        )
+        return noritoEncode(
+            typeName: proofAttachmentWireName,
+            payload: try proofAttachmentPayload(envelope: envelope, verifierRecord: verifierRecord),
+            flags: requestFlags
+        )
+    }
+
     public static func decodeVerifyResult(_ archive: Data) throws -> KagemushaRecursiveSpendVerifyResult {
         let payload = try payloadArchive(archive, schema: verifyResultWireName, field: "verifyResult")
         guard payload.flags == requestFlags else {
@@ -958,7 +1051,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
             backend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
             bytes: verifierKey
         )
-        let schemaHash = Blake2b.hash256(
+        let schemaHash = IrohaHash.hash(
             PrivacyConfidentialWitnessCodecs.confidentialTransferPublicInputsSchema()
         )
         var writer = OfflineCompactNoritoWriter()
@@ -968,8 +1061,14 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         writer.writeField(OfflineCompactNorito.encodeString(kagemushaVerifierNamespace))
         writer.writeField(OfflineCompactNorito.encodeUInt32(backendTagHalo2IpaPasta))
         writer.writeField(OfflineCompactNorito.encodeString(confidentialRecordCurve))
-        writer.writeField(schemaHash)
-        writer.writeField(commitment)
+        writer.writeField(try encodePackedFixed32(
+            schemaHash,
+            field: "publicInputsSchemaHash"
+        ))
+        writer.writeField(try encodePackedFixed32(
+            commitment,
+            field: "commitment"
+        ))
         writer.writeField(OfflineCompactNorito.encodeUInt32(UInt32(verifierKey.count)))
         writer.writeField(OfflineCompactNorito.encodeUInt32(maxProofBytes))
         writer.writeField(encodeOptionString(nil))
@@ -981,6 +1080,8 @@ public enum KagemushaRecursiveSpendRequestCodecs {
             backend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
             bytes: verifierKey
         )))
+        // Norito derive archives enum fields through their canonical `u32` discriminant;
+        // the Rust raw-value representation does not alter the wire width.
         writer.writeField(OfflineCompactNorito.encodeUInt32(confidentialStatusActive))
         return noritoEncode(
             typeName: verifyingKeyRecordWireName,
@@ -1068,6 +1169,8 @@ private struct KagemushaDecodedVerifierRecord {
     let commitment: Data
     let vkLen: UInt32
     let maxProofBytes: UInt32
+    let activationHeight: UInt64?
+    let withdrawHeight: UInt64?
     let key: KagemushaVerifyingKeyBoxValue?
     let status: UInt32
 }
@@ -1091,7 +1194,12 @@ private struct KagemushaPreparedVerifiedFoldHop {
 extension KagemushaRecursiveSpendRequestCodecs {
     private static let lineageKeyArtifactValidationOpeningLen: UInt32 = 2
 
-    static func payloadArchive(_ archive: Data, schema: String, field: String) throws -> ArchivePayload {
+    static func payloadArchive(
+        _ archive: Data,
+        schema: String,
+        field: String,
+        expectedPaddingLength: Int? = nil
+    ) throws -> ArchivePayload {
         guard !archive.isEmpty else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
@@ -1103,6 +1211,9 @@ extension KagemushaRecursiveSpendRequestCodecs {
               frame.header.compression == .none,
               frame.header.length > 0
         else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+        }
+        if let expectedPaddingLength, frame.paddingLength != expectedPaddingLength {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
         return ArchivePayload(payload: frame.payload, flags: frame.header.flags)
@@ -1124,6 +1235,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
             hop.proofOutputArchive,
             expectedAlgorithmId: confidentialTransferAlgorithmId,
             expectedEntrypoint: confidentialTransferEntrypoint,
+            expectedVkRef: PrivacyConfidentialWitnessCodecs.confidentialTransferV2VerifierRef,
             label: "hops[\(index)].proofOutputArchive"
         )
         let envelope = try decodeOpenVerifyEnvelope(
@@ -1159,6 +1271,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
         _ archive: Data,
         expectedAlgorithmId: String,
         expectedEntrypoint: String,
+        expectedVkRef: String,
         label: String
     ) throws -> KagemushaPrivacyBuildResult {
         let payload = try requirePrivacyBuildResultPayload(archive, label: label)
@@ -1176,6 +1289,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
         let publicInputs = try readField(&reader) { try $0.readByteVec() }
         let proof = try readField(&reader) { try $0.readByteVec() }
         let verified = try readField(&reader, readBool)
+        try requirePortableId(vkRef, field: "\(label).vk_ref")
         guard reader.remaining == 0,
               version == privacyFfiVersionV1,
               status == privacyFfiStatusOk,
@@ -1183,26 +1297,79 @@ extension KagemushaRecursiveSpendRequestCodecs {
               message.isEmpty,
               algorithmId == expectedAlgorithmId,
               entrypoint == expectedEntrypoint,
+              vkRef == expectedVkRef,
               publicInputs.isEmpty,
               !proof.isEmpty,
               !verified
         else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(label)
         }
-        try requirePortableId(vkRef, field: "\(label).vk_ref")
         return KagemushaPrivacyBuildResult(proof: proof)
+    }
+
+    private static func requireSuccessfulPrivacyVerifyResult(
+        _ archive: Data,
+        expectedProof: Data,
+        label: String
+    ) throws {
+        let payload = try requirePrivacyProofResultPayload(
+            archive,
+            schemaByte: privacySchemaVerifyProofResult,
+            label: label
+        )
+        guard payload.flags == requestFlags else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(label)
+        }
+        var reader = CompactReader(data: payload.payload)
+        let version = try readField(&reader) { try $0.readUInt32LE() }
+        let status = try readField(&reader) { try $0.readUInt32LE() }
+        let errorCode = try readField(&reader) { try $0.readUInt32LE() }
+        let message = try readField(&reader, readString)
+        let algorithmId = try readField(&reader, readString)
+        let entrypoint = try readField(&reader, readString)
+        let vkRef = try readField(&reader, readString)
+        let publicInputs = try readField(&reader) { try $0.readByteVec() }
+        let proof = try readField(&reader) { try $0.readByteVec() }
+        let verified = try readField(&reader, readBool)
+        guard reader.remaining == 0,
+              version == privacyFfiVersionV1,
+              status == privacyFfiStatusOk,
+              errorCode == 0,
+              message.isEmpty,
+              algorithmId == confidentialUnshieldAlgorithmId,
+              entrypoint == confidentialUnshieldEntrypoint,
+              vkRef == PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+              publicInputs.isEmpty,
+              proof == expectedProof,
+              verified
+        else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(label)
+        }
     }
 
     private static func requirePrivacyBuildResultPayload(
         _ archive: Data,
         label: String
     ) throws -> ArchivePayload {
+        try requirePrivacyProofResultPayload(
+            archive,
+            schemaByte: privacySchemaBuildProofResult,
+            label: label
+        )
+    }
+
+    private static func requirePrivacyProofResultPayload(
+        _ archive: Data,
+        schemaByte: UInt8,
+        label: String
+    ) throws -> ArchivePayload {
         guard !archive.isEmpty,
               archive.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes,
               let frame = noritoDecodeFrame(archive),
-              frame.header.schema.allSatisfy({ $0 == privacySchemaBuildProofResult }),
+              frame.header.schema.allSatisfy({ $0 == schemaByte }),
               frame.header.compression == .none,
-              frame.header.length > 0
+              frame.header.length > 0,
+              frame.paddingLength == 0
         else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(label)
         }
@@ -1213,7 +1380,12 @@ extension KagemushaRecursiveSpendRequestCodecs {
         _ archive: Data,
         label: String
     ) throws -> KagemushaOpenVerifyEnvelopeValue {
-        let payload = try payloadArchive(archive, schema: openVerifyEnvelopeWireName, field: label)
+        let payload = try payloadArchive(
+            archive,
+            schema: openVerifyEnvelopeWireName,
+            field: label,
+            expectedPaddingLength: 0
+        )
         guard payload.flags == requestFlags else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(label)
         }
@@ -1221,7 +1393,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
         let backendTag = try readField(&reader) { try $0.readUInt32LE() }
         let circuitId = try readField(&reader, readString)
         let vkHash = try readField(&reader, field: "\(label).vk_hash") {
-            try $0.readFixed32Flexible(field: "\(label).vk_hash")
+            try $0.readFixedBytes(32)
         }
         let publicInputs = try readField(&reader) { try $0.readByteVec() }
         let proofBytes = try readField(&reader) { try $0.readByteVec() }
@@ -1229,7 +1401,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
         guard reader.remaining == 0,
               backendTag == backendTagHalo2IpaPasta,
               vkHash.contains(where: { $0 != 0 }),
-              !proofBytes.isEmpty,
+              proofBytes.contains(where: { $0 != 0 }),
               aux.isEmpty
         else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(label)
@@ -1250,6 +1422,8 @@ extension KagemushaRecursiveSpendRequestCodecs {
         expectedCircuitId: String,
         expectedSchema: Data,
         proofArchiveSize: Int,
+        blockHeight: UInt64? = nil,
+        enforceLifecycleWindow: Bool = false,
         label: String
     ) throws -> KagemushaVerifierRecordValue {
         let recordPayload = try compactPayloadForRequest(
@@ -1267,7 +1441,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
               record.circuitId == expectedCircuitId,
               envelope.circuitId == expectedCircuitId,
               envelope.publicInputs == expectedSchema,
-              record.publicInputsSchemaHash == Blake2b.hash256(expectedSchema),
+              record.publicInputsSchemaHash == IrohaHash.hash(expectedSchema),
               record.commitment == envelope.vkHash,
               record.maxProofBytes > 0,
               record.maxProofBytes <= UInt32(confidentialV2MaxProofBytes),
@@ -1275,6 +1449,12 @@ extension KagemushaRecursiveSpendRequestCodecs {
         else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(label)
         }
+        try validateVerifierRecordLifecycle(
+            record,
+            blockHeight: blockHeight,
+            requireResolvedWindow: enforceLifecycleWindow,
+            label: label
+        )
         guard let key = record.key,
               key.backend == KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
               !key.bytes.isEmpty,
@@ -1303,10 +1483,10 @@ extension KagemushaRecursiveSpendRequestCodecs {
         let backendTag = try readField(&reader) { try $0.readUInt32LE() }
         let curve = try readField(&reader, readString)
         let schemaHash = try readField(&reader, field: "\(label).public_inputs_schema_hash") {
-            try $0.readFixed32Flexible(field: "\(label).public_inputs_schema_hash")
+            try $0.readFixedBytes(32)
         }
         let commitment = try readField(&reader, field: "\(label).commitment") {
-            try $0.readFixed32Flexible(field: "\(label).commitment")
+            try $0.readFixedBytes(32)
         }
         let vkLen = try readField(&reader, field: "\(label).vk_len") { try $0.readUInt32LE() }
         let maxProofBytes = try readField(&reader, field: "\(label).max_proof_bytes") {
@@ -1315,8 +1495,8 @@ extension KagemushaRecursiveSpendRequestCodecs {
         _ = try readField(&reader) { try readOptionStringPayload(&$0) }
         _ = try readField(&reader) { try readOptionStringPayload(&$0) }
         _ = try readField(&reader) { try readOptionStringPayload(&$0) }
-        _ = try readField(&reader) { try readOptionUInt64Payload(&$0) }
-        _ = try readField(&reader) { try readOptionUInt64Payload(&$0) }
+        let activationHeight = try readField(&reader) { try readOptionUInt64Payload(&$0) }
+        let withdrawHeight = try readField(&reader) { try readOptionUInt64Payload(&$0) }
         let key = try readField(&reader) { child -> KagemushaVerifyingKeyBoxValue? in
             guard let keyPayload = try readOptionRawPayload(&child, field: "\(label).key") else {
                 return nil
@@ -1336,9 +1516,34 @@ extension KagemushaRecursiveSpendRequestCodecs {
             commitment: commitment,
             vkLen: vkLen,
             maxProofBytes: maxProofBytes,
+            activationHeight: activationHeight,
+            withdrawHeight: withdrawHeight,
             key: key,
             status: status
         )
+    }
+
+    private static func validateVerifierRecordLifecycle(
+        _ record: KagemushaDecodedVerifierRecord,
+        blockHeight: UInt64?,
+        requireResolvedWindow: Bool,
+        label: String
+    ) throws {
+        if let activationHeight = record.activationHeight,
+           let withdrawHeight = record.withdrawHeight,
+           activationHeight >= withdrawHeight {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(label)
+        }
+        let hasWindow = record.activationHeight != nil || record.withdrawHeight != nil
+        guard requireResolvedWindow, hasWindow else {
+            return
+        }
+        guard let blockHeight,
+              record.activationHeight.map({ blockHeight >= $0 }) ?? true,
+              record.withdrawHeight.map({ blockHeight < $0 }) ?? true
+        else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(label)
+        }
     }
 
     private static func readVerifyingKeyBoxPayload(
@@ -1465,11 +1670,11 @@ extension KagemushaRecursiveSpendRequestCodecs {
         writer.writeUInt64LE(UInt64(hops.count))
         for hop in hops {
             var step = OfflineCompactNoritoWriter()
-            step.writeField(encodeFixedBytes(hop.publicInputs.rootBefore))
+            step.writeField(try encodePackedFixed32(hop.publicInputs.rootBefore, field: "rootBefore"))
             step.writeField(try encodeFixed32Vec(hop.publicInputs.inputNullifiers, field: "inputNullifiers"))
             step.writeField(try encodeFixed32Vec(hop.publicInputs.outputCommitments, field: "outputCommitments"))
-            step.writeField(encodeFixedBytes(hop.rootAfter))
-            step.writeField(proofAttachmentPayload(envelope: hop.envelope, verifierRecord: hop.verifierRecord))
+            step.writeField(try encodePackedFixed32(hop.rootAfter, field: "rootAfter"))
+            step.writeField(try proofAttachmentPayload(envelope: hop.envelope, verifierRecord: hop.verifierRecord))
             step.writeField(verifyingKeyBoxPayload(
                 backend: hop.verifierRecord.key.backend,
                 bytes: hop.verifierRecord.key.bytes
@@ -1502,14 +1707,20 @@ extension KagemushaRecursiveSpendRequestCodecs {
     private static func proofAttachmentPayload(
         envelope: KagemushaOpenVerifyEnvelopeValue,
         verifierRecord: KagemushaVerifierRecordValue
-    ) -> Data {
+    ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeString(KagemushaRecursiveSpendProver.recursiveAggregationProofBackend))
         writer.writeField(proofBoxPayload(envelope.archive))
         writer.writeField(verifierKeyIdPayload(verifierRecord.id))
-        writer.writeField(encodeOptionRaw(verifierRecord.commitment))
-        writer.writeField(encodeOptionRaw(Blake2b.hash256(envelope.archive)))
-        writer.writeField(encodeOptionRaw(nil))
+        writer.writeField(try encodeOptionFixed32(
+            verifierRecord.commitment,
+            field: "proofAttachment.vkCommitment"
+        ))
+        writer.writeField(try encodeOptionFixed32(
+            IrohaHash.hash(envelope.archive),
+            field: "proofAttachment.envelopeHash"
+        ))
+        // Rust canonical encoding omits the absent trailing default `lane_privacy` field.
         return writer.data
     }
 
@@ -1537,7 +1748,9 @@ extension KagemushaRecursiveSpendRequestCodecs {
         guard let bytes = AssetDefinitionAddress.decode(assetDefinitionId) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidField("assetDefinitionId")
         }
-        return bytes
+        // AssetDefinitionId delegates to `[u8; 16]`, whose canonical Norito representation keeps
+        // per-element framing (unlike protocol-special direct `[u8; 32]` fields).
+        return encodeConstVec(bytes)
     }
 
     private static func encodeFixed32Vec(_ values: [Data], field: String) throws -> Data {
@@ -1548,7 +1761,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
         writer.writeUInt64LE(UInt64(values.count))
         for value in values {
             try requireFixed32(value, field: field)
-            writer.writeField(encodeFixedBytes(value))
+            writer.writeField(encodeConstVec(value))
         }
         return writer.data
     }
@@ -1560,11 +1773,10 @@ extension KagemushaRecursiveSpendRequestCodecs {
         return encodeOptionRaw(OfflineCompactNorito.encodeString(value))
     }
 
-    private static func parseVerifierKeyId(
+    fileprivate static func parseVerifierKeyId(
         _ value: String,
         field: String
     ) throws -> KagemushaVerifierKeyIdValue {
-        try requirePortableId(value, field: field)
         guard let separator = value.firstIndex(of: ":"),
               separator != value.startIndex,
               separator != value.index(before: value.endIndex) else {
@@ -1572,8 +1784,8 @@ extension KagemushaRecursiveSpendRequestCodecs {
         }
         let backend = String(value[..<separator])
         let name = String(value[value.index(after: separator)...])
-        try requirePortableId(backend, field: "\(field).backend")
-        try requirePortableId(name, field: "\(field).name")
+        try requireVerifierKeyIdComponent(backend, field: "\(field).backend")
+        try requireVerifierKeyIdComponent(name, field: "\(field).name")
         return KagemushaVerifierKeyIdValue(backend: backend, name: name)
     }
 
@@ -2102,9 +2314,13 @@ extension KagemushaRecursiveSpendRequestCodecs {
         _ reader: inout CompactReader,
         field: String
     ) throws {
-        guard let payload = try readOptionRawPayload(&reader, field: field),
-              payload.count == 32,
-              payload.contains(where: { $0 != 0 }) else {
+        guard let payload = try readOptionRawPayload(&reader, field: field) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+        }
+        var child = CompactReader(data: payload)
+        let value = try child.readFixed32Flexible(field: field)
+        guard child.remaining == 0,
+              value.contains(where: { $0 != 0 }) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
     }
@@ -2152,6 +2368,31 @@ extension KagemushaRecursiveSpendRequestCodecs {
                       || (scalar.value >= 0x41 && scalar.value <= 0x5a)
                       || (scalar.value >= 0x61 && scalar.value <= 0x7a)
                       || ". _-/::@+=".replacingOccurrences(of: " ", with: "").unicodeScalars.contains(scalar)
+              })
+        else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField(field)
+        }
+    }
+
+    private static func requireVerifierKeyIdComponent(_ value: String, field: String) throws {
+        let bytes = Array(value.utf8)
+        let isLowercaseOrDigit: (UInt8) -> Bool = { byte in
+            (0x61...0x7a).contains(byte) || (0x30...0x39).contains(byte)
+        }
+        let separators = ["..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"]
+        guard let first = bytes.first,
+              let last = bytes.last,
+              bytes.count <= 256,
+              isLowercaseOrDigit(first),
+              isLowercaseOrDigit(last),
+              !separators.contains(where: { value.contains($0) }),
+              bytes.allSatisfy({ byte in
+                  isLowercaseOrDigit(byte)
+                      || byte == 0x2d
+                      || byte == 0x5f
+                      || byte == 0x2f
+                      || byte == 0x3a
+                      || byte == 0x2e
               })
         else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidField(field)
@@ -2339,13 +2580,20 @@ extension KagemushaRecursiveSpendRequestCodecs {
 
     private static func encodeSpendableNote(_ note: KagemushaRecursiveSpendableNoteDescriptor) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
-        writer.writeField(encodeFixedBytes(note.noteCommitment))
-        writer.writeField(encodeFixedBytes(note.spendNullifier))
+        writer.writeField(try encodePackedFixed32(note.noteCommitment, field: "noteCommitment"))
+        writer.writeField(try encodePackedFixed32(note.spendNullifier, field: "spendNullifier"))
         writer.writeField(try encodeNumeric(note.amount))
         return writer.data
     }
 
-    private static func encodeFixedBytes(_ bytes: Data) -> Data {
+    // A direct `[u8; 32]` struct field is packed by Norito derive. Fixed arrays reached through a
+    // generic container (`Vec` element or `Option` inner) retain ConstVec's per-byte framing.
+    private static func encodePackedFixed32(_ bytes: Data, field: String) throws -> Data {
+        try requireFixed32(bytes, field: field)
+        return bytes
+    }
+
+    private static func encodeConstVec(_ bytes: Data) -> Data {
         var writer = OfflineCompactNoritoWriter()
         for byte in bytes {
             writer.writeLength(1)
@@ -2393,7 +2641,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
             return encodeOptionRaw(nil)
         }
         try requireFixed32(bytes, field: field)
-        return encodeOptionRaw(encodeFixedBytes(bytes))
+        return encodeOptionRaw(encodeConstVec(bytes))
     }
 
     private static func encodeOptionUInt64(_ value: UInt64?) -> Data {
@@ -2469,7 +2717,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
         let parsed = try parseAssetId(assetId, field: "assetId")
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try accountIdPayload(parsed.accountId, field: "assetId.account"))
-        writer.writeField(parsed.definitionBytes)
+        writer.writeField(encodeConstVec(parsed.definitionBytes))
         writer.writeField(assetBalanceScopePayload(dataspaceId: parsed.dataspaceId))
         return writer.data
     }
@@ -3032,19 +3280,23 @@ private struct CompactReader {
     }
 
     mutating func readFixedArrayBytes(expectedCount: Int, field: String = "fixedArray") throws -> Data {
-        var out = Data()
-        out.reserveCapacity(expectedCount)
-        while remaining > 0 {
-            let length = try readLength()
-            guard length == 1 else {
+        do {
+            var out = Data()
+            out.reserveCapacity(expectedCount)
+            while remaining > 0 {
+                let length = try readLength()
+                guard length == 1 else {
+                    throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+                }
+                out.append(try readUInt8())
+            }
+            guard out.count == expectedCount else {
                 throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
             }
-            out.append(try readUInt8())
-        }
-        guard out.count == expectedCount else {
+            return out
+        } catch {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
-        return out
     }
 
     mutating func readBytes(_ count: Int) throws -> Data {

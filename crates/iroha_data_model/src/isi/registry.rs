@@ -227,6 +227,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<sorafs::RegisterCapacityDispute>,
     InstructionRegistry::register_slice::<sorafs::IssueReplicationOrder>,
     InstructionRegistry::register_slice::<sorafs::CompleteReplicationOrder>,
+    InstructionRegistry::register_slice::<sorafs::ExpireReplicationOrder>,
     InstructionRegistry::register_slice::<sorafs::RegisterProviderOwner>,
     InstructionRegistry::register_slice::<sorafs::UnregisterProviderOwner>,
     InstructionRegistry::register_slice::<sorafs::SetPricingSchedule>,

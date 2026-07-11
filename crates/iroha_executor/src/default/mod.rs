@@ -31,9 +31,9 @@ pub use executor::visit_upgrade;
 use iroha_smart_contract::data_model::{
     isi::{
         ActivatePublicLaneValidator, ApprovePinManifest, BindManifestAlias,
-        CompleteReplicationOrder, ExitPublicLaneValidator, IssueReplicationOrder,
-        RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
-        RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
+        CompleteReplicationOrder, ExitPublicLaneValidator, ExpireReplicationOrder,
+        IssueReplicationOrder, RecordCapacityTelemetry, RegisterCapacityDeclaration,
+        RegisterCapacityDispute, RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
         RegisterPublicLaneValidator, RemoveAssetKeyValue, RetirePinManifest, SetAssetKeyValue,
         SetLaneRelayEmergencyValidators, SetPricingSchedule, UnregisterProviderOwner,
         UpsertProviderCredit,
@@ -338,6 +338,10 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_complete_replication_order(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<ExpireReplicationOrder>() {
+            sorafs::visit_expire_replication_order(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<RecordBridgeReceipt>() {
             bridge::visit_record_bridge_receipt(executor, isi);
             return;
@@ -613,6 +617,23 @@ pub mod sorafs {
         }
 
         deny!(executor, "Can't complete SoraFS replication order");
+    }
+
+    /// Expire a replication order when permitted.
+    pub fn visit_expire_replication_order<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ExpireReplicationOrder,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanIssueSorafsReplicationOrder
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(executor, "Can't expire SoraFS replication order");
     }
 
     /// Register or update the owner binding for a `SoraFS` provider when permitted.
@@ -2898,10 +2919,11 @@ mod sorafs_permission_tests {
         account::AccountId,
         block::BlockHeader,
         isi::sorafs::{
-            ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-            RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
-            RegisterPinManifest, RegisterProviderOwner, RetirePinManifest, SetPricingSchedule,
-            UnregisterProviderOwner, UpsertProviderCredit,
+            ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder,
+            ExpireReplicationOrder, IssueReplicationOrder, RecordCapacityTelemetry,
+            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
+            RegisterProviderOwner, RetirePinManifest, SetPricingSchedule, UnregisterProviderOwner,
+            UpsertProviderCredit,
         },
         metadata::Metadata,
         permission::Permission as PermissionObject,
@@ -2911,10 +2933,7 @@ mod sorafs_permission_tests {
                 CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
                 CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
             },
-            pin_registry::{
-                ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, PinPolicy,
-                ReplicationOrderId,
-            },
+            pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
             prelude::StorageClass,
             pricing::{PricingScheduleRecord, ProviderCreditRecord},
         },
@@ -3052,31 +3071,10 @@ mod sorafs_permission_tests {
         ManifestDigest::new([0xCD; 32])
     }
 
-    fn sample_chunker_profile() -> ChunkerProfileHandle {
-        ChunkerProfileHandle {
-            profile_id: 1,
-            namespace: "sorafs".to_owned(),
-            name: "sf1".to_owned(),
-            semver: "1.0.0".to_owned(),
-            multihash_code: 0x12,
-        }
-    }
-
-    fn sample_pin_policy() -> PinPolicy {
-        PinPolicy {
-            min_replicas: 1,
-            storage_class: StorageClass::Hot,
-            retention_epoch: 0,
-        }
-    }
-
     fn register_pin_manifest() -> RegisterPinManifest {
         RegisterPinManifest::new(
-            sample_manifest_digest(),
-            sample_chunker_profile(),
+            include_bytes!("../../../../fixtures/sorafs_gateway/1.0.0/manifest_v1.to").to_vec(),
             [0xEF; 32],
-            1_048_576,
-            sample_pin_policy(),
             1,
             None,
             None,
@@ -3165,6 +3163,10 @@ mod sorafs_permission_tests {
 
     fn complete_replication_order() -> CompleteReplicationOrder {
         CompleteReplicationOrder::new(ReplicationOrderId::new([0x11; 32]), 3)
+    }
+
+    fn expire_replication_order() -> ExpireReplicationOrder {
+        ExpireReplicationOrder::new(ReplicationOrderId::new([0x11; 32]), 4)
     }
 
     fn set_pricing_schedule() -> SetPricingSchedule {
@@ -3271,6 +3273,13 @@ mod sorafs_permission_tests {
         complete_replication_order(),
         CanCompleteSorafsReplicationOrder,
         sorafs::visit_complete_replication_order
+    );
+
+    sorafs_permission_case!(
+        expire_replication_order_requires_permission,
+        expire_replication_order(),
+        CanIssueSorafsReplicationOrder,
+        sorafs::visit_expire_replication_order
     );
 
     sorafs_permission_case!(

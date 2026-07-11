@@ -1832,7 +1832,7 @@ mod tests {
     fn sample_manifest_and_payload() -> (DaManifestV1, Vec<u8>) {
         let payload = vec![0xAB; 8];
         let mut store = ChunkStore::new();
-        store.ingest_bytes(&payload);
+        store.ingest_bytes(&payload).expect("ingest payload");
         let chunk_commitments = store
             .chunks()
             .iter()

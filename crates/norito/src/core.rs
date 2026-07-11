@@ -7352,11 +7352,9 @@ where
                 cap = new_cap;
             }
             unsafe {
-                if elem_len != 0 {
-                    if let Err(error) = copy_from_payload(field.as_ptr(), buf, elem_len) {
-                        dealloc_checked(buf, layout, buf_needs_dealloc);
-                        return Err(error);
-                    }
+                if let Err(error) = copy_from_payload(field.as_ptr(), buf, elem_len) {
+                    dealloc_checked(buf, layout, buf_needs_dealloc);
+                    return Err(error);
                 }
                 let tmp_slice = std::slice::from_raw_parts(buf as *const u8, elem_len);
                 let _g = PayloadCtxGuard::enter(tmp_slice);

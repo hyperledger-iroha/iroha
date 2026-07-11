@@ -51,6 +51,11 @@ impl ChunkerProfileDescriptor {
     }
 }
 
+// Indexing the generated registry in a static initializer makes an accidentally empty registry a
+// compile-time error instead of a runtime panic in every consumer of `default_descriptor`.
+static DEFAULT_DESCRIPTOR: ChunkerProfileDescriptor =
+    ChunkerProfileDescriptor::from_raw(&RAW_REGISTRY[0]);
+
 fn registry_storage() -> &'static Vec<ChunkerProfileDescriptor> {
     static REGISTRY: OnceLock<Vec<ChunkerProfileDescriptor>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
@@ -106,9 +111,7 @@ pub fn lookup_by_identity(
 /// Returns the default `sorafs-sf1` descriptor.
 #[must_use]
 pub fn default_descriptor() -> &'static ChunkerProfileDescriptor {
-    registry()
-        .first()
-        .expect("registry must contain at least one descriptor")
+    &DEFAULT_DESCRIPTOR
 }
 
 /// Ensures the registry satisfies governance charter rules.
@@ -118,6 +121,9 @@ pub fn ensure_charter_compliance() -> Result<(), CharterViolation> {
 }
 
 fn validate_entries(entries: &[ChunkerProfileDescriptor]) -> Result<(), CharterViolation> {
+    if entries.is_empty() {
+        return Err(CharterViolation::EmptyRegistry);
+    }
     let mut prev_id: Option<u32> = None;
     let mut canonical_handles = HashSet::new();
     let mut alias_handles = HashSet::new();
@@ -154,6 +160,9 @@ fn validate_entries(entries: &[ChunkerProfileDescriptor]) -> Result<(), CharterV
         if !canonical_handles.insert(canonical.clone()) {
             return Err(CharterViolation::DuplicateCanonical { handle: canonical });
         }
+        if alias_handles.contains(&canonical) {
+            return Err(CharterViolation::AliasConflictsWithCanonical { alias: canonical });
+        }
 
         if descriptor
             .aliases
@@ -176,9 +185,6 @@ fn validate_entries(entries: &[ChunkerProfileDescriptor]) -> Result<(), CharterV
             if alias == canonical {
                 continue;
             }
-            if alias == canonical {
-                continue;
-            }
             if !alias_handles.insert(alias.to_string()) {
                 return Err(CharterViolation::DuplicateAlias {
                     alias: alias.to_string(),
@@ -198,6 +204,8 @@ fn validate_entries(entries: &[ChunkerProfileDescriptor]) -> Result<(), CharterV
 /// Violations detected while validating the charter.
 #[derive(Debug, thiserror::Error)]
 pub enum CharterViolation {
+    #[error("chunker registry must contain at least one descriptor")]
+    EmptyRegistry,
     #[error("chunker registry ids must start at 1 and be monotonically increasing; found {0}")]
     InvalidId(u32),
     #[error("chunker registry ids must increase monotonically (saw {previous} then {current})")]
@@ -267,8 +275,8 @@ mod tests {
         );
         let resolved_dot = lookup_by_handle(&handle_dot).expect("dot handle resolves");
         let resolved_slash = lookup_by_handle(&handle_slash).expect("slash handle resolves");
-        assert!(std::ptr::eq(descriptor, resolved_dot));
-        assert!(std::ptr::eq(descriptor, resolved_slash));
+        assert_eq!(descriptor.id, resolved_dot.id);
+        assert_eq!(descriptor.id, resolved_slash.id);
     }
 
     #[test]
@@ -283,6 +291,42 @@ mod tests {
     #[test]
     fn charter_compliance_holds_for_builtins() {
         ensure_charter_compliance().expect("registry charter compliance");
+    }
+
+    #[test]
+    fn charter_rejects_empty_registry() {
+        assert!(matches!(
+            super::validate_entries(&[]),
+            Err(CharterViolation::EmptyRegistry)
+        ));
+    }
+
+    #[test]
+    fn charter_rejects_alias_that_shadows_later_canonical_handle() {
+        static FIRST_ALIASES: &[&str] = &["sorafs.sf1@1.0.0", "sorafs.sf2@1.0.0"];
+        static SECOND_ALIASES: &[&str] = &["sorafs.sf2@1.0.0"];
+        let first = ChunkerProfileDescriptor {
+            id: crate::ProfileId(1),
+            namespace: "sorafs",
+            name: "sf1",
+            semver: "1.0.0",
+            profile: ChunkProfile::DEFAULT,
+            multihash_code: DEFAULT_MULTIHASH_CODE,
+            aliases: FIRST_ALIASES,
+        };
+        let second = ChunkerProfileDescriptor {
+            id: crate::ProfileId(2),
+            namespace: "sorafs",
+            name: "sf2",
+            semver: "1.0.0",
+            profile: ChunkProfile::DEFAULT,
+            multihash_code: DEFAULT_MULTIHASH_CODE,
+            aliases: SECOND_ALIASES,
+        };
+        assert!(matches!(
+            super::validate_entries(&[first, second]),
+            Err(CharterViolation::AliasConflictsWithCanonical { .. })
+        ));
     }
 
     #[test]

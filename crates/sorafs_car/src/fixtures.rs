@@ -9,10 +9,32 @@
 use sorafs_chunker::{ChunkProfile, fixtures::FixtureProfile};
 
 use crate::{
-    CarBuildPlan,
+    CarBuildPlan, CarPlanError,
     multi_fetch::{ProviderMetadata, RangeCapability, StreamBudget, TransportHint},
     scoreboard::{ProviderTelemetry, TelemetrySnapshot},
 };
+
+const MAX_FIXTURE_PROVIDERS: usize = 1_024;
+
+/// Errors returned while constructing deterministic multi-peer fixtures.
+#[derive(Debug, thiserror::Error)]
+pub enum MultiPeerFixtureError {
+    /// At least one provider is required.
+    #[error("fixture provider count must be greater than zero")]
+    NoProviders,
+    /// Provider inventory exceeded the bounded fixture ceiling.
+    #[error("fixture provider count {count} exceeds maximum {maximum}")]
+    TooManyProviders { count: usize, maximum: usize },
+    /// Canonical CAR planning failed.
+    #[error(transparent)]
+    Plan(#[from] CarPlanError),
+    /// A bounded fixture allocation could not be reserved.
+    #[error("failed to reserve {requested} entries/bytes for {context}")]
+    AllocationFailed {
+        context: &'static str,
+        requested: usize,
+    },
+}
 
 /// Unix timestamp (seconds) used across fixture artefacts.
 const FIXTURE_NOW_UNIX_SECS: u64 = 1_725_000_000;
@@ -35,17 +57,20 @@ impl MultiPeerFixture {
     /// identifiers and telemetry so schedulers can differentiate between them.
     /// The resulting metadata satisfies capability checks for the default SF1
     /// chunk profile.
-    #[must_use]
-    pub fn with_providers(provider_count: usize) -> Self {
-        assert!(
-            provider_count > 0,
-            "provider_count must be greater than zero"
-        );
+    pub fn with_providers(provider_count: usize) -> Result<Self, MultiPeerFixtureError> {
+        if provider_count == 0 {
+            return Err(MultiPeerFixtureError::NoProviders);
+        }
+        if provider_count > MAX_FIXTURE_PROVIDERS {
+            return Err(MultiPeerFixtureError::TooManyProviders {
+                count: provider_count,
+                maximum: MAX_FIXTURE_PROVIDERS,
+            });
+        }
 
         let vectors = FixtureProfile::SF1_V1.generate_vectors();
         let payload = vectors.input.clone();
-        let plan = CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT)
-            .expect("fixture plan");
+        let plan = CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT)?;
         let max_chunk_length = plan
             .chunks
             .iter()
@@ -53,21 +78,30 @@ impl MultiPeerFixture {
             .max()
             .unwrap_or(0);
 
-        let provider_payloads = (0..provider_count)
-            .map(|_| payload.clone())
-            .collect::<Vec<_>>();
+        let mut provider_payloads = Vec::new();
+        try_reserve_fixture(
+            &mut provider_payloads,
+            provider_count,
+            "fixture provider payloads",
+        )?;
+        for _ in 0..provider_count {
+            let mut replica = Vec::new();
+            try_reserve_fixture(&mut replica, payload.len(), "fixture payload replica")?;
+            replica.extend_from_slice(&payload);
+            provider_payloads.push(replica);
+        }
 
-        let providers = build_provider_metadata(provider_count, max_chunk_length);
-        let telemetry = build_telemetry(&providers);
+        let providers = build_provider_metadata(provider_count, max_chunk_length)?;
+        let telemetry = build_telemetry(&providers)?;
 
-        Self {
+        Ok(Self {
             plan,
             payload,
             provider_payloads,
             providers,
             telemetry,
             max_chunk_length,
-        }
+        })
     }
 
     /// Returns the canonical payload bytes.
@@ -113,8 +147,25 @@ impl MultiPeerFixture {
     }
 }
 
-fn build_provider_metadata(count: usize, max_chunk_length: u32) -> Vec<ProviderMetadata> {
-    let mut providers = Vec::with_capacity(count);
+fn try_reserve_fixture<T>(
+    values: &mut Vec<T>,
+    additional: usize,
+    context: &'static str,
+) -> Result<(), MultiPeerFixtureError> {
+    values
+        .try_reserve_exact(additional)
+        .map_err(|_| MultiPeerFixtureError::AllocationFailed {
+            context,
+            requested: additional,
+        })
+}
+
+fn build_provider_metadata(
+    count: usize,
+    max_chunk_length: u32,
+) -> Result<Vec<ProviderMetadata>, MultiPeerFixtureError> {
+    let mut providers = Vec::new();
+    try_reserve_fixture(&mut providers, count, "fixture provider metadata")?;
     for idx in 0..count {
         let mut metadata = ProviderMetadata::new();
         metadata.provider_id = Some(format!("fixture-provider-{idx}"));
@@ -149,15 +200,16 @@ fn build_provider_metadata(count: usize, max_chunk_length: u32) -> Vec<ProviderM
         }];
         providers.push(metadata);
     }
-    providers
+    Ok(providers)
 }
 
-fn build_telemetry(providers: &[ProviderMetadata]) -> TelemetrySnapshot {
-    let records = providers
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, metadata)| metadata.provider_id.as_ref().map(|id| (idx, id)))
-        .map(|(idx, provider_id)| {
+fn build_telemetry(
+    providers: &[ProviderMetadata],
+) -> Result<TelemetrySnapshot, MultiPeerFixtureError> {
+    let mut records = Vec::new();
+    try_reserve_fixture(&mut records, providers.len(), "fixture telemetry")?;
+    for (idx, metadata) in providers.iter().enumerate() {
+        if let Some(provider_id) = metadata.provider_id.as_ref() {
             let mut telemetry = ProviderTelemetry::new(provider_id.clone());
             telemetry.qos_score = Some(95.0 - (idx as f64));
             telemetry.latency_p95_ms = Some(120.0 + (idx as f64 * 15.0));
@@ -166,8 +218,33 @@ fn build_telemetry(providers: &[ProviderMetadata]) -> TelemetrySnapshot {
             telemetry.staking_weight = Some(1.0);
             telemetry.reputation_score_bps = Some(10_000);
             telemetry.last_updated_unix = Some(FIXTURE_NOW_UNIX_SECS - 120);
-            telemetry
-        })
-        .collect::<Vec<_>>();
-    TelemetrySnapshot::from_records(records)
+            records.push(telemetry);
+        }
+    }
+    Ok(TelemetrySnapshot::from_records(records))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixture_provider_count_is_bounded_without_panicking() {
+        assert!(matches!(
+            MultiPeerFixture::with_providers(0),
+            Err(MultiPeerFixtureError::NoProviders)
+        ));
+        assert!(matches!(
+            MultiPeerFixture::with_providers(MAX_FIXTURE_PROVIDERS + 1),
+            Err(MultiPeerFixtureError::TooManyProviders { .. })
+        ));
+    }
+
+    #[test]
+    fn fixture_builds_valid_bounded_provider_inventory() {
+        let fixture = MultiPeerFixture::with_providers(2).expect("build fixture");
+        assert_eq!(fixture.providers().len(), 2);
+        assert_eq!(fixture.provider_payloads().len(), 2);
+        assert_eq!(fixture.payload(), fixture.provider_payloads()[0]);
+    }
 }

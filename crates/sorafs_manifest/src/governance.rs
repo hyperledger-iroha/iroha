@@ -19,7 +19,7 @@ use crate::{
         GC_AUDIT_EVENT_VERSION_V1, GcAuditEventV1, REPAIR_AUDIT_EVENT_VERSION_V1,
         REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairAuditEventV1, RepairSlashProposalV1,
     },
-    reputation::ReputationSnapshotV1,
+    reputation::signed::{SignedReputationSnapshotError, SignedReputationSnapshotV1},
     transparency::{
         MODERATION_LEDGER_PUBLICATION_VERSION_V1, ModerationLedgerCyclePublicationV1,
         PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
@@ -2402,8 +2402,8 @@ pub enum GovernanceLogPayloadV1 {
     AuditVerdict(AuditVerdictV1),
     /// Deal settlement snapshot.
     DealSettlement(DealSettlementV1),
-    /// Provider reputation snapshot.
-    ReputationSnapshot(ReputationSnapshotV1),
+    /// Externally authorized provider reputation snapshot and scoring evidence.
+    SignedReputationSnapshot(SignedReputationSnapshotV1),
     /// SoraFS moderation ballot lifecycle event.
     ModerationBallotEvent(SoraFsModerationBallotGovernanceEventV1),
     /// SoraFS appeal finance report.
@@ -2442,9 +2442,9 @@ impl GovernanceLogPayloadV1 {
             GovernanceLogPayloadV1::DealSettlement(settlement) => settlement
                 .validate()
                 .map_err(GovernanceLogValidationError::DealSettlement),
-            GovernanceLogPayloadV1::ReputationSnapshot(snapshot) => snapshot
-                .validate()
-                .map_err(GovernanceLogValidationError::ReputationSnapshot),
+            GovernanceLogPayloadV1::SignedReputationSnapshot(envelope) => envelope
+                .validate_structure()
+                .map_err(GovernanceLogValidationError::SignedReputationSnapshot),
             GovernanceLogPayloadV1::ModerationBallotEvent(event) => event
                 .validate()
                 .map_err(GovernanceLogValidationError::ModerationBallotEvent),
@@ -3075,8 +3075,8 @@ pub enum GovernanceLogValidationError {
     AuditVerdict(crate::por::AuditVerdictValidationError),
     #[error("deal settlement validation failed: {0}")]
     DealSettlement(crate::deal::DealSettlementValidationError),
-    #[error("reputation snapshot validation failed: {0}")]
-    ReputationSnapshot(crate::reputation::ReputationValidationError),
+    #[error("signed reputation snapshot validation failed: {0}")]
+    SignedReputationSnapshot(SignedReputationSnapshotError),
     #[error("moderation ballot event validation failed: {0}")]
     ModerationBallotEvent(SoraFsModerationBallotGovernanceEventValidationError),
     #[error("appeal finance report validation failed: {0}")]
@@ -4200,12 +4200,17 @@ mod tests {
     }
     use crate::deal::{
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
-        DealSettlementStatusV1, DealSettlementV1, XorAmount,
+        DealSettlementStatusV1, DealSettlementV1,
     };
     use crate::reputation::{
         REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
         ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
         ReputationWeightsV1, build_reputation_snapshot,
+        signed::{
+            REPUTATION_SCORING_EVIDENCE_VERSION_V1, ReputationScoringEvidenceV1,
+            ReputationSnapshotSignatureV1, SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+            SignedReputationSnapshotV1,
+        },
     };
 
     #[test]
@@ -4580,25 +4585,50 @@ mod tests {
 
     #[test]
     fn governance_payload_accepts_deal_settlement() {
-        let ledger = DealLedgerSnapshotV1 {
+        let mut ledger = DealLedgerSnapshotV1 {
             version: DEAL_LEDGER_VERSION_V1,
+            snapshot_id: [0; 32],
+            sequence: 1,
+            previous_snapshot_id: None,
             deal_id: [0xAA; 32],
+            terms_digest: [0x44; 32],
             provider_id: [0xBB; 32],
             client_id: [0xCC; 32],
-            provider_accrual: XorAmount::from_micro(100),
-            client_liability: XorAmount::from_micro(100),
-            bond_locked: XorAmount::from_micro(50),
-            bond_slashed: XorAmount::zero(),
+            deal_start_epoch: 1_700_199_900,
+            deal_end_epoch: 1_700_199_999,
+            settlement_window_epochs: 100,
+            window_start_epoch: 1_700_199_900,
+            window_end_epoch: 1_700_200_000,
+            provider_accrual_nano: 100,
+            client_liability_nano: 100,
+            micropayment_credit_generated_nano: 0,
+            micropayment_credit_applied_nano: 0,
+            micropayment_credit_carry_nano: 0,
+            client_debit_nano: 100,
+            outstanding_liability_nano: 0,
+            bond_total_nano: 50,
+            bond_locked_nano: 0,
+            bond_slashed_nano: 0,
+            bond_released_nano: 50,
+            window_expected_charge_nano: 100,
+            window_micropayment_generated_nano: 0,
+            window_micropayment_applied_nano: 0,
+            window_client_debit_nano: 100,
+            window_bond_slashed_nano: 0,
+            window_bond_released_nano: 50,
             captured_at: 1_700_200_000,
         };
-        let settlement = DealSettlementV1 {
+        ledger.snapshot_id = ledger.derive_snapshot_id().expect("ledger id");
+        let mut settlement = DealSettlementV1 {
             version: DEAL_SETTLEMENT_VERSION_V1,
+            settlement_id: [0; 32],
             deal_id: [0xAA; 32],
             ledger,
             status: DealSettlementStatusV1::Completed,
-            settled_at: 1_700_200_100,
+            settled_at: 1_700_200_000,
             audit_notes: None,
         };
+        settlement.settlement_id = settlement.derive_settlement_id().expect("settlement id");
         let payload = GovernanceLogPayloadV1::DealSettlement(settlement);
         payload.validate(1_700_200_200).expect("valid settlement");
     }
@@ -4623,15 +4653,38 @@ mod tests {
             active_dispute: false,
             slashing_event: false,
         };
+        let inputs = vec![input];
         let snapshot = build_reputation_snapshot(
             [0x42; 16],
             1_800_000_000,
             ReputationWeightsV1::default(),
-            &[input],
+            &inputs,
             None,
         )
         .expect("reputation snapshot");
-        let payload = GovernanceLogPayloadV1::ReputationSnapshot(snapshot);
+        let scoring_evidence = ReputationScoringEvidenceV1 {
+            version: REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+            provider_inputs: inputs,
+            trust_edges: Vec::new(),
+        };
+        let mut envelope = SignedReputationSnapshotV1 {
+            version: SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+            policy_digest: [0xA5; 32],
+            snapshot,
+            scoring_evidence_digest: scoring_evidence
+                .canonical_digest()
+                .expect("scoring evidence digest"),
+            scoring_evidence,
+            signatures: Vec::new(),
+        };
+        let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
+        envelope.signatures.push(ReputationSnapshotSignatureV1 {
+            signer_id: "council-1".to_owned(),
+            signature: signing_key
+                .sign(&envelope.signing_digest().expect("signing digest"))
+                .to_bytes(),
+        });
+        let payload = GovernanceLogPayloadV1::SignedReputationSnapshot(envelope);
 
         payload
             .validate(1_800_000_100)

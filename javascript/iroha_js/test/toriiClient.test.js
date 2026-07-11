@@ -10633,8 +10633,8 @@ test("getSumeragiStatusTyped normalizes governance seals", async () => {
     return createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
-        staged_mode_tag: "iroha2-consensus::npos-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+        staged_mode_tag: "iroha2-consensus::npos-sumeragi@v2",
         staged_mode_activation_height: "10",
         mode_activation_lag_blocks: 2,
         consensus_caps: {
@@ -10729,8 +10729,8 @@ test("getSumeragiStatusTyped normalizes governance seals", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.getSumeragiStatusTyped();
-  assert.equal(payload.mode_tag, "iroha2-consensus::permissioned-sumeragi@v1");
-  assert.equal(payload.staged_mode_tag, "iroha2-consensus::npos-sumeragi@v1");
+  assert.equal(payload.mode_tag, "iroha2-consensus::permissioned-sumeragi@v2");
+  assert.equal(payload.staged_mode_tag, "iroha2-consensus::npos-sumeragi@v2");
   assert.equal(payload.staged_mode_activation_height, 10);
   assert.equal(payload.mode_activation_lag_blocks, 2);
   assert.ok(payload.consensus_caps);
@@ -10824,7 +10824,7 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
     createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
         lane_settlement_commitments: [
           {
             block_height: "21",
@@ -10909,7 +10909,7 @@ test("getSumeragiStatusTyped rejects invalid relay settlement hash", async () =>
     createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
         lane_relay_envelopes: [
           {
             lane_id: 1,
@@ -10943,7 +10943,7 @@ test("getSumeragiStatusTyped rejects invalid relay fastpq_proof digest", async (
     createResponse({
       status: 200,
       jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
         lane_relay_envelopes: [
           {
             lane_id: 1,
@@ -11124,7 +11124,7 @@ test("getSumeragiCommitQc fetches commit QC record", async () => {
           height: "12",
           view: "3",
           epoch: "4",
-          mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+          mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
           validator_set_hash: "dd".repeat(32),
           validator_set_hash_version: 1,
           validator_set: ["alice@test", "bob@test"],

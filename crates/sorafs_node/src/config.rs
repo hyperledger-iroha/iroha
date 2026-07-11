@@ -23,6 +23,7 @@ pub struct StorageConfig {
     metering_smoothing: MeteringSmoothingConfig,
     stream_token_signing_key_path: Option<PathBuf>,
     orderbook: OrderbookAdmissionPolicy,
+    reputation_trust_policy_path: Option<PathBuf>,
     privacy_aggregate_schedule: Option<PrivacyAggregateScheduleConfig>,
     evidence_viewer_audit_schedule: Option<PrivacyAggregateScheduleConfig>,
     reserve_lifecycle_schedule: Option<ReserveLifecycleScheduleConfig>,
@@ -123,6 +124,12 @@ impl StorageConfig {
         self.orderbook
     }
 
+    /// Canonical external trust-policy file used for reputation snapshot admission.
+    #[must_use]
+    pub fn reputation_trust_policy_path(&self) -> Option<&PathBuf> {
+        self.reputation_trust_policy_path.as_ref()
+    }
+
     /// Optional config-backed privacy aggregate due-cycle scheduler.
     #[must_use]
     pub fn privacy_aggregate_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
@@ -207,6 +214,7 @@ impl StorageConfig {
             metering_smoothing: MeteringSmoothingConfig::from(&storage.metering_smoothing),
             stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
             orderbook: OrderbookAdmissionPolicy::from(storage.orderbook),
+            reputation_trust_policy_path: storage.reputation_trust_policy_path.clone(),
             privacy_aggregate_schedule: storage.privacy_aggregates.into_schedule_config(),
             evidence_viewer_audit_schedule: storage.evidence_viewer_audits.into_schedule_config(),
             reserve_lifecycle_schedule: storage.reserve_lifecycle.into_schedule_config(),
@@ -328,6 +336,13 @@ impl StorageConfigBuilder {
     #[must_use]
     pub fn orderbook_admission_policy(mut self, policy: OrderbookAdmissionPolicy) -> Self {
         self.inner.orderbook = policy;
+        self
+    }
+
+    /// Override the canonical reputation trust-policy path.
+    #[must_use]
+    pub fn reputation_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
+        self.inner.reputation_trust_policy_path = path;
         self
     }
 
@@ -1042,6 +1057,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pdp_config_protocol_ceiling_matches_manifest_v1() {
+        assert_eq!(
+            usize::from(iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX),
+            sorafs_manifest::PDP_MAX_SEGMENT_SAMPLES_V1
+        );
+        assert!(iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW > 0);
+        assert!(
+            iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW
+                <= iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX
+        );
+    }
+
+    #[test]
     fn conversion_from_actual_preserves_fields() {
         let mut actual = actual::SorafsStorage::default();
         actual.enabled = true;
@@ -1050,6 +1078,8 @@ mod tests {
         actual.max_parallel_fetches = 99;
         actual.max_pins = 1_001;
         actual.por_sample_interval_secs = 42;
+        actual.pdp_sample_window = 37;
+        actual.pdp_tree_memory_limit_bytes = iroha_config::base::util::Bytes(8_388_608);
         actual.runtime = actual::SorafsRuntimeRetention {
             event_history_limit: 17,
             state_entry_limit: 23,
@@ -1069,6 +1099,8 @@ mod tests {
             min_order_gib: 8,
             price_tick_micro_xor: 25_000,
         };
+        actual.reputation_trust_policy_path =
+            Some(PathBuf::from("/tmp/sorafs-reputation-policy.to"));
         actual.privacy_aggregates = actual::SorafsPrivacyAggregateSchedule {
             enabled: true,
             cycle_seconds: 12,
@@ -1092,6 +1124,8 @@ mod tests {
         assert_eq!(cfg.max_parallel_fetches(), 99);
         assert_eq!(cfg.max_pins(), 1_001);
         assert_eq!(cfg.por_sample_interval_secs(), 42);
+        assert_eq!(cfg.pdp_sample_window(), 37);
+        assert_eq!(cfg.pdp_tree_memory_limit_bytes().0, 8_388_608);
         assert_eq!(
             cfg.runtime_retention(),
             RuntimeRetentionPolicy::new(17, 23, 4_096)
@@ -1114,6 +1148,10 @@ mod tests {
         let orderbook = cfg.orderbook_admission_policy();
         assert_eq!(orderbook.min_order_gib(), 8);
         assert_eq!(orderbook.price_tick_micro_xor(), 25_000);
+        assert_eq!(
+            cfg.reputation_trust_policy_path(),
+            Some(&PathBuf::from("/tmp/sorafs-reputation-policy.to"))
+        );
         assert_eq!(
             cfg.privacy_aggregate_schedule(),
             Some(PrivacyAggregateScheduleConfig {

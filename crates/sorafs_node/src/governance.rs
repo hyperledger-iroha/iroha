@@ -28,10 +28,10 @@ use sorafs_manifest::{
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceExternalPayloadV1,
     GovernanceExternalRepairSlashStageV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
     GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, ModerationLedgerCyclePublicationV1,
-    PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1, ReputationSnapshotV1,
-    SettlementReceiptV1, SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
-    SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
-    SorafsReconciliationReportV1,
+    PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1, SettlementReceiptV1,
+    SignedReputationSnapshotV1, SoraFsAppealFinanceReportV1,
+    SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
+    SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
     governance_dag_block_cid_v1,
     repair::{GcAuditEventV1, RepairAuditEventV1, RepairSlashProposalV1, RepairTaskStatusV1},
@@ -311,9 +311,10 @@ impl FilesystemGovernancePublisher {
 
     fn reputation_snapshot_path(
         &self,
-        snapshot: &ReputationSnapshotV1,
+        envelope: &SignedReputationSnapshotV1,
         digest_hex: &str,
     ) -> PathBuf {
+        let snapshot = &envelope.snapshot;
         let snapshot_hex = hex::encode(snapshot.snapshot_id);
         let digest_prefix = &digest_hex[..16];
         let base = format!(
@@ -555,9 +556,10 @@ fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> b
 
 fn status_label(status: DealSettlementStatusV1) -> &'static str {
     match status {
+        DealSettlementStatusV1::WindowSettled => "window_settled",
         DealSettlementStatusV1::Completed => "completed",
         DealSettlementStatusV1::Cancelled => "cancelled",
-        DealSettlementStatusV1::Slashed => "slashed",
+        DealSettlementStatusV1::Defaulted => "defaulted",
     }
 }
 
@@ -2409,6 +2411,18 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 JsonValue::from(settlement.deal_id.encode_hex::<String>()),
             );
             settlement_obj.insert(
+                "settlement_id".into(),
+                JsonValue::from(settlement.settlement_id.encode_hex::<String>()),
+            );
+            settlement_obj.insert(
+                "ledger_snapshot_id".into(),
+                JsonValue::from(settlement.ledger.snapshot_id.encode_hex::<String>()),
+            );
+            settlement_obj.insert(
+                "ledger_sequence".into(),
+                JsonValue::from(settlement.ledger.sequence),
+            );
+            settlement_obj.insert(
                 "provider_id".into(),
                 JsonValue::from(settlement.ledger.provider_id.encode_hex::<String>()),
             );
@@ -2426,20 +2440,44 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 JsonValue::from(settlement.ledger.captured_at),
             );
             settlement_obj.insert(
-                "provider_accrual_micro".into(),
-                JsonValue::from(settlement.ledger.provider_accrual.as_micro().to_string()),
+                "window_start_epoch".into(),
+                JsonValue::from(settlement.ledger.window_start_epoch),
             );
             settlement_obj.insert(
-                "client_liability_micro".into(),
-                JsonValue::from(settlement.ledger.client_liability.as_micro().to_string()),
+                "window_end_epoch".into(),
+                JsonValue::from(settlement.ledger.window_end_epoch),
             );
             settlement_obj.insert(
-                "bond_locked_micro".into(),
-                JsonValue::from(settlement.ledger.bond_locked.as_micro().to_string()),
+                "settlement_window_epochs".into(),
+                JsonValue::from(settlement.ledger.settlement_window_epochs),
             );
             settlement_obj.insert(
-                "bond_slashed_micro".into(),
-                JsonValue::from(settlement.ledger.bond_slashed.as_micro().to_string()),
+                "provider_accrual_nano".into(),
+                JsonValue::from(settlement.ledger.provider_accrual_nano.to_string()),
+            );
+            settlement_obj.insert(
+                "client_liability_nano".into(),
+                JsonValue::from(settlement.ledger.client_liability_nano.to_string()),
+            );
+            settlement_obj.insert(
+                "outstanding_liability_nano".into(),
+                JsonValue::from(settlement.ledger.outstanding_liability_nano.to_string()),
+            );
+            settlement_obj.insert(
+                "bond_total_nano".into(),
+                JsonValue::from(settlement.ledger.bond_total_nano.to_string()),
+            );
+            settlement_obj.insert(
+                "bond_locked_nano".into(),
+                JsonValue::from(settlement.ledger.bond_locked_nano.to_string()),
+            );
+            settlement_obj.insert(
+                "bond_slashed_nano".into(),
+                JsonValue::from(settlement.ledger.bond_slashed_nano.to_string()),
+            );
+            settlement_obj.insert(
+                "bond_released_nano".into(),
+                JsonValue::from(settlement.ledger.bond_released_nano.to_string()),
             );
             if let Some(notes) = &settlement.audit_notes {
                 settlement_obj.insert("audit_notes".into(), JsonValue::from(notes.clone()));
@@ -2968,24 +3006,29 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
 
     fn publish_reputation_snapshot(
         &self,
-        snapshot: &ReputationSnapshotV1,
+        envelope: &SignedReputationSnapshotV1,
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
             let _publication_guard = self.lock_publication()?;
-            ensure_canonical_governance_encoding(snapshot, encoded, "reputation snapshot")?;
-            snapshot.validate().map_err(|err| {
-                GovernancePublishError::other(format!("invalid reputation snapshot: {err}"))
+            let canonical = envelope.canonical_bytes().map_err(|err| {
+                GovernancePublishError::other(format!("invalid signed reputation snapshot: {err}"))
             })?;
+            if canonical != encoded {
+                return Err(GovernancePublishError::other(
+                    "signed reputation snapshot bytes are not canonical",
+                ));
+            }
+            let snapshot = &envelope.snapshot;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.reputation_snapshot_path(snapshot, &digest_hex);
+            let base_path = self.reputation_snapshot_path(envelope, &digest_hex);
 
             let encoded_path = base_path.with_extension("to");
             write_atomic(&encoded_path, encoded)?;
             write_digest_sidecar(&encoded_path, encoded)?;
 
-            let json_body = reputation_snapshot_json(snapshot, encoded, &digest_hex)?;
+            let json_body = reputation_snapshot_json(envelope, encoded, &digest_hex)?;
             let json_path = base_path.with_extension("json");
             write_atomic(&json_path, json_body.as_bytes())?;
             write_digest_sidecar(&json_path, json_body.as_bytes())?;
@@ -3014,6 +3057,18 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "merkle_root_hex".into(),
                 JsonValue::from(hex::encode(snapshot.merkle_root)),
             );
+            labels.insert(
+                "policy_digest_hex".into(),
+                JsonValue::from(hex::encode(envelope.policy_digest)),
+            );
+            labels.insert(
+                "scoring_evidence_digest_hex".into(),
+                JsonValue::from(hex::encode(envelope.scoring_evidence_digest)),
+            );
+            labels.insert(
+                "signature_count".into(),
+                JsonValue::from(envelope.signatures.len() as u64),
+            );
             self.record_publish_index(
                 "reputation_snapshot",
                 &encoded_path,
@@ -3024,7 +3079,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             )?;
             self.record_runtime_signed_payload(
                 "reputation_snapshot",
-                GovernanceLogPayloadV1::ReputationSnapshot(snapshot.clone()),
+                GovernanceLogPayloadV1::SignedReputationSnapshot(envelope.clone()),
                 &encoded_path,
                 &json_path,
                 &digest_hex,
@@ -3727,18 +3782,19 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
 }
 
 fn reputation_snapshot_json(
-    snapshot: &ReputationSnapshotV1,
+    envelope: &SignedReputationSnapshotV1,
     encoded: &[u8],
     digest_hex: &str,
 ) -> Result<String, GovernancePublishError> {
     let mut payload = JsonMap::new();
     payload.insert(
-        "snapshot".into(),
-        json::to_value(snapshot).map_err(|err| {
-            GovernancePublishError::other(format!("serialize reputation snapshot: {err}"))
+        "signed_snapshot".into(),
+        json::to_value(envelope).map_err(|err| {
+            GovernancePublishError::other(format!("serialize signed reputation snapshot: {err}"))
         })?,
     );
 
+    let snapshot = &envelope.snapshot;
     let mut metadata = JsonMap::new();
     metadata.insert(
         "snapshot_id_hex".into(),
@@ -3757,6 +3813,18 @@ fn reputation_snapshot_json(
         JsonValue::from(hex::encode(snapshot.merkle_root)),
     );
     metadata.insert(
+        "policy_digest_hex".into(),
+        JsonValue::from(hex::encode(envelope.policy_digest)),
+    );
+    metadata.insert(
+        "scoring_evidence_digest_hex".into(),
+        JsonValue::from(hex::encode(envelope.scoring_evidence_digest)),
+    );
+    metadata.insert(
+        "signature_count".into(),
+        JsonValue::from(envelope.signatures.len() as u64),
+    );
+    metadata.insert(
         "encoded_blake3".into(),
         JsonValue::from(digest_hex.to_string()),
     );
@@ -3768,7 +3836,7 @@ fn reputation_snapshot_json(
     payload.insert("metadata".into(), JsonValue::Object(metadata));
 
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
-        GovernancePublishError::other(format!("serialize reputation snapshot json: {err}"))
+        GovernancePublishError::other(format!("serialize signed reputation snapshot json: {err}"))
     })
 }
 
@@ -4388,6 +4456,7 @@ mod tests {
         thread,
     };
 
+    use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use norito::codec::Encode;
     use sorafs_manifest::deal::{
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
@@ -4404,12 +4473,13 @@ mod tests {
         ByteRangeV1, GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogPayloadV1,
         MODERATION_LEDGER_PUBLICATION_VERSION_V1, OrderbookSignatureV1,
         REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
-        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-        ReputationWeightsV1, SETTLEMENT_RECEIPT_VERSION_V1,
-        SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+        REPUTATION_SCORING_EVIDENCE_VERSION_V1, ReputationProviderInputV1,
+        ReputationProviderMetricsV1, ReputationReserveStageV1, ReputationScoringEvidenceV1,
+        ReputationSnapshotSignatureV1, ReputationWeightsV1, SETTLEMENT_RECEIPT_VERSION_V1,
+        SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
         SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
         SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
-        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementReceiptV1,
+        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementReceiptV1, SignedReputationSnapshotV1,
         SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
         SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
         SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
@@ -4450,30 +4520,55 @@ mod tests {
         let deal_id = [0xAB; 32];
         let provider_id = [0xCD; 32];
         let client_id = [0xEF; 32];
-        let ledger = DealLedgerSnapshotV1 {
+        let mut ledger = DealLedgerSnapshotV1 {
             version: DEAL_LEDGER_VERSION_V1,
+            snapshot_id: [0; 32],
+            sequence: 1,
+            previous_snapshot_id: None,
             deal_id,
+            terms_digest: [0xA4; 32],
             provider_id,
             client_id,
-            provider_accrual: sorafs_manifest::deal::XorAmount::from_micro(500_000),
-            client_liability: sorafs_manifest::deal::XorAmount::from_micro(500_000),
-            bond_locked: sorafs_manifest::deal::XorAmount::from_micro(1_000_000),
-            bond_slashed: sorafs_manifest::deal::XorAmount::zero(),
+            deal_start_epoch: 1_699_999_990,
+            deal_end_epoch: 1_699_999_999,
+            settlement_window_epochs: 10,
+            window_start_epoch: 1_699_999_990,
+            window_end_epoch: 1_700_000_000,
+            provider_accrual_nano: 500_000,
+            client_liability_nano: 500_000,
+            micropayment_credit_generated_nano: 0,
+            micropayment_credit_applied_nano: 0,
+            micropayment_credit_carry_nano: 0,
+            client_debit_nano: 500_000,
+            outstanding_liability_nano: 0,
+            bond_total_nano: 1_000_000,
+            bond_locked_nano: 0,
+            bond_slashed_nano: 0,
+            bond_released_nano: 1_000_000,
+            window_expected_charge_nano: 500_000,
+            window_micropayment_generated_nano: 0,
+            window_micropayment_applied_nano: 0,
+            window_client_debit_nano: 500_000,
+            window_bond_slashed_nano: 0,
+            window_bond_released_nano: 1_000_000,
             captured_at: 1_700_000_000,
         };
-        let settlement = DealSettlementV1 {
+        ledger.snapshot_id = ledger.derive_snapshot_id().expect("ledger id");
+        let mut settlement = DealSettlementV1 {
             version: DEAL_SETTLEMENT_VERSION_V1,
+            settlement_id: [0; 32],
             deal_id,
             ledger,
             status: DealSettlementStatusV1::Completed,
-            settled_at: 1_700_000_010,
+            settled_at: 1_700_000_000,
             audit_notes: None,
         };
+        settlement.settlement_id = settlement.derive_settlement_id().expect("settlement id");
         let encoded = norito::to_bytes(&settlement).expect("encode settlement");
         (settlement, encoded)
     }
 
-    fn sample_reputation_snapshot() -> (ReputationSnapshotV1, Vec<u8>) {
+    fn sample_reputation_snapshot() -> (SignedReputationSnapshotV1, Vec<u8>) {
         let metrics = ReputationProviderMetricsV1 {
             version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
             por_success_bps: 9_800,
@@ -4493,16 +4588,48 @@ mod tests {
             active_dispute: false,
             slashing_event: false,
         };
+        let inputs = vec![input];
         let snapshot = build_reputation_snapshot(
             [0x42; 16],
             1_800_000_000,
             ReputationWeightsV1::default(),
-            &[input],
+            &inputs,
             None,
         )
         .expect("reputation snapshot");
-        let encoded = norito::to_bytes(&snapshot).expect("encode reputation snapshot");
-        (snapshot, encoded)
+        let scoring_evidence = ReputationScoringEvidenceV1 {
+            version: REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+            provider_inputs: inputs,
+            trust_edges: Vec::new(),
+        };
+        let mut envelope = SignedReputationSnapshotV1 {
+            version: SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+            policy_digest: [0xA5; 32],
+            snapshot,
+            scoring_evidence_digest: scoring_evidence
+                .canonical_digest()
+                .expect("scoring evidence digest"),
+            scoring_evidence,
+            signatures: Vec::new(),
+        };
+        let signing_key = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+            .expect("derive reputation signing key");
+        let signature = IrohaSignature::try_new(
+            signing_key.private_key(),
+            &envelope.signing_digest().expect("signing digest"),
+        )
+        .expect("sign reputation snapshot");
+        envelope.signatures.push(ReputationSnapshotSignatureV1 {
+            signer_id: "council-1".to_owned(),
+            signature: signature
+                .payload()
+                .try_into()
+                .expect("Ed25519 signature is fixed-width"),
+        });
+        let encoded = envelope
+            .canonical_bytes()
+            .expect("encode signed reputation snapshot");
+        (envelope, encoded)
     }
 
     fn sample_moderation_ballot_event() -> (SoraFsModerationBallotGovernanceEventV1, Vec<u8>) {
@@ -5392,8 +5519,8 @@ mod tests {
             other => panic!("unexpected first runtime DAG payload: {other:?}"),
         }
         match &blocks[1].node.payload {
-            GovernanceLogPayloadV1::ReputationSnapshot(value) => {
-                assert_eq!(value.snapshot_id, snapshot.snapshot_id);
+            GovernanceLogPayloadV1::SignedReputationSnapshot(value) => {
+                assert_eq!(value.snapshot.snapshot_id, snapshot.snapshot.snapshot_id);
             }
             other => panic!("unexpected second runtime DAG payload: {other:?}"),
         }
@@ -6678,7 +6805,7 @@ mod tests {
             .publish_reputation_snapshot(&snapshot, &encoded)
             .expect("publish reputation snapshot");
 
-        let snapshot_hex = hex::encode(snapshot.snapshot_id);
+        let snapshot_hex = hex::encode(snapshot.snapshot.snapshot_id);
         let dir = temp
             .path()
             .join("reputation")
@@ -6710,7 +6837,7 @@ mod tests {
         );
         assert_eq!(
             metadata.get("provider_count").and_then(JsonValue::as_u64),
-            Some(snapshot.providers.len() as u64)
+            Some(snapshot.snapshot.providers.len() as u64)
         );
     }
 }

@@ -10,9 +10,7 @@ use core::fmt;
 use std::{string::String, vec::Vec};
 
 use iroha_crypto::{Hash, HashOf};
-use iroha_schema::{
-    EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta,
-};
+use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, DecodeAll, Encode};
 
 use super::{BlockSignature, Header as BlockHeader};
@@ -25,12 +23,15 @@ use crate::{
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
 
-/// Wire protocol version for first-release Sumeragi consensus messages.
+/// Wire protocol version for the legacy Sumeragi v1 archival message family.
+///
+/// Live consensus rejects this family. New validators use
+/// [`super::consensus_v2`] and its explicit v2 envelope.
 pub const PROTO_VERSION: u32 = 1;
 
-/// Mode tag for classic permissioned Sumeragi used in handshakes and hashing domains.
+/// Legacy permissioned-mode tag retained for decoding and archival verification.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v1";
-/// Mode tag for `NPoS` Sumeragi used in handshakes and hashing domains.
+/// Legacy `NPoS` mode tag retained for decoding and archival verification.
 pub const NPOS_TAG: &str = "iroha2-consensus::npos-sumeragi@v1";
 
 /// Chain-order hash used by fixtures that do not model live validator ordering.
@@ -283,6 +284,18 @@ pub struct ConsensusGenesisParams {
     /// Optional NPoS-specific configuration captured at genesis.
     #[norito(default)]
     pub npos: Option<NposGenesisParams>,
+    /// Explicit global consensus protocol revision.
+    #[norito(default)]
+    pub protocol_version: u32,
+    /// One constant, non-resetting round timeout in milliseconds.
+    #[norito(default)]
+    pub round_timeout_ms: u64,
+    /// Required signed inputs for constructing Sumeragi v2 height contexts.
+    ///
+    /// `None` exists only so archival v1 payloads remain decodable. A live v2
+    /// node must reject it rather than deriving values from local config.
+    #[norito(default)]
+    pub v2_context: Option<super::consensus_v2::SumeragiV2GenesisContextParameters>,
 }
 
 /// `NPoS`-specific consensus parameters hashed into the genesis fingerprint.
@@ -535,9 +548,72 @@ pub enum EvidenceKind {
     InvalidProposal = 3,
     /// Transaction censorship proof (submission receipts).
     Censorship = 4,
+    /// Exact conflicting Sumeragi v2 artifacts authenticated under one frozen
+    /// height context.
+    SumeragiV2Equivocation = 5,
+}
+
+/// Self-contained frozen context and exact signed artifacts for one Sumeragi
+/// v2 equivocation proof.
+///
+/// Proofs of possession are retained in roster order so an auditor can verify
+/// current-context aggregate certificates referenced by the artifacts without
+/// consulting mutable validator state. Production persistence additionally
+/// compares this context and PoP vector with the locally verified immutable
+/// context record.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiV2EquivocationEvidence {
+    /// Immutable context which governed both conflicting artifacts.
+    pub context: super::consensus_v2::HeightContext,
+    /// BLS proofs of possession in exact frozen-roster order.
+    pub proofs_of_possession: Vec<Vec<u8>>,
+    /// Exact pair of conflicting signed artifacts.
+    pub conflict: super::consensus_v2::SumeragiV2Equivocation,
+}
+
+/// Schema projection of the named fields in [`EvidencePayload::DoubleVote`].
+#[derive(IntoSchema)]
+pub struct DoubleVoteEvidencePayloadSchema {
+    /// First observed vote.
+    pub v1: QcVote,
+    /// Second observed vote.
+    pub v2: QcVote,
+}
+
+/// Schema projection of the named fields in [`EvidencePayload::InvalidQc`].
+#[derive(IntoSchema)]
+pub struct InvalidQcEvidencePayloadSchema {
+    /// Certificate flagged as invalid.
+    pub certificate: Qc,
+    /// Human-readable invalidity reason.
+    pub reason: String,
+}
+
+/// Schema projection of the named fields in
+/// [`EvidencePayload::InvalidProposal`].
+#[derive(IntoSchema)]
+pub struct InvalidProposalEvidencePayloadSchema {
+    /// Proposal flagged as invalid.
+    pub proposal: Proposal,
+    /// Human-readable invalidity reason.
+    pub reason: String,
+}
+
+/// Schema projection of the named fields in [`EvidencePayload::Censorship`].
+#[derive(IntoSchema)]
+pub struct CensorshipEvidencePayloadSchema {
+    /// Transaction hash referenced by the receipts.
+    pub tx_hash: HashOf<crate::transaction::SignedTransaction>,
+    /// Signed submission receipts from validators.
+    pub receipts: Vec<TransactionSubmissionReceipt>,
 }
 
 /// Evidence payloads.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum EvidencePayload {
     /// Two votes by the same signer for the same (phase, height, view, epoch)
@@ -569,6 +645,8 @@ pub enum EvidencePayload {
         /// Signed submission receipts from validators.
         receipts: Vec<TransactionSubmissionReceipt>,
     },
+    /// Exact, independently verifiable Sumeragi v2 equivocation material.
+    SumeragiV2Equivocation(SumeragiV2EquivocationEvidence),
 }
 
 /// Evidence wrapper.
@@ -618,6 +696,11 @@ impl IntoSchema for EvidenceKind {
                 discriminant: EvidenceKind::Censorship as u8,
                 ty: None,
             },
+            EnumVariant {
+                tag: "SumeragiV2Equivocation".to_owned(),
+                discriminant: EvidenceKind::SumeragiV2Equivocation as u8,
+                ty: None,
+            },
         ];
         metamap.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
     }
@@ -638,7 +721,40 @@ impl IntoSchema for EvidencePayload {
         if metamap.contains_key::<Self>() {
             return;
         }
-        metamap.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta { types: vec![] }));
+        DoubleVoteEvidencePayloadSchema::update_schema_map(metamap);
+        InvalidQcEvidencePayloadSchema::update_schema_map(metamap);
+        InvalidProposalEvidencePayloadSchema::update_schema_map(metamap);
+        CensorshipEvidencePayloadSchema::update_schema_map(metamap);
+        SumeragiV2EquivocationEvidence::update_schema_map(metamap);
+        metamap.insert::<Self>(Metadata::Enum(EnumMeta {
+            variants: vec![
+                EnumVariant {
+                    tag: "DoubleVote".to_owned(),
+                    discriminant: 0,
+                    ty: Some(core::any::TypeId::of::<DoubleVoteEvidencePayloadSchema>()),
+                },
+                EnumVariant {
+                    tag: "InvalidQc".to_owned(),
+                    discriminant: 1,
+                    ty: Some(core::any::TypeId::of::<InvalidQcEvidencePayloadSchema>()),
+                },
+                EnumVariant {
+                    tag: "InvalidProposal".to_owned(),
+                    discriminant: 2,
+                    ty: Some(core::any::TypeId::of::<InvalidProposalEvidencePayloadSchema>()),
+                },
+                EnumVariant {
+                    tag: "Censorship".to_owned(),
+                    discriminant: 3,
+                    ty: Some(core::any::TypeId::of::<CensorshipEvidencePayloadSchema>()),
+                },
+                EnumVariant {
+                    tag: "SumeragiV2Equivocation".to_owned(),
+                    discriminant: 4,
+                    ty: Some(core::any::TypeId::of::<SumeragiV2EquivocationEvidence>()),
+                },
+            ],
+        }));
     }
 }
 
@@ -681,6 +797,13 @@ pub struct EvidenceRecord {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub penalty_applied_at_height: Option<Height>,
+    /// Block height which first admitted this exact evidence into consensus.
+    ///
+    /// `None` denotes node-local pending diagnostic material. Pending material
+    /// is never eligible for deterministic penalty derivation.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub consensus_admitted_at_height: Option<Height>,
 }
 
 /// Membership snapshot exported through `/v1/sumeragi/status`.
@@ -1885,6 +2008,72 @@ impl NativeAmxAttestationBodyV1 {
     }
 }
 
+/// Canonical Sumeragi v2 native AMX attestation payload.
+///
+/// The exact frozen round and election epoch are part of the signed payload,
+/// preventing a valid lane-local vote from being replayed across chains,
+/// parent decisions, epochs, heights, or views.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NativeAmxAttestationBodyV2 {
+    /// Exact frozen global round in which the receipt may be included.
+    pub round: super::consensus_v2::ConsensusRound,
+    /// Finalized election epoch repeated from the frozen height context.
+    pub epoch: u64,
+    /// Hash of the chain identifier that owns this attestation.
+    pub chain_id_hash: Hash,
+    /// Source transaction hash/id.
+    pub source_id: [u8; 32],
+    /// Hash of the canonical transaction entrypoint.
+    pub tx_entrypoint_hash: HashOf<crate::transaction::TransactionEntrypoint>,
+    /// Deterministic digest of the full coordinator/participant routing plan.
+    pub plan_digest: Hash,
+    /// Native AMX phase certified by this body.
+    pub phase: NativeAmxPhase,
+    /// Coordinator lane selected by the routing plan.
+    pub coordinator_lane_id: LaneId,
+    /// Coordinator dataspace selected by the routing plan.
+    pub coordinator_dataspace_id: DataSpaceId,
+    /// Exact active coordinator-lane incarnation at the frozen authority context.
+    pub coordinator_lane_incarnation: Hash,
+    /// Participant lane certified by the committee.
+    pub participant_lane_id: LaneId,
+    /// Participant dataspace certified by the committee.
+    pub participant_dataspace_id: DataSpaceId,
+    /// Exact active participant-lane incarnation at the frozen authority context.
+    pub participant_lane_incarnation: Hash,
+    /// Hash of the exact canonical participant committee that may attest this leg.
+    pub participant_validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Number of validators in the exact participant committee.
+    pub participant_validator_count: u32,
+    /// Minimum number of participant signatures required by the lane quorum policy.
+    pub participant_min_quorum: u32,
+    /// Global/catalog height used to resolve routes, lane incarnations, keys, and PoPs.
+    pub authority_context_height: u64,
+    /// Coordinator block height planned for final inclusion.
+    pub planned_coordinator_block_height: u64,
+    /// Coordinator lane-local consensus view for this exact attestation.
+    pub coordinator_lane_block_view: u64,
+    /// Exact coordinator lane-block proposal authenticated by the full-plan request.
+    pub coordinator_proposal_hash: Hash,
+}
+
+impl NativeAmxAttestationBodyV2 {
+    /// Build the domain-separated signature preimage for this v2 attestation.
+    #[must_use]
+    pub fn signature_preimage(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + 320);
+        out.extend_from_slice(b"iroha:native-amx:v2");
+        out.extend_from_slice(
+            &norito::to_bytes(self).expect("native AMX v2 attestation body must encode"),
+        );
+        out
+    }
+}
+
 /// Validator-set proof for a native AMX attestation body.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1912,6 +2101,32 @@ pub struct NativeAmxAttestationQcV1 {
     pub bls_aggregate_signature: Vec<u8>,
 }
 
+/// Validator-set proof for a context-bound native AMX v2 attestation.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NativeAmxAttestationQcV2 {
+    /// Context-bound body certified by the aggregate signature.
+    pub body: NativeAmxAttestationBodyV2,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Stable hash of the validator set that produced the certificate.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Ordered validator set used when assembling the certificate.
+    pub validator_set: Vec<PeerId>,
+    /// Historical BLS proofs-of-possession aligned exactly with `validator_set`.
+    ///
+    /// Embedding the full aligned vector keeps a certificate independently
+    /// verifiable after consensus-key rotation or lane retirement.
+    pub validator_set_pops: Vec<Vec<u8>>,
+    /// Compact signer bitmap (LSB-first).
+    pub signers_bitmap: Vec<u8>,
+    /// BLS12-381 aggregate signature bytes (compressed).
+    pub bls_aggregate_signature: Vec<u8>,
+}
+
 /// Per-dataspace native AMX leg committed by the routing-plan coordinator.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1929,6 +2144,23 @@ pub struct NativeAmxLegRecord {
     pub prepare_qc: NativeAmxAttestationQcV1,
     /// Participant commit QC.
     pub commit_qc: NativeAmxAttestationQcV1,
+}
+
+/// Per-dataspace native AMX v2 leg committed by the routing-plan coordinator.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NativeAmxLegRecordV2 {
+    /// Participant lane certified by both phase QCs.
+    pub lane_id: LaneId,
+    /// Dataspace participating in the native AMX group.
+    pub dataspace_id: DataSpaceId,
+    /// Context-bound participant prepare QC.
+    pub prepare_qc: NativeAmxAttestationQcV2,
+    /// Context-bound participant commit QC.
+    pub commit_qc: NativeAmxAttestationQcV2,
 }
 
 /// Versioned native AMX receipt committed by a finalized coordinator block.
@@ -1961,7 +2193,7 @@ pub struct NativeAmxReceipt {
     /// Exact coordinator lane-block proposal authenticated by participant QCs.
     pub coordinator_proposal_hash: Hash,
     /// Prepared and committed dataspace legs.
-    pub legs: Vec<NativeAmxLegRecord>,
+    pub legs: Vec<NativeAmxLegRecordV2>,
 }
 
 /// Liquidity profile applied when computing XOR conversions.
@@ -4116,6 +4348,9 @@ impl_decode_from_slice_via_codec!(NativeAmxPhase);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV1);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV1);
 impl_decode_from_slice_via_codec!(NativeAmxLegRecord);
+impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV2);
+impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV2);
+impl_decode_from_slice_via_codec!(NativeAmxLegRecordV2);
 impl_decode_from_slice_via_codec!(NativeAmxReceipt);
 
 // Provide nicer `Debug` rendering for validator indices in test snapshots.
@@ -4347,38 +4582,63 @@ mod tests {
         coordinator: (LaneId, DataSpaceId),
         participant: (LaneId, DataSpaceId),
         validator_set: Vec<PeerId>,
-    ) -> NativeAmxAttestationQcV1 {
+    ) -> NativeAmxAttestationQcV2 {
         let (coordinator_lane_id, coordinator_dataspace_id) = coordinator;
         let (participant_lane_id, participant_dataspace_id) = participant;
+        let participant_validator_count =
+            u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
+        let participant_min_quorum = u32::try_from(
+            validator_set
+                .len()
+                .saturating_sub(validator_set.len().saturating_sub(1) / 3)
+                .max(1),
+        )
+        .expect("fixture validator quorum fits u32");
         let validator_set_hash = HashOf::new(&validator_set);
-        let validator_count = u32::try_from(validator_set.len()).expect("fixture validator count");
-        let min_quorum =
-            u32::try_from(validator_set.len().saturating_mul(2) / 3 + 1).expect("fixture quorum");
-        NativeAmxAttestationQcV1 {
-            body: NativeAmxAttestationBodyV1 {
-                chain_id_hash: Hash::new(b"native-amx-model-chain"),
+        let validator_set_pops = vec![vec![0x5A; 96]; validator_set.len()];
+        let chain_id_hash = Hash::new(b"native-amx-model-chain");
+        let coordinator_lane_incarnation = Hash::new(b"native-amx-model-coordinator");
+        let participant_lane_incarnation = Hash::new(
+            [
+                b"native-amx-model-participant:".as_slice(),
+                &participant_lane_id.as_u32().to_be_bytes(),
+            ]
+            .concat(),
+        );
+        let coordinator_proposal_hash = Hash::new(b"native-amx-model-proposal");
+        NativeAmxAttestationQcV2 {
+            body: NativeAmxAttestationBodyV2 {
+                round: crate::block::consensus_v2::ConsensusRound {
+                    context_id: crate::block::consensus_v2::HeightContextId(
+                        HashOf::from_untyped_unchecked(Hash::new(b"native-amx-receipt-context")),
+                    ),
+                    height: 42,
+                    view: 3,
+                },
+                epoch: 7,
+                chain_id_hash,
                 source_id,
                 tx_entrypoint_hash: sample_entrypoint_hash(0x42),
                 plan_digest,
                 phase,
                 coordinator_lane_id,
                 coordinator_dataspace_id,
-                coordinator_lane_incarnation: Hash::new(b"native-amx-model-coordinator"),
+                coordinator_lane_incarnation,
                 participant_lane_id,
                 participant_dataspace_id,
-                participant_lane_incarnation: Hash::new(participant_lane_id.as_u32().to_be_bytes()),
+                participant_lane_incarnation,
                 participant_validator_set_hash: validator_set_hash,
-                participant_validator_count: validator_count,
-                participant_min_quorum: min_quorum,
+                participant_validator_count,
+                participant_min_quorum,
                 authority_context_height: 42,
-                coordinator_lane_block_height: 7,
-                coordinator_lane_block_view: 2,
-                coordinator_proposal_hash: Hash::new(b"native-amx-model-proposal"),
+                planned_coordinator_block_height: 42,
+                coordinator_lane_block_view: 3,
+                coordinator_proposal_hash,
             },
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash,
-            validator_set_pops: vec![vec![0x5A; 96]; validator_set.len()],
             validator_set,
+            validator_set_pops,
             signers_bitmap: vec![0b0000_0111],
             bls_aggregate_signature: vec![0xA5; 96],
         }
@@ -4457,7 +4717,7 @@ mod tests {
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: vec![NativeAmxReceipt {
-                version: 1,
+                version: 2,
                 source_id,
                 chain_id_hash: Hash::new(b"native-amx-model-chain"),
                 plan_digest,
@@ -4469,10 +4729,9 @@ mod tests {
                 lane_block_view: 2,
                 coordinator_proposal_hash: Hash::new(b"native-amx-model-proposal"),
                 legs: vec![
-                    NativeAmxLegRecord {
+                    NativeAmxLegRecordV2 {
                         lane_id: LaneId::new(7),
                         dataspace_id: DataSpaceId::new(7),
-                        lane_incarnation: Hash::new(7_u32.to_be_bytes()),
                         prepare_qc: sample_native_amx_qc(
                             NativeAmxPhase::Prepare,
                             source_id,
@@ -4490,10 +4749,9 @@ mod tests {
                             validators.clone(),
                         ),
                     },
-                    NativeAmxLegRecord {
+                    NativeAmxLegRecordV2 {
                         lane_id: LaneId::new(8),
                         dataspace_id: DataSpaceId::new(8),
-                        lane_incarnation: Hash::new(8_u32.to_be_bytes()),
                         prepare_qc: sample_native_amx_qc(
                             NativeAmxPhase::Prepare,
                             source_id,
@@ -4545,6 +4803,28 @@ mod tests {
         let preimage = body.signature_preimage();
         assert!(preimage.starts_with(b"iroha:native-amx:v1"));
         assert!(preimage.len() > b"iroha:native-amx:v1".len());
+    }
+
+    #[test]
+    fn native_amx_v2_attestation_preimage_binds_round_and_epoch() {
+        let body = sample_native_amx_qc(
+            NativeAmxPhase::Prepare,
+            [0x31; 32],
+            Hash::new(b"v2-context-bound-plan"),
+            (LaneId::new(1), DataSpaceId::new(7)),
+            (LaneId::new(2), DataSpaceId::new(8)),
+            sample_roster(),
+        )
+        .body;
+        let preimage = body.signature_preimage();
+        let mut another_view = body;
+        another_view.round.view = another_view.round.view.saturating_add(1);
+        let mut another_epoch = body;
+        another_epoch.epoch = another_epoch.epoch.saturating_add(1);
+
+        assert!(preimage.starts_with(b"iroha:native-amx:v2"));
+        assert_ne!(preimage, another_view.signature_preimage());
+        assert_ne!(preimage, another_epoch.signature_preimage());
     }
 
     fn sample_lane_block_vote_body(phase: CertPhase) -> LaneBlockVoteBodyV1 {
@@ -5243,6 +5523,108 @@ mod tests {
     }
 
     #[test]
+    fn sumeragi_v2_equivocation_evidence_roundtrip_and_kind_id() {
+        use super::super::consensus_v2 as v2;
+
+        let mut peers = sample_roster();
+        peers.sort();
+        let roster = peers
+            .into_iter()
+            .map(|validator| v2::ValidatorPower {
+                validator,
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let context = v2::HeightContext {
+            chain_id: crate::ChainId::from("v2-evidence-codec"),
+            protocol_version: v2::PROTOCOL_VERSION,
+            height: 1,
+            epoch: 0,
+            epoch_end_height: u64::MAX,
+            mode: v2::ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            quorum: v2::DualQuorum::from_roster(&roster).expect("dual quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"v2-evidence-codec-context"),
+            da_layout: v2::DataAvailabilityLayout {
+                encoding: v2::PayloadEncoding::Plain,
+                chunk_size_bytes: 16,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 64,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0x42; 32],
+        };
+        let round = v2::ConsensusRound {
+            context_id: context.id(),
+            height: 1,
+            view: 0,
+        };
+        let subject = |seed| v2::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32])),
+            payload_hash: Hash::prehashed([seed.wrapping_add(1); 32]),
+        };
+        let ev = Evidence {
+            kind: EvidenceKind::SumeragiV2Equivocation,
+            payload: EvidencePayload::SumeragiV2Equivocation(SumeragiV2EquivocationEvidence {
+                context,
+                proofs_of_possession: vec![vec![0xA5; 48]; 3],
+                conflict: v2::SumeragiV2Equivocation::PhaseVote {
+                    first: v2::Vote {
+                        round,
+                        phase: v2::GlobalPhase::Prepare,
+                        subject: subject(0x31),
+                        signer: 1,
+                        signature: vec![0xB1; 96],
+                    },
+                    second: v2::Vote {
+                        round,
+                        phase: v2::GlobalPhase::Prepare,
+                        subject: subject(0x32),
+                        signer: 1,
+                        signature: vec![0xB2; 96],
+                    },
+                },
+            }),
+        };
+        let bytes = ev.encode();
+        let decoded = Evidence::decode(&mut &bytes[..]).expect("decode v2 evidence");
+        assert_eq!(decoded, ev);
+        assert_eq!(EvidenceKind::SumeragiV2Equivocation as u8, 5);
+
+        let schema = EvidencePayload::schema();
+        let Some(Metadata::Enum(metadata)) = schema.get::<EvidencePayload>() else {
+            panic!("evidence payload schema must remain an enum");
+        };
+        let v2 = metadata
+            .variants
+            .iter()
+            .find(|variant| variant.tag == "SumeragiV2Equivocation")
+            .expect("v2 evidence schema variant");
+        assert_eq!(v2.discriminant, 4);
+        assert_eq!(
+            v2.ty,
+            Some(core::any::TypeId::of::<SumeragiV2EquivocationEvidence>())
+        );
+        assert!(schema.contains_key::<SumeragiV2EquivocationEvidence>());
+        let Some(Metadata::Enum(conflict)) =
+            schema.get::<super::super::consensus_v2::SumeragiV2Equivocation>()
+        else {
+            panic!("v2 equivocation conflict schema must remain an enum");
+        };
+        assert_eq!(
+            conflict
+                .variants
+                .iter()
+                .map(|variant| (variant.tag.as_str(), variant.discriminant))
+                .collect::<Vec<_>>(),
+            vec![("proposal", 0), ("phase_vote", 1), ("timeout_vote", 2)]
+        );
+    }
+
+    #[test]
     fn censorship_evidence_roundtrip_codec() {
         let key_pair = checked_random_keypair();
         let payload = crate::transaction::TransactionSubmissionReceiptPayload {
@@ -5313,6 +5695,7 @@ mod tests {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
+            consensus_admitted_at_height: Some(11),
         };
         let bytes = rec.encode();
         let dec = EvidenceRecord::decode(&mut &bytes[..]).expect("decode evidence record");

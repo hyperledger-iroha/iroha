@@ -9,8 +9,15 @@
       { "name": "bls_domain", "type": "Option<String>" },
       { "name": "wire_proto_versions", "type": "Vec<u32>" },
       { "name": "consensus_fingerprint", "type": "Option<String>" },
+      { "name": "sumeragi_v2", "type": "SumeragiV2GenesisContextParameters" },
       { "name": "crypto", "type": "ManifestCrypto" }
     ]
+  },
+  "SumeragiV2GenesisContextParameters": {
+    "Struct": [
+      { "name": "da_layout", "type": "DataAvailabilityLayout" }
+    ],
+    "docs": "Required signed Sumeragi v2 height-context transport parameters."
   },
   "RawGenesisTx": {
     "Struct": [

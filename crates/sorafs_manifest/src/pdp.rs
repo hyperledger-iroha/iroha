@@ -19,7 +19,7 @@ mod merkle;
 
 pub use merkle::{
     PdpMerklePathError, PdpMerkleReadError, PdpMerkleTreeBuilderV1, PdpMerkleTreeError,
-    PdpMerkleTreeV1,
+    PdpMerkleTreeV1, estimated_heap_bytes,
 };
 
 use merkle::{
@@ -1835,7 +1835,7 @@ fn div_ceil_u64(value: u64, divisor: u64) -> Option<u64> {
     if divisor == 0 {
         return None;
     }
-    (value / divisor).checked_add(u64::from(value % divisor != 0))
+    (value / divisor).checked_add(u64::from(!value.is_multiple_of(divisor)))
 }
 
 fn tree_height(count: u64) -> Result<u16, PdpCommitmentValidationError> {

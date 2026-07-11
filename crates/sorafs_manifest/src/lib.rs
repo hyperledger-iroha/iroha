@@ -205,10 +205,13 @@ pub use chunker_registry::{ChunkerProfileDescriptor, DEFAULT_MULTIHASH_CODE, MAN
 pub use deal::{
     BASIS_POINTS_PER_UNIT, DEAL_LEDGER_VERSION_V1, DEAL_MICROPAYMENT_VERSION_V1,
     DEAL_SETTLEMENT_VERSION_V1, DEAL_TERMS_VERSION_V1, DealAmountError, DealLedgerSnapshotV1,
-    DealLedgerValidationError, DealMicropaymentV1, DealMicropaymentValidationError,
-    DealSettlementStatusV1, DealSettlementV1, DealSettlementValidationError, DealTermsV1,
-    DealTermsValidationError, MICRO_XOR_PER_XOR, MicropaymentPolicyError, MicropaymentPolicyV1,
-    XorAmount,
+    DealLedgerTransitionError, DealLedgerValidationError, DealMetadataEntry, DealMicropaymentV1,
+    DealMicropaymentValidationError, DealSettlementStatusV1, DealSettlementTransitionError,
+    DealSettlementV1, DealSettlementValidationError, DealTermsV1, DealTermsValidationError,
+    MAX_DEAL_CLIENT_ACCOUNT_BYTES, MAX_DEAL_METADATA_ENTRIES, MAX_DEAL_METADATA_KEY_BYTES,
+    MAX_DEAL_METADATA_VALUE_BYTES, MAX_DEAL_PROFILE_HANDLE_BYTES,
+    MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES, MICRO_XOR_PER_XOR, MicropaymentPolicyError,
+    MicropaymentPolicyV1, XorAmount, derive_micropayment_hint,
 };
 pub use gateway::{
     GatewayAuthorizationError, GatewayAuthorizationRecord, GatewayAuthorizationVerifier,
@@ -248,14 +251,34 @@ pub use governance::{
     governance_log_node_cid_v1, validate_governance_dag_chain_v1,
     validate_governance_dag_head_against_chain_v1,
 };
+pub use hedging::signed::{
+    GOVERNED_BILLING_STATEMENT_VERSION_V1, GOVERNED_HEDGING_REFERENCE_PRICE_VERSION_V1,
+    GovernedBillingStatementV1, GovernedHedgingReferencePriceDecisionV1,
+    HEDGING_FEED_BINDING_VERSION_V1, HEDGING_FEED_TRUST_POLICY_VERSION_V1,
+    HEDGING_TRUSTED_SIGNER_VERSION_V1, HedgingFeedBindingV1, HedgingFeedTrustPolicyV1,
+    HedgingTrustedSignerV1, MAX_GOVERNED_BILLING_STATEMENT_BYTES,
+    MAX_GOVERNED_HEDGING_DECISION_BYTES, MAX_HEDGING_FEED_BINDINGS_PER_SIGNER,
+    MAX_HEDGING_FUTURE_SKEW_SECS, MAX_HEDGING_SAMPLE_AGE_SECS, MAX_HEDGING_SIGNER_ID_BYTES,
+    MAX_HEDGING_TRUST_POLICY_BYTES, MAX_HEDGING_TRUSTED_SIGNERS, MAX_SIGNED_HEDGING_FEED_BYTES,
+    SIGNED_HEDGING_PRICE_FEED_VERSION_V1, SignedHedgingError, SignedHedgingPriceFeedV1,
+    bind_governed_billing_statement_v1, decode_governed_billing_statement,
+    decode_governed_reference_price_decision, decode_hedging_feed_trust_policy,
+    decode_signed_hedging_price_feed, derive_governed_reference_price_decision_v1,
+};
 pub use hedging::{
-    BILLING_LINE_ITEM_VERSION_V1, BILLING_STATEMENT_VERSION_V1, BillingLineDirectionV1,
-    BillingLineItemKindV1, BillingLineItemV1, BillingStatementV1, HEDGING_BASIS_POINTS,
+    BILLING_LINE_ITEM_VERSION_V1, BILLING_STATEMENT_MAX_CANONICAL_BYTES_V1,
+    BILLING_STATEMENT_VERSION_V1, BillingLineDirectionV1, BillingLineItemKindV1, BillingLineItemV1,
+    BillingStatementV1, HEDGING_BASIS_POINTS, HEDGING_DECISION_MAX_CANONICAL_BYTES_V1,
     HEDGING_PRICE_FEED_VERSION_V1, HEDGING_REFERENCE_PRICE_DECISION_VERSION_V1,
-    HedgingFeedStatusV1, HedgingPriceFeedV1, HedgingReferencePriceDecisionV1,
-    HedgingValidationError, billing_line_item_id_v1, billing_statement_id_v1,
-    build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
-    reference_price_decision_id_v1, xor_to_usd_micros,
+    HEDGING_SMALL_PAYLOAD_MAX_CANONICAL_BYTES_V1, HedgingFeedStatusV1, HedgingPayloadDecodeError,
+    HedgingPriceFeedV1, HedgingReferencePriceDecisionV1, HedgingValidationError,
+    MAX_BILLING_ACCOUNT_ID_BYTES, MAX_BILLING_LINES, MAX_HEDGING_DEGRADATION_REASONS,
+    MAX_HEDGING_IDENTIFIER_BYTES, MAX_HEDGING_NOTE_BYTES, MAX_HEDGING_PRICE_FEEDS,
+    billing_line_item_id_v1, billing_statement_id_v1, build_billing_line_item_v1,
+    build_billing_statement_v1, decode_billing_line_item_v1, decode_billing_statement_v1,
+    decode_hedging_price_feed_v1, decode_hedging_reference_price_decision_v1,
+    derive_reference_price_decision_v1, reference_price_decision_id_v1,
+    validate_billing_statement_transition, xor_to_usd_micros,
 };
 pub use hosts::{DirectCarLocator, HostMappingInput, HostMappingSummary};
 pub use manifest_capabilities::{
@@ -264,12 +287,16 @@ pub use manifest_capabilities::{
 pub use orderbook::{
     BYTES_PER_GIB, ByteRangeV1, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_ID_DOMAIN_V1,
     ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
-    ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1,
-    OrderBookMatchOutcomeV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1,
-    OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookOwnerNonceHighWaterV1,
+    ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, ORDERBOOK_RUNTIME_SNAPSHOT_MAX_CANONICAL_BYTES_V1,
+    ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
+    ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1, OrderBookMatchOutcomeV1,
+    OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1, OrderSideV1,
+    OrderTierV1, OrderbookOwnerNonceHighWaterV1, OrderbookPayloadDecodeError,
     OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, OrderbookValidationError,
     SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1,
     SettlementChannelV1, SettlementReceiptV1, TradeEventV1, apply_settlement_receipt_v1,
+    decode_order_cancel_v1, decode_order_request_v1, decode_orderbook_runtime_snapshot_v1,
+    decode_settlement_channel_v1, decode_settlement_receipt_v1, decode_trade_event_v1,
     derive_orderbook_order_id_v1, derive_orderbook_trade_id_v1, match_order_book_v1,
     match_orders_v1, open_settlement_channel_for_trade_v1, order_cancel_signature_digest_v1,
     order_request_signature_digest_v1, settlement_receipt_signature_digest_v1,
@@ -289,7 +316,7 @@ pub use pdp::{
     PdpEd25519SignatureV1, PdpHotLeafProofV1, PdpMerklePathError, PdpMerkleReadError,
     PdpMerkleTreeBuilderV1, PdpMerkleTreeError, PdpMerkleTreeV1, PdpProofLeafV1,
     PdpProofSigningError, PdpProofV1, PdpProofValidationError, PdpSampleV1,
-    PdpSignatureVerificationError, PdpVerificationError, VerifiedPdpProofV1,
+    PdpSignatureVerificationError, PdpVerificationError, VerifiedPdpProofV1, estimated_heap_bytes,
     sign_pdp_proof_ed25519_v1, verify_pdp_bundle_v1, verify_pdp_witnesses_v1,
 };
 pub use pin_registry::{
@@ -328,10 +355,21 @@ pub use potr::{
     POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrReceiptValidationError, PotrSignatureAlgorithm,
     PotrSignatureV1, PotrStatus,
 };
+pub use pricing::signed::{
+    GOVERNED_PRICING_MANIFEST_VERSION_V1, GovernedPricingError, GovernedPricingManifestV1,
+    MAX_GOVERNED_PRICING_MANIFEST_BYTES, MAX_PRICING_FUTURE_ACTIVATION_SECS,
+    MAX_PRICING_MANIFEST_SIGNATURES, MAX_PRICING_SIGNER_ID_BYTES, MAX_PRICING_TRUST_POLICY_BYTES,
+    MAX_PRICING_TRUSTED_SIGNERS, PRICING_MANIFEST_SIGNATURE_VERSION_V1,
+    PRICING_TRUST_POLICY_VERSION_V1, PRICING_TRUSTED_SIGNER_VERSION_V1, PricingManifestSignatureV1,
+    PricingTrustPolicyV1, PricingTrustedSignerV1, decode_governed_pricing_manifest,
+    decode_pricing_trust_policy, derive_pricing_id, validate_governed_pricing_transition,
+};
 pub use pricing::{
-    BondPolicyError, BondPolicyV1, CreditPolicyError, CreditPolicyV1, MicropaymentDecision,
-    PRICING_MANIFEST_VERSION_V1, PricingManifestError, PricingManifestV1,
-    PricingMicropaymentPolicyError, PricingMicropaymentPolicyV1, PricingTierError, PricingTierV1,
+    BondPolicyError, BondPolicyV1, CreditPolicyError, CreditPolicyV1, MAX_PRICING_NONCE_SAMPLES,
+    MAX_PRICING_NOTES_LEN, MAX_PRICING_TIER_ID_LEN, MAX_PRICING_TIERS, MicropaymentDecision,
+    PRICING_MANIFEST_VERSION_V1, PricingCalculationError, PricingManifestError, PricingManifestV1,
+    PricingMicropaymentEvaluationError, PricingMicropaymentPolicyError,
+    PricingMicropaymentPolicyV1, PricingNonceJsonError, PricingTierError, PricingTierV1,
 };
 pub use proof_stream::{
     MAX_PROOF_STREAM_SAMPLE_COUNT, ProofStreamKind, ProofStreamRequestError, ProofStreamRequestV1,
@@ -401,19 +439,30 @@ pub use repair::{
     SIGNED_AUDITOR_REQUEST_VERSION_V1, SignedAuditorRequestPayloadV1,
     SignedAuditorRequestSignaturePayloadV1, SignedAuditorRequestV1,
 };
+pub use reputation::signed::{
+    MAX_REPUTATION_FUTURE_SKEW_SECS, MAX_REPUTATION_SIGNER_ID_LEN,
+    MAX_REPUTATION_SNAPSHOT_AGE_SECS, MAX_REPUTATION_SNAPSHOT_SIGNATURES,
+    MAX_REPUTATION_TRUSTED_SIGNERS, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+    REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1, REPUTATION_TRUSTED_SIGNER_VERSION_V1,
+    ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1, ReputationSnapshotTrustPolicyV1,
+    ReputationTrustedSignerV1, SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+    SignedReputationSnapshotError, SignedReputationSnapshotV1, snapshot_signing_digest,
+    validate_reputation_snapshot_transition,
+};
 pub use reputation::{
     DEFAULT_CURRENT_SCORE_WEIGHT_BPS, DEFAULT_EIGENTRUST_ALPHA_BPS, LOW_REPUTATION_SCORE_FLAG_BPS,
-    MAX_REPUTATION_MERKLE_PROOF_LEN, MAX_REPUTATION_SCORE_BPS, MIN_REPUTATION_SCORE_BPS,
-    PROVIDER_REPUTATION_VERSION_V1, ProviderReputationV1, REPUTATION_BASIS_POINTS,
-    REPUTATION_EIGENTRUST_CONVERGENCE_L1_BPS, REPUTATION_EIGENTRUST_MAX_ITERATIONS,
-    REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
-    REPUTATION_SNAPSHOT_EVENT_VERSION_V1, REPUTATION_SNAPSHOT_VERSION_V1,
-    REPUTATION_TRUST_EDGE_VERSION_V1, REPUTATION_WEIGHTS_VERSION_V1, ReputationDegradationFlagV1,
-    ReputationMerkleProofV1, ReputationProviderInputV1, ReputationProviderMetricsV1,
-    ReputationReserveStageV1, ReputationSnapshotEventV1, ReputationSnapshotV1,
-    ReputationTrustEdgeV1, ReputationValidationError, ReputationWeightsV1,
-    build_reputation_snapshot, build_reputation_snapshot_with_trust_edges,
-    compute_reputation_merkle_root, score_provider_reputation,
+    MAX_REPUTATION_MERKLE_PROOF_LEN, MAX_REPUTATION_PROVIDERS, MAX_REPUTATION_SCORE_BPS,
+    MAX_REPUTATION_TRUST_EDGES, MIN_REPUTATION_SCORE_BPS, PROVIDER_REPUTATION_VERSION_V1,
+    ProviderReputationV1, REPUTATION_BASIS_POINTS, REPUTATION_EIGENTRUST_CONVERGENCE_L1_BPS,
+    REPUTATION_EIGENTRUST_MAX_ITERATIONS, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+    REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SNAPSHOT_EVENT_VERSION_V1,
+    REPUTATION_SNAPSHOT_VERSION_V1, REPUTATION_TRUST_EDGE_VERSION_V1,
+    REPUTATION_WEIGHTS_VERSION_V1, ReputationDegradationFlagV1, ReputationMerkleProofV1,
+    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+    ReputationSnapshotEventV1, ReputationSnapshotV1, ReputationTrustEdgeV1,
+    ReputationValidationError, ReputationWeightsV1, build_reputation_snapshot,
+    build_reputation_snapshot_with_trust_edges, compute_reputation_merkle_root,
+    score_provider_reputation,
 };
 pub use token::{
     STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1, STREAM_TOKEN_MAX_WIRE_BYTES_V1,
@@ -437,8 +486,11 @@ pub use transparency::{
     TransparencyLedgerError,
 };
 pub use validation::{
-    ManifestValidationError, PinPolicyConstraints, validate_chunker_handle, validate_manifest,
-    validate_pin_policy,
+    MAX_MANIFEST_ALIAS_CLAIMS, MAX_MANIFEST_ALIAS_PROOF_BYTES, MAX_MANIFEST_COUNCIL_SIGNATURES,
+    MAX_MANIFEST_ENCODED_BYTES, MAX_MANIFEST_METADATA_BYTES, MAX_MANIFEST_METADATA_ENTRIES,
+    MAX_MANIFEST_ROOT_CID_BYTES, ManifestValidationError, PinPolicyConstraints,
+    validate_chunker_handle, validate_manifest, validate_manifest_root_cid, validate_pin_policy,
+    validate_registered_chunker_profile,
 };
 
 pub use self::gateway_fixture::{
@@ -456,6 +508,21 @@ pub const MANIFEST_VERSION_V1: u8 = 1;
 /// Multihash code for BLAKE3-256.
 pub const BLAKE3_256_MULTIHASH_CODE: u64 = 0x1f;
 
+/// Builds the canonical binary CIDv1 used for first-release manifest roots.
+///
+/// The returned bytes encode CID version 1, the dag-cbor multicodec, the
+/// BLAKE3-256 multihash code, a 32-byte digest length, and `digest`.
+#[must_use]
+pub fn canonical_manifest_root_cid(digest: [u8; 32]) -> Vec<u8> {
+    let mut cid = Vec::with_capacity(MAX_MANIFEST_ROOT_CID_BYTES);
+    // These are the complete one-byte canonical varints for the immutable
+    // first-release CID layout. Keeping them literal makes this constructor
+    // infallible; the layout test below binds them to the public u64 codes.
+    cid.extend_from_slice(&[1, 0x71, 0x1f, 32]);
+    cid.extend_from_slice(&digest);
+    cid
+}
+
 /// Norito-encoded manifest (version 1).
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -465,6 +532,8 @@ pub struct ManifestV1 {
     pub root_cid: Vec<u8>,
     pub dag_codec: DagCodecId,
     pub chunking: ChunkingProfileV1,
+    /// SHA3-256 commitment to the ordered chunk metadata plan.
+    pub chunk_digest_sha3_256: [u8; 32],
     pub content_length: u64,
     pub car_digest: [u8; 32],
     pub car_size: u64,
@@ -480,24 +549,9 @@ impl ManifestV1 {
         norito::to_bytes(self)
     }
 
-    /// Serializes the manifest using the v1 Norito layout without compact lengths.
-    ///
-    /// This is only for compatibility with already-running Taira nodes that decode
-    /// SoraFS storage manifests with the pre-compact-length Norito layout.
-    pub fn encode_legacy_norito(&self) -> Result<Vec<u8>, NoritoError> {
-        let _guard = norito::core::DecodeFlagsGuard::enter(0);
-        norito::to_bytes(self)
-    }
-
     /// Computes the canonical manifest digest used by the Pin Registry.
     pub fn digest(&self) -> Result<Hash, NoritoError> {
         let bytes = self.encode()?;
-        Ok(blake3::hash(&bytes))
-    }
-
-    /// Computes the digest for the legacy Norito manifest bytes.
-    pub fn legacy_norito_digest(&self) -> Result<Hash, NoritoError> {
-        let bytes = self.encode_legacy_norito()?;
         Ok(blake3::hash(&bytes))
     }
 }
@@ -515,6 +569,7 @@ pub struct ManifestBuilder {
     root_cid: Option<Vec<u8>>,
     dag_codec: Option<DagCodecId>,
     chunking: Option<ChunkingProfileV1>,
+    chunk_digest_sha3_256: Option<[u8; 32]>,
     content_length: Option<u64>,
     car_digest: Option<[u8; 32]>,
     car_size: Option<u64>,
@@ -559,6 +614,13 @@ impl ManifestBuilder {
     #[must_use]
     pub fn chunking_from_profile(mut self, profile: ChunkProfile, multihash_code: u64) -> Self {
         self.chunking = Some(ChunkingProfileV1::from_profile(profile, multihash_code));
+        self
+    }
+
+    /// Set the SHA3-256 commitment to the ordered chunk metadata plan.
+    #[must_use]
+    pub fn chunk_digest_sha3_256(mut self, digest: [u8; 32]) -> Self {
+        self.chunk_digest_sha3_256 = Some(digest);
         self
     }
 
@@ -639,6 +701,9 @@ impl ManifestBuilder {
         let chunking = self
             .chunking
             .ok_or(ManifestBuildError::MissingField("chunking"))?;
+        let chunk_digest_sha3_256 = self
+            .chunk_digest_sha3_256
+            .ok_or(ManifestBuildError::MissingField("chunk_digest_sha3_256"))?;
         let content_length = self
             .content_length
             .ok_or(ManifestBuildError::MissingField("content_length"))?;
@@ -657,6 +722,7 @@ impl ManifestBuilder {
             root_cid,
             dag_codec,
             chunking,
+            chunk_digest_sha3_256,
             content_length,
             car_digest,
             car_size,
@@ -872,11 +938,29 @@ pub struct MetadataEntry {
 mod tests {
     use super::*;
 
+    #[test]
+    fn canonical_manifest_root_cid_has_exact_first_release_layout() {
+        let digest = [0xA5; 32];
+        let cid = canonical_manifest_root_cid(digest);
+        assert_eq!(cid.len(), MAX_MANIFEST_ROOT_CID_BYTES);
+        assert_eq!(
+            &cid[..4],
+            &[
+                1,
+                chunker_registry::MANIFEST_DAG_CODEC as u8,
+                BLAKE3_256_MULTIHASH_CODE as u8,
+                32,
+            ]
+        );
+        assert_eq!(&cid[4..], digest);
+    }
+
     fn sample_manifest() -> ManifestV1 {
         ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x55, 0xaa])
+            .root_cid(canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .chunk_digest_sha3_256([0xAC; 32])
             .content_length(1_048_576)
             .car_digest([0xAB; 32])
             .car_size(1_100_000)
@@ -911,21 +995,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_norito_encode_roundtrip() {
-        let manifest = sample_manifest();
-        let bytes = manifest
-            .encode_legacy_norito()
-            .expect("encode legacy manifest");
-        let decoded: ManifestV1 = norito::decode_from_bytes(&bytes).expect("decode manifest");
-        assert_eq!(manifest, decoded);
-        assert_eq!(bytes[norito::core::Header::SIZE - 1], 0);
-        assert_eq!(
-            manifest.legacy_norito_digest().expect("legacy digest"),
-            blake3::hash(&bytes)
-        );
-    }
-
-    #[test]
     fn digest_is_deterministic() {
         let manifest = sample_manifest();
         let digest_a = manifest.digest().expect("digest");
@@ -937,9 +1006,39 @@ mod tests {
     }
 
     #[test]
+    fn digest_binds_the_embedded_chunk_plan_commitment() {
+        let manifest = sample_manifest();
+        let mut substituted = manifest.clone();
+        substituted.chunk_digest_sha3_256[0] ^= 1;
+        assert_ne!(
+            manifest.digest().expect("original digest"),
+            substituted.digest().expect("substituted digest")
+        );
+    }
+
+    #[test]
     fn builder_rejects_missing_fields() {
         let err = ManifestBuilder::new().build().unwrap_err();
         assert!(matches!(err, ManifestBuildError::MissingField("root_cid")));
+
+        let err = ManifestBuilder::new()
+            .root_cid(canonical_manifest_root_cid([0xAA; 32]))
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .content_length(1)
+            .car_digest([0xAB; 32])
+            .car_size(2)
+            .pin_policy(PinPolicy {
+                min_replicas: 1,
+                storage_class: StorageClass::Hot,
+                retention_epoch: 1,
+            })
+            .build()
+            .expect_err("chunk-plan commitment is mandatory");
+        assert_eq!(
+            err,
+            ManifestBuildError::MissingField("chunk_digest_sha3_256")
+        );
     }
 
     #[test]

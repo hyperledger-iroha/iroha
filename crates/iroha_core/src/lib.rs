@@ -338,6 +338,37 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         use iroha_p2p::network::message::Topic as T;
         match self {
             NetworkMessage::SumeragiBlock(msg) => match msg.as_ref().as_ref() {
+                BlockMessage::V2(message) => match &message.payload {
+                    iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::PayloadChunk(
+                        _,
+                    ) => T::ConsensusChunk,
+                    iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::PayloadManifest(
+                        _,
+                    )
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CertifiedBodyResponse(
+                        _,
+                    ) => T::ConsensusPayload,
+                    iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::Proposal(_)
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::Vote(_)
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::QuorumCertificate(
+                        _,
+                    )
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::TimeoutVote(
+                        _,
+                    )
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::TimeoutCertificate(
+                        _,
+                    )
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CommitCertificateResponse(
+                        _,
+                    ) => T::ConsensusSafety,
+                    iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CertifiedBodyRequest(
+                        _,
+                    )
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CommitCertificateRequest(
+                        _,
+                    ) => T::Consensus,
+                },
                 BlockMessage::FetchBlockBody(_)
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Request(_))
@@ -385,8 +416,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             | NetworkMessage::LaneRelay(_)
             | NetworkMessage::MergeCommitteeSignature(_)
             | NetworkMessage::LaneDrainVote(_)
-            | NetworkMessage::NativeAmx(_)
-            | NetworkMessage::SoracloudLocalReadProxyRequest(_)
+            | NetworkMessage::NativeAmx(_) => T::Consensus,
+            NetworkMessage::SoracloudLocalReadProxyRequest(_)
             | NetworkMessage::SoracloudLocalReadProxyResponse(_)
             | NetworkMessage::ToriiProxyRequest(_)
             | NetworkMessage::ToriiProxyResponse(_)
@@ -794,7 +825,11 @@ mod tests {
                 .expect("sign valid lane-drain vote");
         let message = NetworkMessage::LaneDrainVote(Box::new(vote.clone()));
 
-        assert_eq!(message.topic(), NetworkTopic::Control);
+        assert_eq!(
+            message.topic(),
+            NetworkTopic::Consensus,
+            "lane-drain traffic must not share the authoritative v2 safety topic"
+        );
         let encoded = norito::to_bytes(&message).expect("encode lane-drain vote message");
         let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
             .expect("decode lane-drain vote message");
@@ -1248,6 +1283,48 @@ mod tests {
         assert!(torii_request.is_torii_proxy_control_message());
         assert!(torii_response.is_torii_proxy_control_message());
         assert!(!NetworkMessage::Health.is_torii_proxy_control_message());
+    }
+
+    #[test]
+    fn authoritative_v2_safety_uses_dedicated_topic() {
+        use iroha_data_model::block::consensus_v2 as wire;
+
+        let context_id = wire::HeightContextId(
+            iroha_crypto::HashOf::<wire::HeightContext>::from_untyped_unchecked(Hash::new(
+                b"v2-safety-topic-context",
+            )),
+        );
+        let vote = wire::Vote {
+            round: wire::ConsensusRound {
+                context_id,
+                height: 7,
+                view: 2,
+            },
+            phase: wire::GlobalPhase::Prepare,
+            subject: wire::BlockSubject {
+                parent_block_hash: None,
+                block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                    b"v2-safety-topic-block",
+                )),
+                payload_hash: Hash::new(b"v2-safety-topic-payload"),
+            },
+            signer: 0,
+            signature: vec![1],
+        };
+        let message =
+            NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(BlockMessage::V2(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote)),
+            ))));
+        assert_eq!(message.topic(), NetworkTopic::ConsensusSafety);
+
+        let retired_auxiliary = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::ConsensusParams(ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            }),
+        )));
+        assert_eq!(retired_auxiliary.topic(), NetworkTopic::Consensus);
     }
 
     #[test]

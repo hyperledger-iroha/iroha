@@ -33,7 +33,7 @@ use norito::{
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use reqwest::{
     Client, StatusCode, Url,
-    header::{HeaderMap, HeaderName, HeaderValue},
+    header::{HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue},
 };
 use sorafs_manifest::{
     ManifestV1, STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1,
@@ -496,7 +496,11 @@ impl GatewayFetcherInner {
         );
         headers.insert(
             HeaderName::from_static(HEADER_SORA_NONCE),
-            header_value(&nonce, "X-SoraFS-Nonce"),
+            header_value(&nonce).map_err(|source| GatewayFetchError::InvalidRequestHeader {
+                provider: provider_alias.clone(),
+                header: "X-SoraFS-Nonce",
+                source,
+            })?,
         );
         headers.insert(
             HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
@@ -524,7 +528,11 @@ impl GatewayFetcherInner {
             }
             headers.insert(
                 HeaderName::from_static(HEADER_SORA_REQ_NONCE),
-                header_value(&nonce, "Sora-Req-Nonce"),
+                header_value(&nonce).map_err(|source| GatewayFetchError::InvalidRequestHeader {
+                    provider: provider_alias.clone(),
+                    header: "Sora-Req-Nonce",
+                    source,
+                })?,
             );
         }
 
@@ -754,9 +762,8 @@ impl GatewayFetcherInner {
     }
 }
 
-fn header_value(value: impl AsRef<str>, name: &str) -> HeaderValue {
+fn header_value(value: impl AsRef<str>) -> Result<HeaderValue, InvalidHeaderValue> {
     HeaderValue::from_str(value.as_ref())
-        .unwrap_or_else(|_| panic!("{name} header produced invalid value: {}", value.as_ref()))
 }
 
 fn truncate(text: &str, max: usize) -> String {
@@ -1848,7 +1855,7 @@ fn parse_manifest_response(
         });
     }
     let payload_bytes =
-        hex::decode(&payload_digest_hex).map_err(|err| GatewayManifestError::Decode {
+        hex::decode(payload_digest_hex).map_err(|err| GatewayManifestError::Decode {
             provider: provider.to_string(),
             error: format!("payload_digest_hex decode failed: {err}"),
         })?;
@@ -1924,6 +1931,13 @@ pub enum GatewayFetchError {
     SystemClockBeforeUnixEpoch,
     #[error("provider `{provider}` exhausted its request nonce space")]
     NonceExhausted { provider: String },
+    #[error("failed to construct {header} request header for provider `{provider}`: {source}")]
+    InvalidRequestHeader {
+        provider: String,
+        header: &'static str,
+        #[source]
+        source: InvalidHeaderValue,
+    },
     #[error("failed to join chunk URL for provider `{provider}`: {source}")]
     UrlJoin {
         provider: String,
@@ -2053,6 +2067,13 @@ mod tests {
     use sorafs_manifest::StreamTokenBodyV1;
 
     use super::*;
+
+    #[test]
+    fn request_header_value_rejects_control_characters_without_panicking() {
+        assert!(header_value("valid-nonce").is_ok());
+        assert!(header_value("invalid\nnonce").is_err());
+        assert!(header_value("invalid\0nonce").is_err());
+    }
     use crate::{
         CarBuildPlan, ChunkFetchSpec, moderation::encode_token, multi_fetch::FetchProvider,
     };

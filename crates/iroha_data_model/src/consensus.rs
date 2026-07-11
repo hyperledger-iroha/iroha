@@ -20,6 +20,8 @@ pub use crate::block::consensus::{
     SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
     ValidatorSetId, Vote, default_chain_order_hash,
 };
+/// Canonical Sumeragi v2 wire types.
+pub use crate::block::consensus_v2 as v2;
 use crate::prelude::*;
 
 /// Hash-version constant for validator set checkpoints.
@@ -203,6 +205,11 @@ pub struct NposConsensusEffects {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub vrf_epoch_seals: Vec<VrfEpochRecord>,
+    /// Fully validated Sumeragi v2 equivocation evidence admitted by this
+    /// signed block in canonical evidence-key order.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub v2_evidence_admissions: Vec<crate::block::consensus::SumeragiV2EquivocationEvidence>,
     /// Penalty and marker actions applied by this block.
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
@@ -213,7 +220,9 @@ impl NposConsensusEffects {
     /// Returns true when the bundle carries no committed state changes.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.vrf_epoch_seals.is_empty() && self.penalty_actions.is_empty()
+        self.vrf_epoch_seals.is_empty()
+            && self.v2_evidence_admissions.is_empty()
+            && self.penalty_actions.is_empty()
     }
 }
 
@@ -589,8 +598,56 @@ impl ConsensusKeyRecord {
     }
 }
 
+/// Canonical authenticated VRF commitment retained in an epoch record.
+///
+/// The signature is over the Sumeragi `VrfCommit` v1 preimage.  Keeping the
+/// complete signed fields makes a persisted observation independently
+/// verifiable against the frozen chain id and validator roster.  The
+/// observation height is unsigned admission metadata: validators must compare
+/// it with committed pre-state and the block which first introduces the proof.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct VrfCommitProof {
+    /// Epoch index authenticated by the signature.
+    pub epoch: u64,
+    /// Hiding commitment authenticated by the signature.
+    pub commitment: [u8; 32],
+    /// Validator index in the frozen epoch roster.
+    pub signer: u32,
+    /// Exact canonical signature bytes received on the wire.
+    pub signature: Vec<u8>,
+    /// Unsigned height at which this exact signed message was first admitted.
+    pub observed_at_height: u64,
+}
+
+/// Canonical authenticated VRF reveal retained in an epoch record.
+///
+/// The signature is over the Sumeragi `VrfReveal` v1 preimage.  The complete
+/// signed fields are deliberately retained instead of reconstructing evidence
+/// from unauthenticated participant summaries.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct VrfRevealProof {
+    /// Epoch index authenticated by the signature.
+    pub epoch: u64,
+    /// Revealed preimage authenticated by the signature.
+    pub reveal: [u8; 32],
+    /// Validator index in the frozen epoch roster.
+    pub signer: u32,
+    /// Exact canonical signature bytes received on the wire.
+    pub signature: Vec<u8>,
+    /// Unsigned height at which this exact signed message was first admitted.
+    pub observed_at_height: u64,
+}
+
 /// Participation record for a validator within a VRF epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -604,12 +661,26 @@ pub struct VrfParticipantRecord {
     /// Optional reveal emitted during the reveal window.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub reveal: Option<[u8; 32]>,
+    /// Authenticated commit message matching `signer` and `commitment`.
+    ///
+    /// Older non-v2 records may omit this field; authoritative v2 validation
+    /// requires it whenever `commitment` is present.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub commit_proof: Option<VrfCommitProof>,
+    /// Authenticated reveal message matching `signer` and `reveal`.
+    ///
+    /// Older non-v2 records may omit this field; authoritative v2 validation
+    /// requires it whenever `reveal` is present.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub reveal_proof: Option<VrfRevealProof>,
     /// Last block height at which this participant record was updated.
     pub last_updated_height: u64,
 }
 
 /// Late reveal emitted after the epoch reveal window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -619,6 +690,13 @@ pub struct VrfLateRevealRecord {
     pub signer: u32,
     /// Reveal accepted after the window closed.
     pub reveal: [u8; 32],
+    /// Exact authenticated reveal matching `signer` and `reveal`.
+    ///
+    /// Older non-v2 records may omit this field; authoritative v2 validation
+    /// requires it for every late reveal.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub reveal_proof: Option<VrfRevealProof>,
     /// Block height at which the late reveal was recorded.
     pub noted_at_height: u64,
 }
@@ -633,7 +711,10 @@ pub struct VrfEpochRecord {
     /// Epoch index.
     pub epoch: u64,
     /// Deterministic seed driving PRF-based collector/leader selection for this epoch.
-    /// The seed is fixed at epoch start; reveals are mixed to derive the next epoch seed.
+    /// The seed is fixed at epoch start and advanced by a deterministic hash
+    /// chain. Reveal proofs are not mixed until their inclusion set is
+    /// quorum-certified, preventing a proposer from grinding the next schedule
+    /// by selecting a valid reveal subset.
     pub seed: [u8; 32],
     /// Length of an epoch in blocks (configuration snapshot).
     pub epoch_length: u64,
@@ -672,6 +753,7 @@ pub struct VrfEpochRecord {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_schema::IntoSchema as _;
 
     use super::*;
 
@@ -690,11 +772,32 @@ mod tests {
             signer: 5,
             commitment: Some([0xAA; 32]),
             reveal: Some([0xBB; 32]),
-            last_updated_height: 42,
+            commit_proof: Some(VrfCommitProof {
+                epoch: 3,
+                commitment: [0xAA; 32],
+                signer: 5,
+                signature: vec![0xDD; 48],
+                observed_at_height: 320,
+            }),
+            reveal_proof: Some(VrfRevealProof {
+                epoch: 3,
+                reveal: [0xBB; 32],
+                signer: 5,
+                signature: vec![0xEE; 48],
+                observed_at_height: 340,
+            }),
+            last_updated_height: 340,
         };
         let late = VrfLateRevealRecord {
             signer: 6,
             reveal: [0xCC; 32],
+            reveal_proof: Some(VrfRevealProof {
+                epoch: 3,
+                reveal: [0xCC; 32],
+                signer: 6,
+                signature: vec![0xFF; 48],
+                observed_at_height: 360,
+            }),
             noted_at_height: 360,
         };
         let record = VrfEpochRecord {
@@ -706,8 +809,8 @@ mod tests {
             roster_len: 7,
             finalized: true,
             updated_at_height: 360,
-            participants: vec![participant],
-            late_reveals: vec![late],
+            participants: vec![participant.clone()],
+            late_reveals: vec![late.clone()],
             committed_no_reveal: vec![2, 4],
             no_participation: vec![6],
             penalties_applied: false,
@@ -719,10 +822,24 @@ mod tests {
         assert_eq!(decoded.epoch, record.epoch);
         assert_eq!(decoded.seed, record.seed);
         assert_eq!(decoded.participants.len(), 1);
+        assert_eq!(
+            decoded.participants[0].commit_proof,
+            participant.commit_proof
+        );
+        assert_eq!(
+            decoded.participants[0].reveal_proof,
+            participant.reveal_proof
+        );
         assert_eq!(decoded.late_reveals.len(), 1);
+        assert_eq!(decoded.late_reveals[0].reveal_proof, late.reveal_proof);
         assert!(decoded.finalized);
         assert_eq!(decoded.committed_no_reveal, vec![2, 4]);
         assert_eq!(decoded.no_participation, vec![6]);
+
+        let json = norito::json::to_value(&record).expect("serialize authenticated VRF record");
+        let json_decoded: VrfEpochRecord =
+            norito::json::from_value(json).expect("decode authenticated VRF record");
+        assert_eq!(json_decoded, record);
     }
 
     #[test]
@@ -753,6 +870,16 @@ mod tests {
         assert!(decoded.late_reveals.is_empty());
         assert_eq!(decoded.epoch, record.epoch);
         assert_eq!(decoded.seed, record.seed);
+    }
+
+    #[test]
+    fn vrf_epoch_record_schema_includes_authentication_proofs() {
+        let schema = VrfEpochRecord::schema();
+        assert!(schema.contains_key::<VrfEpochRecord>());
+        assert!(schema.contains_key::<VrfParticipantRecord>());
+        assert!(schema.contains_key::<VrfLateRevealRecord>());
+        assert!(schema.contains_key::<VrfCommitProof>());
+        assert!(schema.contains_key::<VrfRevealProof>());
     }
 
     #[test]

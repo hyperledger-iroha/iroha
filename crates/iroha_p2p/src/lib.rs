@@ -205,29 +205,31 @@ mod frame_tests {
 pub struct ConsensusConfigCaps {
     /// Canonical digest of deterministic, locally configured Nexus policy.
     pub nexus_policy_digest: [u8; 32],
-    /// Number of collectors (K).
+    /// Canonical fixed-width Sumeragi v2 shared-runtime configuration hash.
+    pub v2_config_fingerprint: [u8; 32],
+    /// Legacy status-only number of collectors (K); ignored by v2 admission.
     pub collectors_k: u16,
-    /// Redundant send fanout (r).
+    /// Legacy status-only redundant fanout; ignored by v2 admission.
     pub redundant_send_r: u8,
-    /// Data availability enabled (RBC + availability QC gating).
+    /// Legacy status-only DA flag; ignored by v2 admission.
     pub da_enabled: bool,
-    /// Maximum RBC chunk size in bytes.
+    /// Legacy status-only RBC chunk size; ignored by v2 admission.
     pub rbc_chunk_max_bytes: u64,
-    /// RBC payload encoding.
+    /// Legacy status-only RBC payload encoding; ignored by v2 admission.
     pub rbc_encoding: RbcEncoding,
-    /// RS16 data shards per stripe (`0` when plain chunking is active).
+    /// Legacy status-only RS16 data shards; ignored by v2 admission.
     pub rbc_rs16_data_shards: u16,
-    /// RS16 parity shards per stripe (`0` when plain chunking is active).
+    /// Legacy status-only RS16 parity shards; ignored by v2 admission.
     pub rbc_rs16_parity_shards: u16,
-    /// RBC session TTL in milliseconds.
+    /// Legacy status-only RBC session TTL; ignored by v2 admission.
     pub rbc_session_ttl_ms: u64,
-    /// Hard cap on persisted RBC sessions.
+    /// Legacy status-only hard session cap; ignored by v2 admission.
     pub rbc_store_max_sessions: u32,
-    /// Soft cap on persisted RBC sessions.
+    /// Legacy status-only soft session cap; ignored by v2 admission.
     pub rbc_store_soft_sessions: u32,
-    /// Hard cap on persisted RBC payload bytes.
+    /// Legacy status-only hard byte cap; ignored by v2 admission.
     pub rbc_store_max_bytes: u64,
-    /// Soft cap on persisted RBC payload bytes.
+    /// Legacy status-only soft byte cap; ignored by v2 admission.
     pub rbc_store_soft_bytes: u64,
 }
 
@@ -237,13 +239,13 @@ pub struct ConsensusConfigCaps {
 /// and a deterministic fingerprint derived from genesis and parameters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsensusHandshakeCaps {
-    /// Compile-time mode tag (e.g., "`iroha2-consensus::permissioned-sumeragi@v1`").
+    /// Compile-time mode tag (e.g., "`iroha2-consensus::permissioned-sumeragi@v2`").
     pub mode_tag: String,
     /// Protocol wire version for consensus messages.
     pub proto_version: u32,
     /// Deterministic consensus fingerprint (blake2b-32 bytes).
     pub consensus_fingerprint: [u8; 32],
-    /// Deterministic runtime config summary (collectors/DA/RBC caps).
+    /// Canonical v2 shared-config fingerprint plus legacy status scaffolding.
     pub config: ConsensusConfigCaps,
 }
 

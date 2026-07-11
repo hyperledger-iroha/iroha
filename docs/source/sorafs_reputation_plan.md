@@ -165,25 +165,35 @@ CREATE TABLE reputation_snapshots (
   objective proof/penalty evidence.
 - `ReputationSnapshotV1::merkle_proof` and `ReputationMerkleProofV1::verify`
   provide the proof replay path over the published root. Governance DAG payloads
-  accept `GovernanceLogPayloadV1::ReputationSnapshot` and validate the embedded
-  snapshot before publication.
+  accept `GovernanceLogPayloadV1::SignedReputationSnapshot` and retain the full
+  threshold-signed envelope and deterministic scoring evidence. Intrinsic
+  envelope validation runs again when the DAG is read.
 - `sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID
   --proof=PATH] [--summary-out=PATH]` validates canonical Norito snapshots and
   optional provider Merkle proofs, then emits a JSON summary for operator logs.
-- `sorafs_cli reputation publish --torii-url=URL --snapshot=PATH`,
+- `sorafs_cli reputation publish --torii-url=URL --snapshot=SIGNED_ENVELOPE.to`,
   `sorafs_cli reputation snapshot --torii-url=URL`, and
   `sorafs_cli reputation fetch --torii-url=URL --provider-id=ID
   [--format=table|json]` provide the local Torii publication and consumption
   workflow around the implemented endpoints. `sorafs_cli reputation watch
   --torii-url=URL [--since=N] [--limit=N]` polls the implemented reputation
   event list and advances by `next_since`.
-- `sorafs_node::NodeHandle::publish_reputation_snapshot` validates a snapshot,
-  writes governance publisher artifacts when configured, records a sequenced
-  reputation snapshot event, and caches it as the latest local snapshot. The
-  filesystem publisher writes immutable
+- `sorafs_node::NodeHandle::publish_signed_reputation_snapshot` loads the
+  configured external `ReputationSnapshotTrustPolicyV1`, verifies threshold
+  signatures, policy/freshness bounds, complete replayable scoring evidence,
+  and exact predecessor/time transition, then atomically checkpoints the full
+  envelope, original admission time, event, and signed governance outbox
+  payload. Exact envelope sizes and pending outbox copies are charged against
+  the configured checkpoint ceiling before state mutation. Restart re-verifies
+  the envelope against the configured policy and its original admission time.
+  The filesystem publisher writes immutable
   `reputation/snapshots/<snapshot_id>/` `.to`/`.json` artifacts plus
   `reputation/latest.to` and `reputation/latest.json` pointers with BLAKE3
   sidecars.
+- `NodeHandle::build_reserve_adjusted_reputation_material` only builds an
+  unsigned snapshot plus complete replay evidence; it cannot mutate or publish
+  reputation state. Governance must sign that material and submit the resulting
+  envelope through the signed admission method.
 - Torii exposes the local reputation surface at
   `POST /v1/sorafs/reputation/latest`,
   `GET /v1/sorafs/reputation/latest`, and
@@ -280,9 +290,11 @@ CREATE TABLE reputation_snapshots (
 
 ## APIs & SDK
 - REST endpoints:
-  - Implemented locally: `POST /v1/sorafs/reputation/latest` accepts a
-    canonical `ReputationSnapshotV1`, validates it, persists configured
-    governance artifacts, and caches it as latest.
+  - Implemented locally: `POST /v1/sorafs/reputation/latest` accepts a canonical
+    `SignedReputationSnapshotV1`. It fails closed without a configured trust
+    policy, rejects invalid/stale/future/non-chaining envelopes, persists the
+    full signatures and scoring evidence, and caches the embedded snapshot as
+    latest for read APIs.
   - Implemented locally: `GET /v1/sorafs/reputation/latest` returns latest
     snapshot metadata plus a `limit`-bounded provider-score array while
     preserving the total `provider_count`.
@@ -325,7 +337,8 @@ CREATE TABLE reputation_snapshots (
   - Implemented locally as `sorafs_cli reputation snapshot --torii-url=URL
     [--output=PATH] [--summary-out=PATH]`.
   - Implemented locally as `sorafs_cli reputation publish --torii-url=URL
-    --snapshot=PATH [--summary-out=PATH]`.
+    --snapshot=SIGNED_ENVELOPE.to [--summary-out=PATH]`; the CLI performs a
+    bounded, canonical envelope decode before sending JSON.
   - Implemented locally as `sorafs_cli reputation verify --snapshot=PATH
     [--provider-id=ID --proof=PATH] [--summary-out=PATH]`.
   - Implemented locally as `sorafs_cli reputation watch --torii-url=URL

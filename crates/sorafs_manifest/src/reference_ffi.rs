@@ -1262,7 +1262,7 @@ fn read_payload_descriptors(
     if ptr.is_null() {
         return Err(null_pointer_error("bundle_payloads", generated_at));
     }
-    if (ptr as usize) % mem::align_of::<SorafsReferenceFfiBundlePayload>() != 0 {
+    if !(ptr as usize).is_multiple_of(mem::align_of::<SorafsReferenceFfiBundlePayload>()) {
         return Err(invalid_argument_error(
             "bundle_payloads",
             "descriptor pointer is not correctly aligned",
@@ -1762,7 +1762,7 @@ mod tests {
         build_billing_statement_v1(
             b"buyer-account".to_vec(),
             1_000,
-            1_700,
+            1_800,
             2_000,
             reference_price,
             vec![storage, credit],

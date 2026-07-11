@@ -206,6 +206,7 @@ fn open_read_only_no_follow(path: &Path) -> Result<File, String> {
     })
 }
 
+#[allow(unsafe_code)]
 fn validate_binding_file_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
     if !metadata.is_file() {
         return Err(format!(

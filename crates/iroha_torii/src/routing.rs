@@ -90,9 +90,9 @@ use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
         consensus::{
-            EvidenceRecord, NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1,
-            NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt, NexusFeeReceipt,
-            NexusFeeScheduleInputs,
+            EvidenceRecord, LaneBlockCommitment, NativeAmxAttestationBodyV2,
+            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+            NexusFeeReceipt, NexusFeeScheduleInputs,
         },
     },
     consensus::{ConsensusKeyRecord, ValidatorSetCheckpoint},
@@ -133,7 +133,10 @@ use iroha_data_model::sorafs::{
         CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
         CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
     },
-    deal::{DealId, DealSettlementRecord, DealUsageReport, MicropaymentTicket, TicketId},
+    deal::{
+        DealId, DealSettlementRecord, DealUsageReport, MAX_DEAL_USAGE_TICKETS, MicropaymentTicket,
+        TicketId,
+    },
 };
 #[cfg(feature = "telemetry")]
 use iroha_data_model::soranet::privacy_metrics::{
@@ -221,23 +224,22 @@ use iroha_data_model as dm;
 use iroha_data_model::{
     account,
     block::consensus::{
-        LaneBlockCommitment, SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
-        SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus, SumeragiCommittedLaneBlock,
-        SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
-        SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
-        SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
-        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
-        SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
-        SumeragiNposRepairCoverageStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
-        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiProposalGateStatus,
-        SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus, SumeragiRbcEvictedSession,
-        SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
-        SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
-        SumeragiV1StatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
-        SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
-        SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
-        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
-        SumeragiWorkerQueueTotals,
+        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitPipelineStatus,
+        SumeragiCommitQuorumStatus, SumeragiCommittedLaneBlock, SumeragiConsensusCapsStatus,
+        SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
+        SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
+        SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
+        SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+        SumeragiMissingBlockFetchStatus, SumeragiNposRepairCoverageStatus,
+        SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
+        SumeragiPendingRbcStatus, SumeragiProposalGateStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry,
+        SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiRoundGapStatus,
+        SumeragiRuntimeUpgradeHook, SumeragiV1StatusWire, SumeragiValidationRejectStatus,
+        SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+        SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
+        SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
     },
     domain::DomainId,
     events::{
@@ -9310,11 +9312,6 @@ fn sccp_message_artifact_for_material_request(
             taira_diagnostic_local_admission,
         )
     {
-        #[cfg(not(feature = "sccp-test-fixtures"))]
-        return Err(sccp_bad_request(
-            "TAIRA diagnostic local admission requires the sccp-test-fixtures feature",
-        ));
-        #[cfg(feature = "sccp-test-fixtures")]
         return Ok(iroha_sccp::build_sccp_taira_tron_xor_diagnostic_transparent_proof(bundle));
     }
     sccp_message_artifact_for_destination_material(
@@ -16625,6 +16622,7 @@ pub async fn handle_v1_sumeragi_evidence_list(
             "InvalidQc" | "InvalidQC" => Some(EvidenceKind::InvalidQc),
             "InvalidProposal" => Some(EvidenceKind::InvalidProposal),
             "Censorship" => Some(EvidenceKind::Censorship),
+            "SumeragiV2Equivocation" => Some(EvidenceKind::SumeragiV2Equivocation),
             _ => None,
         };
         if let Some(k) = kind_opt {
@@ -18324,6 +18322,61 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
             }
             map
         }
+        (
+            EvidenceKind::SumeragiV2Equivocation,
+            EvidencePayload::SumeragiV2Equivocation(evidence),
+        ) => {
+            use iroha_data_model::block::consensus_v2::SumeragiV2Equivocation;
+            use norito::codec::Encode as _;
+
+            let (class, round, signer, first, second) = match &evidence.conflict {
+                SumeragiV2Equivocation::Proposal { first, second } => (
+                    "proposal",
+                    first.round,
+                    first.proposer,
+                    first.encode(),
+                    second.encode(),
+                ),
+                SumeragiV2Equivocation::PhaseVote { first, second } => (
+                    "phase_vote",
+                    first.round,
+                    first.signer,
+                    first.encode(),
+                    second.encode(),
+                ),
+                SumeragiV2Equivocation::TimeoutVote { first, second } => (
+                    "timeout_vote",
+                    first.round,
+                    first.signer,
+                    first.encode(),
+                    second.encode(),
+                ),
+            };
+            let mut map = json::Map::new();
+            map.insert("kind".into(), Value::from("SumeragiV2Equivocation"));
+            map.insert("class".into(), Value::from(class));
+            map.insert("height".into(), Value::from(round.height));
+            map.insert("view".into(), Value::from(round.view));
+            map.insert("epoch".into(), Value::from(evidence.context.epoch));
+            map.insert("signer".into(), Value::from(signer));
+            map.insert(
+                "context_id".into(),
+                Value::from(hash_to_hex(round.context_id.0)),
+            );
+            map.insert(
+                "artifact_hash_1".into(),
+                Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
+                    iroha_crypto::Hash::new(first),
+                ))),
+            );
+            map.insert(
+                "artifact_hash_2".into(),
+                Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
+                    iroha_crypto::Hash::new(second),
+                ))),
+            );
+            map
+        }
         _ => {
             let mut map = json::Map::new();
             map.insert("kind".into(), Value::from(format!("{:?}", ev.kind)));
@@ -18337,6 +18390,11 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
     );
     map.insert("recorded_view".into(), Value::from(rec.recorded_at_view));
     map.insert("recorded_ms".into(), Value::from(rec.recorded_at_ms));
+    map.insert(
+        "consensus_admitted_height".into(),
+        rec.consensus_admitted_at_height
+            .map_or(Value::Null, Value::from),
+    );
     Value::Object(map)
 }
 
@@ -31817,6 +31875,14 @@ fn vk_record_to_json(rec: &iroha_data_model::proof::VerifyingKeyRecord) -> norit
         "circuit_id".into(),
         norito::json::Value::from(rec.circuit_id.clone()),
     );
+    m.insert(
+        "owner_manifest_id".into(),
+        json_value(&rec.owner_manifest_id),
+    );
+    m.insert(
+        "namespace".into(),
+        norito::json::Value::from(rec.namespace.clone()),
+    );
     m.insert("backend".into(), json_value(&rec.backend));
     m.insert("curve".into(), norito::json::Value::from(rec.curve.clone()));
     m.insert(
@@ -31867,6 +31933,37 @@ fn vk_record_to_json(rec: &iroha_data_model::proof::VerifyingKeyRecord) -> norit
     norito::json::Value::Object(m)
 }
 
+#[cfg(feature = "app_api")]
+fn vk_record_norito_base64(rec: &iroha_data_model::proof::VerifyingKeyRecord) -> Result<String> {
+    let bytes = norito::to_bytes(rec).map_err(|err| {
+        conversion_error(format!(
+            "failed to encode verifying key record as Norito: {err}"
+        ))
+    })?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+#[cfg(feature = "app_api")]
+fn vk_detail_to_json(
+    id: &iroha_data_model::proof::VerifyingKeyId,
+    rec: &iroha_data_model::proof::VerifyingKeyRecord,
+) -> Result<norito::json::Value> {
+    let mut root = norito::json::Map::new();
+    let mut id_map = norito::json::Map::new();
+    id_map.insert(
+        "backend".into(),
+        norito::json::Value::from(id.backend.clone()),
+    );
+    id_map.insert("name".into(), norito::json::Value::from(id.name.clone()));
+    root.insert("id".into(), norito::json::Value::Object(id_map));
+    root.insert("record".into(), vk_record_to_json(rec));
+    root.insert(
+        "record_norito_base64".into(),
+        norito::json::Value::from(vk_record_norito_base64(rec)?),
+    );
+    Ok(norito::json::Value::Object(root))
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod vk_record_input_tests {
     use iroha_data_model::confidential::ConfidentialStatus;
@@ -31907,6 +32004,76 @@ mod vk_record_input_tests {
         assert_eq!(record.withdraw_height, Some(300));
         assert!(record.key.is_some(), "stored vk bytes should be preserved");
         assert_eq!(record.gas_schedule_id.as_deref(), Some("sched_default"));
+    }
+
+    #[test]
+    fn vk_record_detail_json_preserves_identity_and_exact_norito_archive() {
+        let mut record = mk_record_from_inputs(VkRecordInputs {
+            backend: "halo2/ipa".to_string(),
+            version: 7,
+            status: Some(ConfidentialStatus::Active),
+            vk_bytes: Some(vec![1, 2, 3, 4]),
+            commitment_hex: None,
+            circuit_id: "confidential-unshield-v3".to_string(),
+            public_inputs_schema_hash_hex: sample_hex32(0xA5),
+            curve: Some("pallas".to_string()),
+            gas_schedule_id: Some("halo2_default".to_string()),
+            vk_len: Some(4),
+            max_proof_bytes: Some(16_384),
+            metadata_uri_cid: Some("ipfs://metadata".to_string()),
+            vk_bytes_cid: Some("ipfs://vk".to_string()),
+            activation_height: Some(10),
+            withdraw_height: Some(20),
+        })
+        .expect("record created");
+        record.namespace = "offline_kagemusha".to_owned();
+        record.owner_manifest_id = Some("builtin:confidential-unshield-v3".to_owned());
+
+        let id = iroha_data_model::proof::VerifyingKeyId::new(
+            "halo2/ipa",
+            "recursive-kagemusha-unshield-v3",
+        );
+        let detail = vk_detail_to_json(&id, &record).expect("build verifier record detail");
+        let detail_object = detail.as_object().expect("verifier detail JSON object");
+        let object = detail_object
+            .get("record")
+            .and_then(norito::json::Value::as_object)
+            .expect("verifier record JSON object");
+        assert_eq!(
+            object
+                .get("namespace")
+                .and_then(norito::json::Value::as_str),
+            Some(record.namespace.as_str())
+        );
+        assert_eq!(
+            object
+                .get("owner_manifest_id")
+                .and_then(norito::json::Value::as_str),
+            record.owner_manifest_id.as_deref()
+        );
+
+        let encoded = detail_object
+            .get("record_norito_base64")
+            .and_then(norito::json::Value::as_str)
+            .expect("verifier record Norito archive");
+        let archive = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("decode verifier record archive base64");
+        assert_eq!(
+            archive,
+            norito::to_bytes(&record).expect("canonical verifier record archive")
+        );
+        let decoded: iroha_data_model::proof::VerifyingKeyRecord =
+            norito::decode_from_bytes(&archive).expect("decode verifier record archive");
+        assert_eq!(&decoded.namespace, &record.namespace);
+        assert_eq!(
+            decoded.owner_manifest_id.as_ref(),
+            record.owner_manifest_id.as_ref()
+        );
+        assert_eq!(decoded.key.as_ref(), record.key.as_ref());
+        assert_eq!(decoded.activation_height, record.activation_height);
+        assert_eq!(decoded.withdraw_height, record.withdraw_height);
+        assert_eq!(decoded, record);
     }
 
     #[test]
@@ -32144,16 +32311,8 @@ pub async fn handle_get_vk(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         ))
     })?;
-    let mut root = norito::json::Map::new();
-    let mut id_map = norito::json::Map::new();
-    id_map.insert(
-        "backend".into(),
-        norito::json::Value::from(id.backend.clone()),
-    );
-    id_map.insert("name".into(), norito::json::Value::from(id.name.clone()));
-    root.insert("id".into(), norito::json::Value::Object(id_map));
-    root.insert("record".into(), vk_record_to_json(&rec));
-    let body = norito::json::to_json_pretty(&root).unwrap_or_else(|_| "{}".into());
+    let detail = vk_detail_to_json(&id, &rec)?;
+    let body = norito::json::to_json_pretty(&detail).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -35405,8 +35564,130 @@ pub struct RecordDealUsageResponseDto {
     pub tickets_processed: usize,
     /// Tickets that produced a payout.
     pub tickets_won: usize,
-    /// Tickets discarded as duplicates.
+    /// Duplicate counter (always zero because a duplicate rejects the complete report).
     pub tickets_duplicate: usize,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for funding an admitted provider's deal collateral account.
+pub struct FundProviderBondDto {
+    /// Provider identifier (hex-encoded BLAKE3-256).
+    pub provider_id_hex: String,
+    /// Positive collateral increment in nano-XOR.
+    pub amount_nano: u128,
+    /// Exact next one-based funding sequence for replay protection.
+    pub funding_sequence: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Provider collateral balances returned after an accepted funding request.
+pub struct FundProviderBondResponseDto {
+    /// Provider identifier (hex-encoded).
+    pub provider_id_hex: String,
+    /// Last accepted funding sequence.
+    pub funding_sequence: u64,
+    /// Total collateral deposited in nano-XOR.
+    pub bond_deposited_nano: u128,
+    /// Collateral currently available in nano-XOR.
+    pub bond_available_nano: u128,
+    /// Collateral locked by active deals in nano-XOR.
+    pub bond_locked_nano: u128,
+    /// Collateral irreversibly slashed in nano-XOR.
+    pub bond_slashed_nano: u128,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for funding a deal client's credit account.
+pub struct FundClientCreditDto {
+    /// Client identifier (hex-encoded BLAKE3-256).
+    pub client_id_hex: String,
+    /// Positive credit increment in nano-XOR.
+    pub amount_nano: u128,
+    /// Exact next one-based funding sequence for replay protection.
+    pub funding_sequence: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Client credit balances returned after an accepted funding request.
+pub struct FundClientCreditResponseDto {
+    /// Client identifier (hex-encoded).
+    pub client_id_hex: String,
+    /// Last accepted funding sequence.
+    pub funding_sequence: u64,
+    /// Total credit deposited in nano-XOR.
+    pub credit_deposited_nano: u128,
+    /// Credit currently available in nano-XOR.
+    pub credit_balance_nano: u128,
+    /// Credit consumed by settlements in nano-XOR.
+    pub credit_debited_nano: u128,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for opening a validated SoraFS storage deal.
+pub struct OpenDealDto {
+    /// Canonical proposal whose provider must have a current admitted advert.
+    pub proposal: DealProposal,
+    /// Epoch when the deal becomes active.
+    pub activation_epoch: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Identifiers and lifecycle bounds returned after opening a deal.
+pub struct OpenDealResponseDto {
+    /// Canonical deal identifier (hex-encoded BLAKE3-256).
+    pub deal_id_hex: String,
+    /// Provider identifier (hex-encoded).
+    pub provider_id_hex: String,
+    /// Client identifier (hex-encoded).
+    pub client_id_hex: String,
+    /// Epoch when the deal was activated.
+    pub activation_epoch: u64,
+    /// First negotiated deal epoch.
+    pub start_epoch: u64,
+    /// Final negotiated deal epoch.
+    pub end_epoch: u64,
 }
 
 #[cfg(feature = "app_api")]
@@ -35453,6 +35734,25 @@ pub struct SettleDealResponseDto {
     pub outstanding_nano: u128,
     /// Base64-encoded Norito payload for `DealSettlementV1`.
     pub governance_settlement_b64: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload to cancel an idle deal at its next settlement boundary.
+pub struct CancelDealDto {
+    /// Deal identifier (hex-encoded BLAKE3-256).
+    pub deal_id_hex: String,
+    /// Exact next settlement-boundary epoch.
+    pub cancellation_epoch: u64,
+    /// Canonical non-empty operator rationale stored in the final settlement.
+    pub reason: String,
 }
 
 /// Structured result returned after processing a deal usage submission.
@@ -36974,29 +37274,59 @@ pub async fn handle_post_sorafs_register_manifest(
     validate_pin_policy(&manifest_policy, &manifest_constraints).map_err(|err| {
         sorafs_pin_manifest_validation_error("sorafs_pin_manifest_policy_invalid", err)
     })?;
+    if manifest_policy.retention_epoch <= req.submitted_epoch {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_retention_invalid",
+            format!(
+                "retention_epoch {} must be greater than submitted_epoch {}",
+                manifest_policy.retention_epoch, req.submitted_epoch
+            ),
+        ));
+    }
 
     let manifest_digest_bytes =
         parse_sorafs_pin_hex_array::<32>(&req.manifest_digest_hex, "manifest_digest_hex")?;
     let chunk_digest =
         parse_sorafs_pin_hex_array::<32>(&req.chunk_digest_sha3_256_hex, "chunk_digest_sha3_256")?;
-    validate_manifest_payload_matches_request(
+    if manifest_digest_bytes.iter().all(|byte| *byte == 0) {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_digest_inert",
+            "manifest_digest_hex must not be zero",
+        ));
+    }
+    if chunk_digest.iter().all(|byte| *byte == 0) {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_chunk_digest_inert",
+            "chunk_digest_sha3_256_hex must not be zero",
+        ));
+    }
+    let manifest_payload = validate_manifest_payload_matches_request(
         &req,
         &manifest_constraints,
         &manifest_digest_bytes,
         &manifest_policy,
     )?;
 
-    let chunker_handle = iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
-        profile_id: descriptor.id.0,
-        namespace: descriptor.namespace.to_owned(),
-        name: descriptor.name.to_owned(),
-        semver: descriptor.semver.to_owned(),
-        multihash_code: descriptor.multihash_code,
-    };
-
     let policy = convert_manifest_policy(&manifest_policy);
 
     let alias_binding = if let Some(alias) = req.alias.as_ref() {
+        let max_proof_bytes = sorafs_manifest::pin_registry::MAX_ALIAS_PROOF_ENCODED_BYTES;
+        let max_base64_bytes = max_proof_bytes
+            .checked_add(2)
+            .and_then(|value| value.checked_div(3))
+            .and_then(|value| value.checked_mul(4))
+            .ok_or_else(|| {
+                sorafs_pin_validation_error(
+                    "sorafs_pin_alias_proof_size_invalid",
+                    "alias proof base64 size limit overflow",
+                )
+            })?;
+        if alias.proof_base64.is_empty() || alias.proof_base64.len() > max_base64_bytes {
+            return Err(sorafs_pin_validation_error(
+                "sorafs_pin_alias_proof_size_invalid",
+                format!("alias proof base64 must encode 1..={max_proof_bytes} bytes"),
+            ));
+        }
         let proof = base64::engine::general_purpose::STANDARD
             .decode(alias.proof_base64.as_bytes())
             .map_err(|err| {
@@ -37005,6 +37335,17 @@ pub async fn handle_post_sorafs_register_manifest(
                     format!("invalid base64 in alias proof: {err}"),
                 )
             })?;
+        if proof.is_empty()
+            || proof.len() > max_proof_bytes
+            || base64::engine::general_purpose::STANDARD.encode(&proof) != alias.proof_base64
+        {
+            return Err(sorafs_pin_validation_error(
+                "sorafs_pin_alias_proof_noncanonical",
+                format!(
+                    "alias proof must be canonical base64 encoding of 1..={max_proof_bytes} bytes"
+                ),
+            ));
+        }
         Some(
             iroha_data_model::sorafs::pin_registry::ManifestAliasBinding {
                 name: alias.name.clone(),
@@ -37018,6 +37359,12 @@ pub async fn handle_post_sorafs_register_manifest(
 
     let successor_digest = if let Some(hex) = req.successor_of_hex.as_ref() {
         let bytes = parse_sorafs_pin_hex_array::<32>(hex, "successor_of_hex")?;
+        if bytes.iter().all(|byte| *byte == 0) {
+            return Err(sorafs_pin_validation_error(
+                "sorafs_pin_successor_digest_inert",
+                "successor_of_hex must not be zero",
+            ));
+        }
         Some(iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
             bytes,
         ))
@@ -37025,16 +37372,13 @@ pub async fn handle_post_sorafs_register_manifest(
         None
     };
 
-    let isi = sorafs::RegisterPinManifest {
-        digest: iroha_data_model::sorafs::pin_registry::ManifestDigest::new(manifest_digest_bytes),
-        chunker: chunker_handle.clone(),
-        chunk_digest_sha3_256: chunk_digest,
-        content_length: req.content_length,
-        policy,
-        submitted_epoch: req.submitted_epoch,
-        alias: alias_binding,
-        successor_of: successor_digest,
-    };
+    let isi = sorafs::RegisterPinManifest::new(
+        manifest_payload,
+        chunk_digest,
+        req.submitted_epoch,
+        alias_binding,
+        successor_digest,
+    );
 
     let gas_asset_id =
         normalize_contract_call_gas_asset_id(state.as_ref(), req.gas_asset_id.as_deref())?;
@@ -37053,13 +37397,22 @@ pub async fn handle_post_sorafs_register_manifest(
         "/v1/sorafs/pin/register",
     )?;
 
-    let pin_fee_nano = state.gov.sorafs_pricing.public_pin_fee_nano(
-        policy.storage_class,
-        req.content_length,
-        policy.min_replicas,
-        req.submitted_epoch,
-        policy.retention_epoch,
-    );
+    let pin_fee_nano = state
+        .gov
+        .sorafs_pricing
+        .public_pin_fee_nano(
+            policy.storage_class,
+            req.content_length,
+            policy.min_replicas,
+            req.submitted_epoch,
+            policy.retention_epoch,
+        )
+        .map_err(|error| {
+            sorafs_pin_validation_error(
+                "sorafs_pin_fee_calculation_invalid",
+                format!("public pin fee calculation failed: {error}"),
+            )
+        })?;
     let pin_fee_asset_id = state.gov.sorafs_pin_fee_asset_id.to_string();
     let pin_fee_treasury_account_id = state.gov.sorafs_pin_fee_treasury_account.to_string();
 
@@ -37351,6 +37704,133 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_fund_provider_bond(
+    telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    sorafs_limits: Arc<SorafsQuotaEnforcer>,
+    NoritoJson(req): NoritoJson<FundProviderBondDto>,
+) -> Result<Response> {
+    let provider_id_bytes = parse_hex_array::<32>(&req.provider_id_hex, "provider_id_hex")?;
+    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &provider_id_bytes) {
+        return Err(quota_limit_error(err));
+    }
+    let provider_id = ProviderId::new(provider_id_bytes);
+    let snapshot = sorafs_node
+        .fund_provider_bond_sequenced(provider_id, req.amount_nano, req.funding_sequence)
+        .map_err(deal_engine_error)?;
+
+    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_provider_funding", "ok"));
+    iroha_logger::info!(
+        provider_id = %hex::encode(provider_id_bytes),
+        funding_sequence = snapshot.funding_sequence,
+        amount_nano = req.amount_nano,
+        bond_available_nano = snapshot.bond_available_nano,
+        "funded SoraFS deal provider collateral"
+    );
+
+    let response = FundProviderBondResponseDto {
+        provider_id_hex: hex::encode(provider_id_bytes),
+        funding_sequence: snapshot.funding_sequence,
+        bond_deposited_nano: snapshot.bond_deposited_nano,
+        bond_available_nano: snapshot.bond_available_nano,
+        bond_locked_nano: snapshot.bond_locked_nano,
+        bond_slashed_nano: snapshot.bond_slashed_nano,
+    };
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_fund_client_credit(
+    telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    sorafs_limits: Arc<SorafsQuotaEnforcer>,
+    NoritoJson(req): NoritoJson<FundClientCreditDto>,
+) -> Result<Response> {
+    let client_id_bytes = parse_hex_array::<32>(&req.client_id_hex, "client_id_hex")?;
+    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &client_id_bytes) {
+        return Err(quota_limit_error(err));
+    }
+    let client_id = ClientId::new(client_id_bytes);
+    let snapshot = sorafs_node
+        .fund_client_credit_sequenced(client_id, req.amount_nano, req.funding_sequence)
+        .map_err(deal_engine_error)?;
+
+    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_client_funding", "ok"));
+    iroha_logger::info!(
+        client_id = %hex::encode(client_id_bytes),
+        funding_sequence = snapshot.funding_sequence,
+        amount_nano = req.amount_nano,
+        credit_balance_nano = snapshot.credit_balance_nano,
+        "funded SoraFS deal client credit"
+    );
+
+    let response = FundClientCreditResponseDto {
+        client_id_hex: hex::encode(client_id_bytes),
+        funding_sequence: snapshot.funding_sequence,
+        credit_deposited_nano: snapshot.credit_deposited_nano,
+        credit_balance_nano: snapshot.credit_balance_nano,
+        credit_debited_nano: snapshot.credit_debited_nano,
+    };
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_open_deal(
+    telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    sorafs_limits: Arc<SorafsQuotaEnforcer>,
+    NoritoJson(req): NoritoJson<OpenDealDto>,
+) -> Result<Response> {
+    let provider_id_bytes = *req.proposal.provider_id.as_bytes();
+    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &provider_id_bytes) {
+        return Err(quota_limit_error(err));
+    }
+    let record = sorafs_node
+        .open_deal(req.proposal, req.activation_epoch)
+        .map_err(deal_engine_error)?;
+
+    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_open", "ok"));
+    iroha_logger::info!(
+        deal_id = %hex::encode(record.deal_id.as_bytes()),
+        provider_id = %hex::encode(record.provider_id.as_bytes()),
+        client_id = %hex::encode(record.client_id.as_bytes()),
+        activation_epoch = req.activation_epoch,
+        "opened SoraFS storage deal"
+    );
+
+    let response = OpenDealResponseDto {
+        deal_id_hex: hex::encode(record.deal_id.as_bytes()),
+        provider_id_hex: hex::encode(record.provider_id.as_bytes()),
+        client_id_hex: hex::encode(record.client_id.as_bytes()),
+        activation_epoch: req.activation_epoch,
+        start_epoch: record.start_epoch,
+        end_epoch: record.end_epoch,
+    };
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
 pub async fn handle_post_sorafs_record_deal_usage(
     _chain_id: Arc<ChainId>,
     _queue: Arc<Queue>,
@@ -37363,6 +37843,12 @@ pub async fn handle_post_sorafs_record_deal_usage(
     let deal_id_bytes = parse_hex_array::<32>(&req.deal_id_hex, "deal_id_hex")?;
     if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &deal_id_bytes) {
         return Err(quota_limit_error(err));
+    }
+    if req.tickets.len() > MAX_DEAL_USAGE_TICKETS {
+        return Err(deal_engine_error(DealEngineError::ResourceExhausted {
+            resource: "tickets_per_usage_report",
+            limit: MAX_DEAL_USAGE_TICKETS,
+        }));
     }
 
     let mut tickets = Vec::with_capacity(req.tickets.len());
@@ -37504,6 +37990,64 @@ pub async fn handle_post_sorafs_settle_deal(
 
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(DealSettlementHandlerResult {
+        response: resp,
+        outcome,
+        encoded: settlement_bytes,
+        encoded_b64: settlement_b64,
+    })
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_cancel_deal(
+    telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    sorafs_limits: Arc<SorafsQuotaEnforcer>,
+    NoritoJson(req): NoritoJson<CancelDealDto>,
+) -> Result<DealSettlementHandlerResult> {
+    let deal_id_bytes = parse_hex_array::<32>(&req.deal_id_hex, "deal_id_hex")?;
+    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &deal_id_bytes) {
+        return Err(quota_limit_error(err));
+    }
+
+    let outcome = sorafs_node
+        .cancel_deal(
+            DealId::new(deal_id_bytes),
+            req.cancellation_epoch,
+            req.reason,
+        )
+        .map_err(deal_engine_error)?;
+    let settlement_bytes = to_bytes(&outcome.governance)
+        .map_err(|err| conversion_error(format!("serialise cancellation payload: {err}")))?;
+    let settlement_b64 =
+        base64::engine::general_purpose::STANDARD.encode(settlement_bytes.as_slice());
+
+    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_cancellation", "ok"));
+    iroha_logger::info!(
+        deal_id = %hex::encode(deal_id_bytes),
+        settlement_index = outcome.record.settlement_index,
+        cancellation_epoch = outcome.record.settled_epoch,
+        "cancelled idle SoraFS storage deal"
+    );
+
+    let response = SettleDealResponseDto {
+        deal_id_hex: hex::encode(deal_id_bytes),
+        settlement_index: outcome.record.settlement_index,
+        settled_epoch: outcome.record.settled_epoch,
+        expected_charge_nano: outcome.record.expected_charge_nano,
+        micropayment_credit_nano: outcome.record.micropayment_credit_nano,
+        client_credit_debit_nano: outcome.record.client_credit_debit_nano,
+        bond_slash_nano: outcome.record.bond_slash_nano,
+        outstanding_nano: outcome.record.outstanding_nano,
+        governance_settlement_b64: settlement_b64.clone(),
+    };
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("application/json"),
@@ -38474,7 +39018,7 @@ pub async fn handle_post_sorafs_record_replication_failure(
     Ok(resp)
 }
 
-fn parse_hex_array<const N: usize>(value: &str, field: &str) -> Result<[u8; N], Error> {
+pub(crate) fn parse_hex_array<const N: usize>(value: &str, field: &str) -> Result<[u8; N], Error> {
     let trimmed = value.trim_start_matches("0x");
     let bytes = hex::decode(trimmed).map_err(|err| {
         conversion_error(format!(
@@ -38695,8 +39239,18 @@ fn replication_schedule_error(err: sorafs_node::capacity::CapacityError) -> Erro
             hex::encode(order_id)
         ),
         ZeroSlice => "replication assignment must reserve a positive GiB slice".to_string(),
-        AllocationOverflow => "capacity allocation overflowed internal counters".to_string(),
-        AllocationUnderflow => "capacity allocation underflowed internal counters".to_string(),
+        AllocationOverflow => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_allocation_overflow",
+                message: "capacity allocation overflowed internal counters".to_owned(),
+            };
+        }
+        AllocationUnderflow => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_allocation_underflow",
+                message: "capacity allocation underflowed internal counters".to_owned(),
+            };
+        }
         InvalidCheckpoint(reason) => {
             return Error::AppServiceUnavailable {
                 code: "sorafs_capacity_checkpoint_invalid",
@@ -39658,16 +40212,31 @@ fn validate_manifest_payload_matches_request(
     constraints: &ManifestPinPolicyConstraints,
     expected_digest: &[u8; 32],
     expected_policy: &ManifestPinPolicy,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     let Some(manifest_b64) = req.manifest_b64.as_ref() else {
-        if constraints.require_council_signatures {
-            return Err(sorafs_pin_validation_error(
-                "sorafs_pin_manifest_payload_required",
-                "manifest_b64 is required when governance requires council signatures",
-            ));
-        }
-        return Ok(());
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_required",
+            "manifest_b64 is required for consensus manifest registration",
+        ));
     };
+
+    let maximum_manifest_bytes = sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES;
+    let maximum_base64_bytes = maximum_manifest_bytes
+        .checked_add(2)
+        .and_then(|value| value.checked_div(3))
+        .and_then(|value| value.checked_mul(4))
+        .ok_or_else(|| {
+            sorafs_pin_validation_error(
+                "sorafs_pin_manifest_payload_size_invalid",
+                "manifest payload base64 size limit overflow",
+            )
+        })?;
+    if manifest_b64.is_empty() || manifest_b64.len() > maximum_base64_bytes {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_size_invalid",
+            format!("manifest_b64 must encode 1..={maximum_manifest_bytes} bytes"),
+        ));
+    }
 
     let manifest_bytes = base64::engine::general_purpose::STANDARD
         .decode(manifest_b64.as_bytes())
@@ -39677,12 +40246,35 @@ fn validate_manifest_payload_matches_request(
                 format!("invalid base64 in manifest_b64: {err}"),
             )
         })?;
+    if manifest_bytes.is_empty()
+        || manifest_bytes.len() > maximum_manifest_bytes
+        || base64::engine::general_purpose::STANDARD.encode(&manifest_bytes) != *manifest_b64
+    {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_noncanonical_base64",
+            format!(
+                "manifest_b64 must be canonical base64 encoding of 1..={maximum_manifest_bytes} bytes"
+            ),
+        ));
+    }
     let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes).map_err(|err| {
         sorafs_pin_validation_error(
             "sorafs_pin_manifest_payload_decode_failed",
             format!("invalid Norito ManifestV1 in manifest_b64: {err}"),
         )
     })?;
+    let canonical_manifest_bytes = manifest.encode().map_err(|err| {
+        sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_encode_failed",
+            format!("failed to canonicalize ManifestV1 in manifest_b64: {err}"),
+        )
+    })?;
+    if canonical_manifest_bytes != manifest_bytes {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_noncanonical",
+            "manifest_b64 must use the canonical first-release Norito layout",
+        ));
+    }
 
     validate_manifest(&manifest, constraints).map_err(|err| {
         sorafs_pin_manifest_validation_error("sorafs_pin_manifest_payload_invalid", err)
@@ -39737,7 +40329,7 @@ fn validate_manifest_payload_matches_request(
         ));
     }
 
-    Ok(())
+    Ok(manifest_bytes)
 }
 
 fn convert_manifest_policy(
@@ -39818,59 +40410,144 @@ fn deal_engine_error(err: DealEngineError) -> Error {
             code: "sorafs_deal_balance_overflow",
             message: format!("deal engine balance overflow for `{resource}`"),
         },
-        E::UnknownProvider(provider) => conversion_error(format!(
-            "unknown provider {}",
-            hex::encode(provider.as_bytes())
-        )),
-        E::UnknownClient(client) => {
-            conversion_error(format!("unknown client {}", hex::encode(client.as_bytes())))
-        }
+        E::FundingSequenceMismatch {
+            account_kind,
+            expected,
+            found,
+        } => Error::AppConflict {
+            code: "sorafs_deal_funding_sequence_conflict",
+            message: format!(
+                "{account_kind} funding sequence {found} does not equal next expected sequence {expected}"
+            ),
+        },
+        E::FundingSequenceOverflow { account_kind } => Error::AppConflict {
+            code: "sorafs_deal_funding_sequence_exhausted",
+            message: format!("{account_kind} funding sequence space is exhausted"),
+        },
+        E::InvalidProposal(reason) => Error::AppQueryValidation {
+            code: "sorafs_deal_proposal_invalid",
+            message: reason,
+        },
+        E::UnknownProvider(provider) => Error::AppNotFound {
+            code: "sorafs_deal_provider_not_found",
+            message: format!("unknown provider {}", hex::encode(provider.as_bytes())),
+        },
+        E::UnknownClient(client) => Error::AppNotFound {
+            code: "sorafs_deal_client_not_found",
+            message: format!("unknown client {}", hex::encode(client.as_bytes())),
+        },
         E::InsufficientBond {
             provider,
             required,
             available,
-        } => conversion_error(format!(
-            "insufficient bond for provider {} (required {required}, available {available})",
-            hex::encode(provider.as_bytes())
-        )),
-        E::DuplicateDeal(deal) => conversion_error(format!(
-            "deal {} already exists",
-            hex::encode(deal.as_bytes())
-        )),
-        E::UnknownDeal(deal) => {
-            conversion_error(format!("deal {} not found", hex::encode(deal.as_bytes())))
-        }
-        E::DealInactive(deal) => conversion_error(format!(
-            "deal {} is not active",
-            hex::encode(deal.as_bytes())
-        )),
+        } => Error::AppConflict {
+            code: "sorafs_deal_bond_insufficient",
+            message: format!(
+                "insufficient bond for provider {} (required {required}, available {available})",
+                hex::encode(provider.as_bytes())
+            ),
+        },
+        E::DuplicateDeal(deal) => Error::AppConflict {
+            code: "sorafs_deal_already_exists",
+            message: format!("deal {} already exists", hex::encode(deal.as_bytes())),
+        },
+        E::UnknownDeal(deal) => Error::AppNotFound {
+            code: "sorafs_deal_not_found",
+            message: format!("deal {} not found", hex::encode(deal.as_bytes())),
+        },
+        E::DealInactive(deal) => Error::AppConflict {
+            code: "sorafs_deal_inactive",
+            message: format!("deal {} is not active", hex::encode(deal.as_bytes())),
+        },
         E::ActivationOutOfRange {
             deal_id,
             activation_epoch,
             start,
             end,
-        } => conversion_error(format!(
-            "activation epoch {activation_epoch} outside [{start}, {end}] for deal {}",
-            hex::encode(deal_id.as_bytes())
-        )),
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_activation_epoch_invalid",
+            message: format!(
+                "activation epoch {activation_epoch} outside [{start}, {end}] for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
         E::UsageEpochOutOfRange {
             deal_id,
             usage_epoch,
             start,
             end,
-        } => conversion_error(format!(
-            "usage epoch {usage_epoch} outside [{start}, {end}] for deal {}",
-            hex::encode(deal_id.as_bytes())
-        )),
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_usage_epoch_invalid",
+            message: format!(
+                "usage epoch {usage_epoch} outside [{start}, {end}] for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::UsageEpochNotMonotonic {
+            deal_id,
+            usage_epoch,
+            previous_epoch,
+        } => Error::AppConflict {
+            code: "sorafs_deal_usage_epoch_conflict",
+            message: format!(
+                "usage epoch {usage_epoch} is not after prior epoch {previous_epoch} for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::InvalidTicket { deal_id, reason } => Error::AppQueryValidation {
+            code: "sorafs_deal_ticket_invalid",
+            message: format!(
+                "invalid micropayment ticket for deal {}: {reason}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::UnsafeCancellation { deal_id, reason } => Error::AppConflict {
+            code: "sorafs_deal_cancellation_unsafe",
+            message: format!(
+                "deal {} cannot be cancelled: {reason}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::InvalidCancellationReason => Error::AppQueryValidation {
+            code: "sorafs_deal_cancellation_reason_invalid",
+            message:
+                "deal cancellation reason must be canonical, non-empty, control-free, and bounded"
+                    .to_owned(),
+        },
+        E::TicketReplay { deal_id, ticket_id } => Error::AppConflict {
+            code: "sorafs_deal_ticket_replay",
+            message: format!(
+                "micropayment ticket {} was already consumed for deal {}",
+                hex::encode(ticket_id.as_bytes()),
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
         E::SettlementWindowMismatch {
             deal_id,
             settlement_epoch,
             window_epochs,
-        } => conversion_error(format!(
-            "settlement epoch {settlement_epoch} does not satisfy window length {window_epochs} for deal {}",
-            hex::encode(deal_id.as_bytes())
-        )),
-        E::MetadataEncoding(err) => conversion_error(format!("metadata encoding failed: {err}")),
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_settlement_epoch_invalid",
+            message: format!(
+                "settlement epoch {settlement_epoch} does not satisfy window length {window_epochs} for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::SettlementEpochOverflow(deal_id) => Error::AppConflict {
+            code: "sorafs_deal_settlement_epoch_exhausted",
+            message: format!(
+                "next settlement epoch overflows for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::AllocationFailed { resource } => Error::AppServiceUnavailable {
+            code: "sorafs_deal_allocation_failed",
+            message: format!("deal engine could not reserve memory for `{resource}`"),
+        },
+        E::MetadataEncoding(err) => Error::AppQueryValidation {
+            code: "sorafs_deal_metadata_encoding_invalid",
+            message: format!("metadata encoding failed: {err}"),
+        },
         E::InvalidCheckpoint(reason) => Error::AppServiceUnavailable {
             code: "sorafs_deal_checkpoint_invalid",
             message: format!("invalid deal runtime checkpoint: {reason}"),
@@ -39940,8 +40617,16 @@ mod sorafs_runtime_error_mapping_tests {
     }
 
     #[test]
-    fn capacity_checkpoint_errors_have_distinct_stable_codes() {
+    fn capacity_internal_failures_have_distinct_stable_codes() {
         for (error, code) in [
+            (
+                sorafs_node::capacity::CapacityError::AllocationOverflow,
+                "sorafs_capacity_allocation_overflow",
+            ),
+            (
+                sorafs_node::capacity::CapacityError::AllocationUnderflow,
+                "sorafs_capacity_allocation_underflow",
+            ),
             (
                 sorafs_node::capacity::CapacityError::InvalidCheckpoint("invalid".to_owned()),
                 "sorafs_capacity_checkpoint_invalid",
@@ -39989,6 +40674,34 @@ mod sorafs_runtime_error_mapping_tests {
             other => panic!("expected conflict error, got {other:?}"),
         }
         assert_eq!(overflow.into_response().status(), StatusCode::CONFLICT);
+
+        let replay = deal_engine_error(DealEngineError::FundingSequenceMismatch {
+            account_kind: "provider",
+            expected: 2,
+            found: 1,
+        });
+        match &replay {
+            Error::AppConflict { code, .. } => {
+                assert_eq!(*code, "sorafs_deal_funding_sequence_conflict");
+            }
+            other => panic!("expected funding conflict, got {other:?}"),
+        }
+        assert_eq!(replay.into_response().status(), StatusCode::CONFLICT);
+
+        let invalid_reason = deal_engine_error(DealEngineError::InvalidCancellationReason);
+        assert_eq!(
+            invalid_reason.into_response().status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let unsafe_cancel = deal_engine_error(DealEngineError::UnsafeCancellation {
+            deal_id: DealId::new([0x11; 32]),
+            reason: "unsettled usage",
+        });
+        assert_eq!(unsafe_cancel.into_response().status(), StatusCode::CONFLICT);
+
+        let missing = deal_engine_error(DealEngineError::UnknownDeal(DealId::new([0x22; 32])));
+        assert_eq!(missing.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
@@ -40005,6 +40718,10 @@ mod sorafs_runtime_error_mapping_tests {
             (
                 DealEngineError::StateLockPoisoned,
                 "sorafs_deal_state_poisoned",
+            ),
+            (
+                DealEngineError::AllocationFailed { resource: "deals" },
+                "sorafs_deal_allocation_failed",
             ),
         ] {
             assert_service_unavailable_code(deal_engine_error(error), code);
@@ -40507,8 +41224,8 @@ mod sorafs_pin_tests {
 
     fn default_manifest() -> ManifestV1 {
         use sorafs_manifest::{ManifestBuilder, PinPolicy};
-        ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x55, 0xaa])
+        let mut manifest = ManifestBuilder::new()
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(sorafs_manifest::DagCodecId(
                 sorafs_manifest::MANIFEST_DAG_CODEC,
             ))
@@ -40521,14 +41238,23 @@ mod sorafs_pin_tests {
                 storage_class: sorafs_manifest::StorageClass::Hot,
                 retention_epoch: 42,
             })
-            .governance(sorafs_manifest::GovernanceProofs {
-                council_signatures: vec![sorafs_manifest::CouncilSignature {
-                    signer: [0x11; 32],
-                    signature: vec![0x22; 64],
-                }],
-            })
             .build()
-            .expect("manifest")
+            .expect("manifest");
+        let keypair = checked_pin_keypair(0x11, "SoraFS manifest council signer");
+        let digest = manifest.digest().expect("unsigned manifest digest");
+        let signature = iroha_crypto::Signature::try_new(keypair.private_key(), digest.as_bytes())
+            .expect("sign manifest council proof");
+        let (_, signer) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("manifest council key bytes");
+        manifest.governance = sorafs_manifest::GovernanceProofs {
+            council_signatures: vec![sorafs_manifest::CouncilSignature {
+                signer: signer.try_into().expect("Ed25519 key has 32 bytes"),
+                signature: signature.payload().to_vec(),
+            }],
+        };
+        manifest
     }
 
     fn pin_policy_dto_from_manifest(policy: &sorafs_manifest::PinPolicy) -> PinPolicyDto {
@@ -40551,7 +41277,7 @@ mod sorafs_pin_tests {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         let kp = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
         let manifest_b64 = include_manifest_payload.then(|| {
-            let bytes = norito::to_bytes(manifest).expect("encode manifest");
+            let bytes = manifest.encode().expect("encode canonical manifest");
             base64::engine::general_purpose::STANDARD.encode(bytes)
         });
 
@@ -40739,7 +41465,7 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
         let manifest = default_manifest();
-        let req = request_from_manifest(&manifest, false);
+        let req = request_from_manifest(&manifest, true);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let resp = handle_post_sorafs_register_manifest(
@@ -40788,28 +41514,66 @@ mod sorafs_pin_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_accepts_legacy_encoded_manifest_payload() {
+    async fn register_manifest_handler_rejects_inert_commitments_and_expired_retention() {
+        let manifest = default_manifest();
+        let base = request_from_manifest(&manifest, true);
+
+        let mut expired = base.clone();
+        expired.pin_policy.retention_epoch = expired.submitted_epoch;
+        let mut zero_manifest = base.clone();
+        zero_manifest.manifest_digest_hex = "00".repeat(32);
+        let mut zero_chunks = base.clone();
+        zero_chunks.chunk_digest_sha3_256_hex = "00".repeat(32);
+        let mut zero_successor = base;
+        zero_successor.successor_of_hex = Some("00".repeat(32));
+
+        for (req, expected_code) in [
+            (expired, "sorafs_pin_manifest_retention_invalid"),
+            (zero_manifest, "sorafs_pin_manifest_digest_inert"),
+            (zero_chunks, "sorafs_pin_chunk_digest_inert"),
+            (zero_successor, "sorafs_pin_successor_digest_inert"),
+        ] {
+            let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+            let error = match handle_post_sorafs_register_manifest(
+                chain_id,
+                queue,
+                state,
+                telemetry,
+                NoritoJson(req),
+            )
+            .await
+            {
+                Ok(_) => panic!("{expected_code} input must fail"),
+                Err(error) => error,
+            };
+            let (code, _) = app_validation_error(error);
+            assert_eq!(code, expected_code);
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_rejects_noncanonical_manifest_layout() {
         let manifest = default_manifest();
         let mut req = request_from_manifest(&manifest, true);
-        let legacy_manifest_bytes = manifest
-            .encode_legacy_norito()
-            .expect("legacy manifest encoding");
+        let legacy_manifest_bytes = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(0);
+            norito::to_bytes(&manifest).expect("noncanonical manifest fixture encoding")
+        };
         req.manifest_b64 =
             Some(base64::engine::general_purpose::STANDARD.encode(legacy_manifest_bytes));
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
-        let resp = handle_post_sorafs_register_manifest(
+        let result = handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
             queue,
             state,
             telemetry,
             NoritoJson(req),
         )
-        .await
-        .expect("handler ok")
-        .into_response();
+        .await;
 
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert!(result.is_err(), "noncanonical layout must fail closed");
     }
 
     #[tokio::test]
@@ -40906,7 +41670,7 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_rejects_invalid_alias_proof_with_stable_code() {
         let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest, false);
+        let mut req = request_from_manifest(&manifest, true);
         req.alias = Some(PinAliasDto {
             namespace: "sora".into(),
             name: "docs".into(),
@@ -40969,7 +41733,10 @@ mod sorafs_pin_tests {
             chunker_multihash_code: descriptor.multihash_code,
             pin_policy: pin_policy_dto,
             manifest_digest_hex,
-            manifest_b64: None,
+            manifest_b64: Some(
+                base64::engine::general_purpose::STANDARD
+                    .encode(manifest.encode().expect("encode canonical manifest")),
+            ),
             chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
             content_length: manifest.content_length,
             submitted_epoch: 5,
@@ -41324,9 +42091,9 @@ mod sorafs_capacity_tests {
     fn seed_sample_deal(node: &sorafs_node::NodeHandle) -> (DealId, u64) {
         let provider = ProviderId::new([0xAA; 32]);
         let client = ClientId::new([0xBB; 32]);
-        node.deposit_provider_bond(provider, 5_000_000_000)
+        node.fund_provider_bond_sequenced(provider, 5_000_000_000, 1)
             .expect("deposit provider bond");
-        node.deposit_client_credit(client, 3_000_000_000)
+        node.fund_client_credit_sequenced(client, 3_000_000_000, 1)
             .expect("deposit client credit");
 
         let activation_epoch = 1_700_000_000;
@@ -41471,6 +42238,202 @@ mod sorafs_capacity_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
+    async fn deal_lifecycle_handlers_reject_funding_replay_and_emit_final_cancellation() {
+        let (_state, _queue, _chain_id, telemetry) = test_state_components();
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
+        let provider_id = ProviderId::new([0xA7; 32]);
+        let client_id = ClientId::new([0xB7; 32]);
+        let provider_hex = hex::encode(provider_id.as_bytes());
+        let client_hex = hex::encode(client_id.as_bytes());
+
+        let provider_response = handle_post_sorafs_fund_provider_bond(
+            telemetry.clone(),
+            node.clone(),
+            quotas.clone(),
+            NoritoJson(FundProviderBondDto {
+                provider_id_hex: provider_hex.clone(),
+                amount_nano: 2_000_000_000,
+                funding_sequence: 1,
+            }),
+        )
+        .await
+        .expect("first provider funding accepted");
+        let provider_body = http_body_util::BodyExt::collect(provider_response.into_body())
+            .await
+            .expect("collect provider response")
+            .to_bytes();
+        let provider_json: FundProviderBondResponseDto =
+            norito::json::from_slice(&provider_body).expect("decode provider response");
+        assert_eq!(provider_json.funding_sequence, 1);
+        assert_eq!(provider_json.bond_available_nano, 2_000_000_000);
+
+        let replay = match handle_post_sorafs_fund_provider_bond(
+            telemetry.clone(),
+            node.clone(),
+            quotas.clone(),
+            NoritoJson(FundProviderBondDto {
+                provider_id_hex: provider_hex.clone(),
+                amount_nano: 1,
+                funding_sequence: 1,
+            }),
+        )
+        .await
+        {
+            Ok(_) => panic!("provider funding replay must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(replay.into_response().status(), StatusCode::CONFLICT);
+        assert_eq!(
+            node.deal_engine()
+                .provider_snapshot(provider_id)
+                .expect("provider account")
+                .bond_available_nano,
+            2_000_000_000,
+            "rejected replay must not mutate collateral"
+        );
+
+        handle_post_sorafs_fund_client_credit(
+            telemetry.clone(),
+            node.clone(),
+            quotas.clone(),
+            NoritoJson(FundClientCreditDto {
+                client_id_hex: client_hex.clone(),
+                amount_nano: 1_000_000_000,
+                funding_sequence: 1,
+            }),
+        )
+        .await
+        .expect("first client funding accepted");
+        let gap = match handle_post_sorafs_fund_client_credit(
+            telemetry.clone(),
+            node.clone(),
+            quotas.clone(),
+            NoritoJson(FundClientCreditDto {
+                client_id_hex: client_hex.clone(),
+                amount_nano: 1,
+                funding_sequence: 3,
+            }),
+        )
+        .await
+        {
+            Ok(_) => panic!("client funding gap must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(gap.into_response().status(), StatusCode::CONFLICT);
+        assert_eq!(
+            node.deal_engine()
+                .client_snapshot(client_id)
+                .expect("client account")
+                .credit_balance_nano,
+            1_000_000_000,
+            "rejected gap must not mutate client credit"
+        );
+
+        let activation_epoch = 1_730_000_000;
+        let proposal = DealProposal {
+            provider_id,
+            client_id,
+            storage_class: StorageClass::Hot,
+            capacity_gib: 1,
+            start_epoch: activation_epoch,
+            end_epoch: activation_epoch + 14,
+            terms: DealTerms {
+                storage_price_nano_per_gib_month: 200_000_000,
+                egress_price_nano_per_gib: 50_000_000,
+                settlement_window_epochs: 7,
+                micropayment_probability_bps: 10_000,
+                micropayment_payout_nano: 50_000_000,
+            },
+            metadata: dm::Metadata::default(),
+        };
+        let open_response = handle_post_sorafs_open_deal(
+            telemetry.clone(),
+            node.clone(),
+            quotas.clone(),
+            NoritoJson(OpenDealDto {
+                proposal: proposal.clone(),
+                activation_epoch,
+            }),
+        )
+        .await
+        .expect("funded canonical deal opens");
+        let open_body = http_body_util::BodyExt::collect(open_response.into_body())
+            .await
+            .expect("collect open response")
+            .to_bytes();
+        let open_json: OpenDealResponseDto =
+            norito::json::from_slice(&open_body).expect("decode open response");
+        let deal_id = DealId::new(
+            parse_hex_array::<32>(&open_json.deal_id_hex, "deal_id_hex").expect("response deal id"),
+        );
+        let duplicate_open = match handle_post_sorafs_open_deal(
+            telemetry.clone(),
+            node.clone(),
+            quotas.clone(),
+            NoritoJson(OpenDealDto {
+                proposal,
+                activation_epoch,
+            }),
+        )
+        .await
+        {
+            Ok(_) => panic!("canonical open replay must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            duplicate_open.into_response().status(),
+            StatusCode::CONFLICT
+        );
+
+        let cancellation = handle_post_sorafs_cancel_deal(
+            telemetry.clone(),
+            node.clone(),
+            quotas.clone(),
+            NoritoJson(CancelDealDto {
+                deal_id_hex: open_json.deal_id_hex.clone(),
+                cancellation_epoch: activation_epoch + 7,
+                reason: "operator-approved test cancellation".to_owned(),
+            }),
+        )
+        .await
+        .expect("idle deal cancellation accepted");
+        assert_eq!(
+            cancellation.outcome.governance.status,
+            sorafs_manifest::deal::DealSettlementStatusV1::Cancelled
+        );
+        assert!(matches!(
+            node.deal_snapshot(deal_id).expect("cancelled snapshot").status,
+            iroha_data_model::sorafs::deal::DealStatus::Cancelled(epoch)
+                if epoch == activation_epoch + 7
+        ));
+        let decoded: DealSettlementV1 = norito::decode_from_bytes(&cancellation.encoded)
+            .expect("decode canonical cancellation payload");
+        assert_eq!(decoded, cancellation.outcome.governance);
+
+        let cancellation_replay = match handle_post_sorafs_cancel_deal(
+            telemetry,
+            node,
+            quotas,
+            NoritoJson(CancelDealDto {
+                deal_id_hex: open_json.deal_id_hex,
+                cancellation_epoch: activation_epoch + 7,
+                reason: "operator-approved test cancellation".to_owned(),
+            }),
+        )
+        .await
+        {
+            Ok(_) => panic!("final cancellation replay must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            cancellation_replay.into_response().status(),
+            StatusCode::CONFLICT
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
     async fn deal_usage_handler_records_usage() {
         let (state, queue, chain_id, telemetry) = test_state_components();
         #[cfg(feature = "telemetry")]
@@ -41480,7 +42443,10 @@ mod sorafs_capacity_tests {
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
 
         let deal_hex = hex::encode(deal_id.as_bytes());
-        let ticket_hex = hex::encode([0xCD; 32]);
+        let ticket_hex = hex::encode(
+            sorafs_node::derive_micropayment_ticket_id(deal_id, activation_epoch + 1, 1, 0)
+                .as_bytes(),
+        );
 
         let request = RecordDealUsageDto {
             deal_id_hex: deal_hex.clone(),
@@ -41490,7 +42456,7 @@ mod sorafs_capacity_tests {
             tickets: vec![DealUsageTicketDto {
                 ticket_id_hex: ticket_hex,
                 issued_epoch: activation_epoch + 1,
-                storage_gib_hours: 0,
+                storage_gib_hours: 1,
                 egress_bytes: 0,
             }],
         };
@@ -41569,9 +42535,12 @@ mod sorafs_capacity_tests {
             storage_gib_hours: (4 * GIB_HOURS_PER_MONTH) as u64,
             egress_bytes: 1_048_576,
             tickets: vec![DealUsageTicketDto {
-                ticket_id_hex: hex::encode([0xEF; 32]),
+                ticket_id_hex: hex::encode(
+                    sorafs_node::derive_micropayment_ticket_id(deal_id, activation_epoch + 1, 1, 0)
+                        .as_bytes(),
+                ),
                 issued_epoch: activation_epoch + 1,
-                storage_gib_hours: 0,
+                storage_gib_hours: 1,
                 egress_bytes: 0,
             }],
         };
@@ -56456,18 +57425,29 @@ mod app_api_integration_tests {
                 .expect("compute manifest digest for registry seed")
                 .into(),
         );
+        let manifest_root_cid =
+            iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from_slice(
+                &manifest.root_cid,
+            )
+            .expect("projection manifest must use a canonical root CID");
         let issuer = checked_app_api_account_id(0x8D, "derive projection registry issuer key");
         let policy = iroha_data_model::sorafs::pin_registry::PinPolicy::default();
         let content_length = manifest.content_length;
-        let amount_nano = state.view().world().sorafs_pricing().public_pin_fee_nano(
-            policy.storage_class,
-            content_length,
-            policy.min_replicas,
-            5,
-            policy.retention_epoch,
-        );
+        let amount_nano = state
+            .view()
+            .world()
+            .sorafs_pricing()
+            .public_pin_fee_nano(
+                policy.storage_class,
+                content_length,
+                policy.min_replicas,
+                5,
+                policy.retention_epoch,
+            )
+            .expect("projection registry fixture pin fee");
         let mut manifest_record = iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
             manifest_digest.clone(),
+            manifest_root_cid.clone(),
             default_projection_registry_chunker_handle(),
             [0xAB; 32],
             policy,
@@ -56510,6 +57490,7 @@ mod app_api_integration_tests {
                 iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord {
                     order_id,
                     manifest_digest,
+                    manifest_root_cid,
                     issued_by: issuer,
                     issued_epoch: 8,
                     deadline_epoch: 24,
@@ -59250,8 +60231,17 @@ fn native_amx_phase_label(phase: NativeAmxPhase) -> &'static str {
     }
 }
 
-fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV1) -> Value {
+fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV2) -> Value {
     json_object(vec![
+        json_entry(
+            "round",
+            json_object(vec![
+                json_entry("context_id", hash_with_prefix(body.round.context_id.0)),
+                json_entry("height", body.round.height),
+                json_entry("view", body.round.view),
+            ]),
+        ),
+        json_entry("epoch", body.epoch),
         json_entry("chain_id_hash", hash_with_prefix(body.chain_id_hash)),
         json_entry("source_id", hex::encode(body.source_id)),
         json_entry(
@@ -59272,11 +60262,16 @@ fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV1) -> Value 
             "participant_lane_incarnation",
             hash_with_prefix(body.participant_lane_incarnation),
         ),
-        json_entry("authority_context_height", body.authority_context_height),
         json_entry(
-            "coordinator_lane_block_height",
-            body.coordinator_lane_block_height,
+            "participant_validator_set_hash",
+            hash_with_prefix(body.participant_validator_set_hash),
         ),
+        json_entry(
+            "participant_validator_count",
+            body.participant_validator_count,
+        ),
+        json_entry("participant_min_quorum", body.participant_min_quorum),
+        json_entry("authority_context_height", body.authority_context_height),
         json_entry(
             "coordinator_lane_block_view",
             body.coordinator_lane_block_view,
@@ -59285,10 +60280,14 @@ fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV1) -> Value 
             "coordinator_proposal_hash",
             hash_with_prefix(body.coordinator_proposal_hash),
         ),
+        json_entry(
+            "planned_coordinator_block_height",
+            body.planned_coordinator_block_height,
+        ),
     ])
 }
 
-fn native_amx_attestation_qc_json(qc: &NativeAmxAttestationQcV1) -> Value {
+fn native_amx_attestation_qc_json(qc: &NativeAmxAttestationQcV2) -> Value {
     json_object(vec![
         json_entry("body", native_amx_attestation_body_json(&qc.body)),
         json_entry("validator_set_hash_version", qc.validator_set_hash_version),
@@ -59302,6 +60301,16 @@ fn native_amx_attestation_qc_json(qc: &NativeAmxAttestationQcV1) -> Value {
                 qc.validator_set
                     .iter()
                     .map(|peer| Value::from(peer.to_string()))
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "validator_set_pops",
+            Value::Array(
+                qc.validator_set_pops
+                    .iter()
+                    .map(hex::encode)
+                    .map(Value::from)
                     .collect(),
             ),
         ),
@@ -59397,11 +60406,10 @@ fn committed_lane_block_json(entry: &sumeragi::status::CommittedLaneBlockSnapsho
     ])
 }
 
-fn native_amx_leg_json(leg: &NativeAmxLegRecord) -> Value {
+fn native_amx_leg_json(leg: &NativeAmxLegRecordV2) -> Value {
     json_object(vec![
         json_entry("lane_id", leg.lane_id),
         json_entry("dataspace_id", leg.dataspace_id),
-        json_entry("lane_incarnation", hash_with_prefix(leg.lane_incarnation)),
         json_entry(
             "prepare_qc",
             native_amx_attestation_qc_json(&leg.prepare_qc),
@@ -61106,6 +62114,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         .map(|caps| {
             json_object(vec![
                 json_entry("nexus_policy_digest", hex::encode(caps.nexus_policy_digest)),
+                json_entry(
+                    "v2_config_fingerprint",
+                    format!("0x{}", hex::encode(caps.v2_config_fingerprint)),
+                ),
                 json_entry("collectors_k", caps.collectors_k),
                 json_entry("redundant_send_r", caps.redundant_send_r),
                 json_entry("da_enabled", caps.da_enabled),
@@ -61470,8 +62482,8 @@ mod status_tests {
         block::consensus::{
             CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
             LaneBlockQcV1, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
-            LaneVolatilityClass, NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1,
-            NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
+            LaneVolatilityClass, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2,
+            NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
         },
         consensus::{
             VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome, ValidatorElectionParameters,
@@ -61553,6 +62565,180 @@ mod status_tests {
             prepare_qc,
             commit_qc,
         }
+    }
+
+    fn authoritative_v2_status_fixture() -> iroha_data_model::block::consensus_v2::SumeragiV2Status
+    {
+        use iroha_data_model::block::consensus_v2 as wire;
+
+        wire::SumeragiV2Status {
+            protocol_version: wire::PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"torii-v2-status-node"),
+            build_fingerprint: Hash::new(b"torii-v2-status-build"),
+            config_fingerprint: Hash::new(b"torii-v2-status-config"),
+            height_context_id: wire::HeightContextId(
+                HashOf::<wire::HeightContext>::from_untyped_unchecked(Hash::new(
+                    b"torii-v2-status-context",
+                )),
+            ),
+            height: 7,
+            view: 2,
+            phase: wire::SumeragiV2StatusPhase::Prepare,
+            leader: 1,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: wire::SumeragiV2BodyState::Validated,
+            pending_persistence_id: None,
+            last_committed_height: 0,
+            last_committed_subject: None,
+            height_context: wire::SumeragiV2HeightContextStatus {
+                epoch: 1,
+                epoch_end_height: 10,
+                mode: wire::ConsensusMode::Permissioned,
+                epoch_seed: [0xA5; 32],
+                validator_count: 4,
+                quorum: wire::DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
+        }
+    }
+
+    fn lane_payload_ownership_status_fixture()
+    -> iroha_data_model::block::consensus::SumeragiLanePayloadOwnership {
+        iroha_data_model::block::consensus::SumeragiLanePayloadOwnership {
+            proposal_height: 13,
+            proposal_view: 2,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: Hash::new(b"torii-v2-status-lane-incarnation"),
+            lane_block_height: 13,
+            lane_block_view: 2,
+            subject_hash: Hash::prehashed([0x71; Hash::LENGTH]),
+            qc_mode_tag: "permissioned:lane:7:dataspace:11".to_owned(),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::prehashed([0x72; Hash::LENGTH])],
+            previous_lane_block_height: 12,
+            previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x73; Hash::LENGTH])),
+            lane_block_descriptor_hash: Some(Hash::prehashed([0x74; Hash::LENGTH])),
+            lane_block_descriptor_validator_set: Vec::new(),
+            lane_block_descriptor_validator_count: 0,
+            lane_block_descriptor_min_quorum: 0,
+            payload_ownership_hash: Hash::prehashed([0x75; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0x76; Hash::LENGTH]),
+        }
+    }
+
+    fn lane_block_session_status_fixture()
+    -> iroha_data_model::block::consensus::SumeragiLaneBlockSessionStatus {
+        iroha_data_model::block::consensus::SumeragiLaneBlockSessionStatus {
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: Hash::new(b"torii-v2-status-lane-incarnation"),
+            lane_block_height: 13,
+            lane_block_view: 2,
+            proposal_hash: Hash::prehashed([0x77; Hash::LENGTH]),
+            has_proposal: true,
+            prepare_vote_count: 3,
+            commit_vote_count: 2,
+            has_prepare_qc: true,
+            has_commit_qc: false,
+            pending_commit_vote_request: true,
+            pending_committed_session_drain: false,
+            committed_session_drained: false,
+            validator_count: 4,
+            min_quorum: 3,
+        }
+    }
+
+    #[test]
+    fn v2_status_json_preserves_lane_observability_and_strips_when_nexus_disabled() {
+        let ownership = lane_payload_ownership_status_fixture();
+        let committed = committed_lane_block_status_fixture();
+        let committed_wire = committed_lane_block_wire(&committed);
+        let session = lane_block_session_status_fixture();
+        let snapshot = sumeragi::StatusSnapshot {
+            lane_payload_ownerships: vec![ownership.clone()],
+            committed_lane_blocks: vec![committed],
+            lane_block_sessions: vec![session],
+            ..Default::default()
+        };
+
+        let enabled = sumeragi_v2_status_json_from_snapshot(
+            authoritative_v2_status_fixture(),
+            snapshot.clone(),
+            true,
+            true,
+        );
+        assert_eq!(enabled.lane_payload_ownerships, vec![ownership]);
+        assert_eq!(enabled.committed_lane_blocks, vec![committed_wire]);
+        assert_eq!(enabled.lane_block_sessions, vec![session]);
+        assert!(enabled.local_peer_removed);
+
+        let enabled_json =
+            norito::json::to_value(&enabled).expect("serialize authoritative v2 status JSON");
+        let enabled_object = enabled_json
+            .as_object()
+            .expect("authoritative v2 status JSON object");
+        for key in [
+            "lane_payload_ownerships",
+            "committed_lane_blocks",
+            "lane_block_sessions",
+        ] {
+            assert_eq!(
+                enabled_object
+                    .get(key)
+                    .and_then(Value::as_array)
+                    .map(Vec::len),
+                Some(1),
+                "missing v2 status observability field {key}"
+            );
+        }
+        assert_eq!(
+            enabled_object
+                .get("local_peer_removed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let disabled = sumeragi_v2_status_json_from_snapshot(
+            authoritative_v2_status_fixture(),
+            snapshot,
+            false,
+            true,
+        );
+        assert!(disabled.lane_payload_ownerships.is_empty());
+        assert!(disabled.committed_lane_blocks.is_empty());
+        assert!(disabled.lane_block_sessions.is_empty());
+        assert!(disabled.local_peer_removed);
+
+        let disabled_json =
+            norito::json::to_value(&disabled).expect("serialize stripped v2 status JSON");
+        let disabled_object = disabled_json
+            .as_object()
+            .expect("stripped v2 status JSON object");
+        for key in [
+            "lane_payload_ownerships",
+            "committed_lane_blocks",
+            "lane_block_sessions",
+        ] {
+            assert!(
+                disabled_object
+                    .get(key)
+                    .and_then(Value::as_array)
+                    .is_some_and(Vec::is_empty),
+                "Nexus-disabled v2 status leaked {key}"
+            );
+        }
+        assert_eq!(
+            disabled_object
+                .get("local_peer_removed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
@@ -62272,9 +63458,10 @@ mod status_tests {
     #[test]
     fn status_snapshot_json_includes_consensus_caps() {
         let snap = sumeragi::StatusSnapshot {
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_owned(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_owned(),
             consensus_caps: Some(ConsensusConfigCaps {
                 nexus_policy_digest: [0xA5; 32],
+                v2_config_fingerprint: [0xA5; 32],
                 collectors_k: 4,
                 redundant_send_r: 2,
                 da_enabled: true,
@@ -62317,6 +63504,10 @@ mod status_tests {
         assert_eq!(
             caps.get("nexus_policy_digest").and_then(Value::as_str),
             Some("a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+        );
+        assert_eq!(
+            caps.get("v2_config_fingerprint").and_then(Value::as_str),
+            Some("0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"),
         );
         assert_eq!(caps.get("collectors_k").and_then(Value::as_u64), Some(4));
         assert_eq!(
@@ -62775,36 +63966,52 @@ mod status_tests {
         let validator_count = u32::try_from(validators.len()).expect("fixture validator count");
         let participant_min_quorum = u32::try_from(validators.len().saturating_mul(2) / 3 + 1)
             .expect("fixture validator quorum");
-        let native_amx_qc = |phase: NativeAmxPhase| NativeAmxAttestationQcV1 {
-            body: NativeAmxAttestationBodyV1 {
-                chain_id_hash,
-                source_id,
-                tx_entrypoint_hash,
-                plan_digest,
-                phase,
-                coordinator_lane_id,
-                coordinator_dataspace_id,
-                coordinator_lane_incarnation,
-                participant_lane_id,
-                participant_dataspace_id,
-                participant_lane_incarnation,
-                participant_validator_set_hash: validator_set_hash,
-                participant_validator_count: validator_count,
-                participant_min_quorum,
-                authority_context_height: 70,
-                coordinator_lane_block_height: 77,
-                coordinator_lane_block_view: 3,
-                coordinator_proposal_hash,
-            },
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash,
-            validator_set: validators.clone(),
-            validator_set_pops: vec![vec![0x5A; 96]; validators.len()],
-            signers_bitmap: vec![0b0000_0011],
-            bls_aggregate_signature: vec![0xA5; 96],
-        };
+        let native_amx_qc =
+            |phase: NativeAmxPhase| NativeAmxAttestationQcV2 {
+                body:
+                    NativeAmxAttestationBodyV2 {
+                        round:
+                            iroha_data_model::block::consensus_v2::ConsensusRound {
+                                context_id:
+                                    iroha_data_model::block::consensus_v2::HeightContextId(
+                                        HashOf::<
+                                            iroha_data_model::block::consensus_v2::HeightContext,
+                                        >::from_untyped_unchecked(
+                                            Hash::new(b"torii-native-amx-context"),
+                                        ),
+                                    ),
+                                height: 77,
+                                view: 3,
+                            },
+                        epoch: 7,
+                        chain_id_hash,
+                        source_id,
+                        tx_entrypoint_hash,
+                        plan_digest,
+                        phase,
+                        coordinator_lane_id,
+                        coordinator_dataspace_id,
+                        coordinator_lane_incarnation,
+                        participant_lane_id,
+                        participant_dataspace_id,
+                        participant_lane_incarnation,
+                        participant_validator_set_hash: validator_set_hash,
+                        participant_validator_count: validator_count,
+                        participant_min_quorum,
+                        authority_context_height: 70,
+                        coordinator_lane_block_view: 3,
+                        coordinator_proposal_hash,
+                        planned_coordinator_block_height: 77,
+                    },
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash,
+                validator_set: validators.clone(),
+                validator_set_pops: vec![vec![0x5A; 96]; validators.len()],
+                signers_bitmap: vec![0b0000_0011],
+                bls_aggregate_signature: vec![0xA5; 96],
+            };
         let receipt = NativeAmxReceipt {
-            version: 1,
+            version: 2,
             source_id,
             chain_id_hash,
             plan_digest,
@@ -62815,10 +64022,9 @@ mod status_tests {
             lane_block_height: 77,
             lane_block_view: 3,
             coordinator_proposal_hash,
-            legs: vec![NativeAmxLegRecord {
+            legs: vec![NativeAmxLegRecordV2 {
                 lane_id: participant_lane_id,
                 dataspace_id: participant_dataspace_id,
-                lane_incarnation: participant_lane_incarnation,
                 prepare_qc: native_amx_qc(NativeAmxPhase::Prepare),
                 commit_qc: native_amx_qc(NativeAmxPhase::Commit),
             }],
@@ -62876,13 +64082,14 @@ mod status_tests {
         let participant_lane_incarnation_json = hash_with_prefix(participant_lane_incarnation);
         let coordinator_proposal_hash_json = hash_with_prefix(coordinator_proposal_hash);
         let first_validator = validators[0].to_string();
+        let validator_pop_hex = hex::encode(vec![0x5A; 96]);
         let aggregate_signature_hex = hex::encode(vec![0xA5; 96]);
         assert_eq!(
             native.len(),
             12,
             "native AMX receipt has an exact wire shape"
         );
-        assert_eq!(native.get("version").and_then(Value::as_u64), Some(1));
+        assert_eq!(native.get("version").and_then(Value::as_u64), Some(2));
         assert_eq!(
             native.get("source_id").and_then(Value::as_str),
             Some(source_id_hex.as_str())
@@ -62934,7 +64141,7 @@ mod status_tests {
             .expect("native AMX legs array");
         assert_eq!(legs.len(), 1);
         let leg = legs[0].as_object().expect("native AMX leg object");
-        assert_eq!(leg.len(), 5, "native AMX leg has an exact wire shape");
+        assert_eq!(leg.len(), 4, "native AMX leg has an exact wire shape");
         assert_eq!(
             leg.get("lane_id").and_then(Value::as_u64),
             Some(u64::from(participant_lane_id))
@@ -62943,11 +64150,6 @@ mod status_tests {
             leg.get("dataspace_id").and_then(Value::as_u64),
             Some(u64::from(participant_dataspace_id))
         );
-        assert_eq!(
-            leg.get("lane_incarnation").and_then(Value::as_str),
-            Some(participant_lane_incarnation_json.as_str())
-        );
-
         let prepare_qc = leg
             .get("prepare_qc")
             .and_then(Value::as_object)
@@ -62958,7 +64160,7 @@ mod status_tests {
             .expect("prepare body object");
         assert_eq!(
             prepare_body.len(),
-            15,
+            20,
             "native AMX body has an exact wire shape"
         );
         assert_eq!(
@@ -62978,6 +64180,15 @@ mod status_tests {
         assert_eq!(
             prepare_body.get("phase").and_then(Value::as_str),
             Some("prepare")
+        );
+        assert_eq!(prepare_body.get("epoch").and_then(Value::as_u64), Some(7));
+        assert_eq!(
+            prepare_body
+                .get("round")
+                .and_then(Value::as_object)
+                .and_then(|round| round.get("view"))
+                .and_then(Value::as_u64),
+            Some(3)
         );
         assert_eq!(
             prepare_body
@@ -63005,21 +64216,45 @@ mod status_tests {
         );
         assert_eq!(
             prepare_body
+                .get("participant_validator_set_hash")
+                .and_then(Value::as_str),
+            Some(validator_set_hash_json.as_str())
+        );
+        assert_eq!(
+            prepare_body
+                .get("participant_validator_count")
+                .and_then(Value::as_u64),
+            Some(u64::from(validator_count))
+        );
+        assert_eq!(
+            prepare_body
+                .get("participant_min_quorum")
+                .and_then(Value::as_u64),
+            Some(u64::from(participant_min_quorum))
+        );
+        assert_eq!(
+            prepare_body
                 .get("authority_context_height")
                 .and_then(Value::as_u64),
             Some(70)
         );
         assert_eq!(
             prepare_body
-                .get("coordinator_lane_block_height")
-                .and_then(Value::as_u64),
-            Some(77)
-        );
-        assert_eq!(
-            prepare_body
                 .get("coordinator_lane_block_view")
                 .and_then(Value::as_u64),
             Some(3)
+        );
+        assert_eq!(
+            prepare_body
+                .get("coordinator_proposal_hash")
+                .and_then(Value::as_str),
+            Some(coordinator_proposal_hash_json.as_str())
+        );
+        assert_eq!(
+            prepare_body
+                .get("planned_coordinator_block_height")
+                .and_then(Value::as_u64),
+            Some(77)
         );
         assert_eq!(
             prepare_qc
@@ -63037,6 +64272,15 @@ mod status_tests {
             .expect("validator set array");
         assert_eq!(validator_set.len(), validators.len());
         assert_eq!(validator_set[0].as_str(), Some(first_validator.as_str()));
+        let validator_set_pops = prepare_qc
+            .get("validator_set_pops")
+            .and_then(Value::as_array)
+            .expect("validator proof-of-possession array");
+        assert_eq!(validator_set_pops.len(), validators.len());
+        assert_eq!(
+            validator_set_pops[0].as_str(),
+            Some(validator_pop_hex.as_str())
+        );
         assert_eq!(
             prepare_qc
                 .get("signers_bitmap")
@@ -64164,741 +65408,6 @@ mod status_tests {
     }
 }
 
-/// GET /v1/sumeragi/status — latest consensus status snapshot
-/// Returns leader index and HighestQC (height, view).
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_status(
-    State(state): State<std::sync::Arc<CoreState>>,
-    accept: Option<axum::http::HeaderValue>,
-    nexus_enabled: bool,
-) -> Result<Response> {
-    let mut snap =
-        reconcile_sumeragi_status_snapshot_with_world(sumeragi::status_snapshot(), state.as_ref());
-    if !nexus_enabled {
-        snap = snap.strip_lane_details();
-    }
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        let wire = SumeragiStatusWire {
-            canonical: sumeragi_v1_status_wire(&snap),
-            mode_tag: snap.mode_tag.clone(),
-            staged_mode_tag: snap.staged_mode_tag.clone(),
-            staged_mode_activation_height: snap.staged_mode_activation_height,
-            mode_activation_lag_blocks: snap.mode_activation_lag_blocks,
-            mode_flip_kill_switch: snap.mode_flip_kill_switch,
-            mode_flip_blocked: snap.mode_flip_blocked,
-            mode_flip_success_total: snap.mode_flip_success_total,
-            mode_flip_fail_total: snap.mode_flip_fail_total,
-            mode_flip_blocked_total: snap.mode_flip_blocked_total,
-            last_mode_flip_timestamp_ms: snap.last_mode_flip_timestamp_ms,
-            last_mode_flip_error: snap.last_mode_flip_error.clone(),
-            consensus_caps: snap
-                .consensus_caps
-                .as_ref()
-                .map(|caps| SumeragiConsensusCapsStatus {
-                    nexus_policy_digest: caps.nexus_policy_digest,
-                    collectors_k: caps.collectors_k,
-                    redundant_send_r: caps.redundant_send_r,
-                    da_enabled: caps.da_enabled,
-                    rbc_chunk_max_bytes: caps.rbc_chunk_max_bytes,
-                    rbc_encoding: caps.rbc_encoding,
-                    rbc_rs16_data_shards: caps.rbc_rs16_data_shards,
-                    rbc_rs16_parity_shards: caps.rbc_rs16_parity_shards,
-                    rbc_session_ttl_ms: caps.rbc_session_ttl_ms,
-                    rbc_store_max_sessions: caps.rbc_store_max_sessions,
-                    rbc_store_soft_sessions: caps.rbc_store_soft_sessions,
-                    rbc_store_max_bytes: caps.rbc_store_max_bytes,
-                    rbc_store_soft_bytes: caps.rbc_store_soft_bytes,
-                }),
-            effective_min_finality_ms: snap.effective_min_finality_ms,
-            effective_block_time_ms: snap.effective_block_time_ms,
-            effective_commit_time_ms: snap.effective_commit_time_ms,
-            effective_pacing_factor_bps: snap.effective_pacing_factor_bps,
-            effective_commit_quorum_timeout_ms: snap.effective_commit_quorum_timeout_ms,
-            effective_availability_timeout_ms: snap.effective_availability_timeout_ms,
-            effective_pacemaker_interval_ms: snap.effective_pacemaker_interval_ms,
-            effective_npos_timeouts: snap.effective_npos_timeouts.as_ref().map(|timeouts| {
-                SumeragiNposTimeoutsStatus {
-                    propose_ms: timeouts.propose_ms,
-                    prevote_ms: timeouts.prevote_ms,
-                    precommit_ms: timeouts.precommit_ms,
-                    commit_ms: timeouts.commit_ms,
-                    da_ms: timeouts.da_ms,
-                    aggregator_ms: timeouts.aggregator_ms,
-                    exec_ms: timeouts.exec_ms,
-                    witness_ms: timeouts.witness_ms,
-                }
-            }),
-            npos_repair_coverage: snap.npos_repair_coverage.as_ref().map(|coverage| {
-                SumeragiNposRepairCoverageStatus {
-                    last_repair_height: coverage.last_repair_height,
-                    last_repair_view: coverage.last_repair_view,
-                    reason: coverage.reason.clone(),
-                    selected_repair_peer_count: coverage.selected_repair_peer_count,
-                    required_stake_quorum_bps: coverage.required_stake_quorum_bps,
-                    selected_stake_coverage_bps: coverage.selected_stake_coverage_bps,
-                    reached_stake_quorum_coverage: coverage.reached_stake_quorum_coverage,
-                }
-            }),
-            effective_collectors_k: snap.effective_collectors_k,
-            effective_redundant_send_r: snap.effective_redundant_send_r,
-            leader_index: snap.leader_index,
-            highest_qc_height: snap.highest_qc_height,
-            highest_qc_view: snap.highest_qc_view,
-            highest_qc_subject: snap.highest_qc_subject,
-            locked_qc_height: snap.locked_qc_height,
-            locked_qc_view: snap.locked_qc_view,
-            locked_qc_subject: snap.locked_qc_subject,
-            commit_qc: SumeragiQcStatus {
-                height: snap.commit_qc.height,
-                view: snap.commit_qc.view,
-                epoch: snap.commit_qc.epoch,
-                block_hash: snap.commit_qc.block_hash,
-                validator_set_hash: snap.commit_qc.validator_set_hash,
-                validator_set_len: snap.commit_qc.validator_set_len,
-                signatures_total: snap.commit_qc.signatures_total,
-            },
-            commit_quorum: SumeragiCommitQuorumStatus {
-                height: snap.commit_quorum.height,
-                view: snap.commit_quorum.view,
-                block_hash: snap.commit_quorum.block_hash,
-                signatures_present: snap.commit_quorum.signatures_present,
-                signatures_counted: snap.commit_quorum.signatures_counted,
-                signatures_set_b: snap.commit_quorum.signatures_set_b,
-                signatures_required: snap.commit_quorum.signatures_required,
-                last_updated_ms: snap.commit_quorum.last_updated_ms,
-            },
-            commit_pipeline: SumeragiCommitPipelineStatus {
-                last_total_ms: snap.commit_pipeline.last_total_ms,
-                last_validation_ms: snap.commit_pipeline.last_validation_ms,
-                last_qc_rebuild_ms: snap.commit_pipeline.last_qc_rebuild_ms,
-                last_gate_ms: snap.commit_pipeline.last_gate_ms,
-                last_finalize_ms: snap.commit_pipeline.last_finalize_ms,
-                last_drain_results_ms: snap.commit_pipeline.last_drain_results_ms,
-                last_drain_qc_verify_ms: snap.commit_pipeline.last_drain_qc_verify_ms,
-                last_drain_persist_ms: snap.commit_pipeline.last_drain_persist_ms,
-                last_drain_kura_store_ms: snap.commit_pipeline.last_drain_kura_store_ms,
-                last_drain_state_apply_ms: snap.commit_pipeline.last_drain_state_apply_ms,
-                last_drain_state_commit_ms: snap.commit_pipeline.last_drain_state_commit_ms,
-                ema_total_ms: snap.commit_pipeline.ema_total_ms,
-                ema_validation_ms: snap.commit_pipeline.ema_validation_ms,
-                ema_gate_ms: snap.commit_pipeline.ema_gate_ms,
-                ema_finalize_ms: snap.commit_pipeline.ema_finalize_ms,
-            },
-            round_gap: SumeragiRoundGapStatus {
-                last_deliver_to_state_commit_ms: snap.round_gap.last_deliver_to_state_commit_ms,
-                last_state_commit_to_next_propose_ms: snap
-                    .round_gap
-                    .last_state_commit_to_next_propose_ms,
-                last_deliver_to_next_propose_ms: snap.round_gap.last_deliver_to_next_propose_ms,
-                ema_deliver_to_state_commit_ms: snap.round_gap.ema_deliver_to_state_commit_ms,
-                ema_state_commit_to_next_propose_ms: snap
-                    .round_gap
-                    .ema_state_commit_to_next_propose_ms,
-                ema_deliver_to_next_propose_ms: snap.round_gap.ema_deliver_to_next_propose_ms,
-            },
-            view_change_proof_accepted_total: snap.view_change_proof_accepted_total,
-            view_change_proof_stale_total: snap.view_change_proof_stale_total,
-            view_change_proof_rejected_total: snap.view_change_proof_rejected_total,
-            view_change_suggest_total: snap.view_change_suggest_total,
-            view_change_install_total: snap.view_change_install_total,
-            view_change_causes: SumeragiViewChangeCauseStatus {
-                commit_failure_total: snap.view_change_causes.commit_failure_total,
-                quorum_timeout_total: snap.view_change_causes.quorum_timeout_total,
-                stake_quorum_timeout_total: snap.view_change_causes.stake_quorum_timeout_total,
-                roster_unavailable_total: snap.view_change_causes.roster_unavailable_total,
-                da_gate_total: snap.view_change_causes.da_gate_total,
-                censorship_evidence_total: snap.view_change_causes.censorship_evidence_total,
-                missing_payload_total: snap.view_change_causes.missing_payload_total,
-                missing_qc_total: snap.view_change_causes.missing_qc_total,
-                validation_reject_total: snap.view_change_causes.validation_reject_total,
-                last_cause: snap.view_change_causes.last_cause.clone(),
-                last_cause_timestamp_ms: snap.view_change_causes.last_cause_timestamp_ms,
-                last_commit_failure_timestamp_ms: snap
-                    .view_change_causes
-                    .last_commit_failure_timestamp_ms,
-                last_quorum_timeout_timestamp_ms: snap
-                    .view_change_causes
-                    .last_quorum_timeout_timestamp_ms,
-                last_stake_quorum_timeout_timestamp_ms: snap
-                    .view_change_causes
-                    .last_stake_quorum_timeout_timestamp_ms,
-                last_roster_unavailable_timestamp_ms: snap
-                    .view_change_causes
-                    .last_roster_unavailable_timestamp_ms,
-                last_da_gate_timestamp_ms: snap.view_change_causes.last_da_gate_timestamp_ms,
-                last_censorship_evidence_timestamp_ms: snap
-                    .view_change_causes
-                    .last_censorship_evidence_timestamp_ms,
-                last_missing_payload_timestamp_ms: snap
-                    .view_change_causes
-                    .last_missing_payload_timestamp_ms,
-                last_missing_qc_timestamp_ms: snap.view_change_causes.last_missing_qc_timestamp_ms,
-                last_validation_reject_timestamp_ms: snap
-                    .view_change_causes
-                    .last_validation_reject_timestamp_ms,
-            },
-            gossip_fallback_total: snap.gossip_fallback_total,
-            block_created_dropped_by_lock_total: snap.block_created_dropped_by_lock_total,
-            block_created_hint_mismatch_total: snap.block_created_hint_mismatch_total,
-            block_created_proposal_mismatch_total: snap.block_created_proposal_mismatch_total,
-            consensus_message_handling: SumeragiConsensusMessageHandlingStatus {
-                entries: snap
-                    .consensus_message_handling
-                    .entries
-                    .iter()
-                    .map(|entry| SumeragiConsensusMessageHandlingEntry {
-                        kind: entry.kind.as_str().to_owned(),
-                        outcome: entry.outcome.as_str().to_owned(),
-                        reason: entry.reason.as_str().to_owned(),
-                        total: entry.total,
-                    })
-                    .collect(),
-            },
-            vote_validation_drops: SumeragiVoteValidationDropStatus {
-                total: snap.vote_validation_drops.total,
-                entries: snap
-                    .vote_validation_drops
-                    .entries
-                    .iter()
-                    .map(|entry| SumeragiVoteValidationDropEntry {
-                        reason: entry.reason.as_str().to_owned(),
-                        height: entry.height,
-                        view: entry.view,
-                        epoch: entry.epoch,
-                        signer_index: entry.signer_index,
-                        peer_id: entry.peer_id.clone(),
-                        roster_hash: entry.roster_hash,
-                        roster_len: entry.roster_len,
-                        block_hash: entry.block_hash,
-                        timestamp_ms: entry.timestamp_ms,
-                    })
-                    .collect(),
-                peer_entries: snap
-                    .vote_validation_drops
-                    .peer_entries
-                    .iter()
-                    .map(|entry| SumeragiVoteValidationDropPeerEntry {
-                        peer_id: entry.peer_id.clone(),
-                        roster_hash: entry.roster_hash,
-                        roster_len: entry.roster_len,
-                        total: entry.total,
-                        reasons: entry
-                            .reasons
-                            .iter()
-                            .map(|reason| SumeragiVoteValidationDropReasonCount {
-                                reason: reason.reason.as_str().to_owned(),
-                                total: reason.total,
-                            })
-                            .collect(),
-                        last_height: entry.last_height,
-                        last_view: entry.last_view,
-                        last_epoch: entry.last_epoch,
-                        last_timestamp_ms: entry.last_timestamp_ms,
-                    })
-                    .collect(),
-            },
-            validation_reject_total: snap.validation_reject_total,
-            validation_reject_reason: snap.validation_reject_reason.map(ToOwned::to_owned),
-            validation_rejects: SumeragiValidationRejectStatus {
-                total: snap.validation_rejects.total,
-                stateless_total: snap.validation_rejects.stateless_total,
-                execution_total: snap.validation_rejects.execution_total,
-                prev_hash_total: snap.validation_rejects.prev_hash_total,
-                prev_height_total: snap.validation_rejects.prev_height_total,
-                topology_total: snap.validation_rejects.topology_total,
-                last_reason: snap.validation_rejects.last_reason.map(ToOwned::to_owned),
-                last_height: snap.validation_rejects.last_height,
-                last_view: snap.validation_rejects.last_view,
-                last_block: snap.validation_rejects.last_block,
-                last_timestamp_ms: snap.validation_rejects.last_timestamp_ms,
-            },
-            peer_key_policy: SumeragiPeerKeyPolicyStatus {
-                total: snap.peer_key_policy.total,
-                missing_hsm_total: snap.peer_key_policy.missing_hsm_total,
-                disallowed_algorithm_total: snap.peer_key_policy.disallowed_algorithm_total,
-                disallowed_provider_total: snap.peer_key_policy.disallowed_provider_total,
-                lead_time_violation_total: snap.peer_key_policy.lead_time_violation_total,
-                activation_in_past_total: snap.peer_key_policy.activation_in_past_total,
-                expiry_before_activation_total: snap.peer_key_policy.expiry_before_activation_total,
-                identifier_collision_total: snap.peer_key_policy.identifier_collision_total,
-                last_reason: snap.peer_key_policy.last_reason.map(ToOwned::to_owned),
-                last_timestamp_ms: snap.peer_key_policy.last_timestamp_ms,
-            },
-            block_sync_roster: SumeragiBlockSyncRosterStatus {
-                commit_qc_hint_total: snap.block_sync_roster.commit_qc_hint_total,
-                checkpoint_hint_total: snap.block_sync_roster.checkpoint_hint_total,
-                commit_qc_history_total: snap.block_sync_roster.commit_qc_history_total,
-                checkpoint_history_total: snap.block_sync_roster.checkpoint_history_total,
-                roster_sidecar_total: snap.block_sync_roster.roster_sidecar_total,
-                commit_roster_journal_total: snap.block_sync_roster.commit_roster_journal_total,
-                drop_missing_total: snap.block_sync_roster.drop_missing_total,
-                drop_unsolicited_share_blocks_total: snap
-                    .block_sync_roster
-                    .drop_unsolicited_share_blocks_total,
-            },
-            pacemaker_backpressure_deferrals_total: snap.pacemaker_backpressure_deferrals_total,
-            proposal_gate: proposal_gate_status(snap.proposal_gate),
-            commit_pipeline_tick_total: snap.commit_pipeline_tick_total,
-            da_reschedule_total: snap.da_reschedule_total,
-            missing_block_fetch: SumeragiMissingBlockFetchStatus {
-                total: snap.missing_block_fetch_total,
-                last_targets: snap.missing_block_fetch_last_targets,
-                last_dwell_ms: snap.missing_block_fetch_last_dwell_ms,
-            },
-            qc_deferred_missing_payload_total: snap.qc_deferred_missing_payload_total,
-            qc_deferred_resolved_total: snap.qc_deferred_resolved_total,
-            qc_deferred_expired_total: snap.qc_deferred_expired_total,
-            consensus_missing_qc_reacquire_attempt_total: snap
-                .consensus_missing_qc_reacquire_attempt_total,
-            consensus_missing_qc_reacquire_success_total: snap
-                .consensus_missing_qc_reacquire_success_total,
-            consensus_missing_qc_reacquire_exhausted_total: snap
-                .consensus_missing_qc_reacquire_exhausted_total,
-            consensus_forced_proposal_attempt_total: snap.consensus_forced_proposal_attempt_total,
-            consensus_forced_proposal_success_total: snap.consensus_forced_proposal_success_total,
-            blocksync_range_pull_escalation_total: snap.blocksync_range_pull_escalation_total,
-            blocksync_range_pull_success_total: snap.blocksync_range_pull_success_total,
-            blocksync_range_pull_failure_total: snap.blocksync_range_pull_failure_total,
-            blocksync_range_pull_candidate_exhausted_total: snap
-                .blocksync_range_pull_candidate_exhausted_total,
-            committed_edge_conflict_obsolete_total: snap.committed_edge_conflict_obsolete_total,
-            roster_sidecar_mismatch_obsolete_total: snap.roster_sidecar_mismatch_obsolete_total,
-            da_gate: SumeragiDaGateStatus {
-                reason: match snap.da_gate.reason {
-                    sumeragi::status::DaGateReasonSnapshot::MissingLocalData => {
-                        SumeragiDaGateReason::MissingLocalData
-                    }
-                    sumeragi::status::DaGateReasonSnapshot::ManifestMissing => {
-                        SumeragiDaGateReason::ManifestMissing
-                    }
-                    sumeragi::status::DaGateReasonSnapshot::ManifestHashMismatch => {
-                        SumeragiDaGateReason::ManifestHashMismatch
-                    }
-                    sumeragi::status::DaGateReasonSnapshot::ManifestReadFailed => {
-                        SumeragiDaGateReason::ManifestReadFailed
-                    }
-                    sumeragi::status::DaGateReasonSnapshot::ManifestSpoolScan => {
-                        SumeragiDaGateReason::ManifestSpoolScan
-                    }
-                    sumeragi::status::DaGateReasonSnapshot::None => SumeragiDaGateReason::None,
-                },
-                last_satisfied: match snap.da_gate.last_satisfied {
-                    sumeragi::status::DaGateSatisfactionSnapshot::None => {
-                        SumeragiDaGateSatisfaction::None
-                    }
-                    sumeragi::status::DaGateSatisfactionSnapshot::MissingDataRecovered => {
-                        SumeragiDaGateSatisfaction::MissingDataRecovered
-                    }
-                    sumeragi::status::DaGateSatisfactionSnapshot::ManifestGuardRecovered => {
-                        SumeragiDaGateSatisfaction::ManifestGuardRecovered
-                    }
-                },
-                missing_local_data_total: snap.da_gate.missing_local_data_total,
-                manifest_guard_total: snap.da_gate.manifest_guard_total,
-            },
-            kura_store: SumeragiKuraStoreStatus {
-                failures_total: snap.kura_store.failures_total,
-                abort_total: snap.kura_store.abort_total,
-                stage_total: snap.kura_store.stage_total,
-                rollback_total: snap.kura_store.rollback_total,
-                stage_last_height: snap.kura_store.stage_last_height,
-                stage_last_view: snap.kura_store.stage_last_view,
-                stage_last_hash: snap.kura_store.stage_last_hash,
-                rollback_last_height: snap.kura_store.rollback_last_height,
-                rollback_last_view: snap.kura_store.rollback_last_view,
-                rollback_last_hash: snap.kura_store.rollback_last_hash,
-                rollback_last_reason: snap.kura_store.rollback_last_reason.map(str::to_string),
-                lock_reset_total: snap.kura_store.lock_reset_total,
-                lock_reset_last_height: snap.kura_store.lock_reset_last_height,
-                lock_reset_last_view: snap.kura_store.lock_reset_last_view,
-                lock_reset_last_hash: snap.kura_store.lock_reset_last_hash,
-                lock_reset_last_reason: snap.kura_store.lock_reset_last_reason.map(str::to_string),
-                last_retry_attempt: snap.kura_store.last_retry_attempt,
-                last_retry_backoff_ms: snap.kura_store.last_retry_backoff_ms,
-                last_height: snap.kura_store.last_height,
-                last_view: snap.kura_store.last_view,
-                last_hash: snap.kura_store.last_hash,
-            },
-            rbc_store: SumeragiRbcStoreStatus {
-                sessions: snap.rbc_store_sessions,
-                bytes: snap.rbc_store_bytes,
-                pressure_level: snap.rbc_store_pressure_level,
-                backpressure_deferrals_total: snap.rbc_store_backpressure_deferrals_total,
-                persist_drops_total: snap.rbc_store_persist_drops_total,
-                evictions_total: snap.rbc_store_evictions_total,
-                recent_evictions: snap
-                    .rbc_store_recent_evictions
-                    .iter()
-                    .map(|entry| SumeragiRbcEvictedSession {
-                        block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                            entry.block_hash,
-                        )),
-                        height: entry.height,
-                        view: entry.view,
-                    })
-                    .collect(),
-            },
-            rbc_mismatch: SumeragiRbcMismatchStatus {
-                entries: snap
-                    .rbc_mismatch
-                    .entries
-                    .iter()
-                    .map(|entry| SumeragiRbcMismatchEntry {
-                        peer_id: entry.peer_id.clone(),
-                        chunk_digest_mismatch_total: entry.chunk_digest_mismatch_total,
-                        payload_hash_mismatch_total: entry.payload_hash_mismatch_total,
-                        chunk_root_mismatch_total: entry.chunk_root_mismatch_total,
-                        last_timestamp_ms: entry.last_timestamp_ms,
-                    })
-                    .collect(),
-            },
-            pending_rbc: SumeragiPendingRbcStatus {
-                sessions: snap.pending_rbc.sessions,
-                session_cap: snap.pending_rbc.session_cap,
-                chunks: snap.pending_rbc.chunks,
-                bytes: snap.pending_rbc.bytes,
-                max_chunks_per_session: snap.pending_rbc.max_chunks_per_session,
-                max_bytes_per_session: snap.pending_rbc.max_bytes_per_session,
-                ttl_ms: snap.pending_rbc.ttl_ms,
-                drops_total: snap.pending_rbc.drops_total,
-                drops_cap_total: snap.pending_rbc.drops_cap_total,
-                drops_cap_bytes_total: snap.pending_rbc.drops_cap_bytes_total,
-                drops_ttl_total: snap.pending_rbc.drops_ttl_total,
-                drops_ttl_bytes_total: snap.pending_rbc.drops_ttl_bytes_total,
-                drops_bytes_total: snap.pending_rbc.drops_bytes_total,
-                evicted_total: snap.pending_rbc.evicted_total,
-                stash_ready_total: snap.pending_rbc.stash_ready_total,
-                stash_ready_init_missing_total: snap.pending_rbc.stash_ready_init_missing_total,
-                stash_ready_roster_missing_total: snap.pending_rbc.stash_ready_roster_missing_total,
-                stash_ready_roster_hash_mismatch_total: snap
-                    .pending_rbc
-                    .stash_ready_roster_hash_mismatch_total,
-                stash_ready_roster_unverified_total: snap
-                    .pending_rbc
-                    .stash_ready_roster_unverified_total,
-                stash_deliver_total: snap.pending_rbc.stash_deliver_total,
-                stash_deliver_init_missing_total: snap.pending_rbc.stash_deliver_init_missing_total,
-                stash_deliver_roster_missing_total: snap
-                    .pending_rbc
-                    .stash_deliver_roster_missing_total,
-                stash_deliver_roster_hash_mismatch_total: snap
-                    .pending_rbc
-                    .stash_deliver_roster_hash_mismatch_total,
-                stash_deliver_roster_unverified_total: snap
-                    .pending_rbc
-                    .stash_deliver_roster_unverified_total,
-                stash_chunk_total: snap.pending_rbc.stash_chunk_total,
-                entries: snap
-                    .pending_rbc
-                    .entries
-                    .iter()
-                    .map(|entry| SumeragiPendingRbcEntry {
-                        block_hash: entry.block_hash,
-                        height: entry.height,
-                        view: entry.view,
-                        chunks: entry.chunks,
-                        bytes: entry.bytes,
-                        ready: entry.ready,
-                        deliver: entry.deliver,
-                        dropped_chunks: entry.dropped_chunks,
-                        dropped_bytes: entry.dropped_bytes,
-                        dropped_ready: entry.dropped_ready,
-                        dropped_deliver: entry.dropped_deliver,
-                        age_ms: entry.age_ms,
-                    })
-                    .collect(),
-            },
-            tx_queue_depth: snap.tx_queue_depth,
-            tx_queue_capacity: snap.tx_queue_capacity,
-            tx_queue_retained_bytes: snap.tx_queue_retained_bytes,
-            tx_queue_max_retained_bytes: snap.tx_queue_max_retained_bytes,
-            tx_queue_saturated: snap.tx_queue_saturated,
-            tx_queue_saturated_by_count: snap.tx_queue_saturated_by_count,
-            tx_queue_saturated_by_bytes: snap.tx_queue_saturated_by_bytes,
-            tx_queue_saturated_by_age: snap.tx_queue_saturated_by_age,
-            tx_queue_oldest_queued_age_ms: snap.tx_queue_oldest_queued_age_ms,
-            epoch_length_blocks: snap.epoch_length_blocks,
-            epoch_commit_deadline_offset: snap.epoch_commit_deadline_offset,
-            epoch_reveal_deadline_offset: snap.epoch_reveal_deadline_offset,
-            prf_epoch_seed: snap.prf_epoch_seed,
-            prf_height: snap.prf_height,
-            prf_view: snap.prf_view,
-            vrf_penalty_epoch: snap.vrf_penalty_epoch,
-            vrf_committed_no_reveal_total: snap.vrf_non_reveal_total,
-            vrf_no_participation_total: snap.vrf_no_participation_total,
-            vrf_late_reveals_total: snap.vrf_late_reveals_total,
-            consensus_penalties_applied_total: snap.consensus_penalties_applied_total,
-            consensus_penalties_pending: snap.consensus_penalties_pending,
-            vrf_penalties_applied_total: snap.vrf_penalties_applied_total,
-            vrf_penalties_pending: snap.vrf_penalties_pending,
-            membership: SumeragiMembershipStatus {
-                height: snap.membership_height,
-                view: snap.membership_view,
-                epoch: snap.membership_epoch,
-                view_hash: snap.membership_view_hash,
-            },
-            membership_mismatch: SumeragiMembershipMismatchStatus {
-                active_peers: snap.membership_mismatch.active_peers.clone(),
-                last_peer: snap.membership_mismatch.last_peer.clone(),
-                last_height: snap.membership_mismatch.last_height,
-                last_view: snap.membership_mismatch.last_view,
-                last_epoch: snap.membership_mismatch.last_epoch,
-                last_local_hash: snap.membership_mismatch.last_local_hash,
-                last_remote_hash: snap.membership_mismatch.last_remote_hash,
-                last_timestamp_ms: snap.membership_mismatch.last_timestamp_ms,
-            },
-            lane_commitments: snap
-                .lane_commitments
-                .iter()
-                .map(|entry| SumeragiLaneCommitment {
-                    block_height: entry.block_height,
-                    lane_id: entry.lane_id.into(),
-                    tx_count: entry.tx_count,
-                    total_chunks: entry.total_chunks,
-                    rbc_bytes_total: entry.rbc_bytes_total,
-                    teu_total: entry.teu_total,
-                    block_hash: entry.block_hash,
-                })
-                .collect(),
-            dataspace_commitments: snap
-                .dataspace_commitments
-                .iter()
-                .map(|entry| SumeragiDataspaceCommitment {
-                    block_height: entry.block_height,
-                    lane_id: entry.lane_id.into(),
-                    dataspace_id: entry.dataspace_id.into(),
-                    tx_count: entry.tx_count,
-                    total_chunks: entry.total_chunks,
-                    rbc_bytes_total: entry.rbc_bytes_total,
-                    teu_total: entry.teu_total,
-                    block_hash: entry.block_hash,
-                })
-                .collect(),
-            lane_settlement_commitments: snap.lane_settlement_commitments.clone(),
-            lane_relay_envelopes: snap.lane_relay_envelopes.clone(),
-            lane_payload_ownerships: snap.lane_payload_ownerships.clone(),
-            committed_lane_blocks: snap
-                .committed_lane_blocks
-                .iter()
-                .map(committed_lane_block_wire)
-                .collect(),
-            lane_block_sessions: snap.lane_block_sessions.clone(),
-            lane_governance_sealed_total: snap.lane_governance_sealed_total,
-            lane_governance_sealed_aliases: snap.lane_governance_sealed_aliases.clone(),
-            lane_governance: snap
-                .lane_governance
-                .iter()
-                .map(|entry| SumeragiLaneGovernance {
-                    lane_id: entry.lane_id.into(),
-                    alias: entry.alias.clone(),
-                    governance: entry.governance.clone(),
-                    manifest_required: entry.manifest_required,
-                    manifest_ready: entry.manifest_ready,
-                    manifest_path: entry.manifest_path.clone(),
-                    validator_ids: entry.validator_ids.clone(),
-                    quorum: entry.quorum,
-                    protected_namespaces: entry.protected_namespaces.clone(),
-                    runtime_upgrade: entry.runtime_upgrade.as_ref().map(|hook| {
-                        SumeragiRuntimeUpgradeHook {
-                            allow: hook.allow,
-                            require_metadata: hook.require_metadata,
-                            metadata_key: hook.metadata_key.clone(),
-                            allowed_ids: hook.allowed_ids.clone(),
-                        }
-                    }),
-                })
-                .collect(),
-            worker_loop: SumeragiWorkerLoopStatus {
-                stage: snap.worker_loop.stage.as_str().to_owned(),
-                stage_started_ms: snap.worker_loop.stage_started_ms,
-                last_iteration_ms: snap.worker_loop.last_iteration_ms,
-                queue_depths: SumeragiWorkerQueueDepths {
-                    vote_rx: snap.worker_loop.queue_depths.vote_rx,
-                    block_payload_rx: snap.worker_loop.queue_depths.block_payload_rx,
-                    rbc_chunk_rx: snap.worker_loop.queue_depths.rbc_chunk_rx,
-                    block_rx: snap.worker_loop.queue_depths.block_rx,
-                    consensus_rx: snap.worker_loop.queue_depths.consensus_rx,
-                    lane_relay_rx: snap.worker_loop.queue_depths.lane_relay_rx,
-                    background_rx: snap.worker_loop.queue_depths.background_rx,
-                },
-                queue_diagnostics: SumeragiWorkerQueueDiagnostics {
-                    blocked_total: SumeragiWorkerQueueTotals {
-                        vote_rx: snap.worker_loop.queue_diagnostics.blocked_total.vote_rx,
-                        block_payload_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_total
-                            .block_payload_rx,
-                        rbc_chunk_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_total
-                            .rbc_chunk_rx,
-                        block_rx: snap.worker_loop.queue_diagnostics.blocked_total.block_rx,
-                        consensus_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_total
-                            .consensus_rx,
-                        lane_relay_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_total
-                            .lane_relay_rx,
-                        background_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_total
-                            .background_rx,
-                    },
-                    blocked_ms_total: SumeragiWorkerQueueTotals {
-                        vote_rx: snap.worker_loop.queue_diagnostics.blocked_ms_total.vote_rx,
-                        block_payload_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_ms_total
-                            .block_payload_rx,
-                        rbc_chunk_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_ms_total
-                            .rbc_chunk_rx,
-                        block_rx: snap.worker_loop.queue_diagnostics.blocked_ms_total.block_rx,
-                        consensus_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_ms_total
-                            .consensus_rx,
-                        lane_relay_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_ms_total
-                            .lane_relay_rx,
-                        background_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_ms_total
-                            .background_rx,
-                    },
-                    blocked_max_ms: SumeragiWorkerQueueTotals {
-                        vote_rx: snap.worker_loop.queue_diagnostics.blocked_max_ms.vote_rx,
-                        block_payload_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_max_ms
-                            .block_payload_rx,
-                        rbc_chunk_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_max_ms
-                            .rbc_chunk_rx,
-                        block_rx: snap.worker_loop.queue_diagnostics.blocked_max_ms.block_rx,
-                        consensus_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_max_ms
-                            .consensus_rx,
-                        lane_relay_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_max_ms
-                            .lane_relay_rx,
-                        background_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .blocked_max_ms
-                            .background_rx,
-                    },
-                    dropped_total: SumeragiWorkerQueueTotals {
-                        vote_rx: snap.worker_loop.queue_diagnostics.dropped_total.vote_rx,
-                        block_payload_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .dropped_total
-                            .block_payload_rx,
-                        rbc_chunk_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .dropped_total
-                            .rbc_chunk_rx,
-                        block_rx: snap.worker_loop.queue_diagnostics.dropped_total.block_rx,
-                        consensus_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .dropped_total
-                            .consensus_rx,
-                        lane_relay_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .dropped_total
-                            .lane_relay_rx,
-                        background_rx: snap
-                            .worker_loop
-                            .queue_diagnostics
-                            .dropped_total
-                            .background_rx,
-                    },
-                },
-            },
-            commit_inflight: SumeragiCommitInflightStatus {
-                active: snap.commit_inflight.active,
-                id: snap.commit_inflight.id,
-                height: snap.commit_inflight.height,
-                view: snap.commit_inflight.view,
-                block_hash: snap.commit_inflight.block_hash,
-                started_ms: snap.commit_inflight.started_ms,
-                elapsed_ms: snap.commit_inflight.elapsed_ms,
-                timeout_ms: snap.commit_inflight.timeout_ms,
-                timeout_total: snap.commit_inflight.timeout_total,
-                last_timeout_timestamp_ms: snap.commit_inflight.last_timeout_timestamp_ms,
-                last_timeout_elapsed_ms: snap.commit_inflight.last_timeout_elapsed_ms,
-                last_timeout_height: snap.commit_inflight.last_timeout_height,
-                last_timeout_view: snap.commit_inflight.last_timeout_view,
-                last_timeout_block_hash: snap.commit_inflight.last_timeout_block_hash,
-                pause_total: snap.commit_inflight.pause_total,
-                resume_total: snap.commit_inflight.resume_total,
-                paused_since_ms: snap.commit_inflight.paused_since_ms,
-                pause_queue_depths: SumeragiWorkerQueueDepths {
-                    vote_rx: snap.commit_inflight.pause_queue_depths.vote_rx,
-                    block_payload_rx: snap.commit_inflight.pause_queue_depths.block_payload_rx,
-                    rbc_chunk_rx: snap.commit_inflight.pause_queue_depths.rbc_chunk_rx,
-                    block_rx: snap.commit_inflight.pause_queue_depths.block_rx,
-                    consensus_rx: snap.commit_inflight.pause_queue_depths.consensus_rx,
-                    lane_relay_rx: snap.commit_inflight.pause_queue_depths.lane_relay_rx,
-                    background_rx: snap.commit_inflight.pause_queue_depths.background_rx,
-                },
-                resume_queue_depths: SumeragiWorkerQueueDepths {
-                    vote_rx: snap.commit_inflight.resume_queue_depths.vote_rx,
-                    block_payload_rx: snap.commit_inflight.resume_queue_depths.block_payload_rx,
-                    rbc_chunk_rx: snap.commit_inflight.resume_queue_depths.rbc_chunk_rx,
-                    block_rx: snap.commit_inflight.resume_queue_depths.block_rx,
-                    consensus_rx: snap.commit_inflight.resume_queue_depths.consensus_rx,
-                    lane_relay_rx: snap.commit_inflight.resume_queue_depths.lane_relay_rx,
-                    background_rx: snap.commit_inflight.resume_queue_depths.background_rx,
-                },
-            },
-        };
-        return Ok(crate::NoritoBody(wire).into_response());
-    }
-    let payload = status_snapshot_json(&snap);
-    let body = norito::json::to_json_pretty(&payload).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
 fn sumeragi_mode_tag(mode: ConsensusMode) -> &'static str {
     match mode {
         ConsensusMode::Permissioned => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
@@ -64977,7 +65486,148 @@ fn reconcile_sumeragi_status_snapshot_with_world(
     snap
 }
 
-/// SSE stream for `/v1/sumeragi/status/sse`, emitting the same payload as the JSON snapshot.
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+struct SumeragiV2StatusJson {
+    #[norito(flatten)]
+    authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
+    lane_settlement_commitments: Vec<LaneBlockCommitment>,
+    lane_relay_envelopes: Vec<LaneRelayEnvelope>,
+    lane_payload_ownerships: Vec<iroha_data_model::block::consensus::SumeragiLanePayloadOwnership>,
+    committed_lane_blocks: Vec<iroha_data_model::block::consensus::SumeragiCommittedLaneBlock>,
+    lane_block_sessions: Vec<iroha_data_model::block::consensus::SumeragiLaneBlockSessionStatus>,
+    local_peer_removed: bool,
+    operator: iroha_data_model::block::consensus_v2::SumeragiV2OperatorStatus,
+}
+
+impl From<iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse>
+    for SumeragiV2StatusJson
+{
+    fn from(response: iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse) -> Self {
+        Self {
+            authoritative: response.authoritative,
+            lane_settlement_commitments: response.lane_settlement_commitments,
+            lane_relay_envelopes: response.lane_relay_envelopes,
+            lane_payload_ownerships: response.lane_payload_ownerships,
+            committed_lane_blocks: response.committed_lane_blocks,
+            lane_block_sessions: response.lane_block_sessions,
+            local_peer_removed: response.local_peer_removed,
+            operator: response.operator,
+        }
+    }
+}
+
+fn sumeragi_v2_status_json(
+    authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
+    state: &CoreState,
+    nexus_enabled: bool,
+) -> SumeragiV2StatusJson {
+    sumeragi_v2_status_response(authoritative, state, nexus_enabled).into()
+}
+
+fn sumeragi_v2_status_response(
+    authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
+    state: &CoreState,
+    nexus_enabled: bool,
+) -> iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse {
+    let snapshot =
+        reconcile_sumeragi_status_snapshot_with_world(sumeragi::status_snapshot(), state);
+    sumeragi_v2_status_response_from_snapshot(
+        authoritative,
+        snapshot,
+        nexus_enabled,
+        sumeragi::status::local_peer_removed(),
+    )
+}
+
+fn sumeragi_v2_status_json_from_snapshot(
+    authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
+    snapshot: sumeragi::StatusSnapshot,
+    nexus_enabled: bool,
+    local_peer_removed: bool,
+) -> SumeragiV2StatusJson {
+    sumeragi_v2_status_response_from_snapshot(
+        authoritative,
+        snapshot,
+        nexus_enabled,
+        local_peer_removed,
+    )
+    .into()
+}
+
+fn sumeragi_v2_status_response_from_snapshot(
+    authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
+    snapshot: sumeragi::StatusSnapshot,
+    nexus_enabled: bool,
+    local_peer_removed: bool,
+) -> iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse {
+    let snapshot = if nexus_enabled {
+        snapshot
+    } else {
+        snapshot.strip_lane_details()
+    };
+    let committed_lane_blocks = snapshot
+        .committed_lane_blocks
+        .iter()
+        .map(committed_lane_block_wire)
+        .collect();
+    iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse {
+        authoritative,
+        lane_settlement_commitments: snapshot.lane_settlement_commitments,
+        lane_relay_envelopes: snapshot.lane_relay_envelopes,
+        lane_payload_ownerships: snapshot.lane_payload_ownerships,
+        committed_lane_blocks,
+        lane_block_sessions: snapshot.lane_block_sessions,
+        local_peer_removed,
+        operator: sumeragi::status::v2_operator_status(),
+    }
+}
+
+/// GET /v1/sumeragi/status — latest authoritative Sumeragi v2 snapshot.
+///
+/// The legacy status shape is archival-only. Until the v2 runner publishes a
+/// replayed reducer snapshot, fail closed instead of exposing v1/RBC state as
+/// though it described the live consensus protocol.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sumeragi_status(
+    State(state): State<std::sync::Arc<CoreState>>,
+    accept: Option<axum::http::HeaderValue>,
+    nexus_enabled: bool,
+) -> Result<Response> {
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let Some(status) = sumeragi::status::v2_status() else {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    };
+    let response = sumeragi_v2_status_response(status, state.as_ref(), nexus_enabled);
+    response.validate().map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "refusing to serve invalid authoritative Sumeragi v2 status: {error}"
+        )))
+    })?;
+    if matches!(format, crate::utils::ResponseFormat::Norito) {
+        return Ok(crate::utils::respond_with_format(response, format));
+    }
+
+    let payload = SumeragiV2StatusJson::from(response);
+    let body = norito::json::to_json_pretty(&payload).map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            error.to_string(),
+        ))
+    })?;
+    let mut response = axum::response::Response::new(axum::body::Body::from(body));
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(response)
+}
+
+/// SSE stream for `/v1/sumeragi/status/sse` using only authoritative v2 snapshots.
+///
+/// Before reducer replay completes the stream remains silent instead of
+/// emitting the archival v1/RBC status shape.
 pub fn handle_v1_sumeragi_status_sse(
     state: std::sync::Arc<CoreState>,
     poll_ms: u64,
@@ -64985,23 +65635,24 @@ pub fn handle_v1_sumeragi_status_sse(
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let interval = Duration::from_millis(poll_ms.max(100));
     let ticker = tokio::time::interval(interval);
-    let stream = stream::unfold(ticker, move |mut ticker| {
-        let state = state.clone();
-        async move {
+    let stream = stream::unfold((ticker, state), move |(mut ticker, state)| async move {
+        loop {
             ticker.tick().await;
-            let snapshot = reconcile_sumeragi_status_snapshot_with_world(
-                sumeragi::status_snapshot(),
-                state.as_ref(),
-            );
-            let filtered = if nexus_enabled {
-                snapshot
-            } else {
-                snapshot.strip_lane_details()
-            };
-            let payload = status_snapshot_json(&filtered);
-            let body = norito::json::to_json(&payload).unwrap_or_else(|_| "{}".to_owned());
-            let ev = SseEvent::default().data(body);
-            Some((Ok(ev), ticker))
+            if let Some(status) = sumeragi::status::v2_status() {
+                let payload = sumeragi_v2_status_json(status, state.as_ref(), nexus_enabled);
+                match norito::json::to_json(&payload) {
+                    Ok(body) => {
+                        let event = SseEvent::default().data(body);
+                        break Some((Ok(event), (ticker, state)));
+                    }
+                    Err(error) => {
+                        iroha_logger::error!(
+                            ?error,
+                            "failed to serialize authoritative Sumeragi v2 status"
+                        );
+                    }
+                }
+            }
         }
     });
     Sse::new(stream)
@@ -93200,43 +93851,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sumeragi_status_strips_lane_fields_when_nexus_disabled() {
-        use iroha_crypto::{Hash, HashOf};
-        use iroha_data_model::block::BlockHeader;
-        use status::{
-            LaneActivitySnapshot, LaneCommitmentSnapshot, LaneGovernanceSnapshot,
-            set_lane_activity_snapshot, set_lane_commitments, set_lane_governance_snapshot,
-        };
-
-        set_lane_activity_snapshot(vec![LaneActivitySnapshot {
-            lane_id: 1,
-            tx_vertices: 2,
-            ..LaneActivitySnapshot::default()
-        }]);
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; 32]));
-        set_lane_commitments(
-            vec![LaneCommitmentSnapshot {
-                block_height: 4,
-                lane_id: 1,
-                tx_count: 3,
-                total_chunks: 1,
-                rbc_bytes_total: 8,
-                teu_total: 5,
-                block_hash,
-            }],
-            Vec::new(),
-        );
-        set_lane_governance_snapshot(vec![LaneGovernanceSnapshot {
-            lane_id: 1,
-            alias: "alpha".to_string(),
-            dataspace_id: 0,
-            visibility: "public".to_string(),
-            storage_profile: "default".to_string(),
-            manifest_required: true,
-            manifest_ready: false,
-            ..LaneGovernanceSnapshot::default()
-        }]);
-
+    async fn sumeragi_status_fails_closed_before_v2_replay() {
+        status::clear_v2_status();
         let state = std::sync::Arc::new(CoreState::new_for_testing(
             iroha_core::state::World::default(),
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -93244,51 +93860,9 @@ mod tests {
         ));
         let response = super::handle_v1_sumeragi_status(axum::extract::State(state), None, false)
             .await
-            .expect("status should render");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("read body")
-            .to_bytes();
-        let json: norito::json::Value =
-            norito::json::from_slice(body.as_ref()).expect("parse JSON sumeragi status");
+            .expect("status handler");
 
-        assert_eq!(
-            json.get("lane_activity")
-                .and_then(norito::json::Value::as_array)
-                .map(Vec::len)
-                .unwrap_or_default(),
-            0,
-            "lane activity must be stripped when Nexus is disabled"
-        );
-        assert_eq!(
-            json.get("lane_commitments")
-                .and_then(norito::json::Value::as_array)
-                .map(Vec::len)
-                .unwrap_or_default(),
-            0,
-            "lane commitments must be stripped when Nexus is disabled"
-        );
-        assert_eq!(
-            json.get("lane_governance_sealed_total")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or_default(),
-            0,
-            "lane governance sealed total must reset when Nexus is disabled"
-        );
-        assert_eq!(
-            json.get("lane_governance")
-                .and_then(norito::json::Value::as_array)
-                .map(Vec::len)
-                .unwrap_or_default(),
-            0,
-            "lane governance entries must be stripped when Nexus is disabled"
-        );
-
-        set_lane_activity_snapshot(Vec::new());
-        set_lane_commitments(Vec::new(), Vec::new());
-        set_lane_governance_snapshot(Vec::new());
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

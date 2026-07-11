@@ -10,7 +10,8 @@ Checks that the Iroha mobile SDK packaging surface is ready for wallet
 integration:
   - SwiftPM package manifest and NoritoBridge binary target exist.
   - NoritoBridge.xcframework contains iOS device, iOS simulator, and macOS slices.
-  - NoritoBridge.artifacts.json records per-slice SHA-256 hashes.
+  - NoritoBridge.artifacts.json records per-slice SHA-256 hashes and the
+    privacy-production feature state, which must match the XCFramework marker.
   - Kotlin/Android SDK modules are included and publishable.
 
 By default Android build outputs are not required. Pass --require-built-android
@@ -208,6 +209,7 @@ check_xcframework() {
   local xcframework="$ROOT_DIR/dist/NoritoBridge.xcframework"
   local info="$xcframework/Info.plist"
   local manifest="$ROOT_DIR/dist/NoritoBridge.artifacts.json"
+  local privacy_marker="$xcframework/.privacy-production-enabled"
   local slices=(ios-arm64 ios-arm64_x86_64-simulator macos-arm64)
   local slice
 
@@ -232,6 +234,33 @@ check_xcframework() {
 
   require_file "$manifest" "NoritoBridge artifact manifest"
   if [[ -f "$manifest" ]]; then
+    local privacy_keys=()
+    local privacy_declarations=()
+    local privacy_key
+    local privacy_declaration
+    local privacy_value
+    while IFS= read -r privacy_key; do
+      privacy_keys+=("$privacy_key")
+    done < <(
+      grep -Eo '"privacy_production_enabled"[[:space:]]*:' "$manifest" || true
+    )
+    while IFS= read -r privacy_declaration; do
+      privacy_declarations+=("$privacy_declaration")
+    done < <(
+      grep -Eo '"privacy_production_enabled"[[:space:]]*:[[:space:]]*(true|false)' \
+        "$manifest" || true
+    )
+    if [[ ${#privacy_keys[@]} -ne 1 || ${#privacy_declarations[@]} -ne 1 ]]; then
+      fail "NoritoBridge artifact manifest must contain exactly one boolean privacy_production_enabled field"
+    else
+      privacy_value="${privacy_declarations[0]##*:}"
+      privacy_value="${privacy_value//[[:space:]]/}"
+      if [[ "$privacy_value" == "true" ]]; then
+        require_file "$privacy_marker" "privacy-production-enabled XCFramework marker"
+      elif [[ -e "$privacy_marker" ]]; then
+        fail "default privacy artifact must not carry the privacy-production-enabled XCFramework marker"
+      fi
+    fi
     require_regex "$manifest" '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "NoritoBridge artifact version"
     for slice in "${slices[@]}"; do
       require_regex "$manifest" "\"$slice\"[[:space:]]*:[[:space:]]*\"[[:xdigit:]]{64}\"" "NoritoBridge artifact manifest hash for $slice"

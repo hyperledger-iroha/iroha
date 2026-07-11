@@ -42,6 +42,7 @@ use iroha_data_model::{
     block::{
         SignedBlock,
         consensus::{ConsensusGenesisParams, NposGenesisParams},
+        consensus_v2::SumeragiV2GenesisContextParameters,
     },
     confidential::{
         ConfidentialFeatureDigest, ConfidentialStatus, DEFAULT_ZK_CONSENSUS_POLICY_HASH,
@@ -68,6 +69,9 @@ use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
+
+const CONSENSUS_PROTOCOL_VERSION: u32 =
+    iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
 
 #[cfg(test)]
 fn checked_genesis_fixture_keypair() -> KeyPair {
@@ -142,7 +146,8 @@ pub struct RawGenesisTransaction {
     /// Consensus mode advertised in genesis for operator visibility.
     /// Required in JSON manifests; `None` is reserved for programmatic builders
     /// that set the value later (e.g., via `with_consensus_mode`).
-    /// Not consumed by the node runtime (handshake gates the mode independently).
+    /// Fresh Sumeragi v2 startup consumes the corresponding signed handshake
+    /// metadata and freezes this mode into the height-one context.
     #[norito(default)]
     consensus_mode: Option<iroha_data_model::parameter::system::SumeragiConsensusMode>,
     /// Optional BLS domain separation string for consensus votes/QCs.
@@ -154,6 +159,13 @@ pub struct RawGenesisTransaction {
     /// Optional deterministic fingerprint of consensus params (hex string, e.g., 0x..32bytes..).
     #[norito(default)]
     consensus_fingerprint: Option<String>,
+    /// Genesis-selected Sumeragi v2 context parameters.
+    ///
+    /// JSON manifests must provide this explicitly. Programmatic builders put
+    /// their selected profile here before signing; live nodes never infer it
+    /// from local configuration.
+    #[norito(default)]
+    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
     /// Cryptography configuration snapshot advertised alongside the manifest.
     #[norito(default)]
     crypto: ManifestCrypto,
@@ -1927,6 +1939,11 @@ pub mod genesis_instructions_json {
                 Value::String("Permissioned".to_string()),
             );
             manifest_fields.insert(
+                "sumeragi_v2".to_string(),
+                norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
+                    .expect("serialize v2 genesis context"),
+            );
+            manifest_fields.insert(
                 "transactions".to_string(),
                 Value::Array(vec![Value::Object(norito::json::Map::new())]),
             );
@@ -2152,6 +2169,8 @@ pub struct NormalizedGenesis {
     pub wire_proto_versions: Vec<u32>,
     /// Deterministic fingerprint of consensus parameters.
     pub consensus_fingerprint: String,
+    /// Signed Sumeragi v2 height-context transport parameters.
+    pub sumeragi_v2: SumeragiV2GenesisContextParameters,
     /// Cryptography snapshot advertised alongside genesis.
     pub crypto: ManifestCrypto,
     /// Final transaction batches that will be signed into the genesis block.
@@ -2202,6 +2221,11 @@ impl NormalizedGenesis {
         map.insert(
             "consensus_fingerprint".to_string(),
             norito::json::Value::String(self.consensus_fingerprint.clone()),
+        );
+        map.insert(
+            "sumeragi_v2".to_string(),
+            norito::json::value::to_value(&self.sumeragi_v2)
+                .expect("serialize Sumeragi v2 context parameters"),
         );
         map.insert(
             "crypto".to_string(),
@@ -2408,29 +2432,17 @@ fn extract_sumeragi_staging(
     (next_mode, activation_height)
 }
 
-fn compute_consensus_fingerprint_v1(
+fn compute_consensus_fingerprint_v2(
     chain_id: &ChainId,
     params: &iroha_data_model::block::consensus::ConsensusGenesisParams,
     mode_tag: &str,
 ) -> [u8; 32] {
-    use iroha_crypto::blake2::{Blake2b512, Digest as _};
-    use norito::codec::Encode as _;
-    let mut hasher = Blake2b512::new();
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, mode_tag.as_bytes());
-    iroha_crypto::blake2::digest::Update::update(
-        &mut hasher,
-        &iroha_data_model::block::consensus::PROTO_VERSION.to_be_bytes(),
-    );
-    iroha_crypto::blake2::digest::Update::update(
-        &mut hasher,
-        chain_id.clone().into_inner().as_bytes(),
-    );
-    let bytes = params.encode();
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, &bytes);
-    let digest = iroha_crypto::blake2::Digest::finalize(hasher);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest[..32]);
-    out
+    let mode = if mode_tag == iroha_data_model::block::consensus_v2::NPOS_TAG {
+        iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+    } else {
+        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
+    };
+    iroha_data_model::block::consensus_v2::fingerprint::compute(chain_id, mode, params)
 }
 
 impl RawGenesisTransaction {
@@ -2537,6 +2549,9 @@ impl RawGenesisTransaction {
             .unwrap_or_default();
         let consensus_fingerprint =
             Self::take_optional_field::<String>(&mut map, "consensus_fingerprint")?;
+        let sumeragi_v2 = Some(Self::take_required_field::<
+            SumeragiV2GenesisContextParameters,
+        >(&mut map, "sumeragi_v2")?);
         let crypto = map
             .remove("crypto")
             .map(|value| Self::decode_value::<ManifestCrypto>(value, "crypto"))
@@ -2555,6 +2570,7 @@ impl RawGenesisTransaction {
             bls_domain,
             wire_proto_versions,
             consensus_fingerprint,
+            sumeragi_v2,
             crypto,
         })
     }
@@ -2590,7 +2606,7 @@ impl RawGenesisTransaction {
         aggregated
     }
 
-    /// Populate consensus metadata fields with defaults and a computed fingerprint (v1).
+    /// Populate consensus metadata fields with defaults and a computed v2 fingerprint.
     ///
     /// This helper is best-effort and does not alter existing transactions. It derives
     /// parameters from data-model defaults to produce a stable fingerprint for basic networks.
@@ -2642,12 +2658,12 @@ impl RawGenesisTransaction {
 
         let (mode_tag, default_bls_domain) = match mode {
             SumeragiConsensusMode::Permissioned => (
-                "iroha2-consensus::permissioned-sumeragi@v1",
-                "bls-iroha2:permissioned-sumeragi:v1",
+                "iroha2-consensus::permissioned-sumeragi@v2",
+                "bls-iroha2:permissioned-sumeragi:v2",
             ),
             SumeragiConsensusMode::Npos => (
-                "iroha2-consensus::npos-sumeragi@v1",
-                "bls-iroha2:npos-sumeragi:v1",
+                "iroha2-consensus::npos-sumeragi@v2",
+                "bls-iroha2:npos-sumeragi:v2",
             ),
         };
 
@@ -2716,13 +2732,16 @@ impl RawGenesisTransaction {
                     slashing_delay_blocks: npos.slashing_delay_blocks(),
                 }
             }),
+            protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
+            round_timeout_ms: iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+            v2_context: self.sumeragi_v2,
         };
-        let fp = compute_consensus_fingerprint_v1(&self.chain, &dm_params, mode_tag);
+        let fp = compute_consensus_fingerprint_v2(&self.chain, &dm_params, mode_tag);
         self.consensus_mode = Some(mode);
         if self.bls_domain.is_none() {
             self.bls_domain = Some(bls_domain);
         }
-        self.wire_proto_versions = vec![iroha_data_model::block::consensus::PROTO_VERSION];
+        self.wire_proto_versions = vec![CONSENSUS_PROTOCOL_VERSION];
         self.consensus_fingerprint = Some(format!("0x{}", hex::encode(fp)));
         self
     }
@@ -2757,6 +2776,12 @@ impl RawGenesisTransaction {
                 "consensus_fingerprint missing after normalization; call with_consensus_meta first"
             )
         })?;
+        let sumeragi_v2 = manifest
+            .sumeragi_v2
+            .ok_or_else(|| eyre!("genesis manifest missing required `sumeragi_v2` parameters"))?;
+        sumeragi_v2
+            .validate()
+            .map_err(|error| eyre!("invalid signed Sumeragi v2 context parameters: {error}"))?;
 
         let chain = manifest.chain.clone();
         let chain_discriminant = manifest.chain_discriminant;
@@ -2775,6 +2800,7 @@ impl RawGenesisTransaction {
             bls_domain,
             wire_proto_versions,
             consensus_fingerprint,
+            sumeragi_v2,
             crypto,
             transactions,
         })
@@ -2878,6 +2904,11 @@ mod tests2 {
             .expect("serialize chain discriminant")
     }
 
+    fn manifest_v2_context_value() -> norito::json::Value {
+        norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
+            .expect("serialize v2 genesis context")
+    }
+
     #[test]
     fn genesis_fixture_key_generation_preserves_algorithms() {
         assert_eq!(
@@ -2907,6 +2938,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
         let tx2 = tx.clone().with_consensus_meta();
@@ -2966,6 +2998,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         }
         .with_consensus_meta();
@@ -2983,7 +3016,7 @@ mod tests2 {
             manifest
                 .wire_proto_versions
                 .iter()
-                .any(|v| *v == iroha_data_model::block::consensus::PROTO_VERSION),
+                .any(|v| *v == CONSENSUS_PROTOCOL_VERSION),
             "expected PROTO_VERSION"
         );
         let fp = manifest
@@ -3047,6 +3080,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3083,6 +3117,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3142,6 +3177,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         }
         .with_consensus_meta();
@@ -3153,7 +3189,7 @@ mod tests2 {
         );
         assert_eq!(
             manifest.bls_domain.as_deref(),
-            Some("bls-iroha2:permissioned-sumeragi:v1"),
+            Some("bls-iroha2:permissioned-sumeragi:v2"),
             "staged NPoS reconfiguration should keep the permissioned BLS domain before activation"
         );
     }
@@ -3179,6 +3215,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         }
         .with_consensus_meta();
@@ -3190,7 +3227,7 @@ mod tests2 {
             "effective parameters must reflect block max override"
         );
 
-        let expected = compute_consensus_fingerprint_v1(
+        let expected = compute_consensus_fingerprint_v2(
             &chain,
             &ConsensusGenesisParams {
                 block_time_ms: params.sumeragi().block_time_ms(),
@@ -3208,6 +3245,9 @@ mod tests2 {
                     .expect("bls_domain set")
                     .to_string(),
                 npos: None,
+                protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
+                round_timeout_ms: iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+                v2_context: Some(SumeragiV2GenesisContextParameters::recommended()),
             },
             iroha_data_model::block::consensus::PERMISSIONED_TAG,
         );
@@ -3235,6 +3275,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3286,6 +3327,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
         let keypair = checked_genesis_fixture_keypair();
@@ -3395,6 +3437,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3428,6 +3471,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3464,6 +3508,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3517,6 +3562,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3571,6 +3617,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3615,6 +3662,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
 
@@ -3805,6 +3853,7 @@ mod tests2 {
             "consensus_mode".to_string(),
             norito::json::Value::String("Permissioned".into()),
         );
+        manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
         manifest_fields.insert(
             "transactions".to_string(),
             norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
@@ -3869,6 +3918,7 @@ mod tests2 {
             "consensus_mode".to_string(),
             norito::json::Value::String("Permissioned".into()),
         );
+        manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
         manifest_fields.insert(
             "transactions".to_string(),
             norito::json::Value::Array(vec![norito::json::Value::Object(norito::json::Map::new())]),
@@ -3940,6 +3990,7 @@ mod tests2 {
             "consensus_mode".to_string(),
             norito::json::Value::String("Permissioned".into()),
         );
+        manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
         manifest_fields.insert(
             "transactions".to_string(),
             norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
@@ -4008,6 +4059,7 @@ mod tests2 {
             "consensus_mode".to_string(),
             norito::json::Value::String("Permissioned".into()),
         );
+        manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
         manifest_fields.insert(
             "transactions".to_string(),
             norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
@@ -4053,6 +4105,7 @@ mod tests2 {
             "consensus_mode".to_string(),
             norito::json::Value::String("Permissioned".into()),
         );
+        manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
         manifest_fields.insert(
             "transactions".to_string(),
             norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
@@ -4101,6 +4154,7 @@ mod tests2 {
             bls_domain: Some("bls:test-domain".to_string()),
             wire_proto_versions: vec![1],
             consensus_fingerprint: Some("0xabc123".to_string()),
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
 
@@ -4118,6 +4172,24 @@ mod tests2 {
             rebuilt.consensus_fingerprint,
             manifest.consensus_fingerprint
         );
+        assert_eq!(rebuilt.sumeragi_v2, manifest.sumeragi_v2);
+    }
+
+    #[test]
+    fn raw_v2_genesis_requires_signed_context_parameters() {
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("iroha:test:missing-v2-context"),
+            PathBuf::from("."),
+        )
+        .build_raw();
+        let mut value = norito::json::value::to_value(&manifest).expect("serialize manifest");
+        value
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("sumeragi_v2");
+        let error = RawGenesisTransaction::from_json_value(value)
+            .expect_err("v2 context parameters are required");
+        assert!(error.to_string().contains("sumeragi_v2"));
     }
 
     #[test]
@@ -4142,6 +4214,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         };
 
@@ -4211,12 +4284,12 @@ mod tests2 {
 
             let (mode_tag, default_bls_domain) = match mode {
                 SumeragiConsensusMode::Permissioned => (
-                    "iroha2-consensus::permissioned-sumeragi@v1",
-                    "bls-iroha2:permissioned-sumeragi:v1",
+                    "iroha2-consensus::permissioned-sumeragi@v2",
+                    "bls-iroha2:permissioned-sumeragi:v2",
                 ),
                 SumeragiConsensusMode::Npos => (
-                    "iroha2-consensus::npos-sumeragi@v1",
-                    "bls-iroha2:npos-sumeragi:v1",
+                    "iroha2-consensus::npos-sumeragi@v2",
+                    "bls-iroha2:npos-sumeragi:v2",
                 ),
             };
 
@@ -4274,9 +4347,12 @@ mod tests2 {
                         slashing_delay_blocks: npos.slashing_delay_blocks(),
                     }
                 }),
+                protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
+                round_timeout_ms: iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+                v2_context: tx.sumeragi_v2,
             };
 
-            compute_consensus_fingerprint_v1(&tx.chain, &dm_params, mode_tag)
+            compute_consensus_fingerprint_v2(&tx.chain, &dm_params, mode_tag)
         }
 
         fn build_manifest(chain: ChainId, seed_byte: u8) -> RawGenesisTransaction {
@@ -4313,6 +4389,7 @@ mod tests2 {
                 bls_domain: None,
                 wire_proto_versions: vec![],
                 consensus_fingerprint: None,
+                sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
                 crypto: ManifestCrypto::default(),
             }
         }
@@ -4341,7 +4418,7 @@ mod tests2 {
         assert!(
             manifest_a
                 .wire_proto_versions
-                .contains(&iroha_data_model::block::consensus::PROTO_VERSION),
+                .contains(&CONSENSUS_PROTOCOL_VERSION),
             "wire proto versions must advertise the consensus protocol"
         );
     }
@@ -4374,6 +4451,7 @@ mod tests2 {
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
         }
         .with_consensus_meta();
@@ -4385,7 +4463,7 @@ mod tests2 {
         );
         assert_eq!(
             manifest.bls_domain.as_deref(),
-            Some("bls-iroha2:permissioned-sumeragi:v1"),
+            Some("bls-iroha2:permissioned-sumeragi:v2"),
             "Permissioned mode should emit permissioned BLS domain"
         );
     }
@@ -4501,6 +4579,26 @@ impl RawGenesisTransaction {
             .flat_map(|tx| tx.instructions.iter())
     }
 
+    /// Return the exact Sumeragi v2 context parameters selected by this
+    /// manifest, if present.
+    #[must_use]
+    pub const fn sumeragi_v2_context_parameters(
+        &self,
+    ) -> Option<SumeragiV2GenesisContextParameters> {
+        self.sumeragi_v2
+    }
+
+    /// Replace the Sumeragi v2 context parameters that will be fingerprinted
+    /// and signed with this manifest.
+    #[must_use]
+    pub fn with_sumeragi_v2_context_parameters(
+        mut self,
+        parameters: SumeragiV2GenesisContextParameters,
+    ) -> Self {
+        self.sumeragi_v2 = Some(parameters);
+        self
+    }
+
     /// Construct [`RawGenesisTransaction`] from a json file at `json_path`,
     /// resolving relative paths to `json_path`.
     ///
@@ -4595,6 +4693,7 @@ impl RawGenesisTransaction {
             bls_domain: self.bls_domain,
             wire_proto_versions: self.wire_proto_versions,
             consensus_fingerprint: self.consensus_fingerprint,
+            sumeragi_v2: self.sumeragi_v2,
         }
     }
 
@@ -4714,9 +4813,9 @@ impl RawGenesisTransaction {
     /// Fails if `self.executor` path fails to load [`Executor`].
     #[allow(clippy::too_many_lines)]
     pub fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
-        // Always recompute generated fields. Sumeragi V1 is the only first-release
-        // wire protocol, so stale or externally injected handshake metadata must not
-        // survive into the signed genesis block.
+        // Always recompute generated fields for the live Sumeragi v2 protocol,
+        // so stale or externally injected handshake metadata cannot survive
+        // into the signed genesis block.
         let manifest = self.with_consensus_meta();
 
         manifest
@@ -4734,6 +4833,7 @@ impl RawGenesisTransaction {
             bls_domain,
             wire_proto_versions,
             consensus_fingerprint,
+            sumeragi_v2,
             crypto: _,
         } = manifest;
 
@@ -4762,6 +4862,7 @@ impl RawGenesisTransaction {
             bls_domain,
             wire_proto_versions,
             consensus_fingerprint,
+            sumeragi_v2,
             staged_next_mode,
             staged_activation_height,
             &manual_parameters,
@@ -5003,6 +5104,7 @@ impl RawGenesisTransaction {
         bls_domain: Option<String>,
         wire_proto_versions: Vec<u32>,
         consensus_fingerprint: Option<String>,
+        sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
         staged_next_mode: Option<SumeragiConsensusMode>,
         activation_height: Option<u64>,
         manual_parameters: &[Parameter],
@@ -5062,6 +5164,12 @@ impl RawGenesisTransaction {
                 "genesis manifest missing `consensus_fingerprint`; call `with_consensus_meta` before signing"
             )
         })?;
+        let sumeragi_v2 = sumeragi_v2.ok_or_else(|| {
+            eyre!("genesis manifest missing required `sumeragi_v2` context parameters")
+        })?;
+        sumeragi_v2
+            .validate()
+            .map_err(|error| eyre!("invalid signed Sumeragi v2 context parameters: {error}"))?;
         let mode_str = match resolved_mode {
             SumeragiConsensusMode::Permissioned => "Permissioned",
             SumeragiConsensusMode::Npos => "Npos",
@@ -5084,6 +5192,11 @@ impl RawGenesisTransaction {
         meta_fields.insert(
             "consensus_fingerprint".to_string(),
             norito::json::Value::String(fingerprint),
+        );
+        meta_fields.insert(
+            "sumeragi_v2".to_string(),
+            norito::json::value::to_value(&sumeragi_v2)
+                .expect("serialize Sumeragi v2 genesis context parameters to JSON"),
         );
         let meta_value = norito::json::Value::Object(meta_fields);
         let handshake_payload = Json::from_norito_value_ref(&meta_value)
@@ -5126,6 +5239,7 @@ pub struct GenesisBuilder {
     bls_domain: Option<String>,
     wire_proto_versions: Vec<u32>,
     consensus_fingerprint: Option<String>,
+    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
 }
 
 /// Domain editing mode of the [`GenesisBuilder`] to register accounts and assets under the domain.
@@ -5142,6 +5256,7 @@ pub struct GenesisDomainBuilder {
     bls_domain: Option<String>,
     wire_proto_versions: Vec<u32>,
     consensus_fingerprint: Option<String>,
+    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
 }
 
 #[derive(Default)]
@@ -5166,6 +5281,7 @@ impl GenesisBuilder {
             bls_domain: None,
             wire_proto_versions: Vec::new(),
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
         }
     }
 
@@ -5182,6 +5298,7 @@ impl GenesisBuilder {
             bls_domain: None,
             wire_proto_versions: Vec::new(),
             consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
         }
     }
 
@@ -5194,6 +5311,17 @@ impl GenesisBuilder {
     /// Override the DA proof policy bundle embedded into genesis.
     pub fn with_da_proof_policies(mut self, policies: DaProofPolicyBundle) -> Self {
         self.da_proof_policies = Some(policies);
+        self
+    }
+
+    /// Select the exact Sumeragi v2 context parameters which will be embedded
+    /// in and signed by genesis.
+    #[must_use]
+    pub fn with_sumeragi_v2_context_parameters(
+        mut self,
+        parameters: SumeragiV2GenesisContextParameters,
+    ) -> Self {
+        self.sumeragi_v2 = Some(parameters);
         self
     }
 
@@ -5232,6 +5360,7 @@ impl GenesisBuilder {
             bls_domain: self.bls_domain,
             wire_proto_versions: self.wire_proto_versions,
             consensus_fingerprint: self.consensus_fingerprint,
+            sumeragi_v2: self.sumeragi_v2,
         }
     }
 
@@ -5358,6 +5487,7 @@ impl GenesisBuilder {
             bls_domain: self.bls_domain,
             wire_proto_versions: self.wire_proto_versions,
             consensus_fingerprint: self.consensus_fingerprint,
+            sumeragi_v2: self.sumeragi_v2,
             crypto: self.crypto,
         }
     }
@@ -5377,6 +5507,7 @@ impl GenesisDomainBuilder {
             bls_domain: self.bls_domain,
             wire_proto_versions: self.wire_proto_versions,
             consensus_fingerprint: self.consensus_fingerprint,
+            sumeragi_v2: self.sumeragi_v2,
         }
     }
 
@@ -5952,7 +6083,7 @@ mod tests {
             assert_eq!(
                 wire_proto_versions,
                 &vec![norito::json::Value::Number(
-                    u64::from(iroha_data_model::block::consensus::PROTO_VERSION).into()
+                    u64::from(CONSENSUS_PROTOCOL_VERSION).into()
                 )],
                 "{} must advertise the current consensus wire protocol",
                 manifest_path.display()
@@ -6305,7 +6436,7 @@ mod tests {
                 .and_then(norito::json::Value::as_array)
                 .expect("wire_proto_versions should be encoded"),
             &vec![norito::json::Value::Number(
-                u64::from(iroha_data_model::block::consensus::PROTO_VERSION).into()
+                u64::from(CONSENSUS_PROTOCOL_VERSION).into()
             )]
         );
         assert_eq!(
@@ -6341,7 +6472,7 @@ mod tests {
                 );
                 payload.insert(
                     "bls_domain".to_string(),
-                    norito::json::Value::String("bls-iroha2:npos-sumeragi:v1".to_string()),
+                    norito::json::Value::String("bls-iroha2:npos-sumeragi:v2".to_string()),
                 );
                 payload.insert(
                     "wire_proto_versions".to_string(),
@@ -6468,7 +6599,7 @@ mod tests {
                 .and_then(norito::json::Value::as_array)
                 .expect("wire_proto_versions should be encoded"),
             &vec![norito::json::Value::Number(
-                u64::from(iroha_data_model::block::consensus::PROTO_VERSION).into()
+                u64::from(CONSENSUS_PROTOCOL_VERSION).into()
             )]
         );
         assert_eq!(

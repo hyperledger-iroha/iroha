@@ -168,6 +168,58 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     ]
 
 
+def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    base_genesis_path = tmp_path / "genesis.json"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path, inline_private_keys=False)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+    base_genesis_path.write_text(
+        json.dumps(
+            {
+                "sumeragi_v2": {
+                    "da_layout": {},
+                    "nexus_amx_context_hash": "01" * 32,
+                },
+                "transactions": [
+                    {"instructions": [], "ivm_triggers": [], "topology": []}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    MODULE.render_bundle(
+        base_config_path,
+        roster_path,
+        output_dir,
+        secrets_path=secrets_path,
+        base_genesis_path=base_genesis_path,
+    )
+
+    rendered = json.loads((output_dir / "genesis.json").read_text(encoding="utf-8"))
+    topology = [
+        entry
+        for transaction in rendered["transactions"]
+        for entry in transaction.get("topology", [])
+    ]
+    assert topology == [
+        {"peer": f"peer-{index}-public", "pop_hex": f"peer-{index}-pop"}
+        for index in range(1, 5)
+    ]
+    assert "peer-1-private" not in (output_dir / "genesis.json").read_text(
+        encoding="utf-8"
+    )
+    signing_command = (output_dir / "genesis-signing-command.txt").read_text(
+        encoding="utf-8"
+    )
+    assert "$TAIRA_GENESIS_PRIVATE_KEY" in signing_command
+    assert "taira-validator-1/config.toml" in signing_command
+
+
 def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> None:
     roster_path = tmp_path / "validator_roster.toml"
     roster_path.write_text(

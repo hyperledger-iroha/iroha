@@ -78,7 +78,7 @@ use iroha_data_model::{
             SoraFsModerationBallotContextV1, SoraFsModerationBallotRevealV1,
             SoraFsModerationVoteChoice,
         },
-        pin_registry::{ManifestDigest, PinManifestRecord, PinStatus},
+        pin_registry::{ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus},
         reserve::{
             ReserveLedgerProjection, ReserveLifecycleProjection, ReserveLifecycleStage,
             ReserveQuote,
@@ -115,12 +115,13 @@ use sorafs_manifest::{
     ReputationDegradationFlagV1, ReputationMerkleProofV1, ReputationSnapshotEventV1,
     ReputationSnapshotV1, SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
     SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1,
-    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    SignedReputationSnapshotV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer,
     StreamBudgetV1, StreamTokenBodyV1, TradeEventV1, TransportHintV1, TransportProtocol,
     capacity::CapacityTelemetryV1,
     chunker_registry,
     deal::XorAmount,
+    decode_order_cancel_v1, decode_order_request_v1, decode_settlement_receipt_v1,
     derive_orderbook_order_id_v1,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus},
@@ -169,6 +170,16 @@ use sorafs_node::{
     },
     telemetry::TelemetryError,
 };
+
+#[cfg(test)]
+fn canonical_fixture_manifest_root_cid() -> ManifestRootCid {
+    let manifest: ManifestV1 = norito::decode_from_bytes(include_bytes!(
+        "../../../../fixtures/sorafs_gateway/1.0.0/manifest_v1.to"
+    ))
+    .expect("decode canonical SoraFS fixture manifest");
+    ManifestRootCid::try_from_slice(&manifest.root_cid)
+        .expect("fixture manifest root CID must be canonical")
+}
 use sorafs_orchestrator::appeals::{
     AppealClass, AppealClassConfig, AppealDecision, AppealDisbursementInput,
     AppealDisbursementPlan, AppealPricingConfig, AppealQuote, AppealQuoteInput,
@@ -2365,6 +2376,30 @@ pub struct ModerationBallotTallyRequestDto {
     pub round_id: String,
     /// Ignored by public handlers; tally uses server-side Iroha network time.
     pub now_unix_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload retained for the retired `/v1/sorafs/storage/por-challenge` route.
+pub struct StoragePorChallengeDto {
+    /// Base64-encoded Norito PoR challenge payload.
+    pub challenge_b64: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload retained for the retired `/v1/sorafs/storage/por-proof` route.
+pub struct StoragePorProofDto {
+    /// Base64-encoded Norito PoR proof payload.
+    pub proof_b64: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload retained for the retired `/v1/sorafs/storage/por-verdict` route.
+pub struct StoragePorVerdictDto {
+    /// Base64-encoded Norito PoR verdict payload.
+    pub verdict_b64: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -7868,24 +7903,35 @@ fn limit_governance_publish_index_entries(
 
 pub(crate) async fn handle_post_sorafs_reputation_snapshot(
     State(state): State<SharedAppState>,
-    NoritoJson(snapshot): NoritoJson<ReputationSnapshotV1>,
+    NoritoJson(envelope): NoritoJson<SignedReputationSnapshotV1>,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs reputation API is not enabled on this node");
     }
-    if let Err(err) = snapshot.validate() {
+    if let Err(err) = envelope.validate_structure() {
         return json_error(
             StatusCode::BAD_REQUEST,
-            format!("invalid reputation snapshot: {err}"),
+            format!("invalid signed reputation snapshot: {err}"),
         );
     }
+    let snapshot = envelope.snapshot.clone();
     if let Err(err) = state
         .sorafs_node
-        .publish_reputation_snapshot(snapshot.clone())
+        .publish_signed_reputation_snapshot(envelope)
     {
+        let message = err.to_string();
+        let status = if message.contains("no external trust policy is configured") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else if message.contains("signed reputation admission failed")
+            || message.contains("exact retained head")
+        {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
         return json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to publish reputation snapshot: {err}"),
+            status,
+            format!("failed to publish signed reputation snapshot: {message}"),
         );
     }
     state.telemetry.with_metrics(|telemetry| {
@@ -9497,7 +9543,7 @@ pub(crate) async fn handle_post_sorafs_orderbook_order(
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
-        let order = match norito::decode_from_bytes::<OrderRequestV1>(body.as_ref()) {
+        let order = match decode_order_request_v1(body.as_ref()) {
             Ok(order) => order,
             Err(err) => {
                 return json_error(
@@ -9550,7 +9596,7 @@ pub(crate) async fn handle_post_sorafs_orderbook_cancel(
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
-        let cancel = match norito::decode_from_bytes::<OrderCancelV1>(body.as_ref()) {
+        let cancel = match decode_order_cancel_v1(body.as_ref()) {
             Ok(cancel) => cancel,
             Err(err) => {
                 return json_error(
@@ -9600,7 +9646,7 @@ pub(crate) async fn handle_post_sorafs_orderbook_receipt(
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
-        let receipt = match norito::decode_from_bytes::<SettlementReceiptV1>(body.as_ref()) {
+        let receipt = match decode_settlement_receipt_v1(body.as_ref()) {
             Ok(receipt) => receipt,
             Err(err) => {
                 return json_error(
@@ -20440,6 +20486,10 @@ fn reputation_proof_json(proof: &ReputationMerkleProofV1) -> Value {
         Value::from(u64::from(proof.leaf_index)),
     );
     map.insert(
+        "leaf_count".into(),
+        Value::from(u64::from(proof.leaf_count)),
+    );
+    map.insert(
         "siblings_hex".into(),
         Value::Array(
             proof
@@ -20878,8 +20928,24 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
         }
     };
 
-    let plan = stored.to_car_plan_with_hint(chunk_profile, taikai_hint.clone());
-    let specs = plan.chunk_fetch_specs();
+    let plan = match stored.try_to_car_plan_with_hint(chunk_profile, taikai_hint.as_ref()) {
+        Ok(plan) => plan,
+        Err(err) => return storage_backend_error(err),
+    };
+    let specs = match plan.try_chunk_fetch_specs() {
+        Ok(specs) => specs,
+        Err(err) => {
+            error!(
+                ?err,
+                manifest = manifest_id_hex,
+                "failed to derive validated CAR chunk fetch specs"
+            );
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to derive validated chunk fetch plan",
+            );
+        }
+    };
     let file_count = stored.files().len();
     let files = stored
         .files()
@@ -22551,9 +22617,12 @@ async fn bounded_remote_response_bytes(
             .unwrap_or_default()
             .min(max_bytes),
     );
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|err| format!("failed to read {label} response: {err}"))?;
+    let mut response = response;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|err| format!("failed to read {label} response: {err}"))?
+    {
         let next_len = body
             .len()
             .checked_add(chunk.len())
@@ -26369,6 +26438,7 @@ mod gateway_policy_violation_tests {
         let keypair = iroha_crypto::KeyPair::from_private_key(private).expect("keypair");
         let record = PinManifestRecord::new(
             ManifestDigest::new([0x21; 32]),
+            canonical_fixture_manifest_root_cid(),
             iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
                 profile_id: 1,
                 namespace: "sorafs".to_owned(),
@@ -26509,6 +26579,7 @@ mod gateway_policy_violation_tests {
         let keypair = iroha_crypto::KeyPair::from_private_key(private).expect("keypair");
         let record = PinManifestRecord::new(
             ManifestDigest::new([0x31; 32]),
+            canonical_fixture_manifest_root_cid(),
             iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
                 profile_id: 1,
                 namespace: "sorafs".to_owned(),
@@ -26617,6 +26688,7 @@ mod gateway_policy_violation_tests {
         let keypair = iroha_crypto::KeyPair::from_private_key(private).expect("keypair");
         let record = PinManifestRecord::new(
             ManifestDigest::new([0x41; 32]),
+            canonical_fixture_manifest_root_cid(),
             iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
                 profile_id: 1,
                 namespace: "sorafs".to_owned(),
@@ -28103,6 +28175,97 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
     }
 }
 
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_storage_por_challenge(
+    State(_state): State<SharedAppState>,
+    JsonOnly(_req): JsonOnly<StoragePorChallengeDto>,
+) -> Response {
+    retired_storage_por_mutation_response("challenge")
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn manual_por_trigger_retired_response() -> Response {
+    let response = json_object(vec![
+        json_entry("error", "manual_por_trigger_retired"),
+        json_entry("route_state", "retired"),
+        json_entry("replacement", "trusted PoR coordinator scheduler"),
+        json_entry(
+            "message",
+            "manual PoR trigger requests are retired; challenges are issued only by the trusted PoR coordinator scheduler",
+        ),
+    ]);
+    (StatusCode::GONE, JsonBody(response)).into_response()
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_storage_por_proof(
+    State(_state): State<SharedAppState>,
+    JsonOnly(_req): JsonOnly<StoragePorProofDto>,
+) -> Response {
+    retired_storage_por_mutation_response("proof")
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_storage_por_verdict(
+    State(_state): State<SharedAppState>,
+    JsonOnly(_req): JsonOnly<StoragePorVerdictDto>,
+) -> Response {
+    retired_storage_por_mutation_response("verdict")
+}
+
+#[cfg(feature = "app_api")]
+fn retired_storage_por_mutation_response(kind: &str) -> Response {
+    let replacement = match kind {
+        "challenge" => "trusted PoR coordinator scheduler".to_owned(),
+        _ => format!("/v1/sorafs/capacity/por-{kind}"),
+    };
+    (
+        StatusCode::GONE,
+        JsonBody(json_object(vec![
+            json_entry("error", "storage_por_mutation_retired"),
+            json_entry("kind", kind),
+            json_entry("replacement", replacement),
+            json_entry(
+                "message",
+                "direct storage PoR mutation routes are retired; use the authenticated capacity PoR lifecycle",
+            ),
+        ])),
+    )
+        .into_response()
+}
+
+#[cfg(feature = "app_api")]
+/// Build a stable retirement response for unsafe legacy capacity PoR mutations.
+pub(crate) fn capacity_por_mutation_retired_response(kind: &str) -> Response {
+    let (error, replacement, message) = match kind {
+        "challenge" => (
+            "capacity_por_challenge_retired",
+            "trusted PoR coordinator scheduler",
+            "externally supplied PoR challenges are retired because beacon and VRF evidence must originate from the trusted coordinator scheduler",
+        ),
+        "observation" => (
+            "capacity_por_observation_retired",
+            "/v1/sorafs/capacity/por-proof and /v1/sorafs/capacity/por-verdict",
+            "manual PoR success/failure observations are retired; metering is derived from the authenticated proof and verdict lifecycle",
+        ),
+        _ => (
+            "capacity_por_mutation_retired",
+            "trusted PoR lifecycle",
+            "this PoR mutation route is retired",
+        ),
+    };
+    (
+        StatusCode::GONE,
+        JsonBody(json_object(vec![
+            json_entry("error", error),
+            json_entry("kind", kind),
+            json_entry("replacement", replacement),
+            json_entry("message", message),
+        ])),
+    )
+        .into_response()
+}
+
 fn header_value(value: impl AsRef<str>, name: &str) -> HeaderValue {
     HeaderValue::from_str(value.as_ref())
         .unwrap_or_else(|_| panic!("{name} header produced invalid value: {}", value.as_ref()))
@@ -28148,7 +28311,7 @@ fn alias_proof_b64(alias: &str) -> String {
 
     let binding = AliasBindingV1 {
         alias: alias.to_string(),
-        manifest_cid: vec![0x42; 32],
+        manifest_cid: canonical_fixture_manifest_root_cid().as_bytes().to_vec(),
         bound_at: 1,
         expiry_epoch: 10,
     };
@@ -28359,6 +28522,8 @@ fn range_not_satisfiable(total_length: u64, message: String) -> Response {
 
 #[cfg(all(test, feature = "app_api"))]
 mod app_api_tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::{
         fmt, fs,
         io::Write,
@@ -28384,7 +28549,11 @@ mod app_api_tests {
     };
     use sorafs_manifest::{
         BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, ManifestBuilder, PinPolicy,
-        ProviderAdvertV1,
+        ProviderAdvertV1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+        REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1, REPUTATION_TRUSTED_SIGNER_VERSION_V1,
+        ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1,
+        ReputationSnapshotTrustPolicyV1, ReputationTrustedSignerV1,
+        SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
         pin_registry::{
             AliasBindingV1, AliasProofBundleV1, ReplicationOrderV1, alias_merkle_root,
             alias_proof_signature_digest,
@@ -29816,6 +29985,7 @@ fn car_verification_refusal(
         | CarVerifyError::HeaderTruncated
         | CarVerifyError::CanonicalCar(_)
         | CarVerifyError::ChunkStore(_)
+        | CarVerifyError::AllocationFailed { .. }
         | CarVerifyError::InternalInvariant(_) => (
             "car_parse_error",
             "CAR verification failed due to malformed payload",
@@ -30658,6 +30828,35 @@ mod advert_tests {
         assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
         assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
         assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+    }
+
+    #[tokio::test]
+    async fn reputation_snapshot_post_fails_closed_without_policy_or_with_bad_signature() {
+        let mut app_without_policy = mk_app_state_for_tests();
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        Arc::get_mut(&mut app_without_policy)
+            .expect("unique app state")
+            .sorafs_node = node;
+        let response = handle_post_sorafs_reputation_snapshot(
+            State(app_without_policy.clone()),
+            NoritoJson(reputation_snapshot_fixture()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            app_without_policy
+                .sorafs_node
+                .latest_reputation_snapshot()
+                .is_none()
+        );
+
+        let (app, _dir) = sorafs_app_state_with_reputation_storage();
+        let mut invalid = reputation_snapshot_fixture();
+        invalid.signatures[0].signature[0] ^= 0x80;
+        let response =
+            handle_post_sorafs_reputation_snapshot(State(app.clone()), NoritoJson(invalid)).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(app.sorafs_node.latest_reputation_snapshot().is_none());
     }
 
     fn sorafs_app_state_with_governance_mirror() -> (SharedAppState, TempDir, String, String) {
@@ -33854,7 +34053,24 @@ mod advert_tests {
 
     fn sorafs_app_state_with_reputation_storage() -> (SharedAppState, TempDir) {
         let mut app = mk_app_state_for_tests();
-        let (node, temp_dir) = sorafs_node_with_temp_storage();
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let policy_path = temp_dir.path().join("reputation-trust-policy.to");
+        fs::write(
+            &policy_path,
+            reputation_trust_policy_fixture()
+                .canonical_bytes()
+                .expect("encode reputation trust policy"),
+        )
+        .expect("write reputation trust policy");
+        #[cfg(unix)]
+        fs::set_permissions(&policy_path, fs::Permissions::from_mode(0o600))
+            .expect("secure reputation trust policy permissions");
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .reputation_trust_policy_path(Some(policy_path))
+            .build();
+        let node = sorafs_node::NodeHandle::new(cfg);
         let app_inner = Arc::get_mut(&mut app).expect("unique app state");
         app_inner.sorafs_node = node;
         #[cfg(feature = "telemetry")]
@@ -33864,7 +34080,29 @@ mod advert_tests {
         (app, temp_dir)
     }
 
-    fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
+    fn reputation_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[0x51; 32])
+    }
+
+    fn reputation_trust_policy_fixture() -> ReputationSnapshotTrustPolicyV1 {
+        ReputationSnapshotTrustPolicyV1 {
+            version: REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1,
+            policy_id: [0xA5; 32],
+            valid_from_unix: 1_700_000_000,
+            valid_until_unix: 2_000_000_000,
+            max_snapshot_age_secs: 600,
+            max_future_skew_secs: 30,
+            min_signatures: 1,
+            signers: vec![ReputationTrustedSignerV1 {
+                version: REPUTATION_TRUSTED_SIGNER_VERSION_V1,
+                signer_id: "council-1".to_owned(),
+                public_key: reputation_signing_key().verifying_key().to_bytes(),
+            }],
+            revoked_signer_ids: Vec::new(),
+        }
+    }
+
+    fn reputation_snapshot_fixture() -> SignedReputationSnapshotV1 {
         let metrics_a = ReputationProviderMetricsV1 {
             version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
             por_success_bps: 9_800,
@@ -33885,7 +34123,7 @@ mod advert_tests {
             token_violation_rate_bps: 200,
             repair_breach_rate_bps: 250,
         };
-        let inputs = [
+        let mut inputs = vec![
             ReputationProviderInputV1 {
                 version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
                 provider_id: "provider-b".to_owned(),
@@ -33905,14 +34143,47 @@ mod advert_tests {
                 slashing_event: false,
             },
         ];
-        build_reputation_snapshot(
+        inputs.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
+        let generated_at_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_secs();
+        let snapshot = build_reputation_snapshot(
             [0xAB; 16],
-            1_800_000_000,
+            generated_at_unix,
             ReputationWeightsV1::default(),
             &inputs,
-            Some([0xCD; 16]),
+            None,
         )
-        .expect("build reputation snapshot")
+        .expect("build reputation snapshot");
+        let scoring_evidence = ReputationScoringEvidenceV1 {
+            version: REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+            provider_inputs: inputs,
+            trust_edges: Vec::new(),
+        };
+        let mut envelope = SignedReputationSnapshotV1 {
+            version: SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+            policy_digest: reputation_trust_policy_fixture()
+                .canonical_digest()
+                .expect("reputation policy digest"),
+            snapshot,
+            scoring_evidence_digest: scoring_evidence
+                .canonical_digest()
+                .expect("reputation evidence digest"),
+            scoring_evidence,
+            signatures: Vec::new(),
+        };
+        envelope.signatures.push(ReputationSnapshotSignatureV1 {
+            signer_id: "council-1".to_owned(),
+            signature: reputation_signing_key()
+                .sign(
+                    &envelope
+                        .signing_digest()
+                        .expect("reputation signing digest"),
+                )
+                .to_bytes(),
+        });
+        envelope
     }
 
     struct OrderbookAccountFixture {
@@ -37364,7 +37635,7 @@ mod advert_tests {
         manifest_digest_byte: u8,
         runner_hash_byte: u8,
     ) -> ModerationReproManifestV1 {
-        let body = ModerationReproBodyV1 {
+        let mut body = ModerationReproBodyV1 {
             schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
             manifest_id: [manifest_id_byte; 16],
             manifest_digest: [manifest_digest_byte; 32],
@@ -37382,13 +37653,22 @@ mod advert_tests {
             },
             models: vec![ModerationModelFingerprintV1 {
                 model_id: [0x55; 16],
+                artifact_path: "models/model-55.norito".to_string(),
+                artifact_bytes: 1,
                 artifact_digest: [0x66; 32],
                 weights_digest: [0x77; 32],
-                opset: 17,
+                engine: iroha_data_model::sorafs::moderation::ModerationModelEngineV1::DeterministicLinearV1,
+                feature_profile: iroha_data_model::sorafs::moderation::ModerationFeatureProfileV1::ByteHistogramAndBigramV1,
+                calibration_knot_count: 2,
+                max_input_bytes: 1024,
+                max_operations: 3073,
+                working_memory_bytes: 4096,
                 weight: Some(10_000),
             }],
             notes: Some("registry API fixture".to_string()),
         };
+        body.refresh_manifest_digest()
+            .expect("refresh moderation fixture digest");
         let keypair = KeyPair::try_from_seed(vec![0x9C; 32], Algorithm::Ed25519)
             .expect("moderation registry fixture keypair");
         let signature = SignatureOf::try_new(keypair.private_key(), &body)
@@ -43955,17 +44235,22 @@ mod advert_tests {
     #[tokio::test]
     async fn reputation_snapshot_publish_latest_and_provider_proof_round_trip() {
         let (app, _dir) = sorafs_app_state_with_reputation_storage();
-        let snapshot = reputation_snapshot_fixture();
+        let envelope = reputation_snapshot_fixture();
+        let snapshot = envelope.snapshot.clone();
         let expected_proof = snapshot
             .merkle_proof("provider-a")
             .expect("provider proof fixture");
 
         let response = handle_post_sorafs_reputation_snapshot(
             State(app.clone()),
-            NoritoJson(snapshot.clone()),
+            NoritoJson(envelope.clone()),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            app.sorafs_node.latest_signed_reputation_snapshot(),
+            Some(envelope.clone())
+        );
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect publish body");
@@ -44142,6 +44427,10 @@ mod advert_tests {
         assert_eq!(
             proof.get("leaf_index").and_then(Value::as_u64),
             Some(u64::from(expected_proof.leaf_index))
+        );
+        assert_eq!(
+            proof.get("leaf_count").and_then(Value::as_u64),
+            Some(u64::from(expected_proof.leaf_count))
         );
         let siblings = proof
             .get("siblings_hex")
@@ -44555,21 +44844,25 @@ mod advert_tests {
         let mut tx = block.transaction();
 
         let manifest_digest = ManifestDigest::new([0x11; 32]);
+        let manifest_root_cid = canonical_fixture_manifest_root_cid();
         let chunker_handle = default_chunker_handle();
         let chunk_digest = [0xAA; 32];
         let issuer = test_account();
         let policy = RegistryPinPolicy::default();
         let content_length = 1024;
-        let amount_nano = pricing.public_pin_fee_nano(
-            policy.storage_class,
-            content_length,
-            policy.min_replicas,
-            5,
-            policy.retention_epoch,
-        );
+        let amount_nano = pricing
+            .public_pin_fee_nano(
+                policy.storage_class,
+                content_length,
+                policy.min_replicas,
+                5,
+                policy.retention_epoch,
+            )
+            .expect("pin registry metrics fixture fee");
 
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
+            manifest_root_cid.clone(),
             chunker_handle.clone(),
             chunk_digest,
             policy,
@@ -44616,12 +44909,13 @@ mod advert_tests {
                 ReplicationOrderRecord {
                     order_id: completed_met_id,
                     manifest_digest: manifest_digest.clone(),
+                    manifest_root_cid: manifest_root_cid.clone(),
                     issued_by: issuer.clone(),
                     issued_epoch: 10,
                     deadline_epoch: 16,
                     canonical_order: encode_replication_order_bytes(
                         &completed_met_id,
-                        &manifest_digest,
+                        &manifest_root_cid,
                         16,
                     ),
                     status: ReplicationOrderStatus::Completed(13),
@@ -44636,12 +44930,13 @@ mod advert_tests {
                 ReplicationOrderRecord {
                     order_id: completed_missed_id,
                     manifest_digest: manifest_digest.clone(),
+                    manifest_root_cid: manifest_root_cid.clone(),
                     issued_by: issuer.clone(),
                     issued_epoch: 20,
                     deadline_epoch: 25,
                     canonical_order: encode_replication_order_bytes(
                         &completed_missed_id,
-                        &manifest_digest,
+                        &manifest_root_cid,
                         25,
                     ),
                     status: ReplicationOrderStatus::Completed(32),
@@ -44656,12 +44951,13 @@ mod advert_tests {
                 ReplicationOrderRecord {
                     order_id: pending_id,
                     manifest_digest: manifest_digest.clone(),
+                    manifest_root_cid: manifest_root_cid.clone(),
                     issued_by: issuer.clone(),
                     issued_epoch: 40,
                     deadline_epoch: 55,
                     canonical_order: encode_replication_order_bytes(
                         &pending_id,
-                        &manifest_digest,
+                        &manifest_root_cid,
                         55,
                     ),
                     status: ReplicationOrderStatus::Pending,
@@ -44676,12 +44972,13 @@ mod advert_tests {
                 ReplicationOrderRecord {
                     order_id: expired_id,
                     manifest_digest,
+                    manifest_root_cid: manifest_root_cid.clone(),
                     issued_by: issuer,
                     issued_epoch: 50,
                     deadline_epoch: 60,
                     canonical_order: encode_replication_order_bytes(
                         &expired_id,
-                        &manifest_digest,
+                        &manifest_root_cid,
                         60,
                     ),
                     status: ReplicationOrderStatus::Expired(62),
@@ -44739,7 +45036,6 @@ mod advert_tests {
 
     fn encode_replication_order_bytes_with_providers(
         order_id: &ReplicationOrderId,
-        _manifest_digest: &ManifestDigest,
         manifest_cid: &[u8],
         providers: Vec<[u8; 32]>,
         deadline_epoch: u64,
@@ -44757,15 +45053,14 @@ mod advert_tests {
 
     fn encode_replication_order_bytes(
         order_id: &ReplicationOrderId,
-        manifest_digest: &ManifestDigest,
+        manifest_root_cid: &ManifestRootCid,
         deadline_epoch: u64,
     ) -> Vec<u8> {
         let id_bytes = *order_id.as_bytes();
         let providers = vec![[id_bytes[0]; 32], [id_bytes[0].wrapping_add(1); 32]];
         encode_replication_order_bytes_with_providers(
             order_id,
-            manifest_digest,
-            manifest_digest.as_bytes(),
+            manifest_root_cid.as_bytes(),
             providers,
             deadline_epoch,
         )
@@ -44777,7 +45072,7 @@ mod advert_tests {
         let expires_at_unix = now.saturating_add(3_600);
         let binding = AliasBindingV1 {
             alias: alias.to_owned(),
-            manifest_cid: vec![0x42; 32],
+            manifest_cid: canonical_fixture_manifest_root_cid().as_bytes().to_vec(),
             bound_at: generated_at_unix,
             expiry_epoch: expires_at_unix,
         };
@@ -44825,18 +45120,23 @@ mod advert_tests {
                 .expect("compute manifest digest for registry seed")
                 .into(),
         );
+        let manifest_root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
+            .expect("gateway fixture manifest root CID must be canonical");
         let issuer = test_account();
         let policy = registry_policy_for_manifest(manifest);
         let content_length = manifest.content_length;
-        let amount_nano = pricing.public_pin_fee_nano(
-            policy.storage_class,
-            content_length,
-            policy.min_replicas,
-            5,
-            policy.retention_epoch,
-        );
+        let amount_nano = pricing
+            .public_pin_fee_nano(
+                policy.storage_class,
+                content_length,
+                policy.min_replicas,
+                5,
+                policy.retention_epoch,
+            )
+            .expect("gateway registry fixture fee");
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
+            manifest_root_cid.clone(),
             default_chunker_handle(),
             [0xAB; 32],
             policy,
@@ -44866,12 +45166,12 @@ mod advert_tests {
                 ReplicationOrderRecord {
                     order_id,
                     manifest_digest: manifest_digest.clone(),
+                    manifest_root_cid,
                     issued_by: issuer,
                     issued_epoch: 8,
                     deadline_epoch: 24,
                     canonical_order: encode_replication_order_bytes_with_providers(
                         &order_id,
-                        &manifest_digest,
                         &manifest.root_cid,
                         vec![provider_id],
                         24,
@@ -44960,6 +45260,8 @@ mod advert_tests {
                 .expect("compute manifest digest for paid pin seed")
                 .into(),
         );
+        let manifest_root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
+            .expect("paid pin fixture manifest root CID must be canonical");
         let policy = registry_policy_for_manifest(manifest);
         let amount_nano = state
             .state
@@ -44972,9 +45274,11 @@ mod advert_tests {
                 policy.min_replicas,
                 5,
                 policy.retention_epoch,
-            );
+            )
+            .expect("paid pin fixture fee");
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
+            manifest_root_cid,
             chunker_handle_for_manifest(manifest),
             compute_chunk_plan_digest_sha3(&plan.chunks),
             policy,
@@ -46227,18 +46531,22 @@ mod advert_tests {
         let mut block = app.state.block(default_block_header());
         let mut tx = block.transaction();
         let manifest_digest = ManifestDigest::new([0x61; 32]);
+        let manifest_root_cid = canonical_fixture_manifest_root_cid();
         let issuer = test_account();
         let policy = RegistryPinPolicy::default();
         let content_length = 4096;
-        let amount_nano = pricing.public_pin_fee_nano(
-            policy.storage_class,
-            content_length,
-            policy.min_replicas,
-            5,
-            policy.retention_epoch,
-        );
+        let amount_nano = pricing
+            .public_pin_fee_nano(
+                policy.storage_class,
+                content_length,
+                policy.min_replicas,
+                5,
+                policy.retention_epoch,
+            )
+            .expect("pin readback fixture fee");
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
+            manifest_root_cid.clone(),
             default_chunker_handle(),
             [0xA1; 32],
             policy,
@@ -46288,12 +46596,13 @@ mod advert_tests {
                     ReplicationOrderRecord {
                         order_id,
                         manifest_digest: manifest_digest.clone(),
+                        manifest_root_cid: manifest_root_cid.clone(),
                         issued_by: issuer.clone(),
                         issued_epoch: 20 + index,
                         deadline_epoch: 40 + index,
                         canonical_order: encode_replication_order_bytes(
                             &order_id,
-                            &manifest_digest,
+                            &manifest_root_cid,
                             40 + index,
                         ),
                         status: ReplicationOrderStatus::Pending,
@@ -49280,6 +49589,115 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn manual_por_trigger_route_is_explicitly_retired() {
+        let response = manual_por_trigger_retired_response();
+        assert_eq!(response.status(), StatusCode::GONE);
+
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode retirement response");
+        assert_eq!(
+            value.get("error").and_then(Value::as_str),
+            Some("manual_por_trigger_retired")
+        );
+        assert_eq!(
+            value.get("route_state").and_then(Value::as_str),
+            Some("retired")
+        );
+        assert_eq!(
+            value.get("replacement").and_then(Value::as_str),
+            Some("trusted PoR coordinator scheduler")
+        );
+    }
+
+    #[tokio::test]
+    async fn capacity_challenge_and_manual_observation_routes_are_retired() {
+        for (kind, expected_error) in [
+            ("challenge", "capacity_por_challenge_retired"),
+            ("observation", "capacity_por_observation_retired"),
+        ] {
+            let response = capacity_por_mutation_retired_response(kind);
+            assert_eq!(response.status(), StatusCode::GONE);
+            let body = body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("retirement response body");
+            let value: Value = norito::json::from_slice(&body).expect("decode retirement response");
+            assert_eq!(
+                value.get("error").and_then(Value::as_str),
+                Some(expected_error)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn storage_por_mutation_routes_are_retired_without_side_effects() {
+        let (challenge, proof, verdict) = sample_por_artifacts();
+
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        let node_view = node.clone();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let challenge_b64 = base64::engine::general_purpose::STANDARD
+            .encode(norito::to_bytes(&challenge).expect("encode challenge"));
+        let challenge_req = StoragePorChallengeDto { challenge_b64 };
+        let challenge_resp =
+            handle_post_sorafs_storage_por_challenge(State(state.clone()), JsonOnly(challenge_req))
+                .await;
+        assert_eq!(challenge_resp.status(), StatusCode::GONE);
+        let challenge_body = body::to_bytes(challenge_resp.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let challenge_json: Value =
+            norito::json::from_slice(&challenge_body).expect("challenge response");
+        assert_eq!(
+            challenge_json.get("error").and_then(Value::as_str),
+            Some("storage_por_mutation_retired")
+        );
+
+        let proof_b64 = base64::engine::general_purpose::STANDARD
+            .encode(norito::to_bytes(&proof).expect("encode proof"));
+        let proof_req = StoragePorProofDto { proof_b64 };
+        let proof_resp =
+            handle_post_sorafs_storage_por_proof(State(state.clone()), JsonOnly(proof_req)).await;
+        assert_eq!(proof_resp.status(), StatusCode::GONE);
+        let proof_body = body::to_bytes(proof_resp.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let proof_json: Value = norito::json::from_slice(&proof_body).expect("proof response");
+        assert_eq!(
+            proof_json.get("replacement").and_then(Value::as_str),
+            Some("/v1/sorafs/capacity/por-proof")
+        );
+
+        let verdict_b64 = base64::engine::general_purpose::STANDARD
+            .encode(norito::to_bytes(&verdict).expect("encode verdict"));
+        let verdict_req = StoragePorVerdictDto { verdict_b64 };
+        let verdict_resp =
+            handle_post_sorafs_storage_por_verdict(State(state.clone()), JsonOnly(verdict_req))
+                .await;
+        assert_eq!(verdict_resp.status(), StatusCode::GONE);
+        let verdict_body = body::to_bytes(verdict_resp.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let verdict_json: Value =
+            norito::json::from_slice(&verdict_body).expect("verdict response");
+        assert_eq!(
+            verdict_json.get("replacement").and_then(Value::as_str),
+            Some("/v1/sorafs/capacity/por-verdict")
+        );
+
+        let snapshot = node_view.metering_snapshot();
+        assert_eq!(snapshot.por_samples_success, 0);
+        assert_eq!(snapshot.por_samples_total, 0);
+        assert!(node_view.por_ingestion_overview().is_empty());
+    }
+
+    #[tokio::test]
     async fn por_ingestion_readback_limit_bounds_provider_statuses() {
         let (challenge, _, _) = sample_por_artifacts();
         let mut second_challenge = challenge.clone();
@@ -49340,6 +49758,32 @@ mod advert_tests {
                 .and_then(Value::as_u64),
             Some(1)
         );
+    }
+
+    #[tokio::test]
+    async fn retired_storage_por_challenge_does_not_parse_or_mutate_payload() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let request = StoragePorChallengeDto {
+            challenge_b64: "!!not_base64!!".to_owned(),
+        };
+        let response =
+            handle_post_sorafs_storage_por_challenge(State(state.clone()), JsonOnly(request)).await;
+        assert_eq!(response.status(), StatusCode::GONE);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error response");
+        let error_msg = value
+            .get("error")
+            .and_then(Value::as_str)
+            .expect("error string");
+        assert_eq!(error_msg, "storage_por_mutation_retired");
+        assert!(state.sorafs_node.por_ingestion_overview().is_empty());
     }
 
     #[tokio::test]

@@ -6,7 +6,7 @@
 //! operators to exchange deterministic capacity declarations, replication
 //! orders, and telemetry snapshots.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use norito::{
@@ -75,44 +75,63 @@ impl CapacityDeclarationV1 {
         if !self.stake.is_positive() {
             return Err(CapacityDeclarationValidationError::StakeAmountZero);
         }
+        if self.stake.pool_id.iter().all(|byte| *byte == 0) {
+            return Err(CapacityDeclarationValidationError::InvalidStakePoolId);
+        }
         if self.committed_capacity_gib == 0 {
             return Err(CapacityDeclarationValidationError::ZeroCommittedCapacity);
         }
         if self.chunker_commitments.is_empty() {
             return Err(CapacityDeclarationValidationError::MissingChunkerCommitments);
         }
+        if self.chunker_commitments.len() > MAX_CAPACITY_CHUNKER_COMMITMENTS {
+            return Err(
+                CapacityDeclarationValidationError::TooManyChunkerCommitments {
+                    found: self.chunker_commitments.len(),
+                    maximum: MAX_CAPACITY_CHUNKER_COMMITMENTS,
+                },
+            );
+        }
+        if self.lane_commitments.len() > MAX_CAPACITY_LANE_COMMITMENTS {
+            return Err(CapacityDeclarationValidationError::TooManyLaneCommitments {
+                found: self.lane_commitments.len(),
+                maximum: MAX_CAPACITY_LANE_COMMITMENTS,
+            });
+        }
+        if self.metadata.len() > MAX_CAPACITY_DECLARATION_METADATA_ENTRIES {
+            return Err(CapacityDeclarationValidationError::TooManyMetadataEntries {
+                found: self.metadata.len(),
+                maximum: MAX_CAPACITY_DECLARATION_METADATA_ENTRIES,
+            });
+        }
         if self.valid_until <= self.valid_from {
             return Err(CapacityDeclarationValidationError::InvalidValidityWindow);
         }
 
-        let mut seen_profiles: HashSet<String> = HashSet::new();
+        let mut previous_profile: Option<&str> = None;
         let mut total_committed = 0u128;
         for (index, commitment) in self.chunker_commitments.iter().enumerate() {
             commitment.validate().map_err(|source| {
                 CapacityDeclarationValidationError::ChunkerCommitmentInvalid { index, source }
             })?;
-            let canonical = commitment.profile_id.clone();
-            if !seen_profiles.insert(canonical.clone()) {
-                return Err(
-                    CapacityDeclarationValidationError::DuplicateChunkerCommitment {
-                        handle: canonical,
-                    },
-                );
+            if previous_profile.is_some_and(|previous| previous >= commitment.profile_id.as_str()) {
+                return Err(CapacityDeclarationValidationError::NonCanonicalChunkerOrder { index });
             }
+            previous_profile = Some(commitment.profile_id.as_str());
             total_committed = total_committed
                 .checked_add(u128::from(commitment.committed_gib))
                 .ok_or(CapacityDeclarationValidationError::CommittedCapacityOverflow)?;
         }
-        if total_committed > u128::from(self.committed_capacity_gib) {
+        if total_committed != u128::from(self.committed_capacity_gib) {
             return Err(
-                CapacityDeclarationValidationError::CommittedCapacityExceedsDeclaration {
+                CapacityDeclarationValidationError::CommittedCapacityMismatch {
                     committed_gib: total_committed,
                     declared_gib: self.committed_capacity_gib,
                 },
             );
         }
 
-        let mut seen_lanes = HashSet::new();
+        let mut previous_lane: Option<&str> = None;
         for (index, lane) in self.lane_commitments.iter().enumerate() {
             lane.validate(self.committed_capacity_gib)
                 .map_err(
@@ -121,13 +140,10 @@ impl CapacityDeclarationV1 {
                         source,
                     },
                 )?;
-            if !seen_lanes.insert(lane.lane_id.to_owned()) {
-                return Err(
-                    CapacityDeclarationValidationError::DuplicateLaneCommitment {
-                        lane_id: lane.lane_id.clone(),
-                    },
-                );
+            if previous_lane.is_some_and(|previous| previous >= lane.lane_id.as_str()) {
+                return Err(CapacityDeclarationValidationError::NonCanonicalLaneOrder { index });
             }
+            previous_lane = Some(lane.lane_id.as_str());
         }
 
         if let Some(pricing) = &self.pricing {
@@ -136,10 +152,30 @@ impl CapacityDeclarationV1 {
                 .map_err(CapacityDeclarationValidationError::PricingInvalid)?;
         }
 
+        let mut metadata_bytes = 0usize;
+        let mut metadata_keys = BTreeSet::new();
         for (index, entry) in self.metadata.iter().enumerate() {
             entry.validate().map_err(|source| {
                 CapacityDeclarationValidationError::MetadataInvalid { index, source }
             })?;
+            metadata_bytes = metadata_bytes
+                .checked_add(entry.key.len())
+                .and_then(|total| total.checked_add(entry.value.len()))
+                .ok_or(CapacityDeclarationValidationError::MetadataBytesExceeded {
+                    found: usize::MAX,
+                    maximum: MAX_CAPACITY_DECLARATION_METADATA_BYTES,
+                })?;
+            if metadata_bytes > MAX_CAPACITY_DECLARATION_METADATA_BYTES {
+                return Err(CapacityDeclarationValidationError::MetadataBytesExceeded {
+                    found: metadata_bytes,
+                    maximum: MAX_CAPACITY_DECLARATION_METADATA_BYTES,
+                });
+            }
+            if !metadata_keys.insert(entry.key.as_str()) {
+                return Err(CapacityDeclarationValidationError::DuplicateMetadataKey {
+                    key: entry.key.clone(),
+                });
+            }
         }
 
         Ok(())
@@ -168,6 +204,12 @@ impl ChunkerCommitmentV1 {
         if self.committed_gib == 0 {
             return Err(ChunkerCommitmentError::ZeroCapacity);
         }
+        if self.profile_id.len() > MAX_CAPACITY_PROFILE_HANDLE_BYTES {
+            return Err(ChunkerCommitmentError::ProfileHandleTooLong {
+                found: self.profile_id.len(),
+                maximum: MAX_CAPACITY_PROFILE_HANDLE_BYTES,
+            });
+        }
         let descriptor = chunker_registry::lookup_by_handle(&self.profile_id).ok_or(
             ChunkerCommitmentError::UnknownProfileHandle {
                 handle: self.profile_id.clone(),
@@ -184,16 +226,43 @@ impl ChunkerCommitmentV1 {
             });
         }
         if let Some(aliases) = &self.profile_aliases {
-            validate_aliases(aliases, descriptor).map_err(ChunkerCommitmentError::from)?;
-        }
-        let mut seen_caps: HashSet<u16> = HashSet::new();
-        for capability in &self.capability_refs {
-            let key = *capability as u16;
-            if !seen_caps.insert(key) {
-                return Err(ChunkerCommitmentError::DuplicateCapability {
-                    capability: *capability,
+            if aliases.is_empty() || aliases.len() > MAX_CAPACITY_PROFILE_ALIASES {
+                return Err(ChunkerCommitmentError::InvalidProfileAliasCount {
+                    found: aliases.len(),
+                    maximum: MAX_CAPACITY_PROFILE_ALIASES,
                 });
             }
+            for alias in aliases {
+                if alias.len() > MAX_CAPACITY_PROFILE_HANDLE_BYTES {
+                    return Err(ChunkerCommitmentError::ProfileAliasTooLong {
+                        found: alias.len(),
+                        maximum: MAX_CAPACITY_PROFILE_HANDLE_BYTES,
+                    });
+                }
+            }
+            validate_aliases(aliases, descriptor).map_err(ChunkerCommitmentError::from)?;
+            if aliases.len() != descriptor.aliases.len()
+                || aliases
+                    .iter()
+                    .zip(descriptor.aliases)
+                    .any(|(provided, expected)| provided.as_str() != *expected)
+            {
+                return Err(ChunkerCommitmentError::NonCanonicalProfileAliases);
+            }
+        }
+        if self.capability_refs.len() > MAX_CAPACITY_CAPABILITY_REFS {
+            return Err(ChunkerCommitmentError::TooManyCapabilities {
+                found: self.capability_refs.len(),
+                maximum: MAX_CAPACITY_CAPABILITY_REFS,
+            });
+        }
+        let mut previous_capability = None;
+        for (index, capability) in self.capability_refs.iter().enumerate() {
+            let key = *capability as u16;
+            if previous_capability.is_some_and(|previous| previous >= key) {
+                return Err(ChunkerCommitmentError::NonCanonicalCapabilityOrder { index });
+            }
+            previous_capability = Some(key);
         }
         Ok(descriptor)
     }
@@ -212,6 +281,12 @@ impl LaneCommitmentV1 {
     fn validate(&self, total_capacity: u64) -> Result<(), LaneCommitmentError> {
         if self.lane_id.trim().is_empty() {
             return Err(LaneCommitmentError::EmptyLaneId);
+        }
+        if self.lane_id != self.lane_id.trim() || self.lane_id.len() > MAX_CAPACITY_LANE_ID_BYTES {
+            return Err(LaneCommitmentError::NonCanonicalLaneId {
+                found: self.lane_id.len(),
+                maximum: MAX_CAPACITY_LANE_ID_BYTES,
+            });
         }
         if !self
             .lane_id
@@ -265,11 +340,20 @@ impl PricingScheduleV1 {
         {
             return Err(PricingScheduleError::InvalidCurrencyChars);
         }
+        if trimmed != self.currency {
+            return Err(PricingScheduleError::NonCanonicalCurrency);
+        }
+        if self.rate_per_gib_hour_milliu == 0 {
+            return Err(PricingScheduleError::ZeroRate);
+        }
         if self.min_commitment_hours == Some(0) {
             return Err(PricingScheduleError::InvalidMinCommitment);
         }
         if let Some(notes) = &self.notes
-            && notes.trim().is_empty()
+            && (notes.trim().is_empty()
+                || notes != notes.trim()
+                || notes.len() > MAX_CAPACITY_PRICING_NOTES_BYTES
+                || notes.chars().any(char::is_control))
         {
             return Err(PricingScheduleError::InvalidNotes);
         }
@@ -307,12 +391,65 @@ impl CapacityMetadataEntry {
                 key: self.key.clone(),
             });
         }
+        if key_trimmed != self.key {
+            return Err(MetadataError::NonCanonicalKey);
+        }
+        if self.key.len() > MAX_CAPACITY_METADATA_KEY_BYTES {
+            return Err(MetadataError::KeyTooLong {
+                found: self.key.len(),
+                maximum: MAX_CAPACITY_METADATA_KEY_BYTES,
+            });
+        }
         if self.value.trim().is_empty() {
             return Err(MetadataError::EmptyValue);
+        }
+        if self.value != self.value.trim()
+            || self.value.len() > MAX_CAPACITY_METADATA_VALUE_BYTES
+            || self.value.chars().any(char::is_control)
+        {
+            return Err(MetadataError::InvalidValue {
+                found: self.value.len(),
+                maximum: MAX_CAPACITY_METADATA_VALUE_BYTES,
+            });
         }
         Ok(())
     }
 }
+
+/// Maximum key length for capacity/order metadata.
+pub const MAX_CAPACITY_METADATA_KEY_BYTES: usize = 128;
+/// Maximum value length for capacity/order metadata.
+pub const MAX_CAPACITY_METADATA_VALUE_BYTES: usize = 4096;
+/// Exact first-release manifest CID length in a replication order.
+pub const MAX_REPLICATION_ORDER_MANIFEST_CID_BYTES: usize = crate::MAX_MANIFEST_ROOT_CID_BYTES;
+/// Maximum provider assignments in one replication order.
+pub const MAX_REPLICATION_ORDER_ASSIGNMENTS: usize = 1024;
+/// Maximum metadata entries in one replication order.
+pub const MAX_REPLICATION_ORDER_METADATA_ENTRIES: usize = 64;
+/// Maximum aggregate metadata bytes in one replication order.
+pub const MAX_REPLICATION_ORDER_METADATA_BYTES: usize = 64 * 1024;
+/// Maximum canonical chunker-handle length.
+pub const MAX_REPLICATION_ORDER_PROFILE_BYTES: usize = 128;
+/// Maximum lane-hint length.
+pub const MAX_REPLICATION_ORDER_LANE_BYTES: usize = 64;
+/// Maximum chunker profiles in one capacity declaration.
+pub const MAX_CAPACITY_CHUNKER_COMMITMENTS: usize = 16;
+/// Maximum lane caps in one capacity declaration.
+pub const MAX_CAPACITY_LANE_COMMITMENTS: usize = 64;
+/// Maximum metadata entries in one capacity declaration.
+pub const MAX_CAPACITY_DECLARATION_METADATA_ENTRIES: usize = 64;
+/// Maximum aggregate metadata bytes in one capacity declaration.
+pub const MAX_CAPACITY_DECLARATION_METADATA_BYTES: usize = 64 * 1024;
+/// Maximum aliases in one chunker commitment.
+pub const MAX_CAPACITY_PROFILE_ALIASES: usize = 16;
+/// Maximum capability references in one chunker commitment.
+pub const MAX_CAPACITY_CAPABILITY_REFS: usize = 32;
+/// Maximum canonical profile-handle length.
+pub const MAX_CAPACITY_PROFILE_HANDLE_BYTES: usize = 128;
+/// Maximum lane identifier length.
+pub const MAX_CAPACITY_LANE_ID_BYTES: usize = 64;
+/// Maximum pricing-note length.
+pub const MAX_CAPACITY_PRICING_NOTES_BYTES: usize = 1024;
 
 /// Replication order issued by governance.
 #[derive(
@@ -355,11 +492,31 @@ impl ReplicationOrderV1 {
         if self.order_id.iter().all(|&byte| byte == 0) {
             return Err(ReplicationOrderValidationError::InvalidOrderId);
         }
-        if self.manifest_cid.is_empty() {
-            return Err(ReplicationOrderValidationError::EmptyManifestCid);
-        }
+        crate::validate_manifest_root_cid(
+            &self.manifest_cid,
+            crate::chunker_registry::MANIFEST_DAG_CODEC,
+            crate::BLAKE3_256_MULTIHASH_CODE,
+        )
+        .map_err(|error| match error {
+            crate::ManifestValidationError::InvalidRootCidLength { found, maximum } => {
+                ReplicationOrderValidationError::InvalidManifestCidLength { found, maximum }
+            }
+            crate::ManifestValidationError::InertRootCid
+            | crate::ManifestValidationError::InertRootCidDigest => {
+                ReplicationOrderValidationError::InertManifestCid
+            }
+            error => ReplicationOrderValidationError::MalformedManifestCid {
+                reason: error.to_string(),
+            },
+        })?;
         if self.manifest_digest.iter().all(|&byte| byte == 0) {
             return Err(ReplicationOrderValidationError::InvalidManifestDigest);
+        }
+        if self.chunking_profile.len() > MAX_REPLICATION_ORDER_PROFILE_BYTES {
+            return Err(ReplicationOrderValidationError::ProfileHandleTooLong {
+                found: self.chunking_profile.len(),
+                maximum: MAX_REPLICATION_ORDER_PROFILE_BYTES,
+            });
         }
         let descriptor = chunker_registry::lookup_by_handle(&self.chunking_profile).ok_or(
             ReplicationOrderValidationError::UnknownChunkerHandle {
@@ -382,6 +539,12 @@ impl ReplicationOrderV1 {
         if self.assignments.is_empty() {
             return Err(ReplicationOrderValidationError::MissingAssignments);
         }
+        if self.assignments.len() > MAX_REPLICATION_ORDER_ASSIGNMENTS {
+            return Err(ReplicationOrderValidationError::TooManyAssignments {
+                found: self.assignments.len(),
+                maximum: MAX_REPLICATION_ORDER_ASSIGNMENTS,
+            });
+        }
         if usize::from(self.target_replicas) > self.assignments.len() {
             return Err(
                 ReplicationOrderValidationError::ReplicaTargetExceedsAssignments {
@@ -394,25 +557,53 @@ impl ReplicationOrderV1 {
             return Err(ReplicationOrderValidationError::InvalidDeadline);
         }
 
-        let mut seen_providers = HashSet::new();
+        let mut previous_provider = None;
         for (index, assignment) in self.assignments.iter().enumerate() {
             assignment.validate().map_err(|source| {
                 ReplicationOrderValidationError::AssignmentInvalid { index, source }
             })?;
-            if !seen_providers.insert(assignment.provider_id) {
-                return Err(ReplicationOrderValidationError::DuplicateProvider {
-                    provider_id: assignment.provider_id,
-                });
+            if previous_provider.is_some_and(|previous| previous >= assignment.provider_id) {
+                return Err(ReplicationOrderValidationError::NonCanonicalProviderOrder { index });
             }
+            previous_provider = Some(assignment.provider_id);
         }
         self.sla
             .validate()
             .map_err(ReplicationOrderValidationError::SlaInvalid)?;
+        if u64::from(self.sla.ingest_deadline_secs) > self.deadline_at - self.issued_at {
+            return Err(ReplicationOrderValidationError::SlaExceedsOrderWindow);
+        }
 
+        if self.metadata.len() > MAX_REPLICATION_ORDER_METADATA_ENTRIES {
+            return Err(ReplicationOrderValidationError::TooManyMetadataEntries {
+                found: self.metadata.len(),
+                maximum: MAX_REPLICATION_ORDER_METADATA_ENTRIES,
+            });
+        }
+        let mut metadata_bytes = 0usize;
+        let mut metadata_keys = BTreeSet::new();
         for (index, entry) in self.metadata.iter().enumerate() {
             entry.validate().map_err(|source| {
                 ReplicationOrderValidationError::MetadataInvalid { index, source }
             })?;
+            metadata_bytes = metadata_bytes
+                .checked_add(entry.key.len())
+                .and_then(|total| total.checked_add(entry.value.len()))
+                .ok_or(ReplicationOrderValidationError::MetadataBytesExceeded {
+                    found: usize::MAX,
+                    maximum: MAX_REPLICATION_ORDER_METADATA_BYTES,
+                })?;
+            if metadata_bytes > MAX_REPLICATION_ORDER_METADATA_BYTES {
+                return Err(ReplicationOrderValidationError::MetadataBytesExceeded {
+                    found: metadata_bytes,
+                    maximum: MAX_REPLICATION_ORDER_METADATA_BYTES,
+                });
+            }
+            if !metadata_keys.insert(entry.key.as_str()) {
+                return Err(ReplicationOrderValidationError::DuplicateMetadataKey {
+                    key: entry.key.clone(),
+                });
+            }
         }
 
         Ok(())
@@ -576,7 +767,12 @@ impl ReplicationAssignmentV1 {
             return Err(AssignmentError::ZeroSlice);
         }
         if let Some(lane) = &self.lane
-            && lane.trim().is_empty()
+            && (lane.is_empty()
+                || lane.len() > MAX_REPLICATION_ORDER_LANE_BYTES
+                || lane != lane.trim()
+                || !lane.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-_".contains(&byte)
+                }))
         {
             return Err(AssignmentError::InvalidLane);
         }
@@ -610,12 +806,13 @@ impl ReplicationOrderSlaV1 {
         if self.ingest_deadline_secs == 0 {
             return Err(SlaError::InvalidIngestDeadline);
         }
-        if self.min_availability_percent_milli > 100_000 {
+        if self.min_availability_percent_milli == 0 || self.min_availability_percent_milli > 100_000
+        {
             return Err(SlaError::AvailabilityOutOfRange {
                 value: self.min_availability_percent_milli,
             });
         }
-        if self.min_por_success_percent_milli > 100_000 {
+        if self.min_por_success_percent_milli == 0 || self.min_por_success_percent_milli > 100_000 {
             return Err(SlaError::PorOutOfRange {
                 value: self.min_por_success_percent_milli,
             });
@@ -868,14 +1065,20 @@ pub enum CapacityDeclarationValidationError {
     InvalidProviderId,
     #[error("stake amount must be positive")]
     StakeAmountZero,
+    #[error("stake pool identifier must be non-zero")]
+    InvalidStakePoolId,
     #[error("total committed capacity must be positive")]
     ZeroCommittedCapacity,
     #[error("at least one chunker commitment is required")]
     MissingChunkerCommitments,
-    #[error("chunker commitment duplicates profile {handle}")]
-    DuplicateChunkerCommitment { handle: String },
-    #[error("chunker commitment total {committed_gib} GiB exceeds declared {declared_gib} GiB")]
-    CommittedCapacityExceedsDeclaration {
+    #[error("capacity declaration has {found} chunker commitments; maximum is {maximum}")]
+    TooManyChunkerCommitments { found: usize, maximum: usize },
+    #[error("chunker commitments must be distinct and strictly ordered (index {index})")]
+    NonCanonicalChunkerOrder { index: usize },
+    #[error(
+        "chunker commitment total {committed_gib} GiB does not equal declared {declared_gib} GiB"
+    )]
+    CommittedCapacityMismatch {
         committed_gib: u128,
         declared_gib: u64,
     },
@@ -889,14 +1092,22 @@ pub enum CapacityDeclarationValidationError {
         index: usize,
         source: LaneCommitmentError,
     },
-    #[error("duplicate lane commitment for {lane_id}")]
-    DuplicateLaneCommitment { lane_id: String },
+    #[error("capacity declaration has {found} lane commitments; maximum is {maximum}")]
+    TooManyLaneCommitments { found: usize, maximum: usize },
+    #[error("lane commitments must be distinct and strictly ordered (index {index})")]
+    NonCanonicalLaneOrder { index: usize },
     #[error("pricing schedule invalid: {0}")]
     PricingInvalid(PricingScheduleError),
     #[error("valid_until must be greater than valid_from")]
     InvalidValidityWindow,
     #[error("metadata entry {index} invalid: {source}")]
     MetadataInvalid { index: usize, source: MetadataError },
+    #[error("capacity declaration has {found} metadata entries; maximum is {maximum}")]
+    TooManyMetadataEntries { found: usize, maximum: usize },
+    #[error("capacity declaration metadata contains {found} bytes; maximum is {maximum}")]
+    MetadataBytesExceeded { found: usize, maximum: usize },
+    #[error("duplicate capacity declaration metadata key `{key}`")]
+    DuplicateMetadataKey { key: String },
     #[error("committed capacity overflowed 128-bit accumulator")]
     CommittedCapacityOverflow,
 }
@@ -904,6 +1115,8 @@ pub enum CapacityDeclarationValidationError {
 /// Errors raised when validating chunker commitments.
 #[derive(Debug, Error)]
 pub enum ChunkerCommitmentError {
+    #[error("chunker profile handle has {found} bytes; maximum is {maximum}")]
+    ProfileHandleTooLong { found: usize, maximum: usize },
     #[error("unknown chunker profile handle: {handle}")]
     UnknownProfileHandle { handle: String },
     #[error("chunker handle must be canonical (provided {provided}, canonical {canonical})")]
@@ -916,8 +1129,16 @@ pub enum ChunkerCommitmentError {
     UnknownProfileAlias { alias: String },
     #[error("chunker alias list must be non-empty and trimmed")]
     InvalidProfileAliases,
-    #[error("duplicate capability reference: {capability:?}")]
-    DuplicateCapability { capability: CapabilityType },
+    #[error("chunker alias list has {found} entries; maximum is {maximum}")]
+    InvalidProfileAliasCount { found: usize, maximum: usize },
+    #[error("chunker alias has {found} bytes; maximum is {maximum}")]
+    ProfileAliasTooLong { found: usize, maximum: usize },
+    #[error("chunker aliases must exactly match the canonical registry order")]
+    NonCanonicalProfileAliases,
+    #[error("chunker commitment has {found} capabilities; maximum is {maximum}")]
+    TooManyCapabilities { found: usize, maximum: usize },
+    #[error("capability references must be distinct and strictly ordered (index {index})")]
+    NonCanonicalCapabilityOrder { index: usize },
 }
 
 /// Errors raised for lane commitments.
@@ -927,6 +1148,8 @@ pub enum LaneCommitmentError {
     EmptyLaneId,
     #[error("lane identifier contains invalid characters: {lane_id}")]
     InvalidLaneId { lane_id: String },
+    #[error("lane identifier must be canonical and at most {maximum} bytes (found {found})")]
+    NonCanonicalLaneId { found: usize, maximum: usize },
     #[error("lane capacity must be positive")]
     ZeroCapacity,
     #[error("lane capacity {lane_gib} GiB exceeds declared total {declared_gib} GiB")]
@@ -942,6 +1165,10 @@ pub enum PricingScheduleError {
     InvalidCurrencyLength,
     #[error("currency code contains invalid characters")]
     InvalidCurrencyChars,
+    #[error("currency code must not contain surrounding whitespace")]
+    NonCanonicalCurrency,
+    #[error("pricing rate must be positive")]
+    ZeroRate,
     #[error("minimum commitment must be positive when present")]
     InvalidMinCommitment,
     #[error("notes must not be empty when provided")]
@@ -955,8 +1182,16 @@ pub enum MetadataError {
     EmptyKey,
     #[error("metadata key contains invalid characters: {key}")]
     InvalidKey { key: String },
+    #[error("metadata key must not contain surrounding whitespace")]
+    NonCanonicalKey,
+    #[error("metadata key has {found} bytes; maximum is {maximum}")]
+    KeyTooLong { found: usize, maximum: usize },
     #[error("metadata value must not be empty")]
     EmptyValue,
+    #[error(
+        "metadata value must be canonical control-free UTF-8 of at most {maximum} bytes (found {found})"
+    )]
+    InvalidValue { found: usize, maximum: usize },
 }
 
 /// Errors raised when validating replication orders.
@@ -966,18 +1201,26 @@ pub enum ReplicationOrderValidationError {
     UnsupportedVersion { found: u8 },
     #[error("order identifier must be non-zero")]
     InvalidOrderId,
-    #[error("manifest CID must not be empty")]
-    EmptyManifestCid,
+    #[error("manifest CID has {found} bytes; expected 1..={maximum}")]
+    InvalidManifestCidLength { found: usize, maximum: usize },
+    #[error("manifest CID must not be all zero")]
+    InertManifestCid,
+    #[error("manifest CID is not canonical: {reason}")]
+    MalformedManifestCid { reason: String },
     #[error("manifest digest must be non-zero")]
     InvalidManifestDigest,
     #[error("unknown chunker handle: {handle}")]
     UnknownChunkerHandle { handle: String },
+    #[error("chunker handle has {found} bytes; maximum is {maximum}")]
+    ProfileHandleTooLong { found: usize, maximum: usize },
     #[error("chunker handle must be canonical (provided {provided}, canonical {canonical})")]
     NonCanonicalProfileHandle { provided: String, canonical: String },
     #[error("target replicas must be at least one")]
     ZeroReplicaTarget,
     #[error("replication order must contain at least one assignment")]
     MissingAssignments,
+    #[error("replication order has {found} assignments; maximum is {maximum}")]
+    TooManyAssignments { found: usize, maximum: usize },
     #[error("target replicas {target} exceed assignments {assignments}")]
     ReplicaTargetExceedsAssignments { target: u16, assignments: u16 },
     #[error("replication deadline must be greater than issued_at")]
@@ -987,12 +1230,20 @@ pub enum ReplicationOrderValidationError {
         index: usize,
         source: AssignmentError,
     },
-    #[error("duplicate provider appearing in assignments")]
-    DuplicateProvider { provider_id: [u8; 32] },
+    #[error("replication-order providers must be distinct and strictly ascending (index {index})")]
+    NonCanonicalProviderOrder { index: usize },
     #[error("SLA invalid: {0}")]
     SlaInvalid(SlaError),
+    #[error("SLA ingestion deadline exceeds the replication-order time window")]
+    SlaExceedsOrderWindow,
+    #[error("replication order has {found} metadata entries; maximum is {maximum}")]
+    TooManyMetadataEntries { found: usize, maximum: usize },
     #[error("metadata entry {index} invalid: {source}")]
     MetadataInvalid { index: usize, source: MetadataError },
+    #[error("replication-order metadata contains {found} bytes; maximum is {maximum}")]
+    MetadataBytesExceeded { found: usize, maximum: usize },
+    #[error("duplicate replication-order metadata key `{key}`")]
+    DuplicateMetadataKey { key: String },
 }
 
 /// Errors raised when validating signed replication-order envelopes.
@@ -1206,7 +1457,7 @@ mod tests {
         ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
             order_id: [0xAB; 32],
-            manifest_cid: vec![0x01, 0x55],
+            manifest_cid: crate::canonical_manifest_root_cid([0x11; 32]),
             manifest_digest: [0x10; 32],
             chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
             target_replicas: 2,
@@ -1278,6 +1529,15 @@ mod tests {
         }
     }
 
+    fn sf2_commitment(committed_gib: u64) -> ChunkerCommitmentV1 {
+        ChunkerCommitmentV1 {
+            profile_id: "sorafs.sf2@1.0.0".to_owned(),
+            profile_aliases: Some(vec!["sorafs.sf2@1.0.0".to_owned(), "sorafs-sf2".to_owned()]),
+            committed_gib,
+            capability_refs: vec![],
+        }
+    }
+
     fn base_dispute() -> CapacityDisputeV1 {
         CapacityDisputeV1 {
             version: CAPACITY_DISPUTE_VERSION_V1,
@@ -1341,7 +1601,334 @@ mod tests {
         let err = declaration.validate().unwrap_err();
         assert!(matches!(
             err,
-            CapacityDeclarationValidationError::DuplicateChunkerCommitment { .. }
+            CapacityDeclarationValidationError::NonCanonicalChunkerOrder { .. }
+        ));
+    }
+
+    #[test]
+    fn declaration_rejects_inert_stake_and_unaccounted_capacity() {
+        let mut inert_pool = base_declaration();
+        inert_pool.stake.pool_id = [0; 32];
+        assert!(matches!(
+            inert_pool.validate(),
+            Err(CapacityDeclarationValidationError::InvalidStakePoolId)
+        ));
+
+        let mut undercommitted = base_declaration();
+        undercommitted.committed_capacity_gib += 1;
+        assert!(matches!(
+            undercommitted.validate(),
+            Err(
+                CapacityDeclarationValidationError::CommittedCapacityMismatch {
+                    committed_gib: 500,
+                    declared_gib: 501,
+                }
+            )
+        ));
+
+        let mut overcommitted = base_declaration();
+        overcommitted.committed_capacity_gib -= 1;
+        assert!(matches!(
+            overcommitted.validate(),
+            Err(
+                CapacityDeclarationValidationError::CommittedCapacityMismatch {
+                    committed_gib: 500,
+                    declared_gib: 499,
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn declaration_rejects_noncanonical_collection_order() {
+        let mut reversed_profiles = base_declaration();
+        reversed_profiles.chunker_commitments[0].committed_gib = 250;
+        reversed_profiles
+            .chunker_commitments
+            .insert(0, sf2_commitment(250));
+        assert!(matches!(
+            reversed_profiles.validate(),
+            Err(CapacityDeclarationValidationError::NonCanonicalChunkerOrder { .. })
+        ));
+
+        let mut reversed_lanes = base_declaration();
+        reversed_lanes.lane_commitments = vec![
+            LaneCommitmentV1 {
+                lane_id: "warm".to_owned(),
+                max_gib: 250,
+            },
+            LaneCommitmentV1 {
+                lane_id: "hot".to_owned(),
+                max_gib: 250,
+            },
+        ];
+        assert!(matches!(
+            reversed_lanes.validate(),
+            Err(CapacityDeclarationValidationError::NonCanonicalLaneOrder { .. })
+        ));
+
+        let mut duplicate_lanes = base_declaration();
+        duplicate_lanes.lane_commitments = vec![
+            LaneCommitmentV1 {
+                lane_id: "hot".to_owned(),
+                max_gib: 250,
+            },
+            LaneCommitmentV1 {
+                lane_id: "hot".to_owned(),
+                max_gib: 250,
+            },
+        ];
+        assert!(matches!(
+            duplicate_lanes.validate(),
+            Err(CapacityDeclarationValidationError::NonCanonicalLaneOrder { .. })
+        ));
+
+        let mut duplicate_capabilities = base_declaration();
+        duplicate_capabilities.chunker_commitments[0].capability_refs =
+            vec![CapabilityType::ToriiGateway, CapabilityType::ToriiGateway];
+        assert!(matches!(
+            duplicate_capabilities.validate(),
+            Err(
+                CapacityDeclarationValidationError::ChunkerCommitmentInvalid {
+                    source: ChunkerCommitmentError::NonCanonicalCapabilityOrder { .. },
+                    ..
+                }
+            )
+        ));
+
+        let mut reversed_capabilities = base_declaration();
+        reversed_capabilities.chunker_commitments[0].capability_refs =
+            vec![CapabilityType::QuicNoise, CapabilityType::ToriiGateway];
+        assert!(matches!(
+            reversed_capabilities.validate(),
+            Err(
+                CapacityDeclarationValidationError::ChunkerCommitmentInvalid {
+                    source: ChunkerCommitmentError::NonCanonicalCapabilityOrder { .. },
+                    ..
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn declaration_rejects_resource_exhaustion_shapes() {
+        let mut chunker_flood = base_declaration();
+        chunker_flood.chunker_commitments = vec![
+            chunker_flood.chunker_commitments[0].clone();
+            MAX_CAPACITY_CHUNKER_COMMITMENTS + 1
+        ];
+        assert!(matches!(
+            chunker_flood.validate(),
+            Err(CapacityDeclarationValidationError::TooManyChunkerCommitments { .. })
+        ));
+
+        let mut lane_flood = base_declaration();
+        lane_flood.lane_commitments = (0..=MAX_CAPACITY_LANE_COMMITMENTS)
+            .map(|index| LaneCommitmentV1 {
+                lane_id: format!("lane-{index:02}"),
+                max_gib: 1,
+            })
+            .collect();
+        assert!(matches!(
+            lane_flood.validate(),
+            Err(CapacityDeclarationValidationError::TooManyLaneCommitments { .. })
+        ));
+
+        let mut metadata_flood = base_declaration();
+        metadata_flood.metadata = (0..=MAX_CAPACITY_DECLARATION_METADATA_ENTRIES)
+            .map(|index| CapacityMetadataEntry {
+                key: format!("key{index}"),
+                value: "value".to_owned(),
+            })
+            .collect();
+        assert!(matches!(
+            metadata_flood.validate(),
+            Err(CapacityDeclarationValidationError::TooManyMetadataEntries { .. })
+        ));
+
+        let mut metadata_bytes = base_declaration();
+        metadata_bytes.metadata = (0..MAX_CAPACITY_DECLARATION_METADATA_ENTRIES)
+            .map(|index| CapacityMetadataEntry {
+                key: format!("key{index}"),
+                value: "x".repeat(1024),
+            })
+            .collect();
+        assert!(matches!(
+            metadata_bytes.validate(),
+            Err(CapacityDeclarationValidationError::MetadataBytesExceeded { .. })
+        ));
+
+        let mut alias_flood = base_declaration();
+        alias_flood.chunker_commitments[0].profile_aliases = Some(
+            (0..=MAX_CAPACITY_PROFILE_ALIASES)
+                .map(|_| "sorafs.sf1@1.0.0".to_owned())
+                .collect(),
+        );
+        assert!(matches!(
+            alias_flood.validate(),
+            Err(
+                CapacityDeclarationValidationError::ChunkerCommitmentInvalid {
+                    source: ChunkerCommitmentError::InvalidProfileAliasCount { .. },
+                    ..
+                }
+            )
+        ));
+
+        let mut capability_flood = base_declaration();
+        capability_flood.chunker_commitments[0].capability_refs =
+            vec![CapabilityType::ToriiGateway; MAX_CAPACITY_CAPABILITY_REFS + 1];
+        assert!(matches!(
+            capability_flood.validate(),
+            Err(
+                CapacityDeclarationValidationError::ChunkerCommitmentInvalid {
+                    source: ChunkerCommitmentError::TooManyCapabilities { .. },
+                    ..
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn declaration_rejects_oversized_and_noncanonical_text() {
+        let mut profile = base_declaration();
+        profile.chunker_commitments[0].profile_id =
+            "x".repeat(MAX_CAPACITY_PROFILE_HANDLE_BYTES + 1);
+        assert!(matches!(
+            profile.validate(),
+            Err(
+                CapacityDeclarationValidationError::ChunkerCommitmentInvalid {
+                    source: ChunkerCommitmentError::ProfileHandleTooLong { .. },
+                    ..
+                }
+            )
+        ));
+
+        let mut alias = base_declaration();
+        alias.chunker_commitments[0].profile_aliases = Some(vec![
+            "sorafs.sf1@1.0.0".to_owned(),
+            "x".repeat(MAX_CAPACITY_PROFILE_HANDLE_BYTES + 1),
+        ]);
+        assert!(matches!(
+            alias.validate(),
+            Err(
+                CapacityDeclarationValidationError::ChunkerCommitmentInvalid {
+                    source: ChunkerCommitmentError::ProfileAliasTooLong { .. },
+                    ..
+                }
+            )
+        ));
+
+        let mut alias_order = base_declaration();
+        alias_order.chunker_commitments[0]
+            .profile_aliases
+            .as_mut()
+            .expect("base declaration has aliases")
+            .reverse();
+        assert!(matches!(
+            alias_order.validate(),
+            Err(
+                CapacityDeclarationValidationError::ChunkerCommitmentInvalid {
+                    source: ChunkerCommitmentError::NonCanonicalProfileAliases,
+                    ..
+                }
+            )
+        ));
+
+        let mut padded_lane = base_declaration();
+        padded_lane.lane_commitments = vec![LaneCommitmentV1 {
+            lane_id: " hot ".to_owned(),
+            max_gib: 1,
+        }];
+        assert!(matches!(
+            padded_lane.validate(),
+            Err(CapacityDeclarationValidationError::LaneCommitmentInvalid {
+                source: LaneCommitmentError::NonCanonicalLaneId { .. },
+                ..
+            })
+        ));
+
+        let mut oversized_lane = base_declaration();
+        oversized_lane.lane_commitments = vec![LaneCommitmentV1 {
+            lane_id: "x".repeat(MAX_CAPACITY_LANE_ID_BYTES + 1),
+            max_gib: 1,
+        }];
+        assert!(matches!(
+            oversized_lane.validate(),
+            Err(CapacityDeclarationValidationError::LaneCommitmentInvalid {
+                source: LaneCommitmentError::NonCanonicalLaneId { .. },
+                ..
+            })
+        ));
+
+        let mut padded_currency = base_declaration();
+        padded_currency.pricing = Some(PricingScheduleV1 {
+            currency: " xor ".to_owned(),
+            rate_per_gib_hour_milliu: 1,
+            min_commitment_hours: None,
+            notes: None,
+        });
+        assert!(matches!(
+            padded_currency.validate(),
+            Err(CapacityDeclarationValidationError::PricingInvalid(
+                PricingScheduleError::NonCanonicalCurrency
+            ))
+        ));
+
+        let mut zero_rate = base_declaration();
+        zero_rate.pricing = Some(PricingScheduleV1 {
+            currency: "xor".to_owned(),
+            rate_per_gib_hour_milliu: 0,
+            min_commitment_hours: None,
+            notes: None,
+        });
+        assert!(matches!(
+            zero_rate.validate(),
+            Err(CapacityDeclarationValidationError::PricingInvalid(
+                PricingScheduleError::ZeroRate
+            ))
+        ));
+
+        let mut oversized_notes = base_declaration();
+        oversized_notes.pricing = Some(PricingScheduleV1 {
+            currency: "xor".to_owned(),
+            rate_per_gib_hour_milliu: 1,
+            min_commitment_hours: None,
+            notes: Some("x".repeat(MAX_CAPACITY_PRICING_NOTES_BYTES + 1)),
+        });
+        assert!(matches!(
+            oversized_notes.validate(),
+            Err(CapacityDeclarationValidationError::PricingInvalid(
+                PricingScheduleError::InvalidNotes
+            ))
+        ));
+
+        let mut duplicate_metadata = base_declaration();
+        duplicate_metadata.metadata = vec![
+            CapacityMetadataEntry {
+                key: "region".to_owned(),
+                value: "one".to_owned(),
+            },
+            CapacityMetadataEntry {
+                key: "region".to_owned(),
+                value: "two".to_owned(),
+            },
+        ];
+        assert!(matches!(
+            duplicate_metadata.validate(),
+            Err(CapacityDeclarationValidationError::DuplicateMetadataKey { .. })
+        ));
+
+        let mut oversized_metadata = base_declaration();
+        oversized_metadata.metadata = vec![CapacityMetadataEntry {
+            key: "region".to_owned(),
+            value: "x".repeat(MAX_CAPACITY_METADATA_VALUE_BYTES + 1),
+        }];
+        assert!(matches!(
+            oversized_metadata.validate(),
+            Err(CapacityDeclarationValidationError::MetadataInvalid {
+                source: MetadataError::InvalidValue { .. },
+                ..
+            })
         ));
     }
 
@@ -1465,7 +2052,7 @@ mod tests {
         let order = ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
             order_id: [0xAB; 32],
-            manifest_cid: vec![0x01, 0x55],
+            manifest_cid: crate::canonical_manifest_root_cid([0x11; 32]),
             manifest_digest: [0x10; 32],
             chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
             target_replicas: 1,
@@ -1493,7 +2080,125 @@ mod tests {
         let err = order.validate().unwrap_err();
         assert!(matches!(
             err,
-            ReplicationOrderValidationError::DuplicateProvider { .. }
+            ReplicationOrderValidationError::NonCanonicalProviderOrder { .. }
+        ));
+    }
+
+    #[test]
+    fn replication_order_rejects_resource_exhaustion_shapes() {
+        let mut oversized_cid = base_replication_order();
+        oversized_cid.manifest_cid = vec![1; MAX_REPLICATION_ORDER_MANIFEST_CID_BYTES + 1];
+        assert!(matches!(
+            oversized_cid.validate(),
+            Err(ReplicationOrderValidationError::InvalidManifestCidLength { .. })
+        ));
+
+        let mut wrong_version = base_replication_order();
+        wrong_version.manifest_cid[0] = 2;
+        assert!(matches!(
+            wrong_version.validate(),
+            Err(ReplicationOrderValidationError::MalformedManifestCid { .. })
+        ));
+
+        let mut wrong_codec = base_replication_order();
+        wrong_codec.manifest_cid[1] = 0x55;
+        assert!(matches!(
+            wrong_codec.validate(),
+            Err(ReplicationOrderValidationError::MalformedManifestCid { .. })
+        ));
+
+        let mut zero_digest = base_replication_order();
+        zero_digest.manifest_cid[4..].fill(0);
+        assert!(matches!(
+            zero_digest.validate(),
+            Err(ReplicationOrderValidationError::InertManifestCid)
+        ));
+
+        let mut oversized_profile = base_replication_order();
+        oversized_profile.chunking_profile = "x".repeat(MAX_REPLICATION_ORDER_PROFILE_BYTES + 1);
+        assert!(matches!(
+            oversized_profile.validate(),
+            Err(ReplicationOrderValidationError::ProfileHandleTooLong { .. })
+        ));
+
+        let mut assignment_flood = base_replication_order();
+        assignment_flood.assignments = (0..=MAX_REPLICATION_ORDER_ASSIGNMENTS)
+            .map(|index| {
+                let mut provider_id = [0u8; 32];
+                provider_id[28..].copy_from_slice(
+                    &u32::try_from(index + 1)
+                        .expect("test index fits u32")
+                        .to_be_bytes(),
+                );
+                ReplicationAssignmentV1 {
+                    provider_id,
+                    slice_gib: 1,
+                    lane: None,
+                }
+            })
+            .collect();
+        assert!(matches!(
+            assignment_flood.validate(),
+            Err(ReplicationOrderValidationError::TooManyAssignments { .. })
+        ));
+
+        let mut metadata_flood = base_replication_order();
+        metadata_flood.metadata = (0..=MAX_REPLICATION_ORDER_METADATA_ENTRIES)
+            .map(|index| CapacityMetadataEntry {
+                key: format!("key{index}"),
+                value: "value".to_owned(),
+            })
+            .collect();
+        assert!(matches!(
+            metadata_flood.validate(),
+            Err(ReplicationOrderValidationError::TooManyMetadataEntries { .. })
+        ));
+    }
+
+    #[test]
+    fn replication_order_rejects_noncanonical_assignments_sla_and_metadata() {
+        let mut reversed = base_replication_order();
+        reversed.assignments.reverse();
+        assert!(matches!(
+            reversed.validate(),
+            Err(ReplicationOrderValidationError::NonCanonicalProviderOrder { .. })
+        ));
+
+        let mut invalid_lane = base_replication_order();
+        invalid_lane.assignments[0].lane = Some(" Global ".to_owned());
+        assert!(matches!(
+            invalid_lane.validate(),
+            Err(ReplicationOrderValidationError::AssignmentInvalid { .. })
+        ));
+
+        let mut zero_sla = base_replication_order();
+        zero_sla.sla.min_availability_percent_milli = 0;
+        assert!(matches!(
+            zero_sla.validate(),
+            Err(ReplicationOrderValidationError::SlaInvalid(_))
+        ));
+
+        let mut long_sla = base_replication_order();
+        long_sla.sla.ingest_deadline_secs = 601;
+        assert!(matches!(
+            long_sla.validate(),
+            Err(ReplicationOrderValidationError::SlaExceedsOrderWindow)
+        ));
+
+        let mut duplicate_metadata = base_replication_order();
+        duplicate_metadata.metadata = vec![
+            CapacityMetadataEntry {
+                key: "region".to_owned(),
+                value: "one".to_owned(),
+            },
+            CapacityMetadataEntry {
+                key: "region".to_owned(),
+                value: "two".to_owned(),
+            },
+        ];
+        assert!(matches!(
+            duplicate_metadata.validate(),
+            Err(ReplicationOrderValidationError::DuplicateMetadataKey { .. })
         ));
     }
 

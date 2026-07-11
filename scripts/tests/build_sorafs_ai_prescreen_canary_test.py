@@ -252,53 +252,27 @@ def test_notification_identity_arguments_reject_unicode_controls_before_write(
     assert not canary_path(tmp_path, "notification_transport").exists()
 
 
-def test_generated_canaries_pass_full_ai_prescreen_gate(tmp_path: Path) -> None:
-    evidence_paths: list[Path] = []
+def test_generated_non_live_canaries_pass_their_kind_contract(tmp_path: Path) -> None:
+    assert set(MODULE.CANARY_KINDS).isdisjoint(MODULE.LIVE_PROBE_ONLY_KINDS)
     for kind in MODULE.CANARY_KINDS:
         assert MODULE.main(args_for(kind, tmp_path)) == 0
-        evidence_paths.append(canary_path(tmp_path, kind))
-    summary = tmp_path / "summary.json"
-
-    command = ["--now-unix", str(NOW_UNIX)]
-    for path in evidence_paths:
-        command.extend(["--evidence", str(path)])
-    command.extend(["--summary-out", str(summary)])
-
-    assert CHECKER.main(command) == 0
-
-    payload = json.loads(summary.read_text("utf-8"))
-    assert payload["status"] == "ready"
-    assert payload["recognized_artifact_count"] == len(MODULE.CANARY_KINDS)
-    assert payload["valid_runner_bindings"] == [
-        {
-            "manifest_id_hex": MANIFEST_ID,
-            "runner_hash_hex": DIGEST,
-            "subject_digest_hex": DIGEST,
-        }
-    ]
-    assert payload["valid_workflow_digests"] == [DIGEST]
-    assert payload["valid_notification_manifest_digests"] == [DIGEST]
-    assert payload["valid_executor_summary_digests"] == [DIGEST]
-    assert payload["valid_policy_digests"] == [POLICY_DIGEST]
-    committee_payload = json.loads(canary_path(tmp_path, "committee").read_text("utf-8"))
-    assert committee_payload["results"] == [
-        {"name": "ai-prescreen-committee-result-a"},
-        {"name": "ai-prescreen-committee-result-b"},
-        {"name": "ai-prescreen-committee-result-c"},
-    ]
-    for kind in MODULE.CANARY_KINDS:
-        assert payload["required"][kind]["artifact_count"] == 1
-        assert payload["required"][kind]["artifacts"][0]["valid"] is True
+        payload = json.loads(canary_path(tmp_path, kind).read_text("utf-8"))
+        actual_kind, errors = CHECKER.validate_evidence_payload(
+            payload,
+            checker_options(),
+        )
+        assert actual_kind == kind
+        assert errors == []
 
 
 def test_runner_status_kind_inventory_matches_generated_statuses(tmp_path: Path) -> None:
     assert MODULE.RUNNER_STATUS_KINDS == {"runner", "committee"}
+    assert set(MODULE.RUNNER_STATUS_KINDS) == set(MODULE.LIVE_PROBE_ONLY_KINDS)
 
     for kind in MODULE.CANARY_KINDS:
         assert MODULE.main(args_for(kind, tmp_path)) == 0
         payload = json.loads(canary_path(tmp_path, kind).read_text("utf-8"))
-        expected_status = "verified" if kind in MODULE.RUNNER_STATUS_KINDS else "passed"
-        assert payload["status"] == expected_status
+        assert payload["status"] == "passed"
 
 
 def test_response_file_can_build_end_to_end_workflow_canary(tmp_path: Path) -> None:
@@ -357,85 +331,16 @@ def test_workflow_id_accepts_future_production_label(tmp_path: Path) -> None:
     assert payload["workflow_id"] == "sfm-4a-prod-canary-20260715"
 
 
-def test_subject_must_be_canonical(tmp_path: Path, capsys) -> None:
-    args = args_for("runner", tmp_path)
-    args[args.index("--subject") + 1] = "CID:prod-canary"
-
-    assert_rejected_without_artifact(
-        args,
-        kind="runner",
-        tmp_path=tmp_path,
-        capsys=capsys,
-        expected_error="--subject must match canonical lowercase `cid:name`",
-    )
-
-
-def test_subject_rejects_non_production_markers(tmp_path: Path, capsys) -> None:
-    args = args_for("runner", tmp_path)
-    args[args.index("--subject") + 1] = "cid:example"
-
-    assert_rejected_without_artifact(
-        args,
-        kind="runner",
-        tmp_path=tmp_path,
-        capsys=capsys,
-        expected_error="--subject must not contain non-production markers ['example']",
-    )
-
-
-def test_subject_accepts_future_production_reference(tmp_path: Path) -> None:
-    subject = "cid:bafyprodmoderation20260715"
-    args = args_for("runner", tmp_path)
-    args[args.index("--subject") + 1] = subject
-
-    assert MODULE.main(args) == 0
-
-    payload = json.loads(canary_path(tmp_path, "runner").read_text("utf-8"))
-    assert payload["subject"] == subject
-
-
-@pytest.mark.parametrize(
-    ("option", "expected_error"),
-    (
-        ("--evidence-digest-hex", "--evidence-digest-hex is required for runner"),
-        ("--policy-digest-hex", "--policy-digest-hex is required for runner"),
-    ),
-)
-def test_runner_canary_requires_digest_options(
-    option: str,
-    expected_error: str,
-    tmp_path: Path,
-    capsys,
-) -> None:
-    args = args_for("runner", tmp_path)
-    index = args.index(option)
-    del args[index : index + 2]
-
-    assert_rejected_without_artifact(
-        args,
-        kind="runner",
-        tmp_path=tmp_path,
-        capsys=capsys,
-        expected_error=expected_error,
-    )
-
-
-@pytest.mark.parametrize("kind", ("runner", "committee"))
-def test_score_bps_rejects_out_of_range_before_write(
-    kind: str,
-    tmp_path: Path,
-    capsys,
+@pytest.mark.parametrize("kind", MODULE.LIVE_PROBE_ONLY_KINDS)
+def test_builder_rejects_live_probe_only_kinds(
+    kind: str, tmp_path: Path, capsys
 ) -> None:
     args = args_for(kind, tmp_path)
-    args.extend(["--score-bps", "10001"])
 
-    assert_rejected_without_artifact(
-        args,
-        kind=kind,
-        tmp_path=tmp_path,
-        capsys=capsys,
-        expected_error="--score-bps must be <= 10000",
-    )
+    assert MODULE.main(args) == 2
+
+    assert "invalid choice" in capsys.readouterr().err
+    assert not canary_path(tmp_path, kind).exists()
 
 
 def test_missing_operator_route_coverage_fails_closed(
@@ -590,121 +495,6 @@ def test_executor_action_count_must_match_action_breakdown_before_write(
             "--action-count must equal commit, reveal, and tally action counts"
         ),
     )
-
-
-def test_committee_result_count_must_cover_quorum(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    args = args_for("committee", tmp_path)
-    args.extend(["--quorum", "4", "--result-count", "3"])
-
-    assert MODULE.main(args) == 2
-
-    captured = capsys.readouterr()
-    assert "--result-count must be >= --quorum" in captured.err
-    assert not canary_path(tmp_path, "committee").exists()
-
-
-def test_committee_result_inventory_must_match_result_count(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    args = args_for("committee", tmp_path)
-    args.extend(["--result-count", "4"])
-
-    assert MODULE.main(args) == 2
-
-    captured = capsys.readouterr()
-    assert "--committee-result unique values must match --result-count" in captured.err
-    assert not canary_path(tmp_path, "committee").exists()
-
-
-def test_committee_result_inventory_must_not_duplicate(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    args = args_for("committee", tmp_path)
-    first_result = args.index("--committee-result") + 1
-    args.extend(["--committee-result", args[first_result]])
-
-    assert MODULE.main(args) == 2
-
-    captured = capsys.readouterr()
-    assert "--committee-result must not contain duplicates" in captured.err
-    assert not canary_path(tmp_path, "committee").exists()
-
-
-def test_committee_result_inventory_requires_production_family(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    args = args_for("committee", tmp_path)
-    first_result = args.index("--committee-result") + 1
-    args[first_result] = "runner-result-a"
-
-    assert MODULE.main(args) == 2
-
-    captured = capsys.readouterr()
-    assert MODULE.COMMITTEE_RESULT_LABEL_ERROR in captured.err
-    assert not canary_path(tmp_path, "committee").exists()
-
-
-def test_committee_result_inventory_rejects_placeholder_marker(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    args = args_for("committee", tmp_path)
-    first_result = args.index("--committee-result") + 1
-    args[first_result] = "ai-prescreen-committee-result-placeholder"
-
-    assert MODULE.main(args) == 2
-
-    captured = capsys.readouterr()
-    assert (
-        "--committee-result[0] must not contain non-production markers "
-        "['placeholder']"
-        in captured.err
-    )
-    assert not canary_path(tmp_path, "committee").exists()
-
-
-def test_committee_result_inventory_rejects_compact_placeholder_marker(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    args = args_for("committee", tmp_path)
-    first_result = args.index("--committee-result") + 1
-    args[first_result] = "ai-prescreen-committee-result-placeholderreview"
-
-    assert MODULE.main(args) == 2
-
-    captured = capsys.readouterr()
-    assert (
-        "--committee-result[0] must not contain non-production markers "
-        "['placeholder']"
-        in captured.err
-    )
-    assert not canary_path(tmp_path, "committee").exists()
-
-
-def test_committee_result_inventory_rejects_sandwiched_compact_placeholder_marker(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    args = args_for("committee", tmp_path)
-    first_result = args.index("--committee-result") + 1
-    args[first_result] = "ai-prescreen-committee-result-prodplaceholderreview"
-
-    assert MODULE.main(args) == 2
-
-    captured = capsys.readouterr()
-    assert (
-        "--committee-result[0] must not contain non-production markers "
-        "['placeholder']"
-        in captured.err
-    )
-    assert not canary_path(tmp_path, "committee").exists()
 
 
 def test_governance_dag_canary_records_edge_inventory(tmp_path: Path) -> None:
@@ -942,37 +732,11 @@ def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
     )
 
 
-def test_verdict_input_rejects_unknown_value_before_write(tmp_path: Path, capsys) -> None:
-    args = args_for("runner", tmp_path)
-    args.extend(["--verdict", "allow"])
-
-    assert_rejected_without_artifact(
-        args,
-        kind="runner",
-        tmp_path=tmp_path,
-        capsys=capsys,
-        expected_error="--verdict must be pass, warn, quarantine, escalate, or block",
-    )
-
-
-def test_verdict_input_accepts_shipped_block_value(tmp_path: Path) -> None:
-    args = args_for("committee", tmp_path)
-    args.extend(["--verdict", "block"])
-
-    assert MODULE.main(args) == 0
-
-    payload = json.loads(canary_path(tmp_path, "committee").read_text("utf-8"))
-    assert payload["verdict"] == "block"
-    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
-    assert kind == "committee"
-    assert errors == []
-
-
 def test_output_symlink_is_refused(tmp_path: Path, capsys) -> None:
     target = tmp_path / "target.json"
     link = tmp_path / "link.json"
     link.symlink_to(target)
-    args = args_for("runner", tmp_path)
+    args = args_for("operator_workflow", tmp_path)
     index = args.index("--out")
     args[index + 1] = str(link)
 
@@ -986,7 +750,7 @@ def test_output_symlink_is_refused(tmp_path: Path, capsys) -> None:
 def test_output_directory_is_rejected(tmp_path: Path, capsys) -> None:
     output_dir = tmp_path / "runner-output"
     output_dir.mkdir()
-    args = args_for("runner", tmp_path)
+    args = args_for("operator_workflow", tmp_path)
     args[args.index("--out") + 1] = str(output_dir)
 
     assert MODULE.main(args) == 2
@@ -1002,42 +766,6 @@ def test_url_arguments_reject_encoded_or_secret_bearing_values_without_leaking(
     capsys,
 ) -> None:
     cases = (
-        (
-            "runner",
-            "--runner-url",
-            "https://user:private_key@runner.example",
-            ("private_key",),
-        ),
-        (
-            "runner",
-            "--runner-status-url",
-            "https://runner.example/%2e%2e/status",
-            ("%2e%2e",),
-        ),
-        (
-            "runner",
-            "--runner-screen-url",
-            "https://runner.example/bad%2Fscreen",
-            ("bad%2Fscreen",),
-        ),
-        (
-            "committee",
-            "--committee-aggregate-url",
-            "https://committee.example/C%3A/aggregate",
-            ("C%3A",),
-        ),
-        (
-            "committee",
-            "--committee-aggregate-url",
-            "https://C%3A.committee.example/aggregate",
-            ("C%3A",),
-        ),
-        (
-            "committee",
-            "--committee-aggregate-url",
-            "https://http%3A.committee.example/aggregate",
-            ("http%3A",),
-        ),
         (
             "operator_workflow",
             "--operator-url",
@@ -1075,8 +803,6 @@ def test_base_url_arguments_reject_trailing_slash_before_write(
     capsys,
 ) -> None:
     cases = (
-        ("runner", "--runner-url", "https://runner.example/"),
-        ("committee", "--committee-url", "https://committee.example/"),
         ("operator_workflow", "--operator-url", "https://operator.example/"),
     )
 

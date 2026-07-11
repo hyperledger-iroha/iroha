@@ -293,3 +293,6 @@ artifacts/*.json
 
 # Local executable (repo root)
 /priv
+
+# Runtime output from the interactive setup wizard (may contain private keys).
+/wizard-output/

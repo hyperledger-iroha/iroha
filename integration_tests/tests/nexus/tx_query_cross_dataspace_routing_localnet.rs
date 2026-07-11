@@ -19,7 +19,7 @@ use iroha::{
         Level, ValidationFail,
         account::{Account, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::consensus::SumeragiStatusWire,
+        block::consensus_v2::SumeragiV2StatusResponse,
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
         isi::{
@@ -532,15 +532,15 @@ fn wait_for_height(
     client: &Client,
     target_height: u64,
     context: &str,
-) -> Result<SumeragiStatusWire> {
+) -> Result<SumeragiV2StatusResponse> {
     let started = Instant::now();
     let mut last_height = 0;
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match client.get_sumeragi_status_wire() {
+        match client.get_sumeragi_v2_status() {
             Ok(status) => {
-                last_height = status.commit_qc.height;
-                if status.commit_qc.height >= target_height {
+                last_height = status.authoritative.last_committed_height;
+                if status.authoritative.last_committed_height >= target_height {
                     return Ok(status);
                 }
             }
@@ -1194,10 +1194,10 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     )?;
 
     let lane_sync_height = alice
-        .get_sumeragi_status_wire()
+        .get_sumeragi_v2_status()
         .map_err(|err| eyre!(err))?
-        .commit_qc
-        .height;
+        .authoritative
+        .last_committed_height;
     wait_for_height(
         &bob,
         lane_sync_height,

@@ -144,6 +144,10 @@ public enum PrivacyConfidentialWitnessCodecs {
     public static let confidentialTransferV2Entrypoint = "buildConfidentialTransferProofV2"
     public static let confidentialTransferV2VerifierRef =
         "halo2-ipa-pasta:confidential_transfer_v2"
+    public static let confidentialUnshieldV3AlgorithmId = "unshield"
+    public static let confidentialUnshieldV3Entrypoint = "buildConfidentialUnshieldProofV3"
+    public static let confidentialUnshieldV3VerifierRef =
+        "halo2-ipa-pasta:confidential_unshield_v3"
     public static let confidentialTreeCapacityV2 = 1 << 16
     public static let confidentialMaxInputsV2 = 2
     public static let confidentialMaxTransferOutputsV2 = 2
@@ -161,9 +165,20 @@ public enum PrivacyConfidentialWitnessCodecs {
                 "\"output_commitment_1\",\"root\",\"asset_tag\",\"chain_tag\"]}"
         ).utf8
     )
+    static let confidentialUnshieldPublicInputsSchemaV1 = Data(
+        (
+            "{\"schema\":\"confidential_unshield_v3\",\"public_inputs\":[\"input_commitment_0\"," +
+                "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"change_commitment_0\"," +
+                "\"root\",\"public_amount\",\"asset_tag\",\"chain_tag\"]}"
+        ).utf8
+    )
 
     public static func confidentialTransferPublicInputsSchema() -> Data {
         confidentialTransferPublicInputsSchemaV1
+    }
+
+    public static func confidentialUnshieldPublicInputsSchema() -> Data {
+        confidentialUnshieldPublicInputsSchemaV1
     }
 
     public static func encodeWitness(_ witness: PrivacyConfidentialWitnessV1) throws -> Data {
@@ -192,6 +207,13 @@ public enum PrivacyConfidentialWitnessCodecs {
         return try encodeWitness(witness)
     }
 
+    public static func encodeUnshieldWitness(
+        _ witness: PrivacyConfidentialWitnessV1
+    ) throws -> Data {
+        try validateUnshieldWitness(witness)
+        return try encodeWitness(witness)
+    }
+
     public static func buildConfidentialTransferProofRequestV1(
         witness: PrivacyConfidentialWitnessV1,
         vkRef: String = confidentialTransferV2VerifierRef
@@ -204,6 +226,39 @@ public enum PrivacyConfidentialWitnessCodecs {
             publicInputs: confidentialTransferPublicInputsSchemaV1,
             witness: encodeTransferWitness(witness),
             proof: Data()
+        )
+    }
+
+    public static func buildConfidentialUnshieldProofRequestV1(
+        witness: PrivacyConfidentialWitnessV1,
+        vkRef: String = confidentialUnshieldV3VerifierRef
+    ) throws -> Data {
+        try validateVkRef(vkRef, expected: confidentialUnshieldV3VerifierRef)
+        return try encodePrivacyProofRequest(
+            algorithmId: confidentialUnshieldV3AlgorithmId,
+            entrypoint: confidentialUnshieldV3Entrypoint,
+            vkRef: vkRef,
+            publicInputs: confidentialUnshieldPublicInputsSchemaV1,
+            witness: encodeUnshieldWitness(witness),
+            proof: Data()
+        )
+    }
+
+    public static func buildConfidentialUnshieldVerifyRequestV1(
+        proof: Data,
+        vkRef: String = confidentialUnshieldV3VerifierRef
+    ) throws -> Data {
+        try validateVkRef(vkRef, expected: confidentialUnshieldV3VerifierRef)
+        guard !proof.isEmpty, proof.count <= proofMaxBytes else {
+            throw PrivacyConfidentialWitnessError.invalidField("proof")
+        }
+        return try encodePrivacyProofRequest(
+            algorithmId: confidentialUnshieldV3AlgorithmId,
+            entrypoint: confidentialUnshieldV3Entrypoint,
+            vkRef: vkRef,
+            publicInputs: confidentialUnshieldPublicInputsSchemaV1,
+            witness: Data(),
+            proof: Data(proof)
         )
     }
 
@@ -239,6 +294,15 @@ public enum PrivacyConfidentialWitnessCodecs {
         }
         guard (1...confidentialMaxTransferOutputsV2).contains(witness.transferOutputs.count) else {
             throw PrivacyConfidentialWitnessError.invalidField("transferOutputs")
+        }
+    }
+
+    private static func validateUnshieldWitness(_ witness: PrivacyConfidentialWitnessV1) throws {
+        guard witness.transferOutputs.isEmpty else {
+            throw PrivacyConfidentialWitnessError.invalidField("transferOutputs")
+        }
+        guard witness.unshieldChange.count <= confidentialMaxUnshieldChangeOutputsV3 else {
+            throw PrivacyConfidentialWitnessError.invalidField("unshieldChange")
         }
     }
 

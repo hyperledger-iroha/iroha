@@ -3,6 +3,9 @@ package org.hyperledger.iroha.android.sorafs;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -10,494 +13,237 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.instructions.RegisterPinManifestInstruction;
 import org.hyperledger.iroha.android.testing.SimpleJson;
 
-/**
- * Ensures {@link RegisterPinManifestInstruction} mirrors the tracked SoraFS fixture and
- * serializes into the expected argument schema.
- */
+/** Adversarial coverage for the first-release register-pin consensus builder. */
 public final class SorafsRegisterPinManifestBuilderTests {
+
+  private static final String CANONICAL_MANIFEST_BASE64 =
+      "TlJUMAAAduKskROcpAXus8dyJtDtlwD5AAAAAAAAAP11VCbJ+r+OAgEBLCQAAAAAAAAAAXEfIGIKrspjqahUS44Ka/oZKH+vxtnoUoM+vR660uOpRn5yCQhxAAAAAAAAAF4FBAEAAAAHBnNvcmFmcwQDc2YxBgUxLjAuMAQAAAEABAAABAAEAAAIAAT//wAACB8AAAAAAAAAJgIAAAAAAAAAERBzb3JhZnMuc2YxQDEuMC4wCwpzb3JhZnMtc2YxCAAAEAAAAAAAIM5QqarfhOV1WSCNOSAWISYv0bGIeuSQylRHDioAFT8nCNwEEAAAAAAAEQIDAAQAAAAACIBRAQAAAAAACQgAAAAAAAAAAAgAAAAAAAAAAAgAAAAAAAAAAA==";
 
   private SorafsRegisterPinManifestBuilderTests() {}
 
   public static void main(final String[] args) throws Exception {
-    rejectsMalformedDigestHex();
-    rejectsMalformedChunkDigestHex();
-    rejectsMalformedSuccessorHex();
-    rejectsMalformedAliasProofHex();
+    fixtureUsesCanonicalFirstReleaseFields();
+    rejectsMalformedManifestPayload();
+    rejectsOversizedManifestPayload();
+    defensivelyCopiesManifestPayload();
+    rejectsMissingRequiredFields();
+    rejectsMalformedChunkDigest();
+    rejectsMalformedSuccessorDigest();
     rejectsNegativeSubmittedEpoch();
-    rejectsZeroMinReplicas();
-    rejectsNegativeMinReplicas();
-    rejectsChunkerProfileNonpositiveProfileId();
-    rejectsChunkerProfileNegativeMultihashCode();
-    canonicalizesStorageClass();
-    rejectsUnsupportedStorageClass();
-    rejectsNegativeContentLength();
-    rejectsMissingContentLength();
-    rejectsFromArgumentsMissingContentLength();
-    rejectsFromArgumentsNegativeContentLength();
-    rejectsFromArgumentsNonnumericContentLength();
-    rejectsFromArgumentsNegativeSubmittedEpoch();
-    rejectsFromArgumentsZeroMinReplicas();
-    rejectsFromArgumentsNegativeMinReplicas();
-    rejectsFromArgumentsNonnumericMinReplicas();
-    rejectsFromArgumentsUnsupportedStorageClass();
-    rejectsFromArgumentsNonpositiveChunkerProfileId();
-    rejectsFromArgumentsNegativeChunkerMultihashCode();
-    rejectsFromArgumentsPartialAliasBinding();
-    rejectsFromArgumentsMalformedDigestHex();
-    rejectsFromArgumentsMalformedChunkDigestHex();
-    rejectsFromArgumentsMalformedSuccessorHex();
-    rejectsFromArgumentsMalformedAliasProofHex();
-    rejectsNegativeRetentionEpoch();
+    rejectsPartialAliasBinding();
+    rejectsMalformedAndOversizedAliasProof();
+    rejectsLegacyAndUnknownArguments();
+    roundTripsCanonicalArguments();
+    System.out.println("[IrohaAndroid] SorafsRegisterPinManifestBuilderTests passed.");
+  }
+
+  private static void fixtureUsesCanonicalFirstReleaseFields() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> instruction = asMap(fixture.get("instruction"), "instruction");
-
-    final RegisterPinManifestInstruction payload = buildInstruction(instruction);
+    final RegisterPinManifestInstruction payload =
+        RegisterPinManifestInstruction.builder()
+            .setManifestPayloadBase64(requireString(instruction, "manifest_payload_base64"))
+            .setChunkDigestSha3Hex(requireString(instruction, "chunk_digest_sha3_256_hex"))
+            .setSubmittedEpoch(requireNumber(instruction.get("submitted_epoch")))
+            .build();
     final InstructionBox box = payload.toInstructionBox();
-
+    assert box.arguments().size() == 4 : "unexpected legacy consensus fields";
     assert Objects.equals(
-            box.arguments().get("digest_hex"), requireString(instruction, "digest_hex"))
-        : "digest_hex mismatch";
+        box.arguments().get("manifest_payload_base64"),
+        requireString(instruction, "manifest_payload_base64"));
     assert Objects.equals(
-            box.arguments().get("policy.storage_class"),
-            requireString(asMap(instruction.get("policy"), "policy"), "storage_class"))
-        : "policy.storage_class mismatch";
-    assert Objects.equals(
-            box.arguments().get("content_length"),
-            Long.toString(requireNumber(instruction.get("content_length"))))
-        : "content_length mismatch";
-
-    System.out.println(
-        "[IrohaAndroid] SorafsRegisterPinManifestBuilderTests passed (" + box.arguments().size()
-            + " arguments).");
+        box.arguments().get("chunk_digest_sha3_256_hex"),
+        requireString(instruction, "chunk_digest_sha3_256_hex"));
+    assert !box.arguments().containsKey("digest_hex");
+    assert !box.arguments().containsKey("chunker.profile_id");
+    assert !box.arguments().containsKey("content_length");
+    assert !box.arguments().containsKey("policy.min_replicas");
   }
 
-  private static void rejectsMalformedDigestHex() {
+  private static void rejectsMalformedManifestPayload() {
+    for (final String payload : new String[] {"", "%%%", "AQ"}) {
+      expectIllegalArgument(
+          () -> RegisterPinManifestInstruction.builder().setManifestPayloadBase64(payload),
+          "malformed or noncanonical manifest payload must fail");
+    }
     expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.builder().setDigestHex("zz"),
-        "Expected malformed digestHex to throw");
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.builder().setDigestHex("a0".repeat(31)),
-        "Expected short digestHex to throw");
+        () -> RegisterPinManifestInstruction.builder().setManifestPayload(new byte[0]),
+        "empty raw manifest payload must fail");
   }
 
-  private static void rejectsMalformedChunkDigestHex() {
+  private static void rejectsOversizedManifestPayload() {
+    final byte[] oversized = new byte[512 * 1024 + 1];
+    Arrays.fill(oversized, (byte) 1);
     expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.builder().setChunkDigestSha3Hex("not-hex"),
-        "Expected malformed chunkDigestSha3Hex to throw");
+        () -> RegisterPinManifestInstruction.builder().setManifestPayload(oversized),
+        "oversized raw manifest payload must fail");
+    final String oversizedBase64 = Base64.getEncoder().encodeToString(oversized);
     expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.builder().setChunkDigestSha3Hex("b0".repeat(33)),
-        "Expected oversized chunkDigestSha3Hex to throw");
+        () -> RegisterPinManifestInstruction.builder().setManifestPayloadBase64(oversizedBase64),
+        "oversized base64 manifest payload must fail");
   }
 
-  private static void rejectsMalformedSuccessorHex() {
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.builder().setSuccessorOfHex("01"),
-        "Expected short successorOfHex to throw");
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.builder().setSuccessorOfHex("gg".repeat(32)),
-        "Expected non-hex successorOfHex to throw");
+  private static void defensivelyCopiesManifestPayload() {
+    final byte[] source = Base64.getDecoder().decode(CANONICAL_MANIFEST_BASE64);
+    final byte[] expected = Arrays.copyOf(source, source.length);
+    final RegisterPinManifestInstruction instruction =
+        RegisterPinManifestInstruction.builder()
+            .setManifestPayload(source)
+            .setChunkDigestSha3Hex(repeat("b0", 32))
+            .setSubmittedEpoch(1)
+            .build();
+    Arrays.fill(source, (byte) 0);
+    assert Arrays.equals(expected, instruction.manifestPayloadBytes());
+    final byte[] returned = instruction.manifestPayloadBytes();
+    Arrays.fill(returned, (byte) 0);
+    assert Arrays.equals(expected, instruction.manifestPayloadBytes());
   }
 
-  private static void rejectsMalformedAliasProofHex() {
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.AliasBinding.builder()
-            .setName("docs")
-            .setNamespace("sora")
-            .setProofHex("proof"),
-        "Expected non-hex alias proof to throw");
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.AliasBinding.builder()
-            .setName("docs")
-            .setNamespace("sora")
-            .setProofHex("a"),
-        "Expected odd-length alias proof to throw");
+  private static void rejectsMissingRequiredFields() {
+    expectIllegalState(
+        () ->
+            RegisterPinManifestInstruction.builder()
+                .setChunkDigestSha3Hex(repeat("b0", 32))
+                .setSubmittedEpoch(1)
+                .build(),
+        "missing manifest payload must fail");
+    expectIllegalState(
+        () ->
+            RegisterPinManifestInstruction.builder()
+                .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
+                .setSubmittedEpoch(1)
+                .build(),
+        "missing chunk digest must fail");
+    expectIllegalState(
+        () ->
+            RegisterPinManifestInstruction.builder()
+                .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
+                .setChunkDigestSha3Hex(repeat("b0", 32))
+                .build(),
+        "missing submitted epoch must fail");
+  }
+
+  private static void rejectsMalformedChunkDigest() {
+    for (final String digest :
+        new String[] {
+          repeat("00", 32),
+          repeat("b0", 31),
+          repeat("b0", 33),
+          repeat("B0", 32),
+          "0x" + repeat("b0", 32),
+          repeat("zz", 32)
+        }) {
+      expectIllegalArgument(
+          () -> RegisterPinManifestInstruction.builder().setChunkDigestSha3Hex(digest),
+          "chunk digest must be canonical nonzero 32-byte hex");
+    }
+  }
+
+  private static void rejectsMalformedSuccessorDigest() {
+    for (final String digest :
+        new String[] {
+          repeat("00", 32),
+          repeat("c1", 31),
+          repeat("C1", 32),
+          "0x" + repeat("c1", 32)
+        }) {
+      expectIllegalArgument(
+          () -> RegisterPinManifestInstruction.builder().setSuccessorOfHex(digest),
+          "successor digest must be canonical nonzero 32-byte hex");
+    }
   }
 
   private static void rejectsNegativeSubmittedEpoch() {
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.builder()
-          .setDigestHex("a0".repeat(32))
-          .setChunkDigestSha3Hex("b0".repeat(32))
-          .setSubmittedEpoch(-1);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected negative submitted epoch to throw";
-  }
-
-  private static void rejectsNegativeRetentionEpoch() {
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.PinPolicy.builder()
-          .setMinReplicas(1)
-          .setStorageClass("hot")
-          .setRetentionEpoch(-1);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected negative retention epoch to throw";
-  }
-
-  private static void rejectsZeroMinReplicas() {
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.PinPolicy.builder().setMinReplicas(0);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected zero min replicas to throw";
-  }
-
-  private static void rejectsNegativeMinReplicas() {
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.PinPolicy.builder().setMinReplicas(-1);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected negative min replicas to throw";
-  }
-
-  private static void rejectsChunkerProfileNonpositiveProfileId() {
     expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.ChunkerProfile.builder().setProfileId(0),
-        "Expected zero chunker profile id to throw");
+        () -> RegisterPinManifestInstruction.builder().setSubmittedEpoch(-1),
+        "negative submitted epoch must fail");
+    final Map<String, String> arguments = baseArguments();
+    arguments.put("submitted_epoch", "NaN");
     expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.ChunkerProfile.builder().setProfileId(-1),
-        "Expected negative chunker profile id to throw");
+        () -> RegisterPinManifestInstruction.fromArguments(arguments),
+        "nonnumeric submitted epoch must fail");
   }
 
-  private static void rejectsChunkerProfileNegativeMultihashCode() {
+  private static void rejectsPartialAliasBinding() {
+    final Map<String, String> arguments = baseArguments();
+    arguments.put("alias.name", "docs");
     expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.ChunkerProfile.builder().setMultihashCode(-1),
-        "Expected negative chunker multihash code to throw");
+        () -> RegisterPinManifestInstruction.fromArguments(arguments),
+        "partial alias binding must fail");
   }
 
-  private static void canonicalizesStorageClass() {
-    final RegisterPinManifestInstruction.PinPolicy policy =
-        RegisterPinManifestInstruction.PinPolicy.builder()
-            .setMinReplicas(1)
-            .setStorageClass("hot")
-            .setRetentionEpoch(10)
-            .build();
-    assert Objects.equals(policy.storageClass(), "Hot") : "Expected canonical storage class";
-  }
-
-  private static void rejectsUnsupportedStorageClass() {
+  private static void rejectsMalformedAndOversizedAliasProof() {
     expectIllegalArgument(
         () ->
-            RegisterPinManifestInstruction.PinPolicy.builder()
-                .setMinReplicas(1)
-                .setStorageClass("lava"),
-        "Expected unsupported storage class to throw");
+            RegisterPinManifestInstruction.AliasBinding.builder()
+                .setName("docs")
+                .setNamespace("sora")
+                .setProofHex("A1"),
+        "uppercase alias proof must fail");
+    expectIllegalArgument(
+        () ->
+            RegisterPinManifestInstruction.AliasBinding.builder()
+                .setName(" docs")
+                .setNamespace("sora")
+                .setProofHex("a1"),
+        "padded alias name must fail");
+    final String oversized = repeat("aa", 1024 * 1024 + 1);
+    expectIllegalArgument(
+        () ->
+            RegisterPinManifestInstruction.AliasBinding.builder()
+                .setName("docs")
+                .setNamespace("sora")
+                .setProofHex(oversized),
+        "oversized alias proof must fail");
   }
 
-  private static void rejectsNegativeContentLength() {
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.builder().setContentLength(-1);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
+  private static void rejectsLegacyAndUnknownArguments() {
+    final Map<String, String> legacy = baseArguments();
+    legacy.put("digest_hex", repeat("a0", 32));
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.fromArguments(legacy),
+        "legacy digest field must fail");
+
+    final Map<String, String> wrongAction = baseArguments();
+    wrongAction.put("action", "ApprovePinManifest");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.fromArguments(wrongAction),
+        "wrong action must fail");
+
+    for (final String key :
+        new String[] {
+          "action", "manifest_payload_base64", "chunk_digest_sha3_256_hex", "submitted_epoch"
+        }) {
+      final Map<String, String> missing = baseArguments();
+      missing.remove(key);
+      expectIllegalArgument(
+          () -> RegisterPinManifestInstruction.fromArguments(missing),
+          "missing required argument must fail");
     }
-    assert threw : "Expected negative content length to throw";
   }
 
-  private static void rejectsMissingContentLength() {
-    final RegisterPinManifestInstruction.PinPolicy policy =
-        RegisterPinManifestInstruction.PinPolicy.builder()
-            .setMinReplicas(1)
-            .setStorageClass("hot")
-            .setRetentionEpoch(10)
+  private static void roundTripsCanonicalArguments() {
+    final RegisterPinManifestInstruction.AliasBinding alias =
+        RegisterPinManifestInstruction.AliasBinding.builder()
+            .setName("docs")
+            .setNamespace("sora")
+            .setProofHex("a1b2")
             .build();
-    final RegisterPinManifestInstruction.ChunkerProfile chunkerProfile =
-        RegisterPinManifestInstruction.ChunkerProfile.builder()
-            .setProfileId(1)
-            .setNamespace("sorafs")
-            .setName("sf1")
-            .setSemver("1.0.0")
-            .setMultihashCode(0)
-            .build();
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.builder()
-          .setDigestHex("a0".repeat(32))
-          .setChunkDigestSha3Hex("b0".repeat(32))
-          .setSubmittedEpoch(1)
-          .setPinPolicy(policy)
-          .setChunkerProfile(chunkerProfile)
-          .build();
-    } catch (final IllegalStateException ex) {
-      threw = true;
-    }
-    assert threw : "Expected missing content length to throw";
+    final RegisterPinManifestInstruction instruction =
+        baseBuilder().setSuccessorOfHex(repeat("c1", 32)).setAliasBinding(alias).build();
+    assert instruction.equals(
+        RegisterPinManifestInstruction.fromArguments(instruction.toArguments()));
   }
 
-  private static void rejectsFromArgumentsMissingContentLength() {
-    final Map<String, String> arguments = new LinkedHashMap<>();
-    arguments.put("digest_hex", "a0".repeat(32));
-    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
-    arguments.put("submitted_epoch", "1");
-    arguments.put("chunker.profile_id", "1");
-    arguments.put("chunker.namespace", "sorafs");
-    arguments.put("chunker.name", "sf1");
-    arguments.put("chunker.semver", "1.0.0");
-    arguments.put("chunker.multihash_code", "0");
-    arguments.put("policy.min_replicas", "1");
-    arguments.put("policy.storage_class", "hot");
-    arguments.put("policy.retention_epoch", "10");
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.fromArguments(arguments);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    } catch (final IllegalStateException ex) {
-      threw = true;
-    }
-    assert threw : "Expected missing fromArguments content_length to throw";
-  }
-
-  private static void rejectsFromArgumentsNegativeContentLength() {
-    final Map<String, String> arguments = new LinkedHashMap<>();
-    arguments.put("digest_hex", "a0".repeat(32));
-    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
-    arguments.put("content_length", "-1");
-    arguments.put("submitted_epoch", "1");
-    arguments.put("chunker.profile_id", "1");
-    arguments.put("chunker.namespace", "sorafs");
-    arguments.put("chunker.name", "sf1");
-    arguments.put("chunker.semver", "1.0.0");
-    arguments.put("chunker.multihash_code", "0");
-    arguments.put("policy.min_replicas", "1");
-    arguments.put("policy.storage_class", "hot");
-    arguments.put("policy.retention_epoch", "10");
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.fromArguments(arguments);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected negative fromArguments content_length to throw";
-  }
-
-  private static void rejectsFromArgumentsNonnumericContentLength() {
-    final Map<String, String> arguments = new LinkedHashMap<>();
-    arguments.put("digest_hex", "a0".repeat(32));
-    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
-    arguments.put("content_length", "NaN");
-    arguments.put("submitted_epoch", "1");
-    arguments.put("chunker.profile_id", "1");
-    arguments.put("chunker.namespace", "sorafs");
-    arguments.put("chunker.name", "sf1");
-    arguments.put("chunker.semver", "1.0.0");
-    arguments.put("chunker.multihash_code", "0");
-    arguments.put("policy.min_replicas", "1");
-    arguments.put("policy.storage_class", "hot");
-    arguments.put("policy.retention_epoch", "10");
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.fromArguments(arguments);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected nonnumeric fromArguments content_length to throw";
-  }
-
-  private static void rejectsFromArgumentsNegativeSubmittedEpoch() {
-    final Map<String, String> arguments = new LinkedHashMap<>();
-    arguments.put("digest_hex", "a0".repeat(32));
-    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
-    arguments.put("content_length", "4096");
-    arguments.put("submitted_epoch", "-1");
-    arguments.put("chunker.profile_id", "1");
-    arguments.put("chunker.namespace", "sorafs");
-    arguments.put("chunker.name", "sf1");
-    arguments.put("chunker.semver", "1.0.0");
-    arguments.put("chunker.multihash_code", "0");
-    arguments.put("policy.min_replicas", "1");
-    arguments.put("policy.storage_class", "hot");
-    arguments.put("policy.retention_epoch", "10");
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.fromArguments(arguments);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected negative fromArguments submitted_epoch to throw";
-  }
-
-  private static void rejectsFromArgumentsZeroMinReplicas() {
-    final Map<String, String> arguments = new LinkedHashMap<>();
-    arguments.put("digest_hex", "a0".repeat(32));
-    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
-    arguments.put("content_length", "4096");
-    arguments.put("submitted_epoch", "1");
-    arguments.put("chunker.profile_id", "1");
-    arguments.put("chunker.namespace", "sorafs");
-    arguments.put("chunker.name", "sf1");
-    arguments.put("chunker.semver", "1.0.0");
-    arguments.put("chunker.multihash_code", "0");
-    arguments.put("policy.min_replicas", "0");
-    arguments.put("policy.storage_class", "hot");
-    arguments.put("policy.retention_epoch", "10");
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.fromArguments(arguments);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected zero fromArguments policy.min_replicas to throw";
-  }
-
-  private static void rejectsFromArgumentsNegativeMinReplicas() {
-    final Map<String, String> arguments = new LinkedHashMap<>();
-    arguments.put("digest_hex", "a0".repeat(32));
-    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
-    arguments.put("content_length", "4096");
-    arguments.put("submitted_epoch", "1");
-    arguments.put("chunker.profile_id", "1");
-    arguments.put("chunker.namespace", "sorafs");
-    arguments.put("chunker.name", "sf1");
-    arguments.put("chunker.semver", "1.0.0");
-    arguments.put("chunker.multihash_code", "0");
-    arguments.put("policy.min_replicas", "-1");
-    arguments.put("policy.storage_class", "hot");
-    arguments.put("policy.retention_epoch", "10");
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.fromArguments(arguments);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected negative fromArguments policy.min_replicas to throw";
-  }
-
-  private static void rejectsFromArgumentsNonnumericMinReplicas() {
-    final Map<String, String> arguments = new LinkedHashMap<>();
-    arguments.put("digest_hex", "a0".repeat(32));
-    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
-    arguments.put("content_length", "4096");
-    arguments.put("submitted_epoch", "1");
-    arguments.put("chunker.profile_id", "1");
-    arguments.put("chunker.namespace", "sorafs");
-    arguments.put("chunker.name", "sf1");
-    arguments.put("chunker.semver", "1.0.0");
-    arguments.put("chunker.multihash_code", "0");
-    arguments.put("policy.min_replicas", "many");
-    arguments.put("policy.storage_class", "hot");
-    arguments.put("policy.retention_epoch", "10");
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.fromArguments(arguments);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected nonnumeric fromArguments policy.min_replicas to throw";
-  }
-
-  private static void rejectsFromArgumentsUnsupportedStorageClass() {
-    final Map<String, String> arguments = baseArguments();
-    arguments.put("policy.storage_class", "lava");
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.fromArguments(arguments),
-        "Expected unsupported fromArguments policy.storage_class to throw");
-  }
-
-  private static void rejectsFromArgumentsNonpositiveChunkerProfileId() {
-    final Map<String, String> zeroArguments = baseArguments();
-    zeroArguments.put("chunker.profile_id", "0");
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.fromArguments(zeroArguments),
-        "Expected zero fromArguments chunker.profile_id to throw");
-
-    final Map<String, String> negativeArguments = baseArguments();
-    negativeArguments.put("chunker.profile_id", "-1");
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.fromArguments(negativeArguments),
-        "Expected negative fromArguments chunker.profile_id to throw");
-  }
-
-  private static void rejectsFromArgumentsNegativeChunkerMultihashCode() {
-    final Map<String, String> arguments = baseArguments();
-    arguments.put("chunker.multihash_code", "-1");
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.fromArguments(arguments),
-        "Expected negative fromArguments chunker.multihash_code to throw");
-  }
-
-  private static void rejectsFromArgumentsPartialAliasBinding() {
-    final Map<String, String> arguments = new LinkedHashMap<>();
-    arguments.put("digest_hex", "a0".repeat(32));
-    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
-    arguments.put("content_length", "4096");
-    arguments.put("submitted_epoch", "1");
-    arguments.put("chunker.profile_id", "1");
-    arguments.put("chunker.namespace", "sorafs");
-    arguments.put("chunker.name", "sf1");
-    arguments.put("chunker.semver", "1.0.0");
-    arguments.put("chunker.multihash_code", "0");
-    arguments.put("policy.min_replicas", "1");
-    arguments.put("policy.storage_class", "hot");
-    arguments.put("policy.retention_epoch", "10");
-    arguments.put("alias.name", "docs");
-    boolean threw = false;
-    try {
-      RegisterPinManifestInstruction.fromArguments(arguments);
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected partial fromArguments alias binding to throw";
-  }
-
-  private static void rejectsFromArgumentsMalformedDigestHex() {
-    final Map<String, String> arguments = baseArguments();
-    arguments.put("digest_hex", "zz");
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.fromArguments(arguments),
-        "Expected malformed fromArguments digest_hex to throw");
-  }
-
-  private static void rejectsFromArgumentsMalformedChunkDigestHex() {
-    final Map<String, String> arguments = baseArguments();
-    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(31));
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.fromArguments(arguments),
-        "Expected malformed fromArguments chunk digest to throw");
-  }
-
-  private static void rejectsFromArgumentsMalformedSuccessorHex() {
-    final Map<String, String> arguments = baseArguments();
-    arguments.put("successor_of_hex", "not-hex");
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.fromArguments(arguments),
-        "Expected malformed fromArguments successor_of_hex to throw");
-  }
-
-  private static void rejectsFromArgumentsMalformedAliasProofHex() {
-    final Map<String, String> arguments = baseArguments();
-    arguments.put("alias.name", "docs");
-    arguments.put("alias.namespace", "sora");
-    arguments.put("alias.proof_hex", "abc");
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.fromArguments(arguments),
-        "Expected malformed fromArguments alias.proof_hex to throw");
+  private static RegisterPinManifestInstruction.Builder baseBuilder() {
+    return RegisterPinManifestInstruction.builder()
+        .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
+        .setChunkDigestSha3Hex(repeat("b0", 32))
+        .setSubmittedEpoch(1);
   }
 
   private static Map<String, String> baseArguments() {
-    final Map<String, String> arguments = new LinkedHashMap<>();
-    arguments.put("digest_hex", "a0".repeat(32));
-    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
-    arguments.put("content_length", "4096");
-    arguments.put("submitted_epoch", "1");
-    arguments.put("chunker.profile_id", "1");
-    arguments.put("chunker.namespace", "sorafs");
-    arguments.put("chunker.name", "sf1");
-    arguments.put("chunker.semver", "1.0.0");
-    arguments.put("chunker.multihash_code", "0");
-    arguments.put("policy.min_replicas", "1");
-    arguments.put("policy.storage_class", "hot");
-    arguments.put("policy.retention_epoch", "10");
-    return arguments;
+    return new LinkedHashMap<>(baseBuilder().build().toArguments());
   }
 
   private static void expectIllegalArgument(final Runnable action, final String message) {
@@ -510,48 +256,22 @@ public final class SorafsRegisterPinManifestBuilderTests {
     assert threw : message;
   }
 
-  private static RegisterPinManifestInstruction buildInstruction(
-      final Map<String, Object> instruction) {
-    final Map<String, Object> policyMap = asMap(instruction.get("policy"), "policy");
-    final RegisterPinManifestInstruction.PinPolicy policy =
-        RegisterPinManifestInstruction.PinPolicy.builder()
-            .setMinReplicas((int) requireNumber(policyMap.get("min_replicas")))
-            .setStorageClass(requireString(policyMap, "storage_class"))
-            .setRetentionEpoch(requireNumber(policyMap.get("retention_epoch")))
-            .build();
-
-    final Map<String, Object> chunker = asMap(instruction.get("chunker"), "chunker");
-    final RegisterPinManifestInstruction.ChunkerProfile chunkerProfile =
-        RegisterPinManifestInstruction.ChunkerProfile.builder()
-            .setProfileId((int) requireNumber(chunker.get("profile_id")))
-            .setNamespace(requireString(chunker, "namespace"))
-            .setName(requireString(chunker, "name"))
-            .setSemver(requireString(chunker, "semver"))
-            .setHandle((String) chunker.get("handle"))
-            .setMultihashCode(requireNumber(chunker.get("multihash_code")))
-            .build();
-
-    final RegisterPinManifestInstruction.Builder builder =
-        RegisterPinManifestInstruction.builder()
-            .setDigestHex(requireString(instruction, "digest_hex"))
-            .setChunkDigestSha3Hex(requireString(instruction, "chunk_digest_sha3_256_hex"))
-            .setContentLength(requireNumber(instruction.get("content_length")))
-            .setSubmittedEpoch(requireNumber(instruction.get("submitted_epoch")))
-            .setPinPolicy(policy)
-            .setChunkerProfile(chunkerProfile);
-
-    final Object aliasValue = instruction.get("alias");
-    if (aliasValue instanceof Map<?, ?> aliasMapRaw) {
-      final Map<String, Object> aliasMap = asMap(aliasMapRaw, "alias");
-      builder.setAliasBinding(
-          RegisterPinManifestInstruction.AliasBinding.builder()
-              .setName(requireString(aliasMap, "name"))
-              .setNamespace(requireString(aliasMap, "namespace"))
-              .setProofHex(requireString(aliasMap, "proof_hex"))
-              .build());
+  private static void expectIllegalState(final Runnable action, final String message) {
+    boolean threw = false;
+    try {
+      action.run();
+    } catch (final IllegalStateException ex) {
+      threw = true;
     }
+    assert threw : message;
+  }
 
-    return builder.build();
+  private static String repeat(final String value, final int count) {
+    final StringBuilder result = new StringBuilder(value.length() * count);
+    for (int index = 0; index < count; index++) {
+      result.append(value);
+    }
+    return result.toString();
   }
 
   private static Map<String, Object> loadFixture() throws Exception {
@@ -560,11 +280,11 @@ public final class SorafsRegisterPinManifestBuilderTests {
     Path path = null;
     final Path[] candidates =
         new Path[] {
-          Path.of(relative),
-          Path.of("../" + relative),
-          Path.of("../../" + relative),
-          Path.of("../../../" + relative),
-          Path.of("../../../../" + relative)
+          Paths.get(relative),
+          Paths.get("../" + relative),
+          Paths.get("../../" + relative),
+          Paths.get("../../../" + relative),
+          Paths.get("../../../../" + relative)
         };
     for (final Path candidate : candidates) {
       if (Files.exists(candidate)) {
@@ -573,33 +293,36 @@ public final class SorafsRegisterPinManifestBuilderTests {
       }
     }
     if (path == null) {
-      throw new IllegalStateException(
-          "Fixture not found: " + Path.of(relative).toAbsolutePath());
+      throw new IllegalStateException("Fixture not found: " + Paths.get(relative).toAbsolutePath());
     }
-    final String json = Files.readString(path.toAbsolutePath(), StandardCharsets.UTF_8);
+    final String json =
+        new String(Files.readAllBytes(path.toAbsolutePath()), StandardCharsets.UTF_8);
     return asMap(SimpleJson.parse(json), "root");
   }
 
   private static Map<String, Object> asMap(final Object value, final String field) {
-    if (!(value instanceof Map<?, ?> raw)) {
+    if (!(value instanceof Map)) {
       throw new IllegalStateException("Expected object for " + field);
     }
+    final Map<?, ?> raw = (Map<?, ?>) value;
     final Map<String, Object> copy = new LinkedHashMap<>();
-    raw.forEach((key, v) -> copy.put(Objects.toString(key), v));
+    for (final Map.Entry<?, ?> entry : raw.entrySet()) {
+      copy.put(Objects.toString(entry.getKey()), entry.getValue());
+    }
     return copy;
   }
 
   private static String requireString(final Map<String, Object> map, final String key) {
     final Object value = map.get(key);
-    if (!(value instanceof String str) || str.isBlank()) {
+    if (!(value instanceof String) || ((String) value).isEmpty()) {
       throw new IllegalStateException("Field '" + key + "' must be a non-empty string");
     }
-    return str;
+    return (String) value;
   }
 
   private static long requireNumber(final Object value) {
-    if (value instanceof Number number) {
-      return number.longValue();
+    if (value instanceof Number) {
+      return ((Number) value).longValue();
     }
     throw new IllegalStateException("Expected numeric value, found: " + value);
   }

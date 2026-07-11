@@ -99,7 +99,8 @@ use iroha_data_model::{
         Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
         RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
-        SetKeyValue, SetParameter, Transfer, TransferBox, Unregister, UnregisterBox,
+        SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferBox, Unregister,
+        UnregisterBox,
         bridge::{RemoveSccpRouteManifest, UpsertSccpRouteManifest},
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
@@ -515,8 +516,8 @@ pub struct JsReplicationOrder {
     pub schema_version: u8,
     /// Order identifier encoded as lowercase hex.
     pub order_id_hex: String,
-    /// Manifest CID encoded as UTF-8 when possible.
-    pub manifest_cid_utf8: Option<String>,
+    /// Canonical 36-byte manifest root CID encoded as lowercase hex.
+    pub manifest_cid_hex: String,
     /// Manifest CID encoded as base64.
     pub manifest_cid_base64: String,
     /// Canonical manifest digest (lowercase hex).
@@ -7246,7 +7247,7 @@ fn to_js_replication_order(order: ReplicationOrderV1) -> napi::Result<JsReplicat
     } = order;
 
     let manifest_cid_base64 = STANDARD.encode(&manifest_cid);
-    let manifest_cid_utf8 = String::from_utf8(manifest_cid).ok();
+    let manifest_cid_hex = hex::encode(&manifest_cid);
     let target_replicas = u32::from(target_replicas);
     let issued_at_unix = i64::try_from(issued_at).map_err(|_| {
         napi::Error::new(
@@ -7270,7 +7271,7 @@ fn to_js_replication_order(order: ReplicationOrderV1) -> napi::Result<JsReplicat
     Ok(JsReplicationOrder {
         schema_version: version,
         order_id_hex: hex::encode(order_id),
-        manifest_cid_utf8,
+        manifest_cid_hex,
         manifest_cid_base64,
         manifest_digest_hex: hex::encode(manifest_digest),
         chunking_profile,
@@ -9248,6 +9249,48 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     SetKeyValue::rwa(rwa, key, value),
                 )));
             }
+            if let Some(json::Value::Object(mut variants)) = map.remove("SetKeyValue") {
+                if let Some(json::Value::Object(mut fields)) = variants.remove("Account") {
+                    let account = parse_account_id_value(
+                        required_value(&mut fields, "object", "SetKeyValue.Account")?,
+                        "SetKeyValue.Account.object",
+                    )?;
+                    let key: Name = json::from_value(required_value(
+                        &mut fields,
+                        "key",
+                        "SetKeyValue.Account",
+                    )?)
+                    .map_err(norito_to_napi)?;
+                    let value: Json = json::from_value(required_value(
+                        &mut fields,
+                        "value",
+                        "SetKeyValue.Account",
+                    )?)
+                    .map_err(norito_to_napi)?;
+                    if !fields.is_empty() {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "SetKeyValue.Account contains unsupported fields: {}",
+                                fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                            ),
+                        ));
+                    }
+                    if !variants.is_empty() {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            "SetKeyValue must contain exactly one variant",
+                        ));
+                    }
+                    return Ok(InstructionBox::from(SetKeyValue::account(
+                        account, key, value,
+                    )));
+                }
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "SetKeyValue currently supports the Account variant",
+                ));
+            }
             if let Some(json::Value::Object(mut fields)) = map.remove("RemoveRwaKeyValue") {
                 let rwa = parse_rwa_id_value(
                     required_value(&mut fields, "rwa", "RemoveRwaKeyValue")?,
@@ -10250,6 +10293,29 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             grant_map.insert("Permission".to_owned(), json::Value::Object(fields));
             let mut outer = json::Map::new();
             outer.insert("Grant".to_owned(), json::Value::Object(grant_map));
+            return Ok(json::Value::Object(outer));
+        }
+    }
+
+    if let Some(set_key_value) = instruction_ref.as_any().downcast_ref::<SetKeyValueBox>() {
+        if let SetKeyValueBox::Account(set) = set_key_value {
+            let mut fields = json::Map::new();
+            fields.insert(
+                "object".to_owned(),
+                json::Value::String(account_id_to_canonical_i105(set.object())?),
+            );
+            fields.insert(
+                "key".to_owned(),
+                json::to_value(set.key()).map_err(norito_to_napi)?,
+            );
+            fields.insert(
+                "value".to_owned(),
+                json::to_value(set.value()).map_err(norito_to_napi)?,
+            );
+            let mut variants = json::Map::new();
+            variants.insert("Account".to_owned(), json::Value::Object(fields));
+            let mut outer = json::Map::new();
+            outer.insert("SetKeyValue".to_owned(), json::Value::Object(variants));
             return Ok(json::Value::Object(outer));
         }
     }
@@ -11350,6 +11416,25 @@ fn assemble_transaction(
 pub fn hash_signed_transaction(bytes: Uint8Array) -> napi::Result<Buffer> {
     let tx = decode_signed_transaction(bytes.as_ref())?;
     let hash = tx.hash();
+    Ok(Buffer::from(hash.as_ref().to_vec()))
+}
+
+/// Compute the detached-signature preimage used by Torii for a signed
+/// transaction scaffold: `HashOf::new(tx.payload())`.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
+pub fn hash_signed_transaction_payload(bytes: Uint8Array) -> napi::Result<Buffer> {
+    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let hash = iroha_crypto::HashOf::new(tx.payload());
+    Ok(Buffer::from(hash.as_ref().to_vec()))
+}
+
+/// Compute the canonical identity of an authorized instruction batch. Torii
+/// uses this hash as both the multisig `instructions_hash` and `proposal_id`.
+#[napi]
+pub fn hash_instruction_batch(instructions_json: Vec<String>) -> napi::Result<Buffer> {
+    let instructions = parse_instruction_payloads(instructions_json)?;
+    let hash = iroha_crypto::HashOf::new(&instructions);
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
 
@@ -25825,6 +25910,24 @@ mod tests {
     }
 
     #[test]
+    fn instruction_batch_hash_binds_every_authorized_instruction() {
+        let first = hash_instruction_batch(vec![
+            "{\"Mint\":{\"TriggerRepetitions\":{\"object\":1,\"destination\":\"demo::trigger\"}}}"
+                .to_owned(),
+        ])
+        .expect("hash first instruction batch");
+        let second = hash_instruction_batch(vec![
+            "{\"Mint\":{\"TriggerRepetitions\":{\"object\":2,\"destination\":\"demo::trigger\"}}}"
+                .to_owned(),
+        ])
+        .expect("hash second instruction batch");
+
+        assert_eq!(first.len(), 32);
+        assert_eq!(second.len(), 32);
+        assert_ne!(first.as_ref(), second.as_ref());
+    }
+
+    #[test]
     fn build_time_trigger_action_encodes_expected_schedule() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority_id = AccountId::new(keypair.public_key().clone());
@@ -25892,6 +25995,19 @@ mod tests {
             da_manifest_chunker_handle(Buffer::from(fixture.manifest_bytes.clone()).into())
                 .expect("chunker handle");
         assert_eq!(handle, "sorafs.sf1@1.0.0");
+    }
+
+    #[test]
+    fn local_fetch_integrity_error_maps_to_invalid_argument() {
+        let error = map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled(
+            "verify_digests",
+        ));
+
+        assert_eq!(error.status, napi::Status::InvalidArg);
+        assert_eq!(
+            error.reason,
+            "verify_digests must remain enabled for first-release SoraFS fetch integrity"
+        );
     }
 
     #[test]

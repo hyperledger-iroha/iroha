@@ -1,6 +1,6 @@
 #![allow(unexpected_cfgs)]
 
-use std::{fs, str};
+use std::fs;
 
 use sorafs_manifest::{REPLICATION_ORDER_VERSION_V1, ReplicationOrderV1};
 
@@ -34,9 +34,9 @@ fn replication_order_fixture_roundtrip() {
         "abababababababababababababababababababababababababababababababab",
         "fixture order id changed"
     );
-    let manifest_cid = str::from_utf8(&order.manifest_cid).expect("manifest CID should be UTF-8");
     assert_eq!(
-        manifest_cid, "bafyreplicaexamplecidroot",
+        hex::encode(&order.manifest_cid),
+        "01711f204141414141414141414141414141414141414141414141414141414141414141",
         "fixture manifest CID changed"
     );
     assert_eq!(

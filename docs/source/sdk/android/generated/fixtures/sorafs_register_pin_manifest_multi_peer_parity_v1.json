@@ -13,26 +13,9 @@
     "194c8180f4b90e021a86199d17092af3b2bd29792dc028e401258d903616b664"
   ],
   "instruction": {
-    "digest_hex": "9cd419c9fb260ac54ecbf771890270fbf13189bc1892453313a4bda010b20214",
-    "chunker": {
-      "profile_id": 1,
-      "namespace": "sorafs",
-      "name": "sf1",
-      "semver": "1.0.0",
-      "handle": "sorafs.sf1@1.0.0",
-      "aliases": [
-        "sorafs.sf1@1.0.0"
-      ],
-      "multihash_code": 31
-    },
+    "manifest_payload_base64": "TlJUMAAAduKskROcpAXus8dyJtDtlwD5AAAAAAAAAP11VCbJ+r+OAgEBLCQAAAAAAAAAAXEfIGIKrspjqahUS44Ka/oZKH+vxtnoUoM+vR660uOpRn5yCQhxAAAAAAAAAF4FBAEAAAAHBnNvcmFmcwQDc2YxBgUxLjAuMAQAAAEABAAABAAEAAAIAAT//wAACB8AAAAAAAAAJgIAAAAAAAAAERBzb3JhZnMuc2YxQDEuMC4wCwpzb3JhZnMtc2YxCAAAEAAAAAAAIM5QqarfhOV1WSCNOSAWISYv0bGIeuSQylRHDioAFT8nCNwEEAAAAAAAEQIDAAQAAAAACIBRAQAAAAAACQgAAAAAAAAAAAgAAAAAAAAAAAgAAAAAAAAAAA==",
     "chunk_digest_sha3_256_hex": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482",
-    "content_length": 1048576,
-    "policy": {
-      "min_replicas": 3,
-      "retention_epoch": 1725000000,
-      "storage_class": "Hot"
-    },
-    "submitted_epoch": 1725000000,
+    "submitted_epoch": 1,
     "alias": null,
     "successor_of": null
   }
